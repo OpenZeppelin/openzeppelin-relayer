@@ -180,15 +180,15 @@ where
         tx_data: &EvmTransactionData,
         relayer: &RelayerRepoModel,
     ) -> Result<PriceParams, TransactionError> {
-        let mut final_params = self
+        let mut price_final_params = self
             .fetch_price_params_based_on_tx_type(tx_data, relayer)
             .await?;
 
         // Apply gas price caps and constraints
-        self.apply_gas_price_cap_and_constraints(&mut final_params, relayer)?;
+        self.apply_gas_price_cap_and_constraints(&mut price_final_params, relayer)?;
 
         // Use price params handler if available for custom network pricing and finalize
-        self.finalize_price_params(relayer, tx_data, final_params)
+        self.finalize_price_params(relayer, tx_data, price_final_params)
             .await
     }
 
