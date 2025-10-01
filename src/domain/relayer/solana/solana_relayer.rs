@@ -723,6 +723,11 @@ where
                     )
                     .await?;
             }
+        } else if self.relayer.system_disabled {
+            // enable relayer if it was disabled previously and all checks passed
+            self.relayer_repository
+                .enable_relayer(self.relayer.id.clone())
+                .await?;
         }
 
         self.check_balance_and_trigger_token_swap_if_needed()
@@ -896,6 +901,12 @@ mod tests {
             id: "test-relayer-id".to_string(),
             address: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin".to_string(),
             notification_id: Some("test-notification-id".to_string()),
+            network_type: NetworkType::Solana,
+            policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+                min_balance: Some(0), // No minimum balance requirement
+                swap_config: None,
+                ..Default::default()
+            }),
             ..Default::default()
         }
     }
@@ -1790,5 +1801,259 @@ mod tests {
             other => panic!("expected GetFeaturesEnabled, got {:?}", other),
         };
         assert_eq!(features.features, vec!["gasless".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_initialize_relayer_disables_when_validation_fails() {
+        let mut raw_provider = MockSolanaProviderTrait::new();
+        let mut mock_repo = MockRelayerRepository::new();
+        let mut job_producer = MockJobProducerTrait::new();
+
+        let mut relayer_model = create_test_relayer();
+        relayer_model.system_disabled = false; // Start as enabled
+        relayer_model.notification_id = Some("test-notification-id".to_string());
+
+        // Mock validation failure - RPC validation fails
+        raw_provider.expect_get_latest_blockhash().returning(|| {
+            Box::pin(async { Err(SolanaProviderError::RpcError("RPC error".to_string())) })
+        });
+
+        raw_provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1000000u64) })); // Sufficient balance
+
+        // Mock disable_relayer call
+        let mut disabled_relayer = relayer_model.clone();
+        disabled_relayer.system_disabled = true;
+        mock_repo
+            .expect_disable_relayer()
+            .with(eq("test-relayer-id".to_string()))
+            .returning(move |_| Ok(disabled_relayer.clone()));
+
+        // Mock notification job production
+        job_producer
+            .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        let ctx = TestCtx {
+            relayer_model,
+            mock_repo,
+            provider: Arc::new(raw_provider),
+            job_producer: Arc::new(job_producer),
+            ..Default::default()
+        };
+
+        let solana_relayer = ctx.into_relayer().await;
+        let result = solana_relayer.initialize_relayer().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_initialize_relayer_enables_when_validation_passes_and_was_disabled() {
+        let mut raw_provider = MockSolanaProviderTrait::new();
+        let mut mock_repo = MockRelayerRepository::new();
+
+        let mut relayer_model = create_test_relayer();
+        relayer_model.system_disabled = true; // Start as disabled
+
+        // Mock successful validations
+        raw_provider
+            .expect_get_latest_blockhash()
+            .returning(|| Box::pin(async { Ok(Hash::new_unique()) }));
+
+        raw_provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1000000u64) })); // Sufficient balance
+
+        // Mock enable_relayer call
+        let mut enabled_relayer = relayer_model.clone();
+        enabled_relayer.system_disabled = false;
+        mock_repo
+            .expect_enable_relayer()
+            .with(eq("test-relayer-id".to_string()))
+            .returning(move |_| Ok(enabled_relayer.clone()));
+
+        // Mock any potential disable_relayer calls (even though they shouldn't happen)
+        let mut disabled_relayer = relayer_model.clone();
+        disabled_relayer.system_disabled = true;
+        mock_repo
+            .expect_disable_relayer()
+            .returning(move |_| Ok(disabled_relayer.clone()));
+
+        let ctx = TestCtx {
+            relayer_model,
+            mock_repo,
+            provider: Arc::new(raw_provider),
+            ..Default::default()
+        };
+
+        let solana_relayer = ctx.into_relayer().await;
+        let result = solana_relayer.initialize_relayer().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_initialize_relayer_no_action_when_enabled_and_validation_passes() {
+        let mut raw_provider = MockSolanaProviderTrait::new();
+        let mock_repo = MockRelayerRepository::new();
+
+        let mut relayer_model = create_test_relayer();
+        relayer_model.system_disabled = false; // Start as enabled
+
+        // Mock successful validations
+        raw_provider
+            .expect_get_latest_blockhash()
+            .returning(|| Box::pin(async { Ok(Hash::new_unique()) }));
+
+        raw_provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1000000u64) })); // Sufficient balance
+
+        let ctx = TestCtx {
+            relayer_model,
+            mock_repo,
+            provider: Arc::new(raw_provider),
+            ..Default::default()
+        };
+
+        let solana_relayer = ctx.into_relayer().await;
+        let result = solana_relayer.initialize_relayer().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_initialize_relayer_sends_notification_when_disabled() {
+        let mut raw_provider = MockSolanaProviderTrait::new();
+        let mut mock_repo = MockRelayerRepository::new();
+        let mut job_producer = MockJobProducerTrait::new();
+
+        let mut relayer_model = create_test_relayer();
+        relayer_model.system_disabled = false; // Start as enabled
+        relayer_model.notification_id = Some("test-notification-id".to_string());
+
+        // Mock validation failure - balance check fails
+        raw_provider
+            .expect_get_latest_blockhash()
+            .returning(|| Box::pin(async { Ok(Hash::new_unique()) }));
+
+        raw_provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(100u64) })); // Insufficient balance
+
+        // Mock disable_relayer call
+        let mut disabled_relayer = relayer_model.clone();
+        disabled_relayer.system_disabled = true;
+        mock_repo
+            .expect_disable_relayer()
+            .with(eq("test-relayer-id".to_string()))
+            .returning(move |_| Ok(disabled_relayer.clone()));
+
+        // Mock notification job production - verify it's called
+        job_producer
+            .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        let ctx = TestCtx {
+            relayer_model,
+            mock_repo,
+            provider: Arc::new(raw_provider),
+            job_producer: Arc::new(job_producer),
+            ..Default::default()
+        };
+
+        let solana_relayer = ctx.into_relayer().await;
+        let result = solana_relayer.initialize_relayer().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_initialize_relayer_no_notification_when_no_notification_id() {
+        let mut raw_provider = MockSolanaProviderTrait::new();
+        let mut mock_repo = MockRelayerRepository::new();
+
+        let mut relayer_model = create_test_relayer();
+        relayer_model.system_disabled = false; // Start as enabled
+        relayer_model.notification_id = None; // No notification ID
+
+        // Mock validation failure - RPC validation fails
+        raw_provider.expect_get_latest_blockhash().returning(|| {
+            Box::pin(async {
+                Err(SolanaProviderError::RpcError(
+                    "RPC validation failed".to_string(),
+                ))
+            })
+        });
+
+        raw_provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1000000u64) })); // Sufficient balance
+
+        // Mock disable_relayer call
+        let mut disabled_relayer = relayer_model.clone();
+        disabled_relayer.system_disabled = true;
+        mock_repo
+            .expect_disable_relayer()
+            .with(eq("test-relayer-id".to_string()))
+            .returning(move |_| Ok(disabled_relayer.clone()));
+
+        // No notification job should be produced since notification_id is None
+
+        let ctx = TestCtx {
+            relayer_model,
+            mock_repo,
+            provider: Arc::new(raw_provider),
+            ..Default::default()
+        };
+
+        let solana_relayer = ctx.into_relayer().await;
+        let result = solana_relayer.initialize_relayer().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_initialize_relayer_policy_validation_fails() {
+        let mut raw_provider = MockSolanaProviderTrait::new();
+
+        let mut relayer_model = create_test_relayer();
+        relayer_model.system_disabled = false;
+
+        // Set up a policy that will cause validation to fail
+        relayer_model.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
+                mint: "InvalidMintAddress".to_string(),
+                decimals: Some(9),
+                symbol: Some("INVALID".to_string()),
+                max_allowed_fee: Some(0),
+                swap_config: None,
+            }]),
+            ..Default::default()
+        });
+
+        // Mock provider calls that might be made during token validation
+        raw_provider
+            .expect_get_token_metadata_from_pubkey()
+            .returning(|_| {
+                Box::pin(async {
+                    Err(SolanaProviderError::RpcError("Token not found".to_string()))
+                })
+            });
+
+        let ctx = TestCtx {
+            relayer_model,
+            provider: Arc::new(raw_provider),
+            ..Default::default()
+        };
+
+        let solana_relayer = ctx.into_relayer().await;
+        let result = solana_relayer.initialize_relayer().await;
+
+        // Should fail due to policy validation error
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            RelayerError::PolicyConfigurationError(msg) => {
+                assert!(msg.contains("Error while processing allowed tokens policy"));
+            }
+            other => panic!("Expected PolicyConfigurationError, got {:?}", other),
+        }
     }
 }
