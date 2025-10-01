@@ -1,3 +1,2 @@
-* @OpenZeppelin/defender-sre @OpenZeppelin/defender-dev
-
-SECURITY.md @OpenZeppelin/product-security @OpenZeppelin/defender-sre @OpenZeppelin/defender-dev
+* @OpenZeppelin/relayer-maintainers
+SECURITY.md @OpenZeppelin/product-security @OpenZeppelin/relayer-maintainers
