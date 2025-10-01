@@ -389,6 +389,11 @@ where
         if !failures.is_empty() {
             self.disable_relayer(&failures).await?;
             return Ok(()); // same semantics as EVM
+        } else if self.relayer.system_disabled {
+            // enable relayer if it was disabled previously and all checks passed
+            self.relayer_repository
+                .enable_relayer(self.relayer.id.clone())
+                .await?;
         }
 
         info!(
@@ -1085,5 +1090,277 @@ mod tests {
             }
             _ => panic!("Expected Stellar response"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_initialize_relayer_disables_when_validation_fails() {
+        let ctx = TestCtx::default();
+        ctx.setup_network().await;
+        let mut relayer_model = ctx.relayer_model.clone();
+        relayer_model.system_disabled = false; // Start as enabled
+        relayer_model.notification_id = Some("test-notification-id".to_string());
+
+        let mut provider = MockStellarProviderTrait::new();
+        let mut relayer_repo = MockRelayerRepository::new();
+        let mut job_producer = MockJobProducerTrait::new();
+
+        // Mock validation failure - sequence sync fails
+        provider
+            .expect_get_account()
+            .returning(|_| Box::pin(ready(Err(eyre!("RPC error")))));
+
+        // Mock disable_relayer call
+        let mut disabled_relayer = relayer_model.clone();
+        disabled_relayer.system_disabled = true;
+        relayer_repo
+            .expect_disable_relayer()
+            .with(eq("test-relayer-id".to_string()))
+            .returning(move |_| Ok(disabled_relayer.clone()));
+
+        // Mock notification job production
+        job_producer
+            .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        let tx_repo = MockTransactionRepository::new();
+        let counter = MockTransactionCounterServiceTrait::new();
+        let signer = MockStellarSignTrait::new();
+
+        let relayer = StellarRelayer::new(
+            relayer_model.clone(),
+            signer,
+            provider,
+            StellarRelayerDependencies::new(
+                Arc::new(relayer_repo),
+                ctx.network_repository.clone(),
+                Arc::new(tx_repo),
+                Arc::new(counter),
+                Arc::new(job_producer),
+            ),
+        )
+        .await
+        .unwrap();
+
+        let result = relayer.initialize_relayer().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_initialize_relayer_enables_when_validation_passes_and_was_disabled() {
+        let ctx = TestCtx::default();
+        ctx.setup_network().await;
+        let mut relayer_model = ctx.relayer_model.clone();
+        relayer_model.system_disabled = true; // Start as disabled
+
+        let mut provider = MockStellarProviderTrait::new();
+        let mut relayer_repo = MockRelayerRepository::new();
+
+        // Mock successful validations - sequence sync succeeds
+        provider.expect_get_account().returning(|_| {
+            Box::pin(ready(Ok(AccountEntry {
+                account_id: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32]))),
+                balance: 1000000000, // 100 XLM
+                seq_num: SequenceNumber(1),
+                num_sub_entries: 0,
+                inflation_dest: None,
+                flags: 0,
+                home_domain: String32::default(),
+                thresholds: Thresholds([0; 4]),
+                signers: VecM::default(),
+                ext: AccountEntryExt::V0,
+            })))
+        });
+
+        // Mock enable_relayer call
+        let mut enabled_relayer = relayer_model.clone();
+        enabled_relayer.system_disabled = false;
+        relayer_repo
+            .expect_enable_relayer()
+            .with(eq("test-relayer-id".to_string()))
+            .returning(move |_| Ok(enabled_relayer.clone()));
+
+        let tx_repo = MockTransactionRepository::new();
+        let mut counter = MockTransactionCounterServiceTrait::new();
+        counter
+            .expect_set()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        let signer = MockStellarSignTrait::new();
+        let job_producer = MockJobProducerTrait::new();
+
+        let relayer = StellarRelayer::new(
+            relayer_model.clone(),
+            signer,
+            provider,
+            StellarRelayerDependencies::new(
+                Arc::new(relayer_repo),
+                ctx.network_repository.clone(),
+                Arc::new(tx_repo),
+                Arc::new(counter),
+                Arc::new(job_producer),
+            ),
+        )
+        .await
+        .unwrap();
+
+        let result = relayer.initialize_relayer().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_initialize_relayer_no_action_when_enabled_and_validation_passes() {
+        let ctx = TestCtx::default();
+        ctx.setup_network().await;
+        let mut relayer_model = ctx.relayer_model.clone();
+        relayer_model.system_disabled = false; // Start as enabled
+
+        let mut provider = MockStellarProviderTrait::new();
+
+        // Mock successful validations - sequence sync succeeds
+        provider.expect_get_account().returning(|_| {
+            Box::pin(ready(Ok(AccountEntry {
+                account_id: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32]))),
+                balance: 1000000000, // 100 XLM
+                seq_num: SequenceNumber(1),
+                num_sub_entries: 0,
+                inflation_dest: None,
+                flags: 0,
+                home_domain: String32::default(),
+                thresholds: Thresholds([0; 4]),
+                signers: VecM::default(),
+                ext: AccountEntryExt::V0,
+            })))
+        });
+
+        // No repository calls should be made since relayer is already enabled
+
+        let tx_repo = MockTransactionRepository::new();
+        let mut counter = MockTransactionCounterServiceTrait::new();
+        counter
+            .expect_set()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        let signer = MockStellarSignTrait::new();
+        let job_producer = MockJobProducerTrait::new();
+        let relayer_repo = MockRelayerRepository::new();
+
+        let relayer = StellarRelayer::new(
+            relayer_model.clone(),
+            signer,
+            provider,
+            StellarRelayerDependencies::new(
+                Arc::new(relayer_repo),
+                ctx.network_repository.clone(),
+                Arc::new(tx_repo),
+                Arc::new(counter),
+                Arc::new(job_producer),
+            ),
+        )
+        .await
+        .unwrap();
+
+        let result = relayer.initialize_relayer().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_initialize_relayer_sends_notification_when_disabled() {
+        let ctx = TestCtx::default();
+        ctx.setup_network().await;
+        let mut relayer_model = ctx.relayer_model.clone();
+        relayer_model.system_disabled = false; // Start as enabled
+        relayer_model.notification_id = Some("test-notification-id".to_string());
+
+        let mut provider = MockStellarProviderTrait::new();
+        let mut relayer_repo = MockRelayerRepository::new();
+        let mut job_producer = MockJobProducerTrait::new();
+
+        // Mock validation failure - sequence sync fails
+        provider
+            .expect_get_account()
+            .returning(|_| Box::pin(ready(Err(eyre!("Sequence sync failed")))));
+
+        // Mock disable_relayer call
+        let mut disabled_relayer = relayer_model.clone();
+        disabled_relayer.system_disabled = true;
+        relayer_repo
+            .expect_disable_relayer()
+            .with(eq("test-relayer-id".to_string()))
+            .returning(move |_| Ok(disabled_relayer.clone()));
+
+        // Mock notification job production - verify it's called
+        job_producer
+            .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        let tx_repo = MockTransactionRepository::new();
+        let counter = MockTransactionCounterServiceTrait::new();
+        let signer = MockStellarSignTrait::new();
+
+        let relayer = StellarRelayer::new(
+            relayer_model.clone(),
+            signer,
+            provider,
+            StellarRelayerDependencies::new(
+                Arc::new(relayer_repo),
+                ctx.network_repository.clone(),
+                Arc::new(tx_repo),
+                Arc::new(counter),
+                Arc::new(job_producer),
+            ),
+        )
+        .await
+        .unwrap();
+
+        let result = relayer.initialize_relayer().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_initialize_relayer_no_notification_when_no_notification_id() {
+        let ctx = TestCtx::default();
+        ctx.setup_network().await;
+        let mut relayer_model = ctx.relayer_model.clone();
+        relayer_model.system_disabled = false; // Start as enabled
+        relayer_model.notification_id = None; // No notification ID
+
+        let mut provider = MockStellarProviderTrait::new();
+        let mut relayer_repo = MockRelayerRepository::new();
+
+        // Mock validation failure - sequence sync fails
+        provider
+            .expect_get_account()
+            .returning(|_| Box::pin(ready(Err(eyre!("Sequence sync failed")))));
+
+        // Mock disable_relayer call
+        let mut disabled_relayer = relayer_model.clone();
+        disabled_relayer.system_disabled = true;
+        relayer_repo
+            .expect_disable_relayer()
+            .with(eq("test-relayer-id".to_string()))
+            .returning(move |_| Ok(disabled_relayer.clone()));
+
+        // No notification job should be produced since notification_id is None
+
+        let tx_repo = MockTransactionRepository::new();
+        let counter = MockTransactionCounterServiceTrait::new();
+        let signer = MockStellarSignTrait::new();
+        let job_producer = MockJobProducerTrait::new();
+
+        let relayer = StellarRelayer::new(
+            relayer_model.clone(),
+            signer,
+            provider,
+            StellarRelayerDependencies::new(
+                Arc::new(relayer_repo),
+                ctx.network_repository.clone(),
+                Arc::new(tx_repo),
+                Arc::new(counter),
+                Arc::new(job_producer),
+            ),
+        )
+        .await
+        .unwrap();
+
+        let result = relayer.initialize_relayer().await;
+        assert!(result.is_ok());
     }
 }
