@@ -60,7 +60,10 @@ impl Queue {
         let shared = Arc::new(conn);
         // use REDIS_KEY_PREFIX only if set, otherwise do not use it
         let redis_key_prefix = env::var("REDIS_KEY_PREFIX")
-            .map_or_else(|_| "".to_string(), |value| format!("{value}:queue:"));
+            .ok()
+            .filter(|v| !v.is_empty())
+            .map(|value| format!("{value}:queue:"))
+            .unwrap_or_default();
         Ok(Self {
             transaction_request_queue: Self::storage(
                 &format!("{}transaction_request_queue", redis_key_prefix),
