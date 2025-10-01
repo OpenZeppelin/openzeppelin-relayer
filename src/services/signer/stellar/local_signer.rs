@@ -15,9 +15,9 @@
 use super::StellarSignTrait;
 use crate::{
     domain::{
-        attach_signatures_to_envelope, parse_transaction_xdr, SignDataRequest, SignDataResponse,
-        SignTransactionResponse, SignTransactionResponseStellar, SignTypedDataRequest,
-        SignXdrTransactionResponseStellar,
+        attach_signatures_to_envelope, parse_transaction_xdr, stellar::create_signature_payload,
+        SignDataRequest, SignDataResponse, SignTransactionResponse, SignTransactionResponseStellar,
+        SignTypedDataRequest, SignXdrTransactionResponseStellar,
     },
     models::{
         Address, NetworkTransactionData, Signer as SignerDomainModel, SignerError, TransactionInput,
@@ -65,50 +65,6 @@ impl LocalSigner {
         })
     }
 
-    /// Create a signature payload for the given envelope type
-    fn create_signature_payload(
-        &self,
-        envelope: &TransactionEnvelope,
-        network_id: &Hash,
-    ) -> Result<TransactionSignaturePayload, SignerError> {
-        let tagged_transaction = match envelope {
-            TransactionEnvelope::TxV0(e) => {
-                // For V0, convert to V1 transaction format for signing
-                let v1_tx = self.convert_v0_to_v1_transaction(&e.tx);
-                TransactionSignaturePayloadTaggedTransaction::Tx(v1_tx)
-            }
-            TransactionEnvelope::Tx(e) => {
-                TransactionSignaturePayloadTaggedTransaction::Tx(e.tx.clone())
-            }
-            TransactionEnvelope::TxFeeBump(e) => {
-                TransactionSignaturePayloadTaggedTransaction::TxFeeBump(e.tx.clone())
-            }
-        };
-
-        Ok(TransactionSignaturePayload {
-            network_id: network_id.clone(),
-            tagged_transaction,
-        })
-    }
-
-    /// Convert a V0 transaction to V1 format
-    fn convert_v0_to_v1_transaction(&self, v0_tx: &soroban_rs::xdr::TransactionV0) -> Transaction {
-        Transaction {
-            source_account: soroban_rs::xdr::MuxedAccount::Ed25519(
-                v0_tx.source_account_ed25519.clone(),
-            ),
-            fee: v0_tx.fee,
-            seq_num: v0_tx.seq_num.clone(),
-            cond: match v0_tx.time_bounds.clone() {
-                Some(tb) => soroban_rs::xdr::Preconditions::Time(tb),
-                None => soroban_rs::xdr::Preconditions::None,
-            },
-            memo: v0_tx.memo.clone(),
-            operations: v0_tx.operations.clone(),
-            ext: soroban_rs::xdr::TransactionExt::V0,
-        }
-    }
-
     /// Sign a transaction envelope based on its type
     fn sign_envelope(
         &self,
@@ -116,7 +72,8 @@ impl LocalSigner {
         network_id: &Hash,
     ) -> Result<DecoratedSignature, SignerError> {
         // Create the appropriate signature payload based on envelope type
-        let payload = self.create_signature_payload(envelope, network_id)?;
+        let payload = create_signature_payload(envelope, network_id)
+            .map_err(|e| SignerError::SigningError(format!("failed to create payload: {e}")))?;
 
         // Serialize and hash the payload
         let payload_bytes = payload

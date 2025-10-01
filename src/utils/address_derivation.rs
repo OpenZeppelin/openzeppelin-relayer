@@ -59,6 +59,32 @@ pub fn derive_solana_address_from_pem(pem_str: &str) -> Result<String, AddressDe
     Ok(solana_address)
 }
 
+/// Derive Stellar address from a PEM-encoded public key.
+/// Stellar uses Ed25519 keys and addresses are encoded with StrKey format (G prefix for accounts).
+pub fn derive_stellar_address_from_pem(pem_str: &str) -> Result<String, AddressDerivationError> {
+    let pkey =
+        pem::parse(pem_str).map_err(|e| AddressDerivationError::ParseError(e.to_string()))?;
+    let content = pkey.contents();
+
+    let mut array = [0u8; 32];
+
+    match content.len() {
+        32 => array.copy_from_slice(content),
+        44 => array.copy_from_slice(&content[12..]),
+        _ => {
+            return Err(AddressDerivationError::ParseError(format!(
+                "Unexpected ed25519 public key length: got {} bytes (expected 32 or 44).",
+                content.len()
+            )));
+        }
+    }
+
+    // Use stellar_strkey to encode the public key
+    use stellar_strkey::ed25519::PublicKey;
+    let public_key = PublicKey(array);
+    Ok(public_key.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,6 +175,41 @@ mod tests {
         let invalid_pem_str = pem::encode(&invalid_pem);
 
         let result = derive_solana_address_from_pem(&invalid_pem_str);
+        assert!(result.is_err());
+
+        assert!(matches!(result, Err(AddressDerivationError::ParseError(_))));
+    }
+
+    #[test]
+    fn test_derive_stellar_address_from_pem_with_valid_ed25519() {
+        let result = derive_stellar_address_from_pem(VALID_ED25519_PEM);
+        assert!(result.is_ok());
+
+        let address = result.unwrap();
+        // Stellar addresses start with 'G' for accounts
+        assert!(address.starts_with('G'));
+        // Stellar addresses are base32 encoded and 56 characters long
+        assert_eq!(address.len(), 56);
+    }
+
+    #[test]
+    fn test_derive_stellar_address_from_pem_with_invalid_data() {
+        let invalid_pem = "not-a-valid-pem";
+        let result = derive_stellar_address_from_pem(invalid_pem);
+        assert!(result.is_err());
+
+        // Verify it returns the expected error type
+        assert!(matches!(result, Err(AddressDerivationError::ParseError(_))));
+    }
+
+    #[test]
+    fn test_derive_stellar_address_from_pem_with_invalid_key_length() {
+        // Create a PEM with invalid ed25519 key length
+        let invalid_ed25519_der = vec![0u8; 10]; // Too short
+        let invalid_pem = pem::Pem::new("PUBLIC KEY", invalid_ed25519_der);
+        let invalid_pem_str = pem::encode(&invalid_pem);
+
+        let result = derive_stellar_address_from_pem(&invalid_pem_str);
         assert!(result.is_err());
 
         assert!(matches!(result, Err(AddressDerivationError::ParseError(_))));
