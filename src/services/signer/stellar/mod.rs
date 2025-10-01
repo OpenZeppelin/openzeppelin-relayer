@@ -1,5 +1,5 @@
 // openzeppelin-relayer/src/services/signer/stellar/mod.rs
-//! Stellar signer implementation (local keystore)
+//! Stellar signer implementation (local keystore and Google Cloud KMS)
 
 mod google_cloud_kms_signer;
 mod local_signer;
