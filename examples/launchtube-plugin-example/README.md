@@ -203,12 +203,18 @@ curl -X POST http://localhost:8080/api/v1/plugins/launchtube-plugin/call \
   }'
 ```
 
-**Expected Response:**
+**Expected Response (HTTP 200):**
 
 ```json
 {
-  "ok": true,
-  "appliedRelayerIds": ["launchtube-seq-001", "launchtube-seq-002"]
+  "success": true,
+  "data": {
+    "result": {
+      "ok": true,
+      "appliedRelayerIds": ["launchtube-seq-001", "launchtube-seq-002"]
+    }
+  },
+  "error": null
 }
 ```
 
@@ -261,13 +267,19 @@ curl -X POST http://localhost:8080/api/v1/plugins/launchtube-plugin/call \
 
 > Use either `xdr` OR `func`+`auth`, not both
 
-**Response:**
+**Response (HTTP 200):**
 
 ```json
 {
-  "transactionId": "tx_123456",
-  "status": "submitted",
-  "hash": "1234567890abcdef..."
+  "success": true,
+  "data": {
+    "result": {
+      "transactionId": "tx_123456",
+      "status": "submitted",
+      "hash": "1234567890abcdef..."
+    }
+  },
+  "error": null
 }
 ```
 

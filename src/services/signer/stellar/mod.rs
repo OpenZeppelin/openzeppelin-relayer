@@ -1,10 +1,12 @@
 // openzeppelin-relayer/src/services/signer/stellar/mod.rs
-//! Stellar signer implementation (local keystore)
+//! Stellar signer implementation (local keystore and Google Cloud KMS)
 
+mod google_cloud_kms_signer;
 mod local_signer;
 mod vault_signer;
 
 use async_trait::async_trait;
+use google_cloud_kms_signer::*;
 use local_signer::*;
 use vault_signer::*;
 
@@ -16,7 +18,7 @@ use crate::{
     },
     services::{
         signer::{SignXdrTransactionResponseStellar, SignerError, SignerFactoryError},
-        Signer, VaultConfig, VaultService,
+        GoogleCloudKmsService, Signer, VaultConfig, VaultService,
     },
 };
 
@@ -52,6 +54,7 @@ pub trait StellarSignTrait: Sync + Send {
 pub enum StellarSigner {
     Local(Box<LocalSigner>),
     Vault(VaultSigner<VaultService>),
+    GoogleCloudKms(GoogleCloudKmsSigner),
 }
 
 #[async_trait]
@@ -60,6 +63,7 @@ impl Signer for StellarSigner {
         match self {
             Self::Local(s) => s.address().await,
             Self::Vault(s) => s.address().await,
+            Self::GoogleCloudKms(s) => s.address().await,
         }
     }
 
@@ -70,6 +74,7 @@ impl Signer for StellarSigner {
         match self {
             Self::Local(s) => s.sign_transaction(tx).await,
             Self::Vault(s) => s.sign_transaction(tx).await,
+            Self::GoogleCloudKms(s) => s.sign_transaction(tx).await,
         }
     }
 }
@@ -87,6 +92,10 @@ impl StellarSignTrait for StellarSigner {
                     .await
             }
             Self::Vault(s) => {
+                s.sign_xdr_transaction(unsigned_xdr, network_passphrase)
+                    .await
+            }
+            Self::GoogleCloudKms(s) => {
                 s.sign_xdr_transaction(unsigned_xdr, network_passphrase)
                     .await
             }
@@ -125,6 +134,11 @@ impl StellarSignerFactory {
                     vault_service,
                 ))
             }
+            SignerConfig::GoogleCloudKms(config) => {
+                let service = GoogleCloudKmsService::new(config)
+                    .map_err(|e| SignerFactoryError::CreationFailed(e.to_string()))?;
+                StellarSigner::GoogleCloudKms(GoogleCloudKmsSigner::new(service))
+            }
             SignerConfig::AwsKms(_) => {
                 return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()))
             }
@@ -135,11 +149,6 @@ impl StellarSignerFactory {
                 return Err(SignerFactoryError::UnsupportedType("Turnkey".into()))
             }
             SignerConfig::Cdp(_) => return Err(SignerFactoryError::UnsupportedType("CDP".into())),
-            SignerConfig::GoogleCloudKms(_) => {
-                return Err(SignerFactoryError::UnsupportedType(
-                    "Google Cloud KMS".into(),
-                ))
-            }
         };
         Ok(signer)
     }

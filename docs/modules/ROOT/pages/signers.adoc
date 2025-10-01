@@ -70,7 +70,7 @@ The following table shows which signer types are compatible with each network ty
 |`google_cloud_kms`
 |✅ Supported
 |✅ Supported
-|❌ Not supported
+|✅ Supported
 
 |`aws_kms`
 |✅ Supported
@@ -89,9 +89,9 @@ The following table shows which signer types are compatible with each network ty
 
 - **EVM Networks**: Use secp256k1 cryptography. Most signers support EVM networks with proper key generation.
 - **Solana Networks**: Use ed25519 cryptography. Ensure your signer supports ed25519 key generation and signing.
-- **Stellar Networks**: Use ed25519 cryptography with specific Stellar requirements. Limited signer support due to network-specific implementation requirements.
+- **Stellar Networks**: Use ed25519 cryptography with specific Stellar requirements. Currently supported by local and Google Cloud KMS signers.
 - **AWS KMS**: Currently optimized for EVM networks with secp256k1 support.
-- **Google Cloud KMS**: Supports both secp256k1 (EVM) and ed25519 (Solana) key types.
+- **Google Cloud KMS**: Supports secp256k1 (EVM) and ed25519 (Solana, Stellar) key types.
 - **Turnkey**: Supports EVM and Solana networks with appropriate key management.
 ====
 
@@ -341,12 +341,17 @@ Uses Google Cloud Key Management Service for secure key operations.
 
 [NOTE]
 ====
-For EVM transaction signing, ensure your Google Cloud KMS key is created with:
+**Network-specific key requirements:**
+
+For **EVM** transaction signing, ensure your Google Cloud KMS key is created with:
 - Protection level: HSM
 - Purpose: Asymmetric sign
 - Algorithm: "Elliptic Curve secp256k1 - SHA256 Digest"
 
-This provides secp256k1 compatibility required for Ethereum transactions.
+For **Solana** and **Stellar** transaction signing, ensure your Google Cloud KMS key is created with:
+- Protection level: Software or HSM
+- Purpose: Asymmetric sign
+- Algorithm: "Elliptic Curve ED25519 Key"
 ====
 
 [source,json]

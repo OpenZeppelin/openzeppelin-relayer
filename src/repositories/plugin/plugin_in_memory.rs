@@ -126,6 +126,8 @@ mod tests {
             id: "test-plugin".to_string(),
             path: "test-path".to_string(),
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+            emit_logs: false,
+            emit_traces: false,
         };
         plugin_repository.add(plugin.clone()).await.unwrap();
         assert_eq!(
@@ -148,6 +150,8 @@ mod tests {
             id: "test-plugin".to_string(),
             path: "test-path".to_string(),
             timeout: None,
+            emit_logs: false,
+            emit_traces: false,
         };
         let result = PluginModel::try_from(plugin);
         assert!(result.is_ok());
@@ -157,6 +161,8 @@ mod tests {
                 id: "test-plugin".to_string(),
                 path: "test-path".to_string(),
                 timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+                emit_logs: false,
+                emit_traces: false,
             }
         );
     }
@@ -169,6 +175,8 @@ mod tests {
             id: "test-plugin".to_string(),
             path: "test-path".to_string(),
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+            emit_logs: false,
+            emit_traces: false,
         };
         plugin_repository.add(plugin.clone()).await.unwrap();
         assert_eq!(
@@ -185,12 +193,16 @@ mod tests {
             id: "test-plugin1".to_string(),
             path: "test-path1".to_string(),
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+            emit_logs: false,
+            emit_traces: false,
         };
 
         let plugin2 = PluginModel {
             id: "test-plugin2".to_string(),
             path: "test-path2".to_string(),
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+            emit_logs: false,
+            emit_traces: false,
         };
 
         plugin_repository.add(plugin1.clone()).await.unwrap();
@@ -216,6 +228,8 @@ mod tests {
                 id: "test-plugin".to_string(),
                 path: "test-path".to_string(),
                 timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+                emit_logs: false,
+                emit_traces: false,
             })
             .await
             .unwrap();
@@ -233,6 +247,8 @@ mod tests {
                 id: "test-plugin".to_string(),
                 path: "test-path".to_string(),
                 timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+                emit_logs: false,
+                emit_traces: false,
             })
             .await
             .unwrap();

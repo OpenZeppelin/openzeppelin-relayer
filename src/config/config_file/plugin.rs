@@ -14,6 +14,10 @@ pub struct PluginFileConfig {
     pub id: String,
     pub path: String,
     pub timeout: Option<u64>,
+    #[serde(default)]
+    pub emit_logs: bool,
+    #[serde(default)]
+    pub emit_traces: bool,
 }
 
 pub struct PluginsFileConfig {

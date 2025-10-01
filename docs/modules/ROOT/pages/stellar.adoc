@@ -469,6 +469,17 @@ Soroban operations support different authorization modes:
 |Advanced: provide base64-encoded XDR entries. This allows you to provide pre-signed SorobanAuthorizationEntry objects for complex authorization scenarios. See the link:https://developers.stellar.org/docs/learn/smart-contract-internals/authorization[official Stellar documentation on authorization] for detailed information about SorobanAuthorizationEntries.
 |===
 
+== Signer Support
+
+Stellar networks support the following signer types:
+
+- **Local Signer**: Uses encrypted keystore files (suitable for development)
+- **Google Cloud KMS**: Uses Google Cloud Key Management Service with ED25519 keys (recommended for production)
+
+For detailed signer configuration, see the xref:signers.adoc[Signers Configuration] guide.
+
+For a complete example of using Google Cloud KMS with Stellar, check out the link:https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples/stellar-gcp-kms-signer[stellar-gcp-kms-signer example].
+
 == Security
 
 - Do not expose the relayer directly to the public internet
