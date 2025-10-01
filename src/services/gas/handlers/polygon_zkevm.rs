@@ -18,7 +18,7 @@ use serde_json;
 fn build_zkevm_transaction_params(tx: &EvmTransactionData) -> serde_json::Value {
     serde_json::json!({
         "from": tx.from,
-        "to": tx.to.as_ref().unwrap_or(&"0x".to_string()),
+        "to": tx.to.clone(),
         "value": format!("0x{:x}", tx.value),
         "data": tx.data.as_ref().map(|d| {
             if d.starts_with("0x") { d.clone() } else { format!("0x{}", d) }
