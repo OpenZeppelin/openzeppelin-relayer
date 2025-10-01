@@ -895,7 +895,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
-            l1_fee: None,
+            extra_fee: None,
             total_cost: U256::from(630000000000000u64),
         };
         mock_price_calculator
@@ -995,7 +995,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
-            l1_fee: None,
+            extra_fee: None,
             total_cost: U256::from(630000000000000u64),
         };
         mock_price_calculator
@@ -1152,7 +1152,7 @@ mod tests {
                         max_fee_per_gas: None,
                         max_priority_fee_per_gas: None,
                         is_min_bumped: Some(true),
-                        l1_fee: Some(U256::ZERO),
+                        extra_fee: Some(U256::ZERO),
                         total_cost: U256::ZERO,
                     })
                 });
@@ -1332,7 +1332,7 @@ mod tests {
                         max_fee_per_gas: None,
                         max_priority_fee_per_gas: None,
                         is_min_bumped: Some(true),
-                        l1_fee: Some(U256::ZERO),
+                        extra_fee: Some(U256::ZERO),
                         total_cost: U256::from(2001000000000000000u64), // 2 ETH + gas costs
                     })
                 });
@@ -1817,7 +1817,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
-            l1_fee: None,
+            extra_fee: None,
             total_cost: U256::from(1900000000000000000u128), // 1.9 ETH total cost
         };
 
