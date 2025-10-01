@@ -451,4 +451,433 @@ mod tests {
         let result: String = error.into();
         assert_eq!(result, "Plugin execution error: test-error");
     }
+
+    #[test]
+    fn test_plugin_error_with_traces_handler_error() {
+        let payload = PluginHandlerPayload {
+            status: 400,
+            message: "test message".to_string(),
+            code: Some("TEST_CODE".to_string()),
+            details: None,
+            logs: None,
+            traces: Some(vec![serde_json::json!({"trace": "1"})]),
+        };
+        let error = PluginError::HandlerError(payload);
+        let new_traces = vec![
+            serde_json::json!({"trace": "2"}),
+            serde_json::json!({"trace": "3"}),
+        ];
+
+        let enriched_error = error.with_traces(new_traces);
+
+        match enriched_error {
+            PluginError::HandlerError(payload) => {
+                let traces = payload.traces.unwrap();
+                assert_eq!(traces.len(), 3);
+                assert_eq!(traces[0], serde_json::json!({"trace": "1"}));
+                assert_eq!(traces[1], serde_json::json!({"trace": "2"}));
+                assert_eq!(traces[2], serde_json::json!({"trace": "3"}));
+            }
+            _ => panic!("Expected HandlerError variant"),
+        }
+    }
+
+    #[test]
+    fn test_plugin_error_with_traces_other_variants() {
+        let error = PluginError::PluginExecutionError("test".to_string());
+        let new_traces = vec![serde_json::json!({"trace": "1"})];
+
+        let result = error.with_traces(new_traces);
+
+        match result {
+            PluginError::PluginExecutionError(msg) => assert_eq!(msg, "test"),
+            _ => panic!("Expected PluginExecutionError variant"),
+        }
+    }
+
+    #[test]
+    fn test_derive_handler_message_with_message() {
+        let result = derive_handler_message("Custom error message", None);
+        assert_eq!(result, "Custom error message");
+    }
+
+    #[test]
+    fn test_derive_handler_message_with_error_log() {
+        let logs = vec![
+            LogEntry {
+                level: LogLevel::Log,
+                message: "info log".to_string(),
+            },
+            LogEntry {
+                level: LogLevel::Error,
+                message: "error log".to_string(),
+            },
+        ];
+        let result = derive_handler_message("", Some(&logs));
+        assert_eq!(result, "error log");
+    }
+
+    #[test]
+    fn test_derive_handler_message_with_warn_log() {
+        let logs = vec![
+            LogEntry {
+                level: LogLevel::Log,
+                message: "info log".to_string(),
+            },
+            LogEntry {
+                level: LogLevel::Warn,
+                message: "warn log".to_string(),
+            },
+        ];
+        let result = derive_handler_message("", Some(&logs));
+        assert_eq!(result, "warn log");
+    }
+
+    #[test]
+    fn test_derive_handler_message_with_only_info_logs() {
+        let logs = vec![
+            LogEntry {
+                level: LogLevel::Log,
+                message: "first log".to_string(),
+            },
+            LogEntry {
+                level: LogLevel::Info,
+                message: "last log".to_string(),
+            },
+        ];
+        let result = derive_handler_message("", Some(&logs));
+        assert_eq!(result, "last log");
+    }
+
+    #[test]
+    fn test_derive_handler_message_no_logs() {
+        let result = derive_handler_message("", None);
+        assert_eq!(result, "Plugin execution failed");
+    }
+
+    #[test]
+    fn test_build_metadata_with_logs_and_traces() {
+        let logs = vec![LogEntry {
+            level: LogLevel::Log,
+            message: "test".to_string(),
+        }];
+        let traces = vec![serde_json::json!({"trace": "1"})];
+
+        let result = build_metadata(Some(logs.clone()), Some(traces.clone()));
+
+        assert!(result.is_some());
+        let metadata = result.unwrap();
+        assert_eq!(metadata.logs.unwrap(), logs);
+        assert_eq!(metadata.traces.unwrap(), traces);
+    }
+
+    #[test]
+    fn test_build_metadata_with_only_logs() {
+        let logs = vec![LogEntry {
+            level: LogLevel::Log,
+            message: "test".to_string(),
+        }];
+
+        let result = build_metadata(Some(logs.clone()), None);
+
+        assert!(result.is_some());
+        let metadata = result.unwrap();
+        assert_eq!(metadata.logs.unwrap(), logs);
+        assert!(metadata.traces.is_none());
+    }
+
+    #[test]
+    fn test_build_metadata_with_only_traces() {
+        let traces = vec![serde_json::json!({"trace": "1"})];
+
+        let result = build_metadata(None, Some(traces.clone()));
+
+        assert!(result.is_some());
+        let metadata = result.unwrap();
+        assert!(metadata.logs.is_none());
+        assert_eq!(metadata.traces.unwrap(), traces);
+    }
+
+    #[test]
+    fn test_build_metadata_with_neither() {
+        let result = build_metadata(None, None);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_plugin_handler_payload_append_traces_to_existing() {
+        let mut payload = PluginHandlerPayload {
+            status: 400,
+            message: "test".to_string(),
+            code: None,
+            details: None,
+            logs: None,
+            traces: Some(vec![serde_json::json!({"trace": "1"})]),
+        };
+
+        payload.append_traces(vec![serde_json::json!({"trace": "2"})]);
+
+        let traces = payload.traces.unwrap();
+        assert_eq!(traces.len(), 2);
+        assert_eq!(traces[0], serde_json::json!({"trace": "1"}));
+        assert_eq!(traces[1], serde_json::json!({"trace": "2"}));
+    }
+
+    #[test]
+    fn test_plugin_handler_payload_append_traces_to_none() {
+        let mut payload = PluginHandlerPayload {
+            status: 400,
+            message: "test".to_string(),
+            code: None,
+            details: None,
+            logs: None,
+            traces: None,
+        };
+
+        payload.append_traces(vec![serde_json::json!({"trace": "1"})]);
+
+        let traces = payload.traces.unwrap();
+        assert_eq!(traces.len(), 1);
+        assert_eq!(traces[0], serde_json::json!({"trace": "1"}));
+    }
+
+    #[test]
+    fn test_plugin_handler_payload_into_response_with_logs_and_traces() {
+        let logs = vec![LogEntry {
+            level: LogLevel::Error,
+            message: "error message".to_string(),
+        }];
+        let payload = PluginHandlerPayload {
+            status: 400,
+            message: "".to_string(),
+            code: Some("ERR_CODE".to_string()),
+            details: Some(serde_json::json!({"key": "value"})),
+            logs: Some(logs.clone()),
+            traces: Some(vec![serde_json::json!({"trace": "1"})]),
+        };
+
+        let response = payload.into_response(true, true);
+
+        assert_eq!(response.status, 400);
+        assert_eq!(response.message, "error message"); // Derived from error log
+        assert_eq!(response.error.code, Some("ERR_CODE".to_string()));
+        assert!(response.metadata.is_some());
+        let metadata = response.metadata.unwrap();
+        assert_eq!(metadata.logs.unwrap(), logs);
+        assert_eq!(metadata.traces.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_plugin_handler_payload_into_response_without_logs() {
+        let logs = vec![LogEntry {
+            level: LogLevel::Log,
+            message: "test log".to_string(),
+        }];
+        let payload = PluginHandlerPayload {
+            status: 500,
+            message: "explicit message".to_string(),
+            code: None,
+            details: None,
+            logs: Some(logs),
+            traces: None,
+        };
+
+        let response = payload.into_response(false, false);
+
+        assert_eq!(response.status, 500);
+        assert_eq!(response.message, "explicit message");
+        assert!(response.metadata.is_none()); // emit_logs=false, emit_traces=false
+    }
+
+    #[tokio::test]
+    async fn test_call_plugin_handler_error() {
+        let plugin = PluginModel {
+            id: "test-plugin".to_string(),
+            path: "test-path".to_string(),
+            timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+            emit_logs: true,
+            emit_traces: true,
+        };
+        let app_state =
+            create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;
+
+        let mut plugin_runner = MockPluginRunnerTrait::default();
+
+        plugin_runner
+            .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
+            .returning(move |_, _, _, _, _, _, _| {
+                Err(PluginError::HandlerError(PluginHandlerPayload {
+                    status: 400,
+                    message: "Plugin handler error".to_string(),
+                    code: Some("VALIDATION_ERROR".to_string()),
+                    details: Some(serde_json::json!({"field": "email"})),
+                    logs: Some(vec![LogEntry {
+                        level: LogLevel::Error,
+                        message: "Invalid email".to_string(),
+                    }]),
+                    traces: Some(vec![serde_json::json!({"step": "validation"})]),
+                }))
+            });
+
+        let plugin_service = PluginService::<MockPluginRunnerTrait>::new(plugin_runner);
+        let outcome = plugin_service
+            .call_plugin(
+                plugin,
+                PluginCallRequest {
+                    params: serde_json::Value::Null,
+                },
+                Arc::new(web::ThinData(app_state)),
+            )
+            .await;
+
+        match outcome {
+            PluginCallResult::Handler(response) => {
+                assert_eq!(response.status, 400);
+                assert_eq!(response.error.code, Some("VALIDATION_ERROR".to_string()));
+                assert!(response.metadata.is_some());
+                let metadata = response.metadata.unwrap();
+                assert!(metadata.logs.is_some());
+                assert!(metadata.traces.is_some());
+            }
+            _ => panic!("Expected Handler result"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_call_plugin_fatal_error() {
+        let plugin = PluginModel {
+            id: "test-plugin".to_string(),
+            path: "test-path".to_string(),
+            timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+            emit_logs: false,
+            emit_traces: false,
+        };
+        let app_state =
+            create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;
+
+        let mut plugin_runner = MockPluginRunnerTrait::default();
+
+        plugin_runner
+            .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
+            .returning(|_, _, _, _, _, _, _| {
+                Err(PluginError::PluginExecutionError("Fatal error".to_string()))
+            });
+
+        let plugin_service = PluginService::<MockPluginRunnerTrait>::new(plugin_runner);
+        let outcome = plugin_service
+            .call_plugin(
+                plugin,
+                PluginCallRequest {
+                    params: serde_json::Value::Null,
+                },
+                Arc::new(web::ThinData(app_state)),
+            )
+            .await;
+
+        match outcome {
+            PluginCallResult::Fatal(error) => {
+                assert!(matches!(error, PluginError::PluginExecutionError(_)));
+            }
+            _ => panic!("Expected Fatal result"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_call_plugin_success_with_json_result() {
+        let plugin = PluginModel {
+            id: "test-plugin".to_string(),
+            path: "test-path".to_string(),
+            timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+            emit_logs: true,
+            emit_traces: true,
+        };
+        let app_state =
+            create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;
+
+        let mut plugin_runner = MockPluginRunnerTrait::default();
+
+        plugin_runner
+            .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
+            .returning(|_, _, _, _, _, _, _| {
+                Ok(ScriptResult {
+                    logs: vec![LogEntry {
+                        level: LogLevel::Log,
+                        message: "test-log".to_string(),
+                    }],
+                    error: "".to_string(),
+                    return_value: r#"{"result": "success"}"#.to_string(),
+                    trace: vec![serde_json::json!({"step": "1"})],
+                })
+            });
+
+        let plugin_service = PluginService::<MockPluginRunnerTrait>::new(plugin_runner);
+        let outcome = plugin_service
+            .call_plugin(
+                plugin,
+                PluginCallRequest {
+                    params: serde_json::Value::Null,
+                },
+                Arc::new(web::ThinData(app_state)),
+            )
+            .await;
+
+        match outcome {
+            PluginCallResult::Success(result) => {
+                // Should be parsed as JSON object
+                assert_eq!(result.result, serde_json::json!({"result": "success"}));
+                assert!(result.metadata.is_some());
+                let metadata = result.metadata.unwrap();
+                assert!(metadata.logs.is_some());
+                assert!(metadata.traces.is_some());
+            }
+            _ => panic!("Expected Success result"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_call_plugin_success_with_undefined_result() {
+        let plugin = PluginModel {
+            id: "test-plugin".to_string(),
+            path: "test-path".to_string(),
+            timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+            emit_logs: false,
+            emit_traces: false,
+        };
+        let app_state =
+            create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;
+
+        let mut plugin_runner = MockPluginRunnerTrait::default();
+
+        plugin_runner
+            .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
+            .returning(|_, _, _, _, _, _, _| {
+                Ok(ScriptResult {
+                    logs: vec![],
+                    error: "".to_string(),
+                    return_value: "undefined".to_string(),
+                    trace: vec![],
+                })
+            });
+
+        let plugin_service = PluginService::<MockPluginRunnerTrait>::new(plugin_runner);
+        let outcome = plugin_service
+            .call_plugin(
+                plugin,
+                PluginCallRequest {
+                    params: serde_json::Value::Null,
+                },
+                Arc::new(web::ThinData(app_state)),
+            )
+            .await;
+
+        match outcome {
+            PluginCallResult::Success(result) => {
+                // "undefined" should be converted to null
+                assert_eq!(result.result, serde_json::Value::Null);
+                // emit_logs=false, emit_traces=false -> no metadata
+                assert!(result.metadata.is_none());
+            }
+            _ => panic!("Expected Success result"),
+        }
+    }
 }

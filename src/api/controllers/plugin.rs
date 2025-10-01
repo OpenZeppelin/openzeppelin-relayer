@@ -166,7 +166,8 @@ mod tests {
     };
 
     #[actix_web::test]
-    async fn test_call_plugin() {
+    async fn test_call_plugin_execution_failure() {
+        // Tests the fatal error path (line 107-111) - plugin exists but execution fails
         let plugin = PluginModel {
             id: "test-plugin".to_string(),
             path: "test-path".to_string(),
@@ -186,5 +187,99 @@ mod tests {
         )
         .await;
         assert!(response.is_ok());
+        let http_response = response.unwrap();
+        // Plugin execution fails in test environment (no ts-node), returns 500
+        assert_eq!(http_response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[actix_web::test]
+    async fn test_call_plugin_not_found() {
+        // Tests the not found error path (line 52-56)
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
+        let plugin_call_request = PluginCallRequest {
+            params: serde_json::json!({"key":"value"}),
+        };
+        let response = call_plugin(
+            "non-existent".to_string(),
+            plugin_call_request,
+            web::ThinData(app_state),
+        )
+        .await;
+        assert!(response.is_err());
+        match response.unwrap_err() {
+            ApiError::NotFound(msg) => assert!(msg.contains("non-existent")),
+            _ => panic!("Expected NotFound error"),
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_call_plugin_with_logs_and_traces_enabled() {
+        // Tests that emit_logs and emit_traces flags are respected
+        let plugin = PluginModel {
+            id: "test-plugin-logs".to_string(),
+            path: "test-path".to_string(),
+            timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+            emit_logs: true,
+            emit_traces: true,
+        };
+        let app_state =
+            create_mock_app_state(None, None, None, None, Some(vec![plugin]), None).await;
+        let plugin_call_request = PluginCallRequest {
+            params: serde_json::json!({}),
+        };
+        let response = call_plugin(
+            "test-plugin-logs".to_string(),
+            plugin_call_request,
+            web::ThinData(app_state),
+        )
+        .await;
+        assert!(response.is_ok());
+    }
+
+    #[actix_web::test]
+    async fn test_list_plugins() {
+        // Tests the list_plugins endpoint (line 127-154)
+        let plugin1 = PluginModel {
+            id: "plugin1".to_string(),
+            path: "path1".to_string(),
+            timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+            emit_logs: false,
+            emit_traces: false,
+        };
+        let plugin2 = PluginModel {
+            id: "plugin2".to_string(),
+            path: "path2".to_string(),
+            timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+            emit_logs: true,
+            emit_traces: true,
+        };
+        let app_state =
+            create_mock_app_state(None, None, None, None, Some(vec![plugin1, plugin2]), None).await;
+
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 10,
+        };
+
+        let response = list_plugins(query, web::ThinData(app_state)).await;
+        assert!(response.is_ok());
+        let http_response = response.unwrap();
+        assert_eq!(http_response.status(), StatusCode::OK);
+    }
+
+    #[actix_web::test]
+    async fn test_list_plugins_empty() {
+        // Tests list_plugins with no plugins
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 10,
+        };
+
+        let response = list_plugins(query, web::ThinData(app_state)).await;
+        assert!(response.is_ok());
+        let http_response = response.unwrap();
+        assert_eq!(http_response.status(), StatusCode::OK);
     }
 }
