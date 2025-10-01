@@ -206,7 +206,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
-            l1_fee: None,
+            extra_fee: None,
             total_cost: U256::ZERO,
         };
 
@@ -257,7 +257,7 @@ mod tests {
             max_fee_per_gas: Some(30_000_000_000), // 30 Gwei
             max_priority_fee_per_gas: Some(2_000_000_000), // 2 Gwei
             is_min_bumped: None,
-            l1_fee: None,
+            extra_fee: None,
             total_cost: U256::ZERO,
         };
 
@@ -312,7 +312,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
-            l1_fee: None,
+            extra_fee: None,
             total_cost: U256::ZERO,
         };
 
@@ -344,7 +344,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
-            l1_fee: None,
+            extra_fee: None,
             total_cost: U256::ZERO,
         };
 
@@ -392,7 +392,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
-            l1_fee: None,
+            extra_fee: None,
             total_cost: U256::ZERO,
         };
 
@@ -435,7 +435,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
-            l1_fee: None,
+            extra_fee: None,
             total_cost: U256::from(100_000),
         };
 
@@ -486,7 +486,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
-            l1_fee: None,
+            extra_fee: None,
             total_cost: U256::from(100_000),
         };
 

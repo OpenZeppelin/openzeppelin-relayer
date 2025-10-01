@@ -16,7 +16,7 @@ impl MockPriceHandler {
         _tx: &EvmTransactionData,
         mut original_params: PriceParams,
     ) -> Result<PriceParams, TransactionError> {
-        original_params.l1_fee = Some(U256::from(42u128));
+        original_params.extra_fee = Some(U256::from(42u128));
         original_params.total_cost = original_params.total_cost + U256::from(42u128);
         Ok(original_params)
     }

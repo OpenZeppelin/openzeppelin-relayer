@@ -1222,7 +1222,7 @@ mod tests {
             max_fee_per_gas: Some(30_000_000_000),
             max_priority_fee_per_gas: Some(2_000_000_000),
             is_min_bumped: None,
-            l1_fee: None,
+            extra_fee: None,
             total_cost: U256::ZERO,
         };
 
