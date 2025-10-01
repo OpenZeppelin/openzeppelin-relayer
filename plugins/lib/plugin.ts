@@ -454,7 +454,7 @@ export class DefaultPluginAPI implements PluginAPI {
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeoutId = setTimeout(() => {
         shouldContinue = false;
-        reject(pluginError(`Transaction ${transaction.id} timed out after ${waitOptions.timeout}ms`, 504));
+        reject(pluginError(`Transaction ${transaction.id} timed out after ${waitOptions.timeout}ms`, { status: 504 }));
       }, waitOptions.timeout);
     });
 
