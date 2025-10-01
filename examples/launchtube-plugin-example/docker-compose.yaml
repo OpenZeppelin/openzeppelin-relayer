@@ -9,9 +9,9 @@ services:
     secrets:
       - api_key
       - webhook_signing_key
-      - keystore_fund_passphrase
-      - keystore_seq_001_passphrase
-      - keystore_seq_002_passphrase
+      # - keystore_fund_passphrase
+      # - keystore_seq_001_passphrase
+      # - keystore_seq_002_passphrase
       - launchtube_admin_secret
     environment:
       REDIS_URL: redis://redis:6379
@@ -20,14 +20,18 @@ services:
       LOG_LEVEL: ${LOG_LEVEL}
       WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY}
       API_KEY: ${API_KEY}
-      KEYSTORE_PASSPHRASE_FUND: ${KEYSTORE_PASSPHRASE_FUND}
-      KEYSTORE_PASSPHRASE_SEQ_001: ${KEYSTORE_PASSPHRASE_SEQ_001}
-      KEYSTORE_PASSPHRASE_SEQ_002: ${KEYSTORE_PASSPHRASE_SEQ_002}
+      REPOSITORY_STORAGE_TYPE: redis
+      RESET_STORAGE_ON_START: false
+      STORAGE_ENCRYPTION_KEY: nZMedYvjv601LmwhPM/GAm/B+JtZ1LkRiRSOyuAK7js=
+      # KEYSTORE_PASSPHRASE_FUND: ${KEYSTORE_PASSPHRASE_FUND}
+      # KEYSTORE_PASSPHRASE_SEQ_001: ${KEYSTORE_PASSPHRASE_SEQ_001}
+      # KEYSTORE_PASSPHRASE_SEQ_002: ${KEYSTORE_PASSPHRASE_SEQ_002}
       STELLAR_NETWORK: ${STELLAR_NETWORK}
-      LAUNCHTUBE_ADMIN_SECRET: ${LAUNCHTUBE_ADMIN_SECRET}
+      # LAUNCHTUBE_ADMIN_SECRET: ${LAUNCHTUBE_ADMIN_SECRET}
       SOROBAN_RPC_URL: ${SOROBAN_RPC_URL}
       FUND_RELAYER_ID: ${FUND_RELAYER_ID}
       LOCK_TTL_SECONDS: ${LOCK_TTL_SECONDS}
+      LAUNCHTUBE_ADMIN_SECRET: idpZMedYvhdgv601LmwhPM/GAm/B+JtZ1Ljdu
     security_opt:
       - no-new-privileges
     networks:
@@ -72,11 +76,11 @@ secrets:
     environment: API_KEY
   webhook_signing_key:
     environment: WEBHOOK_SIGNING_KEY
-  keystore_fund_passphrase:
-    environment: KEYSTORE_PASSPHRASE_FUND
-  keystore_seq_001_passphrase:
-    environment: KEYSTORE_PASSPHRASE_SEQ_001
-  keystore_seq_002_passphrase:
-    environment: KEYSTORE_PASSPHRASE_SEQ_002
+  # keystore_fund_passphrase:
+  #   environment: KEYSTORE_PASSPHRASE_FUND
+  # keystore_seq_001_passphrase:
+  #   environment: KEYSTORE_PASSPHRASE_SEQ_001
+  # keystore_seq_002_passphrase:
+  #   environment: KEYSTORE_PASSPHRASE_SEQ_002
   launchtube_admin_secret:
     environment: LAUNCHTUBE_ADMIN_SECRET
