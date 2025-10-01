@@ -9,11 +9,11 @@ use super::TransactionCounterTrait;
 use crate::models::RepositoryError;
 use crate::repositories::redis_base::RedisRepository;
 use async_trait::async_trait;
-use log::debug;
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
+use tracing::debug;
 
 const COUNTER_PREFIX: &str = "transaction_counter";
 
@@ -75,10 +75,7 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         }
 
         let key = self.counter_key(relayer_id, address);
-        debug!(
-            "Getting counter for relayer {} and address {}",
-            relayer_id, address
-        );
+        debug!(relayer_id = %relayer_id, address = %address, "getting counter for relayer and address");
 
         let mut conn = self.client.as_ref().clone();
 
@@ -87,7 +84,7 @@ impl TransactionCounterTrait for RedisTransactionCounter {
             .await
             .map_err(|e| self.map_redis_error(e, "get_counter"))?;
 
-        debug!("Retrieved counter value: {:?}", value);
+        debug!(value = ?value, "retrieved counter value");
         Ok(value)
     }
 
@@ -109,31 +106,19 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         }
 
         let key = self.counter_key(relayer_id, address);
-        debug!(
-            "Getting and incrementing counter for relayer {} and address {}",
-            relayer_id, address
-        );
+        debug!(relayer_id = %relayer_id, address = %address, "getting and incrementing counter for relayer and address");
 
         let mut conn = self.client.as_ref().clone();
 
-        // Get current value (or 0 if not exists)
-        let current_value: Option<u64> = conn
-            .get(&key)
-            .await
-            .map_err(|e| self.map_redis_error(e, "get_current_value"))?;
-
-        let current = current_value.unwrap_or(0);
-
-        // Use a pipeline to atomically set the incremented value
-        let mut pipe = redis::pipe();
-        pipe.atomic();
-        pipe.set(&key, current + 1);
-
-        pipe.exec_async(&mut conn)
+        // Use Redis INCR for atomic increment
+        let new_value: u64 = conn
+            .incr(&key, 1)
             .await
             .map_err(|e| self.map_redis_error(e, "get_and_increment"))?;
 
-        debug!("Counter incremented from {} to {}", current, current + 1);
+        let current = new_value.saturating_sub(1);
+
+        debug!(from = %current, to = %(current + 1), "counter incremented");
         Ok(current)
     }
 
@@ -151,35 +136,41 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         }
 
         let key = self.counter_key(relayer_id, address);
-        debug!(
-            "Decrementing counter for relayer {} and address {}",
-            relayer_id, address
-        );
+        debug!(relayer_id = %relayer_id, address = %address, "decrementing counter for relayer and address");
 
         let mut conn = self.client.as_ref().clone();
 
-        // Check if counter exists
-        let current_value: Option<u64> = conn
-            .get(&key)
+        // Check if counter exists first
+        let exists: bool = conn
+            .exists(&key)
             .await
-            .map_err(|e| self.map_redis_error(e, "get_current_value_for_decrement"))?;
+            .map_err(|e| self.map_redis_error(e, "check_counter_exists"))?;
 
-        let current = current_value.ok_or_else(|| {
-            RepositoryError::NotFound(format!(
+        if !exists {
+            return Err(RepositoryError::NotFound(format!(
                 "Counter not found for relayer {} and address {}",
                 relayer_id, address
-            ))
-        })?;
+            )));
+        }
 
-        // Only decrement if current value is greater than 0
-        let new_value = if current > 0 { current - 1 } else { 0 };
-
-        let _: () = conn
-            .set(&key, new_value)
+        // Use Redis DECR and correct if it goes below 0
+        let new_value: i64 = conn
+            .decr(&key, 1)
             .await
             .map_err(|e| self.map_redis_error(e, "decrement_counter"))?;
 
-        debug!("Counter decremented from {} to {}", current, new_value);
+        let new_value = if new_value < 0 {
+            // Correct negative values back to 0
+            let _: () = conn
+                .set(&key, 0)
+                .await
+                .map_err(|e| self.map_redis_error(e, "correct_negative_counter"))?;
+            0u64
+        } else {
+            new_value as u64
+        };
+
+        debug!(new_value = %new_value, "counter decremented");
         Ok(new_value)
     }
 
@@ -202,10 +193,7 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         }
 
         let key = self.counter_key(relayer_id, address);
-        debug!(
-            "Setting counter for relayer {} and address {} to {}",
-            relayer_id, address, value
-        );
+        debug!(relayer_id = %relayer_id, address = %address, value = %value, "setting counter for relayer and address");
 
         let mut conn = self.client.as_ref().clone();
 
@@ -214,7 +202,7 @@ impl TransactionCounterTrait for RedisTransactionCounter {
             .await
             .map_err(|e| self.map_redis_error(e, "set_counter"))?;
 
-        debug!("Counter set to {}", value);
+        debug!(value = %value, "counter set");
         Ok(())
     }
 }
@@ -367,5 +355,45 @@ mod tests {
             201
         );
         assert_eq!(repo.get(&relayer_2, &address_1).await.unwrap(), Some(300));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_concurrent_get_and_increment() {
+        let repo = setup_test_repo().await;
+        let relayer_id = uuid::Uuid::new_v4().to_string();
+        let address = uuid::Uuid::new_v4().to_string();
+
+        // Set initial value
+        repo.set(&relayer_id, &address, 100).await.unwrap();
+
+        // Create multiple concurrent tasks that increment the counter
+        let handles: Vec<_> = (0..10)
+            .map(|_| {
+                let repo = repo.clone();
+                let relayer_id = relayer_id.clone();
+                let address = address.clone();
+                tokio::spawn(
+                    async move { repo.get_and_increment(&relayer_id, &address).await.unwrap() },
+                )
+            })
+            .collect();
+
+        // Wait for all tasks to complete and collect results
+        let mut results = Vec::new();
+        for handle in handles {
+            results.push(handle.await.unwrap());
+        }
+
+        // Sort results to check they are sequential
+        results.sort();
+
+        // Verify we get exactly the values 100-109 (no duplicates, no gaps)
+        let expected: Vec<u64> = (100..110).collect();
+        assert_eq!(results, expected);
+
+        // Verify final value is 110
+        let final_value = repo.get(&relayer_id, &address).await.unwrap();
+        assert_eq!(final_value, Some(110));
     }
 }

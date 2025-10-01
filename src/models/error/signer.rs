@@ -1,7 +1,7 @@
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::services::{AwsKmsError, GoogleCloudKmsError, TurnkeyError, VaultError};
+use crate::services::{AwsKmsError, CdpError, GoogleCloudKmsError, TurnkeyError, VaultError};
 
 use super::TransactionError;
 
@@ -28,6 +28,9 @@ pub enum SignerError {
 
     #[error("Turnkey error: {0}")]
     TurnkeyError(#[from] TurnkeyError),
+
+    #[error("CDP error: {0}")]
+    CdpError(#[from] CdpError),
 
     #[error("AWS KMS error: {0}")]
     AwsKmsError(#[from] AwsKmsError),

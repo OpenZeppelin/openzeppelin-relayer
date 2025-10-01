@@ -7,9 +7,7 @@
         "https://api.gnosisscan.io/api",
         "https://gnosisscan.io"
       ],
-      "features": [
-        "eip1559"
-      ],
+      "features": ["eip1559"],
       "is_testnet": false,
       "network": "gnosis",
       "required_confirmations": 1,
@@ -26,28 +24,19 @@
     {
       "average_blocktime_ms": 5000,
       "chain_id": 10200,
-      "explorer_urls": [
-        "https://gnosis-chiado.blockscout.com/"
-      ],
-      "features": [
-        "eip1559"
-      ],
+      "explorer_urls": ["https://gnosis-chiado.blockscout.com/"],
+      "features": ["eip1559"],
       "is_testnet": true,
       "network": "gnosis-chiado",
       "required_confirmations": 6,
-      "rpc_urls": [
-        "https://rpc.chiadochain.net"
-      ],
+      "rpc_urls": ["https://rpc.chiadochain.net"],
       "symbol": "xDAI",
       "type": "evm"
     },
     {
       "average_blocktime_ms": 1200,
       "chain_id": 250,
-      "explorer_urls": [
-        "https://api.ftmscan.com/api",
-        "https://ftmscan.com"
-      ],
+      "explorer_urls": ["https://api.ftmscan.com/api", "https://ftmscan.com"],
       "is_testnet": false,
       "network": "fantom",
       "required_confirmations": 1,
@@ -71,13 +60,9 @@
       "is_testnet": true,
       "network": "fantom-testnet",
       "required_confirmations": 1,
-      "rpc_urls": [
-        "https://rpc.testnet.fantom.network"
-      ],
+      "rpc_urls": ["https://rpc.testnet.fantom.network"],
       "symbol": "FTM",
-      "tags": [
-        "deprecated"
-      ],
+      "tags": ["deprecated"],
       "type": "evm"
     },
     {
@@ -87,15 +72,11 @@
         "https://api-moonbeam.moonscan.io/api",
         "https://moonbeam.moonscan.io"
       ],
-      "features": [
-        "eip1559"
-      ],
+      "features": ["eip1559"],
       "is_testnet": false,
       "network": "moonbeam",
       "required_confirmations": 1,
-      "rpc_urls": [
-        "https://rpc.api.moonbeam.network"
-      ],
+      "rpc_urls": ["https://rpc.api.moonbeam.network"],
       "symbol": "GLMR",
       "type": "evm"
     },
@@ -106,9 +87,7 @@
         "https://api-moonriver.moonscan.io/api",
         "https://moonriver.moonscan.io"
       ],
-      "features": [
-        "eip1559"
-      ],
+      "features": ["eip1559"],
       "is_testnet": false,
       "network": "moonriver",
       "required_confirmations": 1,
@@ -129,28 +108,19 @@
         "https://api-moonbase.moonscan.io/api",
         "https://moonbase.moonscan.io"
       ],
-      "features": [
-        "eip1559"
-      ],
+      "features": ["eip1559"],
       "is_testnet": true,
       "network": "moonbase",
       "required_confirmations": 1,
-      "rpc_urls": [
-        "https://rpc.testnet.moonbeam.network"
-      ],
+      "rpc_urls": ["https://rpc.testnet.moonbeam.network"],
       "symbol": "DEV",
       "type": "evm"
     },
     {
       "average_blocktime_ms": 2000,
       "chain_id": 43114,
-      "explorer_urls": [
-        "https://api.snowtrace.io/api",
-        "https://snowtrace.io"
-      ],
-      "features": [
-        "eip1559"
-      ],
+      "explorer_urls": ["https://api.snowtrace.io/api", "https://snowtrace.io"],
+      "features": ["eip1559"],
       "is_testnet": false,
       "network": "avalanche",
       "required_confirmations": 1,
@@ -169,28 +139,19 @@
         "https://api-testnet.snowtrace.io/api",
         "https://testnet.snowtrace.io"
       ],
-      "features": [
-        "eip1559"
-      ],
+      "features": ["eip1559"],
       "is_testnet": true,
       "network": "avalanche-fuji",
       "required_confirmations": 1,
-      "rpc_urls": [
-        "https://ava-testnet.public.blastapi.io/ext/bc/C/rpc"
-      ],
+      "rpc_urls": ["https://ava-testnet.public.blastapi.io/ext/bc/C/rpc"],
       "symbol": "AVAX",
-      "tags": [
-        "deprecated"
-      ],
+      "tags": ["deprecated"],
       "type": "evm"
     },
     {
       "average_blocktime_ms": 5000,
       "chain_id": 42220,
-      "explorer_urls": [
-        "https://api.celoscan.io/api",
-        "https://celoscan.io"
-      ],
+      "explorer_urls": ["https://api.celoscan.io/api", "https://celoscan.io"],
       "is_testnet": false,
       "network": "celo",
       "required_confirmations": 1,
@@ -218,9 +179,7 @@
         "https://alfajores-forno.celo-testnet.org"
       ],
       "symbol": "CELO",
-      "tags": [
-        "deprecated"
-      ],
+      "tags": ["deprecated"],
       "type": "evm"
     },
     {
@@ -233,13 +192,9 @@
       "is_testnet": true,
       "network": "celo-baklava",
       "required_confirmations": 1,
-      "rpc_urls": [
-        "https://baklava-forno.celo-testnet.org"
-      ],
+      "rpc_urls": ["https://baklava-forno.celo-testnet.org"],
       "symbol": "CELO",
-      "tags": [
-        "deprecated"
-      ],
+      "tags": ["deprecated"],
       "type": "evm"
     },
     {
@@ -277,26 +232,18 @@
         "https://aurora-testnet.drpc.org"
       ],
       "symbol": "ETH",
-      "tags": [
-        "deprecated"
-      ],
+      "tags": ["deprecated"],
       "type": "evm"
     },
     {
       "average_blocktime_ms": 5000,
       "chain_id": 122,
-      "explorer_urls": [
-        "https://explorer.fuse.io"
-      ],
-      "features": [
-        "eip1559"
-      ],
+      "explorer_urls": ["https://explorer.fuse.io"],
+      "features": ["eip1559"],
       "is_testnet": false,
       "network": "fuse",
       "required_confirmations": 6,
-      "rpc_urls": [
-        "https://rpc.fuse.io"
-      ],
+      "rpc_urls": ["https://rpc.fuse.io"],
       "symbol": "FUSE",
       "tags": [],
       "type": "evm"
@@ -304,21 +251,76 @@
     {
       "average_blocktime_ms": 5000,
       "chain_id": 123,
-      "explorer_urls": [
-        "https://explorer.fusespark.io"
-      ],
-      "features": [
-        "eip1559"
-      ],
+      "explorer_urls": ["https://explorer.fusespark.io"],
+      "features": ["eip1559"],
       "is_testnet": true,
       "network": "fuse-spark",
       "required_confirmations": 6,
-      "rpc_urls": [
-        " https://rpc.fusespark.io"
-      ],
+      "rpc_urls": ["https://rpc.fusespark.io"],
       "symbol": "SPARK",
       "tags": [],
       "type": "evm"
+    },
+    {
+      "type": "evm",
+      "network": "japan-open-chain",
+      "chain_id": 81,
+      "explorer_urls": ["https://explorer.japanopenchain.org"],
+      "is_testnet": false,
+      "required_confirmations": 1,
+      "rpc_urls": [
+        "https://rpc-1.japanopenchain.org:8545",
+        "https://rpc-2.japanopenchain.org:8545",
+        "https://rpc-3.japanopenchain.org"
+      ],
+      "average_blocktime_ms": 5000,
+      "features": ["eip1559"],
+      "symbol": "JOC"
+    },
+    {
+      "from": "japan-open-chain",
+      "type": "evm",
+      "network": "japan-open-chain-testnet",
+      "chain_id": 10081,
+      "explorer_urls": ["https://explorer.testnet.japanopenchain.org/"],
+      "is_testnet": true,
+      "rpc_urls": [
+        "https://rpc-1.testnet.japanopenchain.org:8545",
+        "https://rpc-2.testnet.japanopenchain.org:8545"
+      ],
+      "symbol": "JOCT"
+    },
+    {
+      "type": "evm",
+      "network": "peaq-mainnet",
+      "chain_id": 3338,
+      "explorer_urls": [
+        "https://peaq.subscan.io/",
+        "https://polkadot.js.org/apps/?rpc=wss://peaq.api.onfinality.io/public-ws#/explorer"
+      ],
+      "is_testnet": false,
+      "required_confirmations": 1,
+      "rpc_urls": [
+        "https://quicknode1.peaq.xyz",
+        "https://quicknode2.peaq.xyz",
+        "https://quicknode3.peaq.xyz"
+      ],
+      "average_blocktime_ms": 6000,
+      "features": ["eip1559"],
+      "symbol": "PEAQ"
+    },
+    {
+      "from": "peaq-mainnet",
+      "type": "evm",
+      "network": "peaq-agung",
+      "chain_id": 9990,
+      "explorer_urls": [
+        "https://agung-testnet.subscan.io/",
+        "https://polkadot.js.org/apps/?rpc=wss://wss-async.agung.peaq.network#/explorer"
+      ],
+      "is_testnet": true,
+      "rpc_urls": ["https://peaq-agung.api.onfinality.io/public"],
+      "symbol": "AGNG"
     }
   ]
 }

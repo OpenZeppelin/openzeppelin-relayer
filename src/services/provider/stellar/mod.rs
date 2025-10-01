@@ -125,7 +125,7 @@ impl StellarProviderTrait for StellarProvider {
         tx_envelope: &TransactionEnvelope,
     ) -> Result<SimulateTransactionResponse> {
         self.client
-            .simulate_transaction_envelope(tx_envelope)
+            .simulate_transaction_envelope(tx_envelope, None)
             .await
             .map_err(|e| eyre!("Failed to simulate transaction: {}", e))
     }
@@ -215,7 +215,7 @@ mod tests {
     use mockall::predicate as p;
     use soroban_rs::stellar_rpc_client::{
         EventStart, GetEventsResponse, GetLatestLedgerResponse, GetLedgerEntriesResponse,
-        GetNetworkResponse, GetTransactionResponse, GetTransactionsRequest,
+        GetNetworkResponse, GetTransactionEvents, GetTransactionResponse, GetTransactionsRequest,
         GetTransactionsResponse, SimulateTransactionResponse,
     };
     use soroban_rs::xdr::{
@@ -272,6 +272,12 @@ mod tests {
             envelope: None,
             result: Some(create_success_tx_result()),
             result_meta: None,
+            events: GetTransactionEvents {
+                contract_events: vec![],
+                diagnostic_events: vec![],
+                transaction_events: vec![],
+            },
+            ledger: None,
         }
     }
 
@@ -303,6 +309,10 @@ mod tests {
         GetEventsResponse {
             events: vec![],
             latest_ledger: 0,
+            latest_ledger_close_time: "0".to_string(),
+            oldest_ledger: 0,
+            oldest_ledger_close_time: "0".to_string(),
+            cursor: "0".to_string(),
         }
     }
 

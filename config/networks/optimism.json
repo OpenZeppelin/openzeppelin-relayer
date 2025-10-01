@@ -23,7 +23,7 @@
       "symbol": "ETH",
       "tags": [
         "rollup",
-        "optimism"
+        "optimism-based"
       ],
       "type": "evm"
     },
@@ -46,7 +46,7 @@
       "tags": [
         "deprecated",
         "rollup",
-        "optimism"
+        "optimism-based"
       ]
     },
     {
@@ -71,7 +71,8 @@
       ],
       "symbol": "ETH",
       "tags": [
-        "rollup"
+        "rollup",
+        "optimism-based"
       ],
       "type": "evm"
     },
@@ -93,7 +94,8 @@
       ],
       "tags": [
         "deprecated",
-        "rollup"
+        "rollup",
+        "optimism-based"
       ]
     },
     {
@@ -117,7 +119,8 @@
       ],
       "symbol": "ETH",
       "tags": [
-        "rollup"
+        "rollup",
+        "optimism-based"
       ],
       "type": "evm"
     },
@@ -142,7 +145,8 @@
       "symbol": "ETH",
       "tags": [
         "deprecated",
-        "rollup"
+        "rollup",
+        "optimism-based"
       ],
       "type": "evm"
     },
@@ -165,7 +169,8 @@
       ],
       "symbol": "ETH",
       "tags": [
-        "rollup"
+        "rollup",
+        "optimism-based"
       ],
       "type": "evm"
     },
@@ -190,7 +195,8 @@
       "symbol": "ETH",
       "tags": [
         "deprecated",
-        "rollup"
+        "rollup",
+        "optimism-based"
       ],
       "type": "evm"
     }

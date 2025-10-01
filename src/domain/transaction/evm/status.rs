@@ -2,9 +2,10 @@
 //! It includes methods for checking transaction status, determining when to resubmit
 //! or replace transactions with NOOPs, and updating transaction status in the repository.
 
+use alloy::network::ReceiptResponse;
 use chrono::{DateTime, Duration, Utc};
 use eyre::Result;
-use log::info;
+use tracing::{debug, info};
 
 use super::EvmRelayerTransaction;
 use super::{
@@ -59,7 +60,7 @@ where
         let receipt_result = self.provider().get_transaction_receipt(tx_hash).await?;
 
         if let Some(receipt) = receipt_result {
-            if !receipt.status() {
+            if !receipt.inner.status() {
                 return Ok(TransactionStatus::Failed);
             }
             let last_block_number = self.provider().get_block_number().await?;
@@ -90,12 +91,12 @@ where
                 last_block_number,
                 network.required_confirmations,
             ) {
-                info!("Transaction mined but not confirmed: {}", tx_hash);
+                debug!(tx_hash = %tx_hash, "transaction mined but not confirmed");
                 return Ok(TransactionStatus::Mined);
             }
             Ok(TransactionStatus::Confirmed)
         } else {
-            info!("Transaction not yet mined: {}", tx_hash);
+            debug!(tx_hash = %tx_hash, "transaction not yet mined");
             Ok(TransactionStatus::Submitted)
         }
     }
@@ -278,7 +279,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("Scheduling resubmit job for transaction: {}", tx.id);
+        debug!("scheduling resubmit job for transaction");
 
         let tx_to_process = if self.should_noop(&tx).await? {
             self.process_noop_transaction(&tx).await?
@@ -295,7 +296,7 @@ where
         &self,
         tx: &TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("Preparing transaction NOOP before resubmission: {}", tx.id);
+        debug!("preparing transaction NOOP before resubmission");
         let update = self.prepare_noop_update_request(tx, false).await?;
         let updated_tx = self
             .transaction_repository()
@@ -313,7 +314,7 @@ where
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
         if self.should_noop(&tx).await? {
-            info!("Preparing NOOP for pending transaction: {}", tx.id);
+            debug!("preparing NOOP for pending transaction");
             let update = self.prepare_noop_update_request(&tx, false).await?;
             let updated_tx = self
                 .transaction_repository()
@@ -357,10 +358,10 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("Checking transaction status for tx: {:?}", tx.id);
+        debug!("checking transaction status");
 
         let status = self.check_transaction_status(&tx).await?;
-        info!("Transaction status: {:?}", status);
+        debug!(status = ?status, "transaction status");
 
         match status {
             TransactionStatus::Submitted => self.handle_submitted_state(tx).await,
@@ -386,7 +387,7 @@ mod tests {
         models::{
             evm::Speed, EvmTransactionData, NetworkConfigData, NetworkRepoModel,
             NetworkTransactionData, NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy,
-            RelayerRepoModel, TransactionRepoModel, TransactionStatus, U256,
+            RelayerRepoModel, TransactionReceipt, TransactionRepoModel, TransactionStatus, U256,
         },
         repositories::{
             MockNetworkRepository, MockRelayerRepository, MockTransactionCounterTrait,
@@ -395,9 +396,9 @@ mod tests {
         services::{MockEvmProviderTrait, MockSigner},
     };
     use alloy::{
-        consensus::{Eip658Value, Receipt, ReceiptEnvelope, ReceiptWithBloom},
+        consensus::{Eip658Value, Receipt, ReceiptWithBloom},
+        network::AnyReceiptEnvelope,
         primitives::{b256, Address, BlockHash, Bloom, TxHash},
-        rpc::types::TransactionReceipt,
     };
     use chrono::{Duration, Utc};
     use std::sync::Arc;
@@ -462,6 +463,7 @@ mod tests {
             required_confirmations: Some(12),
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
+            gas_price_cache: None,
         };
         NetworkRepoModel {
             id: "evm:mainnet".to_string(),
@@ -487,6 +489,7 @@ mod tests {
             required_confirmations: Some(12),
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
+            gas_price_cache: None,
         };
         NetworkRepoModel {
             id: "evm:arbitrum".to_string(),
@@ -590,27 +593,31 @@ mod tests {
         let from_address = Address::from([0x11; 20]);
 
         TransactionReceipt {
-            // A default, minimal "Legacy" receipt envelope
-            inner: ReceiptEnvelope::Legacy(ReceiptWithBloom {
-                receipt: Receipt {
-                    status: Eip658Value::Eip658(status), // determines success/fail
-                    cumulative_gas_used: 0,
-                    logs: vec![],
+            inner: alloy::rpc::types::TransactionReceipt {
+                inner: AnyReceiptEnvelope {
+                    inner: ReceiptWithBloom {
+                        receipt: Receipt {
+                            status: Eip658Value::Eip658(status), // determines success/fail
+                            cumulative_gas_used: 0,
+                            logs: vec![],
+                        },
+                        logs_bloom: Bloom::ZERO,
+                    },
+                    r#type: 0, // Legacy transaction type
                 },
-                logs_bloom: Bloom::ZERO,
-            }),
-            transaction_hash: tx_hash,
-            transaction_index: Some(0),
-            block_hash: block_number.map(|_| block_hash), // only set if mined
-            block_number,
-            gas_used: 21000,
-            effective_gas_price: 1000,
-            blob_gas_used: None,
-            blob_gas_price: None,
-            from: from_address,
-            to: None,
-            contract_address: None,
-            authorization_list: None,
+                transaction_hash: tx_hash,
+                transaction_index: Some(0),
+                block_hash: block_number.map(|_| block_hash), // only set if mined
+                block_number,
+                gas_used: 21000,
+                effective_gas_price: 1000,
+                blob_gas_used: None,
+                blob_gas_price: None,
+                from: from_address,
+                to: None,
+                contract_address: None,
+            },
+            other: Default::default(),
         }
     }
 
@@ -858,6 +865,7 @@ mod tests {
                 required_confirmations: Some(12),
                 features: Some(vec!["eip1559".to_string()]),
                 symbol: Some("ETH".to_string()),
+                gas_price_cache: None,
             };
             let invalid_network = NetworkRepoModel {
                 id: "evm:invalid".to_string(),

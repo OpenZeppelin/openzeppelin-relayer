@@ -1,0 +1,47 @@
+{
+  "relayers": [
+    {
+      "id": "sepolia-example",
+      "name": "Sepolia Example",
+      "network": "sepolia",
+      "paused": false,
+      "notification_id": "notification-example",
+      "signer_id": "cdp-signer-evm",
+      "network_type": "evm",
+      "policies": {
+        "min_balance": 0
+      }
+    }
+  ],
+  "notifications": [
+    {
+      "id": "notification-example",
+      "type": "webhook",
+      "url": "",
+      "signing_key": {
+        "type": "env",
+        "value": "WEBHOOK_SIGNING_KEY"
+      }
+    }
+  ],
+  "signers": [
+    {
+      "id": "cdp-signer-evm",
+      "type": "cdp",
+      "config": {
+        "api_key_id": "",
+        "api_key_secret": {
+          "type": "env",
+          "value": "CDP_API_KEY_SECRET"
+        },
+        "wallet_secret": {
+          "type": "env",
+          "value": "CDP_WALLET_SECRET"
+        },
+        "account_address": ""
+      }
+    }
+  ],
+  "networks": "./config/networks",
+  "plugins": []
+}

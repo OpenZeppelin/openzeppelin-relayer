@@ -33,7 +33,7 @@ pub struct EvmTransactionResponse {
         deserialize_with = "deserialize_optional_u128",
         default
     )]
-    #[schema(nullable = false)]
+    #[schema(nullable = false, value_type = String)]
     pub gas_price: Option<u128>,
     #[serde(deserialize_with = "deserialize_optional_u64", default)]
     pub gas_limit: Option<u64>,
@@ -53,14 +53,14 @@ pub struct EvmTransactionResponse {
         deserialize_with = "deserialize_optional_u128",
         default
     )]
-    #[schema(nullable = false)]
+    #[schema(nullable = false, value_type = String)]
     pub max_fee_per_gas: Option<u128>,
     #[serde(
         serialize_with = "serialize_optional_u128",
         deserialize_with = "deserialize_optional_u128",
         default
     )]
-    #[schema(nullable = false)]
+    #[schema(nullable = false, value_type = String)]
     pub max_priority_fee_per_gas: Option<u128>,
     pub signature: Option<EvmTransactionDataSignature>,
     pub speed: Option<Speed>,
@@ -97,6 +97,7 @@ pub struct StellarTransactionResponse {
     pub source_account: String,
     pub fee: u32,
     pub sequence_number: i64,
+    pub relayer_id: String,
 }
 
 impl From<TransactionRepoModel> for TransactionResponse {
@@ -149,6 +150,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     source_account: stellar_data.source_account,
                     fee: stellar_data.fee.unwrap_or(0),
                     sequence_number: stellar_data.sequence_number.unwrap_or(0),
+                    relayer_id: model.relayer_id,
                 }))
             }
         }
@@ -308,6 +310,7 @@ mod tests {
                 assert_eq!(stellar.source_account, "source_account_id");
                 assert_eq!(stellar.fee, 100);
                 assert_eq!(stellar.sequence_number, 12345);
+                assert_eq!(stellar.relayer_id, "relayer3");
             }
             _ => panic!("Expected StellarTransactionResponse"),
         }
@@ -362,6 +365,7 @@ mod tests {
                 assert_eq!(stellar.source_account, "fee_source_account");
                 assert_eq!(stellar.fee, 200);
                 assert_eq!(stellar.sequence_number, 54321);
+                assert_eq!(stellar.relayer_id, "relayer3");
             }
             _ => panic!("Expected StellarTransactionResponse"),
         }

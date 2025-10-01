@@ -26,7 +26,7 @@
 use super::*;
 use std::str::FromStr;
 
-use log::debug;
+use crate::utils::calculate_scheduled_timestamp;
 use solana_sdk::{
     commitment_config::CommitmentConfig,
     hash::Hash,
@@ -39,8 +39,8 @@ use solana_sdk::{
     transaction::Transaction,
 };
 use solana_system_interface::program;
-
 use spl_token::{amount_to_ui_amount, state::Account};
+use tracing::debug;
 
 use crate::{
     constants::{
@@ -51,6 +51,7 @@ use crate::{
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
 
+#[derive(Debug)]
 pub struct FeeQuote {
     pub fee_in_spl: u64,
     pub fee_in_spl_ui: String,
@@ -77,6 +78,56 @@ where
     JP: JobProducerTrait + Send + Sync,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
 {
+    /// Fetches token decimals from the blockchain using string mint address
+    async fn fetch_token_decimals_from_chain(
+        &self,
+        token_mint_str: &str,
+    ) -> Result<u8, SolanaRpcError> {
+        let token_mint = Pubkey::from_str(token_mint_str)
+            .map_err(|e| SolanaRpcError::Internal(format!("Invalid mint address: {}", e)))?;
+
+        self.fetch_token_decimals_from_chain_pubkey(&token_mint)
+            .await
+    }
+
+    /// Fetches token decimals from the blockchain using Pubkey
+    async fn fetch_token_decimals_from_chain_pubkey(
+        &self,
+        token_mint: &Pubkey,
+    ) -> Result<u8, SolanaRpcError> {
+        let mint_account = self
+            .provider
+            .get_account_from_pubkey(token_mint)
+            .await
+            .map_err(|e| {
+                SolanaRpcError::Internal(format!("Failed to fetch mint account: {}", e))
+            })?;
+
+        let mint_info = spl_token::state::Mint::unpack(&mint_account.data)
+            .map_err(|e| SolanaRpcError::Internal(format!("Failed to unpack mint data: {}", e)))?;
+
+        Ok(mint_info.decimals)
+    }
+
+    /// Gets token decimals from policy first, then fetches from blockchain if not found (Pubkey version)
+    async fn get_token_decimals_from_policy_or_fetch_pubkey(
+        &self,
+        token_mint: &Pubkey,
+    ) -> Result<u8, SolanaRpcError> {
+        match self
+            .relayer
+            .policies
+            .get_solana_policy()
+            .get_allowed_token_decimals(&token_mint.to_string())
+        {
+            Some(decimals) => Ok(decimals),
+            None => {
+                self.fetch_token_decimals_from_chain_pubkey(token_mint)
+                    .await
+            }
+        }
+    }
+
     /// Signs a transaction with the relayer's keypair and returns both the signed transaction and
     /// signature.
     ///
@@ -288,27 +339,39 @@ where
             });
         }
 
-        // Get token policy
-        let token_entry = self
-            .relayer
-            .policies
-            .get_solana_policy()
-            .get_allowed_token_entry(token)
-            .ok_or_else(|| {
+        let policy = self.relayer.policies.get_solana_policy();
+
+        // Check if allowed tokens are configured
+        let no_allowed_tokens_configured = match &policy.allowed_tokens {
+            None => true,                      // No tokens configured
+            Some(tokens) => tokens.is_empty(), // Tokens configured but empty
+        };
+
+        let (decimals, slippage) = if no_allowed_tokens_configured {
+            // No allowed tokens configured - allow all tokens and fetch decimals from blockchain
+            let decimals = self.fetch_token_decimals_from_chain(token).await?;
+            (decimals, DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE)
+        } else {
+            // Allowed tokens are configured - check if token is in the list
+            let token_entry = policy.get_allowed_token_entry(token).ok_or_else(|| {
                 SolanaRpcError::UnsupportedFeeToken(format!("Token {} not allowed", token))
             })?;
 
-        // Get token decimals
-        let decimals = token_entry.decimals.ok_or_else(|| {
-            SolanaRpcError::Estimation("Token decimals not configured".to_string())
-        })?;
+            // Get token decimals from policy first, then fetch from blockchain
+            let decimals = match token_entry.decimals {
+                Some(decimals) => decimals,
+                None => self.fetch_token_decimals_from_chain(token).await?,
+            };
 
-        // Get slippage from policy
-        let slippage = token_entry
-            .swap_config
-            .as_ref()
-            .and_then(|config| config.slippage_percentage)
-            .unwrap_or(DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE);
+            // Get slippage from policy
+            let slippage = token_entry
+                .swap_config
+                .as_ref()
+                .and_then(|config| config.slippage_percentage)
+                .unwrap_or(DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE);
+
+            (decimals, slippage)
+        };
 
         // Get Jupiter quote
         let quote = self
@@ -469,14 +532,11 @@ where
                 token_mint,
             ));
         }
+
+        // Try to get token decimals from policy first, then fetch from blockchain
         let token_decimals = self
-            .relayer
-            .policies
-            .get_solana_policy()
-            .get_allowed_token_decimals(&token_mint.to_string())
-            .ok_or_else(|| {
-                SolanaRpcError::UnsupportedFeeToken("Token not found in allowed tokens".to_string())
-            })?;
+            .get_token_decimals_from_policy_or_fetch_pubkey(token_mint)
+            .await?;
 
         instructions.push(SolanaTokenProgram::create_transfer_checked_instruction(
             &program_id,
@@ -502,11 +562,11 @@ where
             .estimate_fee_payer_total_fee(transaction)
             .await
             .map_err(|e| {
-                error!("Failed to estimate total fee: {}", e);
+                error!(error = %e, "failed to estimate total fee");
                 SolanaRpcError::Estimation(e.to_string())
             })?;
 
-        debug!("Estimated SOL fee: {} lamports", total_fee);
+        debug!(total_fee = %total_fee, "estimated sol fee in lamports");
 
         // Apply buffer if specified
         let buffered_fee = if let Some(factor) = fee_margin_percentage {
@@ -534,7 +594,7 @@ where
             .get_fee_token_quote(fee_token, fee_with_margin)
             .await
             .map_err(|e| {
-                error!("Failed to fee quote: {}", e);
+                error!(error = %e, "failed to fee quote");
                 SolanaRpcError::Estimation(e.to_string())
             })?;
 
@@ -802,7 +862,7 @@ where
                             ) {
                                 Ok(account) => account,
                                 Err(e) => {
-                                    error!("Failed to unpack destination token account: {}", e);
+                                    error!(error = %e, "failed to unpack destination token account");
                                     continue;
                                 }
                             };
@@ -863,13 +923,13 @@ where
                                     }
                                 }
                                 Err(e) => {
-                                    error!("Failed to get source token account: {}", e);
+                                    error!(error = %e, "failed to get source token account");
                                     continue;
                                 }
                             }
                         }
                         Err(e) => {
-                            error!("Failed to get destination token account: {}", e);
+                            error!(error = %e, "failed to get destination token account");
                             continue;
                         }
                     }
@@ -887,14 +947,15 @@ where
         tx: &TransactionRepoModel,
         delay: Option<i64>,
     ) -> Result<(), SolanaRpcError> {
+        let scheduled_on = delay.map(calculate_scheduled_timestamp);
         self.job_producer
             .produce_check_transaction_status_job(
                 TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
-                delay,
+                scheduled_on,
             )
             .await
             .map_err(|e| {
-                error!("Failed to schedule status check: {}", e);
+                error!(error = %e, "failed to schedule status check");
                 SolanaRpcError::Internal(e.to_string())
             })?;
         Ok(())
@@ -2730,5 +2791,109 @@ mod tests {
 
         // Assert success
         assert!(result.is_ok(), "Schedule status check should succeed");
+    }
+
+    #[tokio::test]
+    async fn test_get_fee_token_quote_fetches_decimals_from_chain_when_no_allowed_tokens() {
+        let (relayer, signer, mut provider, mut jupiter_service, _, job_producer, network) =
+            setup_test_context();
+
+        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC mint
+        let total_fee = 5000u64; // 5000 lamports
+
+        // Mock the provider to return mint account data when get_account_from_pubkey is called
+        let mint_data = {
+            let mint_info = spl_token::state::Mint {
+                mint_authority: None.into(),
+                supply: 1_000_000_000_000,
+                decimals: 6, // USDC decimals
+                is_initialized: true,
+                freeze_authority: None.into(),
+            };
+            let mut data = vec![0u8; spl_token::state::Mint::LEN];
+            spl_token::state::Mint::pack(mint_info, &mut data).unwrap();
+            data
+        };
+
+        provider
+            .expect_get_account_from_pubkey()
+            .returning(move |_| {
+                let mint_data_clone = mint_data.clone();
+                Box::pin(async move {
+                    Ok(solana_sdk::account::Account {
+                        lamports: 1000000,
+                        data: mint_data_clone,
+                        owner: spl_token::id(),
+                        executable: false,
+                        rent_epoch: 0,
+                    })
+                })
+            });
+
+        // Mock Jupiter service to return a quote
+        jupiter_service
+            .expect_get_sol_to_token_quote()
+            .returning(|_token, _amount, _slippage| {
+                Box::pin(async move {
+                    Ok(QuoteResponse {
+                        input_mint: WRAPPED_SOL_MINT.to_string(),
+                        output_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                        in_amount: 5000,  // Input SOL amount
+                        out_amount: 5000, // Output token amount (1:1 for simplicity)
+                        other_amount_threshold: 4750,
+                        swap_mode: "ExactIn".to_string(),
+                        slippage_bps: 50,
+                        price_impact_pct: 0.1,
+                        route_plan: vec![RoutePlan {
+                            swap_info: SwapInfo {
+                                amm_key: "test-amm".to_string(),
+                                label: "test-swap".to_string(),
+                                input_mint: WRAPPED_SOL_MINT.to_string(),
+                                output_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+                                    .to_string(),
+                                in_amount: "5000".to_string(),
+                                out_amount: "5000".to_string(),
+                                fee_amount: "25".to_string(),
+                                fee_mint: WRAPPED_SOL_MINT.to_string(),
+                            },
+                            percent: 100,
+                        }],
+                    })
+                })
+            });
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            network,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
+        );
+
+        let result = rpc.get_fee_token_quote(test_token, total_fee).await;
+
+        // Assert success
+        assert!(result.is_ok(), "Fee quote should succeed: {:?}", result);
+
+        let quote = result.unwrap();
+
+        assert_eq!(quote.fee_in_spl, 5000, "SPL fee amount should match");
+        assert_eq!(
+            quote.fee_in_lamports, total_fee,
+            "Lamports fee should match"
+        );
+
+        assert_eq!(
+            quote.fee_in_spl_ui, "0.005",
+            "UI amount should use correct decimals from chain"
+        );
+
+        assert!(
+            (quote.conversion_rate - 1000.0).abs() < 0.001,
+            "Conversion rate should be approximately 1000.0, got {}",
+            quote.conversion_rate
+        );
     }
 }

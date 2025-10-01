@@ -29,3 +29,10 @@ pub const ARBITRUM_TIME_TO_RESUBMIT: i64 = 20_000;
 
 // Gas limit for Arbitrum networks (mainly used for NOOP transactions (with no data), covers L1 + L2 costs)
 pub const ARBITRUM_GAS_LIMIT: u64 = 50_000;
+
+/// Gas price cache refresh timeout in seconds (5 minutes)
+/// Used to cleanup stuck refresh operations that may have failed to complete
+pub const GAS_PRICE_CACHE_REFRESH_TIMEOUT_SECS: u64 = 300;
+
+/// Number of historical blocks to fetch for fee history analysis
+pub const HISTORICAL_BLOCKS: u64 = 4;

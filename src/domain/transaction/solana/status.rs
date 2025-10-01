@@ -4,9 +4,9 @@
 //! including status updates, repository management, and webhook notifications.
 
 use chrono::Utc;
-use log::{debug, error, info, warn};
 use solana_sdk::signature::Signature;
 use std::str::FromStr;
+use tracing::{debug, error, info, warn};
 
 use super::SolanaRelayerTransaction;
 use crate::{
@@ -17,6 +17,7 @@ use crate::{
     },
     repositories::{transaction::TransactionRepository, RelayerRepository, Repository},
     services::provider::SolanaProviderTrait,
+    utils::calculate_scheduled_timestamp,
 };
 
 /// Default delay for retrying status checks after failures (in seconds)
@@ -34,17 +35,14 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("Handling Solana transaction status for: {:?}", tx.id);
+        info!("handling solana transaction status");
 
         // Skip if already in final state
         if matches!(
             tx.status,
             TransactionStatus::Confirmed | TransactionStatus::Failed | TransactionStatus::Expired
         ) {
-            info!(
-                "Transaction {} already in final state: {:?}",
-                tx.id, tx.status
-            );
+            info!(status = ?tx.status, "transaction already in final state");
             return Ok(tx);
         }
 
@@ -74,25 +72,16 @@ where
         tx: TransactionRepoModel,
         error: TransactionError,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        warn!(
-            "Failed to get Solana transaction status for {}: {}. Re-queueing check.",
-            tx.id, error
-        );
+        warn!(error = %error, "failed to get solana transaction status, re-queueing check");
 
         if let Err(requeue_error) = self
             .schedule_status_check(&tx, Some(2 * SOLANA_DEFAULT_STATUS_RETRY_DELAY_SECONDS))
             .await
         {
-            warn!(
-                "Failed to requeue status check for transaction {}: {}",
-                tx.id, requeue_error
-            );
+            warn!(error = %requeue_error, "failed to requeue status check for transaction");
         }
 
-        info!(
-            "Transaction {} status check failure handled. Will retry later. Error: {}",
-            tx.id, error
-        );
+        info!(error = %error, "transaction status check failure handled, will retry later");
 
         // Return the original error even though we scheduled a retry
         Err(error)
@@ -165,7 +154,7 @@ where
         tx: &TransactionRepoModel,
         delay_seconds: Option<i64>,
     ) -> Result<(), TransactionError> {
-        let delay = delay_seconds.map(|seconds| Utc::now().timestamp() + seconds);
+        let delay = delay_seconds.map(calculate_scheduled_timestamp);
         self.job_producer()
             .produce_check_transaction_status_job(
                 TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
@@ -182,10 +171,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!(
-            "Transaction {} is processed but waiting for supermajority confirmation",
-            tx.id
-        );
+        info!("transaction is processed but waiting for supermajority confirmation");
 
         // Schedule another status check since transaction is not in final state
         self.schedule_status_check(&tx, Some(SOLANA_DEFAULT_STATUS_RETRY_DELAY_SECONDS))
@@ -202,7 +188,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!("Transaction {} is confirmed by supermajority", tx.id);
+        debug!("transaction is confirmed by supermajority");
 
         // Update status to mined only if not already mined
         let updated_tx = self
@@ -223,7 +209,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("Transaction {} is finalized and irreversible", tx.id);
+        info!("transaction is finalized and irreversible");
 
         // Update status to confirmed only if not already confirmed (final success state)
         self.update_transaction_status_if_needed(tx, TransactionStatus::Confirmed)
@@ -235,7 +221,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        warn!("Transaction {} failed on-chain", tx.id);
+        warn!("transaction failed on-chain");
 
         // Update status to failed only if not already failed (final failure state)
         self.update_transaction_status_if_needed(tx, TransactionStatus::Failed)
@@ -268,7 +254,7 @@ where
         tx: &TransactionRepoModel,
     ) -> Result<(), TransactionError> {
         if let Some(notification_id) = &self.relayer().notification_id {
-            info!("Sending webhook notification for transaction: {}", tx.id);
+            info!("sending webhook notification for transaction");
 
             let notification_payload =
                 produce_transaction_update_notification_payload(notification_id, tx);
@@ -278,7 +264,7 @@ where
                 .produce_send_notification_job(notification_payload, None)
                 .await
             {
-                error!("Failed to produce notification job: {}", e);
+                error!(error = %e, "failed to produce notification job");
             }
         }
 

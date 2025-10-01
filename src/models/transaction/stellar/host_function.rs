@@ -3,7 +3,7 @@
 use crate::models::SignerError;
 use serde::{Deserialize, Serialize};
 use soroban_rs::xdr::{
-    AccountId, ContractExecutable, ContractIdPreimage, ContractIdPreimageFromAddress,
+    AccountId, ContractExecutable, ContractId, ContractIdPreimage, ContractIdPreimageFromAddress,
     CreateContractArgs, CreateContractArgsV2, Hash, HostFunction, InvokeContractArgs,
     PublicKey as XdrPublicKey, ScAddress, ScSymbol, ScVal, Uint256, VecM,
 };
@@ -275,7 +275,7 @@ fn build_contract_preimage(
             })?;
 
             Ok(ContractIdPreimage::Address(ContractIdPreimageFromAddress {
-                address: ScAddress::Contract(Hash(contract_id.0)),
+                address: ScAddress::Contract(ContractId(Hash(contract_id.0))),
                 salt: Uint256(salt_bytes),
             }))
         }
@@ -291,7 +291,7 @@ fn convert_invoke_contract(
     // Parse contract address
     let contract = stellar_strkey::Contract::from_string(&contract_address)
         .map_err(|e| SignerError::ConversionError(format!("Invalid contract address: {}", e)))?;
-    let contract_addr = ScAddress::Contract(Hash(contract.0));
+    let contract_addr = ScAddress::Contract(ContractId(Hash(contract.0)));
 
     // Convert function name to symbol
     let function_symbol = ScSymbol::try_from(function_name.as_bytes().to_vec())

@@ -10,9 +10,9 @@ use std::sync::Arc;
 
 use apalis_redis::{Config, ConnectionManager, RedisStorage};
 use color_eyre::{eyre, Result};
-use log::error;
 use serde::{Deserialize, Serialize};
 use tokio::time::{timeout, Duration};
+use tracing::error;
 
 use crate::config::ServerConfig;
 
@@ -35,7 +35,9 @@ impl Queue {
         namespace: &str,
         shared: Arc<ConnectionManager>,
     ) -> Result<RedisStorage<T>> {
-        let config = Config::default().set_namespace(namespace);
+        let config = Config::default()
+            .set_namespace(namespace)
+            .set_enqueue_scheduled(Duration::from_secs(1)); // Sets the polling interval for scheduled jobs from default 30 seconds
 
         Ok(RedisStorage::new_with_config((*shared).clone(), config))
     }
@@ -46,11 +48,11 @@ impl Queue {
         let redis_connection_timeout_ms = config.redis_connection_timeout_ms;
         let conn = match timeout(Duration::from_millis(redis_connection_timeout_ms), apalis_redis::connect(redis_url.clone())).await {
             Ok(result) => result.map_err(|e| {
-                error!("Failed to connect to Redis at {}: {}", redis_url, e);
+                error!(redis_url = %redis_url, error = %e, "failed to connect to redis");
                 eyre::eyre!("Failed to connect to Redis. Please ensure Redis is running and accessible at {}. Error: {}", redis_url, e)
             })?,
             Err(_) => {
-                error!("Timeout connecting to Redis at {}", redis_url);
+                error!(redis_url = %redis_url, "timeout connecting to redis");
                 return Err(eyre::eyre!("Timed out after {} milliseconds while connecting to Redis at {}", redis_connection_timeout_ms, redis_url));
             }
         };

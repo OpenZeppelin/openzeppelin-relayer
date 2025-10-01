@@ -17,11 +17,12 @@ use crate::{
         TransactionCounterTrait, TransactionRepository, TransactionRepositoryStorage,
     },
     services::{Signer, StellarProvider, StellarProviderTrait, StellarSigner},
+    utils::calculate_scheduled_timestamp,
 };
 use async_trait::async_trait;
 use eyre::Result;
-use log::info;
 use std::sync::Arc;
+use tracing::info;
 
 use super::lane_gate;
 
@@ -131,8 +132,9 @@ where
         delay_seconds: Option<i64>,
     ) -> Result<(), TransactionError> {
         let job = TransactionRequest::new(tx.id.clone(), tx.relayer_id.clone());
+        let scheduled_on = delay_seconds.map(calculate_scheduled_timestamp);
         self.job_producer()
-            .produce_transaction_request_job(job, delay_seconds)
+            .produce_transaction_request_job(job, scheduled_on)
             .await?;
         Ok(())
     }
@@ -182,11 +184,11 @@ where
                 .await?
             {
                 // Atomic hand-over while still owning the lane
-                info!("Handing over lane from {} to {}", finished_tx_id, next.id);
+                info!(to_tx_id = %next.id, finished_tx_id = %finished_tx_id, "handing over lane");
                 lane_gate::pass_to(&self.relayer().id, finished_tx_id, &next.id);
                 self.send_transaction_request_job(&next, None).await?;
             } else {
-                info!("Releasing relayer lane after {}", finished_tx_id);
+                info!(finished_tx_id = %finished_tx_id, "releasing relayer lane");
                 lane_gate::free(&self.relayer().id, finished_tx_id);
             }
         }
@@ -213,10 +215,7 @@ where
         &self,
         relayer_address: &str,
     ) -> Result<(), TransactionError> {
-        info!(
-            "Syncing sequence number from chain for address: {}",
-            relayer_address
-        );
+        info!(address = %relayer_address, "syncing sequence number from chain");
 
         // Use the shared helper to fetch the next sequence
         let next_usable_seq = fetch_next_sequence_from_chain(self.provider(), relayer_address)
@@ -234,7 +233,7 @@ where
                 ))
             })?;
 
-        info!("Updated local sequence counter to {}", next_usable_seq);
+        info!(sequence = %next_usable_seq, "updated local sequence counter");
         Ok(())
     }
 
@@ -244,7 +243,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("Resetting transaction {} for retry through pipeline", tx.id);
+        info!("resetting transaction for retry through pipeline");
 
         // Use the model's built-in reset method
         let update_req = tx.create_reset_update_request()?;
@@ -255,10 +254,7 @@ where
             .partial_update(tx.id.clone(), update_req)
             .await?;
 
-        info!(
-            "Transaction {} reset successfully to pre-prepare state",
-            reset_tx.id
-        );
+        info!("transaction reset successfully to pre-prepare state");
         Ok(reset_tx)
     }
 }
@@ -412,7 +408,10 @@ mod tests {
             .job_producer
             .expect_produce_transaction_request_job()
             .withf(|job, delay| {
-                job.transaction_id == "tx-1" && job.relayer_id == "relayer-1" && delay == &Some(60)
+                job.transaction_id == "tx-1"
+                    && job.relayer_id == "relayer-1"
+                    && delay.is_some()
+                    && delay.unwrap() > chrono::Utc::now().timestamp()
             })
             .times(1)
             .returning(|_, _| Box::pin(async { Ok(()) }));

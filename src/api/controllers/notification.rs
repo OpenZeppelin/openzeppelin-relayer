@@ -15,8 +15,8 @@ use crate::{
         PaginationQuery, RelayerRepoModel, SignerRepoModel, ThinDataAppState, TransactionRepoModel,
     },
     repositories::{
-        NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
-        TransactionCounterTrait, TransactionRepository,
+        ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
+        Repository, TransactionCounterTrait, TransactionRepository,
     },
 };
 
@@ -33,9 +33,9 @@ use eyre::Result;
 /// # Returns
 ///
 /// A paginated list of notifications.
-pub async fn list_notifications<J, RR, TR, NR, NFR, SR, TCR, PR>(
+pub async fn list_notifications<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     query: PaginationQuery,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -46,6 +46,7 @@ where
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     let notifications = state.notification_repository.list_paginated(query).await?;
 
@@ -72,9 +73,9 @@ where
 /// # Returns
 ///
 /// The notification details or an error if not found.
-pub async fn get_notification<J, RR, TR, NR, NFR, SR, TCR, PR>(
+pub async fn get_notification<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     notification_id: String,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -85,6 +86,7 @@ where
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     let notification = state
         .notification_repository
@@ -105,9 +107,9 @@ where
 /// # Returns
 ///
 /// The created notification or an error if creation fails.
-pub async fn create_notification<J, RR, TR, NR, NFR, SR, TCR, PR>(
+pub async fn create_notification<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     request: NotificationCreateRequest,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -118,6 +120,7 @@ where
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     // Convert request to core notification (validates automatically)
     let notification = Notification::try_from(request)?;
@@ -144,10 +147,10 @@ where
 /// # Returns
 ///
 /// The updated notification or an error if update fails.
-pub async fn update_notification<J, RR, TR, NR, NFR, SR, TCR, PR>(
+pub async fn update_notification<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     notification_id: String,
     request: NotificationUpdateRequest,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -158,6 +161,7 @@ where
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     // Get the existing notification from repository
     let existing_repo_model = state
@@ -193,9 +197,9 @@ where
 /// This endpoint ensures that notifications cannot be deleted if they are still being
 /// used by any relayers. This prevents breaking existing relayer configurations
 /// and maintains system integrity.
-pub async fn delete_notification<J, RR, TR, NR, NFR, SR, TCR, PR>(
+pub async fn delete_notification<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     notification_id: String,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -206,6 +210,7 @@ where
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     // First check if the notification exists
     let _notification = state
@@ -279,7 +284,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_list_notifications_empty() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
         let query = PaginationQuery {
             page: 1,
             per_page: 10,
@@ -304,7 +309,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_list_notifications_with_data() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         // Create test notifications
         let notification1 = create_test_notification_model("test-1");
@@ -350,7 +355,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_list_notifications_pagination() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         // Create multiple test notifications
         for i in 1..=5 {
@@ -386,7 +391,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_get_notification_success() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         // Create a test notification
         let notification = create_test_notification_model("test-notification");
@@ -418,7 +423,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_get_notification_not_found() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         let result = get_notification("non-existent".to_string(), ThinData(app_state)).await;
 
@@ -429,7 +434,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_notification_success() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         let request = create_test_notification_create_request("new-notification");
 
@@ -455,7 +460,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_notification_without_signing_key() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         let request = NotificationCreateRequest {
             id: Some("new-notification".to_string()),
@@ -486,7 +491,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_update_notification_success() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         // Create a test notification
         let notification = create_test_notification_model("test-notification");
@@ -524,7 +529,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_update_notification_not_found() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         let update_request = create_test_notification_update_request();
 
@@ -542,7 +547,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_delete_notification_success() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         // Create a test notification
         let notification = create_test_notification_model("test-notification");
@@ -573,7 +578,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_delete_notification_not_found() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         let result = delete_notification("non-existent".to_string(), ThinData(app_state)).await;
 
@@ -618,8 +623,8 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_notification_validates_repository_creation() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
-        let app_state_2 = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
+        let app_state_2 = create_mock_app_state(None, None, None, None, None, None).await;
 
         let request = create_test_notification_create_request("new-notification");
         let result = create_notification(request, ThinData(app_state)).await;
@@ -651,7 +656,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_notification_validation_error() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         // Create a request with only invalid ID to make test deterministic
         let request = NotificationCreateRequest {
@@ -676,7 +681,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_update_notification_validation_error() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         // Create a test notification
         let notification = create_test_notification_model("test-notification");
@@ -715,7 +720,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_delete_notification_blocked_by_connected_relayers() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         // Create a test notification
         let notification = create_test_notification_model("connected-notification");
@@ -761,7 +766,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_delete_notification_after_relayer_removed() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         // Create a test notification
         let notification = create_test_notification_model("cleanup-notification");
@@ -795,7 +800,7 @@ mod tests {
         assert!(result.is_err());
 
         // Create new app state for second test (since app_state was consumed)
-        let app_state2 = create_mock_app_state(None, None, None, None, None).await;
+        let app_state2 = create_mock_app_state(None, None, None, None, None, None).await;
 
         // Re-create the notification in the new state
         let notification2 = create_test_notification_model("cleanup-notification");
@@ -816,7 +821,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_delete_notification_with_multiple_relayers() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         // Create a test notification
         let notification = create_test_notification_model("multi-relayer-notification");
@@ -903,7 +908,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_delete_notification_with_some_relayers_using_different_notification() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         // Create two test notifications
         let notification1 = create_test_notification_model("notification-to-delete");
@@ -988,7 +993,7 @@ mod tests {
         }
 
         // Try to delete the second notification - should succeed (no relayers using it in our test)
-        let app_state2 = create_mock_app_state(None, None, None, None, None).await;
+        let app_state2 = create_mock_app_state(None, None, None, None, None, None).await;
         let notification2_recreated = create_test_notification_model("other-notification");
         app_state2
             .notification_repository

@@ -1,16 +1,6 @@
 {
     "relayers": [],
-    "notifications": [
-      {
-        "id": "notification-example",
-        "type": "webhook",
-        "url": "https://webhook.site/2e58dee6-eeed-4a94-b743-d958d50cc4d7",
-        "signing_key": {
-          "type": "env",
-          "value": "WEBHOOK_SIGNING_KEY"
-        }
-      }
-    ],
+    "notifications": [],
     "signers": [],
     "networks": "./config/networks",
     "plugins": [

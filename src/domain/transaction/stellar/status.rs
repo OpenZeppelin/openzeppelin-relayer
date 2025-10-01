@@ -3,13 +3,12 @@
 //! ensuring proper transaction state management and lane cleanup.
 
 use chrono::Utc;
-use log::{info, warn};
-use serde_json::{json, Value};
 use soroban_rs::xdr::{Error, Hash};
+use tracing::{info, warn};
 
 use super::StellarRelayerTransaction;
 use crate::{
-    constants::STELLAR_DEFAULT_STATUS_RETRY_DELAY_SECONDS,
+    constants::STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS,
     jobs::{JobProducerTrait, TransactionStatusCheck},
     models::{
         NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
@@ -17,6 +16,7 @@ use crate::{
     },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
     services::{Signer, StellarProviderTrait},
+    utils::calculate_scheduled_timestamp,
 };
 
 impl<R, T, J, S, P, C> StellarRelayerTransaction<R, T, J, S, P, C>
@@ -34,7 +34,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("Handling transaction status for: {:?}", tx.id);
+        info!("handling transaction status");
 
         // Call core status checking logic with error handling
         match self.status_core(tx.clone()).await {
@@ -65,38 +65,8 @@ where
         let provider_response = match self.provider().get_transaction(&stellar_hash).await {
             Ok(response) => response,
             Err(e) => {
-                let error_str = format!("{:?}", e);
-
-                // Check if this is an XDR parsing error (common with fee bump transactions)
-                if error_str.contains("Xdr(Invalid)") || error_str.contains("xdr processing error")
-                {
-                    warn!(
-                        "XDR parsing error for transaction {}, using raw RPC fallback",
-                        tx.id
-                    );
-
-                    // Fallback: Get transaction status via raw RPC request
-                    // TODO: This is a temporary solution to handle XDR parsing errors.
-                    // We should remove this once we upgrade to next stable rpc client version.
-                    match self.get_transaction_status_raw(&stellar_hash).await {
-                        Ok(status) => {
-                            // Return a minimal response with just the status
-                            soroban_rs::stellar_rpc_client::GetTransactionResponse {
-                                status,
-                                envelope: None,
-                                result: None,
-                                result_meta: None,
-                            }
-                        }
-                        Err(raw_err) => {
-                            warn!("Raw RPC fallback also failed for {}: {:?}", tx.id, raw_err);
-                            return Err(TransactionError::from(e));
-                        }
-                    }
-                } else {
-                    warn!("Provider get_transaction failed for {}: {:?}", tx.id, e);
-                    return Err(TransactionError::from(e));
-                }
+                warn!(error = ?e, "provider get_transaction failed");
+                return Err(TransactionError::from(e));
             }
         };
 
@@ -117,25 +87,16 @@ where
         tx: TransactionRepoModel,
         error: TransactionError,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        warn!(
-            "Failed to get Stellar transaction status for {}: {}. Re-queueing check.",
-            tx.id, error
-        );
+        warn!(error = %error, "failed to get stellar transaction status, re-queueing check");
 
         // Step 1: Re-queue status check for retry
         if let Err(requeue_error) = self.requeue_status_check(&tx).await {
-            warn!(
-                "Failed to requeue status check for transaction {}: {}",
-                tx.id, requeue_error
-            );
+            warn!(error = %requeue_error, "failed to requeue status check for transaction");
             // Continue with original error even if requeue fails
         }
 
         // Step 2: Log failure for monitoring (status_check_fail_total metric would go here)
-        info!(
-            "Transaction {} status check failure handled. Will retry later. Error: {}",
-            tx.id, error
-        );
+        info!(error = %error, "transaction status check failure handled, will retry later");
 
         // Step 3: Return original transaction unchanged (will be retried)
         Ok(tx)
@@ -149,7 +110,9 @@ where
         self.job_producer()
             .produce_check_transaction_status_job(
                 TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
-                Some(STELLAR_DEFAULT_STATUS_RETRY_DELAY_SECONDS),
+                Some(calculate_scheduled_timestamp(
+                    STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS,
+                )),
             )
             .await?;
         Ok(())
@@ -231,7 +194,7 @@ where
             format!("{} No detailed XDR result available.", base_reason)
         };
 
-        warn!("Stellar transaction {} failed: {}", tx.id, detailed_reason);
+        warn!(reason = %detailed_reason, "stellar transaction failed");
 
         let update_request = TransactionUpdateRequest {
             status: Some(TransactionStatus::Failed),
@@ -254,77 +217,9 @@ where
         tx: TransactionRepoModel,
         original_status_str: String,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!(
-            "Stellar transaction {} status is still '{}'. Re-queueing check.",
-            tx.id, original_status_str
-        );
+        info!(status = %original_status_str, "stellar transaction status is still pending, re-queueing check");
         self.requeue_status_check(&tx).await?;
         Ok(tx)
-    }
-
-    /// Get transaction status via raw RPC request (workaround for XDR parsing issues)
-    async fn get_transaction_status_raw(
-        &self,
-        tx_hash: &soroban_rs::xdr::Hash,
-    ) -> Result<String, TransactionError> {
-        // Convert hash to hex string (manual implementation to avoid hex dependency)
-        let hash_hex: String = tx_hash
-            .0
-            .iter()
-            .map(|byte| format!("{:02x}", byte))
-            .collect();
-
-        // Build JSON-RPC request
-        let request_body = json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "getTransaction",
-            "params": {
-                "hash": hash_hex
-            }
-        });
-
-        // Get the RPC URL from the provider
-        let rpc_url = self.provider().rpc_url();
-
-        // Make HTTP request using reqwest (already a dependency)
-        let client = reqwest::Client::new();
-        let response = client
-            .post(rpc_url)
-            .json(&request_body)
-            .send()
-            .await
-            .map_err(|e| {
-                TransactionError::UnexpectedError(format!("Raw RPC request failed: {}", e))
-            })?;
-
-        // Parse response as generic JSON
-        let json_response: Value = response.json().await.map_err(|e| {
-            TransactionError::UnexpectedError(format!("Failed to parse JSON response: {}", e))
-        })?;
-
-        // Check for RPC error
-        if let Some(error) = json_response.get("error") {
-            if let Some(code) = error.get("code").and_then(|c| c.as_i64()) {
-                if code == -32602 || code == -32600 {
-                    return Ok("NOT_FOUND".to_string());
-                }
-            }
-            return Err(TransactionError::UnexpectedError(format!(
-                "RPC error: {:?}",
-                error
-            )));
-        }
-
-        // Extract status from result
-        json_response
-            .get("result")
-            .and_then(|result| result.get("status"))
-            .and_then(|status| status.as_str())
-            .map(|s| s.to_string())
-            .ok_or_else(|| {
-                TransactionError::UnexpectedError("Missing status in response".to_string())
-            })
     }
 }
 
@@ -340,9 +235,15 @@ mod tests {
     fn dummy_get_transaction_response(status: &str) -> GetTransactionResponse {
         GetTransactionResponse {
             status: status.to_string(),
+            ledger: None,
             envelope: None,
             result: None,
             result_meta: None,
+            events: soroban_rs::stellar_rpc_client::GetTransactionEvents {
+                contract_events: vec![],
+                diagnostic_events: vec![],
+                transaction_events: vec![],
+            },
         }
     }
 
@@ -482,8 +383,7 @@ mod tests {
                 .job_producer
                 .expect_produce_check_transaction_status_job()
                 .withf(move |job, delay| {
-                    job.transaction_id == "tx-pending-check"
-                        && delay == &Some(STELLAR_DEFAULT_STATUS_RETRY_DELAY_SECONDS)
+                    job.transaction_id == "tx-pending-check" && delay.is_some()
                 })
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
@@ -637,8 +537,7 @@ mod tests {
                 .job_producer
                 .expect_produce_check_transaction_status_job()
                 .withf(move |job, delay| {
-                    job.transaction_id == "tx-provider-error"
-                        && delay == &Some(STELLAR_DEFAULT_STATUS_RETRY_DELAY_SECONDS)
+                    job.transaction_id == "tx-provider-error" && delay.is_some()
                 })
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
@@ -845,259 +744,8 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn test_xdr_parsing_error_detection() {
-            // Test that verifies XDR parsing errors are correctly detected
-            // The actual HTTP fallback is hard to test without mocking the HTTP client
-
-            // Test error string detection for Xdr(Invalid)
-            let error_str1 = format!("{:?}", eyre::eyre!("Xdr(Invalid)"));
-            assert!(error_str1.contains("Xdr(Invalid)"));
-
-            // Test error string detection for "xdr processing error"
-            let error_str2 = format!("{:?}", eyre::eyre!("xdr processing error"));
-            assert!(error_str2.contains("xdr processing error"));
-
-            // Test the actual error detection logic from the code
-            let test_errors = vec![
-                "Xdr(Invalid) - some additional context",
-                "Failed with xdr processing error: malformed",
-                "Error: Xdr(Invalid)",
-            ];
-
-            for error_msg in test_errors {
-                let error_str = format!("{:?}", eyre::eyre!(error_msg));
-                let should_use_fallback = error_str.contains("Xdr(Invalid)")
-                    || error_str.contains("xdr processing error");
-                assert!(
-                    should_use_fallback,
-                    "Error '{}' should trigger fallback",
-                    error_msg
-                );
-            }
-        }
-
-        #[tokio::test]
-        async fn test_get_transaction_status_raw() {
-            use mockito::Server;
-            use serde_json::json;
-
-            // Start a mock server
-            let mut server = Server::new_async().await;
-            let url = server.url();
-
-            let relayer = create_test_relayer();
-            let mut mocks = default_test_mocks();
-
-            // Set up the provider to return the mock server URL
-            mocks.provider.expect_rpc_url().return_const(url.clone());
-
-            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
-
-            // Test case 1: Successful response with SUCCESS status
-            let tx_hash = soroban_rs::xdr::Hash([1u8; 32]);
-
-            let mock = server
-                .mock("POST", "/")
-                .with_status(200)
-                .with_header("content-type", "application/json")
-                .with_body(
-                    json!({
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "result": {
-                            "status": "SUCCESS"
-                        }
-                    })
-                    .to_string(),
-                )
-                .expect(1)
-                .create_async()
-                .await;
-
-            let status = handler.get_transaction_status_raw(&tx_hash).await;
-            assert!(status.is_ok());
-            assert_eq!(status.unwrap(), "SUCCESS");
-            mock.assert_async().await;
-
-            // Test case 2: Successful response with FAILED status
-            let mock = server
-                .mock("POST", "/")
-                .with_status(200)
-                .with_header("content-type", "application/json")
-                .with_body(
-                    json!({
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "result": {
-                            "status": "FAILED"
-                        }
-                    })
-                    .to_string(),
-                )
-                .expect(1)
-                .create_async()
-                .await;
-
-            let status = handler.get_transaction_status_raw(&tx_hash).await;
-            assert!(status.is_ok());
-            assert_eq!(status.unwrap(), "FAILED");
-            mock.assert_async().await;
-
-            // Test case 3: Transaction not found (RPC error code -32602)
-            let mock = server
-                .mock("POST", "/")
-                .with_status(200)
-                .with_header("content-type", "application/json")
-                .with_body(
-                    json!({
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "error": {
-                            "code": -32602,
-                            "message": "Invalid params"
-                        }
-                    })
-                    .to_string(),
-                )
-                .expect(1)
-                .create_async()
-                .await;
-
-            let status = handler.get_transaction_status_raw(&tx_hash).await;
-            assert!(status.is_ok());
-            assert_eq!(status.unwrap(), "NOT_FOUND");
-            mock.assert_async().await;
-
-            // Test case 4: Transaction not found (RPC error code -32600)
-            let mock = server
-                .mock("POST", "/")
-                .with_status(200)
-                .with_header("content-type", "application/json")
-                .with_body(
-                    json!({
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "error": {
-                            "code": -32600,
-                            "message": "Invalid request"
-                        }
-                    })
-                    .to_string(),
-                )
-                .expect(1)
-                .create_async()
-                .await;
-
-            let status = handler.get_transaction_status_raw(&tx_hash).await;
-            assert!(status.is_ok());
-            assert_eq!(status.unwrap(), "NOT_FOUND");
-            mock.assert_async().await;
-
-            // Test case 5: Other RPC error
-            let mock = server
-                .mock("POST", "/")
-                .with_status(200)
-                .with_header("content-type", "application/json")
-                .with_body(
-                    json!({
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "error": {
-                            "code": -32000,
-                            "message": "Server error"
-                        }
-                    })
-                    .to_string(),
-                )
-                .expect(1)
-                .create_async()
-                .await;
-
-            let status = handler.get_transaction_status_raw(&tx_hash).await;
-            assert!(status.is_err());
-            match status.unwrap_err() {
-                TransactionError::UnexpectedError(msg) => {
-                    assert!(msg.contains("RPC error"));
-                }
-                _ => panic!("Expected UnexpectedError"),
-            }
-            mock.assert_async().await;
-
-            // Test case 6: Missing status in response
-            let mock = server
-                .mock("POST", "/")
-                .with_status(200)
-                .with_header("content-type", "application/json")
-                .with_body(
-                    json!({
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "result": {
-                            "other_field": "value"
-                        }
-                    })
-                    .to_string(),
-                )
-                .expect(1)
-                .create_async()
-                .await;
-
-            let status = handler.get_transaction_status_raw(&tx_hash).await;
-            assert!(status.is_err());
-            match status.unwrap_err() {
-                TransactionError::UnexpectedError(msg) => {
-                    assert!(msg.contains("Missing status in response"));
-                }
-                _ => panic!("Expected UnexpectedError"),
-            }
-            mock.assert_async().await;
-
-            // Test case 7: Network error (connection refused)
-            let mut mocks = default_test_mocks();
-            mocks
-                .provider
-                .expect_rpc_url()
-                .return_const("http://localhost:1".to_string()); // Invalid port
-
-            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
-            let status = handler.get_transaction_status_raw(&tx_hash).await;
-            assert!(status.is_err());
-            match status.unwrap_err() {
-                TransactionError::UnexpectedError(msg) => {
-                    assert!(msg.contains("Raw RPC request failed"));
-                }
-                _ => panic!("Expected UnexpectedError"),
-            }
-
-            // Test case 8: Invalid JSON response
-            let mock = server
-                .mock("POST", "/")
-                .with_status(200)
-                .with_header("content-type", "application/json")
-                .with_body("not valid json")
-                .expect(1)
-                .create_async()
-                .await;
-
-            let mut mocks = default_test_mocks();
-            mocks.provider.expect_rpc_url().return_const(url.clone());
-
-            let handler = make_stellar_tx_handler(relayer, mocks);
-            let status = handler.get_transaction_status_raw(&tx_hash).await;
-            assert!(status.is_err());
-            match status.unwrap_err() {
-                TransactionError::UnexpectedError(msg) => {
-                    assert!(msg.contains("Failed to parse JSON response"));
-                }
-                _ => panic!("Expected UnexpectedError"),
-            }
-            mock.assert_async().await;
-        }
-
-        #[tokio::test]
         async fn test_handle_transaction_status_with_xdr_error_requeues() {
-            // This test verifies that when get_transaction returns an XDR parsing error
-            // and the fallback also fails, the transaction is re-queued for retry
+            // This test verifies that when get_transaction fails we re-queue for retry
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();
 
@@ -1125,8 +773,7 @@ mod tests {
                 .job_producer
                 .expect_produce_check_transaction_status_job()
                 .withf(move |job, delay| {
-                    job.transaction_id == "tx-xdr-error-requeue"
-                        && delay == &Some(STELLAR_DEFAULT_STATUS_RETRY_DELAY_SECONDS)
+                    job.transaction_id == "tx-xdr-error-requeue" && delay.is_some()
                 })
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));

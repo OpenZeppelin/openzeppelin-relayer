@@ -15,10 +15,11 @@
  * 3. Calls the plugin's exported 'handler' function
  * 4. Returns results back to the Rust environment
  *
- * Usage: ts-node executor.ts <socket_path> <params_json> <user_script_path>
+ * Usage: ts-node executor.ts <socket_path> <plugin_id> <params_json> <user_script_path>
  *
  * Arguments:
  * - socket_path: Unix socket path for communication with relayer
+ * - plugin_id: Plugin ID for namespacing KV storage
  * - params_json: JSON string containing plugin parameters
  * - user_script_path: Path to the user's plugin file to execute
  */
@@ -29,27 +30,34 @@ import { LogInterceptor } from './logger';
 
 /**
  * Extract and validate CLI arguments passed from Rust script_executor.rs
+ * Now includes pluginId as a separate argument
  */
 function extractCliArguments() {
-  // Get arguments: [node, executor.ts, socketPath, paramsJson, userScriptPath]
+  // Get arguments: [node, executor.ts, socketPath, pluginId, paramsJson, userScriptPath]
   const socketPath = process.argv[2];
-  const paramsJson = process.argv[3];
-  const userScriptPath = process.argv[4];
+  const pluginId = process.argv[3]; // NEW: Plugin ID as separate arg
+  const paramsJson = process.argv[4]; // Shifted from argv[3]
+  const userScriptPath = process.argv[5]; // Shifted from argv[4]
+  const httpRequestId = process.argv[6]; // original HTTP request id
 
-  // Validate required arguments
+  // Validate   required arguments
   if (!socketPath) {
-    throw new Error("Socket path is required (argument 1)");
+    throw new Error('Socket path is required (argument 1)');
+  }
+
+  if (!pluginId) {
+    throw new Error('Plugin ID is required (argument 2)');
   }
 
   if (!paramsJson) {
-    throw new Error("Plugin parameters JSON is required (argument 2)");
+    throw new Error('Plugin parameters JSON is required (argument 3)');
   }
 
   if (!userScriptPath) {
-    throw new Error("User script path is required (argument 3)");
+    throw new Error('User script path is required (argument 4)');
   }
 
-  return { socketPath, paramsJson, userScriptPath };
+  return { socketPath, pluginId, paramsJson, userScriptPath, httpRequestId };
 }
 
 /**
@@ -74,14 +82,14 @@ async function main(): Promise<void> {
     // This provides better backward compatibility with existing scripts
     logInterceptor.start();
 
-    // Extract and validate CLI arguments
-    const { socketPath, paramsJson, userScriptPath } = extractCliArguments();
+    // Extract and validate CLI arguments including plugin ID
+    const { socketPath, pluginId, paramsJson, userScriptPath, httpRequestId } = extractCliArguments();
 
     // Parse plugin parameters
     const pluginParams = parsePluginParameters(paramsJson);
 
-    // Execute plugin with validated parameters
-    const result = await runUserPlugin(socketPath, pluginParams, userScriptPath);
+    // Pass plugin ID as separate argument
+    const result = await runUserPlugin(socketPath, pluginId, pluginParams, userScriptPath, httpRequestId);
 
     // Add the result to LogInterceptor output
     logInterceptor.addResult(serializeResult(result));
