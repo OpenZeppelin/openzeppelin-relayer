@@ -4,7 +4,7 @@
 use crate::{
     constants::HISTORICAL_BLOCKS,
     models::{evm::Speed, EvmNetwork, EvmTransactionData, TransactionError},
-    services::{gas::cache::GasPriceCache, EvmProviderTrait},
+    services::{gas::cache::GasPriceCache, provider::EvmProviderTrait},
 };
 use alloy::rpc::types::{BlockNumberOrTag, FeeHistory};
 use eyre::Result;
@@ -133,7 +133,7 @@ impl IntoIterator for SpeedPrices {
 
 #[async_trait]
 #[cfg_attr(test, automock(
-    type Provider = crate::services::MockEvmProviderTrait;
+    type Provider = crate::services::provider::MockEvmProviderTrait;
 ))]
 #[allow(dead_code)]
 pub trait EvmGasPriceServiceTrait {

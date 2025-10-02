@@ -23,9 +23,11 @@ use crate::{
         VaultSignerConfig,
     },
     services::{
-        signer::evm::{local_signer::LocalSigner, DataSignerTrait},
+        signer::{
+            evm::{local_signer::LocalSigner, DataSignerTrait},
+            Signer,
+        },
         vault::{VaultService, VaultServiceTrait},
-        Signer,
     },
 };
 

@@ -20,7 +20,7 @@ use crate::{
         TransactionUpdateRequest,
     },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
-    services::{Signer, StellarProviderTrait},
+    services::{provider::StellarProviderTrait, signer::Signer},
 };
 
 use common::{sign_and_finalize_transaction, update_and_notify_transaction};

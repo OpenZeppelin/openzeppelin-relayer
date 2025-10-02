@@ -37,7 +37,7 @@ use crate::{
         NetworkTransactionData, Signer as SignerDomainModel, SignerError, SignerRepoModel,
         SignerType, TransactionRepoModel,
     },
-    services::{signer::evm::construct_eip712_message_hash, Signer},
+    services::signer::{evm::construct_eip712_message_hash, Signer},
 };
 
 use super::DataSignerTrait;

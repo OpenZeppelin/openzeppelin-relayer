@@ -14,7 +14,7 @@ pub mod test_utils {
             MockNetworkRepository, MockRelayerRepository, MockTransactionCounterTrait,
             MockTransactionRepository,
         },
-        services::{MockEvmProviderTrait, MockSigner},
+        services::{provider::MockEvmProviderTrait, signer::MockSigner},
     };
     use chrono::Utc;
     use std::sync::Arc;

@@ -32,8 +32,11 @@ use crate::{
         SignerError, SignerRepoModel, TurnkeySignerConfig,
     },
     services::{
-        signer::evm::{construct_eip712_message_hash, validate_and_format_signature},
-        Signer, TurnkeyService, TurnkeyServiceTrait,
+        signer::{
+            evm::{construct_eip712_message_hash, validate_and_format_signature},
+            Signer,
+        },
+        TurnkeyService, TurnkeyServiceTrait,
     },
 };
 

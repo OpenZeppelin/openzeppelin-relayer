@@ -15,7 +15,9 @@ use crate::{
         SolanaAllowedTokensSwapConfig, SolanaFeePaymentStrategy,
     },
     repositories::MockTransactionRepository,
-    services::{MockJupiterServiceTrait, MockSolanaProviderTrait, MockSolanaSignTrait},
+    services::{
+        provider::MockSolanaProviderTrait, signer::MockSolanaSignTrait, MockJupiterServiceTrait,
+    },
     utils::mocks::mockutils::create_mock_solana_network,
 };
 

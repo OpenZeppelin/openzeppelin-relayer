@@ -733,7 +733,7 @@ mod tests {
     use crate::services::{
         evm_gas_price::{EvmGasPriceService, GasPrices, MockEvmGasPriceServiceTrait, SpeedPrices},
         gas::handlers::test_mock::MockPriceHandler,
-        MockEvmProviderTrait,
+        provider::MockEvmProviderTrait,
     };
     use futures::FutureExt;
 

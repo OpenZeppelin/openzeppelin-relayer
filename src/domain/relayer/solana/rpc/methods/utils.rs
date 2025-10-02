@@ -48,7 +48,7 @@ use crate::{
     },
     domain::{SolanaTokenProgram, TokenInstruction},
     jobs::TransactionStatusCheck,
-    services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
+    services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
 };
 
 #[derive(Debug)]

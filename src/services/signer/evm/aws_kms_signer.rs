@@ -14,8 +14,11 @@ use crate::{
         SignerError,
     },
     services::{
-        signer::evm::{construct_eip712_message_hash, validate_and_format_signature},
-        AwsKmsClient, AwsKmsEvmService, AwsKmsService, DataSignerTrait, Signer,
+        signer::{
+            evm::{construct_eip712_message_hash, validate_and_format_signature},
+            DataSignerTrait, Signer,
+        },
+        AwsKmsClient, AwsKmsEvmService, AwsKmsService,
     },
 };
 
