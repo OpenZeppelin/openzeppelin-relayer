@@ -31,6 +31,7 @@ use p256::{
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use solana_sdk::{pubkey::Pubkey, signature::Signature, transaction::Transaction};
+use stellar_strkey;
 use thiserror::Error;
 use tracing::{debug, info};
 
@@ -183,11 +184,17 @@ pub trait TurnkeyServiceTrait: Send + Sync {
     /// Returns the EVM address derived from the configured public key
     fn address_evm(&self) -> Result<Address, TurnkeyError>;
 
+    /// Returns the Stellar address derived from the configured public key
+    fn address_stellar(&self) -> Result<Address, TurnkeyError>;
+
     /// Signs a message using the Solana signing scheme
     async fn sign_solana(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError>;
 
     /// Signs a message using the EVM signing scheme
     async fn sign_evm(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError>;
+
+    /// Signs a message using the Stellar signing scheme (Ed25519)
+    async fn sign_stellar(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError>;
 
     /// Signs an EVM transaction using the Turnkey API
     async fn sign_evm_transaction(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError>;
@@ -262,6 +269,24 @@ impl TurnkeyService {
         array.copy_from_slice(address_bytes);
 
         Ok(Address::Evm(array))
+    }
+
+    /// Converts the public key to a Stellar address
+    pub fn address_stellar(&self) -> Result<Address, TurnkeyError> {
+        if self.public_key.is_empty() {
+            return Err(TurnkeyError::ConfigError("Public key is empty".to_string()));
+        }
+
+        // For Stellar, we expect Ed25519 public key in hex format
+        let raw_pubkey = hex::decode(&self.public_key)
+            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid public key hex: {}", e)))?;
+
+        // Stellar uses StrKey encoding with 'G' prefix for account addresses
+        let stellar_address = stellar_strkey::ed25519::PublicKey::from_payload(&raw_pubkey)
+            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid Ed25519 public key: {}", e)))?
+            .to_string();
+
+        Ok(Address::Stellar(stellar_address))
     }
 
     /// Creates a digital stamp for API authentication
@@ -379,6 +404,15 @@ impl TurnkeyService {
         Ok(result)
     }
 
+    /// Signs raw bytes using the Turnkey API (for Stellar)
+    async fn sign_bytes_stellar(&self, bytes: &[u8]) -> TurnkeyResult<Vec<u8>> {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(bytes);
+
+        self.sign_raw_payload(&hash, "HASH_FUNCTION_NOT_APPLICABLE", false)
+            .await
+    }
+
     /// Signs an EVM transaction using the Turnkey API
     async fn sign_evm_transaction(&self, bytes: &[u8]) -> TurnkeyResult<Vec<u8>> {
         let encoded_bytes = hex::encode(bytes);
@@ -487,6 +521,10 @@ impl TurnkeyServiceTrait for TurnkeyService {
         self.address_evm()
     }
 
+    fn address_stellar(&self) -> Result<Address, TurnkeyError> {
+        self.address_stellar()
+    }
+
     async fn sign_solana(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError> {
         let signature_bytes = self.sign_bytes_solana(message).await?;
         Ok(signature_bytes)
@@ -494,6 +532,11 @@ impl TurnkeyServiceTrait for TurnkeyService {
 
     async fn sign_evm(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError> {
         let signature_bytes = self.sign_bytes_evm(message).await?;
+        Ok(signature_bytes)
+    }
+
+    async fn sign_stellar(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError> {
+        let signature_bytes = self.sign_bytes_stellar(message).await?;
         Ok(signature_bytes)
     }
 
