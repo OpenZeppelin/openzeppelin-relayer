@@ -10,7 +10,7 @@
 use crate::models::PaginationQuery;
 use crate::{
     models::UpdateRelayerRequest,
-    models::{RelayerNetworkPolicy, RelayerRepoModel, RepositoryError},
+    models::{DisabledReason, RelayerNetworkPolicy, RelayerRepoModel, RepositoryError},
 };
 use async_trait::async_trait;
 use eyre::Result;
@@ -134,10 +134,12 @@ impl RelayerRepository for InMemoryRelayerRepository {
     async fn disable_relayer(
         &self,
         relayer_id: String,
+        reason: DisabledReason,
     ) -> Result<RelayerRepoModel, RepositoryError> {
         let mut store = self.store.lock().await;
         if let Some(relayer) = store.get_mut(&relayer_id) {
             relayer.system_disabled = true;
+            relayer.disabled_reason = Some(reason);
             Ok(relayer.clone())
         } else {
             Err(RepositoryError::NotFound(format!(
@@ -154,6 +156,7 @@ impl RelayerRepository for InMemoryRelayerRepository {
         let mut store = self.store.lock().await;
         if let Some(relayer) = store.get_mut(&relayer_id) {
             relayer.system_disabled = false;
+            relayer.disabled_reason = None;
             Ok(relayer.clone())
         } else {
             Err(RepositoryError::NotFound(format!(
@@ -161,6 +164,16 @@ impl RelayerRepository for InMemoryRelayerRepository {
                 relayer_id
             )))
         }
+    }
+
+    async fn list_disabled(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
+        let store = Self::acquire_lock(&self.store).await?;
+        let disabled: Vec<RelayerRepoModel> = store
+            .values()
+            .filter(|r| r.system_disabled)
+            .cloned()
+            .collect();
+        Ok(disabled)
     }
 }
 
@@ -291,6 +304,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         }
     }
 
@@ -414,7 +428,13 @@ mod tests {
         repo.create(initial_relayer.clone()).await.unwrap();
 
         // Disable the relayer
-        let disabled_relayer = repo.disable_relayer(relayer_id.clone()).await.unwrap();
+        let disabled_relayer = repo
+            .disable_relayer(
+                relayer_id.clone(),
+                DisabledReason::BalanceCheckFailed("test reason".to_string()),
+            )
+            .await
+            .unwrap();
 
         assert_eq!(disabled_relayer.id, initial_relayer.id);
         assert!(disabled_relayer.system_disabled);
@@ -517,6 +537,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
 
         let relayer2 = RelayerRepoModel {
@@ -531,6 +552,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
 
         let relayer3 = RelayerRepoModel {
@@ -545,6 +567,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
 
         let relayer4 = RelayerRepoModel {
@@ -559,6 +582,7 @@ mod tests {
             notification_id: Some("notification-1".to_string()),
             system_disabled: true,
             custom_rpc_urls: None,
+            ..Default::default()
         };
 
         // Add all relayers to the repository
@@ -639,6 +663,7 @@ mod tests {
             notification_id: Some("notification-alpha".to_string()),
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
 
         let relayer2 = RelayerRepoModel {
@@ -653,6 +678,7 @@ mod tests {
             notification_id: Some("notification-alpha".to_string()), // Same notification as relayer1
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
 
         let relayer3 = RelayerRepoModel {
@@ -667,6 +693,7 @@ mod tests {
             notification_id: Some("notification-beta".to_string()), // Different notification
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
 
         let relayer4 = RelayerRepoModel {
@@ -681,6 +708,7 @@ mod tests {
             notification_id: None, // No notification
             system_disabled: true,
             custom_rpc_urls: None,
+            ..Default::default()
         };
 
         let relayer5 = RelayerRepoModel {
@@ -695,6 +723,7 @@ mod tests {
             notification_id: Some("notification-alpha".to_string()), // Same notification as relayer1 and relayer2
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
 
         // Add all relayers to the repository

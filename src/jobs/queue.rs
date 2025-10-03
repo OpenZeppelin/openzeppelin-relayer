@@ -17,8 +17,8 @@ use tracing::error;
 use crate::config::ServerConfig;
 
 use super::{
-    Job, NotificationSend, SolanaTokenSwapRequest, TransactionRequest, TransactionSend,
-    TransactionStatusCheck,
+    Job, NotificationSend, RelayerHealthCheck, SolanaTokenSwapRequest, TransactionRequest,
+    TransactionSend, TransactionStatusCheck,
 };
 
 #[derive(Clone, Debug)]
@@ -28,6 +28,7 @@ pub struct Queue {
     pub transaction_status_queue: RedisStorage<Job<TransactionStatusCheck>>,
     pub notification_queue: RedisStorage<Job<NotificationSend>>,
     pub solana_token_swap_request_queue: RedisStorage<Job<SolanaTokenSwapRequest>>,
+    pub relayer_health_check_queue: RedisStorage<Job<RelayerHealthCheck>>,
 }
 
 impl Queue {
@@ -87,6 +88,11 @@ impl Queue {
             .await?,
             solana_token_swap_request_queue: Self::storage(
                 &format!("{}solana_token_swap_request_queue", redis_key_prefix),
+                shared.clone(),
+            )
+            .await?,
+            relayer_health_check_queue: Self::storage(
+                &format!("{}relayer_health_check_queue", redis_key_prefix),
                 shared.clone(),
             )
             .await?,

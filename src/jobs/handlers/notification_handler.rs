@@ -183,6 +183,7 @@ mod tests {
                 custom_rpc_urls: None,
                 address: Some("0xabc".to_string()),
                 system_disabled: Some(false),
+                ..Default::default()
             },
             disable_reason: "test".to_string(),
         }));

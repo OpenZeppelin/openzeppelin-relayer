@@ -34,7 +34,10 @@ use crate::{
 use apalis_cron::Schedule;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
+use std::{
+    fmt::{Display, Formatter},
+    str::FromStr,
+};
 use utoipa::ToSchema;
 use validator::Validate;
 
@@ -47,8 +50,8 @@ pub enum RelayerNetworkType {
     Stellar,
 }
 
-impl std::fmt::Display for RelayerNetworkType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for RelayerNetworkType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             RelayerNetworkType::Evm => write!(f, "evm"),
             RelayerNetworkType::Solana => write!(f, "solana"),
@@ -74,6 +77,145 @@ impl From<RelayerNetworkType> for ConfigFileNetworkType {
             RelayerNetworkType::Solana => ConfigFileNetworkType::Solana,
             RelayerNetworkType::Stellar => ConfigFileNetworkType::Stellar,
         }
+    }
+}
+
+/// Health check failure type
+/// Represents transient validation failures during health checks
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[serde(tag = "type", content = "details")]
+pub enum HealthCheckFailure {
+    /// Nonce synchronization failed during health check
+    NonceSyncFailed(String),
+    /// RPC endpoint validation failed
+    RpcValidationFailed(String),
+    /// Balance check failed (below minimum threshold)
+    BalanceCheckFailed(String),
+    /// Sequence number synchronization failed (Stellar)
+    SequenceSyncFailed(String),
+}
+
+impl Display for HealthCheckFailure {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HealthCheckFailure::NonceSyncFailed(msg) => write!(f, "Nonce sync failed: {}", msg),
+            HealthCheckFailure::RpcValidationFailed(msg) => {
+                write!(f, "RPC validation failed: {}", msg)
+            }
+            HealthCheckFailure::BalanceCheckFailed(msg) => {
+                write!(f, "Balance check failed: {}", msg)
+            }
+            HealthCheckFailure::SequenceSyncFailed(msg) => {
+                write!(f, "Sequence sync failed: {}", msg)
+            }
+        }
+    }
+}
+
+/// Reason for a relayer being disabled by the system
+/// This represents persistent state, converted from HealthCheckFailure when disabling
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[serde(tag = "type", content = "details")]
+pub enum DisabledReason {
+    /// Nonce synchronization failed during initialization
+    NonceSyncFailed(String),
+    /// RPC endpoint validation failed
+    RpcValidationFailed(String),
+    /// Balance check failed (below minimum threshold)
+    BalanceCheckFailed(String),
+    /// Sequence number synchronization failed (Stellar)
+    SequenceSyncFailed(String),
+    /// Multiple failures occurred simultaneously
+    Multiple(Vec<DisabledReason>),
+}
+
+impl DisabledReason {
+    /// Convert from HealthCheckFailure to DisabledReason
+    pub fn from_health_failure(failure: HealthCheckFailure) -> Self {
+        match failure {
+            HealthCheckFailure::NonceSyncFailed(msg) => DisabledReason::NonceSyncFailed(msg),
+            HealthCheckFailure::RpcValidationFailed(msg) => {
+                DisabledReason::RpcValidationFailed(msg)
+            }
+            HealthCheckFailure::BalanceCheckFailed(msg) => DisabledReason::BalanceCheckFailed(msg),
+            HealthCheckFailure::SequenceSyncFailed(msg) => DisabledReason::SequenceSyncFailed(msg),
+        }
+    }
+
+    /// Create a DisabledReason from multiple health check failures
+    ///
+    /// Returns:
+    /// - None if the failures vector is empty
+    /// - Single variant if only one failure
+    /// - Multiple variant if there are multiple failures
+    pub fn from_health_failures(failures: Vec<HealthCheckFailure>) -> Option<Self> {
+        match failures.len() {
+            0 => None,
+            1 => Some(Self::from_health_failure(
+                failures.into_iter().next().unwrap(),
+            )),
+            _ => Some(DisabledReason::Multiple(
+                failures
+                    .into_iter()
+                    .map(Self::from_health_failure)
+                    .collect(),
+            )),
+        }
+    }
+
+    /// Create a reason from multiple DisabledReasons (for internal use)
+    ///
+    /// Returns:
+    /// - None if the failures vector is empty
+    /// - Single variant if only one failure
+    /// - Multiple variant if there are multiple failures
+    pub fn from_failures(failures: Vec<DisabledReason>) -> Option<Self> {
+        match failures.len() {
+            0 => None,
+            1 => Some(failures.into_iter().next().unwrap()),
+            _ => Some(DisabledReason::Multiple(failures)),
+        }
+    }
+
+    /// Get a human-readable description of the disabled reason
+    pub fn description(&self) -> String {
+        match self {
+            DisabledReason::NonceSyncFailed(e) => format!("Nonce sync failed: {}", e),
+            DisabledReason::RpcValidationFailed(e) => format!("RPC validation failed: {}", e),
+            DisabledReason::BalanceCheckFailed(e) => format!("Balance check failed: {}", e),
+            DisabledReason::SequenceSyncFailed(e) => format!("Sequence sync failed: {}", e),
+            DisabledReason::Multiple(reasons) => reasons
+                .iter()
+                .map(|r| r.description())
+                .collect::<Vec<_>>()
+                .join(", "),
+        }
+    }
+
+    /// Create a DisabledReason from an error string, attempting to categorize it
+    ///
+    /// This provides backward compatibility when converting from plain strings
+    pub fn from_error_string(error: String) -> Self {
+        let error_lower = error.to_lowercase();
+
+        if error_lower.contains("nonce") {
+            DisabledReason::NonceSyncFailed(error)
+        } else if error_lower.contains("rpc") {
+            DisabledReason::RpcValidationFailed(error)
+        } else if error_lower.contains("balance") {
+            DisabledReason::BalanceCheckFailed(error)
+        } else if error_lower.contains("sequence") {
+            DisabledReason::SequenceSyncFailed(error)
+        } else {
+            // Default to RPC validation for unrecognized errors
+            DisabledReason::RpcValidationFailed(error)
+        }
+    }
+}
+
+impl std::fmt::Display for DisabledReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.description())
     }
 }
 

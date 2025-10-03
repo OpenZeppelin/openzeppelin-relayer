@@ -49,6 +49,7 @@ pub enum JobType {
     TransactionStatusCheck,
     NotificationSend,
     SolanaTokenSwapRequest,
+    RelayerHealthCheck,
 }
 
 // Example message data for transaction request
@@ -186,6 +187,28 @@ pub struct SolanaTokenSwapRequest {
 impl SolanaTokenSwapRequest {
     pub fn new(relayer_id: String) -> Self {
         Self { relayer_id }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct RelayerHealthCheck {
+    pub relayer_id: String,
+    pub retry_count: u32,
+}
+
+impl RelayerHealthCheck {
+    pub fn new(relayer_id: String) -> Self {
+        Self {
+            relayer_id,
+            retry_count: 0,
+        }
+    }
+
+    pub fn with_retry_count(relayer_id: String, retry_count: u32) -> Self {
+        Self {
+            relayer_id,
+            retry_count,
+        }
     }
 }
 

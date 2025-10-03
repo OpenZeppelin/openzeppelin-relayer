@@ -18,12 +18,12 @@ use crate::{
         relayer::RelayerError, BalanceResponse, DexStrategy, SolanaRelayerDexTrait,
         SolanaRelayerTrait, SolanaRpcHandlerType, SwapParams,
     },
-    jobs::{JobProducerTrait, SolanaTokenSwapRequest},
+    jobs::{JobProducerTrait, RelayerHealthCheck, SolanaTokenSwapRequest},
     models::{
-        produce_relayer_disabled_payload, produce_solana_dex_webhook_payload, JsonRpcRequest,
-        JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest, NetworkRpcResult, NetworkType,
-        RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
-        SolanaDexPayload, SolanaNetwork, TransactionRepoModel,
+        produce_relayer_disabled_payload, produce_solana_dex_webhook_payload, DisabledReason,
+        HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest,
+        NetworkRpcResult, NetworkType, RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy,
+        SolanaAllowedTokensPolicy, SolanaDexPayload, SolanaNetwork, TransactionRepoModel,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
@@ -668,8 +668,36 @@ where
         Ok(())
     }
 
+    async fn check_health(&self) -> Result<(), Vec<HealthCheckFailure>> {
+        info!("running health checks");
+
+        let validate_rpc_result = self.validate_rpc().await;
+        let validate_min_balance_result = self.validate_min_balance().await;
+
+        // Collect all failures
+        let failures: Vec<HealthCheckFailure> = vec![
+            validate_rpc_result
+                .err()
+                .map(|e| HealthCheckFailure::RpcValidationFailed(e.to_string())),
+            validate_min_balance_result
+                .err()
+                .map(|e| HealthCheckFailure::BalanceCheckFailed(e.to_string())),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        if failures.is_empty() {
+            info!("all health checks passed");
+            Ok(())
+        } else {
+            warn!("health checks failed: {:?}", failures);
+            Err(failures)
+        }
+    }
+
     async fn initialize_relayer(&self) -> Result<(), RelayerError> {
-        info!("initializing relayer");
+        info!("initializing Solana relayer {}", self.relayer.id);
 
         // Populate model with allowed token metadata and update DB entry
         // Error will be thrown if any of the tokens are not found
@@ -687,47 +715,50 @@ where
             )
         })?;
 
-        let validate_rpc_result = self.validate_rpc().await;
+        match self.check_health().await {
+            Ok(_) => {
+                // All checks passed
+                if self.relayer.system_disabled {
+                    // Silently re-enable if was disabled (startup, not recovery)
+                    self.relayer_repository
+                        .enable_relayer(self.relayer.id.clone())
+                        .await?;
+                }
+            }
+            Err(failures) => {
+                // Health checks failed
+                let reason = DisabledReason::from_health_failures(failures).unwrap_or_else(|| {
+                    DisabledReason::RpcValidationFailed("Unknown error".to_string())
+                });
 
-        let validate_min_balance_result = self.validate_min_balance().await;
+                warn!(reason = %reason, "disabling relayer");
+                let updated_relayer = self
+                    .relayer_repository
+                    .disable_relayer(self.relayer.id.clone(), reason.clone())
+                    .await?;
 
-        // disable relayer if any check fails
-        if validate_rpc_result.is_err() || validate_min_balance_result.is_err() {
-            let reason = vec![
-                validate_rpc_result
-                    .err()
-                    .map(|e| format!("RPC validation failed: {}", e)),
-                validate_min_balance_result
-                    .err()
-                    .map(|e| format!("Balance check failed: {}", e)),
-            ]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<String>>()
-            .join(", ");
+                // Send notification if configured
+                if let Some(notification_id) = &self.relayer.notification_id {
+                    self.job_producer
+                        .produce_send_notification_job(
+                            produce_relayer_disabled_payload(
+                                notification_id,
+                                &updated_relayer,
+                                &reason.description(),
+                            ),
+                            None,
+                        )
+                        .await?;
+                }
 
-            warn!(reason = %reason, "disabling relayer");
-            let updated_relayer = self
-                .relayer_repository
-                .disable_relayer(self.relayer.id.clone())
-                .await?;
-            if let Some(notification_id) = &self.relayer.notification_id {
+                // Schedule health check to try re-enabling the relayer after 10 seconds
                 self.job_producer
-                    .produce_send_notification_job(
-                        produce_relayer_disabled_payload(
-                            notification_id,
-                            &updated_relayer,
-                            &reason,
-                        ),
-                        None,
+                    .produce_relayer_health_check_job(
+                        RelayerHealthCheck::new(self.relayer.id.clone()),
+                        Some(std::time::Duration::from_secs(10)),
                     )
                     .await?;
             }
-        } else if self.relayer.system_disabled {
-            // enable relayer if it was disabled previously and all checks passed
-            self.relayer_repository
-                .enable_relayer(self.relayer.id.clone())
-                .await?;
         }
 
         self.check_balance_and_trigger_token_swap_if_needed()
@@ -1827,12 +1858,17 @@ mod tests {
         disabled_relayer.system_disabled = true;
         mock_repo
             .expect_disable_relayer()
-            .with(eq("test-relayer-id".to_string()))
-            .returning(move |_| Ok(disabled_relayer.clone()));
+            .with(eq("test-relayer-id".to_string()), always())
+            .returning(move |_, _| Ok(disabled_relayer.clone()));
 
         // Mock notification job production
         job_producer
             .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        // Mock health check job scheduling
+        job_producer
+            .expect_produce_relayer_health_check_job()
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
         let ctx = TestCtx {
@@ -1878,7 +1914,7 @@ mod tests {
         disabled_relayer.system_disabled = true;
         mock_repo
             .expect_disable_relayer()
-            .returning(move |_| Ok(disabled_relayer.clone()));
+            .returning(move |_, _| Ok(disabled_relayer.clone()));
 
         let ctx = TestCtx {
             relayer_model,
@@ -1945,12 +1981,17 @@ mod tests {
         disabled_relayer.system_disabled = true;
         mock_repo
             .expect_disable_relayer()
-            .with(eq("test-relayer-id".to_string()))
-            .returning(move |_| Ok(disabled_relayer.clone()));
+            .with(eq("test-relayer-id".to_string()), always())
+            .returning(move |_, _| Ok(disabled_relayer.clone()));
 
         // Mock notification job production - verify it's called
         job_producer
             .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        // Mock health check job scheduling
+        job_producer
+            .expect_produce_relayer_health_check_job()
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
         let ctx = TestCtx {
@@ -1993,15 +2034,21 @@ mod tests {
         disabled_relayer.system_disabled = true;
         mock_repo
             .expect_disable_relayer()
-            .with(eq("test-relayer-id".to_string()))
-            .returning(move |_| Ok(disabled_relayer.clone()));
+            .with(eq("test-relayer-id".to_string()), always())
+            .returning(move |_, _| Ok(disabled_relayer.clone()));
 
         // No notification job should be produced since notification_id is None
+        // But health check job should still be scheduled
+        let mut job_producer = MockJobProducerTrait::new();
+        job_producer
+            .expect_produce_relayer_health_check_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
 
         let ctx = TestCtx {
             relayer_model,
             mock_repo,
             provider: Arc::new(raw_provider),
+            job_producer: Arc::new(job_producer),
             ..Default::default()
         };
 
