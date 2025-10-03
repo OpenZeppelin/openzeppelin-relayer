@@ -17,7 +17,7 @@ use std::str::FromStr;
 
 use alloy::{
     consensus::{SignableTransaction, TxEip1559, TxLegacy},
-    primitives::{eip191_hash_message, Signature},
+    primitives::{eip191_hash_message, normalize_v, Signature},
 };
 use async_trait::async_trait;
 use tracing::{debug, info};
@@ -154,16 +154,20 @@ impl<T: TurnkeyServiceTrait> DataSignerTrait for TurnkeySigner<T> {
             )));
         }
 
-        let mut rs = k256::ecdsa::Signature::try_from(&signature_bytes[0..64])
+        let sig = Signature::try_from(&signature_bytes[..])
             .map_err(|e| SignerError::ConversionError(e.to_string()))?;
 
-        // Normalize to low-s if necessary (EIP-2 malleability protection)
-        if let Some(normalized) = rs.normalize_s() {
-            rs = normalized;
-        }
+        let v_byte = signature_bytes[64];
+        let original_parity = normalize_v(v_byte as u64)
+            .ok_or_else(|| SignerError::SigningError(format!("Invalid v value: {}", v_byte)))?;
 
-        let mut normalized_bytes = rs.to_vec();
-        normalized_bytes.push(signature_bytes[64]);
+        let normalized_sig = if let Some(normalized) = sig.normalize_s() {
+            normalized.with_parity(!original_parity)
+        } else {
+            sig
+        };
+
+        let normalized_bytes = normalized_sig.as_bytes();
 
         validate_and_format_signature(&normalized_bytes, "Turnkey")
     }
@@ -182,16 +186,20 @@ impl<T: TurnkeyServiceTrait> DataSignerTrait for TurnkeySigner<T> {
             )));
         }
 
-        let mut rs = k256::ecdsa::Signature::try_from(&signature_bytes[0..64])
+        let sig = Signature::try_from(&signature_bytes[..])
             .map_err(|e| SignerError::ConversionError(e.to_string()))?;
 
-        // Normalize to low-s if necessary (EIP-2 malleability protection)
-        if let Some(normalized) = rs.normalize_s() {
-            rs = normalized;
-        }
+        let v_byte = signature_bytes[64];
+        let original_parity = normalize_v(v_byte as u64)
+            .ok_or_else(|| SignerError::SigningError(format!("Invalid v value: {}", v_byte)))?;
 
-        let mut normalized_bytes = rs.to_vec();
-        normalized_bytes.push(signature_bytes[64]);
+        let normalized_sig = if let Some(normalized) = sig.normalize_s() {
+            normalized.with_parity(!original_parity)
+        } else {
+            sig
+        };
+
+        let normalized_bytes = normalized_sig.as_bytes();
 
         validate_and_format_signature(&normalized_bytes, "Turnkey")
     }

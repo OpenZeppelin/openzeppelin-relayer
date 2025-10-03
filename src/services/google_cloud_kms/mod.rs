@@ -499,12 +499,12 @@ impl GoogleCloudKmsEvmService for GoogleCloudKmsService {
     }
 
     async fn sign_payload_evm(&self, payload: &[u8]) -> GoogleCloudKmsResult<Vec<u8>> {
-        self.sign_payload_evm(payload).await
+        let digest = keccak256(payload).0;
+        self.sign_and_recover_evm(digest, payload, false).await
     }
 
     async fn sign_hash_evm(&self, hash: &[u8; 32]) -> GoogleCloudKmsResult<Vec<u8>> {
-        // Delegates to the implementation method on GoogleCloudKmsService
-        self.sign_hash_evm(hash).await
+        self.sign_and_recover_evm(*hash, hash, true).await
     }
 }
 

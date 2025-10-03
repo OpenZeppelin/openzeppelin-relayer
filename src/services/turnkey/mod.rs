@@ -223,47 +223,6 @@ impl TurnkeyService {
         })
     }
 
-    /// Converts the public key to an Solana address
-    pub fn address_solana(&self) -> Result<Address, TurnkeyError> {
-        if self.public_key.is_empty() {
-            return Err(TurnkeyError::ConfigError("Public key is empty".to_string()));
-        }
-
-        let raw_pubkey = hex::decode(&self.public_key)
-            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid public key hex: {}", e)))?;
-
-        let pubkey_bs58 = bs58::encode(&raw_pubkey).into_string();
-
-        Ok(Address::Solana(pubkey_bs58))
-    }
-
-    /// Converts the public key to an EVM address
-    pub fn address_evm(&self) -> Result<Address, TurnkeyError> {
-        let public_key = hex::decode(&self.public_key)
-            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid public key hex: {}", e)))?;
-
-        // Remove the first byte (0x04 prefix)
-        let pub_key_no_prefix = &public_key[1..];
-
-        let hash = keccak256(pub_key_no_prefix);
-
-        // Ethereum addresses are the last 20 bytes of the Keccak-256 hash.
-        // Since the hash is 32 bytes, the address is bytes 12..32.
-        let address_bytes = &hash[12..];
-
-        if address_bytes.len() != 20 {
-            return Err(TurnkeyError::ConfigError(format!(
-                "EVM address should be 20 bytes, got {} bytes",
-                address_bytes.len()
-            )));
-        }
-
-        let mut array = [0u8; 20];
-        array.copy_from_slice(address_bytes);
-
-        Ok(Address::Evm(array))
-    }
-
     /// Creates a digital stamp for API authentication
     fn stamp(&self, message: &str) -> TurnkeyResult<String> {
         let private_api_key_bytes =
@@ -379,8 +338,8 @@ impl TurnkeyService {
         Ok(result)
     }
 
-    /// Signs an EVM transaction using the Turnkey API
-    async fn sign_evm_transaction(&self, bytes: &[u8]) -> TurnkeyResult<Vec<u8>> {
+    /// Signs an EVM transaction using the Turnkey API (internal implementation)
+    async fn sign_evm_transaction_impl(&self, bytes: &[u8]) -> TurnkeyResult<Vec<u8>> {
         let encoded_bytes = hex::encode(bytes);
 
         // Create the request body
@@ -480,11 +439,42 @@ impl TurnkeyService {
 #[async_trait]
 impl TurnkeyServiceTrait for TurnkeyService {
     fn address_solana(&self) -> Result<Address, TurnkeyError> {
-        self.address_solana()
+        if self.public_key.is_empty() {
+            return Err(TurnkeyError::ConfigError("Public key is empty".to_string()));
+        }
+
+        let raw_pubkey = hex::decode(&self.public_key)
+            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid public key hex: {}", e)))?;
+
+        let pubkey_bs58 = bs58::encode(&raw_pubkey).into_string();
+
+        Ok(Address::Solana(pubkey_bs58))
     }
 
     fn address_evm(&self) -> Result<Address, TurnkeyError> {
-        self.address_evm()
+        let public_key = hex::decode(&self.public_key)
+            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid public key hex: {}", e)))?;
+
+        // Remove the first byte (0x04 prefix)
+        let pub_key_no_prefix = &public_key[1..];
+
+        let hash = keccak256(pub_key_no_prefix);
+
+        // Ethereum addresses are the last 20 bytes of the Keccak-256 hash.
+        // Since the hash is 32 bytes, the address is bytes 12..32.
+        let address_bytes = &hash[12..];
+
+        if address_bytes.len() != 20 {
+            return Err(TurnkeyError::ConfigError(format!(
+                "EVM address should be 20 bytes, got {} bytes",
+                address_bytes.len()
+            )));
+        }
+
+        let mut array = [0u8; 20];
+        array.copy_from_slice(address_bytes);
+
+        Ok(Address::Evm(array))
     }
 
     async fn sign_solana(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError> {
@@ -498,8 +488,7 @@ impl TurnkeyServiceTrait for TurnkeyService {
     }
 
     async fn sign_evm_transaction(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError> {
-        let signature_bytes = self.sign_evm_transaction(message).await?;
-        Ok(signature_bytes)
+        self.sign_evm_transaction_impl(message).await
     }
 
     async fn sign_solana_transaction(

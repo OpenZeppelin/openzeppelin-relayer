@@ -97,7 +97,8 @@ mod tests {
         // Generate keypair
         let signing_key = SigningKey::random(&mut OsRng);
         let verifying_key = signing_key.verifying_key();
-        let public_key_bytes = &verifying_key.to_encoded_point(false).as_bytes().to_vec()[1..];
+        let public_key_vec = verifying_key.to_encoded_point(false).as_bytes().to_vec();
+        let public_key_bytes = &public_key_vec[1..];
         println!("Pub key length: {}", public_key_bytes.len());
 
         // EIP-191 style of a message
@@ -128,7 +129,8 @@ mod tests {
         // Generate keypair
         let signing_key = SigningKey::random(&mut OsRng);
         let verifying_key = signing_key.verifying_key();
-        let public_key_bytes = &verifying_key.to_encoded_point(false).as_bytes().to_vec()[1..];
+        let public_key_vec = verifying_key.to_encoded_point(false).as_bytes().to_vec();
+        let public_key_bytes = &public_key_vec[1..];
 
         // Create a pre-computed hash (simulating EIP-712)
         let message = b"Test message for EIP-712";
@@ -157,7 +159,8 @@ mod tests {
         // Test that signing the same hash produces consistent v values
         let signing_key = SigningKey::random(&mut OsRng);
         let verifying_key = signing_key.verifying_key();
-        let public_key_bytes = &verifying_key.to_encoded_point(false).as_bytes().to_vec()[1..];
+        let public_key_vec = verifying_key.to_encoded_point(false).as_bytes().to_vec();
+        let public_key_bytes = &public_key_vec[1..];
 
         // Create a fixed hash
         let hash: [u8; 32] = [0x42; 32];

@@ -247,7 +247,7 @@ impl<T: AwsKmsK256 + Clone> AwsKmsService<T> {
 impl<T: AwsKmsK256 + Clone> AwsKmsService<T> {
     /// Common signing logic for EVM signatures.
     ///
-    /// This internal helper eliminates duplication between `sign_bytes_evm` and `sign_hash_evm`.
+    /// This internal helper eliminates duplication between `sign_payload_evm` and `sign_hash_evm`.
     ///
     /// # Parameters
     /// * `digest` - The 32-byte hash to sign
@@ -285,7 +285,7 @@ impl<T: AwsKmsK256 + Clone> AwsKmsService<T> {
     /// - EIP-191 personal messages
     ///
     /// **Note:** For EIP-712 typed data, use `sign_hash_evm()` to avoid double-hashing.
-    pub async fn sign_bytes_evm(&self, bytes: &[u8]) -> AwsKmsResult<Vec<u8>> {
+    pub async fn sign_payload_evm(&self, bytes: &[u8]) -> AwsKmsResult<Vec<u8>> {
         let digest = keccak256(bytes).0;
         self.sign_and_recover_evm(digest, bytes, false).await
     }
@@ -314,12 +314,13 @@ impl<T: AwsKmsK256 + Clone> AwsKmsEvmService for AwsKmsService<T> {
     }
 
     async fn sign_payload_evm(&self, message: &[u8]) -> AwsKmsResult<Vec<u8>> {
-        self.sign_bytes_evm(message).await
+        let digest = keccak256(message).0;
+        self.sign_and_recover_evm(digest, message, false).await
     }
 
     async fn sign_hash_evm(&self, hash: &[u8; 32]) -> AwsKmsResult<Vec<u8>> {
         // Delegates to the implementation method on AwsKmsService
-        self.sign_hash_evm(hash).await
+        self.sign_and_recover_evm(*hash, hash, true).await
     }
 }
 
