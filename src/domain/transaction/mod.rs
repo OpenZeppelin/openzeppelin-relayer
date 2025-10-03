@@ -26,7 +26,8 @@ use crate::{
             cache::GasPriceCache, evm_gas_price::EvmGasPriceService,
             price_params_handler::PriceParamsHandler,
         },
-        get_network_provider, EvmSignerFactory, StellarSignerFactory,
+        provider::get_network_provider,
+        signer::{EvmSignerFactory, StellarSignerFactory},
     },
 };
 use async_trait::async_trait;

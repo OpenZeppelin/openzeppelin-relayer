@@ -11,7 +11,7 @@ use tracing::error;
 
 use crate::{
     models::{SignerError, SolanaEncodingError},
-    services::SolanaProviderError,
+    services::provider::SolanaProviderError,
 };
 
 use super::TokenError;

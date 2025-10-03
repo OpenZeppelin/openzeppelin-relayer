@@ -279,7 +279,7 @@ mod tests {
         jobs::MockJobProducerTrait,
         models::{NetworkTransactionData, SolanaTransactionData},
         repositories::{MockRelayerRepository, MockTransactionRepository},
-        services::{MockSolanaProviderTrait, SolanaProviderError},
+        services::provider::{MockSolanaProviderTrait, SolanaProviderError},
         utils::mocks::mockutils::{create_mock_solana_relayer, create_mock_solana_transaction},
     };
     use eyre::Result;

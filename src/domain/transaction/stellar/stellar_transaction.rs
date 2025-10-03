@@ -16,7 +16,10 @@ use crate::{
         RelayerRepositoryStorage, Repository, TransactionCounterRepositoryStorage,
         TransactionCounterTrait, TransactionRepository, TransactionRepositoryStorage,
     },
-    services::{Signer, StellarProvider, StellarProviderTrait, StellarSigner},
+    services::{
+        provider::{StellarProvider, StellarProviderTrait},
+        signer::{Signer, StellarSigner},
+    },
     utils::calculate_scheduled_timestamp,
 };
 use async_trait::async_trait;

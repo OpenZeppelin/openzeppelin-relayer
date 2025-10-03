@@ -42,8 +42,9 @@ use crate::{
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
-        DataSignerTrait, EvmProvider, EvmProviderTrait, EvmSigner, TransactionCounterService,
-        TransactionCounterServiceTrait,
+        provider::{EvmProvider, EvmProviderTrait},
+        signer::{DataSignerTrait, EvmSigner},
+        TransactionCounterService, TransactionCounterServiceTrait,
     },
 };
 use async_trait::async_trait;
@@ -586,7 +587,10 @@ mod tests {
             TransactionStatus, U256,
         },
         repositories::{MockNetworkRepository, MockRelayerRepository, MockTransactionRepository},
-        services::{MockEvmProviderTrait, MockTransactionCounterServiceTrait, ProviderError},
+        services::{
+            provider::{MockEvmProviderTrait, ProviderError},
+            MockTransactionCounterServiceTrait,
+        },
     };
     use mockall::predicate::*;
     use std::future::ready;

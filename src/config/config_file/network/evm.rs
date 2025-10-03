@@ -893,7 +893,7 @@ mod tests {
     fn test_gas_price_cache_default_values() {
         let config = GasPriceCacheConfig::default();
 
-        assert_eq!(config.enabled, false);
+        assert!(!config.enabled);
         assert_eq!(config.stale_after_ms, 20_000);
         assert_eq!(config.expire_after_ms, 45_000);
 

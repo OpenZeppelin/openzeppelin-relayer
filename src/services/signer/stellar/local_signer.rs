@@ -22,7 +22,7 @@ use crate::{
     models::{
         Address, NetworkTransactionData, Signer as SignerDomainModel, SignerError, TransactionInput,
     },
-    services::Signer,
+    services::signer::Signer,
 };
 
 use async_trait::async_trait;

@@ -8,7 +8,7 @@ use crate::services::gas::handlers::MockPriceHandler;
 use crate::{
     domain::evm::PriceParams,
     models::{evm::EvmTransactionRequest, EvmNetwork, TransactionError},
-    services::{gas::handlers::OptimismPriceHandler, EvmProvider},
+    services::{gas::handlers::OptimismPriceHandler, provider::EvmProvider},
 };
 #[derive(Clone)]
 pub enum PriceParamsHandler {

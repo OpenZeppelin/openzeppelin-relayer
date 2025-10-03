@@ -12,7 +12,7 @@
 use crate::{
     models::{EvmRpcResult, NetworkRpcResult, OpenZeppelinErrorCodes, RpcErrorCodes},
     models::{JsonRpcError, JsonRpcId, JsonRpcResponse},
-    services::ProviderError,
+    services::provider::ProviderError,
 };
 use serde_json;
 
@@ -118,7 +118,7 @@ pub fn map_provider_error(error: &ProviderError) -> (i32, &'static str) {
 mod tests {
     use super::*;
     use crate::models::{OpenZeppelinErrorCodes, RpcErrorCodes};
-    use crate::services::{provider::rpc_selector::RpcSelectorError, SolanaProviderError};
+    use crate::services::provider::{rpc_selector::RpcSelectorError, SolanaProviderError};
     use serde_json::json;
 
     #[test]

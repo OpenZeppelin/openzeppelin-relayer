@@ -25,7 +25,7 @@ use crate::{
         Address, NetworkTransactionData, SignerError, SignerRepoModel, TransactionRepoModel,
         TurnkeySignerConfig,
     },
-    services::{Signer, TurnkeyService, TurnkeyServiceTrait},
+    services::{signer::Signer, TurnkeyService, TurnkeyServiceTrait},
     utils::{base64_decode, base64_encode},
 };
 
