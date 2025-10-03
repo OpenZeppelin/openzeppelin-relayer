@@ -102,7 +102,9 @@ jobs:
       - name: Get cache-hit output
         run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
       - name: Install cargo hack
-        uses: taiki-e/install-action@7689010b667477e55299b24c373cdf719c945fdf  # cargo-hack
+        uses: taiki-e/install-action@bf2f998095ccb464eb8b85eeb95a460ccd744ec4  # v2.62.17
+        with:
+          tool: cargo-hack
 
       # Check the minimum supported Rust version
       - name: Default features
@@ -223,10 +225,10 @@ jobs:
       # Get the output of the prepare composite action
       - name: Get cache-hit output
         run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
-      - name: Install cargo hack
-        uses: taiki-e/install-action@7689010b667477e55299b24c373cdf719c945fdf  # cargo-hack
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@16edcff251c6bb06f6878981359f84b77b28e7e2  # cargo-llvm-cov
+      - name: Install cargo hack and cargo-llvm-cov
+        uses: taiki-e/install-action@bf2f998095ccb464eb8b85eeb95a460ccd744ec4  # v2.62.17
+        with:
+          tool: cargo-hack,cargo-llvm-cov
       - name: Build
         run: cargo test --no-run --locked
 
