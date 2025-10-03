@@ -16,6 +16,7 @@ use crate::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
         Repository, TransactionCounterTrait, TransactionRepository,
     },
+    utils::calculate_scheduled_timestamp,
 };
 use actix_web::web::ThinData;
 use apalis::prelude::*;
@@ -210,7 +211,7 @@ where
                 .job_producer
                 .produce_relayer_health_check_job(
                     RelayerHealthCheck::with_retry_count(relayer_id, data.retry_count + 1),
-                    Some(delay),
+                    Some(calculate_scheduled_timestamp(delay.as_secs() as i64)),
                 )
                 .await
                 .map_err(|e| eyre::eyre!("Failed to schedule retry: {}", e))?;

@@ -18,7 +18,6 @@ use apalis::prelude::Storage;
 use apalis_redis::RedisError;
 use async_trait::async_trait;
 use serde::Serialize;
-use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::Mutex;
 use tracing::{error, info};
@@ -103,7 +102,7 @@ pub trait JobProducerTrait: Send + Sync {
     async fn produce_relayer_health_check_job(
         &self,
         relayer_health_check_job: RelayerHealthCheck,
-        delay: Option<Duration>,
+        scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError>;
 
     async fn get_queue(&self) -> Result<Queue, JobProducerError>;
@@ -255,7 +254,7 @@ impl JobProducerTrait for JobProducer {
     async fn produce_relayer_health_check_job(
         &self,
         relayer_health_check_job: RelayerHealthCheck,
-        delay: Option<Duration>,
+        scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError> {
         let job = Job::new(
             JobType::RelayerHealthCheck,
@@ -265,28 +264,15 @@ impl JobProducerTrait for JobProducer {
 
         let mut queue = self.queue.lock().await;
 
-        match delay {
-            Some(duration) => {
-                let scheduled_on = chrono::Utc::now()
-                    .checked_add_signed(chrono::Duration::from_std(duration).unwrap())
-                    .unwrap()
-                    .timestamp();
+        match scheduled_on {
+            Some(scheduled_on) => {
                 queue
                     .relayer_health_check_queue
                     .schedule(job, scheduled_on)
                     .await?;
-                info!(
-                    relayer_id = %relayer_health_check_job.relayer_id,
-                    delay_seconds = duration.as_secs(),
-                    "Relayer health check job scheduled"
-                );
             }
             None => {
                 queue.relayer_health_check_queue.push(job).await?;
-                info!(
-                    relayer_id = %relayer_health_check_job.relayer_id,
-                    "Relayer health check job produced immediately"
-                );
             }
         }
 
@@ -493,17 +479,13 @@ mod tests {
         async fn produce_relayer_health_check_job(
             &self,
             relayer_health_check_job: RelayerHealthCheck,
-            delay: Option<Duration>,
+            scheduled_on: Option<i64>,
         ) -> Result<(), JobProducerError> {
             let mut queue = self.queue.lock().await;
             let job = Job::new(JobType::RelayerHealthCheck, relayer_health_check_job);
 
-            match delay {
-                Some(duration) => {
-                    let scheduled_on = chrono::Utc::now()
-                        .checked_add_signed(chrono::Duration::from_std(duration).unwrap())
-                        .unwrap()
-                        .timestamp();
+            match scheduled_on {
+                Some(scheduled_on) => {
                     queue
                         .relayer_health_check_queue
                         .schedule(job, scheduled_on)
@@ -632,8 +614,9 @@ mod tests {
         // Test scheduled health check job
         let producer = TestJobProducer::new();
         let health_check = RelayerHealthCheck::new("relayer-1".to_string());
+        let scheduled_timestamp = calculate_scheduled_timestamp(60);
         let result = producer
-            .produce_relayer_health_check_job(health_check, Some(Duration::from_secs(60)))
+            .produce_relayer_health_check_job(health_check, Some(scheduled_timestamp))
             .await;
         assert!(result.is_ok());
 

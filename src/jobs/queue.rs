@@ -6,6 +6,7 @@
 //! - Transaction status checks
 //! - Notifications
 //! - Solana swap requests
+//! - Relayer health checks
 use std::{env, sync::Arc};
 
 use apalis_redis::{Config, ConnectionManager, RedisStorage};
@@ -121,6 +122,7 @@ mod tests {
         pub namespace_transaction_status: String,
         pub namespace_notification: String,
         pub namespace_solana_token_swap_request_queue: String,
+        pub namespace_relayer_health_check_queue: String,
     }
 
     impl MockQueue {
@@ -132,6 +134,7 @@ mod tests {
                 namespace_notification: "notification_queue".to_string(),
                 namespace_solana_token_swap_request_queue: "solana_token_swap_request_queue"
                     .to_string(),
+                namespace_relayer_health_check_queue: "relayer_health_check_queue".to_string(),
             }
         }
     }
@@ -156,6 +159,10 @@ mod tests {
         assert_eq!(
             mock_queue.namespace_solana_token_swap_request_queue,
             "solana_token_swap_request_queue"
+        );
+        assert_eq!(
+            mock_queue.namespace_relayer_health_check_queue,
+            "relayer_health_check_queue"
         );
     }
 }

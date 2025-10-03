@@ -9,6 +9,7 @@
 //! in-memory repositories, and the application's domain models.
 use std::{str::FromStr, sync::Arc};
 
+use crate::utils::calculate_scheduled_timestamp;
 use crate::{
     constants::{
         DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, DEFAULT_SOLANA_MIN_BALANCE,
@@ -31,6 +32,7 @@ use crate::{
         SolanaSigner,
     },
 };
+
 use async_trait::async_trait;
 use eyre::Result;
 use futures::future::try_join_all;
@@ -669,7 +671,10 @@ where
     }
 
     async fn check_health(&self) -> Result<(), Vec<HealthCheckFailure>> {
-        info!("running health checks");
+        debug!(
+            "running health checks for Solana relayer {}",
+            self.relayer.id
+        );
 
         let validate_rpc_result = self.validate_rpc().await;
         let validate_min_balance_result = self.validate_min_balance().await;
@@ -697,7 +702,7 @@ where
     }
 
     async fn initialize_relayer(&self) -> Result<(), RelayerError> {
-        info!("initializing Solana relayer {}", self.relayer.id);
+        debug!("initializing Solana relayer {}", self.relayer.id);
 
         // Populate model with allowed token metadata and update DB entry
         // Error will be thrown if any of the tokens are not found
@@ -755,7 +760,7 @@ where
                 self.job_producer
                     .produce_relayer_health_check_job(
                         RelayerHealthCheck::new(self.relayer.id.clone()),
-                        Some(std::time::Duration::from_secs(10)),
+                        Some(calculate_scheduled_timestamp(10)),
                     )
                     .await?;
             }

@@ -39,6 +39,7 @@ use crate::{
         StellarProvider, StellarProviderTrait, StellarSignTrait, StellarSigner,
         TransactionCounterService, TransactionCounterServiceTrait,
     },
+    utils::calculate_scheduled_timestamp,
 };
 use async_trait::async_trait;
 use eyre::Result;
@@ -364,7 +365,10 @@ where
 
         match self.sync_sequence().await {
             Ok(_) => {
-                info!("all health checks passed");
+                debug!(
+                    "all health checks passed for Stellar relayer {}",
+                    self.relayer.id
+                );
                 Ok(())
             }
             Err(e) => {
@@ -424,7 +428,7 @@ where
                 self.job_producer
                     .produce_relayer_health_check_job(
                         RelayerHealthCheck::new(self.relayer.id.clone()),
-                        Some(std::time::Duration::from_secs(10)),
+                        Some(calculate_scheduled_timestamp(10)),
                     )
                     .await?;
 

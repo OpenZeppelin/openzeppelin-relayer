@@ -69,13 +69,13 @@ where
 {
     fn clone(&self) -> Self {
         Self {
+            job_producer: Arc::clone(&self.job_producer),
             relayer_repository: Arc::clone(&self.relayer_repository),
             transaction_repository: Arc::clone(&self.transaction_repository),
             signer_repository: Arc::clone(&self.signer_repository),
             notification_repository: Arc::clone(&self.notification_repository),
             network_repository: Arc::clone(&self.network_repository),
             transaction_counter_store: Arc::clone(&self.transaction_counter_store),
-            job_producer: Arc::clone(&self.job_producer),
             plugin_repository: Arc::clone(&self.plugin_repository),
             api_key_repository: Arc::clone(&self.api_key_repository),
         }

@@ -46,6 +46,7 @@ use crate::{
         DataSignerTrait, EvmProvider, EvmProviderTrait, EvmSigner, TransactionCounterService,
         TransactionCounterServiceTrait,
     },
+    utils::calculate_scheduled_timestamp,
 };
 use async_trait::async_trait;
 use eyre::Result;
@@ -589,7 +590,7 @@ where
                 self.job_producer
                     .produce_relayer_health_check_job(
                         RelayerHealthCheck::new(self.relayer.id.clone()),
-                        Some(std::time::Duration::from_secs(10)),
+                        Some(calculate_scheduled_timestamp(10)),
                     )
                     .await?;
 

@@ -438,6 +438,12 @@ mod tests {
 
         assert_eq!(disabled_relayer.id, initial_relayer.id);
         assert!(disabled_relayer.system_disabled);
+        assert_eq!(
+            disabled_relayer.disabled_reason,
+            Some(DisabledReason::BalanceCheckFailed(
+                "test reason".to_string()
+            ))
+        );
     }
 
     #[actix_web::test]
