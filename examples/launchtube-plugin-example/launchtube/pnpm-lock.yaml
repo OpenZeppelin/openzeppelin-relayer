@@ -7,8 +7,8 @@ importers:
   .:
     dependencies:
       '@openzeppelin/relayer-plugin-launchtube':
-        specifier: 0.2.0
-        version: 0.2.0
+        specifier: 0.3.0
+        version: 0.3.0
       '@openzeppelin/relayer-sdk':
         specifier: ^1.6.0
         version: 1.6.0
@@ -250,8 +250,8 @@ packages:
     resolution: {integrity: sha512-uw6guiW/gcAGPDhLmd77/6lW8QLeiV5RUTsAX46Db6oLhGaVj4lhnPwb184s1bkc8kdVg/+h988dro8GRDpmYQ==}
   '@jridgewell/trace-mapping@0.3.9':
     resolution: {integrity: sha512-3Belt6tdc8bPgAtbcmdtNJlirVoTmEb5e2gC94PnkwEW9jI6CAHUeoG85tjWP5WquqfavoMtMwiG4P926ZKKuQ==}
-  '@openzeppelin/relayer-plugin-launchtube@0.2.0':
-    resolution: {integrity: sha512-nhD5ZHDngjeoqdBArzKR1nzbK1R4Gv49fY+cuF3l+QrZ1IVX6PciBqUFenC5kCaKnyBqvMMJx+XDIBFqY7/bgg==}
+  '@openzeppelin/relayer-plugin-launchtube@0.3.0':
+    resolution: {integrity: sha512-pbl14AB1lBJpGGdi3WWBwtizzNOPSRoH4IJ7eMWGyH/ObjAl0bOCvL6eFLk6sbmnAel/710J0DQD1E/hBC+JZA==}
     engines: {node: '>=22.18.0', npm: use pnpm, pnpm: '>=9', yarn: use pnpm}
   '@openzeppelin/relayer-sdk@1.6.0':
     resolution: {integrity: sha512-UjL4TLz4tvCY1ssE3wf47FU+/2vE/bJ5HoXyufUsidL5bRXwf6ziwWZWUa0YsPiGEQNdVtsuoUR9qqHjxYqlXg==}
@@ -1479,7 +1479,7 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.4
-  '@openzeppelin/relayer-plugin-launchtube@0.2.0':
+  '@openzeppelin/relayer-plugin-launchtube@0.3.0':
     dependencies:
       '@actions/exec': 1.1.1
       '@openzeppelin/relayer-sdk': 1.6.0
