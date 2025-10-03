@@ -109,6 +109,40 @@ LOCK_TTL_SECONDS=30
 LOG_LEVEL=info
 ```
 
+### 2b. Provision LaunchTube Sequence Accounts
+
+After generating the credentials above, you can use the bundled TypeScript
+script to create the required relayers, signers, and Stellar accounts while also
+updating the LaunchTube plugin configuration:
+
+```bash
+cd launchtube
+pnpm install
+pnpm exec tsx ./scripts/create-sequence-accounts.ts \
+  --total 3 \
+  --base-url http://localhost:8080 \
+  --api-key <RELAYER_API_KEY> \
+  --funding-relayer launchtube-fund \
+  --plugin-id launchtube-plugin \
+  --plugin-admin-secret <LAUNCHTUBE_ADMIN_SECRET> \
+  --network testnet
+
+# Rerun with --fix to audit or heal any partially created state
+pnpm exec tsx ./scripts/create-sequence-accounts.ts \
+  --total 3 \
+  --base-url http://localhost:8080 \
+  --api-key <RELAYER_API_KEY> \
+  --funding-relayer launchtube-fund \
+  --plugin-id launchtube-plugin \
+  --plugin-admin-secret <LAUNCHTUBE_ADMIN_SECRET> \
+  --network testnet \
+  --fix
+```
+
+The script waits for each funding transaction to confirm, prints a summary of
+the relayer/signer state, and updates the LaunchTube management API with the
+sequence account list so the plugin is immediately ready for use.
+
 ### 3. Verify Configuration
 
 The LaunchTube plugin and relayer configurations are already set up for testnet. The configurations include:
