@@ -18,7 +18,7 @@ import { Buffer } from 'node:buffer';
  * plan to persist secrets.
  *
  * Usage (example):
- *   pnpm ts-node create-stellar-accounts.ts \
+ *   pnpm ts-node create-sequence-accounts.ts \
  *     --total 200 \
  *     --base-url http://localhost:8080 \
  *     --api-key <relayer-api-key> \
@@ -114,7 +114,6 @@ interface CreatedAccountSummary {
   relayerId: string;
   signerId: string;
   publicKey: string;
-  secretSeed?: string;
   secretHex?: string;
   accountExisted: boolean;
   funded: boolean;
@@ -475,6 +474,9 @@ function parseArgs(argv: string[]): CliOptions {
     throw new Error('LaunchTube admin secret missing. Provide --plugin-admin-secret.');
   }
 
+  const resolvedPluginId = pluginId;
+  const resolvedPluginAdminSecret = pluginAdminSecret;
+
   return {
     total,
     prefix,
@@ -488,8 +490,8 @@ function parseArgs(argv: string[]): CliOptions {
     accessToken,
     fundingRelayerId,
     network,
-    pluginId,
-    pluginAdminSecret,
+    pluginId: resolvedPluginId,
+    pluginAdminSecret: resolvedPluginAdminSecret,
   };
 }
 
@@ -682,6 +684,11 @@ async function ensureRelayer(
       if (!data) {
         throw new Error(`Relayer ${relayerId} already exists but could not be fetched`);
       }
+      if (data.signer_id !== signerId) {
+        throw new Error(
+          `Relayer ${relayerId} already exists but is bound to signer ${data.signer_id}, expected ${signerId}.`
+        );
+      }
       return { id: data.id, address: data.address };
     }
     throw error;
@@ -799,7 +806,7 @@ async function main(): Promise<void> {
   const server = new Server(horizonUrl);
   const fundingAccountResponse = await server.loadAccount(fundingAddress);
   const baseReserveStroops = await fetchBaseReserveStroops(server);
-  const targetCount = indicesToProcess.length;
+  const targetCount = options.fix ? missingIndices.length : indicesToProcess.length;
   const fundingSummary = summarizeFundingCapacity(
     fundingAccountResponse,
     baseReserveStroops,
@@ -849,14 +856,12 @@ async function main(): Promise<void> {
     let signerRecord = existingSigner;
     let relayerRecord = existingRelayer;
     let keypair: Keypair | undefined;
-    let secretSeed: string | undefined;
     let secretHex: string | undefined;
     let signerCreated = false;
     let relayerCreated = false;
 
     if (!signerRecord) {
       keypair = Keypair.random();
-      secretSeed = keypair.secret();
       secretHex = Buffer.from(keypair.rawSecretKey()).toString('hex');
       const signerIdentifier = await ensureSigner(signersApi, signerId, secretHex);
       signerRecord = { id: signerIdentifier };
@@ -869,14 +874,12 @@ async function main(): Promise<void> {
           console.log(`[${accountName}] Relayer missing; recreating signer to restore configuration.`);
           await deleteSignerIfExists(signersApi, signerId);
           keypair = Keypair.random();
-          secretSeed = keypair.secret();
           secretHex = Buffer.from(keypair.rawSecretKey()).toString('hex');
           const signerIdentifier = await ensureSigner(signersApi, signerId, secretHex);
           signerRecord = { id: signerIdentifier };
           signerCreated = true;
         } else {
           keypair = Keypair.random();
-          secretSeed = keypair.secret();
           secretHex = Buffer.from(keypair.rawSecretKey()).toString('hex');
           const signerIdentifier = await ensureSigner(signersApi, signerId, secretHex);
           signerRecord = { id: signerIdentifier };
@@ -995,7 +998,6 @@ async function main(): Promise<void> {
       relayerId: relayerIdentifier,
       signerId: signerIdentifier,
       publicKey,
-      secretSeed,
       secretHex,
       accountExisted: accountAlreadyExists,
       funded,
@@ -1004,9 +1006,7 @@ async function main(): Promise<void> {
 
   console.log(options.fix ? '\nAccount audit summary:' : '\nAccount creation summary:');
   for (const entry of createdAccounts) {
-    const secretInfo = entry.secretSeed && entry.secretHex
-      ? `, secret_seed=${entry.secretSeed}, secret_hex=${entry.secretHex}`
-      : '';
+    const secretInfo = entry.secretHex ? `, secret_hex=${entry.secretHex}` : '';
     const existedLabel = entry.accountExisted ? 'yes' : 'no';
     const fundedLabel = entry.funded ? 'yes' : 'no';
     console.log(
@@ -1015,7 +1015,7 @@ async function main(): Promise<void> {
   }
 
   const relayerIdsForPlugin = allIndices.map((index) =>
-    formatAccountName(options.prefix, index, options.padding).toLowerCase(),
+    formatAccountName(options.prefix, index, options.padding)
   );
   await updateLaunchTubePlugin(pluginsApi, options.pluginId, options.pluginAdminSecret, relayerIdsForPlugin);
 }
