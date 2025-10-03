@@ -288,7 +288,7 @@ jobs:
       - changed_files
       - ci
     if: |
-      ${{ github.event.pull_request.draft == false && needs.changed_files.outputs.changed-docker-files == 'true' }}
+      ${{ always() && github.event.pull_request.draft == false && needs.changed_files.outputs.changed-docker-files == 'true' && needs.ci.result == 'success' }}
     steps:
       # Checkout the repository
       - name: Harden the runner (Audit all outbound calls)
