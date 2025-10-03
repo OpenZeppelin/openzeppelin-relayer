@@ -1,77 +1,14 @@
 {
-  "relayers": [
-    {
-      "id": "launchtube-fund",
-      "name": "LaunchTube Fund Account",
-      "network": "testnet",
-      "paused": false,
-      "network_type": "stellar",
-      "signer_id": "launchtube-fund-signer",
-      "policies": {
-        "concurrent_transactions": true
+    "relayers": [],
+    "notifications": [],
+    "signers": [],
+    "networks": "./config/networks",
+    "plugins": [
+      {
+        "id": "launchtube-plugin",
+        "path": "launchtube/index.ts",
+        "timeout": 30
       }
-    },
-    {
-      "id": "launchtube-seq-001",
-      "name": "LaunchTube Sequence 001",
-      "network": "testnet",
-      "paused": false,
-      "network_type": "stellar",
-      "signer_id": "launchtube-seq-001-signer"
-    },
-    {
-      "id": "launchtube-seq-002",
-      "name": "LaunchTube Sequence 002",
-      "network": "testnet",
-      "paused": false,
-      "network_type": "stellar",
-      "signer_id": "launchtube-seq-002-signer"
-    }
-  ],
-  "notifications": [],
-  "signers": [
-    {
-      "id": "launchtube-fund-signer",
-      "type": "local",
-      "config": {
-        "path": "config/keys/launchtube-fund.json",
-        "passphrase": {
-          "type": "env",
-          "value": "KEYSTORE_PASSPHRASE_FUND"
-        }
-      }
-    },
-    {
-      "id": "launchtube-seq-001-signer",
-      "type": "local",
-      "config": {
-        "path": "config/keys/launchtube-seq-001.json",
-        "passphrase": {
-          "type": "env",
-          "value": "KEYSTORE_PASSPHRASE_SEQ_001"
-        }
-      }
-    },
-    {
-      "id": "launchtube-seq-002-signer",
-      "type": "local",
-      "config": {
-        "path": "config/keys/launchtube-seq-002.json",
-        "passphrase": {
-          "type": "env",
-          "value": "KEYSTORE_PASSPHRASE_SEQ_002"
-        }
-      }
-    }
-  ],
-  "networks": "./config/networks",
-  "plugins": [
-    {
-      "id": "launchtube-plugin",
-      "path": "launchtube/index.ts",
-      "timeout": 30,
-      "emit_logs": true,
-      "emit_traces": true
-    }
-  ]
-}
+    ]
+  }
+  
