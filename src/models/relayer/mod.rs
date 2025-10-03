@@ -126,6 +126,7 @@ pub enum DisabledReason {
     /// Sequence number synchronization failed (Stellar)
     SequenceSyncFailed(String),
     /// Multiple failures occurred simultaneously
+    #[schema(value_type = Vec<String>)]
     Multiple(Vec<DisabledReason>),
 }
 
