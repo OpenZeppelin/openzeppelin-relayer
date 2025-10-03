@@ -792,6 +792,7 @@ mod tests {
             signer_id: "test-signer".to_string(),
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         }
     }
 

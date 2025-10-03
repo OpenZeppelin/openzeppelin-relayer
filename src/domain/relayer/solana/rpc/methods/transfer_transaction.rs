@@ -792,6 +792,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
         // Create token account with low balance
         let token_account = spl_token::state::Account {

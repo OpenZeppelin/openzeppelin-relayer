@@ -1,5 +1,6 @@
 use crate::models::{
-    Relayer, RelayerError, RelayerEvmPolicy, RelayerSolanaPolicy, RelayerStellarPolicy,
+    DisabledReason, Relayer, RelayerError, RelayerEvmPolicy, RelayerSolanaPolicy,
+    RelayerStellarPolicy,
 };
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +23,7 @@ impl RelayerRepoUpdater {
 
     /// Apply updates from a domain model while preserving runtime fields
     ///
-    /// This method ensures that runtime fields (address, system_disabled) from the
+    /// This method ensures that runtime fields (address, system_disabled, disabled_reason) from the
     /// original repository model are preserved when converting from domain model,
     /// preventing data loss during updates.
     pub fn apply_domain_update(self, domain: Relayer) -> RelayerRepoModel {
@@ -30,6 +31,7 @@ impl RelayerRepoUpdater {
         // Preserve runtime fields from original
         updated.address = self.original.address;
         updated.system_disabled = self.original.system_disabled;
+        updated.disabled_reason = self.original.disabled_reason;
         updated
     }
 }
@@ -46,6 +48,7 @@ pub struct RelayerRepoModel {
     pub address: String,
     pub notification_id: Option<String>,
     pub system_disabled: bool,
+    pub disabled_reason: Option<DisabledReason>,
     pub custom_rpc_urls: Option<Vec<RpcConfig>>,
 }
 
@@ -76,6 +79,7 @@ impl Default for RelayerRepoModel {
             address: "0x".to_string(),
             notification_id: None,
             system_disabled: false,
+            disabled_reason: None,
             custom_rpc_urls: None,
         }
     }
@@ -123,6 +127,7 @@ impl From<Relayer> for RelayerRepoModel {
             address: "".to_string(), // Will be filled in later by process_relayers
             notification_id: relayer.notification_id,
             system_disabled: false,
+            disabled_reason: None,
             custom_rpc_urls: relayer.custom_rpc_urls,
         }
     }
@@ -143,6 +148,7 @@ mod tests {
             name: "Test Relayer".to_string(),
             paused,
             system_disabled,
+            disabled_reason: None,
             network: "test_network".to_string(),
             network_type: NetworkType::Evm,
             signer_id: "test_signer".to_string(),
@@ -178,6 +184,7 @@ mod tests {
             address: "SolanaAddress123".to_string(),
             notification_id: None,
             custom_rpc_urls: None,
+            ..Default::default()
         }
     }
 
@@ -199,6 +206,7 @@ mod tests {
             address: "GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string(),
             notification_id: None,
             custom_rpc_urls: None,
+            ..Default::default()
         }
     }
 
@@ -567,6 +575,9 @@ mod tests {
             name: "Original Name".to_string(),
             address: "0x742d35Cc6634C0532925a3b8D8C2e48a73F6ba2E".to_string(), // Runtime field
             system_disabled: true,                                             // Runtime field
+            disabled_reason: Some(DisabledReason::BalanceCheckFailed(
+                "Balance too low".to_string(),
+            )), // Runtime field
             paused: false,
             network: "mainnet".to_string(),
             network_type: NetworkType::Evm,
@@ -607,6 +618,12 @@ mod tests {
             "0x742d35Cc6634C0532925a3b8D8C2e48a73F6ba2E"
         );
         assert!(updated.system_disabled);
+        assert_eq!(
+            updated.disabled_reason,
+            Some(DisabledReason::BalanceCheckFailed(
+                "Balance too low".to_string()
+            ))
+        );
     }
 
     #[test]
@@ -617,6 +634,9 @@ mod tests {
             name: "Original Solana Name".to_string(),
             address: "SolanaOriginalAddress123".to_string(), // Runtime field
             system_disabled: true,                           // Runtime field
+            disabled_reason: Some(DisabledReason::RpcValidationFailed(
+                "RPC check failed".to_string(),
+            )), // Runtime field
             paused: false,
             network: "mainnet".to_string(),
             network_type: NetworkType::Solana,
@@ -657,6 +677,12 @@ mod tests {
         // Verify runtime fields were preserved
         assert_eq!(updated.address, "SolanaOriginalAddress123");
         assert!(updated.system_disabled);
+        assert_eq!(
+            updated.disabled_reason,
+            Some(DisabledReason::RpcValidationFailed(
+                "RPC check failed".to_string()
+            ))
+        );
 
         // Verify policies were updated
         if let RelayerNetworkPolicy::Solana(solana_policy) = updated.policies {
@@ -674,6 +700,7 @@ mod tests {
             name: "Original Stellar Name".to_string(),
             address: "GORIGINALXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string(), // Runtime field
             system_disabled: false, // Runtime field
+            disabled_reason: None,  // Runtime field
             paused: true,
             network: "mainnet".to_string(),
             network_type: NetworkType::Stellar,
@@ -716,6 +743,7 @@ mod tests {
             "GORIGINALXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
         );
         assert!(!updated.system_disabled);
+        assert_eq!(updated.disabled_reason, None);
 
         // Verify policies were updated
         if let RelayerNetworkPolicy::Stellar(stellar_policy) = updated.policies {

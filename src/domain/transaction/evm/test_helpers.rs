@@ -98,6 +98,7 @@ pub mod test_utils {
             address: "0x".to_string(),
             notification_id: None,
             custom_rpc_urls: None,
+            ..Default::default()
         }
     }
 

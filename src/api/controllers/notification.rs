@@ -745,6 +745,7 @@ mod tests {
             notification_id: Some("connected-notification".to_string()), // References our notification
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
         app_state.relayer_repository.create(relayer).await.unwrap();
 
@@ -791,6 +792,7 @@ mod tests {
             notification_id: Some("cleanup-notification".to_string()),
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
         app_state.relayer_repository.create(relayer).await.unwrap();
 
@@ -847,6 +849,7 @@ mod tests {
                 notification_id: Some("multi-relayer-notification".to_string()),
                 system_disabled: false,
                 custom_rpc_urls: None,
+                ..Default::default()
             },
             crate::models::RelayerRepoModel {
                 id: "relayer-2".to_string(),
@@ -862,6 +865,7 @@ mod tests {
                 notification_id: Some("multi-relayer-notification".to_string()),
                 system_disabled: false,
                 custom_rpc_urls: None,
+                ..Default::default()
             },
             crate::models::RelayerRepoModel {
                 id: "relayer-3".to_string(),
@@ -877,6 +881,7 @@ mod tests {
                 notification_id: Some("multi-relayer-notification".to_string()),
                 system_disabled: true, // Even disabled relayers should block deletion
                 custom_rpc_urls: None,
+                ..Default::default()
             },
         ];
 
@@ -939,6 +944,7 @@ mod tests {
             notification_id: Some("notification-to-delete".to_string()), // This one blocks deletion
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
 
         let relayer2 = crate::models::RelayerRepoModel {
@@ -955,6 +961,7 @@ mod tests {
             notification_id: Some("other-notification".to_string()), // This one uses different notification
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
 
         let relayer3 = crate::models::RelayerRepoModel {
@@ -971,6 +978,7 @@ mod tests {
             notification_id: None, // This one has no notification
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
 
         app_state.relayer_repository.create(relayer1).await.unwrap();

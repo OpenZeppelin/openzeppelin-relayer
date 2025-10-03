@@ -510,7 +510,8 @@
         "tags": [
           "Plugins"
         ],
-        "summary": "Calls a plugin method.",
+        "summary": "Execute a plugin and receive the sanitized result",
+        "description": "Logs and traces are only returned when the plugin is configured with `emit_logs` / `emit_traces`.\nPlugin-provided errors are normalized into a consistent payload (`code`, `details`) and a derived\nmessage so downstream clients receive a stable shape regardless of how the handler threw.",
         "operationId": "callPlugin",
         "parameters": [
           {
@@ -539,21 +540,54 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_PluginCallResponse"
+                  "$ref": "#/components/schemas/ApiResponse_Value"
+                },
+                "example": {
+                  "data": "done!",
+                  "error": null,
+                  "metadata": {
+                    "logs": [
+                      {
+                        "level": "info",
+                        "message": "Plugin started..."
+                      }
+                    ],
+                    "traces": [
+                      {
+                        "method": "sendTransaction",
+                        "relayerId": "sepolia-example",
+                        "requestId": "6c1f336f-3030-4f90-bd99-ada190a1235b"
+                      }
+                    ]
+                  },
+                  "success": true
                 }
               }
             }
           },
           "400": {
-            "description": "BadRequest",
+            "description": "BadRequest (plugin-provided)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_String"
+                  "$ref": "#/components/schemas/ApiResponse_PluginHandlerError"
                 },
                 "example": {
-                  "data": null,
-                  "message": "Bad Request",
+                  "data": {
+                    "code": "VALIDATION_FAILED",
+                    "details": {
+                      "field": "email"
+                    }
+                  },
+                  "error": "Validation failed",
+                  "metadata": {
+                    "logs": [
+                      {
+                        "level": "error",
+                        "message": "Validation failed for field: email"
+                      }
+                    ]
+                  },
                   "success": false
                 }
               }
@@ -568,7 +602,7 @@
                 },
                 "example": {
                   "data": null,
-                  "message": "Unauthorized",
+                  "error": "Unauthorized",
                   "success": false
                 }
               }
@@ -583,7 +617,7 @@
                 },
                 "example": {
                   "data": null,
-                  "message": "Plugin with ID plugin_id not found",
+                  "error": "Plugin with ID plugin_id not found",
                   "success": false
                 }
               }
@@ -598,7 +632,7 @@
                 },
                 "example": {
                   "data": null,
-                  "message": "Too Many Requests",
+                  "error": "Too Many Requests",
                   "success": false
                 }
               }
@@ -613,7 +647,7 @@
                 },
                 "example": {
                   "data": null,
-                  "message": "Internal Server Error",
+                  "error": "Internal Server Error",
                   "success": false
                 }
               }
@@ -3393,6 +3427,9 @@
           "error": {
             "type": "string"
           },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
+          },
           "pagination": {
             "$ref": "#/components/schemas/PaginationMeta"
           },
@@ -3438,6 +3475,9 @@
           "error": {
             "type": "string"
           },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
+          },
           "pagination": {
             "$ref": "#/components/schemas/PaginationMeta"
           },
@@ -3480,6 +3520,9 @@
           "error": {
             "type": "string"
           },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
+          },
           "pagination": {
             "$ref": "#/components/schemas/PaginationMeta"
           },
@@ -3488,7 +3531,7 @@
           }
         }
       },
-      "ApiResponse_PluginCallResponse": {
+      "ApiResponse_PluginHandlerError": {
         "type": "object",
         "required": [
           "success"
@@ -3496,41 +3539,21 @@
         "properties": {
           "data": {
             "type": "object",
-            "required": [
-              "success",
-              "return_value",
-              "message",
-              "logs",
-              "error",
-              "traces"
-            ],
             "properties": {
-              "error": {
-                "type": "string"
+              "code": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
-              "logs": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/LogEntry"
-                }
-              },
-              "message": {
-                "type": "string"
-              },
-              "return_value": {
-                "type": "string"
-              },
-              "success": {
-                "type": "boolean"
-              },
-              "traces": {
-                "type": "array",
-                "items": {}
-              }
+              "details": {}
             }
           },
           "error": {
             "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
           },
           "pagination": {
             "$ref": "#/components/schemas/PaginationMeta"
@@ -3567,6 +3590,9 @@
                   "$ref": "#/components/schemas/RpcConfig"
                 }
               },
+              "disabled_reason": {
+                "$ref": "#/components/schemas/DisabledReason"
+              },
               "id": {
                 "type": "string"
               },
@@ -3599,6 +3625,9 @@
           },
           "error": {
             "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
           },
           "pagination": {
             "$ref": "#/components/schemas/PaginationMeta"
@@ -3744,6 +3773,9 @@
           "error": {
             "type": "string"
           },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
+          },
           "pagination": {
             "$ref": "#/components/schemas/PaginationMeta"
           },
@@ -3770,6 +3802,9 @@
           },
           "error": {
             "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
           },
           "pagination": {
             "$ref": "#/components/schemas/PaginationMeta"
@@ -3811,6 +3846,9 @@
           "error": {
             "type": "string"
           },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
+          },
           "pagination": {
             "$ref": "#/components/schemas/PaginationMeta"
           },
@@ -3850,6 +3888,9 @@
           "error": {
             "type": "string"
           },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
+          },
           "pagination": {
             "$ref": "#/components/schemas/PaginationMeta"
           },
@@ -3869,6 +3910,9 @@
           },
           "error": {
             "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
           },
           "pagination": {
             "$ref": "#/components/schemas/PaginationMeta"
@@ -3899,6 +3943,30 @@
           },
           "error": {
             "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMeta"
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_Value": {
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {},
+          "error": {
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
           },
           "pagination": {
             "$ref": "#/components/schemas/PaginationMeta"
@@ -3945,6 +4013,9 @@
           "error": {
             "type": "string"
           },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
+          },
           "pagination": {
             "$ref": "#/components/schemas/PaginationMeta"
           },
@@ -3982,6 +4053,9 @@
                     "$ref": "#/components/schemas/RpcConfig"
                   }
                 },
+                "disabled_reason": {
+                  "$ref": "#/components/schemas/DisabledReason"
+                },
                 "id": {
                   "type": "string"
                 },
@@ -4015,6 +4089,9 @@
           },
           "error": {
             "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
           },
           "pagination": {
             "$ref": "#/components/schemas/PaginationMeta"
@@ -4058,6 +4135,9 @@
           "error": {
             "type": "string"
           },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
+          },
           "pagination": {
             "$ref": "#/components/schemas/PaginationMeta"
           },
@@ -4090,6 +4170,9 @@
           },
           "error": {
             "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
           },
           "pagination": {
             "$ref": "#/components/schemas/PaginationMeta"
@@ -4450,6 +4533,114 @@
             "minimum": 0
           }
         }
+      },
+      "DisabledReason": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Nonce synchronization failed during initialization",
+            "required": [
+              "details",
+              "type"
+            ],
+            "properties": {
+              "details": {
+                "type": "string",
+                "description": "Nonce synchronization failed during initialization"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "NonceSyncFailed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "RPC endpoint validation failed",
+            "required": [
+              "details",
+              "type"
+            ],
+            "properties": {
+              "details": {
+                "type": "string",
+                "description": "RPC endpoint validation failed"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "RpcValidationFailed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Balance check failed (below minimum threshold)",
+            "required": [
+              "details",
+              "type"
+            ],
+            "properties": {
+              "details": {
+                "type": "string",
+                "description": "Balance check failed (below minimum threshold)"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "BalanceCheckFailed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Sequence number synchronization failed (Stellar)",
+            "required": [
+              "details",
+              "type"
+            ],
+            "properties": {
+              "details": {
+                "type": "string",
+                "description": "Sequence number synchronization failed (Stellar)"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "SequenceSyncFailed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Multiple failures occurred simultaneously",
+            "required": [
+              "details",
+              "type"
+            ],
+            "properties": {
+              "details": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Multiple failures occurred simultaneously"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "Multiple"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Reason for a relayer being disabled by the system\nThis represents persistent state, converted from HealthCheckFailure when disabling"
       },
       "EncodedSerializedTransaction": {
         "type": "string"
@@ -5503,37 +5694,35 @@
           }
         }
       },
-      "PluginCallResponse": {
+      "PluginHandlerError": {
         "type": "object",
-        "required": [
-          "success",
-          "return_value",
-          "message",
-          "logs",
-          "error",
-          "traces"
-        ],
         "properties": {
-          "error": {
-            "type": "string"
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
+          "details": {}
+        }
+      },
+      "PluginMetadata": {
+        "type": "object",
+        "properties": {
           "logs": {
-            "type": "array",
+            "type": [
+              "array",
+              "null"
+            ],
             "items": {
               "$ref": "#/components/schemas/LogEntry"
             }
           },
-          "message": {
-            "type": "string"
-          },
-          "return_value": {
-            "type": "string"
-          },
-          "success": {
-            "type": "boolean"
-          },
           "traces": {
-            "type": "array",
+            "type": [
+              "array",
+              "null"
+            ],
             "items": {}
           }
         }
@@ -5742,6 +5931,9 @@
             "items": {
               "$ref": "#/components/schemas/RpcConfig"
             }
+          },
+          "disabled_reason": {
+            "$ref": "#/components/schemas/DisabledReason"
           },
           "id": {
             "type": "string"
@@ -7136,7 +7328,8 @@
           "created_at",
           "source_account",
           "fee",
-          "sequence_number"
+          "sequence_number",
+          "relayer_id"
         ],
         "properties": {
           "confirmed_at": {
@@ -7154,6 +7347,9 @@
             "type": "string"
           },
           "id": {
+            "type": "string"
+          },
+          "relayer_id": {
             "type": "string"
           },
           "sent_at": {

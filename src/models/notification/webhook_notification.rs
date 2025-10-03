@@ -40,6 +40,12 @@ pub struct RelayerDisabledPayload {
     pub relayer: RelayerResponse,
     pub disable_reason: String,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct RelayerEnabledPayload {
+    pub relayer: RelayerResponse,
+    pub retry_count: u32,
+}
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct SolanaDexPayload {
     pub swap_results: Vec<SwapResult>,
@@ -54,6 +60,8 @@ pub enum WebhookPayload {
     TransactionFailure(TransactionFailurePayload),
     #[serde(rename = "relayer_disabled")]
     RelayerDisabled(Box<RelayerDisabledPayload>),
+    #[serde(rename = "relayer_enabled")]
+    RelayerEnabled(Box<RelayerEnabledPayload>),
     #[serde(rename = "solana_rpc")]
     SolanaRpc(SolanaWebhookRpcPayload),
     #[serde(rename = "solana_dex")]
@@ -95,6 +103,25 @@ pub fn produce_relayer_disabled_payload(
         WebhookNotification::new(
             "relayer_state_update".to_string(),
             WebhookPayload::RelayerDisabled(Box::new(payload)),
+        ),
+    )
+}
+
+pub fn produce_relayer_enabled_payload(
+    notification_id: &str,
+    relayer: &RelayerRepoModel,
+    retry_count: u32,
+) -> NotificationSend {
+    let relayer_response: RelayerResponse = relayer.clone().into();
+    let payload = RelayerEnabledPayload {
+        relayer: relayer_response,
+        retry_count,
+    };
+    NotificationSend::new(
+        notification_id.to_string(),
+        WebhookNotification::new(
+            "relayer_state_update".to_string(),
+            WebhookPayload::RelayerEnabled(Box::new(payload)),
         ),
     )
 }

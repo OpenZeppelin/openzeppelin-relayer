@@ -22,6 +22,9 @@ pub use solana_swap_request_handler::*;
 mod transaction_cleanup_handler;
 pub use transaction_cleanup_handler::*;
 
+mod relayer_health_check_handler;
+pub use relayer_health_check_handler::*;
+
 pub fn handle_result(
     result: Result<(), Report>,
     attempt: Attempt,

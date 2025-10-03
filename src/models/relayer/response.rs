@@ -12,9 +12,9 @@
 //! with the domain model for business logic.
 
 use super::{
-    Relayer, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerNetworkType, RelayerRepoModel,
-    RelayerSolanaPolicy, RelayerSolanaSwapConfig, RelayerStellarPolicy, RpcConfig,
-    SolanaAllowedTokensPolicy, SolanaFeePaymentStrategy,
+    DisabledReason, Relayer, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerNetworkType,
+    RelayerRepoModel, RelayerSolanaPolicy, RelayerSolanaSwapConfig, RelayerStellarPolicy,
+    RpcConfig, SolanaAllowedTokensPolicy, SolanaFeePaymentStrategy,
 };
 use crate::constants::{
     DEFAULT_EVM_GAS_LIMIT_ESTIMATION, DEFAULT_EVM_MIN_BALANCE, DEFAULT_SOLANA_MAX_TX_DATA_SIZE,
@@ -86,6 +86,29 @@ pub struct RelayerResponse {
     pub address: Option<String>,
     #[schema(nullable = false)]
     pub system_disabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub disabled_reason: Option<DisabledReason>,
+}
+
+#[cfg(test)]
+impl Default for RelayerResponse {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            network: String::new(),
+            network_type: RelayerNetworkType::Evm, // Default to EVM for tests
+            paused: false,
+            policies: None,
+            signer_id: String::new(),
+            notification_id: None,
+            custom_rpc_urls: None,
+            address: None,
+            system_disabled: None,
+            disabled_reason: None,
+        }
+    }
 }
 
 /// Relayer status with runtime information
@@ -164,6 +187,7 @@ impl From<Relayer> for RelayerResponse {
             custom_rpc_urls: relayer.custom_rpc_urls,
             address: None,
             system_disabled: None,
+            disabled_reason: None,
         }
     }
 }
@@ -192,6 +216,7 @@ impl From<RelayerRepoModel> for RelayerResponse {
             custom_rpc_urls: model.custom_rpc_urls,
             address: Some(model.address),
             system_disabled: Some(model.system_disabled),
+            disabled_reason: model.disabled_reason,
         }
     }
 }
@@ -284,6 +309,10 @@ impl<'de> serde::Deserialize<'de> for RelayerResponse {
                 .unwrap_or(None),
             system_disabled: value
                 .get("system_disabled")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or(None),
+            disabled_reason: value
+                .get("disabled_reason")
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or(None),
         })
@@ -642,6 +671,7 @@ mod tests {
             custom_rpc_urls: None,
             address: Some("0x123...".to_string()),
             system_disabled: Some(false),
+            ..Default::default()
         };
 
         // Should serialize without errors
@@ -689,6 +719,7 @@ mod tests {
             custom_rpc_urls: None,
             address: Some("SolanaAddress123...".to_string()),
             system_disabled: Some(false),
+            ..Default::default()
         };
 
         // Should serialize without errors
@@ -722,6 +753,7 @@ mod tests {
             custom_rpc_urls: None,
             address: Some("GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string()),
             system_disabled: Some(false),
+            ..Default::default()
         };
 
         // Should serialize without errors
@@ -764,6 +796,7 @@ mod tests {
             custom_rpc_urls: None,
             address: Some("0x123...".to_string()),
             system_disabled: Some(false),
+            ..Default::default()
         };
 
         let serialized = serde_json::to_string_pretty(&response).unwrap();
@@ -807,6 +840,7 @@ mod tests {
             custom_rpc_urls: None,
             address: Some("SolanaAddress123...".to_string()),
             system_disabled: Some(false),
+            ..Default::default()
         };
 
         let serialized = serde_json::to_string_pretty(&response).unwrap();
@@ -845,6 +879,7 @@ mod tests {
             custom_rpc_urls: None,
             address: Some("GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string()),
             system_disabled: Some(false),
+            ..Default::default()
         };
 
         let serialized = serde_json::to_string_pretty(&response).unwrap();
@@ -878,6 +913,7 @@ mod tests {
             custom_rpc_urls: None,
             address: "0x123...".to_string(),
             system_disabled: false,
+            ..Default::default()
         };
 
         // Convert to response
@@ -909,6 +945,7 @@ mod tests {
             custom_rpc_urls: None,
             address: "SolanaAddress123...".to_string(),
             system_disabled: false,
+            ..Default::default()
         };
 
         // Convert to response
@@ -940,6 +977,7 @@ mod tests {
             custom_rpc_urls: None,
             address: "GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string(),
             system_disabled: false,
+            ..Default::default()
         };
 
         // Convert to response
@@ -978,6 +1016,7 @@ mod tests {
             custom_rpc_urls: None,
             address: "0x123...".to_string(),
             system_disabled: false,
+            ..Default::default()
         };
 
         // Convert to response
@@ -1025,6 +1064,7 @@ mod tests {
             custom_rpc_urls: None,
             address: "SolanaAddress123...".to_string(),
             system_disabled: false,
+            ..Default::default()
         };
 
         // Convert to response
@@ -1069,6 +1109,7 @@ mod tests {
             custom_rpc_urls: None,
             address: "GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string(),
             system_disabled: false,
+            ..Default::default()
         };
 
         // Convert to response

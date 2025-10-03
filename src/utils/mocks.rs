@@ -44,6 +44,7 @@ pub mod mockutils {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         }
     }
 
@@ -67,6 +68,7 @@ pub mod mockutils {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         }
     }
 
@@ -253,6 +255,10 @@ pub mod mockutils {
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
         mock_job_producer
+            .expect_produce_relayer_health_check_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        mock_job_producer
             .expect_produce_solana_token_swap_request_job()
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
@@ -321,5 +327,22 @@ pub mod mockutils {
             )),
             transaction_expiration_hours: 4,
         }
+    }
+
+    /// Create a test app state wrapped in ThinData for use in job handlers
+    pub async fn create_test_app_state_thin() -> actix_web::web::ThinData<
+        AppState<
+            MockJobProducerTrait,
+            RelayerRepositoryStorage,
+            TransactionRepositoryStorage,
+            NetworkRepositoryStorage,
+            NotificationRepositoryStorage,
+            SignerRepositoryStorage,
+            TransactionCounterRepositoryStorage,
+            PluginRepositoryStorage,
+            ApiKeyRepositoryStorage,
+        >,
+    > {
+        actix_web::web::ThinData(create_mock_app_state(None, None, None, None, None, None).await)
     }
 }
