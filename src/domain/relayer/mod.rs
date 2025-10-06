@@ -51,6 +51,7 @@ pub use util::*;
 /// in the system. Implementors of this trait are responsible for handling
 /// transaction requests, managing balances, and interacting with the network.
 #[async_trait]
+#[cfg_attr(test, automock)]
 #[allow(dead_code)]
 pub trait Relayer {
     /// Processes a transaction request and returns the result.
