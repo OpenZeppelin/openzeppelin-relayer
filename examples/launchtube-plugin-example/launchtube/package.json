@@ -13,7 +13,7 @@
   "author": "",
   "license": "",
   "dependencies": {
-    "@openzeppelin/relayer-plugin-launchtube": "0.2.0",
+    "@openzeppelin/relayer-plugin-launchtube": "0.3.0",
     "@openzeppelin/relayer-sdk": "^1.6.0",
     "@types/node": "^24.0.3"
   },
