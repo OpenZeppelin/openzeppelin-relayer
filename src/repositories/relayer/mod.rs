@@ -59,7 +59,6 @@ pub trait RelayerRepository: Repository<RelayerRepoModel, String> + Send + Sync 
         relayer_id: String,
         reason: DisabledReason,
     ) -> Result<RelayerRepoModel, RepositoryError>;
-    async fn list_disabled(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
     async fn update_policy(
         &self,
         id: String,
@@ -233,13 +232,6 @@ impl RelayerRepository for RelayerRepositoryStorage {
                 repo.disable_relayer(relayer_id, reason).await
             }
             RelayerRepositoryStorage::Redis(repo) => repo.disable_relayer(relayer_id, reason).await,
-        }
-    }
-
-    async fn list_disabled(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
-        match self {
-            RelayerRepositoryStorage::InMemory(repo) => repo.list_disabled().await,
-            RelayerRepositoryStorage::Redis(repo) => repo.list_disabled().await,
         }
     }
 
@@ -494,7 +486,6 @@ mockall::mock! {
         async fn partial_update(&self, id: String, update: UpdateRelayerRequest) -> Result<RelayerRepoModel, RepositoryError>;
         async fn enable_relayer(&self, relayer_id: String) -> Result<RelayerRepoModel, RepositoryError>;
         async fn disable_relayer(&self, relayer_id: String, reason: DisabledReason) -> Result<RelayerRepoModel, RepositoryError>;
-        async fn list_disabled(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
         async fn update_policy(&self, id: String, policy: RelayerNetworkPolicy) -> Result<RelayerRepoModel, RepositoryError>;
     }
 }

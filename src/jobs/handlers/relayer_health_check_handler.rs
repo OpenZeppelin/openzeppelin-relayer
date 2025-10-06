@@ -424,4 +424,274 @@ mod tests {
             assert!(description.contains("RPC"));
         }
     }
+
+    #[tokio::test]
+    async fn test_check_and_reenable_relayer_exits_early_if_not_disabled() {
+        use crate::jobs::MockJobProducerTrait;
+        use crate::models::AppState;
+        use crate::repositories::{
+            ApiKeyRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage,
+            PluginRepositoryStorage, RelayerRepositoryStorage, Repository, SignerRepositoryStorage,
+            TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
+        };
+        use std::sync::Arc;
+
+        // Create repositories
+        let relayer_repo = Arc::new(RelayerRepositoryStorage::new_in_memory());
+
+        // Create a relayer that is NOT disabled
+        let mut relayer = create_disabled_relayer("test-check-enabled");
+        relayer.system_disabled = false;
+        relayer.disabled_reason = None;
+        relayer_repo.create(relayer).await.unwrap();
+
+        // Create a mock job producer (should not be called)
+        let mock_job_producer = MockJobProducerTrait::new();
+
+        // Create app state
+        let app_state = AppState {
+            relayer_repository: relayer_repo.clone(),
+            transaction_repository: Arc::new(TransactionRepositoryStorage::new_in_memory()),
+            signer_repository: Arc::new(SignerRepositoryStorage::new_in_memory()),
+            notification_repository: Arc::new(NotificationRepositoryStorage::new_in_memory()),
+            network_repository: Arc::new(NetworkRepositoryStorage::new_in_memory()),
+            transaction_counter_store: Arc::new(
+                TransactionCounterRepositoryStorage::new_in_memory(),
+            ),
+            job_producer: Arc::new(mock_job_producer),
+            plugin_repository: Arc::new(PluginRepositoryStorage::new_in_memory()),
+            api_key_repository: Arc::new(ApiKeyRepositoryStorage::new_in_memory()),
+        };
+
+        // Create health check data
+        let health_check = RelayerHealthCheck::new("test-check-enabled".to_string());
+
+        // Wrap in ThinData for the generic function signature
+        let thin_app_state = actix_web::web::ThinData(app_state);
+
+        // Call the function - should exit early without error
+        let result = check_and_reenable_relayer(health_check, &thin_app_state).await;
+
+        // Should succeed (exits early because relayer is not disabled)
+        assert!(result.is_ok());
+
+        // Verify relayer state hasn't changed
+        let retrieved = relayer_repo
+            .get_by_id("test-check-enabled".to_string())
+            .await
+            .unwrap();
+        assert!(!retrieved.system_disabled);
+        assert!(retrieved.disabled_reason.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_check_and_reenable_variant_comparison() {
+        // Test the logic that only updates disabled_reason when the variant changes
+        use crate::models::DisabledReason;
+
+        // Same variant, different message - should NOT trigger update
+        let reason1 = DisabledReason::RpcValidationFailed("Error A".to_string());
+        let reason2 = DisabledReason::RpcValidationFailed("Error B".to_string());
+        assert!(reason1.same_variant(&reason2));
+
+        // Different variants - should trigger update
+        let reason3 = DisabledReason::NonceSyncFailed("Error".to_string());
+        assert!(!reason1.same_variant(&reason3));
+
+        // Multiple reasons with same variants in same order
+        let multi1 = DisabledReason::Multiple(vec![
+            DisabledReason::RpcValidationFailed("A".to_string()),
+            DisabledReason::NonceSyncFailed("B".to_string()),
+        ]);
+        let multi2 = DisabledReason::Multiple(vec![
+            DisabledReason::RpcValidationFailed("C".to_string()),
+            DisabledReason::NonceSyncFailed("D".to_string()),
+        ]);
+        assert!(multi1.same_variant(&multi2));
+
+        // Multiple reasons with different variants - should not match
+        let multi3 = DisabledReason::Multiple(vec![
+            DisabledReason::RpcValidationFailed("A".to_string()),
+            DisabledReason::BalanceCheckFailed("B".to_string()),
+        ]);
+        assert!(!multi1.same_variant(&multi3));
+    }
+
+    #[tokio::test]
+    async fn test_backoff_delay_calculation_edge_cases() {
+        // Test backoff calculation for edge cases
+
+        // Test retry count 0 (first retry)
+        let delay0 = calculate_backoff_delay(0);
+        assert_eq!(delay0, Duration::from_secs(10));
+
+        // Test very large retry count (should still cap at 60)
+        let delay_large = calculate_backoff_delay(100);
+        assert_eq!(delay_large, Duration::from_secs(60));
+
+        // Test that each step increases until cap
+        let mut prev_delay = Duration::from_secs(0);
+        for retry in 0..10 {
+            let delay = calculate_backoff_delay(retry);
+            if delay < Duration::from_secs(60) {
+                // Before cap, should increase
+                assert!(delay > prev_delay, "Retry {}: delay should increase", retry);
+            } else {
+                // At or after cap, should stay at 60
+                assert_eq!(
+                    delay,
+                    Duration::from_secs(60),
+                    "Retry {}: should cap at 60s",
+                    retry
+                );
+            }
+            prev_delay = delay;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_disabled_reason_from_health_failures() {
+        use crate::models::{DisabledReason, HealthCheckFailure};
+
+        // Test empty failures
+        let empty_result = DisabledReason::from_health_failures(vec![]);
+        assert!(empty_result.is_none());
+
+        // Test single failure
+        let single_failure = vec![HealthCheckFailure::RpcValidationFailed(
+            "RPC down".to_string(),
+        )];
+        let single_result = DisabledReason::from_health_failures(single_failure);
+        assert!(single_result.is_some());
+        match single_result.unwrap() {
+            DisabledReason::RpcValidationFailed(msg) => {
+                assert_eq!(msg, "RPC down");
+            }
+            _ => panic!("Expected RpcValidationFailed variant"),
+        }
+
+        // Test multiple failures
+        let multiple_failures = vec![
+            HealthCheckFailure::RpcValidationFailed("RPC error".to_string()),
+            HealthCheckFailure::NonceSyncFailed("Nonce error".to_string()),
+        ];
+        let multiple_result = DisabledReason::from_health_failures(multiple_failures);
+        assert!(multiple_result.is_some());
+        match multiple_result.unwrap() {
+            DisabledReason::Multiple(reasons) => {
+                assert_eq!(reasons.len(), 2);
+                assert!(matches!(reasons[0], DisabledReason::RpcValidationFailed(_)));
+                assert!(matches!(reasons[1], DisabledReason::NonceSyncFailed(_)));
+            }
+            _ => panic!("Expected Multiple variant"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_relayer_health_check_retry_count_increments() {
+        // This test verifies that retry counts are properly incremented
+        let retry_counts = vec![0, 1, 2, 5, 10];
+
+        for retry_count in retry_counts {
+            let health_check =
+                RelayerHealthCheck::with_retry_count("test-relayer".to_string(), retry_count);
+
+            // Verify the retry count is set correctly
+            assert_eq!(health_check.retry_count, retry_count);
+
+            // Verify the next retry would be incremented
+            let next_health_check =
+                RelayerHealthCheck::with_retry_count("test-relayer".to_string(), retry_count + 1);
+            assert_eq!(next_health_check.retry_count, retry_count + 1);
+
+            // Verify backoff increases with retry count (up to cap)
+            let current_delay = calculate_backoff_delay(retry_count);
+            let next_delay = calculate_backoff_delay(retry_count + 1);
+
+            if current_delay < Duration::from_secs(60) {
+                assert!(next_delay >= current_delay);
+            } else {
+                assert_eq!(next_delay, Duration::from_secs(60));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_repository_enable_disable_operations() {
+        use crate::models::DisabledReason;
+        use crate::repositories::{RelayerRepositoryStorage, Repository};
+
+        let repo = RelayerRepositoryStorage::new_in_memory();
+
+        // Create an initially enabled relayer
+        let mut relayer = create_disabled_relayer("test-enable-disable");
+        relayer.system_disabled = false;
+        relayer.disabled_reason = None;
+        repo.create(relayer).await.unwrap();
+
+        // Disable the relayer
+        let reason = DisabledReason::RpcValidationFailed("Test error".to_string());
+        let disabled = repo
+            .disable_relayer("test-enable-disable".to_string(), reason.clone())
+            .await
+            .unwrap();
+
+        assert!(disabled.system_disabled);
+        assert_eq!(disabled.disabled_reason, Some(reason));
+
+        // Re-enable the relayer
+        let enabled = repo
+            .enable_relayer("test-enable-disable".to_string())
+            .await
+            .unwrap();
+
+        assert!(!enabled.system_disabled);
+        assert!(enabled.disabled_reason.is_none());
+
+        // Verify state persists
+        let retrieved = repo
+            .get_by_id("test-enable-disable".to_string())
+            .await
+            .unwrap();
+        assert!(!retrieved.system_disabled);
+        assert!(retrieved.disabled_reason.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_disabled_reason_safe_description() {
+        use crate::models::DisabledReason;
+
+        // Test that safe_description doesn't leak sensitive information
+        let reasons = vec![
+            DisabledReason::NonceSyncFailed("Error with API key abc123".to_string()),
+            DisabledReason::RpcValidationFailed(
+                "RPC error: http://secret-rpc.com:8545".to_string(),
+            ),
+            DisabledReason::BalanceCheckFailed("Balance: 1.5 ETH at address 0x123...".to_string()),
+        ];
+
+        for reason in reasons {
+            let safe_desc = reason.safe_description();
+
+            // Safe description should not contain sensitive details
+            assert!(!safe_desc.contains("abc123"));
+            assert!(!safe_desc.contains("http://"));
+            assert!(!safe_desc.contains("0x123"));
+            assert!(!safe_desc.contains("1.5 ETH"));
+
+            // But should be informative
+            assert!(!safe_desc.is_empty());
+        }
+
+        // Test Multiple variant
+        let multiple = DisabledReason::Multiple(vec![
+            DisabledReason::RpcValidationFailed("Secret RPC info".to_string()),
+            DisabledReason::NonceSyncFailed("Secret nonce info".to_string()),
+        ]);
+
+        let safe_desc = multiple.safe_description();
+        assert!(!safe_desc.contains("Secret"));
+        assert!(safe_desc.contains("RPC endpoint validation failed"));
+        assert!(safe_desc.contains("Nonce synchronization failed"));
+    }
 }

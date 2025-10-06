@@ -165,16 +165,6 @@ impl RelayerRepository for InMemoryRelayerRepository {
             )))
         }
     }
-
-    async fn list_disabled(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
-        let store = Self::acquire_lock(&self.store).await?;
-        let disabled: Vec<RelayerRepoModel> = store
-            .values()
-            .filter(|r| r.system_disabled)
-            .cloned()
-            .collect();
-        Ok(disabled)
-    }
 }
 
 #[async_trait]

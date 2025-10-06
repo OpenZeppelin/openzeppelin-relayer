@@ -346,6 +346,19 @@ mod tests {
         queue: Mutex<TestQueue>,
     }
 
+    impl Clone for TestJobProducer {
+        fn clone(&self) -> Self {
+            let queue = self
+                .queue
+                .try_lock()
+                .expect("Failed to lock queue for cloning")
+                .clone();
+            Self {
+                queue: Mutex::new(queue),
+            }
+        }
+    }
+
     impl TestJobProducer {
         fn new() -> Self {
             Self {
@@ -636,5 +649,94 @@ mod tests {
             }
             _ => panic!("Unexpected error type"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_get_queue() {
+        let producer = TestJobProducer::new();
+
+        // Get the queue
+        let queue = producer.get_queue().await;
+
+        // Verify the queue is valid and has the expected structure
+        assert!(!queue.transaction_request_queue.push_called);
+        assert!(!queue.transaction_request_queue.schedule_called);
+        assert!(!queue.transaction_submission_queue.push_called);
+        assert!(!queue.notification_queue.push_called);
+        assert!(!queue.solana_token_swap_request_queue.push_called);
+        assert!(!queue.relayer_health_check_queue.push_called);
+    }
+
+    #[tokio::test]
+    async fn test_produce_relayer_health_check_job_immediate() {
+        let producer = TestJobProducer::new();
+
+        // Test immediate health check job (no scheduling)
+        let health_check = RelayerHealthCheck::new("relayer-1".to_string());
+        let result = producer
+            .produce_relayer_health_check_job(health_check, None)
+            .await;
+
+        // Should succeed
+        assert!(result.is_ok());
+
+        // Verify the job was pushed (not scheduled)
+        let queue = producer.get_queue().await;
+        assert!(queue.relayer_health_check_queue.push_called);
+        assert!(!queue.relayer_health_check_queue.schedule_called);
+
+        // Other queues should not be affected
+        assert!(!queue.transaction_request_queue.push_called);
+        assert!(!queue.transaction_submission_queue.push_called);
+        assert!(!queue.transaction_status_queue.push_called);
+        assert!(!queue.notification_queue.push_called);
+        assert!(!queue.solana_token_swap_request_queue.push_called);
+    }
+
+    #[tokio::test]
+    async fn test_produce_relayer_health_check_job_scheduled() {
+        let producer = TestJobProducer::new();
+
+        // Test scheduled health check job
+        let health_check = RelayerHealthCheck::new("relayer-2".to_string());
+        let scheduled_timestamp = calculate_scheduled_timestamp(300); // 5 minutes from now
+        let result = producer
+            .produce_relayer_health_check_job(health_check, Some(scheduled_timestamp))
+            .await;
+
+        // Should succeed
+        assert!(result.is_ok());
+
+        // Verify the job was scheduled (not pushed)
+        let queue = producer.get_queue().await;
+        assert!(queue.relayer_health_check_queue.schedule_called);
+        assert!(!queue.relayer_health_check_queue.push_called);
+
+        // Other queues should not be affected
+        assert!(!queue.transaction_request_queue.push_called);
+        assert!(!queue.transaction_submission_queue.push_called);
+        assert!(!queue.transaction_status_queue.push_called);
+        assert!(!queue.notification_queue.push_called);
+        assert!(!queue.solana_token_swap_request_queue.push_called);
+    }
+
+    #[tokio::test]
+    async fn test_produce_relayer_health_check_job_multiple_relayers() {
+        let producer = TestJobProducer::new();
+
+        // Produce health check jobs for multiple relayers
+        let relayer_ids = vec!["relayer-1", "relayer-2", "relayer-3"];
+
+        for relayer_id in &relayer_ids {
+            let health_check = RelayerHealthCheck::new(relayer_id.to_string());
+            let result = producer
+                .produce_relayer_health_check_job(health_check, None)
+                .await;
+            assert!(result.is_ok());
+        }
+
+        // Verify jobs were produced
+        let queue = producer.get_queue().await;
+        assert!(queue.relayer_health_check_queue.push_called);
     }
 }

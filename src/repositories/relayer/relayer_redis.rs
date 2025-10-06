@@ -517,15 +517,6 @@ impl RelayerRepository for RedisRelayerRepository {
         self.update(relayer_id, relayer).await
     }
 
-    async fn list_disabled(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
-        let all_relayers = self.list_all().await?;
-        let disabled: Vec<RelayerRepoModel> = all_relayers
-            .into_iter()
-            .filter(|r| r.system_disabled)
-            .collect();
-        Ok(disabled)
-    }
-
     async fn update_policy(
         &self,
         id: String,
