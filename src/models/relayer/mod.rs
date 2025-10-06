@@ -114,7 +114,7 @@ impl Display for HealthCheckFailure {
 
 /// Reason for a relayer being disabled by the system
 /// This represents persistent state, converted from HealthCheckFailure when disabling
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[derive(Debug, Clone, Deserialize, PartialEq, ToSchema)]
 #[serde(tag = "type", content = "details")]
 pub enum DisabledReason {
     /// Nonce synchronization failed during initialization
@@ -128,6 +128,43 @@ pub enum DisabledReason {
     /// Multiple failures occurred simultaneously
     #[schema(value_type = Vec<String>)]
     Multiple(Vec<DisabledReason>),
+}
+
+// Custom serialization that sanitizes error details for external exposure
+impl Serialize for DisabledReason {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        let mut state = serializer.serialize_struct("DisabledReason", 2)?;
+
+        match self {
+            DisabledReason::NonceSyncFailed(_) => {
+                state.serialize_field("type", "NonceSyncFailed")?;
+                state.serialize_field("details", "Nonce synchronization failed")?;
+            }
+            DisabledReason::RpcValidationFailed(_) => {
+                state.serialize_field("type", "RpcValidationFailed")?;
+                state.serialize_field("details", "RPC endpoint validation failed")?;
+            }
+            DisabledReason::BalanceCheckFailed(_) => {
+                state.serialize_field("type", "BalanceCheckFailed")?;
+                state.serialize_field("details", "Insufficient balance")?;
+            }
+            DisabledReason::SequenceSyncFailed(_) => {
+                state.serialize_field("type", "SequenceSyncFailed")?;
+                state.serialize_field("details", "Sequence synchronization failed")?;
+            }
+            DisabledReason::Multiple(reasons) => {
+                state.serialize_field("type", "Multiple")?;
+                state.serialize_field("details", reasons)?;
+            }
+        }
+
+        state.end()
+    }
 }
 
 impl DisabledReason {
@@ -188,6 +225,22 @@ impl DisabledReason {
             DisabledReason::Multiple(reasons) => reasons
                 .iter()
                 .map(|r| r.description())
+                .collect::<Vec<_>>()
+                .join(", "),
+        }
+    }
+
+    /// Get a sanitized description safe for external exposure (API/webhooks)
+    /// Removes potentially sensitive information like URLs, keys, and detailed error messages
+    pub fn safe_description(&self) -> String {
+        match self {
+            DisabledReason::NonceSyncFailed(_) => "Nonce synchronization failed".to_string(),
+            DisabledReason::RpcValidationFailed(_) => "RPC endpoint validation failed".to_string(),
+            DisabledReason::BalanceCheckFailed(_) => "Insufficient balance".to_string(),
+            DisabledReason::SequenceSyncFailed(_) => "Sequence synchronization failed".to_string(),
+            DisabledReason::Multiple(reasons) => reasons
+                .iter()
+                .map(|r| r.safe_description())
                 .collect::<Vec<_>>()
                 .join(", "),
         }
@@ -860,6 +913,37 @@ impl From<RelayerValidationError> for crate::models::ApiError {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_disabled_reason_serialization_sanitizes_details() {
+        // Test that serialization removes sensitive error details
+        let reason = DisabledReason::RpcValidationFailed(
+            "Connection failed to https://mainnet.infura.io/v3/SECRET_API_KEY: timeout".to_string(),
+        );
+
+        let serialized = serde_json::to_string(&reason).unwrap();
+
+        // Should not contain the sensitive URL or API key
+        assert!(!serialized.contains("SECRET_API_KEY"));
+        assert!(!serialized.contains("infura.io"));
+
+        // Should contain generic description
+        assert!(serialized.contains("RPC endpoint validation failed"));
+    }
+
+    #[test]
+    fn test_disabled_reason_safe_description() {
+        let reason = DisabledReason::BalanceCheckFailed(
+            "Insufficient balance: 0.001 ETH but need 0.1 ETH at address 0x123...".to_string(),
+        );
+
+        let safe = reason.safe_description();
+
+        // Should not contain specific details
+        assert!(!safe.contains("0.001"));
+        assert!(!safe.contains("0x123"));
+        assert_eq!(safe, "Insufficient balance");
+    }
 
     // ===== RelayerNetworkType Tests =====
 

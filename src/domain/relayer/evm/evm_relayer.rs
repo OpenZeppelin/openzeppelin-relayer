@@ -579,7 +579,7 @@ where
                             produce_relayer_disabled_payload(
                                 notification_id,
                                 &updated_relayer,
-                                &reason.description(),
+                                &reason.safe_description(),
                             ),
                             None,
                         )

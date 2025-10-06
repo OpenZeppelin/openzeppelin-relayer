@@ -19,7 +19,7 @@ use crate::{
     utils::calculate_scheduled_timestamp,
 };
 use actix_web::web::ThinData;
-use apalis::prelude::*;
+use apalis::prelude::{Attempt, Data, *};
 use eyre::Result;
 use std::time::Duration;
 use tracing::{debug, info, warn};
