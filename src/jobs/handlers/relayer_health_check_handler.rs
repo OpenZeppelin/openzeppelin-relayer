@@ -180,13 +180,19 @@ where
                 "Health checks failed, scheduling retry"
             );
 
-            // Update the disabled reason if it has changed
-            if relayer.disabled_reason.as_ref() != Some(&reason) {
+            // Update the disabled reason if the type of failure has changed
+            // We use same_variant() to avoid updating when only error details differ
+            let should_update = match &relayer.disabled_reason {
+                Some(old_reason) => !old_reason.same_variant(&reason),
+                None => true, // Always update if there's no existing reason
+            };
+
+            if should_update {
                 debug!(
                     relayer_id = %relayer_id,
                     old_reason = ?relayer.disabled_reason,
                     new_reason = %reason,
-                    "Disabled reason has changed, updating"
+                    "Disabled reason variant has changed, updating"
                 );
 
                 app_state
@@ -194,6 +200,12 @@ where
                     .disable_relayer(relayer_id.clone(), reason.clone())
                     .await
                     .map_err(|e| eyre::eyre!("Failed to update disabled reason: {}", e))?;
+            } else {
+                debug!(
+                    relayer_id = %relayer_id,
+                    reason = %reason,
+                    "Disabled reason variant unchanged, skipping update"
+                );
             }
 
             // Calculate exponential backoff delay

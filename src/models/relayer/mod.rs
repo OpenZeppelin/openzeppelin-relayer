@@ -246,6 +246,20 @@ impl DisabledReason {
         }
     }
 
+    /// Check if two DisabledReason instances are the same variant type,
+    /// ignoring the error message details.
+    pub fn same_variant(&self, other: &Self) -> bool {
+        use std::mem::discriminant;
+
+        match (self, other) {
+            (DisabledReason::Multiple(a), DisabledReason::Multiple(b)) => {
+                // For Multiple, check if they have the same variant types in the same order
+                a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x.same_variant(y))
+            }
+            _ => discriminant(self) == discriminant(other),
+        }
+    }
+
     /// Create a DisabledReason from an error string, attempting to categorize it
     ///
     /// This provides backward compatibility when converting from plain strings
@@ -943,6 +957,109 @@ mod tests {
         assert!(!safe.contains("0.001"));
         assert!(!safe.contains("0x123"));
         assert_eq!(safe, "Insufficient balance");
+    }
+
+    #[test]
+    fn test_disabled_reason_same_variant_same_type_different_message() {
+        // Same variant type with different error messages should be considered the same
+        let reason1 = DisabledReason::RpcValidationFailed("Connection timeout".to_string());
+        let reason2 = DisabledReason::RpcValidationFailed("Connection refused".to_string());
+
+        assert!(
+            reason1.same_variant(&reason2),
+            "Same variant types with different messages should be considered the same"
+        );
+    }
+
+    #[test]
+    fn test_disabled_reason_same_variant_different_types() {
+        // Different variant types should not be considered the same
+        let reason1 = DisabledReason::RpcValidationFailed("Error".to_string());
+        let reason2 = DisabledReason::BalanceCheckFailed("Error".to_string());
+
+        assert!(
+            !reason1.same_variant(&reason2),
+            "Different variant types should not be considered the same"
+        );
+    }
+
+    #[test]
+    fn test_disabled_reason_same_variant_identical() {
+        // Identical reasons should obviously be the same variant
+        let reason1 = DisabledReason::NonceSyncFailed("Nonce error".to_string());
+        let reason2 = DisabledReason::NonceSyncFailed("Nonce error".to_string());
+
+        assert!(
+            reason1.same_variant(&reason2),
+            "Identical reasons should be the same variant"
+        );
+    }
+
+    #[test]
+    fn test_disabled_reason_same_variant_multiple_same_order() {
+        // Multiple reasons with same variants in same order
+        let reason1 = DisabledReason::Multiple(vec![
+            DisabledReason::RpcValidationFailed("Error 1".to_string()),
+            DisabledReason::BalanceCheckFailed("Error 2".to_string()),
+        ]);
+        let reason2 = DisabledReason::Multiple(vec![
+            DisabledReason::RpcValidationFailed("Different error 1".to_string()),
+            DisabledReason::BalanceCheckFailed("Different error 2".to_string()),
+        ]);
+
+        assert!(
+            reason1.same_variant(&reason2),
+            "Multiple with same variant types in same order should be considered the same"
+        );
+    }
+
+    #[test]
+    fn test_disabled_reason_same_variant_multiple_different_order() {
+        // Multiple reasons with same variants but different order
+        let reason1 = DisabledReason::Multiple(vec![
+            DisabledReason::RpcValidationFailed("Error".to_string()),
+            DisabledReason::BalanceCheckFailed("Error".to_string()),
+        ]);
+        let reason2 = DisabledReason::Multiple(vec![
+            DisabledReason::BalanceCheckFailed("Error".to_string()),
+            DisabledReason::RpcValidationFailed("Error".to_string()),
+        ]);
+
+        assert!(
+            !reason1.same_variant(&reason2),
+            "Multiple with different order should not be considered the same"
+        );
+    }
+
+    #[test]
+    fn test_disabled_reason_same_variant_multiple_different_length() {
+        // Multiple reasons with different lengths
+        let reason1 = DisabledReason::Multiple(vec![DisabledReason::RpcValidationFailed(
+            "Error".to_string(),
+        )]);
+        let reason2 = DisabledReason::Multiple(vec![
+            DisabledReason::RpcValidationFailed("Error".to_string()),
+            DisabledReason::BalanceCheckFailed("Error".to_string()),
+        ]);
+
+        assert!(
+            !reason1.same_variant(&reason2),
+            "Multiple with different lengths should not be considered the same"
+        );
+    }
+
+    #[test]
+    fn test_disabled_reason_same_variant_single_vs_multiple() {
+        // Single reason vs Multiple should not be the same even if they contain the same variant
+        let reason1 = DisabledReason::RpcValidationFailed("Error".to_string());
+        let reason2 = DisabledReason::Multiple(vec![DisabledReason::RpcValidationFailed(
+            "Error".to_string(),
+        )]);
+
+        assert!(
+            !reason1.same_variant(&reason2),
+            "Single variant vs Multiple should not be considered the same"
+        );
     }
 
     // ===== RelayerNetworkType Tests =====
