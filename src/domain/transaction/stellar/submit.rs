@@ -5,7 +5,7 @@
 use chrono::Utc;
 use tracing::{info, warn};
 
-use super::{utils::is_bad_sequence_error, StellarRelayerTransaction};
+use super::{is_final_state, utils::is_bad_sequence_error, StellarRelayerTransaction};
 use crate::{
     constants::STELLAR_BAD_SEQUENCE_RETRY_DELAY_SECONDS,
     jobs::JobProducerTrait,
@@ -33,7 +33,27 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("submitting stellar transaction");
+        info!(tx_id = %tx.id, status = ?tx.status, "submitting stellar transaction");
+
+        // Defensive check: if transaction is in a final state or unexpected state, don't retry
+        if is_final_state(&tx.status) {
+            warn!(
+                tx_id = %tx.id,
+                status = ?tx.status,
+                "transaction already in final state, skipping submission"
+            );
+            return Ok(tx);
+        }
+
+        if tx.status != TransactionStatus::Sent {
+            warn!(
+                tx_id = %tx.id,
+                status = ?tx.status,
+                expected_status = ?TransactionStatus::Sent,
+                "transaction in unexpected state for submission, skipping"
+            );
+            return Ok(tx);
+        }
 
         // Call core submission logic with error handling
         match self.submit_core(tx.clone()).await {
@@ -217,12 +237,7 @@ mod tests {
                     Ok::<_, RepositoryError>(tx)
                 });
 
-            // enqueue status-check & notification
-            mocks
-                .job_producer
-                .expect_produce_check_transaction_status_job()
-                .times(1)
-                .returning(|_, _| Box::pin(async { Ok(()) }));
+            // Expect notification
             mocks
                 .job_producer
                 .expect_produce_send_notification_job()
@@ -232,6 +247,7 @@ mod tests {
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
 
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Submit expects Sent status
             if let NetworkTransactionData::Stellar(ref mut d) = tx.network_data {
                 d.signatures.push(dummy_signature());
             }
@@ -278,6 +294,7 @@ mod tests {
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Submit expects Sent status
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
                 data.sequence_number = Some(42); // Set sequence number
@@ -335,6 +352,7 @@ mod tests {
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Submit expects Sent status
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
                 data.sequence_number = Some(42); // Set sequence number
@@ -353,6 +371,7 @@ mod tests {
 
             // Create a transaction with signed_envelope_xdr set
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Submit expects Sent status
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
                 // Build and store the signed envelope XDR
@@ -381,12 +400,7 @@ mod tests {
                     Ok::<_, RepositoryError>(tx)
                 });
 
-            // Job and notification expectations
-            mocks
-                .job_producer
-                .expect_produce_check_transaction_status_job()
-                .times(1)
-                .returning(|_, _| Box::pin(async { Ok(()) }));
+            // Expect notification
             mocks
                 .job_producer
                 .expect_produce_send_notification_job()
@@ -422,12 +436,7 @@ mod tests {
                     Ok::<_, RepositoryError>(tx)
                 });
 
-            // enqueue status-check & notification
-            mocks
-                .job_producer
-                .expect_produce_check_transaction_status_job()
-                .times(1)
-                .returning(|_, _| Box::pin(async { Ok(()) }));
+            // Expect notification
             mocks
                 .job_producer
                 .expect_produce_send_notification_job()
@@ -437,6 +446,7 @@ mod tests {
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
 
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Submit expects Sent status
             if let NetworkTransactionData::Stellar(ref mut d) = tx.network_data {
                 d.signatures.push(dummy_signature());
             }
@@ -502,6 +512,7 @@ mod tests {
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Submit expects Sent status
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
                 data.sequence_number = Some(42); // Set sequence number
@@ -583,6 +594,7 @@ mod tests {
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Submit expects Sent status
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
                 data.sequence_number = Some(42);

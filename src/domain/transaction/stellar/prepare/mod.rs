@@ -11,7 +11,7 @@ pub mod unsigned_xdr;
 use eyre::Result;
 use tracing::{debug, info, warn};
 
-use super::{lane_gate, StellarRelayerTransaction};
+use super::{is_final_state, lane_gate, StellarRelayerTransaction};
 use crate::models::RelayerRepoModel;
 use crate::{
     jobs::JobProducerTrait,
@@ -39,6 +39,28 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
+        info!(tx_id = %tx.id, status = ?tx.status, "preparing stellar transaction");
+
+        // Defensive check: if transaction is in a final state or unexpected state, don't retry
+        if is_final_state(&tx.status) {
+            warn!(
+                tx_id = %tx.id,
+                status = ?tx.status,
+                "transaction already in final state, skipping preparation"
+            );
+            return Ok(tx);
+        }
+
+        if tx.status != TransactionStatus::Pending {
+            warn!(
+                tx_id = %tx.id,
+                status = ?tx.status,
+                expected_status = ?TransactionStatus::Pending,
+                "transaction in unexpected state for preparation, skipping"
+            );
+            return Ok(tx);
+        }
+
         if !self.concurrent_transactions_enabled() && !lane_gate::claim(&self.relayer().id, &tx.id)
         {
             info!("relayer already has a transaction in flight, must wait");
