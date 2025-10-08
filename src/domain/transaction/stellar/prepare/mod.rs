@@ -9,7 +9,7 @@ pub mod operations;
 pub mod unsigned_xdr;
 
 use eyre::Result;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::{lane_gate, StellarRelayerTransaction};
 use crate::models::RelayerRepoModel;
@@ -45,7 +45,7 @@ where
             return Ok(tx);
         }
 
-        info!("preparing transaction");
+        debug!("preparing transaction {}", tx.id);
 
         // Call core preparation logic with error handling
         match self.prepare_core(tx.clone()).await {
@@ -67,7 +67,7 @@ where
         // Simple dispatch to appropriate processing function based on input type
         match &stellar_data.transaction_input {
             TransactionInput::Operations(_) => {
-                info!("preparing operations-based transaction");
+                debug!("preparing operations-based transaction {}", tx.id);
                 let stellar_data_with_sim = operations::process_operations(
                     self.transaction_counter_service(),
                     &self.relayer().id,
@@ -82,7 +82,7 @@ where
                     .await
             }
             TransactionInput::UnsignedXdr(_) => {
-                info!("preparing unsigned xdr transaction");
+                debug!("preparing unsigned xdr transaction {}", tx.id);
                 let stellar_data_with_sim = unsigned_xdr::process_unsigned_xdr(
                     self.transaction_counter_service(),
                     &self.relayer().id,
@@ -96,7 +96,7 @@ where
                     .await
             }
             TransactionInput::SignedXdr { .. } => {
-                info!("preparing fee-bump transaction");
+                debug!("preparing fee-bump transaction {}", tx.id);
                 let stellar_data_with_fee_bump = fee_bump::process_fee_bump(
                     &self.relayer().address,
                     stellar_data,

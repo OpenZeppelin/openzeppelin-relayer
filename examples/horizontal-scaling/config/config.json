@@ -7,7 +7,6 @@
       "paused": false,
       "signer_id": "local-signer",
       "network_type": "evm",
-      "custom_rpc_urls": ["https://eth-sepolia.g.alchemy.com/v2/DoVjSmjXEdIl-JDornXQRqYYYj8HkBat"],
       "policies": {
         "min_balance": 0,
         "gas_price_cap": 1000000000000000000
@@ -31,4 +30,3 @@
   ],
   "plugins": []
 }
-

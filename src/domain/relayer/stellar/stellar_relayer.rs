@@ -21,13 +21,13 @@
 /// To use the `StellarRelayer`, create an instance using the `new` method, providing the necessary
 /// components. Then, call the appropriate methods to process transactions and manage the relayer's state.
 use crate::{
-    constants::STELLAR_SMALLEST_UNIT_NAME,
+    constants::{STATUS_CHECK_INITIAL_DELAY_SECONDS, STELLAR_SMALLEST_UNIT_NAME},
     domain::{
         transaction::stellar::fetch_next_sequence_from_chain, BalanceResponse, SignDataRequest,
         SignDataResponse, SignTransactionExternalResponse, SignTransactionExternalResponseStellar,
         SignTransactionRequest, SignTypedDataRequest,
     },
-    jobs::{JobProducerTrait, TransactionRequest},
+    jobs::{JobProducerTrait, TransactionRequest, TransactionStatusCheck},
     models::{
         produce_relayer_disabled_payload, DeletePendingTransactionsResponse, JsonRpcRequest,
         JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest, NetworkRpcResult,
@@ -39,6 +39,7 @@ use crate::{
         StellarProvider, StellarProviderTrait, StellarSignTrait, StellarSigner,
         TransactionCounterService, TransactionCounterServiceTrait,
     },
+    utils::calculate_scheduled_timestamp,
 };
 use async_trait::async_trait;
 use eyre::Result;
@@ -264,6 +265,15 @@ where
             .produce_transaction_request_job(
                 TransactionRequest::new(transaction.id.clone(), transaction.relayer_id.clone()),
                 None,
+            )
+            .await?;
+
+        self.job_producer
+            .produce_check_transaction_status_job(
+                TransactionStatusCheck::new(transaction.id.clone(), transaction.relayer_id.clone()),
+                Some(calculate_scheduled_timestamp(
+                    STATUS_CHECK_INITIAL_DELAY_SECONDS,
+                )),
             )
             .await?;
 

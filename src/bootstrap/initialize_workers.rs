@@ -7,7 +7,7 @@ use crate::{
         DEFAULT_CONCURRENCY, DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION,
         WORKER_NOTIFICATION_SENDER_RETRIES, WORKER_SOLANA_TOKEN_SWAP_REQUEST_RETRIES,
         WORKER_TRANSACTION_CLEANUP_RETRIES, WORKER_TRANSACTION_REQUEST_RETRIES,
-        WORKER_TRANSACTION_STATUS_CHECKER_RETRIES, WORKER_TRANSACTION_SUBMISSION_RETRIES,
+        WORKER_TRANSACTION_STATUS_CHECKER_RETRIES, WORKER_TRANSACTION_SUBMIT_RETRIES,
     },
     jobs::{
         notification_handler, solana_token_swap_cron_handler, solana_token_swap_request_handler,
@@ -84,7 +84,7 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
         .catch_panic()
         .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
         .retry(
-            RetryPolicy::retries(WORKER_TRANSACTION_SUBMISSION_RETRIES)
+            RetryPolicy::retries(WORKER_TRANSACTION_SUBMIT_RETRIES)
                 .with_backoff(create_backoff(500, 5000, 0.99).unwrap().make_backoff()),
         )
         .concurrency(DEFAULT_CONCURRENCY)
@@ -99,7 +99,9 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
         .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
         .retry(
             RetryPolicy::retries(WORKER_TRANSACTION_STATUS_CHECKER_RETRIES)
-                .with_backoff(create_backoff(5000, 30000, 0.99).unwrap().make_backoff()),
+                // Reduced from 5s-30s to 3s-15s to enable more frequent checks
+                // This prevents race conditions where transactions timeout before recovery
+                .with_backoff(create_backoff(5000, 20000, 0.99).unwrap().make_backoff()),
         )
         .concurrency(DEFAULT_CONCURRENCY)
         .data(app_state.clone())

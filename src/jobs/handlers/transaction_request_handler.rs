@@ -11,7 +11,7 @@ use tracing::{debug, instrument};
 use crate::{
     constants::WORKER_TRANSACTION_REQUEST_RETRIES,
     domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
-    jobs::{handle_transaction_result, Job, TransactionRequest},
+    jobs::{handle_result, Job, TransactionRequest},
     models::DefaultAppState,
     observability::request_id::set_request_id,
 };
@@ -43,19 +43,14 @@ pub async fn transaction_request_handler(
 
     debug!("handling transaction request {}", job.data.transaction_id);
 
-    let transaction_id = job.data.transaction_id.clone();
     let result = handle_request(job.data, state.clone()).await;
 
-    // Handle transaction result by setting transaction status to Failed when max attempts are reached
-    handle_transaction_result(
+    handle_result(
         result,
         attempt,
         "Transaction Request",
         WORKER_TRANSACTION_REQUEST_RETRIES,
-        transaction_id,
-        state.transaction_repository(),
     )
-    .await
 }
 
 async fn handle_request(

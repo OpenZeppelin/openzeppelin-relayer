@@ -5,14 +5,18 @@
 use alloy::network::ReceiptResponse;
 use chrono::{DateTime, Duration, Utc};
 use eyre::Result;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::EvmRelayerTransaction;
 use super::{
-    ensure_status, get_age_of_sent_at, has_enough_confirmations, is_final_state, is_noop,
-    is_transaction_valid, make_noop, too_many_attempts, too_many_noop_attempts,
+    ensure_status, get_age_of_sent_at, get_age_since_created, get_age_since_status_change,
+    has_enough_confirmations, is_final_state, is_noop, is_too_early_to_check, is_transaction_valid,
+    make_noop, too_many_attempts, too_many_noop_attempts,
 };
-use crate::constants::ARBITRUM_TIME_TO_RESUBMIT;
+use crate::constants::{
+    get_pending_recovery_trigger_timeout, get_prepare_timeout, get_resend_timeout,
+    ARBITRUM_TIME_TO_RESUBMIT,
+};
 use crate::models::{EvmNetwork, NetworkRepoModel, NetworkType};
 use crate::repositories::{NetworkRepository, RelayerRepository};
 use crate::{
@@ -193,7 +197,7 @@ where
                 })?
                 .with_timezone(&Utc);
             let age = Utc::now().signed_duration_since(created_time);
-            if age > Duration::minutes(1) {
+            if age > get_prepare_timeout() {
                 info!("Transaction in Pending state for over 1 minute, will replace with NOOP");
                 return Ok(true);
             }
@@ -316,6 +320,20 @@ where
             self.send_transaction_update_notification(&updated_tx).await;
             return Ok(updated_tx);
         }
+
+        // Check if transaction is stuck in Pending (prepare job may have failed)
+        let age = get_age_since_created(&tx)?;
+        if age > get_pending_recovery_trigger_timeout() {
+            warn!(
+                tx_id = %tx.id,
+                age_seconds = age.num_seconds(),
+                "transaction stuck in Pending, queuing prepare job"
+            );
+
+            // Re-queue prepare job
+            self.send_transaction_request_job(&tx).await?;
+        }
+
         Ok(tx)
     }
 
@@ -340,30 +358,162 @@ where
     /// Inherent status-handling method.
     ///
     /// This method encapsulates the full logic for handling transaction status,
-    /// including resubmission, NOOP replacement, and updating status.
+    /// including resubmission, NOOP replacement, timeout detection, and updating status.
     pub async fn handle_status_impl(
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
         debug!("checking transaction status {}", tx.id);
 
-        // Check transaction status with error handling
+        // 1. Early return if final state
+        if is_final_state(&tx.status) {
+            debug!(status = ?tx.status, "transaction already in final state");
+            return Ok(tx);
+        }
+
+        // 2. Check if too early (tx just created)
+        if is_too_early_to_check(&tx)? {
+            let age = get_age_since_created(&tx)?;
+            debug!(
+                tx_id = %tx.id,
+                age_seconds = age.num_seconds(),
+                "transaction too young to check, will retry later"
+            );
+            return Ok(tx);
+        }
+
+        // 3. Check for timeouts/expiry
+        if let Some(tx) = self.check_timeouts(&tx).await? {
+            return Ok(tx);
+        }
+
+        // 4. Check transaction status on-chain
         let status = self.check_transaction_status(&tx).await?;
 
         debug!(status = ?status, "transaction status {}", tx.id);
 
+        // 5. Handle based on status
         match status {
-            TransactionStatus::Submitted => self.handle_submitted_state(tx).await,
             TransactionStatus::Pending => self.handle_pending_state(tx).await,
+            TransactionStatus::Sent => self.handle_sent_state(tx).await,
+            TransactionStatus::Submitted => self.handle_submitted_state(tx).await,
             TransactionStatus::Mined => self.handle_mined_state(tx).await,
             TransactionStatus::Confirmed
             | TransactionStatus::Failed
-            | TransactionStatus::Expired => self.handle_final_state(tx, status).await,
-            _ => Err(TransactionError::UnexpectedError(format!(
-                "Unexpected transaction status: {:?}",
-                status
-            ))),
+            | TransactionStatus::Expired
+            | TransactionStatus::Canceled => self.handle_final_state(tx, status).await,
         }
+    }
+
+    /// Check for various timeout conditions
+    async fn check_timeouts(
+        &self,
+        tx: &TransactionRepoModel,
+    ) -> Result<Option<TransactionRepoModel>, TransactionError> {
+        use crate::constants::{
+            get_prepare_timeout, get_submit_timeout, PREPARE_TIMEOUT_MINUTES,
+            SUBMIT_TIMEOUT_MINUTES,
+        };
+
+        let age = get_age_since_created(tx)?;
+
+        match tx.status {
+            TransactionStatus::Pending => {
+                // Timeout if stuck in Pending too long
+                if age > get_prepare_timeout() {
+                    warn!(
+                        tx_id = %tx.id,
+                        age_minutes = age.num_minutes(),
+                        "transaction stuck in Pending, marking as failed"
+                    );
+                    return Ok(Some(
+                        self.mark_as_failed(
+                            tx.clone(),
+                            format!(
+                                "Failed to prepare tx within {} minutes",
+                                PREPARE_TIMEOUT_MINUTES
+                            ),
+                        )
+                        .await?,
+                    ));
+                }
+            }
+            TransactionStatus::Sent => {
+                // Timeout if prepared but not submitted
+                let age_since_sent = get_age_since_status_change(tx)?;
+                if age_since_sent > get_submit_timeout() {
+                    warn!(
+                        tx_id = %tx.id,
+                        age_minutes = age_since_sent.num_minutes(),
+                        "transaction stuck in Sent, marking as failed"
+                    );
+                    return Ok(Some(
+                        self.mark_as_failed(
+                            tx.clone(),
+                            format!("Failed to submit within {} minutes", SUBMIT_TIMEOUT_MINUTES),
+                        )
+                        .await?,
+                    ));
+                }
+            }
+            _ => {}
+        }
+
+        Ok(None)
+    }
+
+    /// Mark transaction as failed
+    async fn mark_as_failed(
+        &self,
+        tx: TransactionRepoModel,
+        reason: String,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        info!(
+            tx_id = %tx.id,
+            reason = %reason,
+            "marking transaction as failed"
+        );
+
+        let update = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Failed),
+            status_reason: Some(reason),
+            ..Default::default()
+        };
+
+        let updated_tx = self
+            .transaction_repository()
+            .partial_update(tx.id.clone(), update)
+            .await?;
+
+        self.send_transaction_update_notification(&updated_tx).await;
+
+        Ok(updated_tx)
+    }
+
+    /// Handle transactions stuck in Sent (prepared but not submitted)
+    async fn handle_sent_state(
+        &self,
+        tx: TransactionRepoModel,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        debug!(tx_id = %tx.id, "handling Sent state");
+
+        // Transaction was prepared but submission job may have failed
+        // Re-queue a resend job if it's been stuck for a while
+        let age_since_sent = get_age_since_status_change(&tx)?;
+
+        if age_since_sent > get_resend_timeout() {
+            warn!(
+                tx_id = %tx.id,
+                age_seconds = age_since_sent.num_seconds(),
+                "transaction stuck in Sent, queuing resend job"
+            );
+
+            // Queue resend job (transaction is already prepared)
+            self.send_transaction_resend_job(&tx).await?;
+        }
+
+        self.update_transaction_status_if_needed(tx, TransactionStatus::Sent)
+            .await
     }
 }
 

@@ -7,8 +7,8 @@ use tracing::{info, warn};
 
 use super::{utils::is_bad_sequence_error, StellarRelayerTransaction};
 use crate::{
-    constants::{STELLAR_BAD_SEQUENCE_RETRY_DELAY_SECONDS, STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS},
-    jobs::{JobProducerTrait, TransactionStatusCheck},
+    constants::STELLAR_BAD_SEQUENCE_RETRY_DELAY_SECONDS,
+    jobs::JobProducerTrait,
     models::{
         NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
         TransactionStatus, TransactionUpdateRequest,
@@ -78,16 +78,6 @@ where
         let updated_tx = self
             .transaction_repository()
             .partial_update(tx.id.clone(), update_req)
-            .await?;
-
-        // Enqueue status check job
-        self.job_producer()
-            .produce_check_transaction_status_job(
-                TransactionStatusCheck::new(updated_tx.id.clone(), updated_tx.relayer_id.clone()),
-                Some(calculate_scheduled_timestamp(
-                    STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS,
-                )),
-            )
             .await?;
 
         // Send notification

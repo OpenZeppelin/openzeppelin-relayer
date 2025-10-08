@@ -186,6 +186,38 @@ where
             })
     }
 
+    /// Helper method to produce a resend transaction job.
+    pub(super) async fn send_transaction_resend_job(
+        &self,
+        tx: &TransactionRepoModel,
+    ) -> Result<(), TransactionError> {
+        let job = TransactionSend::resend(tx.id.clone(), tx.relayer_id.clone());
+
+        self.job_producer()
+            .produce_submit_transaction_job(job, None)
+            .await
+            .map_err(|e| {
+                TransactionError::UnexpectedError(format!("Failed to produce resend job: {}", e))
+            })
+    }
+
+    /// Helper method to produce a transaction request (prepare) job.
+    pub(super) async fn send_transaction_request_job(
+        &self,
+        tx: &TransactionRepoModel,
+    ) -> Result<(), TransactionError> {
+        use crate::jobs::TransactionRequest;
+
+        let job = TransactionRequest::new(tx.id.clone(), tx.relayer_id.clone());
+
+        self.job_producer()
+            .produce_transaction_request_job(job, None)
+            .await
+            .map_err(|e| {
+                TransactionError::UnexpectedError(format!("Failed to produce request job: {}", e))
+            })
+    }
+
     /// Updates a transaction's status.
     pub(super) async fn update_transaction_status(
         &self,
@@ -436,12 +468,9 @@ where
                 ..Default::default()
             };
 
-            let saved_tx = self
-                .transaction_repository
+            self.transaction_repository
                 .partial_update(tx.id.clone(), presign_update)
-                .await?;
-
-            saved_tx
+                .await?
         };
 
         // Apply price params for signing (recalculated on every attempt)
@@ -510,7 +539,11 @@ where
         // (e.g., if it's already in a final state like Failed, Confirmed, etc.)
         if let Err(e) = ensure_status_one_of(
             &tx,
-            &[TransactionStatus::Pending, TransactionStatus::Sent, TransactionStatus::Submitted],
+            &[
+                TransactionStatus::Pending,
+                TransactionStatus::Sent,
+                TransactionStatus::Submitted,
+            ],
             Some("submit_transaction"),
         ) {
             warn!(
@@ -557,25 +590,6 @@ where
             }
         };
 
-        // Schedule status check - don't fail if job production fails since tx is already on-chain
-        // The cleanup handler will eventually pick up transactions that weren't monitored
-        if let Err(e) = self
-            .job_producer
-            .produce_check_transaction_status_job(
-                TransactionStatusCheck::new(updated_tx.id.clone(), updated_tx.relayer_id.clone()),
-                None,
-            )
-            .await
-        {
-            error!(
-                error = %e,
-                tx_id = %updated_tx.id,
-                "CRITICAL: failed to produce status check job for submitted transaction - transaction may not be monitored"
-            );
-            // Don't propagate error - transaction is already on-chain, which is the critical operation
-            // Rely on cleanup jobs to catch unmonitored transactions
-        }
-
         self.send_transaction_update_notification(&updated_tx).await;
 
         Ok(updated_tx)
@@ -614,7 +628,11 @@ where
         // If transaction is not in correct status, return Ok to avoid wasteful retries
         if let Err(e) = ensure_status_one_of(
             &tx,
-            &[TransactionStatus::Pending, TransactionStatus::Sent, TransactionStatus::Submitted],
+            &[
+                TransactionStatus::Pending,
+                TransactionStatus::Sent,
+                TransactionStatus::Submitted,
+            ],
             Some("resubmit_transaction"),
         ) {
             warn!(

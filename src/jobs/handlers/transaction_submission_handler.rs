@@ -8,8 +8,7 @@
 use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Data, *};
 use eyre::Result;
-use std::sync::Arc;
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, info, instrument};
 
 use crate::{
     constants::{
@@ -17,9 +16,8 @@ use crate::{
         WORKER_TRANSACTION_RESUBMIT_RETRIES, WORKER_TRANSACTION_SUBMIT_RETRIES,
     },
     domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
-    jobs::{Job, TransactionCommand, TransactionSend},
-    models::{DefaultAppState, TransactionStatus, TransactionUpdateRequest},
-    repositories::TransactionRepository,
+    jobs::{handle_result, Job, TransactionCommand, TransactionSend},
+    models::DefaultAppState,
     observability::request_id::set_request_id,
 };
 
@@ -50,19 +48,16 @@ pub async fn transaction_submission_handler(
         job.data.transaction_id
     );
 
-    let transaction_id = job.data.transaction_id.clone();
     let command = job.data.command.clone();
     let result = handle_request(job.data, state.clone()).await;
 
     // Handle result with command-specific retry logic
-    handle_submission_result(
+    handle_result(
         result,
         attempt,
-        &command,
-        transaction_id,
-        state.transaction_repository(),
+        "Transaction Submission",
+        get_max_retries(&command),
     )
-    .await
 }
 
 /// Get max retry count based on command type
@@ -72,84 +67,6 @@ fn get_max_retries(command: &TransactionCommand) -> usize {
         TransactionCommand::Resubmit => WORKER_TRANSACTION_RESUBMIT_RETRIES,
         TransactionCommand::Cancel { .. } => WORKER_TRANSACTION_CANCEL_RETRIES,
         TransactionCommand::Resend => WORKER_TRANSACTION_RESEND_RETRIES,
-    }
-}
-
-/// Handle submission result with command-specific retry and failure logic
-async fn handle_submission_result<TR>(
-    result: Result<()>,
-    attempt: Attempt,
-    command: &TransactionCommand,
-    transaction_id: String,
-    transaction_repo: Arc<TR>,
-) -> Result<(), Error>
-where
-    TR: TransactionRepository,
-{
-    let max_retries = get_max_retries(command);
-    let command_name = format!("{:?}", command);
-
-    match result {
-        Ok(()) => Ok(()),
-        Err(e) if attempt.current() < max_retries => {
-            // Continue retrying
-            debug!(
-                tx_id = %transaction_id,
-                command = %command_name,
-                attempt = attempt.current(),
-                max_retries,
-                "submission failed, will retry"
-            );
-            Err(Error::Failed(Arc::new(e.to_string().into())))
-        }
-        Err(e) => {
-            // Max retries exhausted - handle based on command type
-            match command {
-                TransactionCommand::Submit => {
-                    // For fresh submissions, mark as Failed
-                    warn!(
-                        tx_id = %transaction_id,
-                        command = %command_name,
-                        attempts = attempt.current(),
-                        "submission retries exhausted, marking transaction as Failed"
-                    );
-
-                    let update_request = TransactionUpdateRequest {
-                        status: Some(TransactionStatus::Failed),
-                        status_reason: Some(format!("Failed to submit after {} attempts: {}", attempt.current(), e)),
-                        ..Default::default()
-                    };
-
-                    if let Err(update_err) = transaction_repo
-                        .partial_update(transaction_id.clone(), update_request)
-                        .await
-                    {
-                        error!(
-                            tx_id = %transaction_id,
-                            error = %update_err,
-                            "failed to update transaction status to Failed"
-                        );
-                    }
-
-                    Err(Error::Abort(Arc::new(e.to_string().into())))
-                }
-                TransactionCommand::Resubmit | TransactionCommand::Cancel { .. } | TransactionCommand::Resend => {
-                    // For resubmit/cancel/resend, don't mark as Failed
-                    // Status checker is already running and will retry on next cycle
-                    // DB state is source of truth - status checker will see the same conditions
-                    // and attempt the operation again
-                    warn!(
-                        tx_id = %transaction_id,
-                        command = %command_name,
-                        attempts = attempt.current(),
-                        "submission retries exhausted, status checker will retry on next cycle"
-                    );
-
-                    // Return Ok to stop job retries - status checker will handle it
-                    Ok(())
-                }
-            }
-        }
     }
 }
 

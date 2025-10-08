@@ -4,11 +4,6 @@ use apalis::prelude::{Attempt, Error};
 use eyre::Report;
 use tracing::{debug, error, warn};
 
-use crate::{
-    models::{TransactionStatus, TransactionUpdateRequest},
-    repositories::TransactionRepository,
-};
-
 mod transaction_request_handler;
 pub use transaction_request_handler::*;
 
@@ -69,99 +64,6 @@ pub fn handle_result(
 
     Err(Error::Failed(Arc::new(
         "Failed to handle request. Retrying".into(),
-    )))?
-}
-
-/// Handles job results for transaction lifecycle handlers.
-///
-/// Used by: transaction_request_handler, transaction_submission_handler
-///
-/// # Retry Strategy
-/// - On success: Job completes
-/// - On error: Retry until max_attempts reached
-/// - At max_attempts: Set transaction to Failed status and abort job
-///
-/// # Arguments
-/// * `result` - The result of the job execution
-/// * `attempt` - Current attempt information
-/// * `job_type` - Type of job for logging
-/// * `max_attempts` - Maximum number of retry attempts
-/// * `transaction_id` - ID of the transaction to update on failure
-/// * `transaction_repo` - Repository for updating transaction state
-pub async fn handle_transaction_result<R>(
-    result: Result<(), Report>,
-    attempt: Attempt,
-    job_type: &str,
-    max_attempts: usize,
-    transaction_id: String,
-    transaction_repo: Arc<R>,
-) -> Result<(), Error>
-where
-    R: TransactionRepository,
-{
-    if result.is_ok() {
-        debug!(
-            job_type = %job_type,
-            tx_id = %transaction_id,
-            "request handled successfully"
-        );
-        return Ok(());
-    }
-
-    let err = result.as_ref().unwrap_err();
-    warn!(
-        job_type = %job_type,
-        tx_id = %transaction_id,
-        error = %err,
-        attempt = %attempt.current(),
-        max_attempts = %max_attempts,
-        "request failed"
-    );
-
-    if attempt.current() >= max_attempts {
-        error!(
-            job_type = %job_type,
-            tx_id = %transaction_id,
-            max_attempts = %max_attempts,
-            error = %err,
-            "max attempts reached, marking transaction as failed"
-        );
-
-        // Update transaction to Failed status with reason
-        let status_reason = format!(
-            "Transaction processing failed after {} retry attempts. The transaction could not be completed due to persistent errors. Please check the transaction details and try again.",
-            max_attempts
-        );
-
-        let update_request = TransactionUpdateRequest {
-            status: Some(TransactionStatus::Failed),
-            status_reason: Some(status_reason),
-            ..Default::default()
-        };
-
-        if let Err(update_err) = transaction_repo
-            .partial_update(transaction_id.clone(), update_request)
-            .await
-        {
-            error!(
-                tx_id = %transaction_id,
-                error = %update_err,
-                "failed to update transaction status to Failed"
-            );
-        } else {
-            debug!(
-                tx_id = %transaction_id,
-                "successfully marked transaction as Failed"
-            );
-        }
-
-        Err(Error::Abort(Arc::new(
-            "Failed to handle transaction request".into(),
-        )))?
-    }
-
-    Err(Error::Failed(Arc::new(
-        "Failed to handle transaction request. Retrying".into(),
     )))?
 }
 
