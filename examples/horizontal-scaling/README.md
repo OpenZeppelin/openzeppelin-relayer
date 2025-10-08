@@ -107,7 +107,7 @@ cargo run --example create_key -- \
 **Important**: Use a strong password with at least:
 - 12 characters
 - One uppercase letter
-- One lowercase letter  
+- One lowercase letter
 - One number
 - One special character
 
@@ -413,8 +413,8 @@ Test the scaled deployment with a load testing tool:
 ab -n 10000 -c 100 -H "AUTHORIZATION: Bearer YOUR_API_KEY" \
   http://localhost:8080/api/v1/relayers
 
-# Using wrk
-wrk -t12 -c400 -d30s -H "AUTHORIZATION: Bearer YOUR_API_KEY" \
+# Using work
+work -t12 -c400 -d30s -H "AUTHORIZATION: Bearer YOUR_API_KEY" \
   http://localhost:8080/api/v1/relayers
 ```
 
@@ -434,4 +434,3 @@ For issues or questions:
 - [GitHub Issues](https://github.com/OpenZeppelin/openzeppelin-relayer/issues)
 - [OpenZeppelin Forum](https://forum.openzeppelin.com/)
 - [Documentation](https://docs.openzeppelin.com/relayer/)
-

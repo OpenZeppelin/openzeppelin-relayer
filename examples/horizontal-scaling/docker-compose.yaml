@@ -310,4 +310,3 @@ secrets:
     environment: KEYSTORE_PASSPHRASE
   storage_encryption_key:
     environment: STORAGE_ENCRYPTION_KEY
-

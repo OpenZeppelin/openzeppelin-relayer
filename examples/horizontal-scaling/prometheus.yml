@@ -31,4 +31,3 @@ scrape_configs:
         labels:
           cluster: 'horizontal-scaling'
     metrics_path: /nginx_status
-
