@@ -1275,13 +1275,9 @@ mod tests {
                 .status_reason
                 .as_ref()
                 .unwrap()
-                .contains("InsufficientBalance")
-                || updated_tx
-                    .status_reason
-                    .as_ref()
-                    .unwrap()
-                    .contains("insufficient balance"),
-            "Status reason should contain InsufficientBalance error, got: {:?}",
+                .to_lowercase()
+                .contains("insufficient balance"),
+            "Status reason should contain insufficient balance error, got: {:?}",
             updated_tx.status_reason
         );
     }
@@ -2084,21 +2080,36 @@ mod tests {
             .returning(|_, _| Box::pin(ready(Ok(()))));
 
         // Mock transaction repository partial_update calls
+        // Note: prepare_transaction calls partial_update twice:
+        // 1. Presign update (saves nonce before signing)
+        // 2. Postsign update (saves signed data and marks as Sent)
         let expected_gas_limit = EXPECTED_GAS_WITH_BUFFER;
 
         let test_tx_clone = test_tx.clone();
         mock_transaction
             .expect_partial_update()
-            .times(1)
-            .returning(move |_, _update| {
+            .times(2)
+            .returning(move |_, update| {
                 let mut updated_tx = test_tx_clone.clone();
-                updated_tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
-                    gas_limit: Some(expected_gas_limit),
-                    ..test_tx_clone
-                        .network_data
-                        .get_evm_transaction_data()
-                        .unwrap()
-                });
+
+                // Apply the updates from the request
+                if let Some(status) = &update.status {
+                    updated_tx.status = status.clone();
+                }
+                if let Some(network_data) = &update.network_data {
+                    updated_tx.network_data = network_data.clone();
+                } else {
+                    // If network_data is not being updated, ensure gas_limit is set
+                    if let NetworkTransactionData::Evm(ref mut evm_data) = updated_tx.network_data {
+                        if evm_data.gas_limit.is_none() {
+                            evm_data.gas_limit = Some(expected_gas_limit);
+                        }
+                    }
+                }
+                if let Some(hashes) = &update.hashes {
+                    updated_tx.hashes = hashes.clone();
+                }
+
                 Ok(updated_tx)
             });
 

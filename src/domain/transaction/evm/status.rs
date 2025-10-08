@@ -10,13 +10,14 @@ use tracing::{debug, error, info, warn};
 use super::EvmRelayerTransaction;
 use super::{
     ensure_status, get_age_of_sent_at, get_age_since_created, get_age_since_status_change,
-    has_enough_confirmations, is_final_state, is_noop, is_too_early_to_check, is_transaction_valid,
-    make_noop, too_many_attempts, too_many_noop_attempts,
+    has_enough_confirmations, is_noop, is_too_early_to_check, is_transaction_valid, make_noop,
+    too_many_attempts, too_many_noop_attempts,
 };
 use crate::constants::{
     get_pending_recovery_trigger_timeout, get_prepare_timeout, get_resend_timeout,
     get_submit_timeout, ARBITRUM_TIME_TO_RESUBMIT, PREPARE_TIMEOUT_MINUTES, SUBMIT_TIMEOUT_MINUTES,
 };
+use crate::domain::transaction::common::is_final_state;
 use crate::models::{EvmNetwork, NetworkRepoModel, NetworkType};
 use crate::repositories::{NetworkRepository, RelayerRepository};
 use crate::{
@@ -1440,6 +1441,8 @@ mod tests {
             let mut mocks = default_test_mocks();
             let relayer = create_test_relayer();
             let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            // Set created_at to be old enough to pass is_too_early_to_check
+            tx.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
             // Set a dummy hash.
             if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
                 evm_data.hash = Some("0xFakeHash".to_string());
@@ -1459,10 +1462,10 @@ mod tests {
                 .network_repo
                 .expect_get_by_chain_id()
                 .returning(|_, _| Ok(Some(create_test_network_model())));
-            // Expect a status check job to be scheduled.
+            // Mock the notification job that gets sent after status update
             mocks
                 .job_producer
-                .expect_produce_check_transaction_status_job()
+                .expect_produce_send_notification_job()
                 .returning(|_, _| Box::pin(async { Ok(()) }));
             // Expect update_transaction_status_if_needed to update status to Mined.
             mocks

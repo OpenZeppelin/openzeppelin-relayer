@@ -22,7 +22,7 @@ use std::str::FromStr;
 use chrono::Utc;
 use futures::try_join;
 use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
-use tracing::info;
+use tracing::debug;
 
 use crate::{
     models::{
@@ -50,7 +50,7 @@ where
         &self,
         params: SignAndSendTransactionRequestParams,
     ) -> Result<SignAndSendTransactionResult, SolanaRpcError> {
-        info!("Processing sign and send transaction request");
+        debug!("Processing sign and send transaction request");
         let transaction_request = Transaction::try_from(params.transaction.clone())?;
 
         validate_sign_and_send_transaction(&transaction_request, &self.relayer, &*self.provider)
@@ -169,7 +169,7 @@ where
         self.schedule_status_check_job(&tx_repo_model, Some(5))
             .await?;
 
-        info!(
+        debug!(
             "Transaction signed and sent successfully with signature: {}",
             result.signature
         );

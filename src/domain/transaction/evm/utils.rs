@@ -77,22 +77,6 @@ pub fn is_pending_transaction(tx_status: &TransactionStatus) -> bool {
         || tx_status == &TransactionStatus::Submitted
 }
 
-/// Checks if a transaction is in a final state (cannot be modified).
-///
-/// Final states include: Confirmed, Failed, Expired, Canceled
-///
-/// # Arguments
-///
-/// * `tx_status` - The transaction status to check
-///
-/// # Returns
-///
-/// `true` if the transaction is in a final state, `false` otherwise
-pub fn is_final_state(tx_status: &TransactionStatus) -> bool {
-    use crate::constants::FINAL_TRANSACTION_STATUSES;
-    FINAL_TRANSACTION_STATUSES.contains(tx_status)
-}
-
 /// Validates that a transaction is in the expected state.
 ///
 /// This enforces state machine invariants and prevents invalid state transitions.
@@ -735,21 +719,6 @@ mod tests {
         assert!(!is_pending_transaction(&TransactionStatus::Canceled));
         assert!(!is_pending_transaction(&TransactionStatus::Mined));
         assert!(!is_pending_transaction(&TransactionStatus::Expired));
-    }
-
-    #[test]
-    fn test_is_final_state() {
-        // Test final states
-        assert!(is_final_state(&TransactionStatus::Confirmed));
-        assert!(is_final_state(&TransactionStatus::Failed));
-        assert!(is_final_state(&TransactionStatus::Expired));
-        assert!(is_final_state(&TransactionStatus::Canceled));
-
-        // Test non-final states
-        assert!(!is_final_state(&TransactionStatus::Pending));
-        assert!(!is_final_state(&TransactionStatus::Sent));
-        assert!(!is_final_state(&TransactionStatus::Submitted));
-        assert!(!is_final_state(&TransactionStatus::Mined));
     }
 
     #[test]

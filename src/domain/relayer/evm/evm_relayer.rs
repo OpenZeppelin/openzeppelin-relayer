@@ -760,6 +760,9 @@ mod tests {
         job_producer
             .expect_produce_transaction_request_job()
             .returning(|_, _| Box::pin(ready(Ok(()))));
+        job_producer
+            .expect_produce_check_transaction_status_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))));
 
         let relayer = EvmRelayer::new(
             relayer_model,
