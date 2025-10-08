@@ -14,8 +14,9 @@ use super::{
     too_many_attempts, too_many_noop_attempts,
 };
 use crate::constants::{
-    get_pending_recovery_trigger_timeout, get_prepare_timeout, get_resend_timeout,
-    get_submit_timeout, ARBITRUM_TIME_TO_RESUBMIT, PREPARE_TIMEOUT_MINUTES, SUBMIT_TIMEOUT_MINUTES,
+    get_evm_pending_recovery_trigger_timeout, get_evm_prepare_timeout, get_evm_resend_timeout,
+    get_evm_submit_timeout, ARBITRUM_TIME_TO_RESUBMIT, EVM_PREPARE_TIMEOUT_MINUTES,
+    EVM_SUBMIT_TIMEOUT_MINUTES,
 };
 use crate::domain::transaction::common::is_final_state;
 use crate::models::{EvmNetwork, NetworkRepoModel, NetworkType};
@@ -207,7 +208,7 @@ where
                 })?
                 .with_timezone(&Utc);
             let age = Utc::now().signed_duration_since(created_time);
-            if age > get_prepare_timeout() {
+            if age > get_evm_prepare_timeout() {
                 info!("Transaction in Pending state for over 1 minute, will replace with NOOP");
                 return Ok(true);
             }
@@ -349,7 +350,7 @@ where
 
         // Check if transaction is stuck in Pending (prepare job may have failed)
         let age = get_age_since_created(&tx)?;
-        if age > get_pending_recovery_trigger_timeout() {
+        if age > get_evm_pending_recovery_trigger_timeout() {
             warn!(
                 tx_id = %tx.id,
                 age_seconds = age.num_seconds(),
@@ -441,7 +442,7 @@ where
         match tx.status {
             TransactionStatus::Pending => {
                 // Timeout if stuck in Pending too long
-                if age > get_prepare_timeout() {
+                if age > get_evm_prepare_timeout() {
                     warn!(
                         tx_id = %tx.id,
                         age_minutes = age.num_minutes(),
@@ -452,7 +453,7 @@ where
                             tx.clone(),
                             format!(
                                 "Failed to prepare tx within {} minutes",
-                                PREPARE_TIMEOUT_MINUTES
+                                EVM_PREPARE_TIMEOUT_MINUTES
                             ),
                         )
                         .await?,
@@ -462,7 +463,7 @@ where
             TransactionStatus::Sent => {
                 // Timeout if prepared but not submitted
                 let age_since_sent = get_age_since_status_change(tx)?;
-                if age_since_sent > get_submit_timeout() {
+                if age_since_sent > get_evm_submit_timeout() {
                     warn!(
                         tx_id = %tx.id,
                         age_minutes = age_since_sent.num_minutes(),
@@ -471,7 +472,10 @@ where
                     return Ok(Some(
                         self.mark_as_failed(
                             tx.clone(),
-                            format!("Failed to submit within {} minutes", SUBMIT_TIMEOUT_MINUTES),
+                            format!(
+                                "Failed to submit within {} minutes",
+                                EVM_SUBMIT_TIMEOUT_MINUTES
+                            ),
                         )
                         .await?,
                     ));
@@ -530,7 +534,7 @@ where
         // Re-queue a resend job if it's been stuck for a while
         let age_since_sent = get_age_since_status_change(&tx)?;
 
-        if age_since_sent > get_resend_timeout() {
+        if age_since_sent > get_evm_resend_timeout() {
             warn!(
                 tx_id = %tx.id,
                 age_seconds = age_since_sent.num_seconds(),

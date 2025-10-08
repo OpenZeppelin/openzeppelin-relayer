@@ -21,7 +21,7 @@
 /// To use the `StellarRelayer`, create an instance using the `new` method, providing the necessary
 /// components. Then, call the appropriate methods to process transactions and manage the relayer's state.
 use crate::{
-    constants::{STATUS_CHECK_INITIAL_DELAY_SECONDS, STELLAR_SMALLEST_UNIT_NAME},
+    constants::{STELLAR_SMALLEST_UNIT_NAME, STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS},
     domain::{
         transaction::stellar::fetch_next_sequence_from_chain, BalanceResponse, SignDataRequest,
         SignDataResponse, SignTransactionExternalResponse, SignTransactionExternalResponseStellar,
@@ -272,7 +272,7 @@ where
             .produce_check_transaction_status_job(
                 TransactionStatusCheck::new(transaction.id.clone(), transaction.relayer_id.clone()),
                 Some(calculate_scheduled_timestamp(
-                    STATUS_CHECK_INITIAL_DELAY_SECONDS,
+                    STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS,
                 )),
             )
             .await?;

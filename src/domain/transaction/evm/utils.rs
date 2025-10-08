@@ -1,6 +1,6 @@
 use crate::constants::{
-    ARBITRUM_GAS_LIMIT, DEFAULT_GAS_LIMIT, DEFAULT_TX_VALID_TIMESPAN, MAXIMUM_NOOP_RETRY_ATTEMPTS,
-    MAXIMUM_TX_ATTEMPTS, STATUS_CHECK_MIN_AGE_SECONDS,
+    ARBITRUM_GAS_LIMIT, DEFAULT_GAS_LIMIT, DEFAULT_TX_VALID_TIMESPAN,
+    EVM_STATUS_CHECK_MIN_AGE_SECONDS, MAXIMUM_NOOP_RETRY_ATTEMPTS, MAXIMUM_TX_ATTEMPTS,
 };
 use crate::models::EvmNetwork;
 use crate::models::{
@@ -227,7 +227,7 @@ pub fn get_age_since_status_change(
 /// Prevents checking transactions that were just created
 pub fn is_too_early_to_check(tx: &TransactionRepoModel) -> Result<bool, TransactionError> {
     let age = get_age_since_created(tx)?;
-    Ok(age < Duration::seconds(STATUS_CHECK_MIN_AGE_SECONDS))
+    Ok(age < Duration::seconds(EVM_STATUS_CHECK_MIN_AGE_SECONDS))
 }
 
 #[cfg(test)]
@@ -1228,7 +1228,7 @@ mod tests {
         let now = Utc::now();
 
         // Test with transaction created well past the minimum age
-        let created_time = now - Duration::seconds(STATUS_CHECK_MIN_AGE_SECONDS + 10);
+        let created_time = now - Duration::seconds(EVM_STATUS_CHECK_MIN_AGE_SECONDS + 10);
         let tx = TransactionRepoModel {
             created_at: created_time.to_rfc3339(),
             ..create_mock_transaction()
@@ -1244,7 +1244,7 @@ mod tests {
         let now = Utc::now();
 
         // Test with transaction created exactly at the boundary
-        let created_time = now - Duration::seconds(STATUS_CHECK_MIN_AGE_SECONDS);
+        let created_time = now - Duration::seconds(EVM_STATUS_CHECK_MIN_AGE_SECONDS);
         let tx = TransactionRepoModel {
             created_at: created_time.to_rfc3339(),
             ..create_mock_transaction()

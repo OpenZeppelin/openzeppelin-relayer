@@ -27,7 +27,7 @@
 use std::sync::Arc;
 
 use crate::{
-    constants::{EVM_SMALLEST_UNIT_NAME, STATUS_CHECK_INITIAL_DELAY_SECONDS},
+    constants::{EVM_SMALLEST_UNIT_NAME, EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS},
     domain::{
         relayer::{Relayer, RelayerError},
         BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
@@ -263,7 +263,7 @@ where
             .produce_check_transaction_status_job(
                 TransactionStatusCheck::new(transaction.id.clone(), transaction.relayer_id.clone()),
                 Some(calculate_scheduled_timestamp(
-                    STATUS_CHECK_INITIAL_DELAY_SECONDS,
+                    EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
                 )),
             )
             .await?;

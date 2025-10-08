@@ -6,7 +6,6 @@ This example demonstrates how to deploy the OpenZeppelin Relayer in a horizontal
 - **Nginx load balancer** distributing traffic across instances
 - **Shared Redis** for coordinated state management
 - **High-performance configuration** optimized for power users
-- **Optional monitoring** with Prometheus and Grafana
 
 ## Architecture
 
@@ -158,12 +157,6 @@ Start all services (without metrics):
 docker compose -f examples/horizontal-scaling/docker-compose.yaml up -d
 ```
 
-Or with monitoring (Prometheus & Grafana):
-
-```bash
-docker compose -f examples/horizontal-scaling/docker-compose.yaml --profile metrics up -d
-```
-
 ### Step 8: Verify Deployment
 
 Check that all services are running:
@@ -186,96 +179,6 @@ curl http://localhost:8080/health
 curl -X GET http://localhost:8080/api/v1/relayers \
   -H "Content-Type: application/json" \
   -H "AUTHORIZATION: Bearer YOUR_API_KEY"
-```
-
-## Monitoring
-
-### Nginx Status
-
-View load balancer statistics:
-
-```bash
-curl http://localhost:8080/nginx_status
-```
-
-### Docker Logs
-
-View logs from all relayer instances:
-
-```bash
-# All services
-docker compose -f examples/horizontal-scaling/docker-compose.yaml logs -f
-
-# Specific instance
-docker compose -f examples/horizontal-scaling/docker-compose.yaml logs -f relayer-1
-
-# Load balancer logs
-docker compose -f examples/horizontal-scaling/docker-compose.yaml logs -f nginx
-
-# Redis logs
-docker compose -f examples/horizontal-scaling/docker-compose.yaml logs -f redis
-```
-
-### Prometheus & Grafana (Optional)
-
-If started with `--profile metrics`:
-
-- **Prometheus**: http://localhost:9090
-- **Grafana**: http://localhost:3000 (admin/admin)
-
-Key metrics to monitor:
-- Request rate per instance
-- Transaction queue depth
-- Redis memory usage
-- Worker processing times
-- Error rates
-
-## Scaling
-
-### Adding More Instances
-
-To add a 4th relayer instance:
-
-1. Add to `docker-compose.yaml`:
-```yaml
-  relayer-4:
-    # Copy configuration from relayer-3
-    # ...
-```
-
-2. Add to `nginx.conf`:
-```nginx
-upstream relayer_backend {
-    least_conn;
-    server relayer-1:8080 max_fails=3 fail_timeout=30s;
-    server relayer-2:8080 max_fails=3 fail_timeout=30s;
-    server relayer-3:8080 max_fails=3 fail_timeout=30s;
-    server relayer-4:8080 max_fails=3 fail_timeout=30s;  # Add this
-}
-```
-
-3. Restart:
-```bash
-docker compose -f examples/horizontal-scaling/docker-compose.yaml up -d
-```
-
-### Removing Instances
-
-To scale down, remove the instance from both files and restart.
-
-### Resource Allocation
-
-Adjust per-instance resources in `docker-compose.yaml`:
-
-```yaml
-deploy:
-  resources:
-    limits:
-      cpus: '4.0'      # Increase for more power
-      memory: 8G
-    reservations:
-      cpus: '2.0'
-      memory: 4G
 ```
 
 ## Performance Tuning
@@ -328,15 +231,6 @@ The default worker concurrency is conservative. To increase it, you'll need to m
 4. **Auto-restart**: All services restart on failure
 5. **Backup strategy**: Regular Redis backups
 
-### Monitoring & Alerts
-
-Set up alerts for:
-- Instance failures
-- High error rates
-- Redis memory usage > 80%
-- Transaction queue backlog
-- High response latency
-
 ### Backup & Recovery
 
 ```bash
@@ -351,74 +245,6 @@ docker cp $(docker compose ps -q redis):/data/dump.rdb ./backup/
 docker cp ./backup/dump.rdb $(docker compose ps -q redis):/data/
 docker compose -f examples/horizontal-scaling/docker-compose.yaml restart redis
 ```
-
-## Troubleshooting
-
-### Instance Not Joining Pool
-
-Check health status:
-```bash
-docker compose -f examples/horizontal-scaling/docker-compose.yaml ps
-```
-
-View logs:
-```bash
-docker compose -f examples/horizontal-scaling/docker-compose.yaml logs relayer-1
-```
-
-### Redis Connection Issues
-
-Test Redis connectivity:
-```bash
-docker compose -f examples/horizontal-scaling/docker-compose.yaml exec redis redis-cli ping
-```
-
-### Load Balancer Not Distributing
-
-Check Nginx configuration:
-```bash
-docker compose -f examples/horizontal-scaling/docker-compose.yaml exec nginx nginx -t
-```
-
-Reload Nginx:
-```bash
-docker compose -f examples/horizontal-scaling/docker-compose.yaml exec nginx nginx -s reload
-```
-
-### High Memory Usage
-
-Check Redis memory:
-```bash
-docker compose -f examples/horizontal-scaling/docker-compose.yaml exec redis redis-cli INFO memory
-```
-
-Adjust `maxmemory` in docker-compose.yaml if needed.
-
-## Stopping the Services
-
-```bash
-# Stop all services
-docker compose -f examples/horizontal-scaling/docker-compose.yaml down
-
-# Stop and remove volumes (CAUTION: deletes all data)
-docker compose -f examples/horizontal-scaling/docker-compose.yaml down -v
-```
-
-## Load Testing
-
-Test the scaled deployment with a load testing tool:
-
-```bash
-# Using Apache Bench
-ab -n 10000 -c 100 -H "AUTHORIZATION: Bearer YOUR_API_KEY" \
-  http://localhost:8080/api/v1/relayers
-
-# Using work
-work -t12 -c400 -d30s -H "AUTHORIZATION: Bearer YOUR_API_KEY" \
-  http://localhost:8080/api/v1/relayers
-```
-
-Monitor performance during load tests using Grafana or Docker stats.
 
 ## Further Reading
 
