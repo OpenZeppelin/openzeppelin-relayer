@@ -221,7 +221,7 @@ pub fn get_age_since_created(tx: &TransactionRepoModel) -> Result<Duration, Tran
 }
 
 /// Get age since status last changed
-/// For Sent status, uses sent_at. Otherwise falls back to created_at
+/// Uses sent_at, otherwise falls back to created_at
 pub fn get_age_since_status_change(
     tx: &TransactionRepoModel,
 ) -> Result<Duration, TransactionError> {
@@ -253,6 +253,7 @@ mod tests {
     use crate::domain::transaction::evm::test_helpers::test_utils::make_test_transaction;
     use crate::models::{evm::Speed, EvmTransactionData, NetworkTransactionData, U256};
     use crate::services::{MockEvmProviderTrait, ProviderError};
+    use crate::utils::mocks::mockutils::create_mock_transaction;
 
     fn create_standard_network() -> EvmNetwork {
         EvmNetwork {
@@ -1118,6 +1119,186 @@ mod tests {
         match result.unwrap_err() {
             TransactionError::UnexpectedError(msg) => {
                 assert!(msg.contains("Error parsing sent_at time"));
+            }
+            _ => panic!("Expected UnexpectedError for invalid timestamp"),
+        }
+    }
+
+    #[test]
+    fn test_get_age_since_created() {
+        let now = Utc::now();
+
+        // Test with transaction created 2 hours ago
+        let created_time = now - Duration::hours(2);
+        let tx = TransactionRepoModel {
+            created_at: created_time.to_rfc3339(),
+            ..create_mock_transaction()
+        };
+
+        let age_result = get_age_since_created(&tx);
+        assert!(age_result.is_ok());
+        let age = age_result.unwrap();
+        // Age should be approximately 2 hours (with some tolerance)
+        assert!(age.num_minutes() >= 119 && age.num_minutes() <= 121);
+    }
+
+    #[test]
+    fn test_get_age_since_created_invalid_timestamp() {
+        let tx = TransactionRepoModel {
+            created_at: "invalid-timestamp".to_string(),
+            ..create_mock_transaction()
+        };
+
+        let result = get_age_since_created(&tx);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::UnexpectedError(msg) => {
+                assert!(msg.contains("Error parsing created_at time"));
+            }
+            _ => panic!("Expected UnexpectedError for invalid timestamp"),
+        }
+    }
+
+    #[test]
+    fn test_get_age_since_created_recent_transaction() {
+        let now = Utc::now();
+
+        // Test with transaction created just 1 minute ago
+        let created_time = now - Duration::minutes(1);
+        let tx = TransactionRepoModel {
+            created_at: created_time.to_rfc3339(),
+            ..create_mock_transaction()
+        };
+
+        let age_result = get_age_since_created(&tx);
+        assert!(age_result.is_ok());
+        let age = age_result.unwrap();
+        // Age should be approximately 1 minute
+        assert!(age.num_seconds() >= 59 && age.num_seconds() <= 61);
+    }
+
+    #[test]
+    fn test_get_age_since_status_change_with_sent_at() {
+        let now = Utc::now();
+
+        // Test with transaction that has sent_at (1 hour ago)
+        let sent_time = now - Duration::hours(1);
+        let created_time = now - Duration::hours(3); // Created 3 hours ago
+        let tx = TransactionRepoModel {
+            status: TransactionStatus::Sent,
+            created_at: created_time.to_rfc3339(),
+            sent_at: Some(sent_time.to_rfc3339()),
+            ..create_mock_transaction()
+        };
+
+        let age_result = get_age_since_status_change(&tx);
+        assert!(age_result.is_ok());
+        let age = age_result.unwrap();
+        // Should use sent_at (1 hour), not created_at (3 hours)
+        assert!(age.num_minutes() >= 59 && age.num_minutes() <= 61);
+    }
+
+    #[test]
+    fn test_get_age_since_status_change_without_sent_at() {
+        let now = Utc::now();
+
+        // Test with transaction that doesn't have sent_at
+        let created_time = now - Duration::hours(2);
+        let tx = TransactionRepoModel {
+            created_at: created_time.to_rfc3339(),
+            ..create_mock_transaction()
+        };
+
+        let age_result = get_age_since_status_change(&tx);
+        assert!(age_result.is_ok());
+        let age = age_result.unwrap();
+        // Should fall back to created_at (2 hours)
+        assert!(age.num_minutes() >= 119 && age.num_minutes() <= 121);
+    }
+
+    #[test]
+    fn test_get_age_since_status_change_invalid_sent_at() {
+        let now = Utc::now();
+        let created_time = now - Duration::hours(2);
+
+        let tx = TransactionRepoModel {
+            status: TransactionStatus::Sent,
+            created_at: created_time.to_rfc3339(),
+            sent_at: Some("invalid-timestamp".to_string()),
+            ..create_mock_transaction()
+        };
+
+        let result = get_age_since_status_change(&tx);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::UnexpectedError(msg) => {
+                assert!(msg.contains("Error parsing sent_at time"));
+            }
+            _ => panic!("Expected UnexpectedError for invalid sent_at timestamp"),
+        }
+    }
+
+    #[test]
+    fn test_is_too_early_to_check_recent_transaction() {
+        let now = Utc::now();
+
+        // Test with transaction created just 1 second ago (too early)
+        let created_time = now - Duration::seconds(1);
+        let tx = TransactionRepoModel {
+            created_at: created_time.to_rfc3339(),
+            ..create_mock_transaction()
+        };
+
+        let result = is_too_early_to_check(&tx);
+        assert!(result.is_ok());
+        assert!(result.unwrap()); // Should be true (too early)
+    }
+
+    #[test]
+    fn test_is_too_early_to_check_old_transaction() {
+        let now = Utc::now();
+
+        // Test with transaction created well past the minimum age
+        let created_time = now - Duration::seconds(STATUS_CHECK_MIN_AGE_SECONDS + 10);
+        let tx = TransactionRepoModel {
+            created_at: created_time.to_rfc3339(),
+            ..create_mock_transaction()
+        };
+
+        let result = is_too_early_to_check(&tx);
+        assert!(result.is_ok());
+        assert!(!result.unwrap()); // Should be false (old enough to check)
+    }
+
+    #[test]
+    fn test_is_too_early_to_check_boundary() {
+        let now = Utc::now();
+
+        // Test with transaction created exactly at the boundary
+        let created_time = now - Duration::seconds(STATUS_CHECK_MIN_AGE_SECONDS);
+        let tx = TransactionRepoModel {
+            created_at: created_time.to_rfc3339(),
+            ..create_mock_transaction()
+        };
+
+        let result = is_too_early_to_check(&tx);
+        assert!(result.is_ok());
+        // At the exact boundary, should be false (not too early)
+        assert!(!result.unwrap());
+    }
+
+    #[test]
+    fn test_is_too_early_to_check_invalid_timestamp() {
+        let tx = TransactionRepoModel {
+            created_at: "invalid-timestamp".to_string(),
+            ..create_mock_transaction()
+        };
+
+        let result = is_too_early_to_check(&tx);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::UnexpectedError(msg) => {
+                assert!(msg.contains("Error parsing created_at time"));
             }
             _ => panic!("Expected UnexpectedError for invalid timestamp"),
         }

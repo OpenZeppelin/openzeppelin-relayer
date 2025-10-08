@@ -1,5 +1,4 @@
 ---
-version: '3.9'
 services:
   # Load Balancer - distributes traffic across relayer instances
   nginx:
@@ -47,7 +46,7 @@ services:
       # Don't reset storage on each instance start
       RESET_STORAGE_ON_START: false
       # Worker configuration for high concurrency
-      RUST_LOG: debug
+      RUST_LOG: info
       # RPC configuration
       RPC_TIMEOUT_MS: 10000
       PROVIDER_MAX_RETRIES: 5
@@ -218,7 +217,6 @@ services:
       - '300'
     networks:
       - relayer-network
-      - metrics-network
     restart: on-failure:5
     deploy:
       resources:
@@ -234,71 +232,12 @@ services:
       timeout: 5s
       retries: 3
 
-  # Redis monitoring exporter (optional)
-  redis-exporter:
-    image: oliver006/redis_exporter:v1.67.0
-    environment:
-      - REDIS_ADDR=redis://redis:6379
-    security_opt:
-      - no-new-privileges
-    profiles:
-      - metrics
-    depends_on:
-      - redis
-    networks:
-      - metrics-network
-    restart: on-failure:5
-
-  # Prometheus for metrics collection (optional)
-  prometheus:
-    image: prom/prometheus:v3.1.0
-    security_opt:
-      - no-new-privileges
-    command: --log.level=warn --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus --storage.tsdb.retention.time=30d
-    ports:
-      - 9090:9090/tcp
-    networks:
-      - metrics-network
-      - relayer-network
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus_data:/prometheus
-    restart: on-failure:5
-    profiles:
-      - metrics
-
-  # Grafana for metrics visualization (optional)
-  grafana:
-    image: grafana/grafana:11.5.1
-    security_opt:
-      - no-new-privileges
-    ports:
-      - 3000:3000/tcp
-    networks:
-      - metrics-network
-      - relayer-network
-    volumes:
-      - grafana_data:/var/lib/grafana
-    environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_USERS_ALLOW_SIGN_UP=false
-    restart: on-failure:5
-    profiles:
-      - metrics
-
 networks:
-  metrics-network:
-    internal: true
   relayer-network:
     driver: bridge
 
 volumes:
   redis_data:
-    driver: local
-  prometheus_data:
-    driver: local
-  grafana_data:
     driver: local
 
 secrets:

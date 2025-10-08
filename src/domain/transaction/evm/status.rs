@@ -5,7 +5,7 @@
 use alloy::network::ReceiptResponse;
 use chrono::{DateTime, Duration, Utc};
 use eyre::Result;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::EvmRelayerTransaction;
 use super::{
@@ -15,7 +15,7 @@ use super::{
 };
 use crate::constants::{
     get_pending_recovery_trigger_timeout, get_prepare_timeout, get_resend_timeout,
-    ARBITRUM_TIME_TO_RESUBMIT,
+    get_submit_timeout, ARBITRUM_TIME_TO_RESUBMIT, PREPARE_TIMEOUT_MINUTES, SUBMIT_TIMEOUT_MINUTES,
 };
 use crate::models::{EvmNetwork, NetworkRepoModel, NetworkType};
 use crate::repositories::{NetworkRepository, RelayerRepository};
@@ -49,6 +49,15 @@ where
         // Early return if transaction is already in a final state
         if is_final_state(&tx.status) {
             return Ok(tx.status.clone());
+        }
+
+        // Early return for Pending/Sent states - these are DB-only states
+        // that don't require on-chain queries and may not have a hash yet
+        match tx.status {
+            TransactionStatus::Pending | TransactionStatus::Sent => {
+                return Ok(tx.status.clone());
+            }
+            _ => {}
         }
 
         let evm_data = tx.network_data.get_evm_transaction_data()?;
@@ -299,7 +308,15 @@ where
             .partial_update(tx.id.clone(), update)
             .await?;
 
-        self.send_transaction_update_notification(&updated_tx).await;
+        let res = self.send_transaction_update_notification(&updated_tx).await;
+        if let Err(e) = res {
+            error!(
+                tx_id = %updated_tx.id,
+                status = ?updated_tx.status,
+                "sending transaction update notification failed for NOOP transaction: {:?}",
+                e
+            );
+        }
         Ok(updated_tx)
     }
 
@@ -317,7 +334,15 @@ where
                 .await?;
 
             self.send_transaction_submit_job(&updated_tx).await?;
-            self.send_transaction_update_notification(&updated_tx).await;
+            let res = self.send_transaction_update_notification(&updated_tx).await;
+            if let Err(e) = res {
+                error!(
+                    tx_id = %updated_tx.id,
+                    status = ?updated_tx.status,
+                    "sending transaction update notification failed for Pending state NOOP: {:?}",
+                    e
+                );
+            }
             return Ok(updated_tx);
         }
 
@@ -387,7 +412,7 @@ where
             return Ok(tx);
         }
 
-        // 4. Check transaction status on-chain
+        // 4. Check transaction status
         let status = self.check_transaction_status(&tx).await?;
 
         debug!(status = ?status, "transaction status {}", tx.id);
@@ -410,11 +435,6 @@ where
         &self,
         tx: &TransactionRepoModel,
     ) -> Result<Option<TransactionRepoModel>, TransactionError> {
-        use crate::constants::{
-            get_prepare_timeout, get_submit_timeout, PREPARE_TIMEOUT_MINUTES,
-            SUBMIT_TIMEOUT_MINUTES,
-        };
-
         let age = get_age_since_created(tx)?;
 
         match tx.status {
@@ -485,7 +505,15 @@ where
             .partial_update(tx.id.clone(), update)
             .await?;
 
-        self.send_transaction_update_notification(&updated_tx).await;
+        let res = self.send_transaction_update_notification(&updated_tx).await;
+        if let Err(e) = res {
+            error!(
+                tx_id = %updated_tx.id,
+                status = ?updated_tx.status,
+                "sending transaction update notification failed for Failed state: {:?}",
+                e
+            );
+        }
 
         Ok(updated_tx)
     }

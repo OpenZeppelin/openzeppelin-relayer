@@ -41,12 +41,13 @@ const MAX_CONCURRENT_TRANSACTIONS_PER_RELAYER: usize = 50;
 /// # Returns
 /// * `Result<(), Error>` - Success or failure of cleanup processing
 #[instrument(
-    level = "info",
+    level = "debug",
     skip(job, data),
     fields(
         job_type = "transaction_cleanup",
         attempt = %attempt.current(),
-    )
+    ),
+    err
 )]
 pub async fn transaction_cleanup_handler(
     job: TransactionCleanupCronReminder,

@@ -59,12 +59,12 @@ pub fn handle_result(
             max_attempts = %max_attempts,
             "max attempts reached, failing job"
         );
-        Err(Error::Abort(Arc::new("Failed to handle request".into())))?
+        return Err(Error::Abort(Arc::new("Failed to handle request".into())));
     }
 
     Err(Error::Failed(Arc::new(
         "Failed to handle request. Retrying".into(),
-    )))?
+    )))
 }
 
 #[cfg(test)]

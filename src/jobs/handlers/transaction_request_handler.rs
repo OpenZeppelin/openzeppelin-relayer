@@ -6,7 +6,7 @@ use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Context, Data, TaskId, Worker, *};
 use apalis_redis::RedisContext;
 use eyre::Result;
-use tracing::{debug, instrument};
+use tracing::instrument;
 
 use crate::{
     constants::WORKER_TRANSACTION_REQUEST_RETRIES,
@@ -17,7 +17,7 @@ use crate::{
 };
 
 #[instrument(
-    level = "info",
+    level = "debug",
     skip(job, state, _worker, _ctx),
     fields(
         request_id = ?job.request_id,
@@ -41,8 +41,6 @@ pub async fn transaction_request_handler(
         set_request_id(request_id);
     }
 
-    debug!("handling transaction request {}", job.data.transaction_id);
-
     let result = handle_request(job.data, state.clone()).await;
 
     handle_result(
@@ -62,11 +60,6 @@ async fn handle_request(
     let transaction = get_transaction_by_id(request.transaction_id.clone(), &state).await?;
 
     relayer_transaction.prepare_transaction(transaction).await?;
-
-    debug!(
-        "transaction request handled successfully {}",
-        request.transaction_id.clone()
-    );
 
     Ok(())
 }

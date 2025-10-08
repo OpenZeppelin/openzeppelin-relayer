@@ -8,8 +8,7 @@
       "signer_id": "local-signer",
       "network_type": "evm",
       "policies": {
-        "min_balance": 0,
-        "gas_price_cap": 1000000000000000000
+        "min_balance": 0
       }
     }
   ],
@@ -22,8 +21,8 @@
       "config": {
         "path": "config/keys/local-signer.json",
         "passphrase": {
-          "type": "plain",
-          "value": "test"
+          "type": "evn",
+          "value": "KEYSTORE_PASSPHRASE"
         }
       }
     }

@@ -26,7 +26,7 @@ use crate::{
 /// # Returns
 /// * `Result<(), Error>` - Success or failure of notification processing
 #[instrument(
-    level = "info",
+    level = "debug",
     skip(job, context),
     fields(
         request_id = ?job.request_id,
@@ -45,7 +45,7 @@ pub async fn solana_token_swap_request_handler(
         set_request_id(request_id);
     }
 
-    debug!("handling solana token swap request {}", job.data.relayer_id);
+    debug!(relayer_id = %job.data.relayer_id, "handling solana token swap request");
 
     let result = handle_request(job.data, context).await;
 
@@ -101,7 +101,7 @@ async fn handle_request(
     request: SolanaTokenSwapRequest,
     context: Data<ThinData<DefaultAppState>>,
 ) -> Result<()> {
-    debug!("processing solana token swap {}", request.relayer_id);
+    debug!(relayer_id = %request.relayer_id, "processing solana token swap");
 
     let relayer_model = get_relayer_by_id(request.relayer_id.clone(), &context).await?;
     let signer_model = context

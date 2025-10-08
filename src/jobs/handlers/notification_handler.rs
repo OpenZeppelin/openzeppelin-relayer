@@ -26,7 +26,7 @@ use crate::{
 /// # Returns
 /// * `Result<(), Error>` - Success or failure of notification processing
 #[instrument(
-    level = "info",
+    level = "debug",
     skip(job, context),
     fields(
         request_id = ?job.request_id,

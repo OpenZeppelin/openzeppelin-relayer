@@ -241,7 +241,14 @@ where
             .partial_update(tx.id.clone(), update_request)
             .await?;
 
-        self.send_transaction_update_notification(&updated_tx).await;
+        if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
+            error!(
+                tx_id = %updated_tx.id,
+                status = ?updated_tx.status,
+                "sending transaction update notification failed: {:?}",
+                e
+            );
+        }
         Ok(updated_tx)
     }
 
@@ -249,19 +256,19 @@ where
     ///
     /// This is a best-effort operation that logs errors but does not propagate them,
     /// as notification failures should not affect the transaction lifecycle.
-    pub(super) async fn send_transaction_update_notification(&self, tx: &TransactionRepoModel) {
+    pub(super) async fn send_transaction_update_notification(
+        &self,
+        tx: &TransactionRepoModel,
+    ) -> Result<(), eyre::Report> {
         if let Some(notification_id) = &self.relayer().notification_id {
-            if let Err(e) = self
-                .job_producer()
+            self.job_producer()
                 .produce_send_notification_job(
                     produce_transaction_update_notification_payload(notification_id, tx),
                     None,
                 )
-                .await
-            {
-                error!(error = %e, "failed to produce notification job");
-            }
+                .await?;
         }
+        Ok(())
     }
 
     /// Validates that the relayer has sufficient balance for the transaction.
@@ -424,7 +431,14 @@ where
                         .partial_update(tx.id.clone(), update)
                         .await?;
 
-                    self.send_transaction_update_notification(&updated_tx).await;
+                    if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
+                        error!(
+                            tx_id = %updated_tx.id,
+                            status = ?TransactionStatus::Failed,
+                            "sending transaction update notification failed for insufficient balance: {:?}",
+                            e
+                        );
+                    }
 
                     // Return Ok since transaction is in final Failed state - no retry needed
                     return Ok(updated_tx);
@@ -444,7 +458,11 @@ where
                 nonce = existing_nonce,
                 "transaction already has nonce assigned, reusing for retry"
             );
-            // No need to update DB - nonce already saved from previous attempt
+            // Retry flow: When reusing an existing nonce from a failed attempt, we intentionally
+            // do NOT persist the fresh price_params (computed earlier) to the DB here. The DB may
+            // temporarily hold stale price_params from the failed attempt. However, fresh price_params
+            // are applied just before signing (see lines 476-480), ensuring the transaction uses
+            // current gas prices.
             tx
         } else {
             // Balance validation passed, proceed to increment nonce
@@ -515,7 +533,14 @@ where
             )
             .await?;
 
-        self.send_transaction_update_notification(&updated_tx).await;
+        if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
+            error!(
+                tx_id = %updated_tx.id,
+                status = ?TransactionStatus::Sent,
+                "sending transaction update notification failed after prepare: {:?}",
+                e
+            );
+        }
 
         Ok(updated_tx)
     }
@@ -539,11 +564,7 @@ where
         // (e.g., if it's already in a final state like Failed, Confirmed, etc.)
         if let Err(e) = ensure_status_one_of(
             &tx,
-            &[
-                TransactionStatus::Pending,
-                TransactionStatus::Sent,
-                TransactionStatus::Submitted,
-            ],
+            &[TransactionStatus::Sent, TransactionStatus::Submitted],
             Some("submit_transaction"),
         ) {
             warn!(
@@ -590,7 +611,14 @@ where
             }
         };
 
-        self.send_transaction_update_notification(&updated_tx).await;
+        if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
+            error!(
+                tx_id = %updated_tx.id,
+                status = ?TransactionStatus::Submitted,
+                "sending transaction update notification failed after submit: {:?}",
+                e
+            );
+        }
 
         Ok(updated_tx)
     }
@@ -761,7 +789,14 @@ where
         self.send_transaction_resubmit_job(&updated_tx).await?;
 
         // Send notification for the updated transaction
-        self.send_transaction_update_notification(&updated_tx).await;
+        if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
+            error!(
+                tx_id = %updated_tx.id,
+                status = ?updated_tx.status,
+                "sending transaction update notification failed after cancel: {:?}",
+                e
+            );
+        }
 
         debug!("original transaction updated with cancellation data");
         Ok(updated_tx)
@@ -874,7 +909,14 @@ where
         self.send_transaction_resubmit_job(&updated_tx).await?;
 
         // Send notification
-        self.send_transaction_update_notification(&updated_tx).await;
+        if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
+            error!(
+                tx_id = %updated_tx.id,
+                status = ?updated_tx.status,
+                "sending transaction update notification failed after replace: {:?}",
+                e
+            );
+        }
 
         Ok(updated_tx)
     }
@@ -1193,6 +1235,7 @@ mod tests {
             .returning(move |_, update| {
                 let mut updated_tx = test_tx_clone.clone();
                 updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                updated_tx.status_reason = update.status_reason.clone();
                 Ok(updated_tx)
             });
 
@@ -1215,10 +1258,31 @@ mod tests {
         };
 
         let result = evm_transaction.prepare_transaction(test_tx.clone()).await;
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+
+        let updated_tx = result.unwrap();
+        assert_eq!(
+            updated_tx.status,
+            TransactionStatus::Failed,
+            "Transaction should be marked as Failed"
+        );
         assert!(
-            matches!(result, Err(TransactionError::InsufficientBalance(_))),
-            "Expected InsufficientBalance error, got: {:?}",
-            result
+            updated_tx.status_reason.is_some(),
+            "Status reason should be set"
+        );
+        assert!(
+            updated_tx
+                .status_reason
+                .as_ref()
+                .unwrap()
+                .contains("InsufficientBalance")
+                || updated_tx
+                    .status_reason
+                    .as_ref()
+                    .unwrap()
+                    .contains("insufficient balance"),
+            "Status reason should contain InsufficientBalance error, got: {:?}",
+            updated_tx.status_reason
         );
     }
 

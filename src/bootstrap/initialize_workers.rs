@@ -24,7 +24,6 @@ use apalis::layers::retry::backoff::MakeBackoff;
 use apalis::layers::retry::{backoff::ExponentialBackoffMaker, RetryPolicy};
 use apalis::layers::ErrorHandlingLayer;
 
-pub use tower::retry::*;
 /// Re-exports from [`tower::util`]
 pub use tower::util::rng::HasherRng;
 
@@ -69,7 +68,7 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
         .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
         .retry(
             RetryPolicy::retries(WORKER_TRANSACTION_REQUEST_RETRIES)
-                .with_backoff(create_backoff(500, 5000, 0.99).unwrap().make_backoff()),
+                .with_backoff(create_backoff(500, 5000, 0.99)?.make_backoff()),
         )
         .enable_tracing()
         .catch_panic()
@@ -99,9 +98,7 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
         .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
         .retry(
             RetryPolicy::retries(WORKER_TRANSACTION_STATUS_CHECKER_RETRIES)
-                // Reduced from 5s-30s to 3s-15s to enable more frequent checks
-                // This prevents race conditions where transactions timeout before recovery
-                .with_backoff(create_backoff(5000, 20000, 0.99).unwrap().make_backoff()),
+                .with_backoff(create_backoff(5000, 20000, 0.99)?.make_backoff()),
         )
         .concurrency(DEFAULT_CONCURRENCY)
         .data(app_state.clone())
@@ -115,7 +112,7 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
         .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
         .retry(
             RetryPolicy::retries(WORKER_NOTIFICATION_SENDER_RETRIES)
-                .with_backoff(create_backoff(2000, 10000, 0.99).unwrap().make_backoff()),
+                .with_backoff(create_backoff(2000, 10000, 0.99)?.make_backoff()),
         )
         .concurrency(DEFAULT_CONCURRENCY)
         .data(app_state.clone())
@@ -129,7 +126,7 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
         .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
         .retry(
             RetryPolicy::retries(WORKER_SOLANA_TOKEN_SWAP_REQUEST_RETRIES)
-                .with_backoff(create_backoff(5000, 20000, 0.99).unwrap().make_backoff()),
+                .with_backoff(create_backoff(5000, 20000, 0.99)?.make_backoff()),
         )
         .concurrency(10)
         .data(app_state.clone())
@@ -143,13 +140,13 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
         .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
         .retry(
             RetryPolicy::retries(WORKER_TRANSACTION_CLEANUP_RETRIES)
-                .with_backoff(create_backoff(5000, 20000, 0.99).unwrap().make_backoff()),
+                .with_backoff(create_backoff(5000, 20000, 0.99)?.make_backoff()),
         )
         .concurrency(1)
         .data(app_state.clone())
         .backend(CronStream::new(
             // every 30 minutes
-            apalis_cron::Schedule::from_str("0 */30 * * * *").unwrap(),
+            apalis_cron::Schedule::from_str("0 */30 * * * *")?,
         ))
         .build_fn(transaction_cleanup_handler);
 
@@ -223,7 +220,7 @@ pub async fn initialize_solana_swap_workers(app_state: ThinData<DefaultAppState>
         solena_relayers_with_swap_enabled.len()
     );
 
-    let swap_backoff = create_backoff(2000, 5000, 0.99).unwrap().make_backoff();
+    let swap_backoff = create_backoff(2000, 5000, 0.99)?.make_backoff();
 
     let mut workers = Vec::new();
 

@@ -19,7 +19,7 @@ use crate::{
 };
 
 #[instrument(
-    level = "info",
+    level = "debug",
     skip(job, state),
     fields(
         request_id = ?job.request_id,
@@ -75,7 +75,11 @@ fn handle_status_check_result(result: Result<TransactionRepoModel>) -> Result<()
                     updated_tx.status
                 );
                 Err(Error::Failed(Arc::new(
-                    "transaction status: {:?} - not in final state, retrying status check".into(),
+                    format!(
+                        "transaction status: {:?} - not in final state, retrying status check",
+                        updated_tx.status
+                    )
+                    .into(),
                 )))?
             }
         }
