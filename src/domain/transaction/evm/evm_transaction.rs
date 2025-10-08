@@ -14,10 +14,10 @@ use crate::{
     constants::{DEFAULT_EVM_GAS_LIMIT_ESTIMATION, GAS_LIMIT_BUFFER_MULTIPLIER},
     domain::{
         transaction::{
-            evm::{is_pending_transaction, PriceCalculator, PriceCalculatorTrait},
+            evm::{ensure_status, ensure_status_one_of, PriceCalculator, PriceCalculatorTrait},
             Transaction,
         },
-        EvmTransactionValidator,
+        EvmTransactionValidationError, EvmTransactionValidator,
     },
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
@@ -209,28 +209,27 @@ where
             .partial_update(tx.id.clone(), update_request)
             .await?;
 
-        self.send_transaction_update_notification(&updated_tx)
-            .await?;
+        self.send_transaction_update_notification(&updated_tx).await;
         Ok(updated_tx)
     }
 
     /// Sends a transaction update notification if a notification ID is configured.
-    pub(super) async fn send_transaction_update_notification(
-        &self,
-        tx: &TransactionRepoModel,
-    ) -> Result<(), TransactionError> {
+    ///
+    /// This is a best-effort operation that logs errors but does not propagate them,
+    /// as notification failures should not affect the transaction lifecycle.
+    pub(super) async fn send_transaction_update_notification(&self, tx: &TransactionRepoModel) {
         if let Some(notification_id) = &self.relayer().notification_id {
-            self.job_producer()
+            if let Err(e) = self
+                .job_producer()
                 .produce_send_notification_job(
                     produce_transaction_update_notification_payload(notification_id, tx),
                     None,
                 )
                 .await
-                .map_err(|e| {
-                    TransactionError::UnexpectedError(format!("Failed to send notification: {}", e))
-                })?;
+            {
+                error!(error = %e, "failed to produce notification job");
+            }
         }
-        Ok(())
     }
 
     /// Validates that the relayer has sufficient balance for the transaction.
@@ -241,7 +240,9 @@ where
     ///
     /// # Returns
     ///
-    /// A `Result` indicating success or a `TransactionError` if insufficient balance.
+    /// A `Result` indicating success or a `TransactionError`.
+    /// - Returns `InsufficientBalance` only when balance is truly insufficient (permanent failure)
+    /// - Returns `UnexpectedError` for RPC/network issues (retryable)
     async fn ensure_sufficient_balance(
         &self,
         total_cost: crate::models::U256,
@@ -253,8 +254,19 @@ where
             &self.provider,
         )
         .await
-        .map_err(|validation_error| {
-            TransactionError::InsufficientBalance(validation_error.to_string())
+        .map_err(|validation_error| match validation_error {
+            // Only convert actual insufficient balance to permanent failure
+            EvmTransactionValidationError::InsufficientBalance(msg) => {
+                TransactionError::InsufficientBalance(msg)
+            }
+            // Provider errors are retryable (RPC down, timeout, etc.)
+            EvmTransactionValidationError::ProviderError(msg) => {
+                TransactionError::UnexpectedError(format!("Failed to check balance: {}", msg))
+            }
+            // Validation errors are also retryable
+            EvmTransactionValidationError::ValidationError(msg) => {
+                TransactionError::UnexpectedError(format!("Balance validation error: {}", msg))
+            }
         })
     }
 
@@ -315,7 +327,20 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!("preparing transaction");
+        debug!("preparing transaction {}", tx.id);
+
+        // If transaction is not in Pending status, return Ok to avoid wasteful retries
+        // (e.g., if it's already Sent, Failed, or in another state)
+        if let Err(e) = ensure_status(&tx, TransactionStatus::Pending, Some("prepare_transaction"))
+        {
+            warn!(
+                tx_id = %tx.id,
+                status = ?tx.status,
+                error = %e,
+                "transaction not in Pending status, skipping preparation"
+            );
+            return Ok(tx);
+        }
 
         let mut evm_data = tx.network_data.get_evm_transaction_data()?;
         let relayer = self.relayer();
@@ -345,18 +370,87 @@ where
             .await?;
 
         debug!(gas_price = ?price_params.gas_price, "gas price");
-        // increment the nonce
-        let nonce = self
-            .transaction_counter_service
-            .get_and_increment(&self.relayer.id, &self.relayer.address)
+
+        // Validate the relayer has sufficient balance before consuming nonce and signing
+        if let Err(balance_error) = self
+            .ensure_sufficient_balance(price_params.total_cost)
             .await
-            .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
+        {
+            // Only mark as Failed for actual insufficient balance, not RPC errors
+            match &balance_error {
+                TransactionError::InsufficientBalance(_) => {
+                    warn!(error = %balance_error, "insufficient balance for transaction");
 
-        let updated_evm_data = evm_data
-            .with_price_params(price_params.clone())
-            .with_nonce(nonce);
+                    let update = TransactionUpdateRequest {
+                        status: Some(TransactionStatus::Failed),
+                        status_reason: Some(balance_error.to_string()),
+                        ..Default::default()
+                    };
 
-        // sign the transaction
+                    let updated_tx = self
+                        .transaction_repository
+                        .partial_update(tx.id.clone(), update)
+                        .await?;
+
+                    self.send_transaction_update_notification(&updated_tx).await;
+
+                    // Return Ok since transaction is in final Failed state - no retry needed
+                    return Ok(updated_tx);
+                }
+                // For RPC/provider errors, propagate without marking as Failed
+                // This allows the handler to retry
+                _ => {
+                    debug!(error = %balance_error, "failed to check balance, will retry");
+                    return Err(balance_error);
+                }
+            }
+        }
+
+        // Check if transaction already has a nonce (recovery from failed signing attempt)
+        let tx_with_nonce = if let Some(existing_nonce) = evm_data.nonce {
+            debug!(
+                nonce = existing_nonce,
+                "transaction already has nonce assigned, reusing for retry"
+            );
+            // No need to update DB - nonce already saved from previous attempt
+            tx
+        } else {
+            // Balance validation passed, proceed to increment nonce
+            let new_nonce = self
+                .transaction_counter_service
+                .get_and_increment(&self.relayer.id, &self.relayer.address)
+                .await
+                .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
+
+            debug!(nonce = new_nonce, "assigned new nonce to transaction");
+
+            let updated_evm_data = evm_data
+                .with_price_params(price_params.clone())
+                .with_nonce(new_nonce);
+
+            // Save transaction with nonce BEFORE signing
+            // This ensures we can recover if signing fails (timeout, KMS error, etc.)
+            let presign_update = TransactionUpdateRequest {
+                network_data: Some(NetworkTransactionData::Evm(updated_evm_data.clone())),
+                priced_at: Some(Utc::now().to_rfc3339()),
+                ..Default::default()
+            };
+
+            let saved_tx = self
+                .transaction_repository
+                .partial_update(tx.id.clone(), presign_update)
+                .await?;
+
+            saved_tx
+        };
+
+        // Apply price params for signing (recalculated on every attempt)
+        let updated_evm_data = tx_with_nonce
+            .network_data
+            .get_evm_transaction_data()?
+            .with_price_params(price_params.clone());
+
+        // Now sign the transaction - if this fails, we still have the tx with nonce saved
         let sig_result = self
             .signer
             .sign_transaction(NetworkTransactionData::Evm(updated_evm_data.clone()))
@@ -365,49 +459,23 @@ where
         let updated_evm_data =
             updated_evm_data.with_signed_transaction_data(sig_result.into_evm()?);
 
-        // Validate the relayer has sufficient balance
-        match self
-            .ensure_sufficient_balance(price_params.total_cost)
-            .await
-        {
-            Ok(()) => {}
-            Err(balance_error) => {
-                info!(error = %balance_error, "insufficient balance for transaction");
-
-                let update = TransactionUpdateRequest {
-                    status: Some(TransactionStatus::Failed),
-                    status_reason: Some(balance_error.to_string()),
-                    ..Default::default()
-                };
-
-                let updated_tx = self
-                    .transaction_repository
-                    .partial_update(tx.id.clone(), update)
-                    .await?;
-
-                let _ = self.send_transaction_update_notification(&updated_tx).await;
-                return Err(balance_error);
-            }
-        }
-
-        // Balance validation passed, continue with normal flow
         // Track the transaction hash
-        let mut hashes = tx.hashes.clone();
+        let mut hashes = tx_with_nonce.hashes.clone();
         if let Some(hash) = updated_evm_data.hash.clone() {
             hashes.push(hash);
         }
 
-        let update = TransactionUpdateRequest {
+        // Update with signed data and mark as Sent
+        let postsign_update = TransactionUpdateRequest {
             status: Some(TransactionStatus::Sent),
             network_data: Some(NetworkTransactionData::Evm(updated_evm_data)),
-            priced_at: Some(Utc::now().to_rfc3339()),
             hashes: Some(hashes),
             ..Default::default()
         };
 
         let updated_tx = self
             .transaction_repository
-            .partial_update(tx.id.clone(), update)
+            .partial_update(tx_with_nonce.id.clone(), postsign_update)
             .await?;
 
         // after preparing the transaction, we need to submit it to the job queue
@@ -418,8 +486,7 @@ where
             )
             .await?;
 
-        self.send_transaction_update_notification(&updated_tx)
-            .await?;
+        self.send_transaction_update_notification(&updated_tx).await;
 
         Ok(updated_tx)
     }
@@ -437,36 +504,79 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!("submitting transaction");
+        debug!("submitting transaction {}", tx.id);
+
+        // If transaction is not in correct status, return Ok to avoid wasteful retries
+        // (e.g., if it's already in a final state like Failed, Confirmed, etc.)
+        if let Err(e) = ensure_status_one_of(
+            &tx,
+            &[TransactionStatus::Pending, TransactionStatus::Sent, TransactionStatus::Submitted],
+            Some("submit_transaction"),
+        ) {
+            warn!(
+                tx_id = %tx.id,
+                status = ?tx.status,
+                error = %e,
+                "transaction not in expected status for submission, skipping"
+            );
+            return Ok(tx);
+        }
 
         let evm_tx_data = tx.network_data.get_evm_transaction_data()?;
         let raw_tx = evm_tx_data.raw.as_ref().ok_or_else(|| {
             TransactionError::InvalidType("Raw transaction data is missing".to_string())
         })?;
 
+        // Send transaction to blockchain - this is the critical operation
+        // If this fails, retry is safe due to nonce idempotency
         self.provider.send_raw_transaction(raw_tx).await?;
 
+        // Transaction is now on-chain - update database
+        // If this fails, transaction is still valid, just not tracked correctly
         let update = TransactionUpdateRequest {
             status: Some(TransactionStatus::Submitted),
             sent_at: Some(Utc::now().to_rfc3339()),
             ..Default::default()
         };
 
-        let updated_tx = self
+        let updated_tx = match self
             .transaction_repository
             .partial_update(tx.id.clone(), update)
-            .await?;
+            .await
+        {
+            Ok(tx) => tx,
+            Err(e) => {
+                error!(
+                    error = %e,
+                    tx_id = %tx.id,
+                    "CRITICAL: transaction sent to blockchain but failed to update database - transaction may not be tracked correctly"
+                );
+                // Transaction is on-chain - don't propagate error to avoid wasteful retries
+                // Return the original transaction data
+                tx
+            }
+        };
 
-        // Schedule status check
-        self.job_producer
+        // Schedule status check - don't fail if job production fails since tx is already on-chain
+        // The cleanup handler will eventually pick up transactions that weren't monitored
+        if let Err(e) = self
+            .job_producer
             .produce_check_transaction_status_job(
                 TransactionStatusCheck::new(updated_tx.id.clone(), updated_tx.relayer_id.clone()),
                 None,
             )
-            .await?;
+            .await
+        {
+            error!(
+                error = %e,
+                tx_id = %updated_tx.id,
+                "CRITICAL: failed to produce status check job for submitted transaction - transaction may not be monitored"
+            );
+            // Don't propagate error - transaction is already on-chain, which is the critical operation
+            // Rely on cleanup jobs to catch unmonitored transactions
+        }
 
-        self.send_transaction_update_notification(&updated_tx)
-            .await?;
+        self.send_transaction_update_notification(&updated_tx).await;
 
         Ok(updated_tx)
     }
@@ -499,7 +609,22 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!("resubmitting transaction");
+        debug!("resubmitting transaction {}", tx.id);
+
+        // If transaction is not in correct status, return Ok to avoid wasteful retries
+        if let Err(e) = ensure_status_one_of(
+            &tx,
+            &[TransactionStatus::Pending, TransactionStatus::Sent, TransactionStatus::Submitted],
+            Some("resubmit_transaction"),
+        ) {
+            warn!(
+                tx_id = %tx.id,
+                status = ?tx.status,
+                error = %e,
+                "transaction not in expected status for resubmission, skipping"
+            );
+            return Ok(tx);
+        }
 
         // Calculate bumped gas price
         let bumped_price_params = self
@@ -515,6 +640,10 @@ where
             return Ok(tx);
         }
 
+        // Validate the relayer has sufficient balance
+        self.ensure_sufficient_balance(bumped_price_params.total_cost)
+            .await?;
+
         // Get transaction data
         let evm_data = tx.network_data.get_evm_transaction_data()?;
 
@@ -529,23 +658,19 @@ where
 
         let final_evm_data = updated_evm_data.with_signed_transaction_data(sig_result.into_evm()?);
 
-        // Validate the relayer has sufficient balance
-        self.ensure_sufficient_balance(bumped_price_params.total_cost)
-            .await?;
-
         let raw_tx = final_evm_data.raw.as_ref().ok_or_else(|| {
             TransactionError::InvalidType("Raw transaction data is missing".to_string())
         })?;
 
+        // Send resubmitted transaction to blockchain - this is the critical operation
         self.provider.send_raw_transaction(raw_tx).await?;
 
-        // Track attempt count and hash history
+        // Transaction is now on-chain - update database with new hash and pricing
         let mut hashes = tx.hashes.clone();
         if let Some(hash) = final_evm_data.hash.clone() {
             hashes.push(hash);
         }
 
-        // Update the transaction in the repository
         let update = TransactionUpdateRequest {
             network_data: Some(NetworkTransactionData::Evm(final_evm_data)),
             hashes: Some(hashes),
@@ -553,10 +678,22 @@ where
             ..Default::default()
         };
 
-        let updated_tx = self
+        let updated_tx = match self
             .transaction_repository
             .partial_update(tx.id.clone(), update)
-            .await?;
+            .await
+        {
+            Ok(tx) => tx,
+            Err(e) => {
+                error!(
+                    error = %e,
+                    tx_id = %tx.id,
+                    "CRITICAL: resubmitted transaction sent to blockchain but failed to update database"
+                );
+                // Transaction is on-chain - return original tx data to avoid wasteful retries
+                tx
+            }
+        };
 
         Ok(updated_tx)
     }
@@ -576,13 +713,17 @@ where
     ) -> Result<TransactionRepoModel, TransactionError> {
         info!("cancelling transaction");
         debug!(status = ?tx.status, "transaction status");
-        // Check if the transaction can be cancelled
-        if !is_pending_transaction(&tx.status) {
-            return Err(TransactionError::ValidationError(format!(
-                "Cannot cancel transaction with status: {:?}",
-                tx.status
-            )));
-        }
+
+        // Validate state: can only cancel transactions that are still pending
+        ensure_status_one_of(
+            &tx,
+            &[
+                TransactionStatus::Pending,
+                TransactionStatus::Sent,
+                TransactionStatus::Submitted,
+            ],
+            Some("cancel_transaction"),
+        )?;
 
         // If the transaction is in Pending state, we can just update its status
         if tx.status == TransactionStatus::Pending {
@@ -602,8 +743,7 @@ where
         self.send_transaction_resubmit_job(&updated_tx).await?;
 
         // Send notification for the updated transaction
-        self.send_transaction_update_notification(&updated_tx)
-            .await?;
+        self.send_transaction_update_notification(&updated_tx).await;
 
         debug!("original transaction updated with cancellation data");
         Ok(updated_tx)
@@ -626,13 +766,16 @@ where
     ) -> Result<TransactionRepoModel, TransactionError> {
         debug!("replacing transaction");
 
-        // Check if the transaction can be replaced
-        if !is_pending_transaction(&old_tx.status) {
-            return Err(TransactionError::ValidationError(format!(
-                "Cannot replace transaction with status: {:?}",
-                old_tx.status
-            )));
-        }
+        // Validate state: can only replace transactions that are still pending
+        ensure_status_one_of(
+            &old_tx,
+            &[
+                TransactionStatus::Pending,
+                TransactionStatus::Sent,
+                TransactionStatus::Submitted,
+            ],
+            Some("replace_transaction"),
+        )?;
 
         // Extract EVM data from both old transaction and new request
         let old_evm_data = old_tx.network_data.get_evm_transaction_data()?;
@@ -713,8 +856,7 @@ where
         self.send_transaction_resubmit_job(&updated_tx).await?;
 
         // Send notification
-        self.send_transaction_update_notification(&updated_tx)
-            .await?;
+        self.send_transaction_update_notification(&updated_tx).await;
 
         Ok(updated_tx)
     }
@@ -1297,7 +1439,7 @@ mod tests {
             let result = evm_transaction.cancel_transaction(test_tx.clone()).await;
             assert!(result.is_err());
             if let Err(TransactionError::ValidationError(msg)) = result {
-                assert!(msg.contains("Cannot cancel transaction with status"));
+                assert!(msg.contains("Invalid transaction state for cancel_transaction"));
             } else {
                 panic!("Expected ValidationError");
             }
@@ -1515,7 +1657,7 @@ mod tests {
                 .await;
             assert!(result.is_err());
             if let Err(TransactionError::ValidationError(msg)) = result {
-                assert!(msg.contains("Cannot replace transaction with status"));
+                assert!(msg.contains("Invalid transaction state for replace_transaction"));
             } else {
                 panic!("Expected ValidationError");
             }

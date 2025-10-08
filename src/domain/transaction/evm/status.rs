@@ -9,8 +9,8 @@ use tracing::{debug, info};
 
 use super::EvmRelayerTransaction;
 use super::{
-    get_age_of_sent_at, has_enough_confirmations, is_noop, is_transaction_valid, make_noop,
-    too_many_attempts, too_many_noop_attempts,
+    ensure_status, get_age_of_sent_at, has_enough_confirmations, is_final_state, is_noop,
+    is_transaction_valid, make_noop, too_many_attempts, too_many_noop_attempts,
 };
 use crate::constants::ARBITRUM_TIME_TO_RESUBMIT;
 use crate::models::{EvmNetwork, NetworkRepoModel, NetworkType};
@@ -42,10 +42,8 @@ where
         &self,
         tx: &TransactionRepoModel,
     ) -> Result<TransactionStatus, TransactionError> {
-        if tx.status == TransactionStatus::Expired
-            || tx.status == TransactionStatus::Failed
-            || tx.status == TransactionStatus::Confirmed
-        {
+        // Early return if transaction is already in a final state
+        if is_final_state(&tx.status) {
             return Ok(tx.status.clone());
         }
 
@@ -106,12 +104,8 @@ where
         &self,
         tx: &TransactionRepoModel,
     ) -> Result<bool, TransactionError> {
-        if tx.status != TransactionStatus::Submitted {
-            return Err(TransactionError::UnexpectedError(format!(
-                "Transaction must be in Submitted status to resubmit, found: {:?}",
-                tx.status
-            )));
-        }
+        // Validate transaction is in correct state for resubmission
+        ensure_status(tx, TransactionStatus::Submitted, Some("should_resubmit"))?;
 
         let evm_data = tx.network_data.get_evm_transaction_data()?;
         let age = get_age_of_sent_at(tx)?;
@@ -265,11 +259,9 @@ where
     ) -> Result<TransactionRepoModel, TransactionError> {
         if self.should_resubmit(&tx).await? {
             let resubmitted_tx = self.handle_resubmission(tx).await?;
-            self.schedule_status_check(&resubmitted_tx, None).await?;
             return Ok(resubmitted_tx);
         }
 
-        self.schedule_status_check(&tx, Some(5)).await?;
         self.update_transaction_status_if_needed(tx, TransactionStatus::Submitted)
             .await
     }
@@ -303,8 +295,7 @@ where
             .partial_update(tx.id.clone(), update)
             .await?;
 
-        self.send_transaction_update_notification(&updated_tx)
-            .await?;
+        self.send_transaction_update_notification(&updated_tx).await;
         Ok(updated_tx)
     }
 
@@ -314,7 +305,7 @@ where
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
         if self.should_noop(&tx).await? {
-            debug!("preparing NOOP for pending transaction");
+            debug!("preparing NOOP for pending transaction {}", tx.id);
             let update = self.prepare_noop_update_request(&tx, false).await?;
             let updated_tx = self
                 .transaction_repository()
@@ -322,11 +313,8 @@ where
                 .await?;
 
             self.send_transaction_submit_job(&updated_tx).await?;
-            self.send_transaction_update_notification(&updated_tx)
-                .await?;
+            self.send_transaction_update_notification(&updated_tx).await;
             return Ok(updated_tx);
-        } else {
-            self.schedule_status_check(&tx, Some(5)).await?;
         }
         Ok(tx)
     }
@@ -336,7 +324,6 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        self.schedule_status_check(&tx, Some(5)).await?;
         self.update_transaction_status_if_needed(tx, TransactionStatus::Mined)
             .await
     }
@@ -358,10 +345,12 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!("checking transaction status");
+        debug!("checking transaction status {}", tx.id);
 
+        // Check transaction status with error handling
         let status = self.check_transaction_status(&tx).await?;
-        debug!(status = ?status, "transaction status");
+
+        debug!(status = ?status, "transaction status {}", tx.id);
 
         match status {
             TransactionStatus::Submitted => self.handle_submitted_state(tx).await,

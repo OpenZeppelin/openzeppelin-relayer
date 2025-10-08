@@ -3,26 +3,36 @@
 //! This module contains functions for initializing background workers,
 //! including job processors and other long-running tasks.
 use crate::{
+    constants::{
+        DEFAULT_CONCURRENCY, DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION,
+        WORKER_NOTIFICATION_SENDER_RETRIES, WORKER_SOLANA_TOKEN_SWAP_REQUEST_RETRIES,
+        WORKER_TRANSACTION_CLEANUP_RETRIES, WORKER_TRANSACTION_REQUEST_RETRIES,
+        WORKER_TRANSACTION_STATUS_CHECKER_RETRIES, WORKER_TRANSACTION_SUBMISSION_RETRIES,
+    },
     jobs::{
         notification_handler, solana_token_swap_cron_handler, solana_token_swap_request_handler,
         transaction_cleanup_handler, transaction_request_handler, transaction_status_handler,
-        transaction_submission_handler, BackoffRetryPolicy,
+        transaction_submission_handler,
     },
     models::DefaultAppState,
     repositories::RelayerRepository,
 };
 use actix_web::web::ThinData;
-use apalis::{layers::ErrorHandlingLayer, prelude::*};
+use apalis::prelude::*;
+
+use apalis::layers::retry::backoff::MakeBackoff;
+use apalis::layers::retry::{backoff::ExponentialBackoffMaker, RetryPolicy};
+use apalis::layers::ErrorHandlingLayer;
+
+pub use tower::retry::*;
+/// Re-exports from [`tower::util`]
+pub use tower::util::rng::HasherRng;
+
 use apalis_cron::CronStream;
 use eyre::Result;
 use std::{str::FromStr, time::Duration};
 use tokio::signal::unix::SignalKind;
 use tracing::{debug, error, info};
-
-// Review and fine tune configuration for the workers
-const DEFAULT_CONCURRENCY: usize = 2;
-const DEFAULT_RATE_LIMIT: u64 = 20;
-const DEFAULT_RATE_LIMIT_DURATION: Duration = Duration::from_secs(1);
 
 const TRANSACTION_REQUEST: &str = "transaction_request";
 const TRANSACTION_SENDER: &str = "transaction_sender";
@@ -31,15 +41,38 @@ const NOTIFICATION_SENDER: &str = "notification_sender";
 const SOLANA_TOKEN_SWAP_REQUEST: &str = "solana_token_swap_request";
 const TRANSACTION_CLEANUP: &str = "transaction_cleanup";
 
+/// Creates an exponential backoff with configurable parameters
+///
+/// # Arguments
+/// * `initial_ms` - Initial delay in milliseconds (e.g., 200)
+/// * `max_ms` - Maximum delay in milliseconds (e.g., 5000)
+/// * `jitter` - Jitter factor 0.0-1.0 (e.g., 0.99 for high jitter)
+///
+/// # Returns
+/// A configured backoff instance ready for use with RetryPolicy
+fn create_backoff(initial_ms: u64, max_ms: u64, jitter: f64) -> Result<ExponentialBackoffMaker> {
+    let maker = ExponentialBackoffMaker::new(
+        Duration::from_millis(initial_ms),
+        Duration::from_millis(max_ms),
+        jitter,
+        HasherRng::default(),
+    )?;
+
+    Ok(maker)
+}
+
 pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<()> {
     let queue = app_state.job_producer.get_queue().await?;
 
     let transaction_request_queue_worker = WorkerBuilder::new(TRANSACTION_REQUEST)
         .layer(ErrorHandlingLayer::new())
+        .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
+        .retry(
+            RetryPolicy::retries(WORKER_TRANSACTION_REQUEST_RETRIES)
+                .with_backoff(create_backoff(500, 5000, 0.99).unwrap().make_backoff()),
+        )
         .enable_tracing()
         .catch_panic()
-        .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
-        .retry(BackoffRetryPolicy::default())
         .concurrency(DEFAULT_CONCURRENCY)
         .data(app_state.clone())
         .backend(queue.transaction_request_queue.clone())
@@ -50,7 +83,10 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
         .enable_tracing()
         .catch_panic()
         .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
-        .retry(BackoffRetryPolicy::default())
+        .retry(
+            RetryPolicy::retries(WORKER_TRANSACTION_SUBMISSION_RETRIES)
+                .with_backoff(create_backoff(500, 5000, 0.99).unwrap().make_backoff()),
+        )
         .concurrency(DEFAULT_CONCURRENCY)
         .data(app_state.clone())
         .backend(queue.transaction_submission_queue.clone())
@@ -58,10 +94,13 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
 
     let transaction_status_queue_worker = WorkerBuilder::new(TRANSACTION_STATUS_CHECKER)
         .layer(ErrorHandlingLayer::new())
-        .catch_panic()
         .enable_tracing()
+        .catch_panic()
         .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
-        .retry(BackoffRetryPolicy::default())
+        .retry(
+            RetryPolicy::retries(WORKER_TRANSACTION_STATUS_CHECKER_RETRIES)
+                .with_backoff(create_backoff(5000, 30000, 0.99).unwrap().make_backoff()),
+        )
         .concurrency(DEFAULT_CONCURRENCY)
         .data(app_state.clone())
         .backend(queue.transaction_status_queue.clone())
@@ -72,7 +111,10 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
         .enable_tracing()
         .catch_panic()
         .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
-        .retry(BackoffRetryPolicy::default())
+        .retry(
+            RetryPolicy::retries(WORKER_NOTIFICATION_SENDER_RETRIES)
+                .with_backoff(create_backoff(2000, 10000, 0.99).unwrap().make_backoff()),
+        )
         .concurrency(DEFAULT_CONCURRENCY)
         .data(app_state.clone())
         .backend(queue.notification_queue.clone())
@@ -83,7 +125,10 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
         .enable_tracing()
         .catch_panic()
         .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
-        .retry(BackoffRetryPolicy::default())
+        .retry(
+            RetryPolicy::retries(WORKER_SOLANA_TOKEN_SWAP_REQUEST_RETRIES)
+                .with_backoff(create_backoff(5000, 20000, 0.99).unwrap().make_backoff()),
+        )
         .concurrency(10)
         .data(app_state.clone())
         .backend(queue.solana_token_swap_request_queue.clone())
@@ -94,7 +139,10 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
         .enable_tracing()
         .catch_panic()
         .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
-        .retry(BackoffRetryPolicy::default())
+        .retry(
+            RetryPolicy::retries(WORKER_TRANSACTION_CLEANUP_RETRIES)
+                .with_backoff(create_backoff(5000, 20000, 0.99).unwrap().make_backoff()),
+        )
         .concurrency(1)
         .data(app_state.clone())
         .backend(CronStream::new(
@@ -119,14 +167,14 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
         let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
             .expect("Failed to create SIGTERM signal");
 
-        info!("Monitor started");
+        debug!("Workers monitor started");
 
         tokio::select! {
-            _ = sigint.recv() => info!("Received SIGINT."),
-            _ = sigterm.recv() => info!("Received SIGTERM."),
+            _ = sigint.recv() => debug!("Received SIGINT."),
+            _ = sigterm.recv() => debug!("Received SIGTERM."),
         };
 
-        info!("Monitor shutting down");
+        debug!("Workers monitor shutting down");
 
         Ok(())
     });
@@ -135,7 +183,7 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
             error!(error = %e, "monitor error");
         }
     });
-    info!("Monitor shutdown complete");
+    debug!("Workers monitor shutdown complete");
     Ok(())
 }
 
@@ -165,13 +213,15 @@ pub async fn initialize_solana_swap_workers(app_state: ThinData<DefaultAppState>
         .collect::<Vec<_>>();
 
     if solena_relayers_with_swap_enabled.is_empty() {
-        info!("No solana relayers with swap enabled");
+        debug!("No solana relayers with swap enabled");
         return Ok(());
     }
-    info!(
+    debug!(
         "Found {} solana relayers with swap enabled",
         solena_relayers_with_swap_enabled.len()
     );
+
+    let swap_backoff = create_backoff(2000, 5000, 0.99).unwrap().make_backoff();
 
     let mut workers = Vec::new();
 
@@ -182,7 +232,7 @@ pub async fn initialize_solana_swap_workers(app_state: ThinData<DefaultAppState>
         let swap_config = match policy.get_swap_config() {
             Some(config) => config,
             None => {
-                info!("No swap configuration specified; skipping validation.");
+                debug!("No swap configuration specified; skipping validation.");
                 continue;
             }
         };
@@ -201,7 +251,10 @@ pub async fn initialize_solana_swap_workers(app_state: ThinData<DefaultAppState>
             .enable_tracing()
             .catch_panic()
             .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
-            .retry(BackoffRetryPolicy::default())
+            .retry(
+                RetryPolicy::retries(WORKER_SOLANA_TOKEN_SWAP_REQUEST_RETRIES)
+                    .with_backoff(swap_backoff.clone()),
+            )
             .concurrency(1)
             .data(relayer.id.clone())
             .data(app_state.clone())
@@ -209,7 +262,7 @@ pub async fn initialize_solana_swap_workers(app_state: ThinData<DefaultAppState>
             .build_fn(solana_token_swap_cron_handler);
 
         workers.push(worker);
-        info!(
+        debug!(
             "Created worker for solana relayer with swap enabled: {:?}",
             relayer
         );
@@ -230,14 +283,14 @@ pub async fn initialize_solana_swap_workers(app_state: ThinData<DefaultAppState>
         let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
             .expect("Failed to create SIGTERM signal");
 
-        info!("Solana Swap Monitor started");
+        debug!("Solana Swap Monitor started");
 
         tokio::select! {
-            _ = sigint.recv() => info!("Received SIGINT."),
-            _ = sigterm.recv() => info!("Received SIGTERM."),
+            _ = sigint.recv() => debug!("Received SIGINT."),
+            _ = sigterm.recv() => debug!("Received SIGTERM."),
         };
 
-        info!("Solana Swap Monitor shutting down");
+        debug!("Solana Swap Monitor shutting down");
 
         Ok(())
     });

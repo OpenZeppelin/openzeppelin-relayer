@@ -9,11 +9,12 @@ use apalis::prelude::{Attempt, Data, *};
 use eyre::Result;
 use tracing::{debug, instrument};
 
+use std::sync::Arc;
+
 use crate::{
-    constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
-    domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
-    jobs::{handle_result, Job, TransactionStatusCheck},
-    models::DefaultAppState,
+    domain::{get_relayer_transaction, get_transaction_by_id, is_final_state, Transaction},
+    jobs::{Job, TransactionStatusCheck},
+    models::{DefaultAppState, TransactionRepoModel},
     observability::request_id::set_request_id,
 };
 
@@ -27,8 +28,7 @@ use crate::{
         attempt = %attempt.current(),
         tx_id = %job.data.transaction_id,
         relayer_id = %job.data.relayer_id,
-    ),
-    err
+    )
 )]
 pub async fn transaction_status_handler(
     job: Job<TransactionStatusCheck>,
@@ -39,40 +39,77 @@ pub async fn transaction_status_handler(
         set_request_id(request_id);
     }
 
-    debug!("handling transaction status check");
+    debug!(
+        "handling transaction status check for tx_id {}",
+        job.data.transaction_id
+    );
 
     let result = handle_request(job.data, state).await;
 
-    handle_result(
-        result,
-        attempt,
-        "Transaction Status",
-        WORKER_DEFAULT_MAXIMUM_RETRIES,
-    )
+    handle_status_check_result(result)
+}
+
+/// Handles status check results with special retry logic.
+///
+/// # Retry Strategy
+/// - If transaction is in final state → Job completes successfully
+/// - If error occurred → Retry (let handle_result decide)
+/// - If transaction still not final → Retry to keep checking
+fn handle_status_check_result(result: Result<TransactionRepoModel>) -> Result<(), Error> {
+    match result {
+        Ok(updated_tx) => {
+            // Check if transaction reached final state
+            if is_final_state(&updated_tx.status) {
+                debug!(
+                    tx_id = %updated_tx.id,
+                    status = ?updated_tx.status,
+                    "transaction reached final state, status check complete"
+                );
+                Ok(())
+            } else {
+                // Transaction still processing, retry status check
+                debug!(
+                    tx_id = %updated_tx.id,
+                    status = ?updated_tx.status,
+                    "transaction status: {:?} - not in final state, retrying status check",
+                    updated_tx.status
+                );
+                Err(Error::Failed(Arc::new(
+                    "transaction status: {:?} - not in final state, retrying status check".into(),
+                )))?
+            }
+        }
+        Err(e) => {
+            // Error occurred, retry
+            Err(Error::Failed(Arc::new(format!("{}", e).into())))?
+        }
+    }
 }
 
 async fn handle_request(
     status_request: TransactionStatusCheck,
     state: Data<ThinData<DefaultAppState>>,
-) -> Result<()> {
+) -> Result<TransactionRepoModel> {
     let relayer_transaction =
         get_relayer_transaction(status_request.relayer_id.clone(), &state).await?;
 
-    let transaction = get_transaction_by_id(status_request.transaction_id, &state).await?;
+    let transaction = get_transaction_by_id(status_request.transaction_id.clone(), &state).await?;
 
-    relayer_transaction
+    let updated_transaction = relayer_transaction
         .handle_transaction_status(transaction)
         .await?;
 
-    debug!("status check handled successfully");
+    debug!(
+        "status check handled successfully for tx_id {}",
+        status_request.transaction_id
+    );
 
-    Ok(())
+    Ok(updated_transaction)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use apalis::prelude::Attempt;
     use std::collections::HashMap;
 
     #[tokio::test]
@@ -102,22 +139,5 @@ mod tests {
         let job_metadata = check_job.metadata.unwrap();
         assert_eq!(job_metadata.get("retry_count").unwrap(), "2");
         assert_eq!(job_metadata.get("last_status").unwrap(), "pending");
-    }
-
-    #[tokio::test]
-    async fn test_status_handler_attempt_tracking() {
-        // Create attempts with different retry counts
-        let first_attempt = Attempt::default();
-        assert_eq!(first_attempt.current(), 0);
-
-        let second_attempt = Attempt::default();
-        second_attempt.increment();
-        assert_eq!(second_attempt.current(), 1);
-
-        let final_attempt = Attempt::default();
-        for _ in 0..WORKER_DEFAULT_MAXIMUM_RETRIES {
-            final_attempt.increment();
-        }
-        assert_eq!(final_attempt.current(), WORKER_DEFAULT_MAXIMUM_RETRIES);
     }
 }

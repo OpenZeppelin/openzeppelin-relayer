@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
-    constants::{FINAL_TRANSACTION_STATUSES, WORKER_DEFAULT_MAXIMUM_RETRIES},
+    constants::{FINAL_TRANSACTION_STATUSES, WORKER_TRANSACTION_CLEANUP_RETRIES},
     jobs::handle_result,
     models::{DefaultAppState, RelayerRepoModel, TransactionRepoModel},
     repositories::{Repository, TransactionRepository},
@@ -46,8 +46,7 @@ const MAX_CONCURRENT_TRANSACTIONS_PER_RELAYER: usize = 50;
     fields(
         job_type = "transaction_cleanup",
         attempt = %attempt.current(),
-    ),
-    err
+    )
 )]
 pub async fn transaction_cleanup_handler(
     job: TransactionCleanupCronReminder,
@@ -60,7 +59,7 @@ pub async fn transaction_cleanup_handler(
         result,
         attempt,
         "TransactionCleanup",
-        WORKER_DEFAULT_MAXIMUM_RETRIES,
+        WORKER_TRANSACTION_CLEANUP_RETRIES,
     )
 }
 

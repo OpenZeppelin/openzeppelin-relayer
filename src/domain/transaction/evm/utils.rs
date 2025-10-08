@@ -77,6 +77,94 @@ pub fn is_pending_transaction(tx_status: &TransactionStatus) -> bool {
         || tx_status == &TransactionStatus::Submitted
 }
 
+/// Checks if a transaction is in a final state (cannot be modified).
+///
+/// Final states include: Confirmed, Failed, Expired, Canceled
+///
+/// # Arguments
+///
+/// * `tx_status` - The transaction status to check
+///
+/// # Returns
+///
+/// `true` if the transaction is in a final state, `false` otherwise
+pub fn is_final_state(tx_status: &TransactionStatus) -> bool {
+    use crate::constants::FINAL_TRANSACTION_STATUSES;
+    FINAL_TRANSACTION_STATUSES.contains(tx_status)
+}
+
+/// Validates that a transaction is in the expected state.
+///
+/// This enforces state machine invariants and prevents invalid state transitions.
+/// Used for domain-level validation to ensure business rules are always enforced.
+///
+/// # Arguments
+///
+/// * `tx` - The transaction to validate
+/// * `expected` - The expected status
+/// * `operation` - Optional operation name for better error messages (e.g., "prepare_transaction")
+///
+/// # Returns
+///
+/// `Ok(())` if the status matches, `Err(TransactionError)` otherwise
+pub fn ensure_status(
+    tx: &TransactionRepoModel,
+    expected: TransactionStatus,
+    operation: Option<&str>,
+) -> Result<(), TransactionError> {
+    if tx.status != expected {
+        let error_msg = if let Some(op) = operation {
+            format!(
+                "Invalid transaction state for {}. Current: {:?}, Expected: {:?}",
+                op, tx.status, expected
+            )
+        } else {
+            format!(
+                "Invalid transaction state. Current: {:?}, Expected: {:?}",
+                tx.status, expected
+            )
+        };
+        return Err(TransactionError::ValidationError(error_msg));
+    }
+    Ok(())
+}
+
+/// Validates that a transaction is in one of the expected states.
+///
+/// This enforces state machine invariants for operations that are valid
+/// in multiple states (e.g., cancel, replace).
+///
+/// # Arguments
+///
+/// * `tx` - The transaction to validate
+/// * `expected` - Slice of acceptable statuses
+/// * `operation` - Optional operation name for better error messages (e.g., "cancel_transaction")
+///
+/// # Returns
+///
+/// `Ok(())` if the status is one of the expected values, `Err(TransactionError)` otherwise
+pub fn ensure_status_one_of(
+    tx: &TransactionRepoModel,
+    expected: &[TransactionStatus],
+    operation: Option<&str>,
+) -> Result<(), TransactionError> {
+    if !expected.contains(&tx.status) {
+        let error_msg = if let Some(op) = operation {
+            format!(
+                "Invalid transaction state for {}. Current: {:?}, Expected one of: {:?}",
+                op, tx.status, expected
+            )
+        } else {
+            format!(
+                "Invalid transaction state. Current: {:?}, Expected one of: {:?}",
+                tx.status, expected
+            )
+        };
+        return Err(TransactionError::ValidationError(error_msg));
+    }
+    Ok(())
+}
+
 /// Helper function to check if a transaction has enough confirmations.
 pub fn has_enough_confirmations(
     tx_block_number: u64,
@@ -126,7 +214,8 @@ pub fn get_age_of_sent_at(tx: &TransactionRepoModel) -> Result<Duration, Transac
 mod tests {
     use super::*;
     use crate::constants::{ARBITRUM_BASED_TAG, ROLLUP_TAG};
-    use crate::models::{evm::Speed, NetworkTransactionData};
+    use crate::domain::transaction::evm::test_helpers::test_utils::make_test_transaction;
+    use crate::models::{evm::Speed, EvmTransactionData, NetworkTransactionData, U256};
     use crate::services::{MockEvmProviderTrait, ProviderError};
 
     fn create_standard_network() -> EvmNetwork {
@@ -609,6 +698,257 @@ mod tests {
         assert!(!is_pending_transaction(&TransactionStatus::Canceled));
         assert!(!is_pending_transaction(&TransactionStatus::Mined));
         assert!(!is_pending_transaction(&TransactionStatus::Expired));
+    }
+
+    #[test]
+    fn test_is_final_state() {
+        // Test final states
+        assert!(is_final_state(&TransactionStatus::Confirmed));
+        assert!(is_final_state(&TransactionStatus::Failed));
+        assert!(is_final_state(&TransactionStatus::Expired));
+        assert!(is_final_state(&TransactionStatus::Canceled));
+
+        // Test non-final states
+        assert!(!is_final_state(&TransactionStatus::Pending));
+        assert!(!is_final_state(&TransactionStatus::Sent));
+        assert!(!is_final_state(&TransactionStatus::Submitted));
+        assert!(!is_final_state(&TransactionStatus::Mined));
+    }
+
+    #[test]
+    fn test_ensure_status_success() {
+        let tx = make_test_transaction(TransactionStatus::Pending);
+
+        // Should succeed when status matches
+        let result = ensure_status(&tx, TransactionStatus::Pending, Some("test_operation"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_ensure_status_failure_with_operation() {
+        let tx = make_test_transaction(TransactionStatus::Sent);
+
+        // Should fail with operation context in error message
+        let result = ensure_status(&tx, TransactionStatus::Pending, Some("prepare_transaction"));
+        assert!(result.is_err());
+
+        if let Err(TransactionError::ValidationError(msg)) = result {
+            assert!(msg.contains("prepare_transaction"));
+            assert!(msg.contains("Sent"));
+            assert!(msg.contains("Pending"));
+        } else {
+            panic!("Expected ValidationError");
+        }
+    }
+
+    #[test]
+    fn test_ensure_status_failure_without_operation() {
+        let tx = make_test_transaction(TransactionStatus::Sent);
+
+        // Should fail without operation context
+        let result = ensure_status(&tx, TransactionStatus::Pending, None);
+        assert!(result.is_err());
+
+        if let Err(TransactionError::ValidationError(msg)) = result {
+            assert!(!msg.contains("for"));
+            assert!(msg.contains("Sent"));
+            assert!(msg.contains("Pending"));
+        } else {
+            panic!("Expected ValidationError");
+        }
+    }
+
+    #[test]
+    fn test_ensure_status_all_states() {
+        // Test that ensure_status works for all possible status values
+        let statuses = vec![
+            TransactionStatus::Pending,
+            TransactionStatus::Sent,
+            TransactionStatus::Submitted,
+            TransactionStatus::Mined,
+            TransactionStatus::Confirmed,
+            TransactionStatus::Failed,
+            TransactionStatus::Expired,
+            TransactionStatus::Canceled,
+        ];
+
+        for status in &statuses {
+            let tx = make_test_transaction(status.clone());
+
+            // Should succeed when expecting the same status
+            assert!(ensure_status(&tx, status.clone(), Some("test")).is_ok());
+
+            // Should fail when expecting a different status
+            for other_status in &statuses {
+                if other_status != status {
+                    assert!(ensure_status(&tx, other_status.clone(), Some("test")).is_err());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_ensure_status_one_of_success() {
+        let tx = make_test_transaction(TransactionStatus::Submitted);
+
+        // Should succeed when status is in the list
+        let result = ensure_status_one_of(
+            &tx,
+            &[TransactionStatus::Submitted, TransactionStatus::Mined],
+            Some("resubmit_transaction"),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_ensure_status_one_of_success_first_in_list() {
+        let tx = make_test_transaction(TransactionStatus::Pending);
+
+        // Should succeed when status is first in list
+        let result = ensure_status_one_of(
+            &tx,
+            &[
+                TransactionStatus::Pending,
+                TransactionStatus::Sent,
+                TransactionStatus::Submitted,
+            ],
+            Some("cancel_transaction"),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_ensure_status_one_of_success_last_in_list() {
+        let tx = make_test_transaction(TransactionStatus::Submitted);
+
+        // Should succeed when status is last in list
+        let result = ensure_status_one_of(
+            &tx,
+            &[
+                TransactionStatus::Pending,
+                TransactionStatus::Sent,
+                TransactionStatus::Submitted,
+            ],
+            Some("cancel_transaction"),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_ensure_status_one_of_failure_with_operation() {
+        let tx = make_test_transaction(TransactionStatus::Confirmed);
+
+        // Should fail with operation context when status not in list
+        let result = ensure_status_one_of(
+            &tx,
+            &[TransactionStatus::Pending, TransactionStatus::Sent],
+            Some("cancel_transaction"),
+        );
+        assert!(result.is_err());
+
+        if let Err(TransactionError::ValidationError(msg)) = result {
+            assert!(msg.contains("cancel_transaction"));
+            assert!(msg.contains("Confirmed"));
+            assert!(msg.contains("Pending"));
+            assert!(msg.contains("Sent"));
+        } else {
+            panic!("Expected ValidationError");
+        }
+    }
+
+    #[test]
+    fn test_ensure_status_one_of_failure_without_operation() {
+        let tx = make_test_transaction(TransactionStatus::Confirmed);
+
+        // Should fail without operation context
+        let result = ensure_status_one_of(
+            &tx,
+            &[TransactionStatus::Pending, TransactionStatus::Sent],
+            None,
+        );
+        assert!(result.is_err());
+
+        if let Err(TransactionError::ValidationError(msg)) = result {
+            assert!(!msg.contains("for"));
+            assert!(msg.contains("Confirmed"));
+        } else {
+            panic!("Expected ValidationError");
+        }
+    }
+
+    #[test]
+    fn test_ensure_status_one_of_single_status() {
+        let tx = make_test_transaction(TransactionStatus::Pending);
+
+        // Should work with a single status in the list
+        let result = ensure_status_one_of(&tx, &[TransactionStatus::Pending], Some("test"));
+        assert!(result.is_ok());
+
+        // Should fail when status doesn't match
+        let tx2 = make_test_transaction(TransactionStatus::Sent);
+        let result = ensure_status_one_of(&tx2, &[TransactionStatus::Pending], Some("test"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ensure_status_one_of_all_states() {
+        let all_statuses = vec![
+            TransactionStatus::Pending,
+            TransactionStatus::Sent,
+            TransactionStatus::Submitted,
+            TransactionStatus::Mined,
+            TransactionStatus::Confirmed,
+            TransactionStatus::Failed,
+            TransactionStatus::Expired,
+            TransactionStatus::Canceled,
+        ];
+
+        // Should succeed for each status when it's in the list
+        for status in &all_statuses {
+            let tx = make_test_transaction(status.clone());
+            let result = ensure_status_one_of(&tx, &all_statuses, Some("test"));
+            assert!(result.is_ok());
+        }
+    }
+
+    #[test]
+    fn test_ensure_status_one_of_empty_list() {
+        let tx = make_test_transaction(TransactionStatus::Pending);
+
+        // Should always fail with empty list
+        let result = ensure_status_one_of(&tx, &[], Some("test"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ensure_status_error_message_formatting() {
+        let tx = make_test_transaction(TransactionStatus::Confirmed);
+
+        // Test error message format for ensure_status
+        let result = ensure_status(&tx, TransactionStatus::Pending, Some("my_operation"));
+        if let Err(TransactionError::ValidationError(msg)) = result {
+            // Should have clear format: "Invalid transaction state for {operation}. Current: {current}, Expected: {expected}"
+            assert!(msg.starts_with("Invalid transaction state for my_operation"));
+            assert!(msg.contains("Current: Confirmed"));
+            assert!(msg.contains("Expected: Pending"));
+        } else {
+            panic!("Expected ValidationError");
+        }
+
+        // Test error message format for ensure_status_one_of
+        let result = ensure_status_one_of(
+            &tx,
+            &[TransactionStatus::Pending, TransactionStatus::Sent],
+            Some("another_operation"),
+        );
+        if let Err(TransactionError::ValidationError(msg)) = result {
+            // Should have clear format with list of expected states
+            assert!(msg.starts_with("Invalid transaction state for another_operation"));
+            assert!(msg.contains("Current: Confirmed"));
+            assert!(msg.contains("Expected one of:"));
+        } else {
+            panic!("Expected ValidationError");
+        }
     }
 
     #[test]

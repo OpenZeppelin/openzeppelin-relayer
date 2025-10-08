@@ -43,7 +43,10 @@ mod util;
 pub use util::*;
 
 // Explicit re-exports to avoid ambiguous glob re-exports
-pub use evm::{DefaultEvmTransaction, EvmRelayerTransaction};
+pub use evm::{
+    ensure_status, ensure_status_one_of, is_final_state, DefaultEvmTransaction,
+    EvmRelayerTransaction,
+};
 pub use solana::{DefaultSolanaTransaction, SolanaRelayerTransaction};
 pub use stellar::{DefaultStellarTransaction, StellarRelayerTransaction};
 

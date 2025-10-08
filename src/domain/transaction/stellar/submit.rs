@@ -91,8 +91,7 @@ where
             .await?;
 
         // Send notification
-        self.send_transaction_update_notification(&updated_tx)
-            .await?;
+        self.send_transaction_update_notification(&updated_tx).await;
 
         Ok(updated_tx)
     }

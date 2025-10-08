@@ -9,6 +9,7 @@ use std::str::FromStr;
 use tracing::{debug, error, info, warn};
 
 use super::SolanaRelayerTransaction;
+use crate::domain::transaction::evm::is_final_state;
 use crate::{
     jobs::{JobProducerTrait, TransactionStatusCheck},
     models::{
@@ -38,10 +39,8 @@ where
         info!("handling solana transaction status");
 
         // Skip if already in final state
-        if matches!(
-            tx.status,
-            TransactionStatus::Confirmed | TransactionStatus::Failed | TransactionStatus::Expired
-        ) {
+        // Early return if transaction is already in a final state
+        if is_final_state(&tx.status) {
             info!(status = ?tx.status, "transaction already in final state");
             return Ok(tx);
         }
@@ -195,10 +194,6 @@ where
             .update_transaction_status_if_needed(tx, TransactionStatus::Mined)
             .await?;
 
-        // Schedule another status check since transaction could progress to finalized
-        self.schedule_status_check(&updated_tx, Some(SOLANA_DEFAULT_STATUS_RETRY_DELAY_SECONDS))
-            .await?;
-
         Ok(updated_tx)
     }
 
@@ -242,17 +237,16 @@ where
             .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
 
         // Send webhook notification if relayer has notification configured
-        self.send_transaction_update_notification(&updated_tx)
-            .await?;
+        self.send_transaction_update_notification(&updated_tx).await;
 
         Ok(updated_tx)
     }
 
-    /// Send webhook notification for transaction updates
-    async fn send_transaction_update_notification(
-        &self,
-        tx: &TransactionRepoModel,
-    ) -> Result<(), TransactionError> {
+    /// Send webhook notification for transaction updates.
+    ///
+    /// This is a best-effort operation that logs errors but does not propagate them,
+    /// as notification failures should not affect the transaction lifecycle.
+    async fn send_transaction_update_notification(&self, tx: &TransactionRepoModel) {
         if let Some(notification_id) = &self.relayer().notification_id {
             info!("sending webhook notification for transaction");
 
@@ -267,8 +261,6 @@ where
                 error!(error = %e, "failed to produce notification job");
             }
         }
-
-        Ok(())
     }
 }
 
