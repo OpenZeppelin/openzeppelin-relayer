@@ -2,6 +2,7 @@
 pub const NO_MEMPOOL_TAG: &str = "no-mempool";
 pub const ARBITRUM_BASED_TAG: &str = "arbitrum-based";
 pub const OPTIMISM_BASED_TAG: &str = "optimism-based";
+pub const POLYGON_ZKEVM_TAG: &str = "polygon-zkevm-based";
 /// @deprecated Use OPTIMISM_BASED_TAG instead. Will be removed in a future version.
 pub const OPTIMISM_TAG: &str = "optimism";
 pub const ROLLUP_TAG: &str = "rollup";
