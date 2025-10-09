@@ -52,7 +52,7 @@ where
         }
 
         if tx.status != TransactionStatus::Pending {
-            warn!(
+            debug!(
                 tx_id = %tx.id,
                 status = ?tx.status,
                 expected_status = ?TransactionStatus::Pending,
