@@ -33,11 +33,19 @@ pub enum StringOrEnvValue {
     Env(EnvRef),
 }
 
-/// Reference to an environment variable
+/// Types of value references supported
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ValueRefType {
+    Env,
+    // Future: Vault, AwsSecret, File, etc.
+}
+
+/// Reference to an external value source
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EnvRef {
     #[serde(rename = "type")]
-    pub type_field: String,
+    pub type_field: ValueRefType,
     pub value: String,
 }
 
@@ -50,7 +58,7 @@ impl StringOrEnvValue {
     /// Creates a new environment variable reference
     pub fn env(var_name: impl Into<String>) -> Self {
         Self::Env(EnvRef {
-            type_field: "env".to_string(),
+            type_field: ValueRefType::Env,
             value: var_name.into(),
         })
     }
@@ -60,8 +68,12 @@ impl StringOrEnvValue {
         match self {
             Self::Plain(value) => Ok(value.clone()),
             Self::Env(env_ref) => {
-                std::env::var(&env_ref.value)
-                    .map_err(|_| StringOrEnvError::MissingEnvVar(env_ref.value.clone()))
+                match env_ref.type_field {
+                    ValueRefType::Env => std::env::var(&env_ref.value)
+                        .map_err(|_| StringOrEnvError::MissingEnvVar(env_ref.value.clone())), // Future: Add other types here
+                                                                                              // ValueRefType::Vault => resolve_from_vault(&env_ref.value),
+                                                                                              // ValueRefType::AwsSecret => resolve_from_aws(&env_ref.value),
+                }
             }
         }
     }
@@ -102,16 +114,7 @@ impl<'de> Deserialize<'de> for StringOrEnvValue {
         let helper = Helper::deserialize(deserializer)?;
         match helper {
             Helper::String(s) => Ok(StringOrEnvValue::Plain(s)),
-            Helper::Env(env_ref) => {
-                // Validate that type is "env"
-                if env_ref.type_field != "env" {
-                    return Err(serde::de::Error::custom(format!(
-                        "Invalid type '{}', expected 'env'",
-                        env_ref.type_field
-                    )));
-                }
-                Ok(StringOrEnvValue::Env(env_ref))
-            }
+            Helper::Env(env_ref) => Ok(StringOrEnvValue::Env(env_ref)),
         }
     }
 }
@@ -284,3 +287,4 @@ mod tests {
         assert!(config.rpc_urls[1].is_plain());
     }
 }
+
