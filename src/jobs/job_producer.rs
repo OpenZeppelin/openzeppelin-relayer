@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use serde::Serialize;
 use thiserror::Error;
 use tokio::sync::Mutex;
-use tracing::{error, info};
+use tracing::{debug, error};
 
 use super::{JobType, SolanaTokenSwapRequest};
 
@@ -120,7 +120,7 @@ impl JobProducerTrait for JobProducer {
         transaction_process_job: TransactionRequest,
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError> {
-        info!(
+        debug!(
             "Producing transaction request job: {:?}",
             transaction_process_job
         );
@@ -139,7 +139,7 @@ impl JobProducerTrait for JobProducer {
                 queue.transaction_request_queue.push(job).await?;
             }
         }
-        info!("Transaction job produced successfully");
+        debug!("Transaction job produced successfully");
 
         Ok(())
     }
@@ -161,7 +161,7 @@ impl JobProducerTrait for JobProducer {
                 queue.transaction_submission_queue.push(job).await?;
             }
         }
-        info!("Transaction Submit job produced successfully");
+        debug!("Transaction Submit job produced successfully");
 
         Ok(())
     }
@@ -185,7 +185,7 @@ impl JobProducerTrait for JobProducer {
                 queue.transaction_status_queue.push(job).await?;
             }
         }
-        info!("Transaction Status Check job produced successfully");
+        debug!("Transaction Status Check job produced successfully");
         Ok(())
     }
 
@@ -207,7 +207,7 @@ impl JobProducerTrait for JobProducer {
             }
         }
 
-        info!("Notification Send job produced successfully");
+        debug!("Notification Send job produced successfully");
         Ok(())
     }
 
@@ -232,7 +232,7 @@ impl JobProducerTrait for JobProducer {
             }
         }
 
-        info!("Solana token swap job produced successfully");
+        debug!("Solana token swap job produced successfully");
         Ok(())
     }
 }

@@ -1,0 +1,9 @@
+# Environment variables
+.env
+
+# Signer keys
+config/keys/*.json
+
+# Logs
+logs/
+*.log

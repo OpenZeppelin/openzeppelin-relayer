@@ -11,7 +11,10 @@ use eyre::Result;
 use tracing::{debug, info, instrument};
 
 use crate::{
-    constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
+    constants::{
+        WORKER_TRANSACTION_CANCEL_RETRIES, WORKER_TRANSACTION_RESEND_RETRIES,
+        WORKER_TRANSACTION_RESUBMIT_RETRIES, WORKER_TRANSACTION_SUBMIT_RETRIES,
+    },
     domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
     jobs::{handle_result, Job, TransactionCommand, TransactionSend},
     models::DefaultAppState,
@@ -29,8 +32,7 @@ use crate::{
         tx_id = %job.data.transaction_id,
         relayer_id = %job.data.relayer_id,
         command = ?job.data.command,
-    ),
-    err
+    )
 )]
 pub async fn transaction_submission_handler(
     job: Job<TransactionSend>,
@@ -41,16 +43,31 @@ pub async fn transaction_submission_handler(
         set_request_id(request_id);
     }
 
-    debug!("handling transaction submission");
+    debug!(
+        "handling transaction submission {}",
+        job.data.transaction_id
+    );
 
-    let result = handle_request(job.data, state).await;
+    let command = job.data.command.clone();
+    let result = handle_request(job.data, state.clone()).await;
 
+    // Handle result with command-specific retry logic
     handle_result(
         result,
         attempt,
-        "Transaction Sender",
-        WORKER_DEFAULT_MAXIMUM_RETRIES,
+        "Transaction Submission",
+        get_max_retries(&command),
     )
+}
+
+/// Get max retry count based on command type
+fn get_max_retries(command: &TransactionCommand) -> usize {
+    match command {
+        TransactionCommand::Submit => WORKER_TRANSACTION_SUBMIT_RETRIES,
+        TransactionCommand::Resubmit => WORKER_TRANSACTION_RESUBMIT_RETRIES,
+        TransactionCommand::Cancel { .. } => WORKER_TRANSACTION_CANCEL_RETRIES,
+        TransactionCommand::Resend => WORKER_TRANSACTION_RESEND_RETRIES,
+    }
 }
 
 async fn handle_request(
@@ -69,18 +86,21 @@ async fn handle_request(
         TransactionCommand::Cancel { reason } => {
             info!(
                 reason = %reason,
-                "cancelling transaction"
+                "cancelling transaction {}", transaction.id
             );
             relayer_transaction.submit_transaction(transaction).await?;
         }
         TransactionCommand::Resubmit => {
-            debug!("resubmitting transaction with updated parameters");
+            debug!(
+                "resubmitting transaction with updated parameters {}",
+                transaction.id
+            );
             relayer_transaction
                 .resubmit_transaction(transaction)
                 .await?;
         }
         TransactionCommand::Resend => {
-            debug!("resending transaction");
+            debug!("resending transaction {}", transaction.id);
             relayer_transaction.submit_transaction(transaction).await?;
         }
     };

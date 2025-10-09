@@ -27,13 +27,13 @@
 use std::sync::Arc;
 
 use crate::{
-    constants::EVM_SMALLEST_UNIT_NAME,
+    constants::{EVM_SMALLEST_UNIT_NAME, EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS},
     domain::{
         relayer::{Relayer, RelayerError},
         BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
         SignTransactionRequest, SignTypedDataRequest,
     },
-    jobs::{JobProducerTrait, TransactionRequest},
+    jobs::{JobProducerTrait, TransactionRequest, TransactionStatusCheck},
     models::{
         produce_relayer_disabled_payload, DeletePendingTransactionsResponse, EvmNetwork,
         JsonRpcRequest, JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest, NetworkRpcResult,
@@ -45,6 +45,7 @@ use crate::{
         DataSignerTrait, EvmProvider, EvmProviderTrait, EvmSigner, TransactionCounterService,
         TransactionCounterServiceTrait,
     },
+    utils::calculate_scheduled_timestamp,
 };
 use async_trait::async_trait;
 use eyre::Result;
@@ -249,10 +250,21 @@ where
             .await
             .map_err(|e| RepositoryError::TransactionFailure(e.to_string()))?;
 
+        // Queue preparation job (immediate)
         self.job_producer
             .produce_transaction_request_job(
                 TransactionRequest::new(transaction.id.clone(), transaction.relayer_id.clone()),
                 None,
+            )
+            .await?;
+
+        // Queue status check job (with initial delay)
+        self.job_producer
+            .produce_check_transaction_status_job(
+                TransactionStatusCheck::new(transaction.id.clone(), transaction.relayer_id.clone()),
+                Some(calculate_scheduled_timestamp(
+                    EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+                )),
             )
             .await?;
 
@@ -747,6 +759,9 @@ mod tests {
         tx_repo.expect_create().returning(Ok);
         job_producer
             .expect_produce_transaction_request_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+        job_producer
+            .expect_produce_check_transaction_status_job()
             .returning(|_, _| Box::pin(ready(Ok(()))));
 
         let relayer = EvmRelayer::new(
