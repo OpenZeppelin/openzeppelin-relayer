@@ -8,9 +8,11 @@
 //! - **Inheritance support**: Child networks inherit from parents with override capability
 //! - **Smart merging**: Collections merge preserving unique items, primitives override
 //! - **Validation**: Required field checks and URL format validation
+//! - **Environment variable support**: RPC URLs can reference environment variables
 
 use crate::config::ConfigFileError;
 use serde::{Deserialize, Serialize};
+use super::string_or_env::{StringOrEnvValue, resolve_all, merge_optional_string_or_env_vecs};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct NetworkConfigCommon {
@@ -21,9 +23,11 @@ pub struct NetworkConfigCommon {
     /// overriding specific fields as needed.
     pub from: Option<String>,
     /// List of RPC endpoint URLs for connecting to the network.
-    pub rpc_urls: Option<Vec<String>>,
+    /// URLs can be plain strings or environment variable references.
+    pub rpc_urls: Option<Vec<StringOrEnvValue>>,
     /// List of Explorer endpoint URLs for connecting to the network.
-    pub explorer_urls: Option<Vec<String>>,
+    /// URLs can be plain strings or environment variable references.
+    pub explorer_urls: Option<Vec<StringOrEnvValue>>,
     /// Estimated average time between blocks in milliseconds.
     pub average_blocktime_ms: Option<u64>,
     /// Flag indicating if the network is a testnet.
@@ -33,6 +37,29 @@ pub struct NetworkConfigCommon {
 }
 
 impl NetworkConfigCommon {
+    /// Resolves RPC URLs from StringOrEnvValue to String, fetching from environment if needed
+    pub fn resolve_rpc_urls(&self) -> Result<Option<Vec<String>>, String> {
+        match &self.rpc_urls {
+            Some(urls) => {
+                let resolved = resolve_all(urls)
+                    .map_err(|e| format!("Failed to resolve RPC URL: {}", e))?;
+                Ok(Some(resolved))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Resolves Explorer URLs from StringOrEnvValue to String, fetching from environment if needed
+    pub fn resolve_explorer_urls(&self) -> Result<Option<Vec<String>>, String> {
+        match &self.explorer_urls {
+            Some(urls) => {
+                let resolved = resolve_all(urls)
+                    .map_err(|e| format!("Failed to resolve Explorer URL: {}", e))?;
+                Ok(Some(resolved))
+            }
+            None => Ok(None),
+        }
+    }
     /// Validates the common fields for a network configuration.
     ///
     /// # Returns
@@ -54,16 +81,26 @@ impl NetworkConfigCommon {
 
         // Validate RPC URLs format if provided
         if let Some(urls) = &self.rpc_urls {
-            for url in urls {
-                reqwest::Url::parse(url).map_err(|_| {
+            // Resolve and validate URLs
+            let resolved = resolve_all(urls).map_err(|e| {
+                ConfigFileError::InvalidFormat(format!("Failed to resolve RPC URL: {}", e))
+            })?;
+
+            for url in resolved {
+                reqwest::Url::parse(&url).map_err(|_| {
                     ConfigFileError::InvalidFormat(format!("Invalid RPC URL: {}", url))
                 })?;
             }
         }
 
         if let Some(urls) = &self.explorer_urls {
-            for url in urls {
-                reqwest::Url::parse(url).map_err(|_| {
+            // Resolve and validate URLs
+            let resolved = resolve_all(urls).map_err(|e| {
+                ConfigFileError::InvalidFormat(format!("Failed to resolve Explorer URL: {}", e))
+            })?;
+
+            for url in resolved {
+                reqwest::Url::parse(&url).map_err(|_| {
                     ConfigFileError::InvalidFormat(format!("Invalid Explorer URL: {}", url))
                 })?;
             }
@@ -83,11 +120,8 @@ impl NetworkConfigCommon {
         Self {
             network: self.network.clone(),
             from: self.from.clone(),
-            rpc_urls: self.rpc_urls.clone().or_else(|| parent.rpc_urls.clone()),
-            explorer_urls: self
-                .explorer_urls
-                .clone()
-                .or_else(|| parent.explorer_urls.clone()),
+            rpc_urls: merge_optional_string_or_env_vecs(&self.rpc_urls, &parent.rpc_urls),
+            explorer_urls: merge_optional_string_or_env_vecs(&self.explorer_urls, &parent.explorer_urls),
             average_blocktime_ms: self.average_blocktime_ms.or(parent.average_blocktime_ms),
             is_testnet: self.is_testnet.or(parent.is_testnet),
             tags: merge_tags(&self.tags, &parent.tags),

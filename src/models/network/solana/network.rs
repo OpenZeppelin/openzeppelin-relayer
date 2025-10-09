@@ -32,7 +32,13 @@ impl TryFrom<NetworkRepoModel> for SolanaNetwork {
             NetworkConfigData::Solana(solana_config) => {
                 let common = &solana_config.common;
 
-                let rpc_urls = common.rpc_urls.clone().ok_or_else(|| {
+                // Resolve URLs from environment variables if needed
+                let rpc_urls = common.resolve_rpc_urls().map_err(|e| {
+                    RepositoryError::InvalidData(format!(
+                        "Failed to resolve RPC URLs for network '{}': {}",
+                        network_repo.name, e
+                    ))
+                })?.ok_or_else(|| {
                     RepositoryError::InvalidData(format!(
                         "Solana network '{}' has no rpc_urls",
                         network_repo.name
@@ -46,10 +52,17 @@ impl TryFrom<NetworkRepoModel> for SolanaNetwork {
                     ))
                 })?;
 
+                let explorer_urls = common.resolve_explorer_urls().map_err(|e| {
+                    RepositoryError::InvalidData(format!(
+                        "Failed to resolve Explorer URLs for network '{}': {}",
+                        network_repo.name, e
+                    ))
+                })?;
+
                 Ok(SolanaNetwork {
                     network: common.network.clone(),
                     rpc_urls,
-                    explorer_urls: common.explorer_urls.clone(),
+                    explorer_urls,
                     average_blocktime_ms,
                     is_testnet: common.is_testnet.unwrap_or(false),
                     tags: common.tags.clone().unwrap_or_default(),

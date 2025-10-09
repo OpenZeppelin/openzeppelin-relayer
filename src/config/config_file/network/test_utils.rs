@@ -18,8 +18,8 @@ pub fn create_network_common(network: &str) -> NetworkConfigCommon {
     NetworkConfigCommon {
         network: network.to_string(),
         from: None,
-        rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
-        explorer_urls: Some(vec!["https://explorer.example.com".to_string()]),
+        rpc_urls: Some(vec![StringOrEnvValue::plain("https://rpc.example.com")]),
+        explorer_urls: Some(vec![StringOrEnvValue::plain("https://explorer.example.com")]),
         average_blocktime_ms: Some(12000),
         is_testnet: Some(true),
         tags: Some(vec!["test".to_string()]),
