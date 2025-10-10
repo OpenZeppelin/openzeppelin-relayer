@@ -132,7 +132,7 @@ cargo run
 ```bash
 curl -X GET http://localhost:8080/api/v1/relayers \
   -H "Content-Type: application/json" \
-  -H "AUTHORIZATION: Bearer YOUR_API_KEY"
+  -H "Authorization: Bearer <REDACTED_API_KEY>"
 ```
 
 ## Network Configuration Examples
@@ -161,8 +161,8 @@ curl -X GET http://localhost:8080/api/v1/relayers \
   "network": "sepolia",
   "chain_id": 11155111,
   "rpc_urls": [
-    {"type": "env", "value": "SEPOLIA_RPC_PRIMARY"},
-    {"type": "env", "value": "SEPOLIA_RPC_SECONDARY"},
+    {"type": "env", "value": "SEPOLIA_RPC_URL_PRIMARY"},
+    {"type": "env", "value": "SEPOLIA_RPC_URL_FALLBACK"},
     "https://sepolia.drpc.org"
   ],
   "explorer_urls": ["https://sepolia.etherscan.io"],
