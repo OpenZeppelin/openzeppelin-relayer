@@ -27,7 +27,7 @@ use crate::{
         Address, NetworkTransactionData, Signer as SignerDomainModel, SignerError,
         TransactionRepoModel,
     },
-    services::Signer,
+    services::signer::Signer,
 };
 
 use super::SolanaSignTrait;
@@ -93,7 +93,7 @@ mod tests {
             LocalSignerConfig, Signer as SignerDomainModel, SignerConfig, SignerType,
             SolanaTransactionData,
         },
-        services::Signer,
+        services::signer::Signer,
     };
 
     use super::*;

@@ -8,7 +8,7 @@ use crate::{
     config::GasPriceCacheConfig,
     constants::{GAS_PRICE_CACHE_REFRESH_TIMEOUT_SECS, HISTORICAL_BLOCKS},
     models::{EvmNetwork, TransactionError},
-    services::EvmProviderTrait,
+    services::provider::EvmProviderTrait,
 };
 use alloy::rpc::types::{BlockNumberOrTag, FeeHistory};
 use dashmap::DashMap;
@@ -258,7 +258,8 @@ impl GasPriceCache {
         tokio::spawn(async move {
             let refresh = async {
                 // Get network provider and fetch fresh data
-                let provider = crate::services::get_network_provider(&network, None).ok()?;
+                let provider =
+                    crate::services::provider::get_network_provider(&network, None).ok()?;
                 let fresh_gas_price = provider.get_gas_price().await.ok()?;
                 let block = provider.get_block_by_number().await.ok()?;
                 let fresh_base_fee: u128 = block.header.base_fee_per_gas.unwrap_or(0).into();

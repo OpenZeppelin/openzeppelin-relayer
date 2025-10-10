@@ -25,9 +25,8 @@ use crate::{
         VaultSignerConfig,
     },
     services::{
-        signer::stellar::local_signer::LocalSigner,
+        signer::{stellar::local_signer::LocalSigner, Signer},
         vault::{VaultService, VaultServiceTrait},
-        Signer,
     },
 };
 

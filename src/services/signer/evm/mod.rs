@@ -1,22 +1,40 @@
-//! EVM signer implementation for managing Ethereum-compatible private keys and signing operations.
-//! This module provides various EVM signer implementations, including local keystore, HashiCorp Vault, Google Cloud KMS, AWS KMS, and Turnkey.
+//! # EVM Signer Implementations
 //!
-//! # Architecture
+//! This module provides various signer implementations for Ethereum Virtual Machine (EVM)
+//! transactions and data signing, including support for EIP-712 typed data.
+//!
+//! ## Architecture
 //!
 //! ```text
-//! EvmSigner
-//!   ├── LocalSigner (encrypted JSON keystore)
-//!   ├── AwsKmsSigner (AWS KMS backend)
-//!   ├── Vault (HashiCorp Vault backend)
-//!   ├── Google Cloud KMS signer
-//!   ├── AWS KMS Signer
-//!   └── Turnkey (Turnkey backend)
+//! EVM Signer (trait implementations)
+//!   ├── LocalSigner             - Encrypted JSON keystore (development/testing)
+//!   ├── AwsKmsSigner           - AWS Key Management Service
+//!   ├── GoogleCloudKmsSigner   - Google Cloud Key Management Service
+//!   ├── VaultSigner            - HashiCorp Vault KV2 backend
+//!   ├── TurnkeySigner          - Turnkey API backend
+//!   └── CdpSigner              - Coinbase Developer Platform
 //! ```
+//!
+//! ## Features
+//!
+//! - **Transaction Signing**: Support for both legacy and EIP-1559 transactions
+//! - **Data Signing**: EIP-191 personal message signing
+//! - **Typed Data**: EIP-712 structured data signing
+//! - **Multi-Backend**: Pluggable signer backends with consistent API
+//!
+//! ## Security
+//!
+//! All implementations follow Ethereum signing standards and include:
+//! - Signature malleability protection (EIP-2 low-s normalization)
+//! - Proper v-value handling for different transaction types
+//! - Input validation and error handling
+
 mod aws_kms_signer;
 mod cdp_signer;
 mod google_cloud_kms_signer;
 mod local_signer;
 mod turnkey_signer;
+pub(crate) mod utils;
 mod vault_signer;
 use aws_kms_signer::*;
 use cdp_signer::*;
@@ -27,7 +45,6 @@ use turnkey_signer::*;
 use vault_signer::*;
 
 use async_trait::async_trait;
-use color_eyre::config;
 use std::sync::Arc;
 
 use crate::{
@@ -49,6 +66,202 @@ use crate::{
     },
 };
 use eyre::Result;
+
+// EIP-712 and ECDSA Constants
+const EIP712_PREFIX: [u8; 2] = [0x19, 0x01];
+const EIP712_MESSAGE_SIZE: usize = 66; // 2 (prefix) + 32 (domain) + 32 (struct)
+
+/// SECP256K1 signature length: 32 bytes (r) + 32 bytes (s) + 1 byte (v)
+const SECP256K1_SIGNATURE_LENGTH: usize = 65;
+
+/// Keccak256 hash output length
+const HASH_LENGTH: usize = 32;
+
+/// Validates and decodes a hex string
+///
+/// # Arguments
+/// * `value` - The hex string to decode (may have optional "0x" prefix)
+/// * `field_name` - Name of the field for error messages
+///
+/// # Returns
+/// * `Ok(Vec<u8>)` - The decoded bytes
+/// * `Err(SignerError)` - If the hex string is invalid
+fn validate_and_decode_hex(value: &str, field_name: &str) -> Result<Vec<u8>, SignerError> {
+    let hex_str = value.strip_prefix("0x").unwrap_or(value);
+
+    // Check for invalid characters and report position
+    if let Some((pos, ch)) = hex_str
+        .chars()
+        .enumerate()
+        .find(|(_, c)| !c.is_ascii_hexdigit())
+    {
+        return Err(SignerError::SigningError(format!(
+            "Invalid {} hex: non-hexadecimal character '{}' at position {} (input: {}...)",
+            field_name,
+            ch,
+            pos,
+            &hex_str[..hex_str.len().min(16)] // Show first 16 chars
+        )));
+    }
+
+    // Decode the hex string
+    hex::decode(hex_str).map_err(|e| {
+        SignerError::SigningError(format!(
+            "Invalid {} hex: failed to decode - {} (input: {}...)",
+            field_name,
+            e,
+            &hex_str[..hex_str.len().min(16)]
+        ))
+    })
+}
+
+/// Constructs an EIP-712 message hash from domain separator and struct hash
+///
+/// This function implements the EIP-712 typed data signing specification:
+/// <https://eips.ethereum.org/EIPS/eip-712>
+///
+/// # EIP-712 Format
+///
+/// The message hash is constructed as:
+/// ```text
+/// keccak256("\x19\x01" ‖ domainSeparator ‖ hashStruct(message))
+/// ```
+///
+/// # Security Considerations
+///
+/// **CRITICAL SECURITY REQUIREMENTS:**
+///
+/// - **Domain Separator Uniqueness**: The domain separator MUST be unique to your dapp
+///   to prevent cross-contract replay attacks. Include at minimum:
+///   - Contract name
+///   - Contract version
+///   - Chain ID (prevents cross-chain replays)
+///   - Verifying contract address
+///
+/// - **Hash Struct Integrity**: The hashStruct MUST uniquely identify your message type
+///   and data. Collisions allow signature reuse across different messages.
+///
+/// - **Replay Protection**: Always include nonces or timestamps in your message struct
+///   to prevent replay attacks within the same contract.
+///
+/// - **Chain ID**: MUST be included in domain separator to prevent signatures from
+///   being valid on multiple chains (mainnet, testnet, etc.)
+///
+/// # Arguments
+///
+/// * `request` - The typed data signing request containing:
+///   - `domain_separator`: 32-byte hash uniquely identifying the signing domain
+///   - `hash_struct_message`: 32-byte hash of the structured message data
+///
+/// # Returns
+///
+/// * `Ok([u8; 32])` - The 32-byte message hash ready for signing
+/// * `Err(SignerError)` - If validation fails or hex decoding fails
+///
+/// # Errors
+///
+/// Returns `SignerError::SigningError` if:
+/// - Domain separator is not exactly 32 bytes
+/// - Hash struct is not exactly 32 bytes
+/// - Input contains invalid hexadecimal characters
+///
+/// # Examples
+///
+/// ```ignore
+/// use crate::domain::SignTypedDataRequest;
+/// use crate::services::signer::evm::construct_eip712_message_hash;
+///
+/// let request = SignTypedDataRequest {
+///     // 32 bytes as hex (with or without 0x prefix)
+///     domain_separator: "a".repeat(64),
+///     hash_struct_message: "b".repeat(64),
+/// };
+///
+/// let hash = construct_eip712_message_hash(&request)?;
+/// // hash is now ready for signing
+/// ```
+pub fn construct_eip712_message_hash(
+    request: &SignTypedDataRequest,
+) -> Result<[u8; 32], SignerError> {
+    // Decode and validate domain separator
+    let domain_separator = validate_and_decode_hex(&request.domain_separator, "domain separator")?;
+
+    // Decode and validate hash struct message
+    let hash_struct = validate_and_decode_hex(&request.hash_struct_message, "hash struct message")?;
+
+    // Validate lengths (both must be exactly 32 bytes)
+    if domain_separator.len() != HASH_LENGTH {
+        return Err(SignerError::SigningError(format!(
+            "Invalid domain separator length: expected {} bytes, got {}",
+            HASH_LENGTH,
+            domain_separator.len()
+        )));
+    }
+    if hash_struct.len() != HASH_LENGTH {
+        return Err(SignerError::SigningError(format!(
+            "Invalid hash struct length: expected {} bytes, got {}",
+            HASH_LENGTH,
+            hash_struct.len()
+        )));
+    }
+
+    // Construct EIP-712 message: "\x19\x01" ++ domainSeparator ++ hashStruct(message)
+    // Use fixed-size array instead of Vec for better performance (size known at compile time)
+    let mut eip712_message = [0u8; EIP712_MESSAGE_SIZE];
+    eip712_message[0..2].copy_from_slice(&EIP712_PREFIX);
+    eip712_message[2..34].copy_from_slice(&domain_separator);
+    eip712_message[34..66].copy_from_slice(&hash_struct);
+
+    // Hash the EIP-712 message
+    use alloy::primitives::keccak256;
+    let message_hash = keccak256(eip712_message);
+
+    Ok(message_hash.into())
+}
+
+/// Validates signature length and formats it into a SignDataResponse::Evm
+///
+/// This helper eliminates duplication across all EVM signer implementations by providing
+/// a single point for signature validation and formatting.
+///
+/// # Arguments
+/// * `signature_bytes` - The raw signature bytes (expected to be 65 bytes: r + s + v)
+/// * `signer_name` - Name of the signer for error messages (e.g., "AWS KMS", "Turnkey")
+///
+/// # Returns
+/// * `Ok(SignDataResponse)` - A properly formatted EVM signature response
+/// * `Err(SignerError)` - If the signature length is not 65 bytes
+///
+/// # Format
+/// The signature is split into:
+/// - `r`: First 32 bytes (hex encoded)
+/// - `s`: Next 32 bytes (hex encoded)
+/// - `v`: Last byte (recovery ID, typically 27 or 28)
+/// - `sig`: Full 65 bytes (hex encoded)
+pub(crate) fn validate_and_format_signature(
+    signature_bytes: &[u8],
+    signer_name: &str,
+) -> Result<SignDataResponse, SignerError> {
+    if signature_bytes.len() != SECP256K1_SIGNATURE_LENGTH {
+        return Err(SignerError::SigningError(format!(
+            "Invalid signature length from {}: expected {} bytes, got {}",
+            signer_name,
+            SECP256K1_SIGNATURE_LENGTH,
+            signature_bytes.len()
+        )));
+    }
+
+    let r = hex::encode(&signature_bytes[0..32]);
+    let s = hex::encode(&signature_bytes[32..64]);
+    let v = signature_bytes[64];
+
+    Ok(SignDataResponse::Evm(SignDataResponseEvm {
+        r,
+        s,
+        v,
+        sig: hex::encode(signature_bytes),
+    }))
+}
 
 #[async_trait]
 pub trait DataSignerTrait: Send + Sync {
@@ -583,6 +796,170 @@ mod tests {
             } else {
                 panic!("Expected EVM signature for {}", name);
             }
+        }
+    }
+
+    // Edge case tests for EIP-712 and signature validation
+    #[tokio::test]
+    async fn test_eip712_hash_with_0x_prefix() {
+        let request_with_prefix = SignTypedDataRequest {
+            domain_separator: format!("0x{}", "a".repeat(64)),
+            hash_struct_message: format!("0x{}", "b".repeat(64)),
+        };
+
+        let request_without_prefix = SignTypedDataRequest {
+            domain_separator: "a".repeat(64),
+            hash_struct_message: "b".repeat(64),
+        };
+
+        let hash1 = construct_eip712_message_hash(&request_with_prefix).unwrap();
+        let hash2 = construct_eip712_message_hash(&request_without_prefix).unwrap();
+
+        assert_eq!(
+            hash1, hash2,
+            "Hash should be same with or without 0x prefix"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_eip712_deterministic() {
+        let request = SignTypedDataRequest {
+            domain_separator: "a".repeat(64),
+            hash_struct_message: "b".repeat(64),
+        };
+
+        let hash1 = construct_eip712_message_hash(&request).unwrap();
+        let hash2 = construct_eip712_message_hash(&request).unwrap();
+
+        assert_eq!(hash1, hash2, "Hash must be deterministic");
+    }
+
+    #[tokio::test]
+    async fn test_eip712_invalid_domain_length() {
+        let request = SignTypedDataRequest {
+            domain_separator: "a".repeat(30), // Too short
+            hash_struct_message: "b".repeat(64),
+        };
+
+        let result = construct_eip712_message_hash(&request);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(e.to_string().contains("Invalid domain separator length"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_eip712_invalid_hash_struct_length() {
+        let request = SignTypedDataRequest {
+            domain_separator: "a".repeat(64),
+            hash_struct_message: "b".repeat(30), // Too short
+        };
+
+        let result = construct_eip712_message_hash(&request);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(e.to_string().contains("Invalid hash struct length"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_eip712_invalid_hex_characters() {
+        let request = SignTypedDataRequest {
+            domain_separator: "zzzz".to_string(), // Invalid hex
+            hash_struct_message: "b".repeat(64),
+        };
+
+        let result = construct_eip712_message_hash(&request);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(e.to_string().contains("non-hexadecimal character"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_eip712_invalid_hex_at_specific_position() {
+        let request = SignTypedDataRequest {
+            domain_separator: format!("{}z{}", "a".repeat(10), "a".repeat(53)), // 'z' at position 10
+            hash_struct_message: "b".repeat(64),
+        };
+
+        let result = construct_eip712_message_hash(&request);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            let err_msg = e.to_string();
+            assert!(err_msg.contains("non-hexadecimal character"));
+            assert!(err_msg.contains("position 10")); // Error should report exact position
+        }
+    }
+
+    #[test]
+    fn test_signature_validation_wrong_length() {
+        let sig_64_bytes = vec![0u8; 64];
+        let result = validate_and_format_signature(&sig_64_bytes, "TestSigner");
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(e.to_string().contains("expected 65 bytes"));
+        }
+
+        let sig_66_bytes = vec![0u8; 66];
+        let result = validate_and_format_signature(&sig_66_bytes, "TestSigner");
+        assert!(result.is_err());
+
+        let sig_0_bytes = vec![];
+        let result = validate_and_format_signature(&sig_0_bytes, "TestSigner");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_signature_validation_correct_length() {
+        let sig_65_bytes = vec![0u8; 65];
+        let result = validate_and_format_signature(&sig_65_bytes, "TestSigner");
+        assert!(result.is_ok());
+
+        if let Ok(SignDataResponse::Evm(sig)) = result {
+            assert_eq!(sig.r.len(), 64); // 32 bytes as hex
+            assert_eq!(sig.s.len(), 64); // 32 bytes as hex
+            assert_eq!(sig.v, 0); // Last byte
+            assert_eq!(sig.sig.len(), 130); // 65 bytes as hex
+        }
+    }
+
+    #[tokio::test]
+    async fn test_eip712_odd_length_hex_string() {
+        // Odd-length hex strings should fail during decoding
+        let request = SignTypedDataRequest {
+            domain_separator: "a".repeat(63), // Odd length
+            hash_struct_message: "b".repeat(64),
+        };
+
+        let result = construct_eip712_message_hash(&request);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_eip712_mixed_case_hex() {
+        // Mixed case hex should work
+        let request = SignTypedDataRequest {
+            domain_separator: "AaBbCcDdEeFf11223344556677889900AaBbCcDdEeFf11223344556677889900"
+                .to_string(),
+            hash_struct_message: "b".repeat(64),
+        };
+
+        let result = construct_eip712_message_hash(&request);
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_and_decode_hex_error_includes_input_preview() {
+        let long_invalid_hex = format!("{}z{}", "a".repeat(20), "a".repeat(100));
+        let result = validate_and_decode_hex(&long_invalid_hex, "test_field");
+
+        assert!(result.is_err());
+        if let Err(e) = result {
+            let err_msg = e.to_string();
+            // Should include first 16 chars of input for debugging
+            assert!(err_msg.contains("input:"));
+            assert!(err_msg.len() < 200); // Error message should be reasonably sized
         }
     }
 }

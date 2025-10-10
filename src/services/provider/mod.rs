@@ -157,8 +157,8 @@ where
 }
 
 // Implement From for RpcSelectorError
-impl From<super::rpc_selector::RpcSelectorError> for ProviderError {
-    fn from(err: super::rpc_selector::RpcSelectorError) -> Self {
+impl From<rpc_selector::RpcSelectorError> for ProviderError {
+    fn from(err: rpc_selector::RpcSelectorError) -> Self {
         ProviderError::NetworkConfiguration(format!("RPC selector error: {}", err))
     }
 }

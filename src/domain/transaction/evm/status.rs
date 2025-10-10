@@ -23,7 +23,7 @@ use crate::{
         TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
-    services::{EvmProviderTrait, Signer},
+    services::{provider::EvmProviderTrait, signer::Signer},
     utils::{get_resubmit_timeout_for_speed, get_resubmit_timeout_with_backoff},
 };
 
@@ -393,7 +393,7 @@ mod tests {
             MockNetworkRepository, MockRelayerRepository, MockTransactionCounterTrait,
             MockTransactionRepository,
         },
-        services::{MockEvmProviderTrait, MockSigner},
+        services::{provider::MockEvmProviderTrait, signer::MockSigner},
     };
     use alloy::{
         consensus::{Eip658Value, Receipt, ReceiptWithBloom},

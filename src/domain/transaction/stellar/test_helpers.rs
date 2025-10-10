@@ -8,7 +8,7 @@ use crate::{
         TransactionRepoModel, TransactionStatus,
     },
     repositories::{MockRepository, MockTransactionCounterTrait, MockTransactionRepository},
-    services::{MockSigner, MockStellarProviderTrait},
+    services::{provider::MockStellarProviderTrait, signer::MockSigner},
 };
 use chrono::Utc;
 use soroban_rs::xdr::{Signature, SignatureHint};
