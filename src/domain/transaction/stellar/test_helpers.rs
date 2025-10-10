@@ -38,7 +38,7 @@ pub fn create_test_relayer() -> RelayerRepoModel {
         address: TEST_PK.to_string(),
         notification_id: Some("test-notification-id".to_string()),
         system_disabled: false,
-        custom_rpc_urls: None,
+        ..Default::default()
     }
 }
 

@@ -44,6 +44,7 @@ pub mod mockutils {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         }
     }
 
@@ -67,6 +68,7 @@ pub mod mockutils {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         }
     }
 
@@ -250,6 +252,10 @@ pub mod mockutils {
 
         mock_job_producer
             .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        mock_job_producer
+            .expect_produce_relayer_health_check_job()
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
         mock_job_producer

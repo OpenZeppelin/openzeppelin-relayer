@@ -33,18 +33,20 @@ use crate::{
         BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
         SignTransactionRequest, SignTypedDataRequest,
     },
-    jobs::{JobProducerTrait, TransactionRequest},
+    jobs::{JobProducerTrait, RelayerHealthCheck, TransactionRequest},
     models::{
-        produce_relayer_disabled_payload, DeletePendingTransactionsResponse, EvmNetwork,
-        JsonRpcRequest, JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest, NetworkRpcResult,
-        NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus, RepositoryError,
-        RpcErrorCodes, TransactionRepoModel, TransactionStatus,
+        produce_relayer_disabled_payload, DeletePendingTransactionsResponse, DisabledReason,
+        EvmNetwork, HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel,
+        NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest, NetworkType,
+        RelayerRepoModel, RelayerStatus, RepositoryError, RpcErrorCodes, TransactionRepoModel,
+        TransactionStatus,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
         DataSignerTrait, EvmProvider, EvmProviderTrait, EvmSigner, TransactionCounterService,
         TransactionCounterServiceTrait,
     },
+    utils::calculate_scheduled_timestamp,
 };
 use async_trait::async_trait;
 use eyre::Result;
@@ -512,57 +514,89 @@ where
     /// # Returns
     ///
     /// A `Result` indicating success or a `RelayerError` if any initialization step fails.
-    async fn initialize_relayer(&self) -> Result<(), RelayerError> {
-        info!("initializing relayer");
+    async fn check_health(&self) -> Result<(), Vec<HealthCheckFailure>> {
+        debug!("running health checks for EVM relayer {}", self.relayer.id);
+
         let nonce_sync_result = self.sync_nonce().await;
         let validate_rpc_result = self.validate_rpc().await;
         let validate_min_balance_result = self.validate_min_balance().await;
 
-        // disable relayer if any check fails
-        if nonce_sync_result.is_err()
-            || validate_rpc_result.is_err()
-            || validate_min_balance_result.is_err()
-        {
-            let reason = vec![
-                nonce_sync_result
-                    .err()
-                    .map(|e| format!("Nonce sync failed: {}", e)),
-                validate_rpc_result
-                    .err()
-                    .map(|e| format!("RPC validation failed: {}", e)),
-                validate_min_balance_result
-                    .err()
-                    .map(|e| format!("Balance check failed: {}", e)),
-            ]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<String>>()
-            .join(", ");
+        // Collect all failures
+        let failures: Vec<HealthCheckFailure> = vec![
+            nonce_sync_result
+                .err()
+                .map(|e| HealthCheckFailure::NonceSyncFailed(e.to_string())),
+            validate_rpc_result
+                .err()
+                .map(|e| HealthCheckFailure::RpcValidationFailed(e.to_string())),
+            validate_min_balance_result
+                .err()
+                .map(|e| HealthCheckFailure::BalanceCheckFailed(e.to_string())),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
 
-            warn!(reason = %reason, "disabling relayer");
-            let updated_relayer = self
-                .relayer_repository
-                .disable_relayer(self.relayer.id.clone())
-                .await?;
-            if let Some(notification_id) = &self.relayer.notification_id {
+        if failures.is_empty() {
+            info!("all health checks passed");
+            Ok(())
+        } else {
+            warn!("health checks failed: {:?}", failures);
+            Err(failures)
+        }
+    }
+
+    async fn initialize_relayer(&self) -> Result<(), RelayerError> {
+        debug!("initializing EVM relayer {}", self.relayer.id);
+
+        match self.check_health().await {
+            Ok(_) => {
+                // All checks passed
+                if self.relayer.system_disabled {
+                    // Silently re-enable if was disabled (startup, not recovery)
+                    self.relayer_repository
+                        .enable_relayer(self.relayer.id.clone())
+                        .await?;
+                }
+                Ok(())
+            }
+            Err(failures) => {
+                // Health checks failed
+                let reason = DisabledReason::from_health_failures(failures).unwrap_or_else(|| {
+                    DisabledReason::RpcValidationFailed("Unknown error".to_string())
+                });
+
+                warn!(reason = %reason, "disabling relayer");
+                let updated_relayer = self
+                    .relayer_repository
+                    .disable_relayer(self.relayer.id.clone(), reason.clone())
+                    .await?;
+
+                // Send notification if configured
+                if let Some(notification_id) = &self.relayer.notification_id {
+                    self.job_producer
+                        .produce_send_notification_job(
+                            produce_relayer_disabled_payload(
+                                notification_id,
+                                &updated_relayer,
+                                &reason.safe_description(),
+                            ),
+                            None,
+                        )
+                        .await?;
+                }
+
+                // Schedule health check to try re-enabling the relayer after 10 seconds
                 self.job_producer
-                    .produce_send_notification_job(
-                        produce_relayer_disabled_payload(
-                            notification_id,
-                            &updated_relayer,
-                            &reason,
-                        ),
-                        None,
+                    .produce_relayer_health_check_job(
+                        RelayerHealthCheck::new(self.relayer.id.clone()),
+                        Some(calculate_scheduled_timestamp(10)),
                     )
                     .await?;
+
+                Ok(())
             }
-        } else if self.relayer.system_disabled {
-            // enable relayer if it was disabled previously and all checks passed
-            self.relayer_repository
-                .enable_relayer(self.relayer.id.clone())
-                .await?;
         }
-        Ok(())
     }
 
     async fn sign_transaction(
@@ -662,6 +696,7 @@ mod tests {
             }),
             network_type: NetworkType::Evm,
             custom_rpc_urls: None,
+            ..Default::default()
         }
     }
 
@@ -2393,12 +2428,17 @@ mod tests {
         disabled_relayer.system_disabled = true;
         relayer_repo
             .expect_disable_relayer()
-            .with(eq("test-relayer-id".to_string()))
-            .returning(move |_| Ok(disabled_relayer.clone()));
+            .with(eq("test-relayer-id".to_string()), always())
+            .returning(move |_, _| Ok(disabled_relayer.clone()));
 
         // Mock notification job production
         job_producer
             .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        // Mock health check job scheduling
+        job_producer
+            .expect_produce_relayer_health_check_job()
             .returning(|_, _| Box::pin(ready(Ok(()))));
 
         let relayer = EvmRelayer::new(
@@ -2562,12 +2602,17 @@ mod tests {
         disabled_relayer.system_disabled = true;
         relayer_repo
             .expect_disable_relayer()
-            .with(eq("test-relayer-id".to_string()))
-            .returning(move |_| Ok(disabled_relayer.clone()));
+            .with(eq("test-relayer-id".to_string()), always())
+            .returning(move |_, _| Ok(disabled_relayer.clone()));
 
         // Mock notification job production - verify it's called with correct parameters
         job_producer
             .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        // Mock health check job scheduling
+        job_producer
+            .expect_produce_relayer_health_check_job()
             .returning(|_, _| Box::pin(ready(Ok(()))));
 
         let relayer = EvmRelayer::new(
@@ -2594,7 +2639,7 @@ mod tests {
             mut relayer_repo,
             network_repo,
             tx_repo,
-            job_producer,
+            mut job_producer,
             signer,
             mut counter,
         ) = setup_mocks();
@@ -2626,10 +2671,14 @@ mod tests {
         disabled_relayer.system_disabled = true;
         relayer_repo
             .expect_disable_relayer()
-            .with(eq("test-relayer-id".to_string()))
-            .returning(move |_| Ok(disabled_relayer.clone()));
+            .with(eq("test-relayer-id".to_string()), always())
+            .returning(move |_, _| Ok(disabled_relayer.clone()));
 
         // No notification job should be produced since notification_id is None
+        // But health check job should still be scheduled
+        job_producer
+            .expect_produce_relayer_health_check_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))));
 
         let relayer = EvmRelayer::new(
             relayer_model,
