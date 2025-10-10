@@ -1,0 +1,36 @@
+---
+version: '3.8'
+services:
+  relayer:
+    build:
+      context: ../../
+      dockerfile: Dockerfile.development
+    ports:
+      - 8080:8080
+    environment:
+      - RUST_LOG=info
+      - RUST_BACKTRACE=1
+      - CONFIG_FILE_PATH=/app/config/config.json
+      - REDIS_URL=redis://redis:6379
+    env_file:
+      - .env
+    volumes:
+      - ./config:/app/config:ro
+    depends_on:
+      - redis
+    networks:
+      - relayer-network
+  redis:
+    image: redis:latest
+    ports:
+      - 6379:6379
+    networks:
+      - relayer-network
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+networks:
+  relayer-network:
+    driver: bridge
+volumes:
+  redis-data:
