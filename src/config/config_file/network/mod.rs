@@ -550,7 +550,7 @@ mod tests {
     fn test_validation_error_propagation() {
         let mut config = create_evm_network_wrapped("test-evm");
         if let NetworkFileConfig::Evm(ref mut evm_config) = config {
-            evm_config.common.rpc_urls = Some(vec!["invalid-url".to_string()]);
+            evm_config.common.rpc_urls = Some(vec![StringOrEnvValue::plain("invalid-url")]);
         }
 
         let result = config.validate();

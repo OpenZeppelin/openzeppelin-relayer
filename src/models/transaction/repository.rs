@@ -1058,7 +1058,8 @@ mod tests {
     use super::*;
     use crate::{
         config::{
-            EvmNetworkConfig, NetworkConfigCommon, SolanaNetworkConfig, StellarNetworkConfig,
+            network::StringOrEnvValue, EvmNetworkConfig, NetworkConfigCommon, SolanaNetworkConfig,
+            StellarNetworkConfig,
         },
         models::{
             network::NetworkConfigData,
@@ -1667,8 +1668,8 @@ mod tests {
                 common: NetworkConfigCommon {
                     network: "ethereum".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["https://mainnet.infura.io".to_string()]),
-                    explorer_urls: Some(vec!["https://etherscan.io".to_string()]),
+                    rpc_urls: Some(vec![StringOrEnvValue::plain("https://mainnet.infura.io")]),
+                    explorer_urls: Some(vec![StringOrEnvValue::plain("https://etherscan.io")]),
                     average_blocktime_ms: Some(12000),
                     is_testnet: Some(false),
                     tags: Some(vec!["mainnet".to_string()]),
@@ -1745,8 +1746,12 @@ mod tests {
                 common: NetworkConfigCommon {
                     network: "mainnet".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["https://api.mainnet-beta.solana.com".to_string()]),
-                    explorer_urls: Some(vec!["https://explorer.solana.com".to_string()]),
+                    rpc_urls: Some(vec![StringOrEnvValue::plain(
+                        "https://api.mainnet-beta.solana.com",
+                    )]),
+                    explorer_urls: Some(vec![StringOrEnvValue::plain(
+                        "https://explorer.solana.com",
+                    )]),
                     average_blocktime_ms: Some(400),
                     is_testnet: Some(false),
                     tags: Some(vec!["mainnet".to_string()]),
@@ -1821,8 +1826,8 @@ mod tests {
                 common: NetworkConfigCommon {
                     network: "mainnet".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["https://horizon.stellar.org".to_string()]),
-                    explorer_urls: Some(vec!["https://stellarchain.io".to_string()]),
+                    rpc_urls: Some(vec![StringOrEnvValue::plain("https://horizon.stellar.org")]),
+                    explorer_urls: Some(vec![StringOrEnvValue::plain("https://stellarchain.io")]),
                     average_blocktime_ms: Some(5000),
                     is_testnet: Some(false),
                     tags: Some(vec!["mainnet".to_string()]),
@@ -2080,7 +2085,7 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "testnet".to_string(),
                 from: None,
-                rpc_urls: Some(vec!["https://test.stellar.org".to_string()]),
+                rpc_urls: Some(vec![StringOrEnvValue::plain("https://test.stellar.org")]),
                 explorer_urls: None,
                 average_blocktime_ms: Some(5000), // 5 seconds for Stellar
                 is_testnet: Some(true),

@@ -38,17 +38,20 @@ impl TryFrom<NetworkRepoModel> for StellarNetwork {
                 let common = &stellar_config.common;
 
                 // Resolve URLs from environment variables if needed
-                let rpc_urls = common.resolve_rpc_urls().map_err(|e| {
-                    RepositoryError::InvalidData(format!(
-                        "Failed to resolve RPC URLs for network '{}': {}",
-                        network_repo.name, e
-                    ))
-                })?.ok_or_else(|| {
-                    RepositoryError::InvalidData(format!(
-                        "Stellar network '{}' has no rpc_urls",
-                        network_repo.name
-                    ))
-                })?;
+                let rpc_urls = common
+                    .resolve_rpc_urls()
+                    .map_err(|e| {
+                        RepositoryError::InvalidData(format!(
+                            "Failed to resolve RPC URLs for network '{}': {}",
+                            network_repo.name, e
+                        ))
+                    })?
+                    .ok_or_else(|| {
+                        RepositoryError::InvalidData(format!(
+                            "Stellar network '{}' has no rpc_urls",
+                            network_repo.name
+                        ))
+                    })?;
 
                 let average_blocktime_ms = common.average_blocktime_ms.ok_or_else(|| {
                     RepositoryError::InvalidData(format!(

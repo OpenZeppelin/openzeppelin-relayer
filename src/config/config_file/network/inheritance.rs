@@ -116,6 +116,7 @@ mod tests {
     use super::*;
     use crate::config::config_file::network::common::NetworkConfigCommon;
     use crate::config::config_file::network::test_utils::*;
+    use crate::config::network::StringOrEnvValue;
     use std::collections::HashMap;
 
     #[test]
@@ -532,8 +533,12 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "child".to_string(),
                 from: Some("parent".to_string()),
-                rpc_urls: Some(vec!["https://custom-rpc.example.com".to_string()]),
-                explorer_urls: Some(vec!["https://custom-explorer.example.com".to_string()]),
+                rpc_urls: Some(vec![StringOrEnvValue::plain(
+                    "https://custom-rpc.example.com",
+                )]),
+                explorer_urls: Some(vec![StringOrEnvValue::plain(
+                    "https://custom-explorer.example.com",
+                )]),
                 average_blocktime_ms: None,
                 is_testnet: None,
                 tags: None,
@@ -552,11 +557,15 @@ mod tests {
         assert_eq!(resolved.common.network, "child");
         assert_eq!(
             resolved.common.rpc_urls,
-            Some(vec!["https://custom-rpc.example.com".to_string()])
+            Some(vec![StringOrEnvValue::plain(
+                "https://custom-rpc.example.com"
+            )])
         ); // From child
         assert_eq!(
             resolved.common.explorer_urls,
-            Some(vec!["https://custom-explorer.example.com".to_string()])
+            Some(vec![StringOrEnvValue::plain(
+                "https://custom-explorer.example.com"
+            )])
         ); // From child
         assert_eq!(resolved.common.average_blocktime_ms, Some(11000)); // From grandparent
         assert_eq!(resolved.common.is_testnet, Some(false)); // From parent
@@ -661,12 +670,12 @@ mod tests {
                 network: "parent".to_string(),
                 from: None,
                 rpc_urls: Some(vec![
-                    "https://parent-rpc1.example.com".to_string(),
-                    "https://parent-rpc2.example.com".to_string(),
+                    StringOrEnvValue::plain("https://parent-rpc1.example.com"),
+                    StringOrEnvValue::plain("https://parent-rpc2.example.com"),
                 ]),
                 explorer_urls: Some(vec![
-                    "https://parent-explorer1.example.com".to_string(),
-                    "https://parent-explorer2.example.com".to_string(),
+                    StringOrEnvValue::plain("https://parent-explorer1.example.com"),
+                    StringOrEnvValue::plain("https://parent-explorer2.example.com"),
                 ]),
                 average_blocktime_ms: Some(12000),
                 is_testnet: Some(true),
@@ -688,8 +697,12 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "child".to_string(),
                 from: Some("parent".to_string()),
-                rpc_urls: Some(vec!["https://child-rpc.example.com".to_string()]), // Override
-                explorer_urls: Some(vec!["https://child-explorer.example.com".to_string()]), // Override
+                rpc_urls: Some(vec![StringOrEnvValue::plain(
+                    "https://child-rpc.example.com",
+                )]), // Override
+                explorer_urls: Some(vec![StringOrEnvValue::plain(
+                    "https://child-explorer.example.com",
+                )]), // Override
                 average_blocktime_ms: None,                // Inherit
                 is_testnet: Some(false),                   // Override
                 tags: Some(vec!["child-tag".to_string()]), // Override (merge behavior depends on implementation)
@@ -708,11 +721,15 @@ mod tests {
         assert_eq!(resolved.common.network, "child");
         assert_eq!(
             resolved.common.rpc_urls,
-            Some(vec!["https://child-rpc.example.com".to_string()])
+            Some(vec![StringOrEnvValue::plain(
+                "https://child-rpc.example.com"
+            )])
         ); // Child override
         assert_eq!(
             resolved.common.explorer_urls,
-            Some(vec!["https://child-explorer.example.com".to_string()])
+            Some(vec![StringOrEnvValue::plain(
+                "https://child-explorer.example.com"
+            )])
         ); // Child override
         assert_eq!(resolved.common.average_blocktime_ms, Some(12000)); // Inherited from parent
         assert_eq!(resolved.common.is_testnet, Some(false)); // Child override

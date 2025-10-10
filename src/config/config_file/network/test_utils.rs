@@ -19,7 +19,9 @@ pub fn create_network_common(network: &str) -> NetworkConfigCommon {
         network: network.to_string(),
         from: None,
         rpc_urls: Some(vec![StringOrEnvValue::plain("https://rpc.example.com")]),
-        explorer_urls: Some(vec![StringOrEnvValue::plain("https://explorer.example.com")]),
+        explorer_urls: Some(vec![StringOrEnvValue::plain(
+            "https://explorer.example.com",
+        )]),
         average_blocktime_ms: Some(12000),
         is_testnet: Some(true),
         tags: Some(vec!["test".to_string()]),
@@ -101,8 +103,13 @@ pub fn create_solana_network(network: &str) -> SolanaNetworkConfig {
         common: NetworkConfigCommon {
             network: network.to_string(),
             from: None,
-            rpc_urls: Some(vec![StringOrEnvValue::plain(format!("https://api.{}.solana.com", network))]),
-            explorer_urls: Some(vec![StringOrEnvValue::plain("https://explorer.example.com")]),
+            rpc_urls: Some(vec![StringOrEnvValue::plain(format!(
+                "https://api.{}.solana.com",
+                network
+            ))]),
+            explorer_urls: Some(vec![StringOrEnvValue::plain(
+                "https://explorer.example.com",
+            )]),
             average_blocktime_ms: Some(400),
             is_testnet: Some(true),
             tags: Some(vec!["solana".to_string()]),
@@ -116,8 +123,13 @@ pub fn create_solana_network_with_parent(network: &str, parent: &str) -> SolanaN
         common: NetworkConfigCommon {
             network: network.to_string(),
             from: Some(parent.to_string()),
-            rpc_urls: Some(vec![StringOrEnvValue::plain(format!("https://api.{}.solana.com", network))]), // Override parent's RPC URLs
-            explorer_urls: Some(vec![StringOrEnvValue::plain("https://explorer.example.com")]),
+            rpc_urls: Some(vec![StringOrEnvValue::plain(format!(
+                "https://api.{}.solana.com",
+                network
+            ))]), // Override parent's RPC URLs
+            explorer_urls: Some(vec![StringOrEnvValue::plain(
+                "https://explorer.example.com",
+            )]),
             average_blocktime_ms: Some(500), // Override parent's blocktime
             is_testnet: None,                // Will inherit from parent
             tags: None,                      // Will inherit from parent
@@ -131,8 +143,13 @@ pub fn create_stellar_network(network: &str) -> StellarNetworkConfig {
         common: NetworkConfigCommon {
             network: network.to_string(),
             from: None,
-            rpc_urls: Some(vec![StringOrEnvValue::plain(format!("https://horizon.{}.stellar.org", network))]),
-            explorer_urls: Some(vec![StringOrEnvValue::plain("https://explorer.example.com")]),
+            rpc_urls: Some(vec![StringOrEnvValue::plain(format!(
+                "https://horizon.{}.stellar.org",
+                network
+            ))]),
+            explorer_urls: Some(vec![StringOrEnvValue::plain(
+                "https://explorer.example.com",
+            )]),
             average_blocktime_ms: Some(5000),
             is_testnet: Some(true),
             tags: Some(vec!["stellar".to_string()]),
@@ -147,8 +164,13 @@ pub fn create_stellar_network_with_parent(network: &str, parent: &str) -> Stella
         common: NetworkConfigCommon {
             network: network.to_string(),
             from: Some(parent.to_string()),
-            rpc_urls: Some(vec![StringOrEnvValue::plain(format!("https://horizon.{}.stellar.org", network))]), // Override parent's RPC URLs
-            explorer_urls: Some(vec![StringOrEnvValue::plain("https://explorer.example.com")]),
+            rpc_urls: Some(vec![StringOrEnvValue::plain(format!(
+                "https://horizon.{}.stellar.org",
+                network
+            ))]), // Override parent's RPC URLs
+            explorer_urls: Some(vec![StringOrEnvValue::plain(
+                "https://explorer.example.com",
+            )]),
             average_blocktime_ms: Some(6000), // Override parent's blocktime
             is_testnet: None,                 // Will inherit from parent
             tags: None,                       // Will inherit from parent

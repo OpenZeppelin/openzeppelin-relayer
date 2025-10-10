@@ -287,4 +287,3 @@ mod tests {
         assert!(config.rpc_urls[1].is_plain());
     }
 }
-

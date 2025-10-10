@@ -190,7 +190,7 @@ mod tests {
     };
     use std::path::Path;
 
-    use super::*;
+    use super::{network::StringOrEnvValue, *};
 
     fn create_valid_config() -> Config {
         Config {
@@ -224,8 +224,12 @@ mod tests {
                 common: NetworkConfigCommon {
                     network: "test-network".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["https://rpc.test.example.com".to_string()]),
-                    explorer_urls: Some(vec!["https://explorer.test.example.com".to_string()]),
+                    rpc_urls: Some(vec![StringOrEnvValue::plain(
+                        "https://rpc.test.example.com",
+                    )]),
+                    explorer_urls: Some(vec![StringOrEnvValue::plain(
+                        "https://explorer.test.example.com",
+                    )]),
                     average_blocktime_ms: Some(12000),
                     is_testnet: Some(true),
                     tags: Some(vec!["test".to_string()]),
@@ -263,8 +267,12 @@ mod tests {
                 common: NetworkConfigCommon {
                     network: "test-network".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["https://rpc.test.example.com".to_string()]),
-                    explorer_urls: Some(vec!["https://explorer.test.example.com".to_string()]),
+                    rpc_urls: Some(vec![StringOrEnvValue::plain(
+                        "https://rpc.test.example.com",
+                    )]),
+                    explorer_urls: Some(vec![StringOrEnvValue::plain(
+                        "https://explorer.test.example.com",
+                    )]),
                     average_blocktime_ms: Some(12000),
                     is_testnet: Some(true),
                     tags: Some(vec!["test".to_string()]),
@@ -291,8 +299,12 @@ mod tests {
                 common: NetworkConfigCommon {
                     network: "test-network".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["https://rpc.test.example.com".to_string()]),
-                    explorer_urls: Some(vec!["https://explorer.test.example.com".to_string()]),
+                    rpc_urls: Some(vec![StringOrEnvValue::plain(
+                        "https://rpc.test.example.com",
+                    )]),
+                    explorer_urls: Some(vec![StringOrEnvValue::plain(
+                        "https://explorer.test.example.com",
+                    )]),
                     average_blocktime_ms: Some(12000),
                     is_testnet: Some(true),
                     tags: Some(vec!["test".to_string()]),
@@ -857,8 +869,12 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "test-network".to_string(),
                 from: None,
-                rpc_urls: Some(vec!["https://rpc.test.example.com".to_string()]),
-                explorer_urls: Some(vec!["https://explorer.test.example.com".to_string()]),
+                rpc_urls: Some(vec![StringOrEnvValue::plain(
+                    "https://rpc.test.example.com",
+                )]),
+                explorer_urls: Some(vec![StringOrEnvValue::plain(
+                    "https://explorer.test.example.com",
+                )]),
                 average_blocktime_ms: Some(12000),
                 is_testnet: Some(true),
                 tags: Some(vec!["test".to_string()]),
@@ -1206,8 +1222,12 @@ mod tests {
                 common: NetworkConfigCommon {
                     network: "test-network".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["https://rpc.test.example.com".to_string()]),
-                    explorer_urls: Some(vec!["https://explorer.test.example.com".to_string()]),
+                    rpc_urls: Some(vec![StringOrEnvValue::plain(
+                        "https://rpc.test.example.com",
+                    )]),
+                    explorer_urls: Some(vec![StringOrEnvValue::plain(
+                        "https://explorer.test.example.com",
+                    )]),
                     average_blocktime_ms: Some(12000),
                     is_testnet: Some(true),
                     tags: Some(vec!["test".to_string()]),
@@ -1241,8 +1261,12 @@ mod tests {
                 common: NetworkConfigCommon {
                     network: "test-network".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["https://rpc.test.example.com".to_string()]),
-                    explorer_urls: Some(vec!["https://explorer.test.example.com".to_string()]),
+                    rpc_urls: Some(vec![StringOrEnvValue::plain(
+                        "https://rpc.test.example.com",
+                    )]),
+                    explorer_urls: Some(vec![StringOrEnvValue::plain(
+                        "https://explorer.test.example.com",
+                    )]),
                     average_blocktime_ms: Some(12000),
                     is_testnet: Some(true),
                     tags: Some(vec!["test".to_string()]),
@@ -1295,8 +1319,10 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "devnet".to_string(),
                 from: None,
-                rpc_urls: Some(vec!["https://api.devnet.solana.com".to_string()]),
-                explorer_urls: Some(vec!["https://explorer.solana.com".to_string()]),
+                rpc_urls: Some(vec![StringOrEnvValue::plain(
+                    "https://api.devnet.solana.com",
+                )]),
+                explorer_urls: Some(vec![StringOrEnvValue::plain("https://explorer.solana.com")]),
                 average_blocktime_ms: Some(400),
                 is_testnet: Some(true),
                 tags: Some(vec!["test".to_string()]),
@@ -1307,8 +1333,12 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "testnet".to_string(),
                 from: None,
-                rpc_urls: Some(vec!["https://soroban-testnet.stellar.org".to_string()]),
-                explorer_urls: Some(vec!["https://stellar.expert/explorer/testnet".to_string()]),
+                rpc_urls: Some(vec![StringOrEnvValue::plain(
+                    "https://soroban-testnet.stellar.org",
+                )]),
+                explorer_urls: Some(vec![StringOrEnvValue::plain(
+                    "https://stellar.expert/explorer/testnet",
+                )]),
                 average_blocktime_ms: Some(5000),
                 is_testnet: Some(true),
                 tags: Some(vec!["test".to_string()]),
@@ -1335,8 +1365,12 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "solana-test".to_string(),
                 from: None,
-                rpc_urls: Some(vec!["https://api.devnet.solana.com".to_string()]),
-                explorer_urls: Some(vec!["https://explorer.test.example.com".to_string()]),
+                rpc_urls: Some(vec![StringOrEnvValue::plain(
+                    "https://api.devnet.solana.com",
+                )]),
+                explorer_urls: Some(vec![StringOrEnvValue::plain(
+                    "https://explorer.test.example.com",
+                )]),
                 average_blocktime_ms: Some(400),
                 is_testnet: Some(true),
                 tags: Some(vec!["solana".to_string()]),
@@ -1348,8 +1382,12 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "stellar-test".to_string(),
                 from: None,
-                rpc_urls: Some(vec!["https://horizon-testnet.stellar.org".to_string()]),
-                explorer_urls: Some(vec!["https://explorer.test.example.com".to_string()]),
+                rpc_urls: Some(vec![StringOrEnvValue::plain(
+                    "https://horizon-testnet.stellar.org",
+                )]),
+                explorer_urls: Some(vec![StringOrEnvValue::plain(
+                    "https://explorer.test.example.com",
+                )]),
                 average_blocktime_ms: Some(5000),
                 is_testnet: Some(true),
                 tags: Some(vec!["stellar".to_string()]),
