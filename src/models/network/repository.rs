@@ -159,6 +159,8 @@ impl TryFrom<NetworkFileConfig> for NetworkRepoModel {
 
 #[cfg(test)]
 mod tests {
+    use crate::config::network::StringOrEnvValue;
+
     use super::*;
 
     fn create_evm_config(name: &str, chain_id: u64, symbol: &str) -> EvmNetworkConfig {
@@ -166,8 +168,10 @@ mod tests {
             common: NetworkConfigCommon {
                 network: name.to_string(),
                 from: None,
-                rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
-                explorer_urls: Some(vec!["https://explorer.example.com".to_string()]),
+                rpc_urls: Some(vec![StringOrEnvValue::plain("https://rpc.example.com")]),
+                explorer_urls: Some(vec![StringOrEnvValue::plain(
+                    "https://explorer.example.com",
+                )]),
                 average_blocktime_ms: Some(12000),
                 is_testnet: Some(false),
                 tags: Some(vec!["mainnet".to_string()]),
@@ -185,8 +189,10 @@ mod tests {
             common: NetworkConfigCommon {
                 network: name.to_string(),
                 from: None,
-                rpc_urls: Some(vec!["https://api.mainnet-beta.solana.com".to_string()]),
-                explorer_urls: Some(vec!["https://explorer.solana.com".to_string()]),
+                rpc_urls: Some(vec![StringOrEnvValue::plain(
+                    "https://api.mainnet-beta.solana.com",
+                )]),
+                explorer_urls: Some(vec![StringOrEnvValue::plain("https://explorer.solana.com")]),
                 average_blocktime_ms: Some(400),
                 is_testnet: Some(is_testnet),
                 tags: Some(vec!["solana".to_string()]),
@@ -199,8 +205,8 @@ mod tests {
             common: NetworkConfigCommon {
                 network: name.to_string(),
                 from: None,
-                rpc_urls: Some(vec!["https://horizon.stellar.org".to_string()]),
-                explorer_urls: Some(vec!["https://stellarchain.io".to_string()]),
+                rpc_urls: Some(vec![StringOrEnvValue::plain("https://horizon.stellar.org")]),
+                explorer_urls: Some(vec![StringOrEnvValue::plain("https://stellarchain.io")]),
                 average_blocktime_ms: Some(5000),
                 is_testnet: Some(passphrase.is_none()),
                 tags: Some(vec!["stellar".to_string()]),
@@ -337,7 +343,7 @@ mod tests {
         assert_eq!(common.average_blocktime_ms, Some(12000));
         assert_eq!(
             common.rpc_urls,
-            Some(vec!["https://rpc.example.com".to_string()])
+            Some(vec![StringOrEnvValue::plain("https://rpc.example.com")])
         );
     }
 
@@ -456,7 +462,7 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "minimal".to_string(),
                 from: None,
-                rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+                rpc_urls: Some(vec![StringOrEnvValue::plain("https://rpc.example.com")]),
                 explorer_urls: None,
                 average_blocktime_ms: None,
                 is_testnet: None,

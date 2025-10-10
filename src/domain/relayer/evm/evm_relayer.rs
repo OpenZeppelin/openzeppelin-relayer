@@ -613,6 +613,7 @@ where
 mod tests {
     use super::*;
     use crate::{
+        config::network::StringOrEnvValue,
         jobs::MockJobProducerTrait,
         models::{
             EvmRpcRequest, EvmRpcResult, JsonRpcId, NetworkRepoModel, NetworkType,
@@ -658,9 +659,9 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "mainnet".to_string(),
                 from: None,
-                rpc_urls: Some(vec![
-                    "https://mainnet.infura.io/v3/YOUR_INFURA_API_KEY".to_string()
-                ]),
+                rpc_urls: Some(vec![StringOrEnvValue::plain(
+                    "https://mainnet.infura.io/v3/YOUR_INFURA_API_KEY",
+                )]),
                 explorer_urls: None,
                 average_blocktime_ms: Some(12000),
                 is_testnet: Some(false),
