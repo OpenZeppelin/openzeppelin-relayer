@@ -10,8 +10,8 @@ use tracing::{debug, error, info, warn};
 use super::EvmRelayerTransaction;
 use super::{
     ensure_status, get_age_of_sent_at, get_age_since_created, get_age_since_status_change,
-    has_enough_confirmations, is_noop, is_too_early_to_check, is_transaction_valid, make_noop,
-    too_many_attempts, too_many_noop_attempts,
+    has_enough_confirmations, is_noop, is_pending_transaction, is_too_early_to_resubmit,
+    is_transaction_valid, make_noop, too_many_attempts, too_many_noop_attempts,
 };
 use crate::constants::{
     get_evm_pending_recovery_trigger_timeout, get_evm_prepare_timeout, get_evm_resend_timeout,
@@ -398,28 +398,29 @@ where
             return Ok(tx);
         }
 
-        // 2. Check if too early (tx just created)
-        if is_too_early_to_check(&tx)? {
-            let age = get_age_since_created(&tx)?;
-            debug!(
-                tx_id = %tx.id,
-                age_seconds = age.num_seconds(),
-                "transaction too young to check, will retry later"
-            );
-            return Ok(tx);
-        }
-
-        // 3. Check for timeouts/expiry
-        if let Some(tx) = self.check_timeouts(&tx).await? {
-            return Ok(tx);
-        }
-
-        // 4. Check transaction status
+        // 2. Check transaction status first
+        // This allows fast transactions to update their status immediately,
+        // even if they're young (<20s). For Pending/Sent states, this returns
+        // early without querying the blockchain.
         let status = self.check_transaction_status(&tx).await?;
 
         debug!(status = ?status, "transaction status {}", tx.id);
 
-        // 5. Handle based on status
+        // 3. Check if too early for resubmission on in-progress transactions
+        // For Pending/Sent/Submitted states, defer resubmission logic and timeout checks
+        // if the transaction is too young. Just update status and return.
+        // For other states (Mined/Confirmed/Failed/etc), process immediately regardless of age.
+        if is_too_early_to_resubmit(&tx)? && is_pending_transaction(&status) {
+            // Update status if it changed, then return
+            return self.update_transaction_status_if_needed(tx, status).await;
+        }
+
+        // 4. Check for timeouts/expiry
+        if let Some(tx) = self.check_status_timeouts(&tx).await? {
+            return Ok(tx);
+        }
+
+        // 5. Handle based on status (including complex operations like resubmission)
         match status {
             TransactionStatus::Pending => self.handle_pending_state(tx).await,
             TransactionStatus::Sent => self.handle_sent_state(tx).await,
@@ -433,7 +434,7 @@ where
     }
 
     /// Check for various timeout conditions
-    async fn check_timeouts(
+    async fn check_status_timeouts(
         &self,
         tx: &TransactionRepoModel,
     ) -> Result<Option<TransactionRepoModel>, TransactionError> {
@@ -1445,7 +1446,7 @@ mod tests {
             let mut mocks = default_test_mocks();
             let relayer = create_test_relayer();
             let mut tx = make_test_transaction(TransactionStatus::Submitted);
-            // Set created_at to be old enough to pass is_too_early_to_check
+            // Set created_at to be old enough to pass is_too_early_to_resubmit
             tx.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
             // Set a dummy hash.
             if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {

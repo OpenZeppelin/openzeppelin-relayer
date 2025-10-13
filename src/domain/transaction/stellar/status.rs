@@ -6,7 +6,7 @@ use chrono::Utc;
 use soroban_rs::xdr::{Error, Hash};
 use tracing::{debug, info, warn};
 
-use super::{is_final_state, is_too_early_to_check, StellarRelayerTransaction};
+use super::{is_final_state, StellarRelayerTransaction};
 use crate::{
     jobs::JobProducerTrait,
     models::{
@@ -37,12 +37,6 @@ where
         // Early exit for final states - no need to check
         if is_final_state(&tx.status) {
             info!(tx_id = %tx.id, status = ?tx.status, "transaction in final state, skipping status check");
-            return Ok(tx);
-        }
-
-        // Early exit if transaction is too young
-        if is_too_early_to_check(&tx)? {
-            info!(tx_id = %tx.id, "transaction too young for status check, skipping");
             return Ok(tx);
         }
 
@@ -281,7 +275,6 @@ mod tests {
 
             let mut tx_to_handle = create_test_transaction(&relayer.id);
             tx_to_handle.id = "tx-confirm-this".to_string();
-            // Make sure it's old enough to not be skipped by is_too_early_to_check
             tx_to_handle.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
             let tx_hash_bytes = [1u8; 32];
             let tx_hash_hex = hex::encode(tx_hash_bytes);
@@ -381,7 +374,6 @@ mod tests {
 
             let mut tx_to_handle = create_test_transaction(&relayer.id);
             tx_to_handle.id = "tx-pending-check".to_string();
-            // Make sure it's old enough to not be skipped by is_too_early_to_check
             tx_to_handle.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
             let tx_hash_bytes = [2u8; 32];
             if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx_to_handle.network_data
@@ -433,7 +425,6 @@ mod tests {
 
             let mut tx_to_handle = create_test_transaction(&relayer.id);
             tx_to_handle.id = "tx-fail-this".to_string();
-            // Make sure it's old enough to not be skipped by is_too_early_to_check
             tx_to_handle.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
             let tx_hash_bytes = [3u8; 32];
             if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx_to_handle.network_data
@@ -532,7 +523,6 @@ mod tests {
 
             let mut tx_to_handle = create_test_transaction(&relayer.id);
             tx_to_handle.id = "tx-provider-error".to_string();
-            // Make sure it's old enough to not be skipped by is_too_early_to_check
             tx_to_handle.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
             let tx_hash_bytes = [4u8; 32];
             if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx_to_handle.network_data
@@ -584,7 +574,6 @@ mod tests {
             let mut tx_to_handle = create_test_transaction(&relayer.id);
             tx_to_handle.id = "tx-no-hashes".to_string();
             tx_to_handle.status = TransactionStatus::Submitted;
-            // Make sure it's old enough to not be skipped by is_too_early_to_check
             tx_to_handle.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
 
             // With our new error handling, validation errors mark the transaction as failed
@@ -642,7 +631,6 @@ mod tests {
 
             let mut tx_to_handle = create_test_transaction(&relayer.id);
             tx_to_handle.id = "tx-on-chain-fail".to_string();
-            // Make sure it's old enough to not be skipped by is_too_early_to_check
             tx_to_handle.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
             let tx_hash_bytes = [4u8; 32];
             if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx_to_handle.network_data
@@ -711,7 +699,6 @@ mod tests {
 
             let mut tx_to_handle = create_test_transaction(&relayer.id);
             tx_to_handle.id = "tx-on-chain-success".to_string();
-            // Make sure it's old enough to not be skipped by is_too_early_to_check
             tx_to_handle.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
             let tx_hash_bytes = [5u8; 32];
             if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx_to_handle.network_data
@@ -786,7 +773,6 @@ mod tests {
 
             let mut tx_to_handle = create_test_transaction(&relayer.id);
             tx_to_handle.id = "tx-xdr-error-requeue".to_string();
-            // Make sure it's old enough to not be skipped by is_too_early_to_check
             tx_to_handle.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
             let tx_hash_bytes = [8u8; 32];
             if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx_to_handle.network_data

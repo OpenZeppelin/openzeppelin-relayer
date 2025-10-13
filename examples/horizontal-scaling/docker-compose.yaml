@@ -37,8 +37,8 @@ services:
       APP_PORT: 8080
       REDIS_URL: redis://redis:6379
       # High throughput configuration
-      RATE_LIMIT_REQUESTS_PER_SECOND: 500
-      RATE_LIMIT_BURST_SIZE: 1000
+      RATE_LIMIT_REQUESTS_PER_SECOND: 1500
+      RATE_LIMIT_BURST_SIZE: 3000
       # Redis storage for shared state
       REPOSITORY_STORAGE_TYPE: redis
       STORAGE_ENCRYPTION_KEY: ${STORAGE_ENCRYPTION_KEY}
@@ -57,6 +57,10 @@ services:
       WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY}
       API_KEY: ${API_KEY}
       KEYSTORE_PASSPHRASE: ${KEYSTORE_PASSPHRASE}
+      LOG_MODE: file
+      LOG_DATA_DIR: logs1/
+      LOG_MAX_SIZE: 1073741824
+
     security_opt:
       - no-new-privileges
     networks:
@@ -64,6 +68,7 @@ services:
     volumes:
       - ./config:/app/config/
       - ../../config/networks:/app/config/networks
+      - ./logs/relayer-1:/app/logs1
     depends_on:
       - redis
     restart: on-failure:5
@@ -95,14 +100,14 @@ services:
     environment:
       APP_PORT: 8080
       REDIS_URL: redis://redis:6379
-      RATE_LIMIT_REQUESTS_PER_SECOND: 500
-      RATE_LIMIT_BURST_SIZE: 1000
+      RATE_LIMIT_REQUESTS_PER_SECOND: 1500
+      RATE_LIMIT_BURST_SIZE: 3000
       REPOSITORY_STORAGE_TYPE: redis
       STORAGE_ENCRYPTION_KEY: ${STORAGE_ENCRYPTION_KEY}
       RESET_STORAGE_ON_START: false
       REDIS_KEY_PREFIX: ${REDIS_KEY_PREFIX}
-
       RUST_LOG: debug
+      # RPC configuration
       RPC_TIMEOUT_MS: 10000
       PROVIDER_MAX_RETRIES: 5
       PROVIDER_RETRY_BASE_DELAY_MS: 100
@@ -111,6 +116,9 @@ services:
       WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY}
       API_KEY: ${API_KEY}
       KEYSTORE_PASSPHRASE: ${KEYSTORE_PASSPHRASE}
+      LOG_MODE: file
+      LOG_DATA_DIR: logs2/
+      LOG_MAX_SIZE: 1073741824
     security_opt:
       - no-new-privileges
     networks:
@@ -118,6 +126,7 @@ services:
     volumes:
       - ./config:/app/config/
       - ../../config/networks:/app/config/networks
+      - ./logs/relayer-2:/app/logs2
     depends_on:
       - redis
     restart: on-failure:5
@@ -149,13 +158,14 @@ services:
     environment:
       APP_PORT: 8080
       REDIS_URL: redis://redis:6379
-      RATE_LIMIT_REQUESTS_PER_SECOND: 500
-      RATE_LIMIT_BURST_SIZE: 1000
+      RATE_LIMIT_REQUESTS_PER_SECOND: 1500
+      RATE_LIMIT_BURST_SIZE: 3000
       REPOSITORY_STORAGE_TYPE: redis
       STORAGE_ENCRYPTION_KEY: ${STORAGE_ENCRYPTION_KEY}
       RESET_STORAGE_ON_START: false
       REDIS_KEY_PREFIX: ${REDIS_KEY_PREFIX}
       RUST_LOG: debug
+      # RPC configuration
       RPC_TIMEOUT_MS: 10000
       PROVIDER_MAX_RETRIES: 5
       PROVIDER_RETRY_BASE_DELAY_MS: 100
@@ -164,6 +174,9 @@ services:
       WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY}
       API_KEY: ${API_KEY}
       KEYSTORE_PASSPHRASE: ${KEYSTORE_PASSPHRASE}
+      LOG_MODE: file
+      LOG_DATA_DIR: logs3/
+      LOG_MAX_SIZE: 1073741824
     security_opt:
       - no-new-privileges
     networks:
@@ -171,6 +184,7 @@ services:
     volumes:
       - ./config:/app/config/
       - ../../config/networks:/app/config/networks
+      - ./logs/relayer-3:/app/logs3
     depends_on:
       - redis
     restart: on-failure:5

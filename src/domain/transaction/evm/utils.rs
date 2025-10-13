@@ -1,6 +1,6 @@
 use crate::constants::{
     ARBITRUM_GAS_LIMIT, DEFAULT_GAS_LIMIT, DEFAULT_TX_VALID_TIMESPAN,
-    EVM_STATUS_CHECK_MIN_AGE_SECONDS, MAXIMUM_NOOP_RETRY_ATTEMPTS, MAXIMUM_TX_ATTEMPTS,
+    EVM_MIN_AGE_FOR_RESUBMIT_SECONDS, MAXIMUM_NOOP_RETRY_ATTEMPTS, MAXIMUM_TX_ATTEMPTS,
 };
 use crate::models::EvmNetwork;
 use crate::models::{
@@ -223,11 +223,21 @@ pub fn get_age_since_status_change(
     get_age_since_created(tx)
 }
 
-/// Check if transaction is too young to check status
-/// Prevents checking transactions that were just created
-pub fn is_too_early_to_check(tx: &TransactionRepoModel) -> Result<bool, TransactionError> {
+/// Check if transaction is too young for resubmission and timeout checks.
+///
+/// Returns true if the transaction was created less than EVM_MIN_AGE_FOR_RESUBMIT_SECONDS ago.
+/// This is used to defer resubmission logic and timeout checks for newly created transactions,
+/// while still allowing basic status updates from the blockchain.
+pub fn is_too_early_to_resubmit(tx: &TransactionRepoModel) -> Result<bool, TransactionError> {
     let age = get_age_since_created(tx)?;
-    Ok(age < Duration::seconds(EVM_STATUS_CHECK_MIN_AGE_SECONDS))
+    Ok(age < Duration::seconds(EVM_MIN_AGE_FOR_RESUBMIT_SECONDS))
+}
+
+/// Deprecated: Use `is_too_early_to_resubmit` instead.
+/// This alias exists for backward compatibility.
+#[deprecated(since = "1.1.0", note = "Use `is_too_early_to_resubmit` instead")]
+pub fn is_too_early_to_check(tx: &TransactionRepoModel) -> Result<bool, TransactionError> {
+    is_too_early_to_resubmit(tx)
 }
 
 #[cfg(test)]
@@ -1208,7 +1218,7 @@ mod tests {
     }
 
     #[test]
-    fn test_is_too_early_to_check_recent_transaction() {
+    fn test_is_too_early_to_resubmit_recent_transaction() {
         let now = Utc::now();
 
         // Test with transaction created just 1 second ago (too early)
@@ -1218,52 +1228,52 @@ mod tests {
             ..create_mock_transaction()
         };
 
-        let result = is_too_early_to_check(&tx);
+        let result = is_too_early_to_resubmit(&tx);
         assert!(result.is_ok());
         assert!(result.unwrap()); // Should be true (too early)
     }
 
     #[test]
-    fn test_is_too_early_to_check_old_transaction() {
+    fn test_is_too_early_to_resubmit_old_transaction() {
         let now = Utc::now();
 
         // Test with transaction created well past the minimum age
-        let created_time = now - Duration::seconds(EVM_STATUS_CHECK_MIN_AGE_SECONDS + 10);
+        let created_time = now - Duration::seconds(EVM_MIN_AGE_FOR_RESUBMIT_SECONDS + 10);
         let tx = TransactionRepoModel {
             created_at: created_time.to_rfc3339(),
             ..create_mock_transaction()
         };
 
-        let result = is_too_early_to_check(&tx);
+        let result = is_too_early_to_resubmit(&tx);
         assert!(result.is_ok());
-        assert!(!result.unwrap()); // Should be false (old enough to check)
+        assert!(!result.unwrap()); // Should be false (old enough to resubmit)
     }
 
     #[test]
-    fn test_is_too_early_to_check_boundary() {
+    fn test_is_too_early_to_resubmit_boundary() {
         let now = Utc::now();
 
         // Test with transaction created exactly at the boundary
-        let created_time = now - Duration::seconds(EVM_STATUS_CHECK_MIN_AGE_SECONDS);
+        let created_time = now - Duration::seconds(EVM_MIN_AGE_FOR_RESUBMIT_SECONDS);
         let tx = TransactionRepoModel {
             created_at: created_time.to_rfc3339(),
             ..create_mock_transaction()
         };
 
-        let result = is_too_early_to_check(&tx);
+        let result = is_too_early_to_resubmit(&tx);
         assert!(result.is_ok());
         // At the exact boundary, should be false (not too early)
         assert!(!result.unwrap());
     }
 
     #[test]
-    fn test_is_too_early_to_check_invalid_timestamp() {
+    fn test_is_too_early_to_resubmit_invalid_timestamp() {
         let tx = TransactionRepoModel {
             created_at: "invalid-timestamp".to_string(),
             ..create_mock_transaction()
         };
 
-        let result = is_too_early_to_check(&tx);
+        let result = is_too_early_to_resubmit(&tx);
         assert!(result.is_err());
         match result.unwrap_err() {
             TransactionError::UnexpectedError(msg) => {

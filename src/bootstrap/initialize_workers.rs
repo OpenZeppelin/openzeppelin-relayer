@@ -98,7 +98,7 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
         .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
         .retry(
             RetryPolicy::retries(WORKER_TRANSACTION_STATUS_CHECKER_RETRIES)
-                .with_backoff(create_backoff(5000, 20000, 0.99)?.make_backoff()),
+                .with_backoff(create_backoff(8000, 20000, 0.99)?.make_backoff()),
         )
         .concurrency(DEFAULT_CONCURRENCY)
         .data(app_state.clone())

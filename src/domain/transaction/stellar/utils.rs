@@ -1,5 +1,4 @@
 //! Utility functions for Stellar transaction domain logic.
-use crate::constants::STELLAR_STATUS_CHECK_MIN_AGE_SECONDS;
 use crate::models::OperationSpec;
 use crate::models::{RelayerError, TransactionError, TransactionRepoModel};
 use crate::services::StellarProviderTrait;
@@ -137,13 +136,6 @@ pub fn get_age_since_created(tx: &TransactionRepoModel) -> Result<Duration, Tran
         .map_err(|e| TransactionError::UnexpectedError(format!("Invalid created_at: {}", e)))?;
 
     Ok(Utc::now().signed_duration_since(created_at))
-}
-
-/// Checks if a transaction is too early to perform status checks on
-/// Returns true if the transaction is younger than STELLAR_STATUS_CHECK_MIN_AGE_SECONDS
-pub fn is_too_early_to_check(tx: &TransactionRepoModel) -> Result<bool, TransactionError> {
-    let age = get_age_since_created(tx)?;
-    Ok(age < Duration::seconds(STELLAR_STATUS_CHECK_MIN_AGE_SECONDS))
 }
 
 #[cfg(test)]
@@ -413,125 +405,6 @@ mod tests {
                 tx.created_at = "2025-01-01T12:00:00.123Z".to_string();
                 assert!(get_age_since_created(&tx).is_ok());
             }
-        }
-
-        mod is_too_early_to_check_tests {
-            use super::*;
-
-            #[test]
-            fn test_returns_true_for_very_young_transaction() {
-                // Transaction created 2 seconds ago (younger than STELLAR_STATUS_CHECK_MIN_AGE_SECONDS which is 5)
-                let tx = create_test_tx_with_age(2);
-                let result = is_too_early_to_check(&tx).unwrap();
-
-                // Should be too early since age (2) < threshold (5)
-                assert!(result);
-            }
-
-            #[test]
-            fn test_returns_false_for_old_transaction() {
-                // Transaction created 60 seconds ago (older than STELLAR_STATUS_CHECK_MIN_AGE_SECONDS)
-                let tx = create_test_tx_with_age(60);
-                let result = is_too_early_to_check(&tx).unwrap();
-
-                // Should not be too early
-                assert!(!result);
-            }
-
-            #[test]
-            fn test_returns_false_for_very_old_transaction() {
-                // Transaction created 1 hour ago
-                let tx = create_test_tx_with_age(3600);
-                let result = is_too_early_to_check(&tx).unwrap();
-
-                // Should definitely not be too early
-                assert!(!result);
-            }
-
-            #[test]
-            fn test_boundary_condition_at_threshold() {
-                // Transaction created exactly at the threshold
-                let tx = create_test_tx_with_age(STELLAR_STATUS_CHECK_MIN_AGE_SECONDS);
-                let result = is_too_early_to_check(&tx).unwrap();
-
-                // At exactly the threshold, should be ready to check (not too early)
-                // Because age < threshold returns true, age == threshold returns false
-                assert!(!result);
-            }
-
-            #[test]
-            fn test_boundary_condition_just_before_threshold() {
-                // Transaction created just before the threshold
-                let tx = create_test_tx_with_age(STELLAR_STATUS_CHECK_MIN_AGE_SECONDS - 1);
-                let result = is_too_early_to_check(&tx).unwrap();
-
-                // Should still be too early
-                assert!(result);
-            }
-
-            #[test]
-            fn test_boundary_condition_just_after_threshold() {
-                // Transaction created just after the threshold
-                let tx = create_test_tx_with_age(STELLAR_STATUS_CHECK_MIN_AGE_SECONDS + 1);
-                let result = is_too_early_to_check(&tx).unwrap();
-
-                // Should not be too early
-                assert!(!result);
-            }
-
-            #[test]
-            fn test_returns_error_for_invalid_created_at() {
-                let mut tx = create_mock_transaction();
-                tx.created_at = "not-a-valid-timestamp".to_string();
-
-                let result = is_too_early_to_check(&tx);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_handles_future_timestamp() {
-                // Transaction with future timestamp (clock skew)
-                let created_at = (Utc::now() + Duration::seconds(30)).to_rfc3339();
-                let mut tx = create_mock_transaction();
-                tx.created_at = created_at;
-
-                // With negative age, it should be "too early" (or handle gracefully)
-                let result = is_too_early_to_check(&tx).unwrap();
-
-                // Negative age means age < threshold, so should return true (too early)
-                assert!(result);
-            }
-
-            #[test]
-            fn test_just_created_transaction_is_too_early() {
-                // Transaction created right now
-                let tx = create_test_tx_with_age(0);
-                let result = is_too_early_to_check(&tx).unwrap();
-
-                // Should definitely be too early
-                assert!(result);
-            }
-        }
-
-        #[test]
-        fn test_integration_age_and_early_check() {
-            // Integration test: verify that is_too_early_to_check uses get_age_since_created correctly
-
-            // Create a young transaction (2 seconds old, less than 5 second threshold)
-            let young_tx = create_test_tx_with_age(2);
-            let age = get_age_since_created(&young_tx).unwrap();
-            let is_too_early = is_too_early_to_check(&young_tx).unwrap();
-
-            assert!(age.num_seconds() < STELLAR_STATUS_CHECK_MIN_AGE_SECONDS);
-            assert!(is_too_early);
-
-            // Create an old transaction (100 seconds old, much more than 5 second threshold)
-            let old_tx = create_test_tx_with_age(100);
-            let age = get_age_since_created(&old_tx).unwrap();
-            let is_too_early = is_too_early_to_check(&old_tx).unwrap();
-
-            assert!(age.num_seconds() >= STELLAR_STATUS_CHECK_MIN_AGE_SECONDS);
-            assert!(!is_too_early);
         }
     }
 

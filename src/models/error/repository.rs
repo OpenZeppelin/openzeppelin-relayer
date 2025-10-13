@@ -34,6 +34,9 @@ pub enum RepositoryError {
     #[error("Not supported: {0}")]
     NotSupported(String),
 
+    #[error("Concurrent modification detected: {0}")]
+    ConcurrentModification(String),
+
     #[error("Other error: {0}")]
     Other(String),
 }

@@ -138,6 +138,15 @@ where
         &self.transaction_repository
     }
 
+    /// Checks if a provider error indicates the transaction was already submitted to the blockchain.
+    /// This handles cases where the transaction was submitted by another instance or in a previous retry.
+    fn is_already_submitted_error(error: &impl std::fmt::Display) -> bool {
+        let error_msg = error.to_string().to_lowercase();
+        error_msg.contains("already known")
+            || error_msg.contains("nonce too low")
+            || error_msg.contains("replacement transaction underpriced")
+    }
+
     /// Helper method to schedule a transaction status check job.
     pub(super) async fn schedule_status_check(
         &self,
@@ -583,7 +592,27 @@ where
 
         // Send transaction to blockchain - this is the critical operation
         // If this fails, retry is safe due to nonce idempotency
-        self.provider.send_raw_transaction(raw_tx).await?;
+        match self.provider.send_raw_transaction(raw_tx).await {
+            Ok(_) => {
+                // Transaction submitted successfully
+            }
+            Err(e) => {
+                // SAFETY CHECK: If transaction is in Sent status and we get "already known" or
+                // "nonce too low" errors, it means the transaction was already submitted
+                // (possibly by another instance or in a previous retry)
+                if tx.status == TransactionStatus::Sent && Self::is_already_submitted_error(&e) {
+                    warn!(
+                        tx_id = %tx.id,
+                        error = %e,
+                        "transaction appears to be already submitted based on RPC error - treating as success"
+                    );
+                    // Continue to update status to Submitted
+                } else {
+                    // Real error - propagate it
+                    return Err(e.into());
+                }
+            }
+        }
 
         // Transaction is now on-chain - update database
         // If this fails, transaction is still valid, just not tracked correctly
@@ -709,7 +738,31 @@ where
         })?;
 
         // Send resubmitted transaction to blockchain - this is the critical operation
-        self.provider.send_raw_transaction(raw_tx).await?;
+        match self.provider.send_raw_transaction(raw_tx).await {
+            Ok(_) => {
+                // Transaction resubmitted successfully
+            }
+            Err(e) => {
+                // SAFETY CHECK: If we get "already known" or "nonce too low" errors,
+                // it means a transaction with this nonce was already submitted
+                let error_msg = e.to_string().to_lowercase();
+                let is_already_submitted = error_msg.contains("already known")
+                    || error_msg.contains("nonce too low")
+                    || error_msg.contains("replacement transaction underpriced");
+
+                if is_already_submitted {
+                    warn!(
+                        tx_id = %tx.id,
+                        error = %e,
+                        "resubmission indicates transaction already in mempool/mined - treating as success"
+                    );
+                    // Continue to update with new pricing info
+                } else {
+                    // Real error - propagate it
+                    return Err(e.into());
+                }
+            }
+        }
 
         // Transaction is now on-chain - update database with new hash and pricing
         let mut hashes = tx.hashes.clone();

@@ -42,11 +42,12 @@ pub const HISTORICAL_BLOCKS: u64 = 4;
 
 /// Initial delay before first status check (in seconds)
 /// Reduced to 10s to enable faster detection of stuck transactions
-pub const EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS: i64 = 10;
+pub const EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS: i64 = 8;
 
-/// Minimum age of transaction before status check processes it (in seconds)
-/// Prevents checking transactions that were just created
-pub const EVM_STATUS_CHECK_MIN_AGE_SECONDS: i64 = 15;
+/// Minimum age of transaction before allowing resubmission and timeout checks (in seconds)
+/// Transactions younger than this will still get status updates from blockchain,
+/// but resubmission logic and timeout checks are deferred to prevent premature actions.
+pub const EVM_MIN_AGE_FOR_RESUBMIT_SECONDS: i64 = 20;
 
 /// Timeout for preparation phase: Pending → Sent (in minutes)
 /// Increased from 1 to 2 minutes to provide wider recovery window
