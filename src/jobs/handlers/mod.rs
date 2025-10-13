@@ -30,6 +30,9 @@ pub use transaction_cleanup_handler::*;
 /// - On success: Job completes
 /// - On error: Retry until max_attempts reached
 /// - At max_attempts: Abort job
+mod relayer_health_check_handler;
+pub use relayer_health_check_handler::*;
+
 pub fn handle_result(
     result: Result<(), Report>,
     attempt: Attempt,

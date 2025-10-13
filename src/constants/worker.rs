@@ -23,6 +23,9 @@ pub const WORKER_SOLANA_TOKEN_SWAP_REQUEST_RETRIES: usize = 2;
 // Number of retries for the transaction cleanup job
 pub const WORKER_TRANSACTION_CLEANUP_RETRIES: usize = 5;
 
+// Number of retries for the relayer health check job
+pub const WORKER_RELAYER_HEALTH_CHECK_RETRIES: usize = 2;
+
 // Default concurrency for the workers
 pub const DEFAULT_CONCURRENCY: usize = 1500;
 

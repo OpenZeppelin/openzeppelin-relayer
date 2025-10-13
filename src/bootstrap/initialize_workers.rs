@@ -5,16 +5,17 @@
 use crate::{
     constants::{
         DEFAULT_CONCURRENCY, DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION,
-        WORKER_NOTIFICATION_SENDER_RETRIES, WORKER_SOLANA_TOKEN_SWAP_REQUEST_RETRIES,
-        WORKER_TRANSACTION_CLEANUP_RETRIES, WORKER_TRANSACTION_REQUEST_RETRIES,
-        WORKER_TRANSACTION_STATUS_CHECKER_RETRIES, WORKER_TRANSACTION_SUBMIT_RETRIES,
+        WORKER_NOTIFICATION_SENDER_RETRIES, WORKER_RELAYER_HEALTH_CHECK_RETRIES,
+        WORKER_SOLANA_TOKEN_SWAP_REQUEST_RETRIES, WORKER_TRANSACTION_CLEANUP_RETRIES,
+        WORKER_TRANSACTION_REQUEST_RETRIES, WORKER_TRANSACTION_STATUS_CHECKER_RETRIES,
+        WORKER_TRANSACTION_SUBMIT_RETRIES,
     },
     jobs::{
-        notification_handler, solana_token_swap_cron_handler, solana_token_swap_request_handler,
-        transaction_cleanup_handler, transaction_request_handler, transaction_status_handler,
-        transaction_submission_handler,
+        notification_handler, relayer_health_check_handler, solana_token_swap_cron_handler,
+        solana_token_swap_request_handler, transaction_cleanup_handler,
+        transaction_request_handler, transaction_status_handler, transaction_submission_handler,
     },
-    models::DefaultAppState,
+    models::{DefaultAppState, RelayerRepoModel},
     repositories::RelayerRepository,
 };
 use actix_web::web::ThinData;
@@ -43,6 +44,7 @@ const TRANSACTION_STATUS_CHECKER_STELLAR: &str = "transaction_status_checker_ste
 const NOTIFICATION_SENDER: &str = "notification_sender";
 const SOLANA_TOKEN_SWAP_REQUEST: &str = "solana_token_swap_request";
 const TRANSACTION_CLEANUP: &str = "transaction_cleanup";
+const RELAYER_HEALTH_CHECK: &str = "relayer_health_check";
 
 /// Creates an exponential backoff with configurable parameters
 ///
@@ -189,6 +191,20 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
         ))
         .build_fn(transaction_cleanup_handler);
 
+    let relayer_health_check_worker = WorkerBuilder::new(RELAYER_HEALTH_CHECK)
+        .layer(ErrorHandlingLayer::new())
+        .enable_tracing()
+        .catch_panic()
+        .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
+        .retry(
+            RetryPolicy::retries(WORKER_RELAYER_HEALTH_CHECK_RETRIES)
+                .with_backoff(create_backoff(2000, 10000, 0.99)?.make_backoff()),
+        )
+        .concurrency(10)
+        .data(app_state.clone())
+        .backend(queue.relayer_health_check_queue.clone())
+        .build_fn(relayer_health_check_handler);
+
     let monitor = Monitor::new()
         .register(transaction_request_queue_worker)
         .register(transaction_submission_queue_worker)
@@ -198,6 +214,7 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
         .register(notification_queue_worker)
         .register(solana_token_swap_request_queue_worker)
         .register(transaction_cleanup_queue_worker)
+        .register(relayer_health_check_worker)
         .on_event(monitor_handle_event)
         .shutdown_timeout(Duration::from_millis(5000));
 
@@ -227,43 +244,51 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
     Ok(())
 }
 
-/// Initializes the Solana swap workers
-/// This function creates and registers workers for Solana relayers that have swap enabled and cron schedule set.
-pub async fn initialize_solana_swap_workers(app_state: ThinData<DefaultAppState>) -> Result<()> {
-    let solena_relayers_with_swap_enabled = app_state
-        .relayer_repository
-        .list_active()
-        .await?
+/// Filters relayers to find those eligible for swap workers
+/// Returns relayers that have:
+/// 1. Solana network type
+/// 2. Swap configuration
+/// 3. Cron schedule defined
+fn filter_relayers_for_swap(relayers: Vec<RelayerRepoModel>) -> Vec<RelayerRepoModel> {
+    relayers
         .into_iter()
         .filter(|relayer| {
             let policy = relayer.policies.get_solana_policy();
             let swap_config = match policy.get_swap_config() {
                 Some(config) => config,
                 None => {
-                    info!("No swap configuration specified; skipping validation.");
+                    debug!(relayer_id = %relayer.id, "No swap configuration specified; skipping");
                     return false;
                 }
             };
 
             if swap_config.cron_schedule.is_none() {
+                debug!(relayer_id = %relayer.id, "No cron schedule specified; skipping");
                 return false;
             }
             true
         })
-        .collect::<Vec<_>>();
+        .collect()
+}
+
+/// Initializes the Solana swap workers
+/// This function creates and registers workers for Solana relayers that have swap enabled and cron schedule set.
+pub async fn initialize_solana_swap_workers(app_state: ThinData<DefaultAppState>) -> Result<()> {
+    let active_relayers = app_state.relayer_repository.list_active().await?;
+    let solena_relayers_with_swap_enabled = filter_relayers_for_swap(active_relayers);
 
     if solena_relayers_with_swap_enabled.is_empty() {
-        debug!("No solana relayers with swap enabled");
+        info!("No solana relayers with swap enabled");
         return Ok(());
     }
-    debug!(
+    info!(
         "Found {} solana relayers with swap enabled",
         solena_relayers_with_swap_enabled.len()
     );
 
-    let swap_backoff = create_backoff(2000, 5000, 0.99)?.make_backoff();
-
     let mut workers = Vec::new();
+
+    let swap_backoff = create_backoff(2000, 5000, 0.99)?.make_backoff();
 
     for relayer in solena_relayers_with_swap_enabled {
         debug!(relayer = ?relayer, "found solana relayer with swap enabled");
@@ -364,5 +389,190 @@ fn monitor_handle_event(e: Worker<Event>) {
             debug!(worker_id = %worker_id, "worker stopped");
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{
+        NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy,
+        RelayerSolanaSwapConfig,
+    };
+
+    fn create_test_evm_relayer(id: &str) -> RelayerRepoModel {
+        RelayerRepoModel {
+            id: id.to_string(),
+            name: format!("EVM Relayer {}", id),
+            network: "sepolia".to_string(),
+            paused: false,
+            network_type: NetworkType::Evm,
+            policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default()),
+            signer_id: "test-signer".to_string(),
+            address: "0x742d35Cc6634C0532925a3b8D8C2e48a73F6ba2E".to_string(),
+            system_disabled: false,
+            ..Default::default()
+        }
+    }
+
+    fn create_test_solana_relayer_with_swap(
+        id: &str,
+        cron_schedule: Option<String>,
+    ) -> RelayerRepoModel {
+        RelayerRepoModel {
+            id: id.to_string(),
+            name: format!("Solana Relayer {}", id),
+            network: "mainnet-beta".to_string(),
+            paused: false,
+            network_type: NetworkType::Solana,
+            policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+                min_balance: Some(1000000000),
+                allowed_tokens: None,
+                allowed_programs: None,
+                max_signatures: None,
+                max_tx_data_size: None,
+                fee_payment_strategy: None,
+                fee_margin_percentage: None,
+                allowed_accounts: None,
+                disallowed_accounts: None,
+                max_allowed_fee_lamports: None,
+                swap_config: Some(RelayerSolanaSwapConfig {
+                    strategy: None,
+                    cron_schedule,
+                    min_balance_threshold: Some(5000000000),
+                    jupiter_swap_options: None,
+                }),
+            }),
+            signer_id: "test-signer".to_string(),
+            address: "5zWma6gn4QxRfC6xZk6KfpXWXXgV3Xt6VzPpXMKCMYW5".to_string(),
+            system_disabled: false,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_filter_relayers_for_swap_with_empty_list() {
+        let relayers = vec![];
+        let filtered = filter_relayers_for_swap(relayers);
+
+        assert_eq!(
+            filtered.len(),
+            0,
+            "Should return empty list when no relayers provided"
+        );
+    }
+
+    #[test]
+    fn test_filter_relayers_for_swap_filters_non_solana() {
+        let relayers = vec![
+            create_test_evm_relayer("evm-1"),
+            create_test_evm_relayer("evm-2"),
+        ];
+
+        let filtered = filter_relayers_for_swap(relayers);
+
+        assert_eq!(
+            filtered.len(),
+            0,
+            "Should filter out all non-Solana relayers"
+        );
+    }
+
+    #[test]
+    fn test_filter_relayers_for_swap_filters_no_cron_schedule() {
+        let relayers = vec![
+            create_test_solana_relayer_with_swap("solana-1", None),
+            create_test_solana_relayer_with_swap("solana-2", None),
+        ];
+
+        let filtered = filter_relayers_for_swap(relayers);
+
+        assert_eq!(
+            filtered.len(),
+            0,
+            "Should filter out Solana relayers without cron schedule"
+        );
+    }
+
+    #[test]
+    fn test_filter_relayers_for_swap_includes_valid_relayers() {
+        let relayers = vec![
+            create_test_solana_relayer_with_swap("solana-1", Some("0 0 * * * *".to_string())),
+            create_test_solana_relayer_with_swap("solana-2", Some("0 */2 * * * *".to_string())),
+        ];
+
+        let filtered = filter_relayers_for_swap(relayers);
+
+        assert_eq!(
+            filtered.len(),
+            2,
+            "Should include all Solana relayers with cron schedule"
+        );
+        assert_eq!(filtered[0].id, "solana-1");
+        assert_eq!(filtered[1].id, "solana-2");
+    }
+
+    #[test]
+    fn test_filter_relayers_for_swap_with_mixed_relayers() {
+        let relayers = vec![
+            create_test_evm_relayer("evm-1"),
+            create_test_solana_relayer_with_swap("solana-no-cron", None),
+            create_test_solana_relayer_with_swap(
+                "solana-with-cron-1",
+                Some("0 0 * * * *".to_string()),
+            ),
+            create_test_evm_relayer("evm-2"),
+            create_test_solana_relayer_with_swap(
+                "solana-with-cron-2",
+                Some("0 */3 * * * *".to_string()),
+            ),
+        ];
+
+        let filtered = filter_relayers_for_swap(relayers);
+
+        assert_eq!(
+            filtered.len(),
+            2,
+            "Should only include Solana relayers with cron schedule"
+        );
+
+        // Verify the correct relayers were included
+        let ids: Vec<&str> = filtered.iter().map(|r| r.id.as_str()).collect();
+        assert!(
+            ids.contains(&"solana-with-cron-1"),
+            "Should include solana-with-cron-1"
+        );
+        assert!(
+            ids.contains(&"solana-with-cron-2"),
+            "Should include solana-with-cron-2"
+        );
+        assert!(!ids.contains(&"evm-1"), "Should not include EVM relayers");
+        assert!(
+            !ids.contains(&"solana-no-cron"),
+            "Should not include Solana without cron"
+        );
+    }
+
+    #[test]
+    fn test_filter_relayers_for_swap_preserves_relayer_data() {
+        let cron = "0 1 * * * *".to_string();
+        let relayers = vec![create_test_solana_relayer_with_swap(
+            "test-relayer",
+            Some(cron.clone()),
+        )];
+
+        let filtered = filter_relayers_for_swap(relayers);
+
+        assert_eq!(filtered.len(), 1);
+
+        let relayer = &filtered[0];
+        assert_eq!(relayer.id, "test-relayer");
+        assert_eq!(relayer.name, "Solana Relayer test-relayer");
+        assert_eq!(relayer.network_type, NetworkType::Solana);
+
+        // Verify swap config is preserved
+        let policy = relayer.policies.get_solana_policy();
+        let swap_config = policy.get_swap_config().expect("Should have swap config");
+        assert_eq!(swap_config.cron_schedule.as_ref(), Some(&cron));
     }
 }
