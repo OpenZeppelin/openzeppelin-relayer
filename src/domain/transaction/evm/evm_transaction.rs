@@ -689,11 +689,7 @@ where
         // If transaction is not in correct status, return Ok to avoid wasteful retries
         if let Err(e) = ensure_status_one_of(
             &tx,
-            &[
-                TransactionStatus::Pending,
-                TransactionStatus::Sent,
-                TransactionStatus::Submitted,
-            ],
+            &[TransactionStatus::Sent, TransactionStatus::Submitted],
             Some("resubmit_transaction"),
         ) {
             warn!(
@@ -749,10 +745,7 @@ where
             Err(e) => {
                 // SAFETY CHECK: If we get "already known" or "nonce too low" errors,
                 // it means a transaction with this nonce was already submitted
-                let error_msg = e.to_string().to_lowercase();
-                let is_already_submitted = error_msg.contains("already known")
-                    || error_msg.contains("nonce too low")
-                    || error_msg.contains("replacement transaction underpriced");
+                let is_already_submitted = Self::is_already_submitted_error(&e);
 
                 if is_already_submitted {
                     warn!(

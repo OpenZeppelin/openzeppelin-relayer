@@ -39,7 +39,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!(tx_id = %tx.id, status = ?tx.status, "preparing stellar transaction");
+        debug!(tx_id = %tx.id, status = ?tx.status, "preparing stellar transaction");
 
         // Defensive check: if transaction is in a final state or unexpected state, don't retry
         if is_final_state(&tx.status) {

@@ -14,11 +14,17 @@ use crate::{
         notification_handler, relayer_health_check_handler, solana_token_swap_cron_handler,
         solana_token_swap_request_handler, transaction_cleanup_handler,
         transaction_request_handler, transaction_status_handler, transaction_submission_handler,
+        JobProducerTrait,
     },
-    models::{DefaultAppState, RelayerRepoModel},
-    repositories::RelayerRepository,
+    models::{
+        NetworkRepoModel, NotificationRepoModel, RelayerRepoModel, SignerRepoModel,
+        ThinDataAppState, TransactionRepoModel,
+    },
+    repositories::{
+        ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
+        Repository, TransactionCounterTrait, TransactionRepository,
+    },
 };
-use actix_web::web::ThinData;
 use apalis::prelude::*;
 
 use apalis::layers::retry::backoff::MakeBackoff;
@@ -66,7 +72,20 @@ fn create_backoff(initial_ms: u64, max_ms: u64, jitter: f64) -> Result<Exponenti
     Ok(maker)
 }
 
-pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<()> {
+pub async fn initialize_workers<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    app_state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+) -> Result<()>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
     let queue = app_state.job_producer.get_queue().await?;
 
     let transaction_request_queue_worker = WorkerBuilder::new(TRANSACTION_REQUEST)
@@ -273,12 +292,25 @@ fn filter_relayers_for_swap(relayers: Vec<RelayerRepoModel>) -> Vec<RelayerRepoM
 
 /// Initializes the Solana swap workers
 /// This function creates and registers workers for Solana relayers that have swap enabled and cron schedule set.
-pub async fn initialize_solana_swap_workers(app_state: ThinData<DefaultAppState>) -> Result<()> {
+pub async fn initialize_solana_swap_workers<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    app_state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+) -> Result<()>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
     let active_relayers = app_state.relayer_repository.list_active().await?;
     let solena_relayers_with_swap_enabled = filter_relayers_for_swap(active_relayers);
 
     if solena_relayers_with_swap_enabled.is_empty() {
-        info!("No solana relayers with swap enabled");
+        debug!("No solana relayers with swap enabled");
         return Ok(());
     }
     info!(

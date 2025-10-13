@@ -45,16 +45,6 @@ where
             return Ok(tx);
         }
 
-        if tx.status != TransactionStatus::Sent {
-            warn!(
-                tx_id = %tx.id,
-                status = ?tx.status,
-                expected_status = ?TransactionStatus::Sent,
-                "transaction in unexpected state for submission, skipping"
-            );
-            return Ok(tx);
-        }
-
         // Call core submission logic with error handling
         match self.submit_core(tx.clone()).await {
             Ok(submitted_tx) => Ok(submitted_tx),
@@ -247,7 +237,6 @@ mod tests {
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
 
             let mut tx = create_test_transaction(&relayer.id);
-            tx.status = TransactionStatus::Sent; // Submit expects Sent status
             if let NetworkTransactionData::Stellar(ref mut d) = tx.network_data {
                 d.signatures.push(dummy_signature());
             }
@@ -294,7 +283,6 @@ mod tests {
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
-            tx.status = TransactionStatus::Sent; // Submit expects Sent status
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
                 data.sequence_number = Some(42); // Set sequence number
@@ -352,7 +340,6 @@ mod tests {
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
-            tx.status = TransactionStatus::Sent; // Submit expects Sent status
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
                 data.sequence_number = Some(42); // Set sequence number
@@ -371,7 +358,6 @@ mod tests {
 
             // Create a transaction with signed_envelope_xdr set
             let mut tx = create_test_transaction(&relayer.id);
-            tx.status = TransactionStatus::Sent; // Submit expects Sent status
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
                 // Build and store the signed envelope XDR
@@ -446,7 +432,6 @@ mod tests {
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
 
             let mut tx = create_test_transaction(&relayer.id);
-            tx.status = TransactionStatus::Sent; // Submit expects Sent status
             if let NetworkTransactionData::Stellar(ref mut d) = tx.network_data {
                 d.signatures.push(dummy_signature());
             }
@@ -512,7 +497,6 @@ mod tests {
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
-            tx.status = TransactionStatus::Sent; // Submit expects Sent status
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
                 data.sequence_number = Some(42); // Set sequence number
@@ -594,7 +578,6 @@ mod tests {
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
-            tx.status = TransactionStatus::Sent; // Submit expects Sent status
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
                 data.sequence_number = Some(42);

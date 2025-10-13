@@ -235,7 +235,7 @@ where
         tx: TransactionRepoModel,
         original_status_str: String,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!(status = %original_status_str, "stellar transaction status is still pending, will retry check later");
+        debug!(status = %original_status_str, "stellar transaction status is still pending, will retry check later");
         Ok(tx)
     }
 }

@@ -12,6 +12,7 @@ pub const WORKER_TRANSACTION_CANCEL_RETRIES: usize = 2; // Cancel/replacement (s
 pub const WORKER_TRANSACTION_RESEND_RETRIES: usize = 3; // Resend same transaction (status checker will retry)
 
 // Number of retries for the transaction status checker job
+// Maximum retries for the transaction status checker job until tx is in final state
 pub const WORKER_TRANSACTION_STATUS_CHECKER_RETRIES: usize = usize::MAX;
 
 // Number of retries for the notification sender job

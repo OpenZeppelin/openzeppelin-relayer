@@ -41,7 +41,6 @@ pub const HISTORICAL_BLOCKS: u64 = 4;
 // EVM Status check and timeout constants
 
 /// Initial delay before first status check (in seconds)
-/// Reduced to 10s to enable faster detection of stuck transactions
 pub const EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS: i64 = 8;
 
 /// Minimum age of transaction before allowing resubmission and timeout checks (in seconds)
