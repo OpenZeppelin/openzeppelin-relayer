@@ -18,6 +18,9 @@ use crate::{
     observability::request_id::set_request_id,
 };
 
+#[cfg(test)]
+use crate::models::NetworkType;
+
 #[instrument(
     level = "debug",
     skip(job, state),
@@ -119,7 +122,7 @@ mod tests {
     #[tokio::test]
     async fn test_status_check_job_validation() {
         // Create a basic status check job
-        let check_job = TransactionStatusCheck::new("tx123", "relayer-1");
+        let check_job = TransactionStatusCheck::new("tx123", "relayer-1", NetworkType::Evm);
         let job = Job::new(crate::jobs::JobType::TransactionStatusCheck, check_job);
 
         // Validate the job data
@@ -135,8 +138,8 @@ mod tests {
         metadata.insert("retry_count".to_string(), "2".to_string());
         metadata.insert("last_status".to_string(), "pending".to_string());
 
-        let check_job =
-            TransactionStatusCheck::new("tx123", "relayer-1").with_metadata(metadata.clone());
+        let check_job = TransactionStatusCheck::new("tx123", "relayer-1", NetworkType::Evm)
+            .with_metadata(metadata.clone());
 
         // Validate the metadata
         assert!(check_job.metadata.is_some());

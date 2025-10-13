@@ -261,7 +261,11 @@ where
         // Queue status check job (with initial delay)
         self.job_producer
             .produce_check_transaction_status_job(
-                TransactionStatusCheck::new(transaction.id.clone(), transaction.relayer_id.clone()),
+                TransactionStatusCheck::new(
+                    transaction.id.clone(),
+                    transaction.relayer_id.clone(),
+                    crate::models::NetworkType::Evm,
+                ),
                 Some(calculate_scheduled_timestamp(
                     EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
                 )),

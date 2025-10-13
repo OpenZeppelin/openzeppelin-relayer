@@ -35,7 +35,11 @@ use tracing::{debug, error, info};
 
 const TRANSACTION_REQUEST: &str = "transaction_request";
 const TRANSACTION_SENDER: &str = "transaction_sender";
+// Generic transaction status checker
 const TRANSACTION_STATUS_CHECKER: &str = "transaction_status_checker";
+// Network specific status checkers
+const TRANSACTION_STATUS_CHECKER_EVM: &str = "transaction_status_checker_evm";
+const TRANSACTION_STATUS_CHECKER_STELLAR: &str = "transaction_status_checker_stellar";
 const NOTIFICATION_SENDER: &str = "notification_sender";
 const SOLANA_TOKEN_SWAP_REQUEST: &str = "solana_token_swap_request";
 const TRANSACTION_CLEANUP: &str = "transaction_cleanup";
@@ -91,7 +95,25 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
         .backend(queue.transaction_submission_queue.clone())
         .build_fn(transaction_submission_handler);
 
+    // Generic status checker
+    // Uses medium settings that work reasonably for most chains
     let transaction_status_queue_worker = WorkerBuilder::new(TRANSACTION_STATUS_CHECKER)
+        .layer(ErrorHandlingLayer::new())
+        .enable_tracing()
+        .catch_panic()
+        .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
+        .retry(
+            RetryPolicy::retries(WORKER_TRANSACTION_STATUS_CHECKER_RETRIES)
+                .with_backoff(create_backoff(5000, 15000, 0.99)?.make_backoff()),
+        )
+        .concurrency(DEFAULT_CONCURRENCY)
+        .data(app_state.clone())
+        .backend(queue.transaction_status_queue.clone())
+        .build_fn(transaction_status_handler);
+
+    // EVM status checker - slower retries to avoid premature resubmission
+    // EVM has longer block times (~12s) and needs time for resubmission logic
+    let transaction_status_queue_worker_evm = WorkerBuilder::new(TRANSACTION_STATUS_CHECKER_EVM)
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
         .catch_panic()
@@ -102,8 +124,25 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
         )
         .concurrency(DEFAULT_CONCURRENCY)
         .data(app_state.clone())
-        .backend(queue.transaction_status_queue.clone())
+        .backend(queue.transaction_status_queue_evm.clone())
         .build_fn(transaction_status_handler);
+
+    // Stellar status checker - fast retries for fast finality
+    // Stellar has sub-second finality, needs more frequent status checks
+    let transaction_status_queue_worker_stellar =
+        WorkerBuilder::new(TRANSACTION_STATUS_CHECKER_STELLAR)
+            .layer(ErrorHandlingLayer::new())
+            .enable_tracing()
+            .catch_panic()
+            .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
+            .retry(
+                RetryPolicy::retries(WORKER_TRANSACTION_STATUS_CHECKER_RETRIES)
+                    .with_backoff(create_backoff(2000, 3000, 0.99)?.make_backoff()),
+            )
+            .concurrency(DEFAULT_CONCURRENCY)
+            .data(app_state.clone())
+            .backend(queue.transaction_status_queue_stellar.clone())
+            .build_fn(transaction_status_handler);
 
     let notification_queue_worker = WorkerBuilder::new(NOTIFICATION_SENDER)
         .layer(ErrorHandlingLayer::new())
@@ -154,6 +193,8 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
         .register(transaction_request_queue_worker)
         .register(transaction_submission_queue_worker)
         .register(transaction_status_queue_worker)
+        .register(transaction_status_queue_worker_evm)
+        .register(transaction_status_queue_worker_stellar)
         .register(notification_queue_worker)
         .register(solana_token_swap_request_queue_worker)
         .register(transaction_cleanup_queue_worker)

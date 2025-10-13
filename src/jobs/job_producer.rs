@@ -174,18 +174,30 @@ impl JobProducerTrait for JobProducer {
         let mut queue = self.queue.lock().await;
         let job = Job::new(
             JobType::TransactionStatusCheck,
-            transaction_status_check_job,
+            transaction_status_check_job.clone(),
         )
         .with_request_id(get_request_id());
+
+        // Route to the appropriate queue based on network type
+        use crate::models::NetworkType;
+        let status_queue = match transaction_status_check_job.network_type {
+            NetworkType::Evm => &mut queue.transaction_status_queue_evm,
+            NetworkType::Stellar => &mut queue.transaction_status_queue_stellar,
+            _ => &mut queue.transaction_status_queue, // Generic queue
+        };
+
         match scheduled_on {
             Some(on) => {
-                queue.transaction_status_queue.schedule(job, on).await?;
+                status_queue.schedule(job, on).await?;
             }
             None => {
-                queue.transaction_status_queue.push(job).await?;
+                status_queue.push(job).await?;
             }
         }
-        debug!("Transaction Status Check job produced successfully");
+        debug!(
+            network_type = ?transaction_status_check_job.network_type,
+            "Transaction Status Check job produced successfully"
+        );
         Ok(())
     }
 
@@ -280,6 +292,8 @@ mod tests {
         pub transaction_request_queue: TestRedisStorage<Job<TransactionRequest>>,
         pub transaction_submission_queue: TestRedisStorage<Job<TransactionSend>>,
         pub transaction_status_queue: TestRedisStorage<Job<TransactionStatusCheck>>,
+        pub transaction_status_queue_evm: TestRedisStorage<Job<TransactionStatusCheck>>,
+        pub transaction_status_queue_stellar: TestRedisStorage<Job<TransactionStatusCheck>>,
         pub notification_queue: TestRedisStorage<Job<NotificationSend>>,
         pub solana_token_swap_request_queue: TestRedisStorage<Job<SolanaTokenSwapRequest>>,
     }
@@ -290,6 +304,8 @@ mod tests {
                 transaction_request_queue: TestRedisStorage::new(),
                 transaction_submission_queue: TestRedisStorage::new(),
                 transaction_status_queue: TestRedisStorage::new(),
+                transaction_status_queue_evm: TestRedisStorage::new(),
+                transaction_status_queue_stellar: TestRedisStorage::new(),
                 notification_queue: TestRedisStorage::new(),
                 solana_token_swap_request_queue: TestRedisStorage::new(),
             }
@@ -366,15 +382,23 @@ mod tests {
             let mut queue = self.queue.lock().await;
             let job = Job::new(
                 JobType::TransactionStatusCheck,
-                transaction_status_check_job,
+                transaction_status_check_job.clone(),
             );
+
+            // Route to the appropriate queue based on network type
+            use crate::models::NetworkType;
+            let status_queue = match transaction_status_check_job.network_type {
+                NetworkType::Evm => &mut queue.transaction_status_queue_evm,
+                NetworkType::Stellar => &mut queue.transaction_status_queue_stellar,
+                NetworkType::Solana => &mut queue.transaction_status_queue, // Use default queue
+            };
 
             match scheduled_on {
                 Some(on) => {
-                    queue.transaction_status_queue.schedule(job, on).await?;
+                    status_queue.schedule(job, on).await?;
                 }
                 None => {
-                    queue.transaction_status_queue.push(job).await?;
+                    status_queue.push(job).await?;
                 }
             }
 
@@ -472,17 +496,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_status_job() {
+        use crate::models::NetworkType;
         let producer = TestJobProducer::new();
 
-        // Test status check job
-        let status_job = TransactionStatusCheck::new("tx123", "relayer-1");
+        // Test status check job for EVM
+        let status_job = TransactionStatusCheck::new("tx123", "relayer-1", NetworkType::Evm);
         let result = producer
             .produce_check_transaction_status_job(status_job, None)
             .await;
         assert!(result.is_ok());
 
         let queue = producer.get_queue().await;
-        assert!(queue.transaction_status_queue.push_called);
+        assert!(queue.transaction_status_queue_evm.push_called);
     }
 
     #[tokio::test]

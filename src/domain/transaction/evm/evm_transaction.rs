@@ -156,7 +156,11 @@ where
         let delay = delay_seconds.map(calculate_scheduled_timestamp);
         self.job_producer()
             .produce_check_transaction_status_job(
-                TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
+                TransactionStatusCheck::new(
+                    tx.id.clone(),
+                    tx.relayer_id.clone(),
+                    crate::models::NetworkType::Evm,
+                ),
                 delay,
             )
             .await

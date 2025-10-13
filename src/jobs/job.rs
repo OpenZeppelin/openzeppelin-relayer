@@ -4,7 +4,7 @@
 //! - Transaction processing
 //! - Status monitoring
 //! - Notifications
-use crate::models::WebhookNotification;
+use crate::models::{NetworkType, WebhookNotification};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -145,14 +145,20 @@ impl TransactionSend {
 pub struct TransactionStatusCheck {
     pub transaction_id: String,
     pub relayer_id: String,
+    pub network_type: NetworkType,
     pub metadata: Option<HashMap<String, String>>,
 }
 
 impl TransactionStatusCheck {
-    pub fn new(transaction_id: impl Into<String>, relayer_id: impl Into<String>) -> Self {
+    pub fn new(
+        transaction_id: impl Into<String>,
+        relayer_id: impl Into<String>,
+        network_type: NetworkType,
+    ) -> Self {
         Self {
             transaction_id: transaction_id.into(),
             relayer_id: relayer_id.into(),
+            network_type,
             metadata: None,
         }
     }
@@ -261,16 +267,18 @@ mod tests {
 
     #[test]
     fn test_transaction_status_check() {
-        let tx_status = TransactionStatusCheck::new("tx123", "relayer-1");
+        let tx_status = TransactionStatusCheck::new("tx123", "relayer-1", NetworkType::Evm);
         assert_eq!(tx_status.transaction_id, "tx123");
         assert_eq!(tx_status.relayer_id, "relayer-1");
+        assert_eq!(tx_status.network_type, NetworkType::Evm);
         assert!(tx_status.metadata.is_none());
 
         let mut metadata = HashMap::new();
         metadata.insert("retries".to_string(), "3".to_string());
 
         let tx_status_with_metadata =
-            TransactionStatusCheck::new("tx123", "relayer-1").with_metadata(metadata.clone());
+            TransactionStatusCheck::new("tx123", "relayer-1", NetworkType::Stellar)
+                .with_metadata(metadata.clone());
 
         assert!(tx_status_with_metadata.metadata.is_some());
         assert_eq!(tx_status_with_metadata.metadata.unwrap(), metadata);

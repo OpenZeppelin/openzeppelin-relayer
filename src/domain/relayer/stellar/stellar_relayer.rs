@@ -270,7 +270,11 @@ where
 
         self.job_producer
             .produce_check_transaction_status_job(
-                TransactionStatusCheck::new(transaction.id.clone(), transaction.relayer_id.clone()),
+                TransactionStatusCheck::new(
+                    transaction.id.clone(),
+                    transaction.relayer_id.clone(),
+                    crate::models::NetworkType::Stellar,
+                ),
                 Some(calculate_scheduled_timestamp(
                     STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS,
                 )),
