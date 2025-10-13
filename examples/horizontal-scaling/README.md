@@ -210,7 +210,44 @@ command:
 
 ### Worker Concurrency
 
-The default worker concurrency is conservative. To increase it, you'll need to modify the source code in `src/bootstrap/initialize_workers.rs` or wait for environment variable support.
+The default worker concurrency is 1500 concurrent jobs per worker. You can tune it using environment variables based on your resource constraints:
+
+```yaml
+environment:
+  # Global rate limiting for all workers (jobs per time window)
+  - BACKGROUND_WORKER_RATE_LIMIT=5000
+  - BACKGROUND_WORKER_RATE_LIMIT_DURATION_MS=1000
+  
+  # Per-worker concurrency settings
+  - BACKGROUND_WORKER_TRANSACTION_REQUEST_CONCURRENCY=20
+  - BACKGROUND_WORKER_TRANSACTION_SENDER_CONCURRENCY=20
+  - BACKGROUND_WORKER_TRANSACTION_STATUS_CHECKER_CONCURRENCY=15
+  - BACKGROUND_WORKER_TRANSACTION_STATUS_CHECKER_EVM_CONCURRENCY=15
+  - BACKGROUND_WORKER_TRANSACTION_STATUS_CHECKER_STELLAR_CONCURRENCY=20
+  - BACKGROUND_WORKER_NOTIFICATION_SENDER_CONCURRENCY=20
+```
+
+**Available Worker Configuration Variables:**
+
+- `BACKGROUND_WORKER_RATE_LIMIT` - Global rate limit for all workers (default: 3000)
+- `BACKGROUND_WORKER_RATE_LIMIT_DURATION_MS` - Rate limit time window in milliseconds (default: 1000)
+- `BACKGROUND_WORKER_TRANSACTION_REQUEST_CONCURRENCY` - Transaction request worker concurrency (default: 1500)
+- `BACKGROUND_WORKER_TRANSACTION_SENDER_CONCURRENCY` - Transaction submission worker concurrency (default: 1500)
+- `BACKGROUND_WORKER_TRANSACTION_STATUS_CHECKER_CONCURRENCY` - Generic status checker concurrency (default: 1500)
+- `BACKGROUND_WORKER_TRANSACTION_STATUS_CHECKER_EVM_CONCURRENCY` - EVM status checker concurrency (default: 1500)
+- `BACKGROUND_WORKER_TRANSACTION_STATUS_CHECKER_STELLAR_CONCURRENCY` - Stellar status checker concurrency (default: 1500)
+- `BACKGROUND_WORKER_NOTIFICATION_SENDER_CONCURRENCY` - Notification worker concurrency (default: 1500)
+- `BACKGROUND_WORKER_SOLANA_TOKEN_SWAP_REQUEST_CONCURRENCY` - Solana swap worker concurrency (default: 1500)
+- `BACKGROUND_WORKER_TRANSACTION_CLEANUP_CONCURRENCY` - Cleanup worker concurrency (default: 1)
+- `BACKGROUND_WORKER_RELAYER_HEALTH_CHECK_CONCURRENCY` - Health check worker concurrency (default: 1500)
+
+**Tuning Recommendations:**
+
+- **High throughput**: Increase concurrency for transaction_request and transaction_sender workers
+- **Fast finality networks** (Stellar): Increase the Stellar status checker concurrency
+- **Slow finality networks** (Ethereum): Keep EVM status checker concurrency moderate to avoid overwhelming RPC endpoints
+- **Rate limiting**: Adjust `BACKGROUND_WORKER_RATE_LIMIT` based on your infrastructure capacity
+- **Cleanup worker**: Keep at 1 to avoid database conflicts
 
 ## Production Considerations
 

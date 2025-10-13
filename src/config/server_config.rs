@@ -291,6 +291,44 @@ impl ServerConfig {
             .parse()
             .unwrap_or(4)
     }
+
+    /// Get worker concurrency from environment variable or use default
+    ///
+    /// Environment variable format: `BACKGROUND_WORKER_{WORKER_NAME}_CONCURRENCY`
+    /// Example: `BACKGROUND_WORKER_TRANSACTION_REQUEST_CONCURRENCY=20`
+    pub fn get_worker_concurrency(worker_name: &str, default: usize) -> usize {
+        let env_var = format!(
+            "BACKGROUND_WORKER_{}_CONCURRENCY",
+            worker_name.to_uppercase()
+        );
+        env::var(&env_var)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+    }
+
+    /// Get rate limit from environment variable or use default
+    ///
+    /// Environment variable: `BACKGROUND_WORKER_RATE_LIMIT`
+    /// Default: Uses the provided default value
+    pub fn get_worker_rate_limit(default: u64) -> u64 {
+        env::var("BACKGROUND_WORKER_RATE_LIMIT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+    }
+
+    /// Get rate limit duration from environment variable (in milliseconds) or use default
+    ///
+    /// Environment variable: `BACKGROUND_WORKER_RATE_LIMIT_DURATION_MS`
+    /// Default: Uses the provided default value
+    pub fn get_worker_rate_limit_duration(default: std::time::Duration) -> std::time::Duration {
+        env::var("BACKGROUND_WORKER_RATE_LIMIT_DURATION_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(std::time::Duration::from_millis)
+            .unwrap_or(default)
+    }
 }
 
 #[cfg(test)]

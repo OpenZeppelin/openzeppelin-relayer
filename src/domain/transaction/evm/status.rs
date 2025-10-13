@@ -539,11 +539,11 @@ where
             warn!(
                 tx_id = %tx.id,
                 age_seconds = age_since_sent.num_seconds(),
-                "transaction stuck in Sent, queuing resend job"
+                "transaction stuck in Sent, queuing resubmit job with repricing"
             );
 
-            // Queue resend job (transaction is already prepared)
-            self.send_transaction_resend_job(&tx).await?;
+            // Queue resubmit job to reprice the transaction for better acceptance
+            self.send_transaction_resubmit_job(&tx).await?;
         }
 
         self.update_transaction_status_if_needed(tx, TransactionStatus::Sent)
