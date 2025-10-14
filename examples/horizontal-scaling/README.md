@@ -45,11 +45,10 @@ This example demonstrates how to deploy the OpenZeppelin Relayer in a horizontal
 - Graceful degradation if instances go down
 
 ### Performance Optimizations
-- **Rate limits**: 500 requests/second per instance (1500 total)
-- **Burst capacity**: 1000 requests per instance
 - **Resource limits**: 2 CPU cores, 4GB RAM per instance
 - **Redis tuning**: Optimized for high throughput with 4GB memory
-- **Worker configuration**: Increased concurrency for parallel processing
+- **Worker configuration**: Optimized concurrency for parallel processing
+- **Connection pooling**: Persistent connections to Redis and RPC endpoints
 
 ### Shared State
 - All instances share Redis for:
@@ -183,18 +182,6 @@ curl -X GET http://localhost:8080/api/v1/relayers \
 
 ## Performance Tuning
 
-### Rate Limits
-
-Adjust per-instance rate limits:
-
-```yaml
-environment:
-  RATE_LIMIT_REQUESTS_PER_SECOND: 1000  # Increase for higher throughput
-  RATE_LIMIT_BURST_SIZE: 2000
-```
-
-**Total capacity** = `RATE_LIMIT_REQUESTS_PER_SECOND` × number of instances
-
 ### Redis Configuration
 
 For higher throughput, adjust Redis settings in `docker-compose.yaml`:
@@ -210,44 +197,38 @@ command:
 
 ### Worker Concurrency
 
-The default worker concurrency is 50 concurrent jobs per worker. You can tune it using environment variables based on your resource constraints and expected load:
+Worker concurrency controls how many jobs each worker can process simultaneously. Defaults are optimized based on typical workload patterns. You can tune them using environment variables:
 
 ```yaml
 environment:
-  # Global rate limiting for all workers (jobs per time window)
-  - BACKGROUND_WORKER_RATE_LIMIT=5000
-  - BACKGROUND_WORKER_RATE_LIMIT_DURATION_MS=1000
-
   # Per-worker concurrency settings
-  - BACKGROUND_WORKER_TRANSACTION_REQUEST_CONCURRENCY=20
-  - BACKGROUND_WORKER_TRANSACTION_SENDER_CONCURRENCY=20
-  - BACKGROUND_WORKER_TRANSACTION_STATUS_CHECKER_CONCURRENCY=15
-  - BACKGROUND_WORKER_TRANSACTION_STATUS_CHECKER_EVM_CONCURRENCY=15
-  - BACKGROUND_WORKER_TRANSACTION_STATUS_CHECKER_STELLAR_CONCURRENCY=20
-  - BACKGROUND_WORKER_NOTIFICATION_SENDER_CONCURRENCY=20
+  - BACKGROUND_WORKER_TRANSACTION_REQUEST_CONCURRENCY=100
+  - BACKGROUND_WORKER_TRANSACTION_SENDER_CONCURRENCY=150
+  - BACKGROUND_WORKER_TRANSACTION_STATUS_CHECKER_CONCURRENCY=100
+  - BACKGROUND_WORKER_TRANSACTION_STATUS_CHECKER_EVM_CONCURRENCY=200
+  - BACKGROUND_WORKER_TRANSACTION_STATUS_CHECKER_STELLAR_CONCURRENCY=100
+  - BACKGROUND_WORKER_NOTIFICATION_SENDER_CONCURRENCY=50
 ```
 
 **Available Worker Configuration Variables:**
 
-- `BACKGROUND_WORKER_RATE_LIMIT` - Global rate limit for all workers (default: 100)
-- `BACKGROUND_WORKER_RATE_LIMIT_DURATION_MS` - Rate limit time window in milliseconds (default: 1000)
 - `BACKGROUND_WORKER_TRANSACTION_REQUEST_CONCURRENCY` - Transaction request worker concurrency (default: 50)
-- `BACKGROUND_WORKER_TRANSACTION_SENDER_CONCURRENCY` - Transaction submission worker concurrency (default: 50)
+- `BACKGROUND_WORKER_TRANSACTION_SENDER_CONCURRENCY` - Transaction submission worker concurrency (default: 75)
 - `BACKGROUND_WORKER_TRANSACTION_STATUS_CHECKER_CONCURRENCY` - Generic status checker concurrency (default: 50)
-- `BACKGROUND_WORKER_TRANSACTION_STATUS_CHECKER_EVM_CONCURRENCY` - EVM status checker concurrency (default: 50)
+- `BACKGROUND_WORKER_TRANSACTION_STATUS_CHECKER_EVM_CONCURRENCY` - EVM status checker concurrency (default: 100, highest volume ~75% of jobs)
 - `BACKGROUND_WORKER_TRANSACTION_STATUS_CHECKER_STELLAR_CONCURRENCY` - Stellar status checker concurrency (default: 50)
-- `BACKGROUND_WORKER_NOTIFICATION_SENDER_CONCURRENCY` - Notification worker concurrency (default: 50)
-- `BACKGROUND_WORKER_SOLANA_TOKEN_SWAP_REQUEST_CONCURRENCY` - Solana swap worker concurrency (default: 50)
+- `BACKGROUND_WORKER_NOTIFICATION_SENDER_CONCURRENCY` - Notification worker concurrency (default: 30)
+- `BACKGROUND_WORKER_SOLANA_TOKEN_SWAP_REQUEST_CONCURRENCY` - Solana swap worker concurrency (default: 10, low volume)
 - `BACKGROUND_WORKER_TRANSACTION_CLEANUP_CONCURRENCY` - Cleanup worker concurrency (default: 1)
-- `BACKGROUND_WORKER_RELAYER_HEALTH_CHECK_CONCURRENCY` - Health check worker concurrency (default: 50)
+- `BACKGROUND_WORKER_RELAYER_HEALTH_CHECK_CONCURRENCY` - Health check worker concurrency (default: 10, low volume)
 
 **Tuning Recommendations:**
 
-- **High throughput**: Increase concurrency for transaction_request and transaction_sender workers
-- **Fast finality networks** (Stellar): Increase the Stellar status checker concurrency
-- **Slow finality networks** (Ethereum): Keep EVM status checker concurrency moderate to avoid overwhelming RPC endpoints
-- **Rate limiting**: Adjust `BACKGROUND_WORKER_RATE_LIMIT` based on your infrastructure capacity
-- **Cleanup worker**: Keep at 1 to avoid database conflicts
+- **High throughput**: Increase concurrency for `transaction_request`, `transaction_sender`, and especially `transaction_status_checker_evm` workers
+- **EVM networks**: EVM status checker handles the highest volume (~75% of all jobs) - scale this proportionally
+- **Fast finality networks** (Stellar): Increase Stellar status checker concurrency for sub-second finality chains
+- **Resource constraints**: Monitor CPU and memory usage when increasing concurrency
+- **Cleanup worker**: Always keep at 1 to avoid database conflicts
 
 ## Production Considerations
 
