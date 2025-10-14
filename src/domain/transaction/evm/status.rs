@@ -9,15 +9,16 @@ use tracing::{debug, error, info, warn};
 
 use super::EvmRelayerTransaction;
 use super::{
-    ensure_status, get_age_of_sent_at, get_age_since_created, get_age_since_status_change,
-    has_enough_confirmations, is_noop, is_pending_transaction, is_too_early_to_resubmit,
-    is_transaction_valid, make_noop, too_many_attempts, too_many_noop_attempts,
+    ensure_status, get_age_of_sent_at, get_age_since_status_change, has_enough_confirmations,
+    is_noop, is_pending_transaction, is_too_early_to_resubmit, is_transaction_valid, make_noop,
+    too_many_attempts, too_many_noop_attempts,
 };
 use crate::constants::{
     get_evm_pending_recovery_trigger_timeout, get_evm_prepare_timeout, get_evm_resend_timeout,
     ARBITRUM_TIME_TO_RESUBMIT,
 };
 use crate::domain::transaction::common::is_final_state;
+use crate::domain::transaction::util::get_age_since_created;
 use crate::models::{EvmNetwork, NetworkRepoModel, NetworkType};
 use crate::repositories::{NetworkRepository, RelayerRepository};
 use crate::{
@@ -221,7 +222,7 @@ where
                 .with_timezone(&Utc);
             let age = Utc::now().signed_duration_since(created_time);
             if age > get_evm_prepare_timeout() {
-                info!("Transaction in Pending state for over 1 minute, will replace with NOOP");
+                info!("Transaction in Pending state for over 2 minutes, will replace with NOOP");
                 return Ok(true);
             }
         }
@@ -474,7 +475,7 @@ where
     /// Determines if we should attempt hash recovery for a stuck transaction.
     ///
     /// This is an expensive operation, so we only do it when:
-    /// - Transaction has been in Submitted status for a while (> 5 minutes)
+    /// - Transaction has been in Submitted status for a while (> 2 minutes)
     /// - Transaction has had at least 2 resubmission attempts (hashes.len() > 1)
     /// - Haven't tried recovery too recently (to avoid repeated attempts)
     fn should_try_hash_recovery(

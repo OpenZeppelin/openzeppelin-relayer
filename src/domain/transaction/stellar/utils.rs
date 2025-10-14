@@ -1,8 +1,7 @@
 //! Utility functions for Stellar transaction domain logic.
 use crate::models::OperationSpec;
-use crate::models::{RelayerError, TransactionError, TransactionRepoModel};
+use crate::models::RelayerError;
 use crate::services::StellarProviderTrait;
-use chrono::{Duration, Utc};
 use soroban_rs::xdr;
 use tracing::info;
 
@@ -129,14 +128,6 @@ pub fn create_transaction_signature_payload(
 // ============================================================================
 // Status Check Utility Functions
 // ============================================================================
-
-/// Gets the age of a transaction since it was created
-pub fn get_age_since_created(tx: &TransactionRepoModel) -> Result<Duration, TransactionError> {
-    let created_at = chrono::DateTime::parse_from_rfc3339(&tx.created_at)
-        .map_err(|e| TransactionError::UnexpectedError(format!("Invalid created_at: {}", e)))?;
-
-    Ok(Utc::now().signed_duration_since(created_at))
-}
 
 #[cfg(test)]
 mod tests {
@@ -294,9 +285,12 @@ mod tests {
     }
 
     mod status_check_utils_tests {
-        use super::*;
-        use crate::models::{NetworkTransactionData, StellarTransactionData, TransactionInput};
+        use crate::models::{
+            NetworkTransactionData, StellarTransactionData, TransactionError, TransactionInput,
+            TransactionRepoModel,
+        };
         use crate::utils::mocks::mockutils::create_mock_transaction;
+        use chrono::{Duration, Utc};
 
         /// Helper to create a test transaction with a specific created_at timestamp
         fn create_test_tx_with_age(seconds_ago: i64) -> TransactionRepoModel {
@@ -322,6 +316,8 @@ mod tests {
         }
 
         mod get_age_since_created_tests {
+            use crate::domain::get_age_since_created;
+
             use super::*;
 
             #[test]

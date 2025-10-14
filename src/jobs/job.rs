@@ -146,7 +146,10 @@ impl TransactionSend {
 pub struct TransactionStatusCheck {
     pub transaction_id: String,
     pub relayer_id: String,
-    pub network_type: NetworkType,
+    /// Network type for this transaction status check.
+    /// Optional for backward compatibility with older queued messages.
+    #[serde(default)]
+    pub network_type: Option<NetworkType>,
     pub metadata: Option<HashMap<String, String>>,
 }
 
@@ -159,7 +162,7 @@ impl TransactionStatusCheck {
         Self {
             transaction_id: transaction_id.into(),
             relayer_id: relayer_id.into(),
-            network_type,
+            network_type: Some(network_type),
             metadata: None,
         }
     }
@@ -293,7 +296,7 @@ mod tests {
         let tx_status = TransactionStatusCheck::new("tx123", "relayer-1", NetworkType::Evm);
         assert_eq!(tx_status.transaction_id, "tx123");
         assert_eq!(tx_status.relayer_id, "relayer-1");
-        assert_eq!(tx_status.network_type, NetworkType::Evm);
+        assert_eq!(tx_status.network_type, Some(NetworkType::Evm));
         assert!(tx_status.metadata.is_none());
 
         let mut metadata = HashMap::new();
@@ -305,6 +308,27 @@ mod tests {
 
         assert!(tx_status_with_metadata.metadata.is_some());
         assert_eq!(tx_status_with_metadata.metadata.unwrap(), metadata);
+    }
+
+    #[test]
+    fn test_transaction_status_check_backward_compatibility() {
+        // Simulate an old message without network_type field
+        let old_json = r#"{
+            "transaction_id": "tx456",
+            "relayer_id": "relayer-2",
+            "metadata": null
+        }"#;
+
+        // Should deserialize successfully with network_type defaulting to None
+        let deserialized: TransactionStatusCheck = serde_json::from_str(old_json).unwrap();
+        assert_eq!(deserialized.transaction_id, "tx456");
+        assert_eq!(deserialized.relayer_id, "relayer-2");
+        assert_eq!(deserialized.network_type, None);
+        assert!(deserialized.metadata.is_none());
+
+        // New messages should include network_type
+        let new_status = TransactionStatusCheck::new("tx789", "relayer-3", NetworkType::Solana);
+        assert_eq!(new_status.network_type, Some(NetworkType::Solana));
     }
 
     #[test]

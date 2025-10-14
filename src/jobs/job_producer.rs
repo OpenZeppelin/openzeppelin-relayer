@@ -196,9 +196,9 @@ impl JobProducerTrait for JobProducer {
         // Route to the appropriate queue based on network type
         use crate::models::NetworkType;
         let status_queue = match transaction_status_check_job.network_type {
-            NetworkType::Evm => &mut queue.transaction_status_queue_evm,
-            NetworkType::Stellar => &mut queue.transaction_status_queue_stellar,
-            _ => &mut queue.transaction_status_queue, // Generic queue
+            Some(NetworkType::Evm) => &mut queue.transaction_status_queue_evm,
+            Some(NetworkType::Stellar) => &mut queue.transaction_status_queue_stellar,
+            _ => &mut queue.transaction_status_queue, // Generic queue or legacy messages without network_type
         };
 
         match scheduled_on {
@@ -450,9 +450,10 @@ mod tests {
             // Route to the appropriate queue based on network type
             use crate::models::NetworkType;
             let status_queue = match transaction_status_check_job.network_type {
-                NetworkType::Evm => &mut queue.transaction_status_queue_evm,
-                NetworkType::Stellar => &mut queue.transaction_status_queue_stellar,
-                NetworkType::Solana => &mut queue.transaction_status_queue, // Use default queue
+                Some(NetworkType::Evm) => &mut queue.transaction_status_queue_evm,
+                Some(NetworkType::Stellar) => &mut queue.transaction_status_queue_stellar,
+                Some(NetworkType::Solana) => &mut queue.transaction_status_queue, // Use default queue
+                None => &mut queue.transaction_status_queue, // Legacy messages without network_type
             };
 
             match scheduled_on {

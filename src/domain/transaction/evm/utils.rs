@@ -2,6 +2,7 @@ use crate::constants::{
     ARBITRUM_GAS_LIMIT, DEFAULT_GAS_LIMIT, DEFAULT_TX_VALID_TIMESPAN,
     EVM_MIN_AGE_FOR_RESUBMIT_SECONDS, MAXIMUM_NOOP_RETRY_ATTEMPTS, MAXIMUM_TX_ATTEMPTS,
 };
+use crate::domain::get_age_since_created;
 use crate::models::EvmNetwork;
 use crate::models::{
     EvmTransactionData, TransactionError, TransactionRepoModel, TransactionStatus, U256,
@@ -192,16 +193,6 @@ pub fn get_age_of_sent_at(tx: &TransactionRepoModel) -> Result<Duration, Transac
         .map_err(|_| TransactionError::UnexpectedError("Error parsing sent_at time".to_string()))?
         .with_timezone(&Utc);
     Ok(now.signed_duration_since(sent_time))
-}
-
-/// Get age since transaction creation
-pub fn get_age_since_created(tx: &TransactionRepoModel) -> Result<Duration, TransactionError> {
-    let created = DateTime::parse_from_rfc3339(&tx.created_at)
-        .map_err(|e| {
-            TransactionError::UnexpectedError(format!("Error parsing created_at time: {}", e))
-        })?
-        .with_timezone(&Utc);
-    Ok(Utc::now().signed_duration_since(created))
 }
 
 /// Get age since status last changed

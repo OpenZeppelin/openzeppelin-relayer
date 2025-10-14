@@ -71,7 +71,7 @@ This table lists the environment variables and their default values.
 | `<any file name>`
 | File Name of the configuration file.
 
-| `RATE_LIMIT_RPS`
+| `RATE_LIMIT_REQUESTS_PER_SECOND`
 | `100`
 | `<any value>`
 | Rate limit for the API in requests per second.
@@ -229,7 +229,7 @@ CONFIG_DIR=./config
 CONFIG_FILE_NAME=config.json
 WEBHOOK_SIGNING_KEY=e1d42480-6f74-4d0b-85f4-b7f0bb690fae
 API_KEY=5eefd216-0e44-4ca7-b421-2925f90d30d5
-RATE_LIMIT_RPS=100
+RATE_LIMIT_REQUESTS_PER_SECOND=100
 RATE_LIMIT_BURST_SIZE=300
 METRICS_ENABLED=true
 METRICS_PORT=8081

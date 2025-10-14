@@ -59,7 +59,6 @@ pub const EVM_SUBMIT_TIMEOUT_MINUTES: i64 = 5;
 pub const EVM_RESEND_TIMEOUT_SECONDS: i64 = 25;
 
 /// Trigger recovery for stuck Pending transactions (in seconds)
-/// Set to 15s to trigger before timeout with sufficient safety margin
 pub const EVM_PENDING_RECOVERY_TRIGGER_SECONDS: i64 = 20;
 
 /// Get preparation timeout duration

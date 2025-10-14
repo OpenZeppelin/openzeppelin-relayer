@@ -45,8 +45,8 @@ This example demonstrates how to deploy the OpenZeppelin Relayer in a horizontal
 - Graceful degradation if instances go down
 
 ### Performance Optimizations
-- **Resource limits**: 2 CPU cores, 4GB RAM per instance
-- **Redis tuning**: Optimized for high throughput with 4GB memory
+- **Resource limits**: Up to 3 CPU cores, 4GB RAM per relayer instance (2 CPU / 2GB reserved)
+- **Redis**: Up to 2 CPU cores, 4GB memory (1 CPU / 2GB reserved)
 - **Worker configuration**: Optimized concurrency for parallel processing
 - **Connection pooling**: Persistent connections to Redis and RPC endpoints
 
@@ -63,8 +63,8 @@ This example demonstrates how to deploy the OpenZeppelin Relayer in a horizontal
 - [Docker](https://docs.docker.com/get-docker/) (20.10+)
 - [Docker Compose](https://docs.docker.com/compose/install/) (v2.0+)
 - Rust (for key generation tools)
-- At least 8GB RAM available for Docker
-- 4+ CPU cores recommended
+- **Minimum**: 8GB RAM, 7 CPU cores available for Docker
+- **Recommended**: 16GB RAM, 13+ CPU cores for full performance
 
 ## Getting Started
 

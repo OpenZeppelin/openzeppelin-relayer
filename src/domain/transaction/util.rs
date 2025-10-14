@@ -4,6 +4,7 @@
 //! handle unsupported operations for specific relayers. The module interacts with various
 //! repositories and factories to perform these operations.
 use actix_web::web::ThinData;
+use chrono::{DateTime, Duration, Utc};
 
 use crate::{
     domain::get_relayer_by_id,
@@ -127,4 +128,23 @@ pub fn solana_not_supported_transaction<T>() -> Result<T, TransactionError> {
     Err(TransactionError::NotSupported(
         "Endpoint is not supported for Solana relayers".to_string(),
     ))
+}
+
+/// Gets the age of a transaction since it was created.
+///
+/// # Arguments
+///
+/// * `tx` - The transaction repository model
+///
+/// # Returns
+///
+/// A `Result` containing the `Duration` since the transaction was created,
+/// or a `TransactionError` if the created_at timestamp cannot be parsed.
+pub fn get_age_since_created(tx: &TransactionRepoModel) -> Result<Duration, TransactionError> {
+    let created = DateTime::parse_from_rfc3339(&tx.created_at)
+        .map_err(|e| {
+            TransactionError::UnexpectedError(format!("Error parsing created_at time: {}", e))
+        })?
+        .with_timezone(&Utc);
+    Ok(Utc::now().signed_duration_since(created))
 }

@@ -114,7 +114,7 @@ where
         .catch_panic()
         .retry(
             RetryPolicy::retries(WORKER_TRANSACTION_SUBMIT_RETRIES)
-                .with_backoff(create_backoff(500, 2000, 0.99).unwrap().make_backoff()),
+                .with_backoff(create_backoff(500, 2000, 0.99)?.make_backoff()),
         )
         .concurrency(ServerConfig::get_worker_concurrency(
             TRANSACTION_SENDER,

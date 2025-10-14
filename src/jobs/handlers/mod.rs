@@ -22,14 +22,14 @@ pub use solana_swap_request_handler::*;
 mod transaction_cleanup_handler;
 pub use transaction_cleanup_handler::*;
 
-/// Handles job results for simple handlers (no transaction state management).
-///
-/// Used by: notification_handler, solana_swap_request_handler, transaction_cleanup_handler
-///
-/// # Retry Strategy
-/// - On success: Job completes
-/// - On error: Retry until max_attempts reached
-/// - At max_attempts: Abort job
+// Handles job results for simple handlers (no transaction state management).
+//
+// Used by: notification_handler, solana_swap_request_handler, transaction_cleanup_handler
+//
+// # Retry Strategy
+// - On success: Job completes
+// - On error: Retry until max_attempts reached
+// - At max_attempts: Abort job
 mod relayer_health_check_handler;
 pub use relayer_health_check_handler::*;
 
