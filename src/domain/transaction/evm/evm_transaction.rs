@@ -819,7 +819,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("cancelling transaction");
+        info!("cancelling transaction {}", tx.id);
         debug!(status = ?tx.status, "transaction status");
 
         // Validate state: can only cancel transactions that are still pending

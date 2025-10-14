@@ -20,7 +20,6 @@ use crate::{
     utils::calculate_scheduled_timestamp,
 };
 use async_trait::async_trait;
-use eyre::Result;
 use std::sync::Arc;
 use tracing::{error, info};
 

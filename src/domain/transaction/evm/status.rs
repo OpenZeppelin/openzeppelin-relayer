@@ -115,11 +115,12 @@ where
             // Only do this for transactions that have multiple resubmission attempts
             // and have been stuck in Submitted for a while
             if tx.hashes.len() > 1 && self.should_try_hash_recovery(tx)? {
-                if let Some(status) = self
+                if let Some(recovered_tx) = self
                     .try_recover_with_historical_hashes(tx, &evm_data)
                     .await?
                 {
-                    return Ok(status);
+                    // Return the status from the recovered (updated) transaction
+                    return Ok(recovered_tx.status);
                 }
             }
 
@@ -424,6 +425,23 @@ where
             "transaction status check completed"
         );
 
+        // 2.1. Reload transaction from DB if status changed
+        // This ensures we have fresh data if check_transaction_status triggered a recovery
+        // or any other update that modified the transaction in the database.
+        let tx = if status != tx.status {
+            debug!(
+                tx_id = %tx.id,
+                old_status = ?tx.status,
+                new_status = ?status,
+                "status changed during check, reloading transaction from DB to ensure fresh data"
+            );
+            self.transaction_repository()
+                .get_by_id(tx.id.clone())
+                .await?
+        } else {
+            tx
+        };
+
         // 3. Check if too early for resubmission on in-progress transactions
         // For Pending/Sent/Submitted states, defer resubmission logic and timeout checks
         // if the transaction is too young. Just update status and return.
@@ -515,11 +533,13 @@ where
     /// may contain multiple hashes. The "current" hash (network_data.hash) might not
     /// be the one that actually got mined. This method checks all historical hashes
     /// to find if any were mined, and updates the database with the correct one.
+    ///
+    /// Returns the updated transaction model if recovery was successful, None otherwise.
     async fn try_recover_with_historical_hashes(
         &self,
         tx: &TransactionRepoModel,
         evm_data: &crate::models::EvmTransactionData,
-    ) -> Result<Option<TransactionStatus>, TransactionError> {
+    ) -> Result<Option<TransactionRepoModel>, TransactionError> {
         warn!(
             tx_id = %tx.id,
             current_hash = ?evm_data.hash,
@@ -558,15 +578,16 @@ where
 
                     // Update with correct hash and Mined status
                     // Let the normal status check flow handle confirmation checking
-                    self.update_transaction_with_corrected_hash(
-                        tx,
-                        evm_data,
-                        historical_hash,
-                        TransactionStatus::Mined,
-                    )
-                    .await?;
+                    let updated_tx = self
+                        .update_transaction_with_corrected_hash(
+                            tx,
+                            evm_data,
+                            historical_hash,
+                            TransactionStatus::Mined,
+                        )
+                        .await?;
 
-                    return Ok(Some(TransactionStatus::Mined));
+                    return Ok(Some(updated_tx));
                 }
                 Ok(None) => {
                     // This hash not found either, continue to next
@@ -594,17 +615,20 @@ where
     }
 
     /// Updates transaction with the corrected hash and status
+    ///
+    /// Returns the updated transaction model and sends a notification about the status change.
     async fn update_transaction_with_corrected_hash(
         &self,
         tx: &TransactionRepoModel,
         evm_data: &crate::models::EvmTransactionData,
         correct_hash: &str,
         status: TransactionStatus,
-    ) -> Result<(), TransactionError> {
+    ) -> Result<TransactionRepoModel, TransactionError> {
         let mut corrected_data = evm_data.clone();
         corrected_data.hash = Some(correct_hash.to_string());
 
-        self.transaction_repository()
+        let updated_tx = self
+            .transaction_repository()
             .partial_update(
                 tx.id.clone(),
                 TransactionUpdateRequest {
@@ -615,7 +639,16 @@ where
             )
             .await?;
 
-        Ok(())
+        // Send notification about the recovered transaction
+        if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
+            error!(
+                tx_id = %updated_tx.id,
+                error = %e,
+                "failed to send notification after hash recovery"
+            );
+        }
+
+        Ok(updated_tx)
     }
 }
 
@@ -1541,6 +1574,11 @@ mod tests {
                 .job_producer
                 .expect_produce_send_notification_job()
                 .returning(|_, _| Box::pin(async { Ok(()) }));
+            // Expect get_by_id to reload the transaction after status change
+            mocks.tx_repo.expect_get_by_id().returning(|_| {
+                let updated_tx = make_test_transaction(TransactionStatus::Mined);
+                Ok(updated_tx)
+            });
             // Expect update_transaction_status_if_needed to update status to Mined.
             mocks
                 .tx_repo

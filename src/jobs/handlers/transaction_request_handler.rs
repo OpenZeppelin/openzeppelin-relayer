@@ -5,7 +5,6 @@
 use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Context, Data, TaskId, Worker, *};
 use apalis_redis::RedisContext;
-use eyre::Result;
 use tracing::instrument;
 
 use crate::{
@@ -54,7 +53,7 @@ pub async fn transaction_request_handler(
 async fn handle_request(
     request: TransactionRequest,
     state: Data<ThinData<DefaultAppState>>,
-) -> Result<()> {
+) -> eyre::Result<()> {
     let relayer_transaction = get_relayer_transaction(request.relayer_id, &state).await?;
 
     let transaction = get_transaction_by_id(request.transaction_id.clone(), &state).await?;
