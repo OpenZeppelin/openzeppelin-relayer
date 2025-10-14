@@ -2203,4 +2203,540 @@ mod tests {
             panic!("Expected EVM network data");
         }
     }
+
+    #[test]
+    fn test_is_already_submitted_error_detection() {
+        // Test "already known" variants
+        assert!(DefaultEvmTransaction::is_already_submitted_error(
+            &"already known"
+        ));
+        assert!(DefaultEvmTransaction::is_already_submitted_error(
+            &"Transaction already known"
+        ));
+        assert!(DefaultEvmTransaction::is_already_submitted_error(
+            &"Error: already known"
+        ));
+
+        // Test "nonce too low" variants
+        assert!(DefaultEvmTransaction::is_already_submitted_error(
+            &"nonce too low"
+        ));
+        assert!(DefaultEvmTransaction::is_already_submitted_error(
+            &"Nonce Too Low"
+        ));
+        assert!(DefaultEvmTransaction::is_already_submitted_error(
+            &"Error: nonce too low"
+        ));
+
+        // Test "replacement transaction underpriced" variants
+        assert!(DefaultEvmTransaction::is_already_submitted_error(
+            &"replacement transaction underpriced"
+        ));
+        assert!(DefaultEvmTransaction::is_already_submitted_error(
+            &"Replacement Transaction Underpriced"
+        ));
+
+        // Test non-matching errors
+        assert!(!DefaultEvmTransaction::is_already_submitted_error(
+            &"insufficient funds"
+        ));
+        assert!(!DefaultEvmTransaction::is_already_submitted_error(
+            &"execution reverted"
+        ));
+        assert!(!DefaultEvmTransaction::is_already_submitted_error(
+            &"gas too low"
+        ));
+        assert!(!DefaultEvmTransaction::is_already_submitted_error(
+            &"timeout"
+        ));
+    }
+
+    /// Test submit_transaction with "already known" error in Sent status
+    /// This should treat the error as success and update to Submitted
+    #[tokio::test]
+    async fn test_submit_transaction_already_known_error_from_sent() {
+        let mut mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mock_price_calculator = MockPriceCalculator::new();
+        let counter_service = MockTransactionCounterTrait::new();
+        let mock_network = MockNetworkRepository::new();
+
+        let relayer = create_test_relayer();
+        let mut test_tx = create_test_transaction();
+        test_tx.status = TransactionStatus::Sent;
+        test_tx.sent_at = Some(Utc::now().to_rfc3339());
+        test_tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+            nonce: Some(42),
+            hash: Some("0xhash".to_string()),
+            raw: Some(vec![1, 2, 3]),
+            ..test_tx.network_data.get_evm_transaction_data().unwrap()
+        });
+
+        // Provider returns "already known" error
+        mock_provider
+            .expect_send_raw_transaction()
+            .times(1)
+            .returning(|_| {
+                Box::pin(async {
+                    Err(crate::services::ProviderError::Other(
+                        "already known: transaction already in mempool".to_string(),
+                    ))
+                })
+            });
+
+        // Should still update to Submitted status
+        let test_tx_clone = test_tx.clone();
+        mock_transaction
+            .expect_partial_update()
+            .times(1)
+            .withf(|_, update| update.status == Some(TransactionStatus::Submitted))
+            .returning(move |_, update| {
+                let mut updated_tx = test_tx_clone.clone();
+                updated_tx.status = update.status.unwrap();
+                updated_tx.sent_at = update.sent_at.clone();
+                Ok(updated_tx)
+            });
+
+        mock_job_producer
+            .expect_produce_send_notification_job()
+            .times(1)
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(mock_network),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.submit_transaction(test_tx).await;
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.status, TransactionStatus::Submitted);
+    }
+
+    /// Test submit_transaction with real error (not "already known") should fail
+    #[tokio::test]
+    async fn test_submit_transaction_real_error_fails() {
+        let mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mock_signer = MockSigner::new();
+        let mock_job_producer = MockJobProducerTrait::new();
+        let mock_price_calculator = MockPriceCalculator::new();
+        let counter_service = MockTransactionCounterTrait::new();
+        let mock_network = MockNetworkRepository::new();
+
+        let relayer = create_test_relayer();
+        let mut test_tx = create_test_transaction();
+        test_tx.status = TransactionStatus::Sent;
+        test_tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+            raw: Some(vec![1, 2, 3]),
+            ..test_tx.network_data.get_evm_transaction_data().unwrap()
+        });
+
+        // Provider returns a real error
+        mock_provider
+            .expect_send_raw_transaction()
+            .times(1)
+            .returning(|_| {
+                Box::pin(async {
+                    Err(crate::services::ProviderError::Other(
+                        "insufficient funds for gas * price + value".to_string(),
+                    ))
+                })
+            });
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(mock_network),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.submit_transaction(test_tx).await;
+        assert!(result.is_err());
+    }
+
+    /// Test resubmit_transaction when transaction is already submitted
+    /// Should NOT update hash, only status
+    #[tokio::test]
+    async fn test_resubmit_transaction_already_submitted_preserves_hash() {
+        let mut mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mut mock_signer = MockSigner::new();
+        let mock_job_producer = MockJobProducerTrait::new();
+        let mut mock_price_calculator = MockPriceCalculator::new();
+        let counter_service = MockTransactionCounterTrait::new();
+        let mock_network = MockNetworkRepository::new();
+
+        let relayer = create_test_relayer();
+        let mut test_tx = create_test_transaction();
+        test_tx.status = TransactionStatus::Submitted;
+        test_tx.sent_at = Some(Utc::now().to_rfc3339());
+        let original_hash = "0xoriginal_hash".to_string();
+        test_tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+            nonce: Some(42),
+            hash: Some(original_hash.clone()),
+            raw: Some(vec![1, 2, 3]),
+            ..test_tx.network_data.get_evm_transaction_data().unwrap()
+        });
+        test_tx.hashes = vec![original_hash.clone()];
+
+        // Price calculator returns bumped price
+        mock_price_calculator
+            .expect_calculate_bumped_gas_price()
+            .times(1)
+            .returning(|_, _| {
+                Ok(PriceParams {
+                    gas_price: Some(25000000000), // 25% bump
+                    max_fee_per_gas: None,
+                    max_priority_fee_per_gas: None,
+                    is_min_bumped: Some(true),
+                    extra_fee: None,
+                    total_cost: U256::from(525000000000000u64),
+                })
+            });
+
+        // Balance check passes
+        mock_provider
+            .expect_get_balance()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(U256::from(1000000000000000000u64)) }));
+
+        // Signer creates new transaction with new hash
+        mock_signer
+            .expect_sign_transaction()
+            .times(1)
+            .returning(|_| {
+                Box::pin(ready(Ok(
+                    crate::domain::relayer::SignTransactionResponse::Evm(
+                        crate::domain::relayer::SignTransactionResponseEvm {
+                            hash: "0xnew_hash_that_should_not_be_saved".to_string(),
+                            signature: crate::models::EvmTransactionDataSignature {
+                                r: "r".to_string(),
+                                s: "s".to_string(),
+                                v: 1,
+                                sig: "0xsignature".to_string(),
+                            },
+                            raw: vec![4, 5, 6],
+                        },
+                    ),
+                )))
+            });
+
+        // Provider returns "already known" - transaction is already in mempool
+        mock_provider
+            .expect_send_raw_transaction()
+            .times(1)
+            .returning(|_| {
+                Box::pin(async {
+                    Err(crate::services::ProviderError::Other(
+                        "already known: transaction with same nonce already in mempool".to_string(),
+                    ))
+                })
+            });
+
+        // Verify that partial_update is called with NO network_data (preserving original hash)
+        let test_tx_clone = test_tx.clone();
+        mock_transaction
+            .expect_partial_update()
+            .times(1)
+            .withf(|_, update| {
+                // Should only update status, NOT network_data or hashes
+                update.status == Some(TransactionStatus::Submitted)
+                    && update.network_data.is_none()
+                    && update.hashes.is_none()
+            })
+            .returning(move |_, _| {
+                let mut updated_tx = test_tx_clone.clone();
+                updated_tx.status = TransactionStatus::Submitted;
+                // Hash should remain unchanged!
+                Ok(updated_tx)
+            });
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(mock_network),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.resubmit_transaction(test_tx.clone()).await;
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+
+        // Verify hash was NOT changed
+        if let NetworkTransactionData::Evm(evm_data) = &updated_tx.network_data {
+            assert_eq!(evm_data.hash, Some(original_hash));
+        } else {
+            panic!("Expected EVM network data");
+        }
+    }
+
+    /// Test submit_transaction with database update failure
+    /// Transaction is on-chain, but DB update fails - should return Ok with original tx
+    #[tokio::test]
+    async fn test_submit_transaction_db_failure_after_blockchain_success() {
+        let mut mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mock_price_calculator = MockPriceCalculator::new();
+        let counter_service = MockTransactionCounterTrait::new();
+        let mock_network = MockNetworkRepository::new();
+
+        let relayer = create_test_relayer();
+        let mut test_tx = create_test_transaction();
+        test_tx.status = TransactionStatus::Sent;
+        test_tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+            raw: Some(vec![1, 2, 3]),
+            ..test_tx.network_data.get_evm_transaction_data().unwrap()
+        });
+
+        // Provider succeeds
+        mock_provider
+            .expect_send_raw_transaction()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok("0xsubmitted_hash".to_string()) }));
+
+        // But database update fails
+        mock_transaction
+            .expect_partial_update()
+            .times(1)
+            .returning(|_, _| {
+                Err(crate::models::RepositoryError::UnexpectedError(
+                    "Redis timeout".to_string(),
+                ))
+            });
+
+        // Notification will still be sent (with original tx data)
+        mock_job_producer
+            .expect_produce_send_notification_job()
+            .times(1)
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(mock_network),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.submit_transaction(test_tx.clone()).await;
+        // Should return Ok (transaction is on-chain, don't retry)
+        assert!(result.is_ok());
+        let returned_tx = result.unwrap();
+        // Should return original tx since DB update failed
+        assert_eq!(returned_tx.id, test_tx.id);
+        assert_eq!(returned_tx.status, TransactionStatus::Sent); // Original status
+    }
+
+    /// Test send_transaction_resend_job success
+    #[tokio::test]
+    async fn test_send_transaction_resend_job_success() {
+        let mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mock_provider = MockEvmProviderTrait::new();
+        let mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mock_price_calculator = MockPriceCalculator::new();
+        let counter_service = MockTransactionCounterTrait::new();
+        let mock_network = MockNetworkRepository::new();
+
+        let relayer = create_test_relayer();
+        let test_tx = create_test_transaction();
+
+        // Expect produce_submit_transaction_job to be called with resend job
+        mock_job_producer
+            .expect_produce_submit_transaction_job()
+            .times(1)
+            .withf(|job, delay| {
+                // Verify it's a resend job with correct IDs
+                job.transaction_id == "test-tx-id"
+                    && job.relayer_id == "test-relayer-id"
+                    && matches!(job.command, crate::jobs::TransactionCommand::Resend)
+                    && delay.is_none()
+            })
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(mock_network),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.send_transaction_resend_job(&test_tx).await;
+        assert!(result.is_ok());
+    }
+
+    /// Test send_transaction_resend_job failure
+    #[tokio::test]
+    async fn test_send_transaction_resend_job_failure() {
+        let mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mock_provider = MockEvmProviderTrait::new();
+        let mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mock_price_calculator = MockPriceCalculator::new();
+        let counter_service = MockTransactionCounterTrait::new();
+        let mock_network = MockNetworkRepository::new();
+
+        let relayer = create_test_relayer();
+        let test_tx = create_test_transaction();
+
+        // Job producer returns an error
+        mock_job_producer
+            .expect_produce_submit_transaction_job()
+            .times(1)
+            .returning(|_, _| {
+                Box::pin(ready(Err(crate::jobs::JobProducerError::QueueError(
+                    "Job queue is full".to_string(),
+                ))))
+            });
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(mock_network),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.send_transaction_resend_job(&test_tx).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            TransactionError::UnexpectedError(msg) => {
+                assert!(msg.contains("Failed to produce resend job"));
+            }
+            _ => panic!("Expected UnexpectedError"),
+        }
+    }
+
+    /// Test send_transaction_request_job success
+    #[tokio::test]
+    async fn test_send_transaction_request_job_success() {
+        let mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mock_provider = MockEvmProviderTrait::new();
+        let mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mock_price_calculator = MockPriceCalculator::new();
+        let counter_service = MockTransactionCounterTrait::new();
+        let mock_network = MockNetworkRepository::new();
+
+        let relayer = create_test_relayer();
+        let test_tx = create_test_transaction();
+
+        // Expect produce_transaction_request_job to be called
+        mock_job_producer
+            .expect_produce_transaction_request_job()
+            .times(1)
+            .withf(|job, delay| {
+                // Verify correct transaction ID and relayer ID
+                job.transaction_id == "test-tx-id"
+                    && job.relayer_id == "test-relayer-id"
+                    && delay.is_none()
+            })
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(mock_network),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.send_transaction_request_job(&test_tx).await;
+        assert!(result.is_ok());
+    }
+
+    /// Test send_transaction_request_job failure
+    #[tokio::test]
+    async fn test_send_transaction_request_job_failure() {
+        let mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mock_provider = MockEvmProviderTrait::new();
+        let mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mock_price_calculator = MockPriceCalculator::new();
+        let counter_service = MockTransactionCounterTrait::new();
+        let mock_network = MockNetworkRepository::new();
+
+        let relayer = create_test_relayer();
+        let test_tx = create_test_transaction();
+
+        // Job producer returns an error
+        mock_job_producer
+            .expect_produce_transaction_request_job()
+            .times(1)
+            .returning(|_, _| {
+                Box::pin(ready(Err(crate::jobs::JobProducerError::QueueError(
+                    "Redis connection failed".to_string(),
+                ))))
+            });
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(mock_network),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.send_transaction_request_job(&test_tx).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            TransactionError::UnexpectedError(msg) => {
+                assert!(msg.contains("Failed to produce request job"));
+            }
+            _ => panic!("Expected UnexpectedError"),
+        }
+    }
 }

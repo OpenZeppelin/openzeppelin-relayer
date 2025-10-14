@@ -83,7 +83,7 @@ fn handle_status_check_result(result: Result<TransactionRepoModel>) -> Result<()
                         updated_tx.status
                     )
                     .into(),
-                )))?
+                )))
             }
         }
         Err(e) => {
@@ -117,6 +117,8 @@ async fn handle_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::TransactionStatus;
+    use crate::utils::mocks::mockutils::create_mock_transaction;
     use std::collections::HashMap;
 
     #[tokio::test]
@@ -146,5 +148,180 @@ mod tests {
         let job_metadata = check_job.metadata.unwrap();
         assert_eq!(job_metadata.get("retry_count").unwrap(), "2");
         assert_eq!(job_metadata.get("last_status").unwrap(), "pending");
+    }
+
+    mod handle_status_check_result_tests {
+        use super::*;
+
+        #[test]
+        fn test_final_state_confirmed_returns_ok() {
+            let mut tx = create_mock_transaction();
+            tx.status = TransactionStatus::Confirmed;
+            let result = Ok(tx);
+
+            let check_result = handle_status_check_result(result);
+
+            assert!(
+                check_result.is_ok(),
+                "Should return Ok for Confirmed (final) state"
+            );
+        }
+
+        #[test]
+        fn test_final_state_failed_returns_ok() {
+            let mut tx = create_mock_transaction();
+            tx.status = TransactionStatus::Failed;
+            let result = Ok(tx);
+
+            let check_result = handle_status_check_result(result);
+
+            assert!(
+                check_result.is_ok(),
+                "Should return Ok for Failed (final) state"
+            );
+        }
+
+        #[test]
+        fn test_final_state_expired_returns_ok() {
+            let mut tx = create_mock_transaction();
+            tx.status = TransactionStatus::Expired;
+            let result = Ok(tx);
+
+            let check_result = handle_status_check_result(result);
+
+            assert!(
+                check_result.is_ok(),
+                "Should return Ok for Expired (final) state"
+            );
+        }
+
+        #[test]
+        fn test_final_state_canceled_returns_ok() {
+            let mut tx = create_mock_transaction();
+            tx.status = TransactionStatus::Canceled;
+            let result = Ok(tx);
+
+            let check_result = handle_status_check_result(result);
+
+            assert!(
+                check_result.is_ok(),
+                "Should return Ok for Canceled (final) state"
+            );
+        }
+
+        #[test]
+        fn test_non_final_state_pending_returns_error() {
+            let mut tx = create_mock_transaction();
+            tx.status = TransactionStatus::Pending;
+            let result = Ok(tx);
+
+            let check_result = handle_status_check_result(result);
+
+            assert!(
+                check_result.is_err(),
+                "Should return Err for Pending (non-final) state to trigger retry"
+            );
+        }
+
+        #[test]
+        fn test_non_final_state_sent_returns_error() {
+            let mut tx = create_mock_transaction();
+            tx.status = TransactionStatus::Sent;
+            let result = Ok(tx);
+
+            let check_result = handle_status_check_result(result);
+
+            assert!(
+                check_result.is_err(),
+                "Should return Err for Sent (non-final) state to trigger retry"
+            );
+        }
+
+        #[test]
+        fn test_non_final_state_submitted_returns_error() {
+            let mut tx = create_mock_transaction();
+            tx.status = TransactionStatus::Submitted;
+            let result = Ok(tx);
+
+            let check_result = handle_status_check_result(result);
+
+            assert!(
+                check_result.is_err(),
+                "Should return Err for Submitted (non-final) state to trigger retry"
+            );
+        }
+
+        #[test]
+        fn test_non_final_state_mined_returns_error() {
+            let mut tx = create_mock_transaction();
+            tx.status = TransactionStatus::Mined;
+            let result = Ok(tx);
+
+            let check_result = handle_status_check_result(result);
+
+            assert!(
+                check_result.is_err(),
+                "Should return Err for Mined (non-final) state to trigger retry"
+            );
+        }
+
+        #[test]
+        fn test_error_result_returns_error() {
+            let result: Result<TransactionRepoModel> =
+                Err(eyre::eyre!("Network timeout during status check"));
+
+            let check_result = handle_status_check_result(result);
+
+            assert!(
+                check_result.is_err(),
+                "Should return Err when original result is an error"
+            );
+        }
+
+        #[test]
+        fn test_error_message_propagation() {
+            let error_message = "RPC call failed: connection timeout";
+            let result: Result<TransactionRepoModel> = Err(eyre::eyre!(error_message));
+
+            let check_result = handle_status_check_result(result);
+
+            match check_result {
+                Err(Error::Failed(arc)) => {
+                    let err_string = arc.to_string();
+                    assert!(
+                        err_string.contains(error_message),
+                        "Error message should contain original error: {}",
+                        err_string
+                    );
+                }
+                _ => panic!("Expected Error::Failed"),
+            }
+        }
+
+        #[test]
+        fn test_non_final_state_error_message() {
+            let mut tx = create_mock_transaction();
+            tx.status = TransactionStatus::Submitted;
+            let result = Ok(tx);
+
+            let check_result = handle_status_check_result(result);
+
+            match check_result {
+                Err(Error::Failed(arc)) => {
+                    let err_string = arc.to_string();
+                    assert!(
+                        err_string.contains("not in final state"),
+                        "Error message should indicate non-final state: {}",
+                        err_string
+                    );
+                    assert!(
+                        err_string.contains("Submitted"),
+                        "Error message should mention the status: {}",
+                        err_string
+                    );
+                }
+                _ => panic!("Expected Error::Failed for non-final state"),
+            }
+        }
     }
 }

@@ -1123,7 +1123,7 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             TransactionError::UnexpectedError(msg) => {
-                assert!(msg.contains("Error parsing created_at time"));
+                assert!(msg.contains("Invalid created_at timestamp"));
             }
             _ => panic!("Expected UnexpectedError for invalid timestamp"),
         }
@@ -1268,7 +1268,7 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             TransactionError::UnexpectedError(msg) => {
-                assert!(msg.contains("Error parsing created_at time"));
+                assert!(msg.contains("Invalid created_at timestamp"));
             }
             _ => panic!("Expected UnexpectedError for invalid timestamp"),
         }

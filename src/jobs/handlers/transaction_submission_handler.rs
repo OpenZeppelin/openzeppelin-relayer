@@ -158,6 +158,53 @@ mod tests {
         assert_eq!(job_metadata.get("gas_price").unwrap(), "20000000000");
     }
 
-    // Note: As with the transaction_request_handler tests, full testing of the
-    // handler functionality would require dependency injection or integration tests.
+    mod get_max_retries_tests {
+        use super::*;
+
+        #[test]
+        fn test_submit_command_retries() {
+            let command = TransactionCommand::Submit;
+            let retries = get_max_retries(&command);
+
+            assert_eq!(
+                retries, WORKER_TRANSACTION_SUBMIT_RETRIES,
+                "Submit command should use WORKER_TRANSACTION_SUBMIT_RETRIES"
+            );
+        }
+
+        #[test]
+        fn test_resubmit_command_retries() {
+            let command = TransactionCommand::Resubmit;
+            let retries = get_max_retries(&command);
+
+            assert_eq!(
+                retries, WORKER_TRANSACTION_RESUBMIT_RETRIES,
+                "Resubmit command should use WORKER_TRANSACTION_RESUBMIT_RETRIES"
+            );
+        }
+
+        #[test]
+        fn test_cancel_command_retries() {
+            let command = TransactionCommand::Cancel {
+                reason: "test cancel".to_string(),
+            };
+            let retries = get_max_retries(&command);
+
+            assert_eq!(
+                retries, WORKER_TRANSACTION_CANCEL_RETRIES,
+                "Cancel command should use WORKER_TRANSACTION_CANCEL_RETRIES"
+            );
+        }
+
+        #[test]
+        fn test_resend_command_retries() {
+            let command = TransactionCommand::Resend;
+            let retries = get_max_retries(&command);
+
+            assert_eq!(
+                retries, WORKER_TRANSACTION_RESEND_RETRIES,
+                "Resend command should use WORKER_TRANSACTION_RESEND_RETRIES"
+            );
+        }
+    }
 }

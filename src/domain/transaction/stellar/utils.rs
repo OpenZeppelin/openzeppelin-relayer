@@ -316,7 +316,7 @@ mod tests {
         }
 
         mod get_age_since_created_tests {
-            use crate::domain::get_age_since_created;
+            use crate::domain::transaction::util::get_age_since_created;
 
             use super::*;
 
@@ -370,7 +370,7 @@ mod tests {
 
                 match result.unwrap_err() {
                     TransactionError::UnexpectedError(msg) => {
-                        assert!(msg.contains("Invalid created_at"));
+                        assert!(msg.contains("Invalid created_at timestamp"));
                     }
                     _ => panic!("Expected UnexpectedError"),
                 }
