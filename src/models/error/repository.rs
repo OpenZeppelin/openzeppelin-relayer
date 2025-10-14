@@ -37,6 +37,9 @@ pub enum RepositoryError {
     #[error("Concurrent modification detected: {0}")]
     ConcurrentModification(String),
 
+    #[error("Unexpected error: {0}")]
+    UnexpectedError(String),
+
     #[error("Other error: {0}")]
     Other(String),
 }

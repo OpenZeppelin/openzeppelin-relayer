@@ -5,7 +5,10 @@
 use crate::{
     config::ServerConfig,
     constants::{
-        DEFAULT_CONCURRENCY, DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION,
+        DEFAULT_CONCURRENCY_HEALTH_CHECK, DEFAULT_CONCURRENCY_NOTIFICATION,
+        DEFAULT_CONCURRENCY_SOLANA_SWAP, DEFAULT_CONCURRENCY_STATUS_CHECKER,
+        DEFAULT_CONCURRENCY_STATUS_CHECKER_EVM, DEFAULT_CONCURRENCY_STATUS_CHECKER_STELLAR,
+        DEFAULT_CONCURRENCY_TRANSACTION_REQUEST, DEFAULT_CONCURRENCY_TRANSACTION_SENDER,
         WORKER_NOTIFICATION_SENDER_RETRIES, WORKER_RELAYER_HEALTH_CHECK_RETRIES,
         WORKER_SOLANA_TOKEN_SWAP_REQUEST_RETRIES, WORKER_TRANSACTION_CLEANUP_RETRIES,
         WORKER_TRANSACTION_REQUEST_RETRIES, WORKER_TRANSACTION_STATUS_CHECKER_RETRIES,
@@ -89,14 +92,8 @@ where
 {
     let queue = app_state.job_producer.get_queue().await?;
 
-    // Get configuration from environment variables
-    let rate_limit = ServerConfig::get_worker_rate_limit(DEFAULT_RATE_LIMIT);
-    let rate_limit_duration =
-        ServerConfig::get_worker_rate_limit_duration(DEFAULT_RATE_LIMIT_DURATION);
-
     let transaction_request_queue_worker = WorkerBuilder::new(TRANSACTION_REQUEST)
         .layer(ErrorHandlingLayer::new())
-        .rate_limit(rate_limit, rate_limit_duration)
         .retry(
             RetryPolicy::retries(WORKER_TRANSACTION_REQUEST_RETRIES)
                 .with_backoff(create_backoff(500, 5000, 0.99)?.make_backoff()),
@@ -105,7 +102,7 @@ where
         .catch_panic()
         .concurrency(ServerConfig::get_worker_concurrency(
             TRANSACTION_REQUEST,
-            DEFAULT_CONCURRENCY,
+            DEFAULT_CONCURRENCY_TRANSACTION_REQUEST,
         ))
         .data(app_state.clone())
         .backend(queue.transaction_request_queue.clone())
@@ -115,14 +112,13 @@ where
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
         .catch_panic()
-        .rate_limit(rate_limit, rate_limit_duration)
         .retry(
             RetryPolicy::retries(WORKER_TRANSACTION_SUBMIT_RETRIES)
-                .with_backoff(create_backoff(500, 5000, 0.99).unwrap().make_backoff()),
+                .with_backoff(create_backoff(500, 2000, 0.99).unwrap().make_backoff()),
         )
         .concurrency(ServerConfig::get_worker_concurrency(
             TRANSACTION_SENDER,
-            DEFAULT_CONCURRENCY,
+            DEFAULT_CONCURRENCY_TRANSACTION_SENDER,
         ))
         .data(app_state.clone())
         .backend(queue.transaction_submission_queue.clone())
@@ -134,14 +130,13 @@ where
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
         .catch_panic()
-        .rate_limit(rate_limit, rate_limit_duration)
         .retry(
             RetryPolicy::retries(WORKER_TRANSACTION_STATUS_CHECKER_RETRIES)
-                .with_backoff(create_backoff(5000, 15000, 0.99)?.make_backoff()),
+                .with_backoff(create_backoff(5000, 8000, 0.99)?.make_backoff()),
         )
         .concurrency(ServerConfig::get_worker_concurrency(
             TRANSACTION_STATUS_CHECKER,
-            DEFAULT_CONCURRENCY,
+            DEFAULT_CONCURRENCY_STATUS_CHECKER,
         ))
         .data(app_state.clone())
         .backend(queue.transaction_status_queue.clone())
@@ -153,14 +148,13 @@ where
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
         .catch_panic()
-        .rate_limit(rate_limit, rate_limit_duration)
         .retry(
             RetryPolicy::retries(WORKER_TRANSACTION_STATUS_CHECKER_RETRIES)
-                .with_backoff(create_backoff(8000, 20000, 0.99)?.make_backoff()),
+                .with_backoff(create_backoff(8000, 12000, 0.99)?.make_backoff()),
         )
         .concurrency(ServerConfig::get_worker_concurrency(
             TRANSACTION_STATUS_CHECKER_EVM,
-            DEFAULT_CONCURRENCY,
+            DEFAULT_CONCURRENCY_STATUS_CHECKER_EVM,
         ))
         .data(app_state.clone())
         .backend(queue.transaction_status_queue_evm.clone())
@@ -173,14 +167,13 @@ where
             .layer(ErrorHandlingLayer::new())
             .enable_tracing()
             .catch_panic()
-            .rate_limit(rate_limit, rate_limit_duration)
             .retry(
                 RetryPolicy::retries(WORKER_TRANSACTION_STATUS_CHECKER_RETRIES)
                     .with_backoff(create_backoff(2000, 3000, 0.99)?.make_backoff()),
             )
             .concurrency(ServerConfig::get_worker_concurrency(
                 TRANSACTION_STATUS_CHECKER_STELLAR,
-                DEFAULT_CONCURRENCY,
+                DEFAULT_CONCURRENCY_STATUS_CHECKER_STELLAR,
             ))
             .data(app_state.clone())
             .backend(queue.transaction_status_queue_stellar.clone())
@@ -190,14 +183,13 @@ where
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
         .catch_panic()
-        .rate_limit(rate_limit, rate_limit_duration)
         .retry(
             RetryPolicy::retries(WORKER_NOTIFICATION_SENDER_RETRIES)
-                .with_backoff(create_backoff(2000, 10000, 0.99)?.make_backoff()),
+                .with_backoff(create_backoff(2000, 8000, 0.99)?.make_backoff()),
         )
         .concurrency(ServerConfig::get_worker_concurrency(
             NOTIFICATION_SENDER,
-            DEFAULT_CONCURRENCY,
+            DEFAULT_CONCURRENCY_NOTIFICATION,
         ))
         .data(app_state.clone())
         .backend(queue.notification_queue.clone())
@@ -207,14 +199,13 @@ where
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
         .catch_panic()
-        .rate_limit(rate_limit, rate_limit_duration)
         .retry(
             RetryPolicy::retries(WORKER_SOLANA_TOKEN_SWAP_REQUEST_RETRIES)
                 .with_backoff(create_backoff(5000, 20000, 0.99)?.make_backoff()),
         )
         .concurrency(ServerConfig::get_worker_concurrency(
             SOLANA_TOKEN_SWAP_REQUEST,
-            DEFAULT_CONCURRENCY,
+            DEFAULT_CONCURRENCY_SOLANA_SWAP,
         ))
         .data(app_state.clone())
         .backend(queue.solana_token_swap_request_queue.clone())
@@ -224,7 +215,6 @@ where
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
         .catch_panic()
-        .rate_limit(rate_limit, rate_limit_duration)
         .retry(
             RetryPolicy::retries(WORKER_TRANSACTION_CLEANUP_RETRIES)
                 .with_backoff(create_backoff(5000, 20000, 0.99)?.make_backoff()),
@@ -241,14 +231,13 @@ where
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
         .catch_panic()
-        .rate_limit(rate_limit, rate_limit_duration)
         .retry(
             RetryPolicy::retries(WORKER_RELAYER_HEALTH_CHECK_RETRIES)
                 .with_backoff(create_backoff(2000, 10000, 0.99)?.make_backoff()),
         )
         .concurrency(ServerConfig::get_worker_concurrency(
             RELAYER_HEALTH_CHECK,
-            DEFAULT_CONCURRENCY,
+            DEFAULT_CONCURRENCY_HEALTH_CHECK,
         ))
         .data(app_state.clone())
         .backend(queue.relayer_health_check_queue.clone())
@@ -377,7 +366,6 @@ where
             .layer(ErrorHandlingLayer::new())
             .enable_tracing()
             .catch_panic()
-            .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
             .retry(
                 RetryPolicy::retries(WORKER_SOLANA_TOKEN_SWAP_REQUEST_RETRIES)
                     .with_backoff(swap_backoff.clone()),

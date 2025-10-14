@@ -15,8 +15,7 @@ use super::{
 };
 use crate::constants::{
     get_evm_pending_recovery_trigger_timeout, get_evm_prepare_timeout, get_evm_resend_timeout,
-    get_evm_submit_timeout, ARBITRUM_TIME_TO_RESUBMIT, EVM_PREPARE_TIMEOUT_MINUTES,
-    EVM_SUBMIT_TIMEOUT_MINUTES,
+    ARBITRUM_TIME_TO_RESUBMIT,
 };
 use crate::domain::transaction::common::is_final_state;
 use crate::models::{EvmNetwork, NetworkRepoModel, NetworkType};
@@ -110,6 +109,19 @@ where
             Ok(TransactionStatus::Confirmed)
         } else {
             debug!(tx_hash = %tx_hash, "transaction not yet mined");
+
+            // FALLBACK: Try to find transaction by checking all historical hashes
+            // Only do this for transactions that have multiple resubmission attempts
+            // and have been stuck in Submitted for a while
+            if tx.hashes.len() > 1 && self.should_try_hash_recovery(tx)? {
+                if let Some(status) = self
+                    .try_recover_with_historical_hashes(tx, &evm_data)
+                    .await?
+                {
+                    return Ok(status);
+                }
+            }
+
             Ok(TransactionStatus::Submitted)
         }
     }
@@ -404,7 +416,12 @@ where
         // early without querying the blockchain.
         let status = self.check_transaction_status(&tx).await?;
 
-        debug!(status = ?status, "transaction status {}", tx.id);
+        debug!(
+            tx_id = %tx.id,
+            previous_status = ?tx.status,
+            new_status = ?status,
+            "transaction status check completed"
+        );
 
         // 3. Check if too early for resubmission on in-progress transactions
         // For Pending/Sent/Submitted states, defer resubmission logic and timeout checks
@@ -415,12 +432,7 @@ where
             return self.update_transaction_status_if_needed(tx, status).await;
         }
 
-        // 4. Check for timeouts/expiry
-        if let Some(tx) = self.check_status_timeouts(&tx).await? {
-            return Ok(tx);
-        }
-
-        // 5. Handle based on status (including complex operations like resubmission)
+        // 4. Handle based on status (including complex operations like resubmission)
         match status {
             TransactionStatus::Pending => self.handle_pending_state(tx).await,
             TransactionStatus::Sent => self.handle_sent_state(tx).await,
@@ -431,97 +443,6 @@ where
             | TransactionStatus::Expired
             | TransactionStatus::Canceled => self.handle_final_state(tx, status).await,
         }
-    }
-
-    /// Check for various timeout conditions
-    async fn check_status_timeouts(
-        &self,
-        tx: &TransactionRepoModel,
-    ) -> Result<Option<TransactionRepoModel>, TransactionError> {
-        let age = get_age_since_created(tx)?;
-
-        match tx.status {
-            TransactionStatus::Pending => {
-                // Timeout if stuck in Pending too long
-                if age > get_evm_prepare_timeout() {
-                    warn!(
-                        tx_id = %tx.id,
-                        age_minutes = age.num_minutes(),
-                        "transaction stuck in Pending, marking as failed"
-                    );
-                    return Ok(Some(
-                        self.mark_as_failed(
-                            tx.clone(),
-                            format!(
-                                "Failed to prepare tx within {} minutes",
-                                EVM_PREPARE_TIMEOUT_MINUTES
-                            ),
-                        )
-                        .await?,
-                    ));
-                }
-            }
-            TransactionStatus::Sent => {
-                // Timeout if prepared but not submitted
-                let age_since_sent = get_age_since_status_change(tx)?;
-                if age_since_sent > get_evm_submit_timeout() {
-                    warn!(
-                        tx_id = %tx.id,
-                        age_minutes = age_since_sent.num_minutes(),
-                        "transaction stuck in Sent, marking as failed"
-                    );
-                    return Ok(Some(
-                        self.mark_as_failed(
-                            tx.clone(),
-                            format!(
-                                "Failed to submit within {} minutes",
-                                EVM_SUBMIT_TIMEOUT_MINUTES
-                            ),
-                        )
-                        .await?,
-                    ));
-                }
-            }
-            _ => {}
-        }
-
-        Ok(None)
-    }
-
-    /// Mark transaction as failed
-    async fn mark_as_failed(
-        &self,
-        tx: TransactionRepoModel,
-        reason: String,
-    ) -> Result<TransactionRepoModel, TransactionError> {
-        info!(
-            tx_id = %tx.id,
-            reason = %reason,
-            "marking transaction as failed"
-        );
-
-        let update = TransactionUpdateRequest {
-            status: Some(TransactionStatus::Failed),
-            status_reason: Some(reason),
-            ..Default::default()
-        };
-
-        let updated_tx = self
-            .transaction_repository()
-            .partial_update(tx.id.clone(), update)
-            .await?;
-
-        let res = self.send_transaction_update_notification(&updated_tx).await;
-        if let Err(e) = res {
-            error!(
-                tx_id = %updated_tx.id,
-                status = ?updated_tx.status,
-                "sending transaction update notification failed for Failed state: {:?}",
-                e
-            );
-        }
-
-        Ok(updated_tx)
     }
 
     /// Handle transactions stuck in Sent (prepared but not submitted)
@@ -548,6 +469,152 @@ where
 
         self.update_transaction_status_if_needed(tx, TransactionStatus::Sent)
             .await
+    }
+
+    /// Determines if we should attempt hash recovery for a stuck transaction.
+    ///
+    /// This is an expensive operation, so we only do it when:
+    /// - Transaction has been in Submitted status for a while (> 5 minutes)
+    /// - Transaction has had at least 2 resubmission attempts (hashes.len() > 1)
+    /// - Haven't tried recovery too recently (to avoid repeated attempts)
+    fn should_try_hash_recovery(
+        &self,
+        tx: &TransactionRepoModel,
+    ) -> Result<bool, TransactionError> {
+        // Only try recovery for transactions stuck in Submitted
+        if tx.status != TransactionStatus::Submitted {
+            return Ok(false);
+        }
+
+        // Must have multiple hashes (indicating resubmissions happened)
+        if tx.hashes.len() <= 1 {
+            return Ok(false);
+        }
+
+        // Only try if transaction has been stuck for a while
+        let age = get_age_of_sent_at(tx)?;
+        let min_age_for_recovery = Duration::minutes(2);
+
+        if age < min_age_for_recovery {
+            return Ok(false);
+        }
+
+        // Check if we've had enough resubmission attempts (more attempts = more likely to have wrong hash)
+        // Only try recovery if we have at least 3 hashes (2 resubmissions)
+        if tx.hashes.len() < 3 {
+            return Ok(false);
+        }
+
+        Ok(true)
+    }
+
+    /// Attempts to recover transaction status by checking all historical hashes.
+    ///
+    /// When a transaction is resubmitted multiple times due to timeouts, the database
+    /// may contain multiple hashes. The "current" hash (network_data.hash) might not
+    /// be the one that actually got mined. This method checks all historical hashes
+    /// to find if any were mined, and updates the database with the correct one.
+    async fn try_recover_with_historical_hashes(
+        &self,
+        tx: &TransactionRepoModel,
+        evm_data: &crate::models::EvmTransactionData,
+    ) -> Result<Option<TransactionStatus>, TransactionError> {
+        warn!(
+            tx_id = %tx.id,
+            current_hash = ?evm_data.hash,
+            total_hashes = %tx.hashes.len(),
+            "attempting hash recovery - checking historical hashes"
+        );
+
+        // Check each historical hash (most recent first, since it's more likely)
+        for (idx, historical_hash) in tx.hashes.iter().rev().enumerate() {
+            // Skip if this is the current hash (already checked)
+            if Some(historical_hash) == evm_data.hash.as_ref() {
+                continue;
+            }
+
+            debug!(
+                tx_id = %tx.id,
+                hash = %historical_hash,
+                index = %idx,
+                "checking historical hash"
+            );
+
+            // Try to get receipt for this hash
+            match self
+                .provider()
+                .get_transaction_receipt(historical_hash)
+                .await
+            {
+                Ok(Some(receipt)) => {
+                    warn!(
+                        tx_id = %tx.id,
+                        mined_hash = %historical_hash,
+                        wrong_hash = ?evm_data.hash,
+                        block_number = ?receipt.block_number,
+                        "RECOVERED: found mined transaction with historical hash - correcting database"
+                    );
+
+                    // Update with correct hash and Mined status
+                    // Let the normal status check flow handle confirmation checking
+                    self.update_transaction_with_corrected_hash(
+                        tx,
+                        evm_data,
+                        historical_hash,
+                        TransactionStatus::Mined,
+                    )
+                    .await?;
+
+                    return Ok(Some(TransactionStatus::Mined));
+                }
+                Ok(None) => {
+                    // This hash not found either, continue to next
+                    continue;
+                }
+                Err(e) => {
+                    // Network error, log but continue checking other hashes
+                    warn!(
+                        tx_id = %tx.id,
+                        hash = %historical_hash,
+                        error = %e,
+                        "error checking historical hash, continuing to next"
+                    );
+                    continue;
+                }
+            }
+        }
+
+        // None of the historical hashes found on-chain
+        debug!(
+            tx_id = %tx.id,
+            "hash recovery completed - no historical hashes found on-chain"
+        );
+        Ok(None)
+    }
+
+    /// Updates transaction with the corrected hash and status
+    async fn update_transaction_with_corrected_hash(
+        &self,
+        tx: &TransactionRepoModel,
+        evm_data: &crate::models::EvmTransactionData,
+        correct_hash: &str,
+        status: TransactionStatus,
+    ) -> Result<(), TransactionError> {
+        let mut corrected_data = evm_data.clone();
+        corrected_data.hash = Some(correct_hash.to_string());
+
+        self.transaction_repository()
+            .partial_update(
+                tx.id.clone(),
+                TransactionUpdateRequest {
+                    network_data: Some(NetworkTransactionData::Evm(corrected_data)),
+                    status: Some(status),
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        Ok(())
     }
 }
 

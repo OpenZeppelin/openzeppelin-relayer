@@ -856,26 +856,65 @@ impl TransactionRepository for RedisTransactionRepository {
         tx_id: String,
         update: TransactionUpdateRequest,
     ) -> Result<TransactionRepoModel, RepositoryError> {
-        // Get current transaction
-        let mut tx = self.get_by_id(tx_id.clone()).await?;
-        let old_tx = tx.clone(); // Keep copy for index updates
+        const MAX_RETRIES: u32 = 3;
+        const BACKOFF_MS: u64 = 100;
 
-        // Apply partial updates using the model's business logic
-        tx.apply_partial_update(update);
+        let mut last_error = None;
 
-        // Update transaction and indexes atomically
-        let key = self.tx_key(&tx.relayer_id, &tx_id);
-        let mut conn = self.client.as_ref().clone();
+        for attempt in 0..MAX_RETRIES {
+            // Get current transaction
+            let mut tx = match self.get_by_id(tx_id.clone()).await {
+                Ok(tx) => tx,
+                Err(e) if attempt < MAX_RETRIES - 1 => {
+                    warn!(tx_id = %tx_id, attempt = %attempt, error = %e, "failed to get transaction, retrying");
+                    last_error = Some(e);
+                    tokio::time::sleep(tokio::time::Duration::from_millis(BACKOFF_MS)).await;
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
 
-        let value = self.serialize_entity(&tx, |t| &t.id, "transaction")?;
+            let old_tx = tx.clone();
+            tx.apply_partial_update(update.clone());
 
-        let _: () = conn
-            .set(&key, value)
-            .await
-            .map_err(|e| self.map_redis_error(e, "partial_update"))?;
+            let key = self.tx_key(&tx.relayer_id, &tx_id);
+            let mut conn = self.client.as_ref().clone();
+            let value = self.serialize_entity(&tx, |t| &t.id, "transaction")?;
 
-        self.update_indexes(&tx, Some(&old_tx)).await?;
-        Ok(tx)
+            // Try to update transaction data
+            let result: Result<(), _> = conn.set(&key, &value).await;
+            match result {
+                Ok(_) => {}
+                Err(e) => {
+                    if attempt < MAX_RETRIES - 1 {
+                        warn!(tx_id = %tx_id, attempt = %attempt, error = %e, "failed to set transaction data, retrying");
+                        last_error = Some(self.map_redis_error(e, "partial_update"));
+                        tokio::time::sleep(tokio::time::Duration::from_millis(BACKOFF_MS)).await;
+                        continue;
+                    }
+                    return Err(self.map_redis_error(e, "partial_update"));
+                }
+            }
+
+            // Try to update indexes
+            match self.update_indexes(&tx, Some(&old_tx)).await {
+                Ok(_) => {
+                    debug!(tx_id = %tx_id, attempt = %attempt, "successfully updated transaction");
+                    return Ok(tx);
+                }
+                Err(e) if attempt < MAX_RETRIES - 1 => {
+                    warn!(tx_id = %tx_id, attempt = %attempt, error = %e, "failed to update indexes, retrying");
+                    last_error = Some(e);
+                    tokio::time::sleep(tokio::time::Duration::from_millis(BACKOFF_MS)).await;
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            RepositoryError::UnexpectedError("partial_update exhausted retries".to_string())
+        }))
     }
 
     async fn update_network_data(

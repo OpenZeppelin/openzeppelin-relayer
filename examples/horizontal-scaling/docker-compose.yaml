@@ -73,10 +73,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.0'
+          cpus: '3.0'
           memory: 4G
         reservations:
-          cpus: '1.0'
+          cpus: '2.0'
           memory: 2G
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/api/v1/health"]
@@ -131,10 +131,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.0'
+          cpus: '3.0'
           memory: 4G
         reservations:
-          cpus: '1.0'
+          cpus: '2.0'
           memory: 2G
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/api/v1/health"]
@@ -189,10 +189,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.0'
+          cpus: '3.0'
           memory: 4G
         reservations:
-          cpus: '1.0'
+          cpus: '2.0'
           memory: 2G
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/api/v1/health"]

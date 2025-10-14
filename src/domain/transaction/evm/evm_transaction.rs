@@ -738,9 +738,10 @@ where
         })?;
 
         // Send resubmitted transaction to blockchain - this is the critical operation
-        match self.provider.send_raw_transaction(raw_tx).await {
+        let was_already_submitted = match self.provider.send_raw_transaction(raw_tx).await {
             Ok(_) => {
-                // Transaction resubmitted successfully
+                // Transaction resubmitted successfully with new pricing
+                false
             }
             Err(e) => {
                 // SAFETY CHECK: If we get "already known" or "nonce too low" errors,
@@ -751,27 +752,38 @@ where
                     warn!(
                         tx_id = %tx.id,
                         error = %e,
-                        "resubmission indicates transaction already in mempool/mined - treating as success"
+                        "resubmission indicates transaction already in mempool/mined - keeping original hash"
                     );
-                    // Continue to update with new pricing info
+                    // Don't update with new hash - the original transaction is what's on-chain
+                    true
                 } else {
                     // Real error - propagate it
                     return Err(e.into());
                 }
             }
-        }
+        };
 
-        // Transaction is now on-chain - update database with new hash and pricing
-        let mut hashes = tx.hashes.clone();
-        if let Some(hash) = final_evm_data.hash.clone() {
-            hashes.push(hash);
-        }
+        // If transaction was already submitted, just update status without changing hash
+        let update = if was_already_submitted {
+            // Keep original hash and data - just ensure status is Submitted
+            TransactionUpdateRequest {
+                status: Some(TransactionStatus::Submitted),
+                ..Default::default()
+            }
+        } else {
+            // Transaction resubmitted successfully - update with new hash and pricing
+            let mut hashes = tx.hashes.clone();
+            if let Some(hash) = final_evm_data.hash.clone() {
+                hashes.push(hash);
+            }
 
-        let update = TransactionUpdateRequest {
-            network_data: Some(NetworkTransactionData::Evm(final_evm_data)),
-            hashes: Some(hashes),
-            priced_at: Some(Utc::now().to_rfc3339()),
-            ..Default::default()
+            TransactionUpdateRequest {
+                network_data: Some(NetworkTransactionData::Evm(final_evm_data)),
+                hashes: Some(hashes),
+                priced_at: Some(Utc::now().to_rfc3339()),
+                sent_at: Some(Utc::now().to_rfc3339()),
+                ..Default::default()
+            }
         };
 
         let updated_tx = match self
