@@ -49,6 +49,7 @@ pub enum JobType {
     TransactionStatusCheck,
     NotificationSend,
     SolanaTokenSwapRequest,
+    RelayerHealthCheck,
 }
 
 // Example message data for transaction request
@@ -186,6 +187,28 @@ pub struct SolanaTokenSwapRequest {
 impl SolanaTokenSwapRequest {
     pub fn new(relayer_id: String) -> Self {
         Self { relayer_id }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct RelayerHealthCheck {
+    pub relayer_id: String,
+    pub retry_count: u32,
+}
+
+impl RelayerHealthCheck {
+    pub fn new(relayer_id: String) -> Self {
+        Self {
+            relayer_id,
+            retry_count: 0,
+        }
+    }
+
+    pub fn with_retry_count(relayer_id: String, retry_count: u32) -> Self {
+        Self {
+            relayer_id,
+            retry_count,
+        }
     }
 }
 
@@ -376,5 +399,92 @@ mod tests {
                 panic!("Deserialization error: {}", e);
             }
         }
+    }
+
+    #[test]
+    fn test_relayer_health_check_new() {
+        let health_check = RelayerHealthCheck::new("relayer-1".to_string());
+
+        assert_eq!(health_check.relayer_id, "relayer-1");
+        assert_eq!(health_check.retry_count, 0);
+    }
+
+    #[test]
+    fn test_relayer_health_check_with_retry_count() {
+        let health_check = RelayerHealthCheck::with_retry_count("relayer-1".to_string(), 5);
+
+        assert_eq!(health_check.relayer_id, "relayer-1");
+        assert_eq!(health_check.retry_count, 5);
+    }
+
+    #[test]
+    fn test_relayer_health_check_correct_field_values() {
+        // Test with zero retry count
+        let health_check_zero = RelayerHealthCheck::new("relayer-test-123".to_string());
+        assert_eq!(health_check_zero.relayer_id, "relayer-test-123");
+        assert_eq!(health_check_zero.retry_count, 0);
+
+        // Test with specific retry count
+        let health_check_custom =
+            RelayerHealthCheck::with_retry_count("relayer-abc".to_string(), 10);
+        assert_eq!(health_check_custom.relayer_id, "relayer-abc");
+        assert_eq!(health_check_custom.retry_count, 10);
+
+        // Test with large retry count
+        let health_check_large =
+            RelayerHealthCheck::with_retry_count("relayer-xyz".to_string(), 999);
+        assert_eq!(health_check_large.relayer_id, "relayer-xyz");
+        assert_eq!(health_check_large.retry_count, 999);
+    }
+
+    #[test]
+    fn test_relayer_health_check_job_serialization() {
+        let health_check = RelayerHealthCheck::new("relayer-1".to_string());
+        let job = Job::new(JobType::RelayerHealthCheck, health_check);
+
+        let serialized = serde_json::to_string(&job).unwrap();
+        let deserialized: Job<RelayerHealthCheck> = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.job_type.to_string(), "RelayerHealthCheck");
+        assert_eq!(deserialized.data.relayer_id, "relayer-1");
+        assert_eq!(deserialized.data.retry_count, 0);
+    }
+
+    #[test]
+    fn test_relayer_health_check_job_serialization_with_retry_count() {
+        let health_check = RelayerHealthCheck::with_retry_count("relayer-2".to_string(), 3);
+        let job = Job::new(JobType::RelayerHealthCheck, health_check.clone());
+
+        let serialized = serde_json::to_string(&job).unwrap();
+        let deserialized: Job<RelayerHealthCheck> = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.job_type.to_string(), "RelayerHealthCheck");
+        assert_eq!(deserialized.data.relayer_id, health_check.relayer_id);
+        assert_eq!(deserialized.data.retry_count, health_check.retry_count);
+        assert_eq!(deserialized.data, health_check);
+    }
+
+    #[test]
+    fn test_relayer_health_check_equality_after_deserialization() {
+        let original_health_check =
+            RelayerHealthCheck::with_retry_count("relayer-test".to_string(), 7);
+        let job = Job::new(JobType::RelayerHealthCheck, original_health_check.clone());
+
+        let serialized = serde_json::to_string(&job).unwrap();
+        let deserialized: Job<RelayerHealthCheck> = serde_json::from_str(&serialized).unwrap();
+
+        // Assert job type string
+        assert_eq!(deserialized.job_type.to_string(), "RelayerHealthCheck");
+
+        // Assert data equality
+        assert_eq!(deserialized.data, original_health_check);
+        assert_eq!(
+            deserialized.data.relayer_id,
+            original_health_check.relayer_id
+        );
+        assert_eq!(
+            deserialized.data.retry_count,
+            original_health_check.retry_count
+        );
     }
 }

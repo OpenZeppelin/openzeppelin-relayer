@@ -834,6 +834,7 @@ mod tests {
             policies: RelayerNetworkPolicy::Evm(evm_policy),
             network_type: NetworkType::Evm,
             custom_rpc_urls: None,
+            ..Default::default()
         }
     }
 

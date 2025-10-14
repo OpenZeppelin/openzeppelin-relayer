@@ -8,7 +8,8 @@
 
 use crate::{
     jobs::{
-        Job, NotificationSend, Queue, TransactionRequest, TransactionSend, TransactionStatusCheck,
+        Job, NotificationSend, Queue, RelayerHealthCheck, TransactionRequest, TransactionSend,
+        TransactionStatusCheck,
     },
     models::RelayerError,
     observability::request_id::get_request_id,
@@ -97,6 +98,14 @@ pub trait JobProducerTrait: Send + Sync {
         solana_swap_request_job: SolanaTokenSwapRequest,
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError>;
+
+    async fn produce_relayer_health_check_job(
+        &self,
+        relayer_health_check_job: RelayerHealthCheck,
+        scheduled_on: Option<i64>,
+    ) -> Result<(), JobProducerError>;
+
+    async fn get_queue(&self) -> Result<Queue, JobProducerError>;
 }
 
 impl JobProducer {
@@ -115,6 +124,12 @@ impl JobProducer {
 
 #[async_trait]
 impl JobProducerTrait for JobProducer {
+    async fn get_queue(&self) -> Result<Queue, JobProducerError> {
+        let queue = self.queue.lock().await;
+
+        Ok(queue.clone())
+    }
+
     async fn produce_transaction_request_job(
         &self,
         transaction_process_job: TransactionRequest,
@@ -235,6 +250,34 @@ impl JobProducerTrait for JobProducer {
         info!("Solana token swap job produced successfully");
         Ok(())
     }
+
+    async fn produce_relayer_health_check_job(
+        &self,
+        relayer_health_check_job: RelayerHealthCheck,
+        scheduled_on: Option<i64>,
+    ) -> Result<(), JobProducerError> {
+        let job = Job::new(
+            JobType::RelayerHealthCheck,
+            relayer_health_check_job.clone(),
+        )
+        .with_request_id(get_request_id());
+
+        let mut queue = self.queue.lock().await;
+
+        match scheduled_on {
+            Some(scheduled_on) => {
+                queue
+                    .relayer_health_check_queue
+                    .schedule(job, scheduled_on)
+                    .await?;
+            }
+            None => {
+                queue.relayer_health_check_queue.push(job).await?;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -282,6 +325,7 @@ mod tests {
         pub transaction_status_queue: TestRedisStorage<Job<TransactionStatusCheck>>,
         pub notification_queue: TestRedisStorage<Job<NotificationSend>>,
         pub solana_token_swap_request_queue: TestRedisStorage<Job<SolanaTokenSwapRequest>>,
+        pub relayer_health_check_queue: TestRedisStorage<Job<RelayerHealthCheck>>,
     }
 
     impl TestQueue {
@@ -292,6 +336,7 @@ mod tests {
                 transaction_status_queue: TestRedisStorage::new(),
                 notification_queue: TestRedisStorage::new(),
                 solana_token_swap_request_queue: TestRedisStorage::new(),
+                relayer_health_check_queue: TestRedisStorage::new(),
             }
         }
     }
@@ -299,6 +344,19 @@ mod tests {
     // A test version of JobProducer
     struct TestJobProducer {
         queue: Mutex<TestQueue>,
+    }
+
+    impl Clone for TestJobProducer {
+        fn clone(&self) -> Self {
+            let queue = self
+                .queue
+                .try_lock()
+                .expect("Failed to lock queue for cloning")
+                .clone();
+            Self {
+                queue: Mutex::new(queue),
+            }
+        }
     }
 
     impl TestJobProducer {
@@ -315,6 +373,10 @@ mod tests {
 
     #[async_trait]
     impl JobProducerTrait for TestJobProducer {
+        async fn get_queue(&self) -> Result<Queue, JobProducerError> {
+            unimplemented!("get_queue not used in tests")
+        }
+
         async fn produce_transaction_request_job(
             &self,
             transaction_process_job: TransactionRequest,
@@ -426,6 +488,29 @@ mod tests {
 
             Ok(())
         }
+
+        async fn produce_relayer_health_check_job(
+            &self,
+            relayer_health_check_job: RelayerHealthCheck,
+            scheduled_on: Option<i64>,
+        ) -> Result<(), JobProducerError> {
+            let mut queue = self.queue.lock().await;
+            let job = Job::new(JobType::RelayerHealthCheck, relayer_health_check_job);
+
+            match scheduled_on {
+                Some(scheduled_on) => {
+                    queue
+                        .relayer_health_check_queue
+                        .schedule(job, scheduled_on)
+                        .await?;
+                }
+                None => {
+                    queue.relayer_health_check_queue.push(job).await?;
+                }
+            }
+
+            Ok(())
+        }
     }
 
     #[tokio::test]
@@ -525,6 +610,33 @@ mod tests {
         assert!(queue.notification_queue.push_called);
     }
 
+    #[tokio::test]
+    async fn test_relayer_health_check_job() {
+        let producer = TestJobProducer::new();
+
+        // Test immediate health check job
+        let health_check = RelayerHealthCheck::new("relayer-1".to_string());
+        let result = producer
+            .produce_relayer_health_check_job(health_check, None)
+            .await;
+        assert!(result.is_ok());
+
+        let queue = producer.get_queue().await;
+        assert!(queue.relayer_health_check_queue.push_called);
+
+        // Test scheduled health check job
+        let producer = TestJobProducer::new();
+        let health_check = RelayerHealthCheck::new("relayer-1".to_string());
+        let scheduled_timestamp = calculate_scheduled_timestamp(60);
+        let result = producer
+            .produce_relayer_health_check_job(health_check, Some(scheduled_timestamp))
+            .await;
+        assert!(result.is_ok());
+
+        let queue = producer.get_queue().await;
+        assert!(queue.relayer_health_check_queue.schedule_called);
+    }
+
     #[test]
     fn test_job_producer_error_conversion() {
         // Test error conversion without using specific Redis error types
@@ -537,5 +649,94 @@ mod tests {
             }
             _ => panic!("Unexpected error type"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_get_queue() {
+        let producer = TestJobProducer::new();
+
+        // Get the queue
+        let queue = producer.get_queue().await;
+
+        // Verify the queue is valid and has the expected structure
+        assert!(!queue.transaction_request_queue.push_called);
+        assert!(!queue.transaction_request_queue.schedule_called);
+        assert!(!queue.transaction_submission_queue.push_called);
+        assert!(!queue.notification_queue.push_called);
+        assert!(!queue.solana_token_swap_request_queue.push_called);
+        assert!(!queue.relayer_health_check_queue.push_called);
+    }
+
+    #[tokio::test]
+    async fn test_produce_relayer_health_check_job_immediate() {
+        let producer = TestJobProducer::new();
+
+        // Test immediate health check job (no scheduling)
+        let health_check = RelayerHealthCheck::new("relayer-1".to_string());
+        let result = producer
+            .produce_relayer_health_check_job(health_check, None)
+            .await;
+
+        // Should succeed
+        assert!(result.is_ok());
+
+        // Verify the job was pushed (not scheduled)
+        let queue = producer.get_queue().await;
+        assert!(queue.relayer_health_check_queue.push_called);
+        assert!(!queue.relayer_health_check_queue.schedule_called);
+
+        // Other queues should not be affected
+        assert!(!queue.transaction_request_queue.push_called);
+        assert!(!queue.transaction_submission_queue.push_called);
+        assert!(!queue.transaction_status_queue.push_called);
+        assert!(!queue.notification_queue.push_called);
+        assert!(!queue.solana_token_swap_request_queue.push_called);
+    }
+
+    #[tokio::test]
+    async fn test_produce_relayer_health_check_job_scheduled() {
+        let producer = TestJobProducer::new();
+
+        // Test scheduled health check job
+        let health_check = RelayerHealthCheck::new("relayer-2".to_string());
+        let scheduled_timestamp = calculate_scheduled_timestamp(300); // 5 minutes from now
+        let result = producer
+            .produce_relayer_health_check_job(health_check, Some(scheduled_timestamp))
+            .await;
+
+        // Should succeed
+        assert!(result.is_ok());
+
+        // Verify the job was scheduled (not pushed)
+        let queue = producer.get_queue().await;
+        assert!(queue.relayer_health_check_queue.schedule_called);
+        assert!(!queue.relayer_health_check_queue.push_called);
+
+        // Other queues should not be affected
+        assert!(!queue.transaction_request_queue.push_called);
+        assert!(!queue.transaction_submission_queue.push_called);
+        assert!(!queue.transaction_status_queue.push_called);
+        assert!(!queue.notification_queue.push_called);
+        assert!(!queue.solana_token_swap_request_queue.push_called);
+    }
+
+    #[tokio::test]
+    async fn test_produce_relayer_health_check_job_multiple_relayers() {
+        let producer = TestJobProducer::new();
+
+        // Produce health check jobs for multiple relayers
+        let relayer_ids = vec!["relayer-1", "relayer-2", "relayer-3"];
+
+        for relayer_id in &relayer_ids {
+            let health_check = RelayerHealthCheck::new(relayer_id.to_string());
+            let result = producer
+                .produce_relayer_health_check_job(health_check, None)
+                .await;
+            assert!(result.is_ok());
+        }
+
+        // Verify jobs were produced
+        let queue = producer.get_queue().await;
+        assert!(queue.relayer_health_check_queue.push_called);
     }
 }

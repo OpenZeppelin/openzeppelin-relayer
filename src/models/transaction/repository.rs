@@ -1656,6 +1656,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
 
         let network_model = NetworkRepoModel {
@@ -1733,6 +1734,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
 
         let network_model = NetworkRepoModel {
@@ -1808,6 +1810,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
 
         let network_model = NetworkRepoModel {
@@ -2110,6 +2113,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
 
         (network_model, relayer_model)

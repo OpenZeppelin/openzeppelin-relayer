@@ -79,7 +79,7 @@ impl<P: EvmProviderTrait> OptimismPriceHandler<P> {
         let zero_bytes = U256::from(data_bytes.iter().filter(|&b| *b == 0).count());
         let non_zero_bytes = U256::from(data_bytes.len()) - zero_bytes;
 
-        ((zero_bytes * U256::from(4)) + (non_zero_bytes * U256::from(16))) / U256::from(16)
+        (zero_bytes * U256::from(4)) + (non_zero_bytes * U256::from(16))
     }
 
     pub async fn fetch_fee_data(&self) -> Result<OptimismFeeData, TransactionError> {
@@ -109,15 +109,33 @@ impl<P: EvmProviderTrait> OptimismPriceHandler<P> {
         fee_data: &OptimismFeeData,
         tx: &EvmTransactionRequest,
     ) -> Result<U256, TransactionError> {
-        let tx_compressed_size = Self::calculate_compressed_tx_size(tx);
+        // Ecotone cost formula from code:
+        // https://github.com/ethereum-optimism/op-geth/blob/0402d543c3d0cff3a3d344c0f4f83809edb44f10/core/types/rollup_cost.go#L188-L219
+        //
+        // Ecotone L1 cost function:
+        //
+        //   (calldataGas/16)*(l1BaseFee*16*l1BaseFeeScalar + l1BlobBaseFee*l1BlobBaseFeeScalar)/1e6
+        //
+        // We divide "calldataGas" by 16 to change from units of calldata gas to "estimated # of bytes when
+        // compressed". Known as "compressedTxSize" in the spec.
+        //
+        // Function is actually computed as follows for better precision under integer arithmetic:
+        //
+        //   calldataGas*(l1BaseFee*16*l1BaseFeeScalar + l1BlobBaseFee*l1BlobBaseFeeScalar)/16e6
 
-        let weighted_gas_price = U256::from(16)
-            .saturating_mul(U256::from(fee_data.base_fee_scalar))
-            .saturating_mul(U256::from(fee_data.l1_base_fee))
-            + U256::from(fee_data.blob_base_fee_scalar)
-                .saturating_mul(U256::from(fee_data.blob_base_fee));
+        let calldata_gas_used = Self::calculate_compressed_tx_size(tx);
 
-        Ok(tx_compressed_size.saturating_mul(weighted_gas_price))
+        let ecotone_divisor = U256::from(1_000_000 * 16);
+        let calldata_cost_per_byte = U256::from(fee_data.l1_base_fee)
+            .saturating_mul(U256::from(16))
+            .saturating_mul(U256::from(fee_data.base_fee_scalar));
+        let blob_cost_per_byte = U256::from(fee_data.blob_base_fee)
+            .saturating_mul(U256::from(fee_data.blob_base_fee_scalar));
+        let fee = calldata_cost_per_byte
+            .saturating_add(blob_cost_per_byte)
+            .saturating_mul(U256::from(calldata_gas_used))
+            .wrapping_div(ecotone_divisor);
+        Ok(fee)
     }
 
     pub async fn handle_price_params(
@@ -225,8 +243,39 @@ mod tests {
         let size =
             OptimismPriceHandler::<MockEvmProviderTrait>::calculate_compressed_tx_size(&data_tx);
         // Expected: ((2 * 4) + (2 * 16)) / 16 = (8 + 32) / 16 = 40 / 16 = 2.5 -> 2 (integer division)
-        let expected =
-            (U256::from(2) * U256::from(4) + U256::from(2) * U256::from(16)) / U256::from(16);
+        let expected = U256::from(2) * U256::from(4) + U256::from(2) * U256::from(16);
         assert_eq!(size, expected);
+    }
+
+    #[test]
+    fn test_calculate_fee_with_specific_data_and_fee_data() {
+        let mock_provider = MockEvmProviderTrait::new();
+        let handler = OptimismPriceHandler::new(mock_provider);
+
+        let fee_data = OptimismFeeData {
+            l1_base_fee: U256::from(422079632u64),
+            base_fee: U256::from(138u64),
+            decimals: U256::from(6u64),
+            blob_base_fee: U256::from(2u64),
+            base_fee_scalar: U256::from(5227u64),
+            blob_base_fee_scalar: U256::from(1014213u64),
+        };
+
+        let tx = EvmTransactionRequest {
+            to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string()),
+            value: U256::ZERO,
+            data: Some("0xaf524e5852ba824bfabc2bcfcdf7f0edbb486ebb05e1836c90e78047efeb949990f72e5f00000000000000000000000000000000000000000000000000000000000000600f0b4ec422bb6297b5ded2971c583488bc1a714a2b11201bb32988080dec689b0000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000653636313431353161306633613839373337393633303932650000000000000000363831306565633032393766616339373337303865316531000000000000000000000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000000000000000000000000014cab1a2f55e1c3f8905f46c0f9f73746b7fc160c5000000000000000000000000".to_string()),
+            gas_limit: Some(21000),
+            gas_price: Some(20_000_000_000),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            speed: None,
+            valid_until: None,
+        };
+
+        let result = handler.calculate_fee(&fee_data, &tx);
+        assert!(result.is_ok());
+        let fee = result.unwrap();
+        assert_eq!(fee, U256::from(7342268088u64));
     }
 }

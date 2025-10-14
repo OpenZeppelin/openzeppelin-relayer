@@ -6,6 +6,7 @@
 //! - Transaction status checks
 //! - Notifications
 //! - Solana swap requests
+//! - Relayer health checks
 use std::{env, sync::Arc};
 
 use apalis_redis::{Config, ConnectionManager, RedisStorage};
@@ -17,8 +18,8 @@ use tracing::error;
 use crate::config::ServerConfig;
 
 use super::{
-    Job, NotificationSend, SolanaTokenSwapRequest, TransactionRequest, TransactionSend,
-    TransactionStatusCheck,
+    Job, NotificationSend, RelayerHealthCheck, SolanaTokenSwapRequest, TransactionRequest,
+    TransactionSend, TransactionStatusCheck,
 };
 
 #[derive(Clone, Debug)]
@@ -28,6 +29,7 @@ pub struct Queue {
     pub transaction_status_queue: RedisStorage<Job<TransactionStatusCheck>>,
     pub notification_queue: RedisStorage<Job<NotificationSend>>,
     pub solana_token_swap_request_queue: RedisStorage<Job<SolanaTokenSwapRequest>>,
+    pub relayer_health_check_queue: RedisStorage<Job<RelayerHealthCheck>>,
 }
 
 impl Queue {
@@ -90,6 +92,11 @@ impl Queue {
                 shared.clone(),
             )
             .await?,
+            relayer_health_check_queue: Self::storage(
+                &format!("{}relayer_health_check_queue", redis_key_prefix),
+                shared.clone(),
+            )
+            .await?,
         })
     }
 }
@@ -115,6 +122,7 @@ mod tests {
         pub namespace_transaction_status: String,
         pub namespace_notification: String,
         pub namespace_solana_token_swap_request_queue: String,
+        pub namespace_relayer_health_check_queue: String,
     }
 
     impl MockQueue {
@@ -126,6 +134,7 @@ mod tests {
                 namespace_notification: "notification_queue".to_string(),
                 namespace_solana_token_swap_request_queue: "solana_token_swap_request_queue"
                     .to_string(),
+                namespace_relayer_health_check_queue: "relayer_health_check_queue".to_string(),
             }
         }
     }
@@ -150,6 +159,10 @@ mod tests {
         assert_eq!(
             mock_queue.namespace_solana_token_swap_request_queue,
             "solana_token_swap_request_queue"
+        );
+        assert_eq!(
+            mock_queue.namespace_relayer_health_check_queue,
+            "relayer_health_check_queue"
         );
     }
 }
