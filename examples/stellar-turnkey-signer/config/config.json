@@ -1,0 +1,45 @@
+{
+  "relayers": [
+    {
+      "id": "stellar-example",
+      "name": "Stellar Testnet Example",
+      "network": "testnet",
+      "paused": false,
+      "notification_id": "notification-example",
+      "signer_id": "turnkey-signer-stellar",
+      "network_type": "stellar",
+      "policies": {
+        "min_balance": 0
+      }
+    }
+  ],
+  "notifications": [
+    {
+      "id": "notification-example",
+      "type": "webhook",
+      "url": "",
+      "signing_key": {
+        "type": "env",
+        "value": "WEBHOOK_SIGNING_KEY"
+      }
+    }
+  ],
+  "signers": [
+    {
+      "id": "turnkey-signer-stellar",
+      "type": "turnkey",
+      "config": {
+        "api_public_key": "",
+        "api_private_key": {
+          "type": "env",
+          "value": "TURNKEY_API_PRIVATE_KEY"
+        },
+        "organization_id": "",
+        "private_key_id": "",
+        "public_key": ""
+      }
+    }
+  ],
+  "networks": "./config/networks",
+  "plugins": []
+}
