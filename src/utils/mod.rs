@@ -38,5 +38,8 @@ pub use uuid::*;
 mod encryption;
 pub use encryption::*;
 
+mod json_rpc_error;
+pub use json_rpc_error::*;
+
 #[cfg(test)]
 pub mod mocks;

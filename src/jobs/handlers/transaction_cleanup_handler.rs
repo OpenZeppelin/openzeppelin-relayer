@@ -791,6 +791,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
         let now = Utc::now();
 
@@ -834,6 +835,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
         let now = Utc::now();
 

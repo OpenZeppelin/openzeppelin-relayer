@@ -2,6 +2,7 @@ use crate::{
     domain::evm::PriceParams,
     models::{EvmTransactionData, TransactionError, U256},
     services::provider::{evm::EvmProviderTrait, ProviderError},
+    utils::{EthereumJsonRpcError, StandardJsonRpcError},
 };
 use serde_json;
 
@@ -81,7 +82,10 @@ impl<P: EvmProviderTrait> PolygonZKEvmPriceHandler<P> {
 
         // Handle case where zkEVM methods are not available on this rpc or network
         let zkevm_fee_estimate = match zkevm_fee_estimate {
-            Err(ProviderError::MethodNotAvailable(_)) => {
+            Err(ProviderError::RpcErrorCode { code, .. })
+                if code == StandardJsonRpcError::MethodNotFound.code()
+                    || code == EthereumJsonRpcError::MethodNotSupported.code() =>
+            {
                 // zkEVM methods not supported on this rpc or network, return original params
                 return Ok(original_params);
             }
@@ -110,7 +114,7 @@ mod tests {
     // Mock implementation for testing zkEVM methods
     enum MockFeeEstimateResult {
         Success(U256),
-        MethodNotAvailable(String),
+        MethodNotAvailable,
     }
 
     struct MockZkEvmHandler {
@@ -126,9 +130,7 @@ mod tests {
 
         fn new_method_not_available() -> Self {
             Self {
-                fee_estimate_result: MockFeeEstimateResult::MethodNotAvailable(
-                    "zkevm_estimateFee method not available".to_string(),
-                ),
+                fee_estimate_result: MockFeeEstimateResult::MethodNotAvailable,
             }
         }
 
@@ -138,9 +140,10 @@ mod tests {
         ) -> Result<U256, ProviderError> {
             match &self.fee_estimate_result {
                 MockFeeEstimateResult::Success(fee) => Ok(*fee),
-                MockFeeEstimateResult::MethodNotAvailable(msg) => {
-                    Err(ProviderError::MethodNotAvailable(msg.clone()))
-                }
+                MockFeeEstimateResult::MethodNotAvailable => Err(ProviderError::RpcErrorCode {
+                    code: -32601,
+                    message: "Method not found".to_string(),
+                }),
             }
         }
 
@@ -154,7 +157,9 @@ mod tests {
 
             // Handle case where zkEVM methods are not available on this rpc or network
             let zkevm_fee_estimate = match zkevm_fee_estimate {
-                Err(ProviderError::MethodNotAvailable(_)) => {
+                Err(ProviderError::RpcErrorCode { code, .. })
+                    if code == -32601 || code == -32004 =>
+                {
                     // zkEVM methods not supported on this rpc or network, return original params
                     return Ok(original_params);
                 }
@@ -566,7 +571,7 @@ mod tests {
             minimal_params["from"],
             "0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
         );
-        assert_eq!(minimal_params["to"], "0x");
+        assert_eq!(minimal_params["to"], serde_json::Value::Null); // None becomes JSON null
         assert_eq!(minimal_params["value"], "0x0");
         assert_eq!(minimal_params["data"], "0x");
         assert_eq!(minimal_params["gas"], serde_json::Value::Null);

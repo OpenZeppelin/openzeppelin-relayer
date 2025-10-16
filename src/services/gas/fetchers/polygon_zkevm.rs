@@ -39,10 +39,10 @@ impl PolygonZkEvmGasPriceFetcher {
 
         match result {
             Ok(response) => self.parse_zkevm_response(response, network.chain_id),
-            Err(ProviderError::MethodNotAvailable(_)) => {
+            Err(ProviderError::RpcErrorCode { code, .. }) if code == -32601 || code == -32004 => {
                 debug!(
-                    "zkEVM gas price method not available for chain_id {}",
-                    network.chain_id
+                    "zkEVM gas price method not available for chain_id {} (error code: {})",
+                    network.chain_id, code
                 );
                 Ok(None)
             }
@@ -170,9 +170,10 @@ mod tests {
             .times(1)
             .returning(|_, _| {
                 async {
-                    Err(ProviderError::MethodNotAvailable(
-                        "Method not available".to_string(),
-                    ))
+                    Err(ProviderError::RpcErrorCode {
+                        code: -32601,
+                        message: "Method not found".to_string(),
+                    })
                 }
                 .boxed()
             });

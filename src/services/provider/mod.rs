@@ -37,8 +37,8 @@ pub enum ProviderError {
     BadGateway,
     #[error("Request error (HTTP {status_code}): {error}")]
     RequestError { error: String, status_code: u16 },
-    #[error("Method not available: {0}")]
-    MethodNotAvailable(String),
+    #[error("JSON-RPC error (code {code}): {message}")]
+    RpcErrorCode { code: i64, message: String },
     #[error("Other provider error: {0}")]
     Other(String),
 }
@@ -147,16 +147,10 @@ where
                 // Fallback for other transport error types
                 ProviderError::Other(format!("Transport error: {}", transport_err))
             }
-            RpcError::ErrorResp(json_rpc_err) => {
-                if json_rpc_err.code == -32601 {
-                    ProviderError::MethodNotAvailable(json_rpc_err.message.to_string())
-                } else {
-                    ProviderError::Other(format!(
-                        "JSON-RPC error ({}): {}",
-                        json_rpc_err.code, json_rpc_err.message
-                    ))
-                }
-            }
+            RpcError::ErrorResp(json_rpc_err) => ProviderError::RpcErrorCode {
+                code: json_rpc_err.code,
+                message: json_rpc_err.message.to_string(),
+            },
             _ => ProviderError::Other(format!("Other RPC error: {}", err)),
         }
     }
@@ -655,6 +649,17 @@ mod tests {
             }
             _ => panic!("Unexpected error type"),
         }
+    }
+
+    #[test]
+    fn test_provider_error_rpc_error_code_variant() {
+        let error = ProviderError::RpcErrorCode {
+            code: -32000,
+            message: "insufficient funds".to_string(),
+        };
+        let error_string = format!("{}", error);
+        assert!(error_string.contains("-32000"));
+        assert!(error_string.contains("insufficient funds"));
     }
 
     #[test]

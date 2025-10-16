@@ -3590,6 +3590,9 @@
                   "$ref": "#/components/schemas/RpcConfig"
                 }
               },
+              "disabled_reason": {
+                "$ref": "#/components/schemas/DisabledReason"
+              },
               "id": {
                 "type": "string"
               },
@@ -4049,6 +4052,9 @@
                   "items": {
                     "$ref": "#/components/schemas/RpcConfig"
                   }
+                },
+                "disabled_reason": {
+                  "$ref": "#/components/schemas/DisabledReason"
                 },
                 "id": {
                   "type": "string"
@@ -4527,6 +4533,114 @@
             "minimum": 0
           }
         }
+      },
+      "DisabledReason": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Nonce synchronization failed during initialization",
+            "required": [
+              "details",
+              "type"
+            ],
+            "properties": {
+              "details": {
+                "type": "string",
+                "description": "Nonce synchronization failed during initialization"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "NonceSyncFailed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "RPC endpoint validation failed",
+            "required": [
+              "details",
+              "type"
+            ],
+            "properties": {
+              "details": {
+                "type": "string",
+                "description": "RPC endpoint validation failed"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "RpcValidationFailed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Balance check failed (below minimum threshold)",
+            "required": [
+              "details",
+              "type"
+            ],
+            "properties": {
+              "details": {
+                "type": "string",
+                "description": "Balance check failed (below minimum threshold)"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "BalanceCheckFailed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Sequence number synchronization failed (Stellar)",
+            "required": [
+              "details",
+              "type"
+            ],
+            "properties": {
+              "details": {
+                "type": "string",
+                "description": "Sequence number synchronization failed (Stellar)"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "SequenceSyncFailed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Multiple failures occurred simultaneously",
+            "required": [
+              "details",
+              "type"
+            ],
+            "properties": {
+              "details": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Multiple failures occurred simultaneously"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "Multiple"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Reason for a relayer being disabled by the system\nThis represents persistent state, converted from HealthCheckFailure when disabling"
       },
       "EncodedSerializedTransaction": {
         "type": "string"
@@ -5817,6 +5931,9 @@
             "items": {
               "$ref": "#/components/schemas/RpcConfig"
             }
+          },
+          "disabled_reason": {
+            "$ref": "#/components/schemas/DisabledReason"
           },
           "id": {
             "type": "string"
