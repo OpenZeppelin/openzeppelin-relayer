@@ -9,6 +9,13 @@
 //! in-memory repositories, and the application's domain models.
 use std::{str::FromStr, sync::Arc};
 
+use crate::constants::SOLANA_STATUS_CHECK_INITIAL_DELAY_SECONDS;
+use crate::domain::{
+    Relayer, SignDataRequest, SignTransactionExternalResponse, SignTransactionRequest,
+    SignTypedDataRequest,
+};
+use crate::jobs::{TransactionRequest, TransactionStatusCheck};
+use crate::models::{DeletePendingTransactionsResponse, RelayerStatus, RepositoryError};
 use crate::utils::calculate_scheduled_timestamp;
 use crate::{
     constants::{
@@ -17,14 +24,15 @@ use crate::{
     },
     domain::{
         relayer::RelayerError, BalanceResponse, DexStrategy, SolanaRelayerDexTrait,
-        SolanaRelayerTrait, SolanaRpcHandlerType, SwapParams,
+        SolanaRpcHandlerType, SwapParams,
     },
     jobs::{JobProducerTrait, RelayerHealthCheck, SolanaTokenSwapRequest},
     models::{
         produce_relayer_disabled_payload, produce_solana_dex_webhook_payload, DisabledReason,
         HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest,
         NetworkRpcResult, NetworkType, RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy,
-        SolanaAllowedTokensPolicy, SolanaDexPayload, SolanaNetwork, TransactionRepoModel,
+        SolanaAllowedTokensPolicy, SolanaDexPayload, SolanaFeePaymentStrategy, SolanaNetwork,
+        TransactionRepoModel, TransactionStatus,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
@@ -329,7 +337,7 @@ where
         &self,
         relayer_id: String,
     ) -> Result<Vec<SwapResult>, RelayerError> {
-        debug!("handling token swap request for relayer");
+        debug!("handling token swap request for relayer {}", relayer_id);
         let relayer = self
             .relayer_repository
             .get_by_id(relayer_id.clone())
@@ -340,7 +348,7 @@ where
         let swap_config = match policy.get_swap_config() {
             Some(config) => config,
             None => {
-                info!("No swap configuration specified; Exiting.");
+                debug!(%relayer_id, "No swap configuration specified for relayer; Exiting.");
                 return Ok(vec![]);
             }
         };
@@ -348,7 +356,7 @@ where
         match swap_config.strategy {
             Some(strategy) => strategy,
             None => {
-                info!("No swap strategy specified; Exiting.");
+                debug!(%relayer_id, "No swap strategy specified for relayer; Exiting.");
                 return Ok(vec![]);
             }
         };
@@ -393,7 +401,7 @@ where
                         .unwrap_or(0);
 
                     if swap_amount > 0 {
-                        debug!(token = ?token, "token swap eligible for token");
+                        debug!(%relayer_id, token = ?token, "token swap eligible for token");
 
                         // Add the token to the list of eligible tokens for swapping
                         eligible_tokens.push(TokenSwapCandidate {
@@ -505,7 +513,7 @@ where
 }
 
 #[async_trait]
-impl<RR, TR, J, S, JS, SP, NR> SolanaRelayerTrait for SolanaRelayer<RR, TR, J, S, JS, SP, NR>
+impl<RR, TR, J, S, JS, SP, NR> Relayer for SolanaRelayer<RR, TR, J, S, JS, SP, NR>
 where
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
@@ -515,6 +523,65 @@ where
     SP: SolanaProviderTrait + Send + Sync + 'static,
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
 {
+    async fn process_transaction_request(
+        &self,
+        network_transaction: crate::models::NetworkTransactionRequest,
+    ) -> Result<TransactionRepoModel, RelayerError> {
+        // Validate fee payment strategy - send transaction endpoint only supports relayer-paid fees
+        let policy = self.relayer.policies.get_solana_policy();
+        if policy
+            .fee_payment_strategy
+            .unwrap_or(SolanaFeePaymentStrategy::User)
+            != SolanaFeePaymentStrategy::Relayer
+        {
+            return Err(RelayerError::ValidationError(
+                "Send transaction endpoint only available for Solana relayers with fee_payment_strategy set to 'relayer'".to_string()
+            ));
+        }
+
+        let network_model = self
+            .network_repository
+            .get_by_name(NetworkType::Solana, &self.relayer.network)
+            .await?
+            .ok_or_else(|| {
+                RelayerError::NetworkConfiguration(format!(
+                    "Network {} not found",
+                    self.relayer.network
+                ))
+            })?;
+
+        let transaction =
+            TransactionRepoModel::try_from((&network_transaction, &self.relayer, &network_model))?;
+
+        self.transaction_repository
+            .create(transaction.clone())
+            .await
+            .map_err(|e| RepositoryError::TransactionFailure(e.to_string()))?;
+
+        self.job_producer
+            .produce_transaction_request_job(
+                TransactionRequest::new(transaction.id.clone(), transaction.relayer_id.clone()),
+                None,
+            )
+            .await?;
+
+        // Queue status check job (with initial delay)
+        self.job_producer
+            .produce_check_transaction_status_job(
+                TransactionStatusCheck::new(
+                    transaction.id.clone(),
+                    transaction.relayer_id.clone(),
+                    NetworkType::Solana,
+                ),
+                Some(calculate_scheduled_timestamp(
+                    SOLANA_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+                )),
+            )
+            .await?;
+
+        Ok(transaction)
+    }
+
     async fn get_balance(&self) -> Result<BalanceResponse, RelayerError> {
         let address = &self.relayer.address;
         let balance = self.provider.get_balance(address).await?;
@@ -523,6 +590,41 @@ where
             balance: balance as u128,
             unit: SOLANA_SMALLEST_UNIT_NAME.to_string(),
         })
+    }
+
+    async fn delete_pending_transactions(
+        &self,
+    ) -> Result<DeletePendingTransactionsResponse, RelayerError> {
+        Err(RelayerError::NotSupported(
+            "Delete pending transactions not supported for Solana relayers".to_string(),
+        ))
+    }
+
+    async fn sign_data(
+        &self,
+        _request: SignDataRequest,
+    ) -> Result<crate::domain::relayer::SignDataResponse, RelayerError> {
+        Err(RelayerError::NotSupported(
+            "Sign data not supported for Solana relayers".to_string(),
+        ))
+    }
+
+    async fn sign_typed_data(
+        &self,
+        _request: SignTypedDataRequest,
+    ) -> Result<crate::domain::relayer::SignDataResponse, RelayerError> {
+        Err(RelayerError::NotSupported(
+            "Sign typed data not supported for Solana relayers".to_string(),
+        ))
+    }
+
+    async fn sign_transaction(
+        &self,
+        _request: &SignTransactionRequest,
+    ) -> Result<SignTransactionExternalResponse, RelayerError> {
+        Err(RelayerError::NotSupported(
+            "Sign transaction not supported for Solana relayers".to_string(),
+        ))
     }
 
     async fn rpc(
@@ -549,8 +651,7 @@ where
                     }
                     SolanaRpcError::UnsupportedFeeToken(msg) => JsonRpcResponse::error(
                         -32000,
-                        "UNSUPPORTED
-                        FEE_TOKEN",
+                        "UNSUPPORTED_FEE_TOKEN",
                         &format!(
                             "The provided fee_token is not supported by the relayer: {}",
                             msg
@@ -650,55 +751,38 @@ where
         }
     }
 
-    async fn validate_min_balance(&self) -> Result<(), RelayerError> {
-        let balance = self
-            .provider
-            .get_balance(&self.relayer.address)
+    async fn get_status(&self) -> Result<RelayerStatus, RelayerError> {
+        let address = &self.relayer.address;
+        let balance = self.provider.get_balance(address).await?;
+
+        let pending_statuses = [TransactionStatus::Pending, TransactionStatus::Submitted];
+        let pending_transactions = self
+            .transaction_repository
+            .find_by_status(&self.relayer.id, &pending_statuses[..])
             .await
-            .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
+            .map_err(RelayerError::from)?;
+        let pending_transactions_count = pending_transactions.len() as u64;
 
-        debug!(balance = %balance, "balance for relayer");
+        let confirmed_statuses = [TransactionStatus::Confirmed];
+        let confirmed_transactions = self
+            .transaction_repository
+            .find_by_status(&self.relayer.id, &confirmed_statuses[..])
+            .await
+            .map_err(RelayerError::from)?;
 
-        let policy = self.relayer.policies.get_solana_policy();
+        let last_confirmed_transaction_timestamp = confirmed_transactions
+            .iter()
+            .filter_map(|tx| tx.confirmed_at.as_ref())
+            .max()
+            .cloned();
 
-        if balance < policy.min_balance.unwrap_or(DEFAULT_SOLANA_MIN_BALANCE) {
-            return Err(RelayerError::InsufficientBalanceError(
-                "Insufficient balance".to_string(),
-            ));
-        }
-
-        Ok(())
-    }
-
-    async fn check_health(&self) -> Result<(), Vec<HealthCheckFailure>> {
-        debug!(
-            "running health checks for Solana relayer {}",
-            self.relayer.id
-        );
-
-        let validate_rpc_result = self.validate_rpc().await;
-        let validate_min_balance_result = self.validate_min_balance().await;
-
-        // Collect all failures
-        let failures: Vec<HealthCheckFailure> = vec![
-            validate_rpc_result
-                .err()
-                .map(|e| HealthCheckFailure::RpcValidationFailed(e.to_string())),
-            validate_min_balance_result
-                .err()
-                .map(|e| HealthCheckFailure::BalanceCheckFailed(e.to_string())),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
-
-        if failures.is_empty() {
-            info!("all health checks passed");
-            Ok(())
-        } else {
-            warn!("health checks failed: {:?}", failures);
-            Err(failures)
-        }
+        Ok(RelayerStatus::Solana {
+            balance: (balance as u128).to_string(),
+            pending_transactions_count,
+            last_confirmed_transaction_timestamp,
+            system_disabled: self.relayer.system_disabled,
+            paused: self.relayer.paused,
+        })
     }
 
     async fn initialize_relayer(&self) -> Result<(), RelayerError> {
@@ -771,6 +855,57 @@ where
 
         Ok(())
     }
+
+    async fn check_health(&self) -> Result<(), Vec<HealthCheckFailure>> {
+        debug!(
+            "running health checks for Solana relayer {}",
+            self.relayer.id
+        );
+
+        let validate_rpc_result = self.validate_rpc().await;
+        let validate_min_balance_result = self.validate_min_balance().await;
+
+        // Collect all failures
+        let failures: Vec<HealthCheckFailure> = vec![
+            validate_rpc_result
+                .err()
+                .map(|e| HealthCheckFailure::RpcValidationFailed(e.to_string())),
+            validate_min_balance_result
+                .err()
+                .map(|e| HealthCheckFailure::BalanceCheckFailed(e.to_string())),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        if failures.is_empty() {
+            info!("all health checks passed");
+            Ok(())
+        } else {
+            warn!("health checks failed: {:?}", failures);
+            Err(failures)
+        }
+    }
+
+    async fn validate_min_balance(&self) -> Result<(), RelayerError> {
+        let balance = self
+            .provider
+            .get_balance(&self.relayer.address)
+            .await
+            .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
+
+        debug!(balance = %balance, "balance for relayer");
+
+        let policy = self.relayer.policies.get_solana_policy();
+
+        if balance < policy.min_balance.unwrap_or(DEFAULT_SOLANA_MIN_BALANCE) {
+            return Err(RelayerError::InsufficientBalanceError(
+                "Insufficient balance".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -778,13 +913,13 @@ mod tests {
     use super::*;
     use crate::{
         config::{NetworkConfigCommon, SolanaNetworkConfig},
-        domain::{create_network_dex_generic, SolanaRpcHandler, SolanaRpcMethodsImpl},
+        domain::{create_network_dex_generic, Relayer, SolanaRpcHandler, SolanaRpcMethodsImpl},
         jobs::MockJobProducerTrait,
         models::{
             EncodedSerializedTransaction, FeeEstimateRequestParams,
-            GetFeaturesEnabledRequestParams, JsonRpcId, NetworkConfigData, NetworkRepoModel,
-            RelayerSolanaSwapConfig, SolanaAllowedTokensSwapConfig, SolanaRpcResult,
-            SolanaSwapStrategy,
+            GetFeaturesEnabledRequestParams, HealthCheckFailure, JsonRpcId, NetworkConfigData,
+            NetworkRepoModel, RelayerSolanaSwapConfig, SolanaAllowedTokensSwapConfig,
+            SolanaRpcResult, SolanaSwapStrategy,
         },
         repositories::{MockNetworkRepository, MockRelayerRepository, MockTransactionRepository},
         services::{

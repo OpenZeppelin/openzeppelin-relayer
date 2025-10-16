@@ -226,8 +226,8 @@ mod tests {
         let signer = TurnkeySigner::new_for_testing(mock_service);
 
         let tx_data = SolanaTransactionData {
-            transaction: "transaction_123".to_string(),
-            signature: None,
+            transaction: Some("transaction_123".to_string()),
+            ..Default::default()
         };
 
         let result = signer

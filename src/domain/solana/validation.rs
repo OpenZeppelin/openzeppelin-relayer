@@ -24,7 +24,7 @@ use solana_system_interface::program;
 use thiserror::Error;
 use tracing::info;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, serde::Serialize)]
 #[allow(dead_code)]
 pub enum SolanaTransactionValidationError {
     #[error("Failed to decode transaction: {0}")]
@@ -47,6 +47,61 @@ pub enum SolanaTransactionValidationError {
     InsufficientFunds(String),
     #[error("Insufficient balance: {0}")]
     InsufficientBalance(String),
+}
+
+impl SolanaTransactionValidationError {
+    /// Determines if this validation error is transient (retriable) or permanent.
+    ///
+    /// Transient errors are typically RPC/network issues that may succeed on retry:
+    /// - RPC connection errors
+    /// - Network timeouts
+    /// - Node behind errors
+    ///
+    /// Permanent errors are validation failures that won't change on retry:
+    /// - Policy violations
+    /// - Invalid transaction structure
+    /// - Insufficient funds (actual balance issue, not RPC error)
+    pub fn is_transient(&self) -> bool {
+        match self {
+            // Policy violations are always permanent
+            Self::PolicyViolation(_) => false,
+
+            // Fee payer mismatch is permanent
+            Self::FeePayer(_) => false,
+
+            // Decode/deserialize errors are permanent (invalid transaction)
+            Self::DecodeError(_) | Self::DeserializeError(_) => false,
+
+            // Expired blockhash is permanent (cannot be fixed by retry)
+            Self::ExpiredBlockhash(_) => false,
+
+            // Signing errors are permanent
+            Self::SigningError(_) => false,
+
+            // Generic validation errors - check message for transient patterns
+            Self::ValidationError(msg) | Self::SimulationError(msg) => {
+                // Check for known transient error patterns in the message
+                msg.contains("RPC")
+                    || msg.contains("timeout")
+                    || msg.contains("timed out")
+                    || msg.contains("connection")
+                    || msg.contains("network")
+                    || msg.contains("Failed to check")
+                    || msg.contains("Failed to get")
+                    || msg.contains("node behind")
+                    || msg.contains("rate limit")
+            }
+
+            // Balance errors - check if it's an RPC error or actual insufficient balance
+            Self::InsufficientBalance(msg) | Self::InsufficientFunds(msg) => {
+                // If the message indicates an RPC failure, it's transient
+                msg.contains("Failed to get balance")
+                    || msg.contains("RPC")
+                    || msg.contains("timeout")
+                    || msg.contains("network")
+            }
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -110,10 +165,24 @@ impl SolanaTransactionValidator {
     }
 
     /// Validates that the transaction's blockhash is still valid.
+    ///
+    /// **Smart Validation**: This method automatically determines whether validation is needed:
+    /// - **Single-signer transactions** (`num_required_signatures == 1`): Skips validation
+    ///   because the blockhash will be updated to a fresh value before signing
+    /// - **Multi-signer transactions** (`num_required_signatures > 1`): Performs validation
+    ///   because the blockhash cannot be updated without invalidating existing signatures
     pub async fn validate_blockhash<T: SolanaProviderTrait>(
         tx: &Transaction,
         provider: &T,
     ) -> Result<(), SolanaTransactionValidationError> {
+        let num_required_signatures = tx.message.header.num_required_signatures;
+
+        // Skip validation for single-signer transactions (blockhash will be updated)
+        if num_required_signatures <= 1 {
+            return Ok(());
+        }
+
+        // Multi-signer transactions: must validate blockhash
         let blockhash = tx.message.recent_blockhash;
 
         // Check if blockhash is still valid
@@ -570,6 +639,50 @@ impl SolanaTransactionValidator {
     }
 }
 
+/// Validates a fully prepared Solana transaction according to relayer policies.
+///
+/// This is the comprehensive validation function used by both:
+/// - RPC methods (sign_and_send_transaction, sign_transaction, etc.)
+/// - Send transaction endpoint (prepare_transaction)
+///
+/// It ensures consistency across all transaction submission paths.
+///
+/// # Validations Performed
+/// - **Policy checks**: Allowed/disallowed accounts, programs, signatures, data size, fee payer
+/// - **Blockhash validation**: Smart validation (skips for single-signer, validates for multi-signer)
+/// - **Simulation**: Executes transaction simulation on-chain
+/// - **Transfer validation**: Validates lamports and token transfers
+pub async fn validate_prepared_transaction<P: SolanaProviderTrait + Send + Sync>(
+    tx: &Transaction,
+    relayer_pubkey: &Pubkey,
+    policy: &RelayerSolanaPolicy,
+    provider: &P,
+) -> Result<(), SolanaTransactionValidationError> {
+    use futures::try_join;
+
+    // Synchronous validations (policy checks)
+    let sync_validations = async {
+        SolanaTransactionValidator::validate_tx_allowed_accounts(tx, policy)?;
+        SolanaTransactionValidator::validate_tx_disallowed_accounts(tx, policy)?;
+        SolanaTransactionValidator::validate_allowed_programs(tx, policy)?;
+        SolanaTransactionValidator::validate_max_signatures(tx, policy)?;
+        SolanaTransactionValidator::validate_fee_payer(tx, relayer_pubkey)?;
+        SolanaTransactionValidator::validate_data_size(tx, policy)?;
+        Ok::<(), SolanaTransactionValidationError>(())
+    };
+
+    // Run all validations concurrently
+    try_join!(
+        sync_validations,
+        SolanaTransactionValidator::validate_blockhash(tx, provider),
+        SolanaTransactionValidator::simulate_transaction(tx, provider),
+        SolanaTransactionValidator::validate_lamports_transfers(tx, relayer_pubkey),
+        SolanaTransactionValidator::validate_token_transfers(tx, policy, provider, relayer_pubkey),
+    )?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -688,6 +801,23 @@ mod tests {
         Transaction::new_unsigned(message)
     }
 
+    fn create_multi_signer_test_transaction(
+        fee_payer: &Pubkey,
+        additional_signer: &Pubkey,
+    ) -> Transaction {
+        let recipient = Pubkey::new_unique();
+        let instruction = instruction::transfer(fee_payer, &recipient, 1000);
+        // Create message with 2 required signatures
+        let mut message = Message::new(&[instruction], Some(fee_payer));
+        // Add second signer to account keys
+        if !message.account_keys.contains(additional_signer) {
+            message.account_keys.push(*additional_signer);
+        }
+        // Set num_required_signatures to 2
+        message.header.num_required_signatures = 2;
+        Transaction::new_unsigned(message)
+    }
+
     #[test]
     fn test_validate_fee_payer_success() {
         let relayer_keypair = Keypair::new();
@@ -715,7 +845,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_blockhash_valid() {
-        let transaction = create_test_transaction(&Keypair::new().pubkey());
+        // Use multi-signer transaction so blockhash validation actually runs
+        let fee_payer = Keypair::new().pubkey();
+        let additional_signer = Keypair::new().pubkey();
+        let transaction = create_multi_signer_test_transaction(&fee_payer, &additional_signer);
         let mut mock_provider = MockSolanaProviderTrait::new();
 
         mock_provider
@@ -734,7 +867,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_blockhash_expired() {
-        let transaction = create_test_transaction(&Keypair::new().pubkey());
+        // Use multi-signer transaction so blockhash validation actually runs
+        let fee_payer = Keypair::new().pubkey();
+        let additional_signer = Keypair::new().pubkey();
+        let transaction = create_multi_signer_test_transaction(&fee_payer, &additional_signer);
         let mut mock_provider = MockSolanaProviderTrait::new();
 
         mock_provider
@@ -752,7 +888,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_blockhash_provider_error() {
-        let transaction = create_test_transaction(&Keypair::new().pubkey());
+        // Use multi-signer transaction so blockhash validation actually runs
+        let fee_payer = Keypair::new().pubkey();
+        let additional_signer = Keypair::new().pubkey();
+        let transaction = create_multi_signer_test_transaction(&fee_payer, &additional_signer);
         let mut mock_provider = MockSolanaProviderTrait::new();
 
         mock_provider.expect_is_blockhash_valid().returning(|_, _| {
@@ -766,6 +905,20 @@ mod tests {
             result.unwrap_err(),
             SolanaTransactionValidationError::ValidationError(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn test_validate_blockhash_skips_for_single_signer() {
+        // Single-signer transaction should skip blockhash validation
+        let transaction = create_test_transaction(&Keypair::new().pubkey());
+        let mock_provider = MockSolanaProviderTrait::new();
+        // No expectations set - if validation runs, it will panic
+
+        let result =
+            SolanaTransactionValidator::validate_blockhash(&transaction, &mock_provider).await;
+
+        // Should succeed without calling provider (validation skipped)
+        assert!(result.is_ok());
     }
 
     #[test]

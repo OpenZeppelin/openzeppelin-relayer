@@ -191,58 +191,6 @@ pub trait SolanaRelayerDexTrait {
     ) -> Result<Vec<SwapResult>, RelayerError>;
 }
 
-/// Solana Relayer Trait
-/// Subset of methods for Solana relayer
-#[async_trait]
-#[allow(dead_code)]
-#[cfg_attr(test, automock)]
-pub trait SolanaRelayerTrait {
-    /// Retrieves the current balance of the relayer.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing a `BalanceResponse` on success, or a
-    /// `RelayerError` on failure.
-    async fn get_balance(&self) -> Result<BalanceResponse, RelayerError>;
-
-    /// Executes a JSON-RPC request.
-    ///
-    /// # Arguments
-    ///
-    /// * `request` - The JSON-RPC request to be executed.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing a `JsonRpcResponse` on success, or a
-    /// `RelayerError` on failure.
-    async fn rpc(
-        &self,
-        request: JsonRpcRequest<NetworkRpcRequest>,
-    ) -> Result<JsonRpcResponse<NetworkRpcResult>, RelayerError>;
-
-    /// Runs health checks on the relayer without side effects.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - All health checks passed
-    /// * `Err(Vec<HealthCheckFailure>)` - One or more health checks failed
-    async fn check_health(&self) -> Result<(), Vec<crate::models::HealthCheckFailure>>;
-
-    /// Initializes the relayer.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` indicating success, or a `RelayerError` on failure.
-    async fn initialize_relayer(&self) -> Result<(), RelayerError>;
-
-    /// Validates that the relayer's balance meets the minimum required.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` indicating success, or a `RelayerError` on failure.
-    async fn validate_min_balance(&self) -> Result<(), RelayerError>;
-}
-
 pub enum NetworkRelayer<
     J: JobProducerTrait + 'static,
     T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
@@ -270,7 +218,9 @@ impl<
     ) -> Result<TransactionRepoModel, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.process_transaction_request(tx_request).await,
-            NetworkRelayer::Solana(_) => solana_not_supported_relayer(),
+            NetworkRelayer::Solana(relayer) => {
+                relayer.process_transaction_request(tx_request).await
+            }
             NetworkRelayer::Stellar(relayer) => {
                 relayer.process_transaction_request(tx_request).await
             }
@@ -328,7 +278,7 @@ impl<
     async fn get_status(&self) -> Result<RelayerStatus, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.get_status().await,
-            NetworkRelayer::Solana(_) => solana_not_supported_relayer(),
+            NetworkRelayer::Solana(relayer) => relayer.get_status().await,
             NetworkRelayer::Stellar(relayer) => relayer.get_status().await,
         }
     }

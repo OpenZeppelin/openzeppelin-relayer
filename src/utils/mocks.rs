@@ -164,8 +164,8 @@ pub mod mockutils {
             confirmed_at: None,
             valid_until: None,
             network_data: NetworkTransactionData::Solana(SolanaTransactionData {
-                transaction: "test".to_string(),
-                signature: None,
+                transaction: Some("test".to_string()),
+                ..Default::default()
             }),
             priced_at: None,
             hashes: vec![],

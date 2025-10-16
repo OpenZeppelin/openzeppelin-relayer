@@ -15,7 +15,7 @@
 //! compared to local key storage solutions.
 use crate::{
     domain::SignTransactionResponse,
-    models::{Address, CdpSignerConfig, NetworkTransactionData, SignerError},
+    models::{Address, CdpSignerConfig, NetworkTransactionData, SignerError, TransactionError},
     services::{signer::Signer, CdpService, CdpServiceTrait},
 };
 use async_trait::async_trait;
@@ -159,9 +159,15 @@ impl<T: CdpServiceTrait> Signer for CdpSigner<T> {
     ) -> Result<SignTransactionResponse, SignerError> {
         let solana_data = transaction.get_solana_transaction_data()?;
 
+        let transaction_str = solana_data.transaction.ok_or_else(|| {
+            SignerError::InvalidTransaction(TransactionError::ValidationError(
+                "Transaction not yet built".to_string(),
+            ))
+        })?;
+
         let signed_transaction = self
             .cdp_service
-            .sign_solana_transaction(solana_data.transaction)
+            .sign_solana_transaction(transaction_str)
             .await
             .map_err(SignerError::CdpError)?;
 
@@ -374,8 +380,8 @@ mod tests {
         let signer = CdpSigner::new_for_testing(mock_service);
 
         let tx_data = SolanaTransactionData {
-            transaction: test_transaction,
-            signature: None,
+            transaction: Some(test_transaction),
+            ..Default::default()
         };
 
         let result = signer
@@ -408,8 +414,8 @@ mod tests {
         let signer = CdpSigner::new_for_testing(mock_service);
 
         let tx_data = SolanaTransactionData {
-            transaction: test_transaction,
-            signature: None,
+            transaction: Some(test_transaction),
+            ..Default::default()
         };
 
         let result = signer

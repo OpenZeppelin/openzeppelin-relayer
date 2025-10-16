@@ -129,7 +129,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
             NetworkTransactionData::Solana(solana_data) => {
                 TransactionResponse::Solana(Box::new(SolanaTransactionResponse {
                     id: model.id,
-                    transaction: solana_data.transaction,
+                    transaction: solana_data.transaction.unwrap_or_default(),
                     status: model.status,
                     status_reason: model.status_reason,
                     created_at: model.created_at,
@@ -238,7 +238,8 @@ mod tests {
             priced_at: None,
             hashes: vec![],
             network_data: NetworkTransactionData::Solana(SolanaTransactionData {
-                transaction: "transaction_123".to_string(),
+                transaction: Some("transaction_123".to_string()),
+                instructions: None,
                 signature: Some("signature_123".to_string()),
             }),
             valid_until: None,
@@ -385,7 +386,8 @@ mod tests {
             priced_at: None,
             hashes: vec![],
             network_data: NetworkTransactionData::Solana(SolanaTransactionData {
-                transaction: "transaction_123".to_string(),
+                transaction: Some("transaction_123".to_string()),
+                instructions: None,
                 signature: None,
             }),
             valid_until: None,

@@ -5,9 +5,13 @@
 //! * Transaction processing
 //! * Relayer management
 //! * Network-specific implementations
+//! * Shared network-specific domain logic
 
-mod relayer;
+pub mod relayer;
 pub use relayer::*;
 
-mod transaction;
+pub mod transaction;
 pub use transaction::*;
+
+// Shared Solana domain logic (validation, utilities)
+pub mod solana;

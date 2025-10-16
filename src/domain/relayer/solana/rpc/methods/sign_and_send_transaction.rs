@@ -20,7 +20,6 @@
 use std::str::FromStr;
 
 use chrono::Utc;
-use futures::try_join;
 use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
 use tracing::{debug, error};
 
@@ -93,7 +92,9 @@ where
         let (signed_transaction, _) = self.relayer_sign_transaction(transaction_request).await?;
 
         let network_transaction = NetworkTransactionRequest::Solana(SolanaTransactionRequest {
-            transaction: params.transaction.clone(),
+            transaction: Some(params.transaction.clone()),
+            instructions: None,
+            valid_until: None,
         });
 
         let transaction =
@@ -152,7 +153,8 @@ where
             sent_at: Some(Utc::now().to_rfc3339()),
             network_data: Some(NetworkTransactionData::Solana(SolanaTransactionData {
                 signature: Some(send_signature.to_string()),
-                transaction: params.transaction.clone().into_inner(),
+                transaction: Some(params.transaction.clone().into_inner()),
+                ..Default::default()
             })),
             ..Default::default()
         };
@@ -213,26 +215,8 @@ async fn validate_sign_and_send_transaction<P: SolanaProviderTrait + Send + Sync
         SolanaTransactionValidationError::ValidationError(format!("Invalid relayer address: {}", e))
     })?;
 
-    let sync_validations = async {
-        SolanaTransactionValidator::validate_tx_allowed_accounts(tx, policy)?;
-        SolanaTransactionValidator::validate_tx_disallowed_accounts(tx, policy)?;
-        SolanaTransactionValidator::validate_allowed_programs(tx, policy)?;
-        SolanaTransactionValidator::validate_max_signatures(tx, policy)?;
-        SolanaTransactionValidator::validate_fee_payer(tx, &relayer_pubkey)?;
-        SolanaTransactionValidator::validate_data_size(tx, policy)?;
-        Ok::<(), SolanaTransactionValidationError>(())
-    };
-
-    // Run all validations concurrently.
-    try_join!(
-        sync_validations,
-        SolanaTransactionValidator::validate_blockhash(tx, provider),
-        SolanaTransactionValidator::simulate_transaction(tx, provider),
-        SolanaTransactionValidator::validate_lamports_transfers(tx, &relayer_pubkey),
-        SolanaTransactionValidator::validate_token_transfers(tx, policy, provider, &relayer_pubkey,),
-    )?;
-
-    Ok(())
+    // Use the shared validation function to ensure consistency
+    validate_prepared_transaction(tx, &relayer_pubkey, policy, provider).await
 }
 
 #[cfg(test)]
@@ -847,9 +831,35 @@ mod tests {
         let (relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer, network) =
             setup_test_context();
 
+        // Blockhash validation will be triggered for multi-signer transactions
+        // and will fail, causing validation to error out
         provider
             .expect_is_blockhash_valid()
             .returning(|_, _| Box::pin(async { Ok(false) }));
+
+        // Other validations may be called concurrently even if blockhash validation fails
+        provider.expect_simulate_transaction().returning(|_| {
+            Box::pin(async {
+                Ok(solana_client::rpc_response::RpcSimulateTransactionResult {
+                    err: None,
+                    logs: None,
+                    accounts: None,
+                    units_consumed: None,
+                    return_data: None,
+                    inner_instructions: None,
+                    replacement_blockhash: None,
+                    loaded_accounts_data_size: None,
+                })
+            })
+        });
+
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(1_000_000u64) }));
+
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1_000_000_000u64) }));
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,

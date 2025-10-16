@@ -1,4 +1,5 @@
 use crate::{
+    domain::solana::SolanaTransactionValidationError,
     jobs::JobProducerError,
     models::{SignerError, SignerFactoryError},
     services::{ProviderError, SolanaProviderError},
@@ -14,6 +15,9 @@ use thiserror::Error;
 pub enum TransactionError {
     #[error("Transaction validation error: {0}")]
     ValidationError(String),
+
+    #[error("Solana transaction validation error: {0}")]
+    SolanaValidation(#[from] SolanaTransactionValidationError),
 
     #[error("Network configuration error: {0}")]
     NetworkConfiguration(String),
@@ -50,6 +54,7 @@ impl From<TransactionError> for ApiError {
     fn from(error: TransactionError) -> Self {
         match error {
             TransactionError::ValidationError(msg) => ApiError::BadRequest(msg),
+            TransactionError::SolanaValidation(err) => ApiError::BadRequest(err.to_string()),
             TransactionError::NetworkConfiguration(msg) => ApiError::InternalError(msg),
             TransactionError::JobProducerError(msg) => ApiError::InternalError(msg.to_string()),
             TransactionError::InvalidType(msg) => ApiError::InternalError(msg),

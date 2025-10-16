@@ -213,8 +213,8 @@ mod tests {
     async fn test_sign_transaction_not_implemented() {
         let local_signer = create_testing_signer();
         let transaction_data = NetworkTransactionData::Solana(SolanaTransactionData {
-            transaction: "transaction_123".to_string(),
-            signature: None,
+            transaction: Some("transaction_123".to_string()),
+            ..Default::default()
         });
 
         let result = local_signer.sign_transaction(transaction_data).await;

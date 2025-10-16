@@ -26,7 +26,7 @@ use crate::{
             cache::GasPriceCache, evm_gas_price::EvmGasPriceService,
             price_params_handler::PriceParamsHandler,
         },
-        get_network_provider, EvmSignerFactory, StellarSignerFactory,
+        get_network_provider, EvmSignerFactory, SolanaSignerFactory, StellarSignerFactory,
     },
 };
 use async_trait::async_trait;
@@ -474,12 +474,16 @@ impl RelayerTransactionFactory {
                     relayer.custom_rpc_urls.clone(),
                 )?);
 
+                let signer_service =
+                    Arc::new(SolanaSignerFactory::create_solana_signer(&signer.into())?);
+
                 Ok(NetworkTransaction::Solana(SolanaRelayerTransaction::new(
                     relayer,
                     relayer_repository,
                     solana_provider,
                     transaction_repository,
                     job_producer,
+                    signer_service,
                 )?))
             }
             NetworkType::Stellar => {

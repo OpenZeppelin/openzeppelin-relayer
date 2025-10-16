@@ -2757,8 +2757,9 @@ mod tests {
             valid_until: None,
             network_data: crate::models::NetworkTransactionData::Solana(
                 crate::models::SolanaTransactionData {
-                    transaction: "test-transaction".to_string(),
+                    transaction: Some("test-transaction".to_string()),
                     signature: Some("test-signature".to_string()),
+                    ..Default::default()
                 },
             ),
             priced_at: None,

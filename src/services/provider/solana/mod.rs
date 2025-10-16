@@ -16,6 +16,7 @@ use mpl_token_metadata::accounts::Metadata;
 use reqwest::Url;
 use serde::Serialize;
 use solana_client::{
+    client_error::{ClientError, ClientErrorKind},
     nonblocking::rpc_client::RpcClient,
     rpc_response::{RpcPrioritizationFee, RpcSimulateTransactionResult},
 };
@@ -44,16 +45,187 @@ use super::{
     RetryConfig,
 };
 
+/// Errors that can occur when interacting with the Solana provider.
+///
+/// Use `is_transient()` to determine if an error should be retried.
 #[derive(Error, Debug, Serialize)]
 pub enum SolanaProviderError {
+    /// Generic RPC error (typically transient - network issues, timeouts)
     #[error("RPC client error: {0}")]
     RpcError(String),
+
+    /// Invalid address format (permanent)
     #[error("Invalid address: {0}")]
     InvalidAddress(String),
+
+    /// RPC selector error (transient - can retry with different node)
     #[error("RPC selector error: {0}")]
     SelectorError(RpcSelectorError),
+
+    /// Network configuration error (permanent)
     #[error("Network configuration error: {0}")]
     NetworkConfiguration(String),
+
+    /// Insufficient funds for transaction (permanent)
+    #[error("Insufficient funds for transaction: {0}")]
+    InsufficientFunds(String),
+
+    /// Blockhash not found or expired (transient - can rebuild with fresh blockhash)
+    #[error("Blockhash not found or expired: {0}")]
+    BlockhashNotFound(String),
+
+    /// Invalid transaction structure or execution (permanent)
+    #[error("Invalid transaction: {0}")]
+    InvalidTransaction(String),
+
+    /// Transaction already processed (permanent - duplicate)
+    #[error("Transaction already processed: {0}")]
+    AlreadyProcessed(String),
+}
+
+impl SolanaProviderError {
+    /// Determines if this error is transient (can retry) or permanent (should fail).
+    ///
+    /// Transient errors: network issues, timeouts, RPC node problems, expired blockhash
+    /// Non-transient errors: insufficient funds, invalid transaction, already processed
+    pub fn is_transient(&self) -> bool {
+        match self {
+            // Specific non-transient errors
+            SolanaProviderError::InsufficientFunds(_) => false,
+            SolanaProviderError::InvalidTransaction(_) => false,
+            SolanaProviderError::AlreadyProcessed(_) => false,
+            SolanaProviderError::InvalidAddress(_) => false,
+            SolanaProviderError::NetworkConfiguration(_) => false,
+
+            // Blockhash not found is transient - can rebuild transaction with fresh blockhash
+            SolanaProviderError::BlockhashNotFound(_) => true,
+
+            // RPC errors may be transient (network issues) or not (parse error messages)
+            SolanaProviderError::RpcError(msg) => {
+                let msg_lower = msg.to_lowercase();
+
+                // Check for non-transient patterns in generic RPC errors
+                let non_transient_patterns = [
+                    "insufficientfunds",
+                    "blockhashnotfound",
+                    "blockhash not found",
+                    "invalidsignature",
+                    "accountnotfound",
+                    "instructionerror",
+                    "alreadyprocessed",
+                    "invalidtransaction",
+                    "signatureverificationfailed",
+                    "accountinuse",
+                    "transactionexpired",
+                ];
+
+                !non_transient_patterns
+                    .iter()
+                    .any(|pattern| msg_lower.contains(pattern))
+            }
+
+            // Selector errors are transient (can retry with different RPC)
+            SolanaProviderError::SelectorError(_) => true,
+        }
+    }
+
+    /// Classifies a Solana RPC client error into the appropriate error variant.
+    ///
+    /// Uses structured error types from the Solana SDK for precise classification.
+    pub fn from_rpc_error(error: ClientError) -> Self {
+        match error.kind() {
+            // Network/IO errors are transient
+            ClientErrorKind::Io(_) | ClientErrorKind::Reqwest(_) => {
+                SolanaProviderError::RpcError(error.to_string())
+            }
+
+            // RPC errors (rate limiting, node issues) are typically transient
+            ClientErrorKind::RpcError(_) => SolanaProviderError::RpcError(error.to_string()),
+
+            // Transaction errors - classify based on specific error type
+            ClientErrorKind::TransactionError(tx_error) => {
+                Self::from_transaction_error(tx_error, &error)
+            }
+
+            // Custom errors from Solana client
+            ClientErrorKind::Custom(msg) => {
+                // Fall back to string matching for custom errors
+                let msg_lower = msg.to_lowercase();
+                if msg_lower.contains("insufficientfunds") {
+                    SolanaProviderError::InsufficientFunds(error.to_string())
+                } else if msg_lower.contains("blockhashnotfound") {
+                    SolanaProviderError::BlockhashNotFound(error.to_string())
+                } else {
+                    SolanaProviderError::RpcError(error.to_string())
+                }
+            }
+
+            // All other error types
+            _ => SolanaProviderError::RpcError(error.to_string()),
+        }
+    }
+
+    /// Classifies a Solana TransactionError into the appropriate error variant.
+    fn from_transaction_error(
+        tx_error: &solana_sdk::transaction::TransactionError,
+        full_error: &ClientError,
+    ) -> Self {
+        use solana_sdk::transaction::TransactionError as TxErr;
+
+        match tx_error {
+            // Insufficient funds - permanent
+            TxErr::InsufficientFundsForFee | TxErr::InsufficientFundsForRent { .. } => {
+                SolanaProviderError::InsufficientFunds(full_error.to_string())
+            }
+
+            // Blockhash not found - transient (can rebuild transaction with fresh blockhash)
+            TxErr::BlockhashNotFound => {
+                SolanaProviderError::BlockhashNotFound(full_error.to_string())
+            }
+
+            // Already processed - permanent
+            TxErr::AlreadyProcessed => {
+                SolanaProviderError::AlreadyProcessed(full_error.to_string())
+            }
+
+            // Invalid transaction structure/signatures - permanent
+            TxErr::SignatureFailure
+            | TxErr::MissingSignatureForFee
+            | TxErr::InvalidAccountForFee
+            | TxErr::AccountNotFound
+            | TxErr::InvalidAccountIndex
+            | TxErr::InvalidProgramForExecution
+            | TxErr::ProgramAccountNotFound
+            | TxErr::InstructionError(_, _)
+            | TxErr::CallChainTooDeep
+            | TxErr::InvalidWritableAccount
+            | TxErr::InvalidRentPayingAccount
+            | TxErr::WouldExceedMaxBlockCostLimit
+            | TxErr::WouldExceedMaxAccountCostLimit
+            | TxErr::WouldExceedMaxVoteCostLimit
+            | TxErr::WouldExceedAccountDataBlockLimit
+            | TxErr::TooManyAccountLocks
+            | TxErr::AddressLookupTableNotFound
+            | TxErr::InvalidAddressLookupTableOwner
+            | TxErr::InvalidAddressLookupTableData
+            | TxErr::InvalidAddressLookupTableIndex
+            | TxErr::MaxLoadedAccountsDataSizeExceeded
+            | TxErr::InvalidLoadedAccountsDataSizeLimit
+            | TxErr::ResanitizationNeeded
+            | TxErr::ProgramExecutionTemporarilyRestricted { .. }
+            | TxErr::AccountBorrowOutstanding => {
+                SolanaProviderError::InvalidTransaction(full_error.to_string())
+            }
+
+            // Transient errors that might succeed on retry
+            TxErr::AccountInUse | TxErr::AccountLoadedTwice | TxErr::ClusterMaintenance => {
+                SolanaProviderError::RpcError(full_error.to_string())
+            }
+
+            // Treat unknown errors as generic RPC errors (transient by default)
+            _ => SolanaProviderError::RpcError(full_error.to_string()),
+        }
+    }
 }
 
 /// A trait that abstracts common Solana provider operations.
@@ -388,7 +560,7 @@ impl SolanaProviderTrait for SolanaProvider {
             client
                 .send_transaction(transaction)
                 .await
-                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+                .map_err(SolanaProviderError::from_rpc_error)
         })
         .await
     }
@@ -402,7 +574,7 @@ impl SolanaProviderTrait for SolanaProvider {
             client
                 .send_transaction(transaction)
                 .await
-                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+                .map_err(SolanaProviderError::from_rpc_error)
         })
         .await
     }
