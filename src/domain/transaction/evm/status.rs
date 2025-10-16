@@ -14,8 +14,9 @@ use super::{
     too_many_attempts, too_many_noop_attempts,
 };
 use crate::constants::{
-    get_evm_pending_recovery_trigger_timeout, get_evm_prepare_timeout, get_evm_resend_timeout,
-    ARBITRUM_TIME_TO_RESUBMIT,
+    get_evm_min_age_for_hash_recovery, get_evm_pending_recovery_trigger_timeout,
+    get_evm_prepare_timeout, get_evm_resend_timeout, ARBITRUM_TIME_TO_RESUBMIT,
+    EVM_MIN_HASHES_FOR_RECOVERY, EVM_PREPARE_TIMEOUT_MINUTES,
 };
 use crate::domain::transaction::common::is_final_state;
 use crate::domain::transaction::util::get_age_since_created;
@@ -226,7 +227,7 @@ where
                 .with_timezone(&Utc);
             let age = Utc::now().signed_duration_since(created_time);
             if age > get_evm_prepare_timeout() {
-                info!("Transaction in Pending state for over 2 minutes, will replace with NOOP");
+                info!("Transaction in Pending state for over {EVM_PREPARE_TIMEOUT_MINUTES} minutes, will replace with NOOP");
                 return Ok(true);
             }
         }
@@ -515,7 +516,7 @@ where
 
         // Only try if transaction has been stuck for a while
         let age = get_age_of_sent_at(tx)?;
-        let min_age_for_recovery = Duration::minutes(2);
+        let min_age_for_recovery = get_evm_min_age_for_hash_recovery();
 
         if age < min_age_for_recovery {
             return Ok(false);
@@ -523,7 +524,7 @@ where
 
         // Check if we've had enough resubmission attempts (more attempts = more likely to have wrong hash)
         // Only try recovery if we have at least 3 hashes (2 resubmissions)
-        if tx.hashes.len() < 3 {
+        if tx.hashes.len() < EVM_MIN_HASHES_FOR_RECOVERY {
             return Ok(false);
         }
 

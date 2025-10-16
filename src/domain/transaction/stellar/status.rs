@@ -6,7 +6,8 @@ use chrono::Utc;
 use soroban_rs::xdr::{Error, Hash};
 use tracing::{debug, info, warn};
 
-use super::{is_final_state, StellarRelayerTransaction};
+use super::StellarRelayerTransaction;
+use crate::domain::transaction::common::is_final_state;
 use crate::{
     jobs::JobProducerTrait,
     models::{

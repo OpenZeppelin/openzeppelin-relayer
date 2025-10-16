@@ -224,13 +224,6 @@ pub fn is_too_early_to_resubmit(tx: &TransactionRepoModel) -> Result<bool, Trans
     Ok(age < Duration::seconds(EVM_MIN_AGE_FOR_RESUBMIT_SECONDS))
 }
 
-/// Deprecated: Use `is_too_early_to_resubmit` instead.
-/// This alias exists for backward compatibility.
-#[deprecated(since = "1.1.0", note = "Use `is_too_early_to_resubmit` instead")]
-pub fn is_too_early_to_check(tx: &TransactionRepoModel) -> Result<bool, TransactionError> {
-    is_too_early_to_resubmit(tx)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

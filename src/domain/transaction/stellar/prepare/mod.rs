@@ -11,7 +11,8 @@ pub mod unsigned_xdr;
 use eyre::Result;
 use tracing::{debug, info, warn};
 
-use super::{is_final_state, lane_gate, StellarRelayerTransaction};
+use super::{lane_gate, StellarRelayerTransaction};
+use crate::domain::transaction::common::is_final_state;
 use crate::models::RelayerRepoModel;
 use crate::{
     jobs::JobProducerTrait,

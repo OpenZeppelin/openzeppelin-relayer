@@ -474,7 +474,7 @@ where
             // Retry flow: When reusing an existing nonce from a failed attempt, we intentionally
             // do NOT persist the fresh price_params (computed earlier) to the DB here. The DB may
             // temporarily hold stale price_params from the failed attempt. However, fresh price_params
-            // are applied just before signing (see lines 476-480), ensuring the transaction uses
+            // are applied just before signing, ensuring the transaction uses
             // current gas prices.
             tx
         } else {
