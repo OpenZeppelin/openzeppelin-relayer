@@ -109,83 +109,25 @@ impl<P: EvmProviderTrait> PolygonZKEvmPriceHandler<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::U256;
-
-    // Mock implementation for testing zkEVM methods
-    enum MockFeeEstimateResult {
-        Success(U256),
-        MethodNotAvailable,
-    }
-
-    struct MockZkEvmHandler {
-        fee_estimate_result: MockFeeEstimateResult,
-    }
-
-    impl MockZkEvmHandler {
-        fn new_success(fee_estimate: U256) -> Self {
-            Self {
-                fee_estimate_result: MockFeeEstimateResult::Success(fee_estimate),
-            }
-        }
-
-        fn new_method_not_available() -> Self {
-            Self {
-                fee_estimate_result: MockFeeEstimateResult::MethodNotAvailable,
-            }
-        }
-
-        async fn zkevm_estimate_fee(
-            &self,
-            _tx: &EvmTransactionData,
-        ) -> Result<U256, ProviderError> {
-            match &self.fee_estimate_result {
-                MockFeeEstimateResult::Success(fee) => Ok(*fee),
-                MockFeeEstimateResult::MethodNotAvailable => Err(ProviderError::RpcErrorCode {
-                    code: -32601,
-                    message: "Method not found".to_string(),
-                }),
-            }
-        }
-
-        async fn handle_price_params(
-            &self,
-            tx: &EvmTransactionData,
-            mut original_params: PriceParams,
-        ) -> Result<PriceParams, TransactionError> {
-            // Use zkEVM-specific endpoints for accurate pricing (recommended by Polygon)
-            let zkevm_fee_estimate = self.zkevm_estimate_fee(tx).await;
-
-            // Handle case where zkEVM methods are not available on this rpc or network
-            let zkevm_fee_estimate = match zkevm_fee_estimate {
-                Err(ProviderError::RpcErrorCode { code, .. })
-                    if code == -32601 || code == -32004 =>
-                {
-                    // zkEVM methods not supported on this rpc or network, return original params
-                    return Ok(original_params);
-                }
-                Ok(fee_estimate) => fee_estimate,
-                Err(e) => {
-                    return Err(TransactionError::UnexpectedError(format!(
-                        "Failed to estimate zkEVM fee: {}",
-                        e
-                    )))
-                }
-            };
-
-            // The zkEVM fee estimate provides a more accurate total cost calculation
-            // that includes both L2 execution costs and L1 data availability costs
-            original_params.total_cost = zkevm_fee_estimate;
-
-            Ok(original_params)
-        }
-    }
+    use crate::{models::U256, services::provider::evm::MockEvmProviderTrait};
+    use mockall::predicate::*;
 
     #[tokio::test]
     async fn test_polygon_zkevm_price_handler_legacy() {
-        // Create the mock handler with predefined responses
-        let handler = MockZkEvmHandler::new_success(
-            U256::from(500_000_000_000_000u128), // 0.0005 ETH fee
-        );
+        // Create mock provider
+        let mut mock_provider = MockEvmProviderTrait::new();
+
+        // Mock zkevm_estimateFee to return 0.0005 ETH fee
+        mock_provider
+            .expect_raw_request_dyn()
+            .with(eq("zkevm_estimateFee"), always())
+            .returning(|_, _| {
+                Box::pin(async move {
+                    Ok(serde_json::json!("0x1c6bf52634000")) // 500_000_000_000_000 in hex
+                })
+            });
+
+        let handler = PolygonZKEvmPriceHandler::new(mock_provider);
 
         // Create test transaction with data
         let tx = EvmTransactionData {
@@ -233,10 +175,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_polygon_zkevm_price_handler_eip1559() {
-        // Create the mock handler with predefined responses
-        let handler = MockZkEvmHandler::new_success(
-            U256::from(750_000_000_000_000u128), // 0.00075 ETH fee
-        );
+        // Create mock provider
+        let mut mock_provider = MockEvmProviderTrait::new();
+
+        // Mock zkevm_estimateFee to return 0.00075 ETH fee
+        mock_provider
+            .expect_raw_request_dyn()
+            .with(eq("zkevm_estimateFee"), always())
+            .returning(|_, _| {
+                Box::pin(async move {
+                    Ok(serde_json::json!("0x2aa1efb94e000")) // 750_000_000_000_000 in hex
+                })
+            });
+
+        let handler = PolygonZKEvmPriceHandler::new(mock_provider);
 
         // Create test transaction with data
         let tx = EvmTransactionData {
@@ -288,12 +240,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_polygon_zkevm_fee_estimation_integration() {
-        // For this test, we'll test the two scenarios separately since we need different mock behaviors
+        // Test with empty data - create mock provider for no data scenario
+        let mut mock_provider_no_data = MockEvmProviderTrait::new();
+        mock_provider_no_data
+            .expect_raw_request_dyn()
+            .with(eq("zkevm_estimateFee"), always())
+            .returning(|_, _| {
+                Box::pin(async move {
+                    Ok(serde_json::json!("0xbefe6f672000")) // 210_000_000_000_000 in hex
+                })
+            });
 
-        // Test with empty data - create handler for no data scenario
-        let handler_no_data = MockZkEvmHandler::new_success(
-            U256::from(210_000_000_000_000u128), // 0.00021 ETH without data
-        );
+        let handler_no_data = PolygonZKEvmPriceHandler::new(mock_provider_no_data);
 
         let empty_tx = EvmTransactionData {
             from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
@@ -334,10 +292,18 @@ mod tests {
             U256::from(210_000_000_000_000u128)
         );
 
-        // Test with data - create handler for data scenario
-        let handler_with_data = MockZkEvmHandler::new_success(
-            U256::from(400_000_000_000_000u128), // 0.0004 ETH with data
-        );
+        // Test with data - create mock provider for data scenario
+        let mut mock_provider_with_data = MockEvmProviderTrait::new();
+        mock_provider_with_data
+            .expect_raw_request_dyn()
+            .with(eq("zkevm_estimateFee"), always())
+            .returning(|_, _| {
+                Box::pin(async move {
+                    Ok(serde_json::json!("0x16bcc41e90000")) // 400_000_000_000_000 in hex (correct)
+                })
+            });
+
+        let handler_with_data = PolygonZKEvmPriceHandler::new(mock_provider_with_data);
 
         let data_tx = EvmTransactionData {
             data: Some("0x1234567890abcdef".to_string()), // 8 bytes
@@ -369,10 +335,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_polygon_zkevm_uses_gas_price_when_not_set() {
-        // Create the mock handler with predefined responses
-        let handler = MockZkEvmHandler::new_success(
-            U256::from(600_000_000_000_000u128), // 0.0006 ETH fee
-        );
+        // Create mock provider
+        let mut mock_provider = MockEvmProviderTrait::new();
+        mock_provider
+            .expect_raw_request_dyn()
+            .with(eq("zkevm_estimateFee"), always())
+            .returning(|_, _| {
+                Box::pin(async move {
+                    Ok(serde_json::json!("0x221b262dd8000")) // 600_000_000_000_000 in hex
+                })
+            });
+
+        let handler = PolygonZKEvmPriceHandler::new(mock_provider);
 
         // Test with no gas price set initially
         let tx = EvmTransactionData {
@@ -415,8 +389,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_polygon_zkevm_method_not_available() {
-        // Create the mock handler with MethodNotAvailable errors
-        let handler = MockZkEvmHandler::new_method_not_available();
+        // Create mock provider that returns MethodNotFound error
+        let mut mock_provider = MockEvmProviderTrait::new();
+        mock_provider
+            .expect_raw_request_dyn()
+            .with(eq("zkevm_estimateFee"), always())
+            .returning(|_, _| {
+                Box::pin(async move {
+                    Err(ProviderError::RpcErrorCode {
+                        code: StandardJsonRpcError::MethodNotFound.code(),
+                        message: "Method not found".to_string(),
+                    })
+                })
+            });
+
+        let handler = PolygonZKEvmPriceHandler::new(mock_provider);
 
         let tx = EvmTransactionData {
             from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
@@ -466,8 +453,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_polygon_zkevm_partial_method_not_available() {
-        // Create the mock handler with MethodNotAvailable error
-        let handler = MockZkEvmHandler::new_method_not_available();
+        // Create mock provider that returns MethodNotSupported error
+        let mut mock_provider = MockEvmProviderTrait::new();
+        mock_provider
+            .expect_raw_request_dyn()
+            .with(eq("zkevm_estimateFee"), always())
+            .returning(|_, _| {
+                Box::pin(async move {
+                    Err(ProviderError::RpcErrorCode {
+                        code: EthereumJsonRpcError::MethodNotSupported.code(),
+                        message: "Method not supported".to_string(),
+                    })
+                })
+            });
+
+        let handler = PolygonZKEvmPriceHandler::new(mock_provider);
 
         let tx = EvmTransactionData {
             from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
