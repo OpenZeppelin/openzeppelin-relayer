@@ -879,6 +879,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
         app_state.relayer_repository.create(relayer).await.unwrap();
 
@@ -939,6 +940,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
         app_state.relayer_repository.create(relayer).await.unwrap();
 
@@ -1008,6 +1010,7 @@ mod tests {
                 notification_id: None,
                 system_disabled: false,
                 custom_rpc_urls: None,
+                ..Default::default()
             },
             crate::models::RelayerRepoModel {
                 id: "relayer-2".to_string(),
@@ -1023,6 +1026,7 @@ mod tests {
                 notification_id: None,
                 system_disabled: false,
                 custom_rpc_urls: None,
+                ..Default::default()
             },
             crate::models::RelayerRepoModel {
                 id: "relayer-3".to_string(),
@@ -1038,6 +1042,7 @@ mod tests {
                 notification_id: None,
                 system_disabled: true, // Even disabled relayers should block deletion
                 custom_rpc_urls: None,
+                ..Default::default()
             },
         ];
 
@@ -1092,6 +1097,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
 
         let relayer2 = crate::models::RelayerRepoModel {
@@ -1108,6 +1114,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
 
         app_state.relayer_repository.create(relayer1).await.unwrap();

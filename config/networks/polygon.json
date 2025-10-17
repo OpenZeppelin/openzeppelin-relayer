@@ -7,9 +7,7 @@
         "https://api.polygonscan.com/api",
         "https://polygonscan.com"
       ],
-      "features": [
-        "eip1559"
-      ],
+      "features": ["eip1559"],
       "is_testnet": false,
       "network": "polygon",
       "required_confirmations": 1,
@@ -58,25 +56,18 @@
         "https://polygon-zkevm-public.nodies.app"
       ],
       "symbol": "ETH",
-      "type": "evm"
+      "type": "evm",
+      "tags": ["polygon-zkevm-based"]
     },
     {
       "from": "polygon-zkevm",
       "type": "evm",
       "network": "polygon-zkevm-testnet",
-      "chain_id": 1442,
-      "explorer_urls": [
-        "https://api-testnet-zkevm.polygonscan.com/api",
-        "https://testnet-zkevm.polygonscan.com"
-      ],
+      "chain_id": 2442,
+      "explorer_urls": ["https://cardona-zkevm.polygonscan.com/"],
       "is_testnet": true,
-      "rpc_urls": [
-        "https://rpc.cardona.zkevm-rpc.com",
-        "https://polygon-zkevm-cardona.drpc.org"
-      ],
-      "tags": [
-        "deprecated"
-      ]
+      "rpc_urls": ["https://rpc.cardona.zkevm-rpc.com"],
+      "tags": ["polygon-zkevm-based"]
     }
   ]
 }

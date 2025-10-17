@@ -8,6 +8,10 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    groups:
+      actions-deps:
+        patterns:
+          - '*'
     commit-message:
       # Prefix all commit messages with "chore(deps): "
       prefix: 'chore(deps): '

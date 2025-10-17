@@ -65,6 +65,7 @@ pub fn setup_test_context() -> (
         notification_id: None,
         system_disabled: false,
         custom_rpc_urls: None,
+        ..Default::default()
     };
 
     let network = create_mock_solana_network();
@@ -169,6 +170,7 @@ pub fn setup_test_context_relayer_fee_strategy() -> RelayerFeeStrategyTestContex
         notification_id: None,
         system_disabled: false,
         custom_rpc_urls: None,
+        ..Default::default()
     };
 
     // Setup mock signer
@@ -305,6 +307,7 @@ pub fn setup_test_context_user_fee_strategy() -> UserFeeStrategyTestContext {
         notification_id: None,
         system_disabled: false,
         custom_rpc_urls: None,
+        ..Default::default()
     };
 
     let mock_signer = MockSolanaSignTrait::new();
@@ -430,6 +433,7 @@ pub fn setup_test_context_single_tx_user_fee_strategy() -> UserFeeStrategySingle
         notification_id: None,
         system_disabled: false,
         custom_rpc_urls: None,
+        ..Default::default()
     };
 
     let mock_signer = MockSolanaSignTrait::new();

@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@ec9f2d5744a09debf3a187a3f4f675c53b671911  # v2.13.0
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a  # v2.13.1
         with:
           egress-policy: audit
       - name: Checkout
@@ -41,6 +41,14 @@ jobs:
             echo "Cargo.lock has no changes, skipping commit and push."
             exit 0
           fi
+      - name: Install cargo hack
+        if: steps.lock-file-commit.outputs.changes == 'true'
+        uses: taiki-e/install-action@bf2f998095ccb464eb8b85eeb95a460ccd744ec4  # v2.62.17
+        with:
+          tool: cargo-hack
+      - name: Check MSRV
+        if: steps.lock-file-commit.outputs.changes == 'true'
+        run: cargo hack check --feature-powerset --locked --rust-version --workspace --lib --bins
       - name: Create or update pull request
         uses: peter-evans/create-pull-request@271a8d0340265f705b14b6d32b9829c1cb33d45e  # v7.0.8
         with:

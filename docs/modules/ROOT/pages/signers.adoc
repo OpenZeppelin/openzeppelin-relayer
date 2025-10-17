@@ -65,7 +65,7 @@ The following table shows which signer types are compatible with each network ty
 |`turnkey`
 |✅ Supported
 |✅ Supported
-|❌ Not supported
+|✅ Supported
 
 |`google_cloud_kms`
 |✅ Supported
@@ -89,10 +89,10 @@ The following table shows which signer types are compatible with each network ty
 
 - **EVM Networks**: Use secp256k1 cryptography. Most signers support EVM networks with proper key generation.
 - **Solana Networks**: Use ed25519 cryptography. Ensure your signer supports ed25519 key generation and signing.
-- **Stellar Networks**: Use ed25519 cryptography with specific Stellar requirements. Currently supported by local and Google Cloud KMS signers.
+- **Stellar Networks**: Use ed25519 cryptography with specific Stellar requirements. Supported by local, Google Cloud KMS, and Turnkey signers.
 - **AWS KMS**: Currently optimized for EVM networks with secp256k1 support.
 - **Google Cloud KMS**: Supports secp256k1 (EVM) and ed25519 (Solana, Stellar) key types.
-- **Turnkey**: Supports EVM and Solana networks with appropriate key management.
+- **Turnkey**: Supports EVM, Solana, and Stellar networks with appropriate key management.
 ====
 
 == Common Configuration Fields

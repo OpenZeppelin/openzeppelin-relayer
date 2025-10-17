@@ -38,7 +38,7 @@ jobs:
     steps:
       # Checkout the repository
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@ec9f2d5744a09debf3a187a3f4f675c53b671911  # v2.13.0
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a  # v2.13.1
         with:
           egress-policy: audit
       - name: Checkout Code
@@ -76,7 +76,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@ec9f2d5744a09debf3a187a3f4f675c53b671911  # v2.13.0
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a  # v2.13.1
         with:
           egress-policy: audit
       - name: Failed
@@ -89,7 +89,7 @@ jobs:
     steps:
       # Checkout the repository
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@ec9f2d5744a09debf3a187a3f4f675c53b671911  # v2.13.0
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a  # v2.13.1
         with:
           egress-policy: audit
       - name: Checkout Code
@@ -102,7 +102,9 @@ jobs:
       - name: Get cache-hit output
         run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
       - name: Install cargo hack
-        uses: taiki-e/install-action@7689010b667477e55299b24c373cdf719c945fdf  # cargo-hack
+        uses: taiki-e/install-action@bf2f998095ccb464eb8b85eeb95a460ccd744ec4  # v2.62.17
+        with:
+          tool: cargo-hack
 
       # Check the minimum supported Rust version
       - name: Default features
@@ -114,7 +116,7 @@ jobs:
     steps:
       # Checkout the repository
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@ec9f2d5744a09debf3a187a3f4f675c53b671911  # v2.13.0
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a  # v2.13.1
         with:
           egress-policy: audit
       - name: Checkout Code
@@ -137,7 +139,7 @@ jobs:
     steps:
       # Checkout the repository
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@ec9f2d5744a09debf3a187a3f4f675c53b671911  # v2.13.0
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a  # v2.13.1
         with:
           egress-policy: audit
       - name: Checkout Code
@@ -183,7 +185,7 @@ jobs:
     steps:
       # Checkout the repository
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@ec9f2d5744a09debf3a187a3f4f675c53b671911  # v2.13.0
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a  # v2.13.1
         with:
           egress-policy: audit
       - name: Checkout Code
@@ -223,10 +225,10 @@ jobs:
       # Get the output of the prepare composite action
       - name: Get cache-hit output
         run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
-      - name: Install cargo hack
-        uses: taiki-e/install-action@7689010b667477e55299b24c373cdf719c945fdf  # cargo-hack
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@16edcff251c6bb06f6878981359f84b77b28e7e2  # cargo-llvm-cov
+      - name: Install cargo hack and cargo-llvm-cov
+        uses: taiki-e/install-action@bf2f998095ccb464eb8b85eeb95a460ccd744ec4  # v2.62.17
+        with:
+          tool: cargo-hack,cargo-llvm-cov
       - name: Build
         run: cargo test --no-run --locked
 
@@ -255,7 +257,7 @@ jobs:
 
       # Upload unit coverage
       - name: Upload Unit Coverage to Codecov
-        uses: codecov/codecov-action@fdcc8476540edceab3de004e990f80d881c6cc00  # v5.5.0
+        uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           name: unit-coverage
@@ -265,7 +267,7 @@ jobs:
 
       # Upload integration coverage
       - name: Upload Integration Coverage to Codecov
-        uses: codecov/codecov-action@fdcc8476540edceab3de004e990f80d881c6cc00  # v5.5.0
+        uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           name: integration-coverage
@@ -275,7 +277,7 @@ jobs:
 
       # Upload properties coverage
       - name: Upload Properties Coverage to Codecov
-        uses: codecov/codecov-action@fdcc8476540edceab3de004e990f80d881c6cc00  # v5.5.0
+        uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           name: properties-coverage
@@ -292,7 +294,7 @@ jobs:
     steps:
       # Checkout the repository
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@ec9f2d5744a09debf3a187a3f4f675c53b671911  # v2.13.0
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a  # v2.13.1
         with:
           egress-policy: audit
       - name: Checkout Code
