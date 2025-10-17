@@ -43,9 +43,10 @@ where
     /// # Returns
     /// The transaction status based on on-chain state.
     ///
-    /// Note: This method only returns the status. For revert detection, use
-    /// `check_transaction_status_with_revert_info` instead.
-    #[allow(dead_code)]
+    /// Note: This method only returns the status without revert information.
+    /// The main flow uses `check_transaction_status_with_revert_info` instead,
+    /// but this method is kept for testing and backward compatibility.
+    #[cfg(test)]
     pub(super) async fn check_transaction_status(
         &self,
         tx: &TransactionRepoModel,
@@ -433,11 +434,11 @@ where
         Ok(tx)
     }
 
-    /// Handles transactions in the Mined state.
+    /// Handles transactions in the Mined state (without revert information).
     ///
-    /// Note: This method is kept for backward compatibility. The main flow now uses
-    /// `handle_mined_state_with_revert` which also tracks revert information.
-    #[allow(dead_code)]
+    /// Note: The main flow now uses `handle_mined_state_with_revert` which also
+    /// tracks revert information. This method is kept for testing and backward compatibility.
+    #[cfg(test)]
     async fn handle_mined_state(
         &self,
         tx: TransactionRepoModel,
@@ -458,11 +459,11 @@ where
             .await
     }
 
-    /// Handles transactions in final states (Confirmed, Failed, Expired).
+    /// Handles transactions in final states (Confirmed, Failed, Expired) without revert information.
     ///
-    /// Note: This method is kept for backward compatibility. The main flow now uses
-    /// `handle_final_state_with_revert` which also tracks revert information.
-    #[allow(dead_code)]
+    /// Note: The main flow now uses `handle_final_state_with_revert` which also
+    /// tracks revert information. This method is kept for testing and backward compatibility.
+    #[cfg(test)]
     async fn handle_final_state(
         &self,
         tx: TransactionRepoModel,
