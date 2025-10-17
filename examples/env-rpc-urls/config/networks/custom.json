@@ -1,0 +1,57 @@
+{
+  "networks": [
+    {
+      "type": "evm",
+      "network": "mainnet-private",
+      "chain_id": 1,
+      "rpc_urls": [
+        {"type": "env", "value": "ETH_MAINNET_RPC_URL"},
+        "https://eth.drpc.org"
+      ],
+      "explorer_urls": ["https://etherscan.io"],
+      "average_blocktime_ms": 12000,
+      "required_confirmations": 12,
+      "symbol": "ETH",
+      "is_testnet": false,
+      "features": ["eip1559"]
+    },
+    {
+      "type": "evm",
+      "network": "sepolia-private",
+      "chain_id": 11155111,
+      "rpc_urls": [
+        {"type": "env", "value": "SEPOLIA_RPC_URL_PRIMARY"}
+      ],
+      "explorer_urls": [
+        {"type": "env", "value": "SEPOLIA_EXPLORER_API"},
+        "https://sepolia.etherscan.io"
+      ],
+      "average_blocktime_ms": 12000,
+      "required_confirmations": 6,
+      "symbol": "ETH",
+      "is_testnet": true,
+      "features": ["eip1559"]
+    },
+    {
+      "type": "solana",
+      "network": "mainnet-private",
+      "rpc_urls": [
+        {"type": "env", "value": "SOLANA_MAINNET_RPC_URL"}
+      ],
+      "explorer_urls": ["https://explorer.solana.com"],
+      "average_blocktime_ms": 400,
+      "is_testnet": false
+    },
+    {
+      "type": "stellar",
+      "network": "mainnet-private",
+      "rpc_urls": [
+        {"type": "env", "value": "STELLAR_HORIZON_URL"}
+      ],
+      "explorer_urls": ["https://stellar.expert/explorer/public"],
+      "average_blocktime_ms": 5000,
+      "is_testnet": false,
+      "passphrase": "Public Global Stellar Network ; September 2015"
+    }
+  ]
+}

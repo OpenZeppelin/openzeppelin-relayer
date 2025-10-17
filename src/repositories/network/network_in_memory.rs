@@ -170,7 +170,8 @@ impl NetworkRepository for InMemoryNetworkRepository {
 #[cfg(test)]
 mod tests {
     use crate::config::{
-        EvmNetworkConfig, NetworkConfigCommon, SolanaNetworkConfig, StellarNetworkConfig,
+        network::StringOrEnvValue, EvmNetworkConfig, NetworkConfigCommon, SolanaNetworkConfig,
+        StellarNetworkConfig,
     };
 
     use super::*;
@@ -179,7 +180,7 @@ mod tests {
         let common = NetworkConfigCommon {
             network: name.clone(),
             from: None,
-            rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+            rpc_urls: Some(vec![StringOrEnvValue::plain("https://rpc.example.com")]),
             explorer_urls: None,
             average_blocktime_ms: None,
             is_testnet: Some(true),

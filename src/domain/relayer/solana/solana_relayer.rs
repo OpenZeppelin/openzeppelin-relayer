@@ -777,7 +777,7 @@ where
 mod tests {
     use super::*;
     use crate::{
-        config::{NetworkConfigCommon, SolanaNetworkConfig},
+        config::{network::StringOrEnvValue, NetworkConfigCommon, SolanaNetworkConfig},
         domain::{create_network_dex_generic, SolanaRpcHandler, SolanaRpcMethodsImpl},
         jobs::MockJobProducerTrait,
         models::{
@@ -868,7 +868,9 @@ mod tests {
                     common: NetworkConfigCommon {
                         network: "devnet".to_string(),
                         from: None,
-                        rpc_urls: Some(vec!["https://api.devnet.solana.com".to_string()]),
+                        rpc_urls: Some(vec![StringOrEnvValue::plain(
+                            "https://api.devnet.solana.com",
+                        )]),
                         explorer_urls: None,
                         average_blocktime_ms: Some(400),
                         is_testnet: Some(true),

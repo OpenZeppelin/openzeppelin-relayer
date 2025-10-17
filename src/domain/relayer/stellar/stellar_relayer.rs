@@ -475,7 +475,7 @@ where
 mod tests {
     use super::*;
     use crate::{
-        config::{NetworkConfigCommon, StellarNetworkConfig},
+        config::{network::StringOrEnvValue, NetworkConfigCommon, StellarNetworkConfig},
         constants::STELLAR_SMALLEST_UNIT_NAME,
         domain::{SignTransactionRequestStellar, SignXdrTransactionResponseStellar},
         jobs::MockJobProducerTrait,
@@ -541,7 +541,9 @@ mod tests {
                     common: NetworkConfigCommon {
                         network: "testnet".to_string(),
                         from: None,
-                        rpc_urls: Some(vec!["https://horizon-testnet.stellar.org".to_string()]),
+                        rpc_urls: Some(vec![StringOrEnvValue::plain(
+                            "https://horizon-testnet.stellar.org",
+                        )]),
                         explorer_urls: None,
                         average_blocktime_ms: Some(5000),
                         is_testnet: Some(true),
@@ -1009,7 +1011,7 @@ mod tests {
                 common: NetworkConfigCommon {
                     network: "mainnet".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["https://horizon.stellar.org".to_string()]),
+                    rpc_urls: Some(vec![StringOrEnvValue::plain("https://horizon.stellar.org")]),
                     explorer_urls: None,
                     average_blocktime_ms: Some(5000),
                     is_testnet: Some(false),
