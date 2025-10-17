@@ -40,7 +40,7 @@ use crate::{
     services::signer::{evm::construct_eip712_message_hash, Signer},
 };
 
-use super::DataSignerTrait;
+use super::{validate_and_format_signature, DataSignerTrait};
 
 use alloy::rpc::types::TransactionRequest;
 
@@ -154,14 +154,7 @@ impl DataSignerTrait for LocalSigner {
             .await
             .map_err(|e| SignerError::SigningError(format!("Failed to sign message: {}", e)))?;
 
-        let sig_bytes = signature.as_bytes();
-
-        Ok(SignDataResponse::Evm(SignDataResponseEvm {
-            r: hex::encode(&sig_bytes[0..32]),
-            s: hex::encode(&sig_bytes[32..64]),
-            v: sig_bytes[64],
-            sig: hex::encode(sig_bytes),
-        }))
+        validate_and_format_signature(&signature.as_bytes(), "Local")
     }
 
     async fn sign_typed_data(
@@ -177,14 +170,7 @@ impl DataSignerTrait for LocalSigner {
                 SignerError::SigningError(format!("Failed to sign EIP-712 message: {}", e))
             })?;
 
-        let sig_bytes = signature.as_bytes();
-
-        Ok(SignDataResponse::Evm(SignDataResponseEvm {
-            r: hex::encode(&sig_bytes[0..32]),
-            s: hex::encode(&sig_bytes[32..64]),
-            v: sig_bytes[64],
-            sig: hex::encode(sig_bytes),
-        }))
+        validate_and_format_signature(&signature.as_bytes(), "Local")
     }
 }
 
