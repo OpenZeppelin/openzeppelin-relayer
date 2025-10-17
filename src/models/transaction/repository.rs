@@ -273,6 +273,10 @@ pub struct EvmTransactionData {
     )]
     pub max_priority_fee_per_gas: Option<u128>,
     pub raw: Option<Vec<u8>>,
+    /// Indicates whether the transaction was reverted on-chain.
+    /// This is set to `Some(true)` when the transaction is mined but reverted,
+    /// `Some(false)` when successfully executed, and `None` when not yet determined.
+    pub reverted: Option<bool>,
 }
 
 impl EvmTransactionData {
@@ -314,6 +318,7 @@ impl EvmTransactionData {
             signature: None,
             hash: None,
             raw: None,
+            reverted: None, // Reset reverted status for new transaction
         }
     }
 
@@ -389,6 +394,7 @@ impl Default for EvmTransactionData {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             raw: None,
+            reverted: None,
         }
     }
 }
@@ -824,6 +830,7 @@ impl
                         max_fee_per_gas: evm_request.max_fee_per_gas,
                         max_priority_fee_per_gas: evm_request.max_priority_fee_per_gas,
                         raw: None,
+                        reverted: None,
                     }),
                     priced_at: None,
                     hashes: Vec::new(),
@@ -1210,6 +1217,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             raw: None,
+            reverted: None,
         }
     }
 
@@ -2970,6 +2978,7 @@ mod tests {
                 max_fee_per_gas: None,
                 max_priority_fee_per_gas: None,
                 raw: None,
+                reverted: None,
             }),
             priced_at: None,
             hashes: vec![],

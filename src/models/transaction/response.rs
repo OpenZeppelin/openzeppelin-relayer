@@ -64,6 +64,12 @@ pub struct EvmTransactionResponse {
     pub max_priority_fee_per_gas: Option<u128>,
     pub signature: Option<EvmTransactionDataSignature>,
     pub speed: Option<Speed>,
+    /// Indicates whether the transaction was reverted on-chain.
+    /// `true` means the transaction was mined but reverted,
+    /// `false` means it was successfully executed,
+    /// `null` means the revert status has not yet been determined.
+    #[schema(nullable = false)]
+    pub reverted: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Deserialize, ToSchema)]
@@ -124,6 +130,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     max_priority_fee_per_gas: evm_data.max_priority_fee_per_gas,
                     signature: evm_data.signature,
                     speed: evm_data.speed,
+                    reverted: evm_data.reverted,
                 }))
             }
             NetworkTransactionData::Solana(solana_data) => {

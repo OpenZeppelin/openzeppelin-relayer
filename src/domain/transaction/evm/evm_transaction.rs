@@ -214,6 +214,49 @@ where
         Ok(updated_tx)
     }
 
+    /// Updates a transaction's status and reverted field.
+    pub(super) async fn update_transaction_status_with_revert_info(
+        &self,
+        tx: TransactionRepoModel,
+        new_status: TransactionStatus,
+        reverted: Option<bool>,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        let confirmed_at = if new_status == TransactionStatus::Confirmed {
+            Some(Utc::now().to_rfc3339())
+        } else {
+            None
+        };
+
+        // Only update network_data if reverted status has changed
+        let network_data = if let Some(reverted_value) = reverted {
+            let mut evm_data = tx.network_data.get_evm_transaction_data()?;
+            if evm_data.reverted != Some(reverted_value) {
+                evm_data.reverted = Some(reverted_value);
+                Some(NetworkTransactionData::Evm(evm_data))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let update_request = TransactionUpdateRequest {
+            status: Some(new_status),
+            confirmed_at,
+            network_data,
+            ..Default::default()
+        };
+
+        let updated_tx = self
+            .transaction_repository()
+            .partial_update(tx.id.clone(), update_request)
+            .await?;
+
+        self.send_transaction_update_notification(&updated_tx)
+            .await?;
+        Ok(updated_tx)
+    }
+
     /// Sends a transaction update notification if a notification ID is configured.
     pub(super) async fn send_transaction_update_notification(
         &self,

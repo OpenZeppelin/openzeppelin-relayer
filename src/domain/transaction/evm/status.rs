@@ -60,7 +60,8 @@ where
         let receipt_result = self.provider().get_transaction_receipt(tx_hash).await?;
 
         if let Some(receipt) = receipt_result {
-            if !receipt.inner.status() {
+            let receipt_status = receipt.inner.status();
+            if !receipt_status {
                 return Ok(TransactionStatus::Failed);
             }
             let last_block_number = self.provider().get_block_number().await?;
@@ -98,6 +99,76 @@ where
         } else {
             debug!(tx_hash = %tx_hash, "transaction not yet mined");
             Ok(TransactionStatus::Submitted)
+        }
+    }
+
+    /// Checks transaction status and updates the reverted field if the transaction has been mined.
+    /// Returns both the status and whether the reverted field was updated.
+    pub(super) async fn check_transaction_status_with_revert_info(
+        &self,
+        tx: &TransactionRepoModel,
+    ) -> Result<(TransactionStatus, Option<bool>), TransactionError> {
+        if tx.status == TransactionStatus::Expired
+            || tx.status == TransactionStatus::Failed
+            || tx.status == TransactionStatus::Confirmed
+        {
+            return Ok((tx.status.clone(), None));
+        }
+
+        let evm_data = tx.network_data.get_evm_transaction_data()?;
+        let tx_hash = evm_data
+            .hash
+            .as_ref()
+            .ok_or(TransactionError::UnexpectedError(
+                "Transaction hash is missing".to_string(),
+            ))?;
+
+        let receipt_result = self.provider().get_transaction_receipt(tx_hash).await?;
+
+        if let Some(receipt) = receipt_result {
+            // Check if transaction was reverted on-chain
+            let receipt_status = receipt.inner.status();
+            let reverted = Some(!receipt_status);
+            
+            if !receipt_status {
+                return Ok((TransactionStatus::Failed, reverted));
+            }
+            
+            let last_block_number = self.provider().get_block_number().await?;
+            let tx_block_number = receipt
+                .block_number
+                .ok_or(TransactionError::UnexpectedError(
+                    "Transaction receipt missing block number".to_string(),
+                ))?;
+
+            let network_model = self
+                .network_repository()
+                .get_by_chain_id(NetworkType::Evm, evm_data.chain_id)
+                .await?
+                .ok_or(TransactionError::UnexpectedError(format!(
+                    "Network with chain id {} not found",
+                    evm_data.chain_id
+                )))?;
+
+            let network = EvmNetwork::try_from(network_model).map_err(|e| {
+                TransactionError::UnexpectedError(format!(
+                    "Error converting network model to EvmNetwork: {}",
+                    e
+                ))
+            })?;
+
+            if !has_enough_confirmations(
+                tx_block_number,
+                last_block_number,
+                network.required_confirmations,
+            ) {
+                debug!(tx_hash = %tx_hash, "transaction mined but not confirmed");
+                return Ok((TransactionStatus::Mined, reverted));
+            }
+            Ok((TransactionStatus::Confirmed, reverted))
+        } else {
+            debug!(tx_hash = %tx_hash, "transaction not yet mined");
+            Ok((TransactionStatus::Submitted, None))
         }
     }
 
@@ -215,6 +286,27 @@ where
     ) -> Result<TransactionRepoModel, TransactionError> {
         if tx.status != new_status {
             return self.update_transaction_status(tx, new_status).await;
+        }
+        Ok(tx)
+    }
+
+    /// Helper method that updates transaction status and reverted field if needed.
+    pub(super) async fn update_transaction_status_with_revert_if_needed(
+        &self,
+        tx: TransactionRepoModel,
+        new_status: TransactionStatus,
+        reverted: Option<bool>,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        // Check if we need to update either status or reverted field
+        let status_changed = tx.status != new_status;
+        let reverted_changed = if let Ok(evm_data) = tx.network_data.get_evm_transaction_data() {
+            reverted.is_some() && evm_data.reverted != reverted
+        } else {
+            false
+        };
+
+        if status_changed || reverted_changed {
+            return self.update_transaction_status_with_revert_info(tx, new_status, reverted).await;
         }
         Ok(tx)
     }
@@ -341,6 +433,17 @@ where
             .await
     }
 
+    /// Handles transactions in the Mined state with revert information.
+    async fn handle_mined_state_with_revert(
+        &self,
+        tx: TransactionRepoModel,
+        reverted: Option<bool>,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        self.schedule_status_check(&tx, Some(5)).await?;
+        self.update_transaction_status_with_revert_if_needed(tx, TransactionStatus::Mined, reverted)
+            .await
+    }
+
     /// Handles transactions in final states (Confirmed, Failed, Expired).
     async fn handle_final_state(
         &self,
@@ -348,6 +451,16 @@ where
         status: TransactionStatus,
     ) -> Result<TransactionRepoModel, TransactionError> {
         self.update_transaction_status_if_needed(tx, status).await
+    }
+
+    /// Handles transactions in final states (Confirmed, Failed, Expired) with revert information.
+    async fn handle_final_state_with_revert(
+        &self,
+        tx: TransactionRepoModel,
+        status: TransactionStatus,
+        reverted: Option<bool>,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        self.update_transaction_status_with_revert_if_needed(tx, status, reverted).await
     }
 
     /// Inherent status-handling method.
@@ -360,16 +473,16 @@ where
     ) -> Result<TransactionRepoModel, TransactionError> {
         debug!("checking transaction status");
 
-        let status = self.check_transaction_status(&tx).await?;
-        debug!(status = ?status, "transaction status");
+        let (status, reverted) = self.check_transaction_status_with_revert_info(&tx).await?;
+        debug!(status = ?status, reverted = ?reverted, "transaction status");
 
         match status {
             TransactionStatus::Submitted => self.handle_submitted_state(tx).await,
             TransactionStatus::Pending => self.handle_pending_state(tx).await,
-            TransactionStatus::Mined => self.handle_mined_state(tx).await,
+            TransactionStatus::Mined => self.handle_mined_state_with_revert(tx, reverted).await,
             TransactionStatus::Confirmed
             | TransactionStatus::Failed
-            | TransactionStatus::Expired => self.handle_final_state(tx, status).await,
+            | TransactionStatus::Expired => self.handle_final_state_with_revert(tx, status, reverted).await,
             _ => Err(TransactionError::UnexpectedError(format!(
                 "Unexpected transaction status: {:?}",
                 status
