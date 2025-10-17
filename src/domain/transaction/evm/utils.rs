@@ -194,6 +194,7 @@ mod tests {
             speed: Some(Speed::Fast),
             chain_id: 1,
             raw: Some(vec![1, 2, 3]),
+            reverted: None,
         };
 
         let network = create_standard_network();
@@ -225,6 +226,7 @@ mod tests {
             speed: Some(Speed::Fast),
             chain_id: 42161, // Arbitrum One
             raw: Some(vec![1, 2, 3]),
+            reverted: None,
         };
 
         let network = create_arbitrum_network();
@@ -257,6 +259,7 @@ mod tests {
             speed: Some(Speed::Fast),
             chain_id: 42170, // Arbitrum Nova
             raw: Some(vec![1, 2, 3]),
+            reverted: None,
         };
 
         let network = create_arbitrum_nova_network();
@@ -297,6 +300,7 @@ mod tests {
             speed: Some(Speed::Fast),
             chain_id: 42161, // Arbitrum One
             raw: Some(vec![1, 2, 3]),
+            reverted: None,
         };
 
         let network = create_arbitrum_network();
@@ -336,6 +340,7 @@ mod tests {
             speed: Some(Speed::Fast),
             chain_id: 42161, // Arbitrum One
             raw: Some(vec![1, 2, 3]),
+            reverted: None,
         };
 
         let network = create_arbitrum_network();
@@ -369,6 +374,7 @@ mod tests {
             speed: Some(Speed::Fast),
             chain_id: 1,
             raw: None,
+            reverted: None,
         };
         assert!(is_noop(&noop_tx));
 
@@ -417,6 +423,7 @@ mod tests {
                 speed: Some(Speed::Fast),
                 chain_id: 1,
                 raw: None,
+                reverted: None,
             }),
             priced_at: None,
             hashes: vec![], // Start with no attempts
@@ -464,6 +471,7 @@ mod tests {
                 speed: Some(Speed::Fast),
                 chain_id: 1,
                 raw: None,
+                reverted: None,
             }),
             priced_at: None,
             hashes: vec![],
@@ -642,6 +650,7 @@ mod tests {
                 speed: Some(Speed::Fast),
                 chain_id: 1,
                 raw: None,
+                reverted: None,
             }),
             priced_at: None,
             hashes: vec![],
@@ -684,6 +693,7 @@ mod tests {
                 speed: Some(Speed::Fast),
                 chain_id: 1,
                 raw: None,
+                reverted: None,
             }),
             priced_at: None,
             hashes: vec![],
@@ -729,6 +739,7 @@ mod tests {
                 speed: Some(Speed::Fast),
                 chain_id: 1,
                 raw: None,
+                reverted: None,
             }),
             priced_at: None,
             hashes: vec![],

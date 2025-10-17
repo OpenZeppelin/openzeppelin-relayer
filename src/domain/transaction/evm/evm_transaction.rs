@@ -909,6 +909,7 @@ mod tests {
                 hash: None,
                 speed: Some(Speed::Fast),
                 raw: None,
+                reverted: None,
             }),
             priced_at: None,
             hashes: Vec::new(),
@@ -1597,6 +1598,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             raw: None,
+            reverted: None,
         };
 
         // Mock provider to return 21000 as estimated gas
@@ -1659,6 +1661,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             raw: None,
+            reverted: None,
         };
 
         // Provider should not be called when estimation is disabled
@@ -1719,6 +1722,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             raw: None,
+            reverted: None,
         };
 
         // Mock provider to return 50000 as estimated gas
@@ -1780,6 +1784,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             raw: None,
+            reverted: None,
         };
 
         // Mock provider to return an error

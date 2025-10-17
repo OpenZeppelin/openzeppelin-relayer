@@ -4839,6 +4839,10 @@
           "relayer_id": {
             "type": "string"
           },
+          "reverted": {
+            "type": "boolean",
+            "description": "Indicates whether the transaction was reverted on-chain.\n`true` means the transaction was mined but reverted,\n`false` means it was successfully executed,\n`null` means the revert status has not yet been determined."
+          },
           "sent_at": {
             "type": "string"
           },

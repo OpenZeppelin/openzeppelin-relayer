@@ -175,6 +175,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             raw: None,
+            reverted: None,
         };
 
         assert_eq!(get_evm_default_gas_limit_for_tx(&tx), DEFAULT_GAS_LIMIT);
@@ -197,6 +198,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             raw: None,
+            reverted: None,
         };
 
         assert_eq!(
@@ -222,6 +224,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             raw: None,
+            reverted: None,
         };
 
         assert_eq!(
@@ -247,6 +250,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             raw: None,
+            reverted: None,
         };
 
         assert_eq!(get_evm_default_gas_limit_for_tx(&tx), COMPLEX_GAS_LIMIT);
@@ -269,6 +273,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             raw: None,
+            reverted: None,
         };
 
         assert_eq!(get_evm_default_gas_limit_for_tx(&tx), COMPLEX_GAS_LIMIT);
@@ -291,6 +296,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             raw: None,
+            reverted: None,
         };
 
         assert_eq!(get_evm_default_gas_limit_for_tx(&tx), COMPLEX_GAS_LIMIT);
@@ -314,6 +320,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             raw: None,
+            reverted: None,
         };
 
         // Should still match ERC20 transfer since it starts with the signature
@@ -341,6 +348,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             raw: None,
+            reverted: None,
         };
 
         // Should not match since the function signature is case-sensitive

@@ -642,6 +642,7 @@ mod tests {
                 hash: None,
                 speed: Some(Speed::Fast),
                 raw: None,
+                reverted: None,
             }),
             priced_at: None,
             hashes: Vec::new(),
@@ -850,6 +851,96 @@ mod tests {
 
             let status = evm_transaction.check_transaction_status(&tx).await.unwrap();
             assert_eq!(status, TransactionStatus::Failed);
+        }
+
+        #[tokio::test]
+        async fn test_check_transaction_status_with_revert_info_failed() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+
+            if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
+                evm_data.hash = Some("0xFakeHash".to_string());
+            }
+
+            // Mock a mined receipt with failure (reverted transaction)
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(|_| Box::pin(async { Ok(Some(make_mock_receipt(false, Some(100)))) }));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+
+            let (status, reverted) = evm_transaction
+                .check_transaction_status_with_revert_info(&tx)
+                .await
+                .unwrap();
+            assert_eq!(status, TransactionStatus::Failed);
+            assert_eq!(reverted, Some(true)); // Transaction reverted on-chain
+        }
+
+        #[tokio::test]
+        async fn test_check_transaction_status_with_revert_info_success() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+
+            if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
+                evm_data.hash = Some("0xFakeHash".to_string());
+            }
+
+            // Mock a mined receipt with success
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(|_| Box::pin(async { Ok(Some(make_mock_receipt(true, Some(100)))) }));
+
+            // Mock block_number that meets the confirmation threshold
+            mocks
+                .provider
+                .expect_get_block_number()
+                .return_once(|| Box::pin(async { Ok(113) }));
+
+            // Mock network repository to return a test network model
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+
+            let (status, reverted) = evm_transaction
+                .check_transaction_status_with_revert_info(&tx)
+                .await
+                .unwrap();
+            assert_eq!(status, TransactionStatus::Confirmed);
+            assert_eq!(reverted, Some(false)); // Transaction succeeded on-chain
+        }
+
+        #[tokio::test]
+        async fn test_check_transaction_status_with_revert_info_not_mined() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+
+            if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
+                evm_data.hash = Some("0xFakeHash".to_string());
+            }
+
+            // Mock that get_transaction_receipt returns None (not mined)
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(|_| Box::pin(async { Ok(None) }));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+
+            let (status, reverted) = evm_transaction
+                .check_transaction_status_with_revert_info(&tx)
+                .await
+                .unwrap();
+            assert_eq!(status, TransactionStatus::Submitted);
+            assert_eq!(reverted, None); // No receipt yet, so reverted status unknown
         }
     }
 

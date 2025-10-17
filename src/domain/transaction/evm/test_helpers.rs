@@ -75,6 +75,7 @@ pub mod test_utils {
                 hash: None,
                 speed: Some(Speed::Fast),
                 raw: None,
+                reverted: None,
             }),
             priced_at: None,
             hashes: Vec::new(),

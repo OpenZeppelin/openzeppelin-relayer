@@ -111,6 +111,7 @@ mod tests {
                 max_priority_fee_per_gas: None,
                 signature: None,
                 speed: None,
+                reverted: None,
             },
         )));
 
@@ -152,6 +153,7 @@ mod tests {
                 max_priority_fee_per_gas: None,
                 signature: None,
                 speed: None,
+                reverted: None,
             },
         )));
 

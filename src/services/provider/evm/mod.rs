@@ -711,6 +711,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             raw: None,
+            reverted: None,
         };
 
         let result = TransactionRequest::try_from(&tx_data);
@@ -1049,6 +1050,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             raw: None,
+            reverted: None,
         };
 
         mock.expect_estimate_gas()
@@ -1089,6 +1091,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             raw: None,
+            reverted: None,
         };
 
         let result = TransactionRequest::try_from(&tx_data);

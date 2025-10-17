@@ -279,6 +279,7 @@ mod tests {
             hash: None,
             signature: None,
             raw: None,
+            reverted: None,
             max_fee_per_gas: Some(1),
             max_priority_fee_per_gas: Some(1),
             speed: None,
@@ -406,6 +407,7 @@ mod tests {
             hash: None,
             signature: None,
             raw: None,
+            reverted: None,
             max_fee_per_gas: None,          // Not used in legacy transactions
             max_priority_fee_per_gas: None, // Not used in legacy transactions
             speed: None,
@@ -457,6 +459,7 @@ mod tests {
             hash: None,
             signature: None,
             raw: None,
+            reverted: None,
             max_fee_per_gas: Some(1),
             max_priority_fee_per_gas: Some(1),
             speed: None,

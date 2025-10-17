@@ -205,6 +205,7 @@ mod tests {
             hash: None,
             signature: None,
             raw: None,
+            reverted: None,
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             speed: None,

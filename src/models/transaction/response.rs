@@ -201,6 +201,7 @@ mod tests {
                 max_fee_per_gas: None,
                 max_priority_fee_per_gas: None,
                 raw: None,
+                reverted: None,
             }),
             valid_until: None,
             network_type: NetworkType::Evm,
