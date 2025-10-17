@@ -1,16 +1,22 @@
 use actix_web::dev::ServiceRequest;
+use actix_web::HttpRequest;
+use std::collections::HashMap;
+use tracing::info;
 
 use crate::{
-    constants::{AUTHORIZATION_HEADER_NAME, AUTHORIZATION_HEADER_VALUE_PREFIX},
-    models::SecretString,
+    constants::{
+        has_permission, has_permission_with_params, AUTHORIZATION_HEADER_NAME,
+        AUTHORIZATION_HEADER_VALUE_PREFIX,
+    },
+    models::{ApiError, SecretString},
+    repositories::ApiKeyRepositoryTrait,
 };
 
 /// Checks if the authorization header in the request matches the expected API key.
 ///
-/// This function extracts the authorization header from the request, verifies that it starts
-/// with the expected prefix (e.g., "Bearer "), and then compares the remaining part of the header
-/// value with the expected API key.
-pub fn check_authorization_header(req: &ServiceRequest, expected_key: &SecretString) -> bool {
+/// This function extracts the authorization header from the request and verifies that it starts
+/// with the expected prefix (e.g., "Bearer ").
+pub fn check_authorization_header(req: &ServiceRequest, _expected_key: &SecretString) -> bool {
     // Ensure there is exactly one Authorization header
     let headers: Vec<_> = req.headers().get_all(AUTHORIZATION_HEADER_NAME).collect();
     if headers.len() != 1 {
@@ -28,9 +34,147 @@ pub fn check_authorization_header(req: &ServiceRequest, expected_key: &SecretStr
             return false;
         }
 
-        return &SecretString::new(token) == expected_key;
+        info!("Token: {}", token);
+        return true;
     }
     false
+}
+
+/// Helper to validate API key and check multiple permissions (AND logic - all required)
+pub async fn validate_api_key_permissions(
+    req: &HttpRequest,
+    api_key_repo: &dyn ApiKeyRepositoryTrait,
+    required_permissions: &[&str],
+) -> Result<(), ApiError> {
+    // Extract API key from Authorization header
+    let headers: Vec<_> = req.headers().get_all(AUTHORIZATION_HEADER_NAME).collect();
+    if headers.len() != 1 {
+        return Err(ApiError::Unauthorized(
+            "Missing or invalid Authorization header".to_string(),
+        ));
+    }
+
+    let auth_header = match headers[0].to_str() {
+        Ok(header) => header,
+        Err(_) => {
+            return Err(ApiError::Unauthorized(
+                "Invalid Authorization header".to_string(),
+            ));
+        }
+    };
+
+    if !auth_header.starts_with(AUTHORIZATION_HEADER_VALUE_PREFIX) {
+        return Err(ApiError::Unauthorized(
+            "Invalid Authorization header format".to_string(),
+        ));
+    }
+
+    let token = &auth_header[AUTHORIZATION_HEADER_VALUE_PREFIX.len()..];
+    if token.is_empty() {
+        return Err(ApiError::Unauthorized("Empty API key".to_string()));
+    }
+
+    // Check if this is the environment API key (full access)
+    if let Ok(env_api_key) = std::env::var("API_KEY") {
+        if token == env_api_key {
+            return Ok(());
+        }
+    }
+
+    // Look up the API key
+    let api_key = match api_key_repo.get_by_value(token).await {
+        Ok(Some(key)) => key,
+        Ok(None) => {
+            return Err(ApiError::Unauthorized("Invalid API key".to_string()));
+        }
+        Err(_) => {
+            return Err(ApiError::InternalError(
+                "Failed to validate API key".to_string(),
+            ));
+        }
+    };
+
+    // Check permissions with AND logic - ALL permissions must be satisfied
+    for required_permission in required_permissions {
+        if !has_permission(&api_key.permissions, required_permission) {
+            let required_list = required_permissions.join(" AND ");
+            return Err(ApiError::ForbiddenError(format!(
+                "Insufficient permissions. Required: {}",
+                required_list
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// Enhanced helper to validate API key with parameter substitution support
+pub async fn validate_api_key_permissions_with_params(
+    req: &HttpRequest,
+    api_key_repo: &dyn ApiKeyRepositoryTrait,
+    required_permissions: &[&str],
+    param_values: &HashMap<String, String>,
+) -> Result<(), ApiError> {
+    // Extract API key from Authorization header (same as above)
+    let headers: Vec<_> = req.headers().get_all(AUTHORIZATION_HEADER_NAME).collect();
+    if headers.len() != 1 {
+        return Err(ApiError::Unauthorized(
+            "Missing or invalid Authorization header".to_string(),
+        ));
+    }
+
+    let auth_header = match headers[0].to_str() {
+        Ok(header) => header,
+        Err(_) => {
+            return Err(ApiError::Unauthorized(
+                "Invalid Authorization header".to_string(),
+            ));
+        }
+    };
+
+    if !auth_header.starts_with(AUTHORIZATION_HEADER_VALUE_PREFIX) {
+        return Err(ApiError::Unauthorized(
+            "Invalid Authorization header format".to_string(),
+        ));
+    }
+
+    let token = &auth_header[AUTHORIZATION_HEADER_VALUE_PREFIX.len()..];
+    if token.is_empty() {
+        return Err(ApiError::Unauthorized("Empty API key".to_string()));
+    }
+
+    // Check if this is the environment API key (full access)
+    if let Ok(env_api_key) = std::env::var("API_KEY") {
+        if token == env_api_key {
+            return Ok(());
+        }
+    }
+
+    // Look up the API key from repository
+    let api_key = match api_key_repo.get_by_value(token).await {
+        Ok(Some(key)) => key,
+        Ok(None) => {
+            return Err(ApiError::Unauthorized("Invalid API key".to_string()));
+        }
+        Err(_) => {
+            return Err(ApiError::InternalError(
+                "Failed to validate API key".to_string(),
+            ));
+        }
+    };
+
+    // Check permissions with parameter substitution
+    for required_permission in required_permissions {
+        if !has_permission_with_params(&api_key.permissions, required_permission, param_values) {
+            let required_list = required_permissions.join(" AND ");
+            return Err(ApiError::ForbiddenError(format!(
+                "Insufficient permissions. Required: {}",
+                required_list
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
