@@ -38,6 +38,14 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PC: PriceCalculatorTrait + Send + Sync,
 {
+    /// Checks the current status of a transaction.
+    ///
+    /// # Returns
+    /// The transaction status based on on-chain state.
+    ///
+    /// Note: This method only returns the status. For revert detection, use
+    /// `check_transaction_status_with_revert_info` instead.
+    #[allow(dead_code)]
     pub(super) async fn check_transaction_status(
         &self,
         tx: &TransactionRepoModel,
@@ -129,11 +137,11 @@ where
             // Check if transaction was reverted on-chain
             let receipt_status = receipt.inner.status();
             let reverted = Some(!receipt_status);
-            
+
             if !receipt_status {
                 return Ok((TransactionStatus::Failed, reverted));
             }
-            
+
             let last_block_number = self.provider().get_block_number().await?;
             let tx_block_number = receipt
                 .block_number
@@ -306,7 +314,9 @@ where
         };
 
         if status_changed || reverted_changed {
-            return self.update_transaction_status_with_revert_info(tx, new_status, reverted).await;
+            return self
+                .update_transaction_status_with_revert_info(tx, new_status, reverted)
+                .await;
         }
         Ok(tx)
     }
@@ -424,6 +434,10 @@ where
     }
 
     /// Handles transactions in the Mined state.
+    ///
+    /// Note: This method is kept for backward compatibility. The main flow now uses
+    /// `handle_mined_state_with_revert` which also tracks revert information.
+    #[allow(dead_code)]
     async fn handle_mined_state(
         &self,
         tx: TransactionRepoModel,
@@ -445,6 +459,10 @@ where
     }
 
     /// Handles transactions in final states (Confirmed, Failed, Expired).
+    ///
+    /// Note: This method is kept for backward compatibility. The main flow now uses
+    /// `handle_final_state_with_revert` which also tracks revert information.
+    #[allow(dead_code)]
     async fn handle_final_state(
         &self,
         tx: TransactionRepoModel,
@@ -460,7 +478,8 @@ where
         status: TransactionStatus,
         reverted: Option<bool>,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        self.update_transaction_status_with_revert_if_needed(tx, status, reverted).await
+        self.update_transaction_status_with_revert_if_needed(tx, status, reverted)
+            .await
     }
 
     /// Inherent status-handling method.
@@ -482,7 +501,10 @@ where
             TransactionStatus::Mined => self.handle_mined_state_with_revert(tx, reverted).await,
             TransactionStatus::Confirmed
             | TransactionStatus::Failed
-            | TransactionStatus::Expired => self.handle_final_state_with_revert(tx, status, reverted).await,
+            | TransactionStatus::Expired => {
+                self.handle_final_state_with_revert(tx, status, reverted)
+                    .await
+            }
             _ => Err(TransactionError::UnexpectedError(format!(
                 "Unexpected transaction status: {:?}",
                 status
