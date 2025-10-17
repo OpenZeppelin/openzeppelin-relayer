@@ -181,12 +181,10 @@ where
         // Generate signature
         let signature = self.signer.sign(&transaction.message_data()).await?;
 
-        // Ensure signatures array has enough elements
-        while transaction.signatures.len() <= signer_index {
-            transaction.signatures.push(Signature::default());
-        }
-
-        // Place signature in the correct position
+        // Resize signatures array and insert signature
+        transaction
+            .signatures
+            .resize(signer_index + 1, Signature::default());
         transaction.signatures[signer_index] = signature;
 
         Ok((transaction, signature))

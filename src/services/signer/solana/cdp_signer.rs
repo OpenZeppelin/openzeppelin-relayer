@@ -14,9 +14,13 @@
 //! Private keys never leave the CDP service, providing enhanced security
 //! compared to local key storage solutions.
 use crate::{
-    domain::SignTransactionResponse,
-    models::{Address, CdpSignerConfig, NetworkTransactionData, SignerError, TransactionError},
+    domain::{SignTransactionResponse, SignTransactionResponseSolana},
+    models::{
+        Address, CdpSignerConfig, EncodedSerializedTransaction, NetworkTransactionData,
+        SignerError, TransactionError,
+    },
     services::{signer::Signer, CdpService, CdpServiceTrait},
+    utils::base64_encode,
 };
 use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine as _};
@@ -165,13 +169,42 @@ impl<T: CdpServiceTrait> Signer for CdpSigner<T> {
             ))
         })?;
 
-        let signed_transaction = self
+        let signed_transaction_bytes = self
             .cdp_service
             .sign_solana_transaction(transaction_str)
             .await
             .map_err(SignerError::CdpError)?;
 
-        Ok(SignTransactionResponse::Solana(signed_transaction))
+        // Deserialize to extract signature
+        let signed_transaction: Transaction = bincode::deserialize(&signed_transaction_bytes)
+            .map_err(|e| {
+                SignerError::InvalidTransaction(TransactionError::UnexpectedError(format!(
+                    "Failed to deserialize signed transaction: {}",
+                    e
+                )))
+            })?;
+
+        // Extract the first signature (relayer's signature)
+        let signature = signed_transaction
+            .signatures
+            .first()
+            .ok_or_else(|| {
+                SignerError::InvalidTransaction(TransactionError::ValidationError(
+                    "Signed transaction has no signatures".to_string(),
+                ))
+            })?
+            .to_string();
+
+        // Encode the transaction bytes to base64
+        let encoded_transaction =
+            EncodedSerializedTransaction::new(base64_encode(&signed_transaction_bytes));
+
+        Ok(SignTransactionResponse::Solana(
+            SignTransactionResponseSolana {
+                transaction: encoded_transaction,
+                signature,
+            },
+        ))
     }
 }
 
@@ -363,10 +396,25 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_transaction_success() {
+        use solana_sdk::{hash::Hash, message::Message, system_instruction};
+
         let mut mock_service = MockCdpServiceTrait::new();
 
         let test_transaction = "transaction_123".to_string();
-        let mock_signed_transaction = vec![1u8; 64]; // Mock signed transaction bytes
+
+        // Create a valid Solana transaction for testing
+        let from_pubkey = Pubkey::from_str("11111111111111111111111111111111").unwrap();
+        let to_pubkey = Pubkey::from_str("22222222222222222222222222222222").unwrap();
+        let instruction = system_instruction::transfer(&from_pubkey, &to_pubkey, 1000);
+        let message = Message::new(&[instruction], Some(&from_pubkey));
+        let mut transaction = Transaction::new_unsigned(message);
+
+        // Add a signature
+        transaction.signatures = vec![Signature::default()];
+
+        // Serialize the transaction
+        let mock_signed_transaction = bincode::serialize(&transaction).unwrap();
+        let expected_signature = transaction.signatures[0].to_string();
 
         mock_service
             .expect_sign_solana_transaction()
@@ -391,7 +439,8 @@ mod tests {
         assert!(result.is_ok());
         match result.unwrap() {
             SignTransactionResponse::Solana(signed_tx) => {
-                assert_eq!(signed_tx, vec![1u8; 64]);
+                assert_eq!(signed_tx.signature, expected_signature);
+                assert!(!signed_tx.transaction.into_inner().is_empty());
             }
             _ => panic!("Expected Solana SignTransactionResponse"),
         }
