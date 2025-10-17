@@ -3,20 +3,23 @@
 //! This module provides transaction status checking for Solana transactions,
 //! including status updates, repository management, and webhook notifications.
 
+use crate::constants::{
+    SOLANA_MIN_AGE_FOR_RESUBMIT_CHECK_SECONDS, SOLANA_PENDING_TIMEOUT_MINUTES,
+    SOLANA_SENT_TIMEOUT_MINUTES, SOLANA_SUBMITTED_TIMEOUT_MINUTES,
+};
 use chrono::{DateTime, Duration, Utc};
-use solana_sdk::{signature::Signature, transaction::Transaction as SolanaTransaction};
+use solana_sdk::{
+    commitment_config::CommitmentConfig, signature::Signature,
+    transaction::Transaction as SolanaTransaction,
+};
 use std::str::FromStr;
-use tracing::{debug, info, warn};
-
-/// Timeout before attempting to resubmit a Solana transaction with fresh blockhash
-/// Solana blockhashes are valid for ~60-90 seconds, so we wait at least 90 seconds
-const SOLANA_RESUBMIT_TIMEOUT_SECONDS: i64 = 90;
+use tracing::{debug, error, info, warn};
 
 use super::{utils::decode_solana_transaction, SolanaRelayerTransaction};
-use crate::domain::transaction::common::is_final_state;
-use crate::services::SolanaSignTrait;
+use crate::domain::transaction::{common::is_final_state, solana::utils::is_resubmitable};
+use crate::services::{SolanaProviderError, SolanaSignTrait};
 use crate::{
-    jobs::{JobProducerTrait, TransactionSend},
+    jobs::{JobProducerTrait, TransactionRequest, TransactionSend},
     models::{
         RelayerRepoModel, SolanaTransactionStatus, TransactionError, TransactionRepoModel,
         TransactionStatus, TransactionUpdateRequest,
@@ -35,10 +38,10 @@ where
 {
     /// Main status handling method with error handling
     ///
-    /// Similar to EVM approach:
     /// 1. Check transaction status (query chain or return current for Pending/Sent)
-    /// 2. Update transaction in DB if status changed
-    /// 3. Handle based on the (potentially new) status
+    /// 2. Reload transaction from DB if status changed (ensures fresh data)
+    /// 3. Check if too early for resubmit checks (young transactions just update status)
+    /// 4. Handle based on detected status (handlers update DB if needed)
     pub async fn handle_transaction_status_impl(
         &self,
         tx: TransactionRepoModel,
@@ -52,42 +55,32 @@ where
         }
 
         // Step 1: Check transaction status (query chain or return current)
-        let status = self.check_transaction_status(&tx).await?;
+        let detected_status = self.check_onchain_transaction_status(&tx).await?;
 
         debug!(
             tx_id = %tx.id,
-            previous_status = ?tx.status,
-            new_status = ?status,
+            current_status = ?tx.status,
+            detected_status = ?detected_status,
             "transaction status check completed"
         );
 
-        // Step 2: Update transaction in DB if status changed
-        let tx = if status != tx.status {
-            debug!(
-                tx_id = %tx.id,
-                old_status = ?tx.status,
-                new_status = ?status,
-                "status changed, updating transaction"
-            );
-            self.update_transaction_status_and_notify(tx, status.clone())
-                .await?
-        } else {
-            tx
-        };
-
-        // Step 3: Handle based on (potentially new) status
-        match status {
-            TransactionStatus::Pending => self.handle_pending_status(tx).await,
-            TransactionStatus::Sent => self.handle_sent_status(tx).await,
-            TransactionStatus::Submitted => self.handle_submitted_status(tx).await,
-            TransactionStatus::Mined => self.handle_mined_status(tx).await,
-            // Final states
-            TransactionStatus::Confirmed
+        // Step 2: Handle based on detected status (handlers will update if needed)
+        match detected_status {
+            TransactionStatus::Pending => {
+                // Pending transactions haven't been submitted yet - schedule request job if not expired
+                self.handle_pending_status(tx).await
+            }
+            TransactionStatus::Sent | TransactionStatus::Submitted => {
+                // Sent/Submitted transactions may need resubmission if blockhash expired
+                self.handle_resubmit_or_expiration(tx).await
+            }
+            TransactionStatus::Mined
+            | TransactionStatus::Confirmed
             | TransactionStatus::Failed
             | TransactionStatus::Canceled
             | TransactionStatus::Expired => {
-                debug!(tx_id = %tx.id, status = ?status, "transaction in final state");
-                Ok(tx)
+                self.update_transaction_status_if_needed(tx, detected_status)
+                    .await
             }
         }
     }
@@ -97,7 +90,7 @@ where
     /// Similar to EVM's check_transaction_status, this method:
     /// - Returns current status for Pending/Sent (no on-chain query needed)
     /// - Queries chain for Submitted/Mined and returns appropriate status
-    async fn check_transaction_status(
+    async fn check_onchain_transaction_status(
         &self,
         tx: &TransactionRepoModel,
     ) -> Result<TransactionStatus, TransactionError> {
@@ -124,14 +117,7 @@ where
             Ok(solana_status) => {
                 // Map Solana on-chain status to repository status
                 let new_status = match solana_status {
-                    SolanaTransactionStatus::Processed => {
-                        // Keep as Submitted or upgrade to Mined
-                        if tx.status == TransactionStatus::Submitted {
-                            TransactionStatus::Mined
-                        } else {
-                            tx.status.clone()
-                        }
-                    }
+                    SolanaTransactionStatus::Processed => TransactionStatus::Mined,
                     SolanaTransactionStatus::Confirmed => TransactionStatus::Mined,
                     SolanaTransactionStatus::Finalized => TransactionStatus::Confirmed,
                     SolanaTransactionStatus::Failed => TransactionStatus::Failed,
@@ -152,10 +138,10 @@ where
         }
     }
 
-    /// Update transaction status in DB and send notification
+    /// Update transaction status in DB and send notification (unconditionally)
     ///
-    /// Used after check_transaction_status detects a status change
-    async fn update_transaction_status_and_notify(
+    /// Used internally by update_transaction_status_if_needed
+    async fn update_transaction_status_and_send_notification(
         &self,
         tx: TransactionRepoModel,
         new_status: TransactionStatus,
@@ -180,7 +166,7 @@ where
         // Send webhook notification if relayer has notification configured
         // Best-effort operation - errors logged but not propagated
         if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
-            tracing::error!(
+            error!(
                 tx_id = %updated_tx.id,
                 status = ?new_status,
                 "sending transaction update notification failed: {:?}",
@@ -191,65 +177,299 @@ where
         Ok(updated_tx)
     }
 
-    /// Handle Pending status - transaction not yet signed/submitted
+    /// Update transaction status in DB if status has changed
     ///
-    /// This is a transient state, should not be in status check loop
+    /// Similar to EVM's update_transaction_status_if_needed pattern
+    async fn update_transaction_status_if_needed(
+        &self,
+        tx: TransactionRepoModel,
+        new_status: TransactionStatus,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        if tx.status != new_status {
+            return self
+                .update_transaction_status_and_send_notification(tx, new_status)
+                .await;
+        }
+        Ok(tx)
+    }
+
+    /// Handle Pending status - check for expiration/timeout or schedule transaction request job
+    ///
+    /// Pending transactions haven't been submitted yet, so we should schedule a transaction
+    /// request job to prepare and submit them, not a resubmit job.
     async fn handle_pending_status(
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!(tx_id = %tx.id, "transaction in Pending status");
-        // Nothing to do - transaction is waiting to be prepared
+        // Step 1: Check if valid_until has expired
+        if self.is_valid_until_expired(&tx) {
+            info!(
+                tx_id = %tx.id,
+                valid_until = ?tx.valid_until,
+                "pending transaction valid_until has expired"
+            );
+            return self
+                .mark_as_expired(
+                    tx,
+                    "Transaction valid_until timestamp has expired".to_string(),
+                )
+                .await;
+        }
+
+        // Step 2: Check if transaction has exceeded pending timeout
+        if self.has_exceeded_timeout(&tx)? {
+            warn!(
+                tx_id = %tx.id,
+                timeout_minutes = SOLANA_PENDING_TIMEOUT_MINUTES,
+                "pending transaction has exceeded timeout"
+            );
+            return self
+                .mark_as_failed(
+                    tx,
+                    format!(
+                        "Transaction stuck in Pending status for more than {} minutes",
+                        SOLANA_PENDING_TIMEOUT_MINUTES
+                    ),
+                )
+                .await;
+        }
+
+        // Step 3: Schedule transaction request job to prepare and submit the transaction
+        info!(
+            tx_id = %tx.id,
+            "scheduling transaction request job for pending transaction"
+        );
+
+        let transaction_request = TransactionRequest::new(tx.id.clone(), tx.relayer_id.clone());
+
+        self.job_producer()
+            .produce_transaction_request_job(transaction_request, None)
+            .await
+            .map_err(|e| {
+                TransactionError::UnexpectedError(format!(
+                    "Failed to enqueue transaction request job: {}",
+                    e
+                ))
+            })?;
+
         Ok(tx)
     }
 
-    /// Handle Sent status - transaction is signed but not yet submitted to network
+    /// Check if enough time has passed since sent_at (or created_at) to check for resubmit/expiration
     ///
-    /// This is a transient state between prepare and submit
-    async fn handle_sent_status(
-        &self,
-        tx: TransactionRepoModel,
-    ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!(tx_id = %tx.id, "transaction in Sent status, waiting for submission");
-        // Nothing to do - submit job will handle this
-        // TODO: Add timeout logic to detect stuck Sent transactions
-        Ok(tx)
-    }
-
-    /// Handle Submitted status - transaction submitted but not yet mined
-    ///
-    /// Check if blockhash has expired and transaction needs resubmission
-    async fn handle_submitted_status(
-        &self,
-        tx: TransactionRepoModel,
-    ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!(tx_id = %tx.id, "handling submitted transaction");
-
-        // Check_transaction_status already queried the chain
-        // If transaction is still Submitted here, it means it wasn't found on-chain
-        // Check if we should resubmit with fresh blockhash
-
-        let transaction = match decode_solana_transaction(&tx) {
-            Ok(tx) => tx,
+    /// Falls back to created_at for Pending transactions where sent_at is not yet set.
+    /// Returns None if both timestamps are missing or invalid.
+    fn get_time_since_sent_or_created_at(&self, tx: &TransactionRepoModel) -> Option<Duration> {
+        // Try sent_at first, fallback to created_at for Pending transactions
+        let timestamp = tx.sent_at.as_ref().or(Some(&tx.created_at))?;
+        match DateTime::parse_from_rfc3339(timestamp) {
+            Ok(dt) => Some(Utc::now().signed_duration_since(dt.with_timezone(&Utc))),
             Err(e) => {
-                // If we can't decode the transaction, we can't check for resubmit
-                // Just log and return - will retry status check next cycle
+                warn!(tx_id = %tx.id, ts = %timestamp, error = %e, "failed to parse timestamp");
+                None
+            }
+        }
+    }
+
+    /// Check if the blockhash in the transaction is still valid
+    ///
+    /// Queries the chain to see if the blockhash is still recognized
+    async fn is_blockhash_valid(
+        &self,
+        transaction: &SolanaTransaction,
+    ) -> Result<bool, TransactionError> {
+        let blockhash = transaction.message.recent_blockhash;
+
+        match self
+            .provider()
+            .is_blockhash_valid(&blockhash, CommitmentConfig::confirmed())
+            .await
+        {
+            Ok(is_valid) => Ok(is_valid),
+            Err(e) => {
+                // Check if blockhash not found
+                if matches!(e, SolanaProviderError::BlockhashNotFound(_)) {
+                    info!("blockhash not found on chain, treating as expired");
+                    return Ok(false);
+                }
+
+                // Propagate the error so the job system can retry the status check later
                 warn!(
-                    tx_id = %tx.id,
                     error = %e,
-                    "failed to decode transaction, cannot check for resubmit"
+                    "error checking blockhash validity, propagating error for retry"
                 );
+                Err(TransactionError::UnderlyingSolanaProvider(e))
+            }
+        }
+    }
+
+    /// Mark transaction as expired with appropriate reason
+    async fn mark_as_expired(
+        &self,
+        tx: TransactionRepoModel,
+        reason: String,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        warn!(tx_id = %tx.id, reason = %reason, "marking transaction as expired");
+
+        let update_request = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Expired),
+            status_reason: Some(reason),
+            ..Default::default()
+        };
+
+        self.transaction_repository()
+            .partial_update(tx.id.clone(), update_request)
+            .await
+            .map_err(|e| TransactionError::UnexpectedError(e.to_string()))
+    }
+
+    /// Mark transaction as failed with appropriate reason
+    async fn mark_as_failed(
+        &self,
+        tx: TransactionRepoModel,
+        reason: String,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        warn!(tx_id = %tx.id, reason = %reason, "marking transaction as failed");
+
+        let update_request = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Failed),
+            status_reason: Some(reason),
+            ..Default::default()
+        };
+
+        self.transaction_repository()
+            .partial_update(tx.id.clone(), update_request)
+            .await
+            .map_err(|e| TransactionError::UnexpectedError(e.to_string()))
+    }
+
+    /// Check if valid_until has expired
+    fn is_valid_until_expired(&self, tx: &TransactionRepoModel) -> bool {
+        if let Some(valid_until_str) = &tx.valid_until {
+            if let Ok(valid_until) = DateTime::parse_from_rfc3339(valid_until_str) {
+                return Utc::now() > valid_until.with_timezone(&Utc);
+            }
+        }
+        false
+    }
+
+    /// Check if transaction has exceeded timeout for its status
+    fn has_exceeded_timeout(&self, tx: &TransactionRepoModel) -> Result<bool, TransactionError> {
+        let age = self.get_time_since_sent_or_created_at(tx).ok_or_else(|| {
+            TransactionError::UnexpectedError(
+                "Both sent_at and created_at are missing or invalid".to_string(),
+            )
+        })?;
+
+        let timeout = match tx.status {
+            TransactionStatus::Pending => Duration::minutes(SOLANA_PENDING_TIMEOUT_MINUTES),
+            TransactionStatus::Sent => Duration::minutes(SOLANA_SENT_TIMEOUT_MINUTES),
+            TransactionStatus::Submitted => Duration::minutes(SOLANA_SUBMITTED_TIMEOUT_MINUTES),
+            _ => return Ok(false), // No timeout for other statuses
+        };
+
+        Ok(age >= timeout)
+    }
+
+    /// Handle resubmit or expiration logic based on blockhash validity
+    ///
+    /// This is the core logic that:
+    /// 1. Checks if valid_until has expired
+    /// 2. Checks if status-based timeout exceeded
+    /// 3. Checks if enough time has passed (60s)
+    /// 4. Checks if blockhash is expired
+    /// 5. Schedules resubmit if possible, or marks as expired/failed
+    async fn handle_resubmit_or_expiration(
+        &self,
+        tx: TransactionRepoModel,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        // Step 1: Check if valid_until has expired
+        if self.is_valid_until_expired(&tx) {
+            info!(
+                tx_id = %tx.id,
+                valid_until = ?tx.valid_until,
+                "transaction valid_until has expired"
+            );
+            return self
+                .mark_as_expired(
+                    tx,
+                    "Transaction valid_until timestamp has expired".to_string(),
+                )
+                .await;
+        }
+
+        // Step 2: Check if transaction has exceeded timeout for its status
+        if self.has_exceeded_timeout(&tx)? {
+            let timeout_minutes = match tx.status {
+                TransactionStatus::Pending => SOLANA_PENDING_TIMEOUT_MINUTES,
+                TransactionStatus::Sent => SOLANA_SENT_TIMEOUT_MINUTES,
+                TransactionStatus::Submitted => SOLANA_SUBMITTED_TIMEOUT_MINUTES,
+                _ => 0,
+            };
+            let status = tx.status.clone();
+            warn!(
+                tx_id = %tx.id,
+                status = ?status,
+                timeout_minutes = timeout_minutes,
+                "transaction has exceeded timeout for status"
+            );
+            return self
+                .mark_as_failed(
+                    tx,
+                    format!(
+                        "Transaction stuck in {:?} status for more than {} minutes",
+                        status, timeout_minutes
+                    ),
+                )
+                .await;
+        }
+
+        // Step 3: Check if enough time has passed for blockhash check
+        let time_since_sent = match self.get_time_since_sent_or_created_at(&tx) {
+            Some(duration) => duration,
+            None => {
+                debug!(tx_id = %tx.id, "both sent_at and created_at are missing or invalid, skipping resubmit check");
                 return Ok(tx);
             }
         };
 
-        if self.should_resubmit_with_fresh_blockhash(&tx, &transaction)? {
+        if time_since_sent.num_seconds() < SOLANA_MIN_AGE_FOR_RESUBMIT_CHECK_SECONDS {
+            debug!(
+                tx_id = %tx.id,
+                time_since_sent_secs = time_since_sent.num_seconds(),
+                min_age = SOLANA_MIN_AGE_FOR_RESUBMIT_CHECK_SECONDS,
+                "transaction too young for blockhash expiration check"
+            );
+            return Ok(tx);
+        }
+
+        // Step 4: Decode transaction to extract blockhash
+        let transaction = decode_solana_transaction(&tx)?;
+
+        // Step 5: Check if blockhash is expired
+        let blockhash_valid = self.is_blockhash_valid(&transaction).await?;
+
+        if blockhash_valid {
+            debug!(
+                tx_id = %tx.id,
+                "blockhash still valid, no action needed"
+            );
+            return Ok(tx);
+        }
+
+        info!(
+            tx_id = %tx.id,
+            "blockhash has expired, checking if transaction can be resubmitted"
+        );
+
+        // Step 6: Check if transaction can be resubmitted
+        if is_resubmitable(&transaction) {
             info!(
                 tx_id = %tx.id,
-                "transaction not found on-chain and timeout reached, enqueuing resubmit job"
+                "transaction is resubmitable, enqueuing resubmit job"
             );
 
-            // Enqueue resubmit job (like EVM does)
+            // Schedule resubmit job
             self.job_producer()
                 .produce_submit_transaction_job(
                     TransactionSend::resubmit(tx.id.clone(), tx.relayer_id.clone()),
@@ -264,77 +484,24 @@ where
                 })?;
 
             info!(tx_id = %tx.id, "resubmit job enqueued successfully");
+            Ok(tx)
         } else {
-            // Not ready to resubmit yet, just return and check again later
-            debug!(
-                tx_id = %tx.id,
-                "transaction waiting for confirmation or resubmit timeout"
-            );
-        }
-
-        Ok(tx)
-    }
-
-    /// Handle Mined status - transaction is mined but not yet confirmed/finalized
-    ///
-    /// Continue checking - check_transaction_status will upgrade to Confirmed when ready
-    async fn handle_mined_status(
-        &self,
-        tx: TransactionRepoModel,
-    ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!(tx_id = %tx.id, "transaction mined, waiting for finalization");
-        // check_transaction_status already checked and will update if finalized
-        // Just return and let the next check cycle handle it
-        Ok(tx)
-    }
-
-    /// Check if transaction should be resubmitted due to expired blockhash
-    ///
-    /// Returns true if:
-    /// - Transaction has been submitted for longer than SOLANA_RESUBMIT_TIMEOUT_SECONDS
-    /// - Transaction has only one required signature (relayer can update blockhash)
-    fn should_resubmit_with_fresh_blockhash(
-        &self,
-        tx: &TransactionRepoModel,
-        transaction: &SolanaTransaction,
-    ) -> Result<bool, TransactionError> {
-        // Check if transaction is single-signer (can update blockhash)
-        if transaction.message.header.num_required_signatures > 1 {
-            debug!(
+            // Multi-signature transaction cannot be resubmitted by relayer alone
+            warn!(
                 tx_id = %tx.id,
                 num_signatures = transaction.message.header.num_required_signatures,
-                "multi-signer transaction, cannot update blockhash for resubmit"
+                "transaction has expired blockhash but cannot be resubmitted (multi-sig)"
             );
-            return Ok(false);
-        }
 
-        // Check if enough time has passed since submission
-        let sent_at = tx.sent_at.as_ref().ok_or_else(|| {
-            TransactionError::ValidationError(
-                "Transaction sent_at timestamp is missing".to_string(),
+            self.mark_as_expired(
+                tx,
+                format!(
+                    "Blockhash expired and transaction requires {} signatures (cannot resubmit)",
+                    transaction.message.header.num_required_signatures
+                ),
             )
-        })?;
-
-        let sent_time = DateTime::parse_from_rfc3339(sent_at)
-            .map_err(|e| {
-                TransactionError::ValidationError(format!("Invalid sent_at timestamp: {}", e))
-            })?
-            .with_timezone(&Utc);
-
-        let time_since_sent = Utc::now().signed_duration_since(sent_time);
-        let timeout = Duration::seconds(SOLANA_RESUBMIT_TIMEOUT_SECONDS);
-
-        if time_since_sent < timeout {
-            debug!(
-                tx_id = %tx.id,
-                time_since_sent_secs = time_since_sent.num_seconds(),
-                timeout_secs = SOLANA_RESUBMIT_TIMEOUT_SECONDS,
-                "not enough time passed since submission"
-            );
-            return Ok(false);
+            .await
         }
-
-        Ok(true)
     }
 }
 

@@ -4,7 +4,6 @@
 //! implements the Transaction trait for Solana transactions.
 
 use async_trait::async_trait;
-use base64::Engine as _;
 use chrono::Utc;
 use eyre::Result;
 use solana_sdk::{hash::Hash, pubkey::Pubkey, transaction::Transaction as SolanaTransaction};
@@ -18,9 +17,8 @@ use crate::{
         transaction::{
             common::is_final_state,
             solana::utils::{
-                build_transaction_from_instructions, can_update_blockhash,
-                decode_solana_transaction, decode_solana_transaction_from_string,
-                is_transient_error,
+                build_transaction_from_instructions, decode_solana_transaction,
+                decode_solana_transaction_from_string, is_resubmitable, is_transient_error,
             },
             Transaction,
         },
@@ -38,6 +36,7 @@ use crate::{
     services::{
         SolanaProvider, SolanaProviderError, SolanaProviderTrait, SolanaSignTrait, SolanaSigner,
     },
+    utils::base64_encode,
 };
 
 #[allow(dead_code)]
@@ -179,7 +178,7 @@ where
             true
         } else if solana_data.transaction.is_some() {
             // Transaction mode: only update if we can (single signer)
-            can_update_blockhash(&transaction)
+            is_resubmitable(&transaction)
         } else {
             false
         };
@@ -275,7 +274,6 @@ where
                 ),
                 ..Default::default()
             })),
-            sent_at: Some(Utc::now().to_rfc3339()),
             ..Default::default()
         };
 
@@ -337,7 +335,7 @@ where
         let transaction = decode_solana_transaction(&tx)?;
 
         // Send to blockchain
-        let signature = match self.provider.send_transaction(&transaction).await {
+        match self.provider.send_transaction(&transaction).await {
             Ok(sig) => sig,
             Err(provider_error) => {
                 // Special case: AlreadyProcessed means transaction is already on-chain
@@ -345,37 +343,26 @@ where
                     info!(
                         tx_id = %tx.id,
                         signature = ?solana_data.signature,
-                        "transaction already processed on-chain, marking as submitted"
+                        "transaction already processed on-chain"
                     );
 
                     // Transaction is already on-chain with existing signature.
-                    // Update status and timestamp - the status checker loop will determine final state.
-                    let update = TransactionUpdateRequest {
-                        status: Some(TransactionStatus::Submitted),
-                        sent_at: Some(Utc::now().to_rfc3339()),
-                        ..Default::default()
-                    };
-
-                    let updated_tx = self
-                        .transaction_repository
-                        .partial_update(tx.id.clone(), update)
-                        .await?;
-
-                    return Ok(updated_tx);
+                    // Return as-is - the status check job will query and update to the actual on-chain status.
+                    return Ok(tx);
                 }
 
                 // Special case: BlockhashNotFound handling depends on signature requirements
-                if matches!(provider_error, SolanaProviderError::BlockhashNotFound(_)) {
-                    if can_update_blockhash(&transaction) {
-                        // Single-signer: Can update blockhash on retry
-                        // Return Ok to allow prepare phase to fetch fresh blockhash and resubmit
-                        info!(
-                            tx_id = %tx.id,
-                            error = %provider_error,
-                            "blockhash expired for single-signer transaction, will retry with fresh blockhash"
-                        );
-                        return Ok(tx);
-                    }
+                if matches!(provider_error, SolanaProviderError::BlockhashNotFound(_))
+                    && is_resubmitable(&transaction)
+                {
+                    // Single-signer: Can update blockhash on retry
+                    // Return Ok to allow prepare phase to fetch fresh blockhash and resubmit
+                    info!(
+                        tx_id = %tx.id,
+                        error = %provider_error,
+                        "blockhash expired for single-signer transaction, will retry with fresh blockhash"
+                    );
+                    return Ok(tx);
                 }
 
                 error!(
@@ -399,7 +386,7 @@ where
             }
         };
 
-        debug!(tx_id = %tx.id, signature = %signature, "transaction submitted successfully to blockchain");
+        debug!(tx_id = %tx.id, "transaction submitted successfully to blockchain");
 
         // Transaction is now on-chain - update status and timestamp
         // Signature is already stored from signing phase, no need to update it
@@ -436,6 +423,151 @@ where
                 e
             );
         }
+
+        Ok(updated_tx)
+    }
+
+    /// Resubmit transaction
+    async fn resubmit_transaction_impl(
+        &self,
+        tx: TransactionRepoModel,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        debug!(tx_id = %tx.id, "resubmitting Solana transaction");
+
+        // Validate transaction is in correct status for resubmission
+        if !matches!(
+            tx.status,
+            TransactionStatus::Sent | TransactionStatus::Submitted
+        ) {
+            warn!(
+                tx_id = %tx.id,
+                status = ?tx.status,
+                "transaction not in expected status for resubmission, skipping"
+            );
+            return Ok(tx);
+        }
+
+        // Decode current transaction
+        let mut transaction = decode_solana_transaction(&tx)?;
+
+        info!(
+            tx_id = %tx.id,
+            old_blockhash = %transaction.message.recent_blockhash,
+            "fetching fresh blockhash for resubmission"
+        );
+
+        // Fetch fresh blockhash
+        let fresh_blockhash = self.provider.get_latest_blockhash().await.map_err(|e| {
+            TransactionError::UnexpectedError(format!(
+                "Failed to fetch fresh blockhash for resubmit: {}",
+                e
+            ))
+        })?;
+
+        // Update transaction with fresh blockhash
+        transaction.message.recent_blockhash = fresh_blockhash;
+
+        // Re-sign the transaction with the updated message
+        let signature = self
+            .signer
+            .sign(&transaction.message_data())
+            .await
+            .map_err(|e| {
+                TransactionError::UnexpectedError(format!("Failed to re-sign transaction: {}", e))
+            })?;
+
+        // Update transaction signature
+        transaction.signatures[0] = signature;
+
+        // Serialize transaction back to base64
+        let serialized_tx = bincode::serialize(&transaction).map_err(|e| {
+            TransactionError::UnexpectedError(format!("Failed to serialize transaction: {}", e))
+        })?;
+
+        let tx_base64 = base64_encode(&serialized_tx);
+        let signature_str = signature.to_string();
+
+        // Update transaction data
+        let solana_data = tx.network_data.get_solana_transaction_data()?;
+        let updated_solana_data = SolanaTransactionData {
+            transaction: Some(tx_base64),
+            signature: Some(signature_str.clone()),
+            ..solana_data
+        };
+
+        // Update in repository with Submitted status and new sent_at
+        let update_request = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Submitted),
+            network_data: Some(NetworkTransactionData::Solana(updated_solana_data)),
+            sent_at: Some(Utc::now().to_rfc3339()),
+            ..Default::default()
+        };
+
+        // Send resubmitted transaction to blockchain directly - this is the critical operation
+        let was_already_processed = match self.provider.send_transaction(&transaction).await {
+            Ok(sig) => {
+                info!(
+                    tx_id = %tx.id,
+                    signature = %sig,
+                    new_blockhash = %fresh_blockhash,
+                    "transaction resubmitted successfully with fresh blockhash"
+                );
+                false
+            }
+            Err(e) => {
+                // Special case: AlreadyProcessed means transaction is already on-chain
+                if matches!(e, SolanaProviderError::AlreadyProcessed(_)) {
+                    warn!(
+                        tx_id = %tx.id,
+                        error = %e,
+                        "resubmission indicates transaction already on-chain - keeping original signature"
+                    );
+                    // Don't update with new signature - the original transaction is what's on-chain
+                    true
+                } else {
+                    // Real error - propagate it
+                    return Err(TransactionError::from(e));
+                }
+            }
+        };
+
+        // If transaction was already processed, just update status without changing signature
+        let update = if was_already_processed {
+            // Keep original signature and data - just ensure status is Submitted
+            TransactionUpdateRequest {
+                status: Some(TransactionStatus::Submitted),
+                sent_at: Some(Utc::now().to_rfc3339()),
+                ..Default::default()
+            }
+        } else {
+            // Transaction resubmitted successfully - update with new signature and blockhash
+            update_request
+        };
+
+        // Update transaction in repository
+        let updated_tx = match self
+            .transaction_repository
+            .partial_update(tx.id.clone(), update)
+            .await
+        {
+            Ok(tx) => tx,
+            Err(e) => {
+                error!(
+                    error = %e,
+                    tx_id = %tx.id,
+                    "CRITICAL: resubmitted transaction sent to blockchain but failed to update database"
+                );
+                // Transaction is on-chain - return original tx data to avoid wasteful retries
+                tx
+            }
+        };
+
+        info!(
+            tx_id = %updated_tx.id,
+            new_signature = %signature_str,
+            new_blockhash = %fresh_blockhash,
+            "transaction resubmitted with fresh blockhash"
+        );
 
         Ok(updated_tx)
     }
@@ -581,98 +713,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!(tx_id = %tx.id, "resubmitting Solana transaction with fresh blockhash");
-
-        // Decode current transaction
-        let mut transaction = decode_solana_transaction(&tx)?;
-
-        info!(
-            tx_id = %tx.id,
-            old_blockhash = %transaction.message.recent_blockhash,
-            "fetching fresh blockhash for resubmission"
-        );
-
-        // Fetch fresh blockhash
-        let fresh_blockhash = self.provider.get_latest_blockhash().await.map_err(|e| {
-            TransactionError::UnexpectedError(format!(
-                "Failed to fetch fresh blockhash for resubmit: {}",
-                e
-            ))
-        })?;
-
-        // Update transaction with fresh blockhash
-        transaction.message.recent_blockhash = fresh_blockhash;
-
-        // Re-sign the transaction with the updated message
-        let signature = self
-            .signer
-            .sign(&transaction.message_data())
-            .await
-            .map_err(|e| {
-                TransactionError::UnexpectedError(format!("Failed to re-sign transaction: {}", e))
-            })?;
-
-        // Update transaction signature
-        transaction.signatures[0] = signature;
-
-        // Serialize transaction back to base64
-        let serialized_tx = bincode::serialize(&transaction).map_err(|e| {
-            TransactionError::UnexpectedError(format!("Failed to serialize transaction: {}", e))
-        })?;
-
-        let tx_base64 = base64::engine::general_purpose::STANDARD.encode(&serialized_tx);
-        let signature_str = signature.to_string();
-
-        // Update transaction data
-        let solana_data = tx.network_data.get_solana_transaction_data()?;
-        let updated_solana_data = SolanaTransactionData {
-            transaction: Some(tx_base64),
-            signature: Some(signature_str.clone()),
-            ..solana_data
-        };
-
-        // Update in repository with Submitted status and new sent_at
-        let update_request = TransactionUpdateRequest {
-            status: Some(TransactionStatus::Submitted),
-            network_data: Some(NetworkTransactionData::Solana(updated_solana_data)),
-            sent_at: Some(Utc::now().to_rfc3339()),
-            ..Default::default()
-        };
-
-        let updated_tx = self
-            .transaction_repository
-            .partial_update(tx.id.clone(), update_request)
-            .await
-            .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
-
-        // Enqueue submit job to actually send the transaction
-        self.job_producer
-            .produce_submit_transaction_job(
-                TransactionSend::submit(updated_tx.id.clone(), updated_tx.relayer_id.clone()),
-                None,
-            )
-            .await
-            .map_err(|e| {
-                TransactionError::UnexpectedError(format!("Failed to enqueue submit job: {}", e))
-            })?;
-
-        // Send notification
-        if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
-            warn!(
-                tx_id = %updated_tx.id,
-                error = %e,
-                "failed to send notification for resubmitted transaction"
-            );
-        }
-
-        info!(
-            tx_id = %updated_tx.id,
-            new_signature = %signature_str,
-            new_blockhash = %fresh_blockhash,
-            "transaction resubmitted with fresh blockhash"
-        );
-
-        Ok(updated_tx)
+        self.resubmit_transaction_impl(tx).await
     }
 
     /// Main entry point for transaction status handling

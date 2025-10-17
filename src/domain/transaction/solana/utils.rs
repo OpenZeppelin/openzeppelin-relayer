@@ -39,7 +39,7 @@ pub fn is_transient_error(error: &SolanaProviderError) -> bool {
 /// # Use Cases
 /// - **Prepare phase**: Decide whether to fetch a fresh blockhash
 /// - **Submit phase**: Decide whether BlockhashNotFound error is retriable
-pub fn can_update_blockhash(tx: &SolanaTransaction) -> bool {
+pub fn is_resubmitable(tx: &SolanaTransaction) -> bool {
     tx.message.header.num_required_signatures <= 1
 }
 
@@ -281,7 +281,7 @@ mod tests {
     }
 
     #[test]
-    fn test_can_update_blockhash_single_signer() {
+    fn test_is_resub_single_signer() {
         use solana_sdk::system_instruction;
 
         let payer = Pubkey::new_unique();
@@ -292,12 +292,12 @@ mod tests {
         let tx = SolanaTransaction::new_with_payer(&[instruction], Some(&payer));
 
         // Single signer - should be able to update blockhash
-        assert!(can_update_blockhash(&tx));
+        assert!(is_resubmitable(&tx));
         assert_eq!(tx.message.header.num_required_signatures, 1);
     }
 
     #[test]
-    fn test_can_update_blockhash_multi_signer() {
+    fn test_is_resubmitable_multi_signer() {
         use solana_sdk::message::Message;
 
         let payer = Pubkey::new_unique();
@@ -314,12 +314,12 @@ mod tests {
         let tx = SolanaTransaction::new_unsigned(message);
 
         // Multi-signer - cannot update blockhash
-        assert!(!can_update_blockhash(&tx));
+        assert!(!is_resubmitable(&tx));
         assert_eq!(tx.message.header.num_required_signatures, 2);
     }
 
     #[test]
-    fn test_can_update_blockhash_no_signers() {
+    fn test_is_resubmitable_no_signers() {
         use solana_sdk::message::Message;
 
         let payer = Pubkey::new_unique();
@@ -333,7 +333,7 @@ mod tests {
         let tx = SolanaTransaction::new_unsigned(message);
 
         // No signers (edge case) - should be able to update
-        assert!(can_update_blockhash(&tx));
+        assert!(is_resubmitable(&tx));
         assert_eq!(tx.message.header.num_required_signatures, 0);
     }
 }
