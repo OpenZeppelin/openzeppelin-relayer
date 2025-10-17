@@ -5,11 +5,10 @@
 use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Context, Data, TaskId, Worker, *};
 use apalis_redis::RedisContext;
-use eyre::Result;
-use tracing::{debug, instrument};
+use tracing::instrument;
 
 use crate::{
-    constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
+    constants::WORKER_TRANSACTION_REQUEST_RETRIES,
     domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
     jobs::{handle_result, Job, TransactionRequest},
     models::DefaultAppState,
@@ -17,7 +16,7 @@ use crate::{
 };
 
 #[instrument(
-    level = "info",
+    level = "debug",
     skip(job, state, _worker, _ctx),
     fields(
         request_id = ?job.request_id,
@@ -27,8 +26,7 @@ use crate::{
         tx_id = %job.data.transaction_id,
         relayer_id = %job.data.relayer_id,
         task_id = %task_id.to_string(),
-    ),
-    err
+    )
 )]
 pub async fn transaction_request_handler(
     job: Job<TransactionRequest>,
@@ -42,29 +40,25 @@ pub async fn transaction_request_handler(
         set_request_id(request_id);
     }
 
-    debug!("handling transaction request");
-
-    let result = handle_request(job.data, state).await;
+    let result = handle_request(job.data, state.clone()).await;
 
     handle_result(
         result,
         attempt,
         "Transaction Request",
-        WORKER_DEFAULT_MAXIMUM_RETRIES,
+        WORKER_TRANSACTION_REQUEST_RETRIES,
     )
 }
 
 async fn handle_request(
     request: TransactionRequest,
     state: Data<ThinData<DefaultAppState>>,
-) -> Result<()> {
+) -> eyre::Result<()> {
     let relayer_transaction = get_relayer_transaction(request.relayer_id, &state).await?;
 
-    let transaction = get_transaction_by_id(request.transaction_id, &state).await?;
+    let transaction = get_transaction_by_id(request.transaction_id.clone(), &state).await?;
 
     relayer_transaction.prepare_transaction(transaction).await?;
-
-    debug!("transaction request handled successfully");
 
     Ok(())
 }

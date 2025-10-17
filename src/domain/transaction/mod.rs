@@ -35,6 +35,7 @@ use eyre::Result;
 use mockall::automock;
 use std::sync::Arc;
 
+pub mod common;
 pub mod evm;
 pub mod solana;
 pub mod stellar;
@@ -42,8 +43,8 @@ pub mod stellar;
 mod util;
 pub use util::*;
 
-// Explicit re-exports to avoid ambiguous glob re-exports
-pub use evm::{DefaultEvmTransaction, EvmRelayerTransaction};
+pub use common::*;
+pub use evm::{ensure_status, ensure_status_one_of, DefaultEvmTransaction, EvmRelayerTransaction};
 pub use solana::{DefaultSolanaTransaction, SolanaRelayerTransaction};
 pub use stellar::{DefaultStellarTransaction, StellarRelayerTransaction};
 

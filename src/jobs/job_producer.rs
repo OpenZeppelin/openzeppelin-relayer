@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use serde::Serialize;
 use thiserror::Error;
 use tokio::sync::Mutex;
-use tracing::{error, info};
+use tracing::{debug, error};
 
 use super::{JobType, SolanaTokenSwapRequest};
 
@@ -135,7 +135,7 @@ impl JobProducerTrait for JobProducer {
         transaction_process_job: TransactionRequest,
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError> {
-        info!(
+        debug!(
             "Producing transaction request job: {:?}",
             transaction_process_job
         );
@@ -154,7 +154,7 @@ impl JobProducerTrait for JobProducer {
                 queue.transaction_request_queue.push(job).await?;
             }
         }
-        info!("Transaction job produced successfully");
+        debug!("Transaction job produced successfully");
 
         Ok(())
     }
@@ -176,7 +176,7 @@ impl JobProducerTrait for JobProducer {
                 queue.transaction_submission_queue.push(job).await?;
             }
         }
-        info!("Transaction Submit job produced successfully");
+        debug!("Transaction Submit job produced successfully");
 
         Ok(())
     }
@@ -189,18 +189,30 @@ impl JobProducerTrait for JobProducer {
         let mut queue = self.queue.lock().await;
         let job = Job::new(
             JobType::TransactionStatusCheck,
-            transaction_status_check_job,
+            transaction_status_check_job.clone(),
         )
         .with_request_id(get_request_id());
+
+        // Route to the appropriate queue based on network type
+        use crate::models::NetworkType;
+        let status_queue = match transaction_status_check_job.network_type {
+            Some(NetworkType::Evm) => &mut queue.transaction_status_queue_evm,
+            Some(NetworkType::Stellar) => &mut queue.transaction_status_queue_stellar,
+            _ => &mut queue.transaction_status_queue, // Generic queue or legacy messages without network_type
+        };
+
         match scheduled_on {
             Some(on) => {
-                queue.transaction_status_queue.schedule(job, on).await?;
+                status_queue.schedule(job, on).await?;
             }
             None => {
-                queue.transaction_status_queue.push(job).await?;
+                status_queue.push(job).await?;
             }
         }
-        info!("Transaction Status Check job produced successfully");
+        debug!(
+            network_type = ?transaction_status_check_job.network_type,
+            "Transaction Status Check job produced successfully"
+        );
         Ok(())
     }
 
@@ -222,7 +234,7 @@ impl JobProducerTrait for JobProducer {
             }
         }
 
-        info!("Notification Send job produced successfully");
+        debug!("Notification Send job produced successfully");
         Ok(())
     }
 
@@ -247,7 +259,7 @@ impl JobProducerTrait for JobProducer {
             }
         }
 
-        info!("Solana token swap job produced successfully");
+        debug!("Solana token swap job produced successfully");
         Ok(())
     }
 
@@ -323,6 +335,8 @@ mod tests {
         pub transaction_request_queue: TestRedisStorage<Job<TransactionRequest>>,
         pub transaction_submission_queue: TestRedisStorage<Job<TransactionSend>>,
         pub transaction_status_queue: TestRedisStorage<Job<TransactionStatusCheck>>,
+        pub transaction_status_queue_evm: TestRedisStorage<Job<TransactionStatusCheck>>,
+        pub transaction_status_queue_stellar: TestRedisStorage<Job<TransactionStatusCheck>>,
         pub notification_queue: TestRedisStorage<Job<NotificationSend>>,
         pub solana_token_swap_request_queue: TestRedisStorage<Job<SolanaTokenSwapRequest>>,
         pub relayer_health_check_queue: TestRedisStorage<Job<RelayerHealthCheck>>,
@@ -334,6 +348,8 @@ mod tests {
                 transaction_request_queue: TestRedisStorage::new(),
                 transaction_submission_queue: TestRedisStorage::new(),
                 transaction_status_queue: TestRedisStorage::new(),
+                transaction_status_queue_evm: TestRedisStorage::new(),
+                transaction_status_queue_stellar: TestRedisStorage::new(),
                 notification_queue: TestRedisStorage::new(),
                 solana_token_swap_request_queue: TestRedisStorage::new(),
                 relayer_health_check_queue: TestRedisStorage::new(),
@@ -428,15 +444,24 @@ mod tests {
             let mut queue = self.queue.lock().await;
             let job = Job::new(
                 JobType::TransactionStatusCheck,
-                transaction_status_check_job,
+                transaction_status_check_job.clone(),
             );
+
+            // Route to the appropriate queue based on network type
+            use crate::models::NetworkType;
+            let status_queue = match transaction_status_check_job.network_type {
+                Some(NetworkType::Evm) => &mut queue.transaction_status_queue_evm,
+                Some(NetworkType::Stellar) => &mut queue.transaction_status_queue_stellar,
+                Some(NetworkType::Solana) => &mut queue.transaction_status_queue, // Use default queue
+                None => &mut queue.transaction_status_queue, // Legacy messages without network_type
+            };
 
             match scheduled_on {
                 Some(on) => {
-                    queue.transaction_status_queue.schedule(job, on).await?;
+                    status_queue.schedule(job, on).await?;
                 }
                 None => {
-                    queue.transaction_status_queue.push(job).await?;
+                    status_queue.push(job).await?;
                 }
             }
 
@@ -557,17 +582,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_status_job() {
+        use crate::models::NetworkType;
         let producer = TestJobProducer::new();
 
-        // Test status check job
-        let status_job = TransactionStatusCheck::new("tx123", "relayer-1");
+        // Test status check job for EVM
+        let status_job = TransactionStatusCheck::new("tx123", "relayer-1", NetworkType::Evm);
         let result = producer
             .produce_check_transaction_status_job(status_job, None)
             .await;
         assert!(result.is_ok());
 
         let queue = producer.get_queue().await;
-        assert!(queue.transaction_status_queue.push_called);
+        assert!(queue.transaction_status_queue_evm.push_called);
     }
 
     #[tokio::test]
@@ -738,5 +764,332 @@ mod tests {
         // Verify jobs were produced
         let queue = producer.get_queue().await;
         assert!(queue.relayer_health_check_queue.push_called);
+    }
+
+    #[tokio::test]
+    async fn test_status_check_routes_to_evm_queue() {
+        use crate::models::NetworkType;
+        let producer = TestJobProducer::new();
+
+        let status_job = TransactionStatusCheck::new("tx-evm", "relayer-1", NetworkType::Evm);
+        let result = producer
+            .produce_check_transaction_status_job(status_job, None)
+            .await;
+
+        assert!(result.is_ok());
+        let queue = producer.get_queue().await;
+        assert!(queue.transaction_status_queue_evm.push_called);
+        assert!(!queue.transaction_status_queue_stellar.push_called);
+        assert!(!queue.transaction_status_queue.push_called);
+    }
+
+    #[tokio::test]
+    async fn test_status_check_routes_to_stellar_queue() {
+        use crate::models::NetworkType;
+        let producer = TestJobProducer::new();
+
+        let status_job =
+            TransactionStatusCheck::new("tx-stellar", "relayer-2", NetworkType::Stellar);
+        let result = producer
+            .produce_check_transaction_status_job(status_job, None)
+            .await;
+
+        assert!(result.is_ok());
+        let queue = producer.get_queue().await;
+        assert!(queue.transaction_status_queue_stellar.push_called);
+        assert!(!queue.transaction_status_queue_evm.push_called);
+        assert!(!queue.transaction_status_queue.push_called);
+    }
+
+    #[tokio::test]
+    async fn test_status_check_routes_to_default_queue_for_solana() {
+        use crate::models::NetworkType;
+        let producer = TestJobProducer::new();
+
+        let status_job = TransactionStatusCheck::new("tx-solana", "relayer-3", NetworkType::Solana);
+        let result = producer
+            .produce_check_transaction_status_job(status_job, None)
+            .await;
+
+        assert!(result.is_ok());
+        let queue = producer.get_queue().await;
+        assert!(queue.transaction_status_queue.push_called);
+        assert!(!queue.transaction_status_queue_evm.push_called);
+        assert!(!queue.transaction_status_queue_stellar.push_called);
+    }
+
+    #[tokio::test]
+    async fn test_status_check_scheduled_evm() {
+        use crate::models::NetworkType;
+        let producer = TestJobProducer::new();
+
+        let status_job =
+            TransactionStatusCheck::new("tx-evm-scheduled", "relayer-1", NetworkType::Evm);
+        let scheduled_timestamp = calculate_scheduled_timestamp(30);
+        let result = producer
+            .produce_check_transaction_status_job(status_job, Some(scheduled_timestamp))
+            .await;
+
+        assert!(result.is_ok());
+        let queue = producer.get_queue().await;
+        assert!(queue.transaction_status_queue_evm.schedule_called);
+        assert!(!queue.transaction_status_queue_evm.push_called);
+    }
+
+    #[tokio::test]
+    async fn test_submit_transaction_scheduled() {
+        let producer = TestJobProducer::new();
+
+        let submit_job = TransactionSend::submit("tx-scheduled", "relayer-1");
+        let scheduled_timestamp = calculate_scheduled_timestamp(15);
+        let result = producer
+            .produce_submit_transaction_job(submit_job, Some(scheduled_timestamp))
+            .await;
+
+        assert!(result.is_ok());
+        let queue = producer.get_queue().await;
+        assert!(queue.transaction_submission_queue.schedule_called);
+        assert!(!queue.transaction_submission_queue.push_called);
+    }
+
+    #[tokio::test]
+    async fn test_notification_job_scheduled() {
+        let producer = TestJobProducer::new();
+
+        let notification = WebhookNotification::new(
+            "test_scheduled_event".to_string(),
+            WebhookPayload::Transaction(TransactionResponse::Evm(Box::new(
+                EvmTransactionResponse {
+                    id: "tx-notify-scheduled".to_string(),
+                    hash: Some("0xabc123".to_string()),
+                    status: TransactionStatus::Confirmed,
+                    status_reason: None,
+                    created_at: "2025-01-27T15:31:10.777083+00:00".to_string(),
+                    sent_at: Some("2025-01-27T15:31:10.777083+00:00".to_string()),
+                    confirmed_at: Some("2025-01-27T15:31:10.777083+00:00".to_string()),
+                    gas_price: Some(1000000000),
+                    gas_limit: Some(21000),
+                    nonce: Some(1),
+                    value: U256::from(1000000000000000000_u64),
+                    from: "0xabc".to_string(),
+                    to: Some("0xdef".to_string()),
+                    relayer_id: "relayer-1".to_string(),
+                    data: None,
+                    max_fee_per_gas: None,
+                    max_priority_fee_per_gas: None,
+                    signature: None,
+                    speed: None,
+                },
+            ))),
+        );
+        let job = NotificationSend::new("notification-scheduled".to_string(), notification);
+
+        let scheduled_timestamp = calculate_scheduled_timestamp(5);
+        let result = producer
+            .produce_send_notification_job(job, Some(scheduled_timestamp))
+            .await;
+
+        assert!(result.is_ok());
+        let queue = producer.get_queue().await;
+        assert!(queue.notification_queue.schedule_called);
+        assert!(!queue.notification_queue.push_called);
+    }
+
+    #[tokio::test]
+    async fn test_solana_swap_job_immediate() {
+        let producer = TestJobProducer::new();
+
+        let swap_job = SolanaTokenSwapRequest::new("relayer-solana".to_string());
+        let result = producer
+            .produce_solana_token_swap_request_job(swap_job, None)
+            .await;
+
+        assert!(result.is_ok());
+        let queue = producer.get_queue().await;
+        assert!(queue.solana_token_swap_request_queue.push_called);
+        assert!(!queue.solana_token_swap_request_queue.schedule_called);
+    }
+
+    #[tokio::test]
+    async fn test_solana_swap_job_scheduled() {
+        let producer = TestJobProducer::new();
+
+        let swap_job = SolanaTokenSwapRequest::new("relayer-solana".to_string());
+        let scheduled_timestamp = calculate_scheduled_timestamp(20);
+        let result = producer
+            .produce_solana_token_swap_request_job(swap_job, Some(scheduled_timestamp))
+            .await;
+
+        assert!(result.is_ok());
+        let queue = producer.get_queue().await;
+        assert!(queue.solana_token_swap_request_queue.schedule_called);
+        assert!(!queue.solana_token_swap_request_queue.push_called);
+    }
+
+    #[tokio::test]
+    async fn test_transaction_send_cancel_job() {
+        let producer = TestJobProducer::new();
+
+        let cancel_job = TransactionSend::cancel("tx-cancel", "relayer-1", "user requested");
+        let result = producer
+            .produce_submit_transaction_job(cancel_job, None)
+            .await;
+
+        assert!(result.is_ok());
+        let queue = producer.get_queue().await;
+        assert!(queue.transaction_submission_queue.push_called);
+    }
+
+    #[tokio::test]
+    async fn test_transaction_send_resubmit_job() {
+        let producer = TestJobProducer::new();
+
+        let resubmit_job = TransactionSend::resubmit("tx-resubmit", "relayer-1");
+        let result = producer
+            .produce_submit_transaction_job(resubmit_job, None)
+            .await;
+
+        assert!(result.is_ok());
+        let queue = producer.get_queue().await;
+        assert!(queue.transaction_submission_queue.push_called);
+    }
+
+    #[tokio::test]
+    async fn test_transaction_send_resend_job() {
+        let producer = TestJobProducer::new();
+
+        let resend_job = TransactionSend::resend("tx-resend", "relayer-1");
+        let result = producer
+            .produce_submit_transaction_job(resend_job, None)
+            .await;
+
+        assert!(result.is_ok());
+        let queue = producer.get_queue().await;
+        assert!(queue.transaction_submission_queue.push_called);
+    }
+
+    #[tokio::test]
+    async fn test_multiple_jobs_different_queues() {
+        let producer = TestJobProducer::new();
+
+        // Produce different types of jobs
+        let request = TransactionRequest::new("tx1", "relayer-1");
+        producer
+            .produce_transaction_request_job(request, None)
+            .await
+            .unwrap();
+
+        let submit = TransactionSend::submit("tx2", "relayer-1");
+        producer
+            .produce_submit_transaction_job(submit, None)
+            .await
+            .unwrap();
+
+        use crate::models::NetworkType;
+        let status = TransactionStatusCheck::new("tx3", "relayer-1", NetworkType::Evm);
+        producer
+            .produce_check_transaction_status_job(status, None)
+            .await
+            .unwrap();
+
+        // Verify all queues were used
+        let queue = producer.get_queue().await;
+        assert!(queue.transaction_request_queue.push_called);
+        assert!(queue.transaction_submission_queue.push_called);
+        assert!(queue.transaction_status_queue_evm.push_called);
+    }
+
+    #[test]
+    fn test_job_producer_clone() {
+        let producer = TestJobProducer::new();
+        let cloned_producer = producer.clone();
+
+        // Both should be valid instances
+        // The clone creates a new Mutex with a cloned Queue
+        assert!(std::ptr::addr_of!(producer) != std::ptr::addr_of!(cloned_producer));
+    }
+
+    #[tokio::test]
+    async fn test_transaction_request_with_metadata() {
+        let producer = TestJobProducer::new();
+
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("retry_count".to_string(), "3".to_string());
+
+        let request = TransactionRequest::new("tx-meta", "relayer-1").with_metadata(metadata);
+
+        let result = producer
+            .produce_transaction_request_job(request, None)
+            .await;
+
+        assert!(result.is_ok());
+        let queue = producer.get_queue().await;
+        assert!(queue.transaction_request_queue.push_called);
+    }
+
+    #[tokio::test]
+    async fn test_status_check_with_metadata() {
+        use crate::models::NetworkType;
+        let producer = TestJobProducer::new();
+
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("attempt".to_string(), "2".to_string());
+
+        let status =
+            TransactionStatusCheck::new("tx-status-meta", "relayer-1", NetworkType::Stellar)
+                .with_metadata(metadata);
+
+        let result = producer
+            .produce_check_transaction_status_job(status, None)
+            .await;
+
+        assert!(result.is_ok());
+        let queue = producer.get_queue().await;
+        assert!(queue.transaction_status_queue_stellar.push_called);
+    }
+
+    #[tokio::test]
+    async fn test_scheduled_jobs_with_different_delays() {
+        let producer = TestJobProducer::new();
+
+        // Test with various scheduling delays
+        let delays = vec![1, 10, 60, 300, 3600]; // 1s, 10s, 1m, 5m, 1h
+
+        for (idx, delay) in delays.iter().enumerate() {
+            let request = TransactionRequest::new(format!("tx-delay-{}", idx), "relayer-1");
+            let timestamp = calculate_scheduled_timestamp(*delay);
+
+            let result = producer
+                .produce_transaction_request_job(request, Some(timestamp))
+                .await;
+
+            assert!(
+                result.is_ok(),
+                "Failed to schedule job with delay {}",
+                delay
+            );
+        }
+    }
+
+    #[test]
+    fn test_job_producer_error_display() {
+        let error = JobProducerError::QueueError("Test queue error".to_string());
+        let error_string = error.to_string();
+
+        assert!(error_string.contains("Queue error"));
+        assert!(error_string.contains("Test queue error"));
+    }
+
+    #[test]
+    fn test_job_producer_error_to_relayer_error() {
+        let job_error = JobProducerError::QueueError("Connection failed".to_string());
+        let relayer_error: RelayerError = job_error.into();
+
+        match relayer_error {
+            RelayerError::QueueError(msg) => {
+                assert_eq!(msg, "Queue error");
+            }
+            _ => panic!("Expected QueueError variant"),
+        }
     }
 }

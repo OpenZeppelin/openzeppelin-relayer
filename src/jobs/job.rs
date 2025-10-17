@@ -4,7 +4,7 @@
 //! - Transaction processing
 //! - Status monitoring
 //! - Notifications
-use crate::models::WebhookNotification;
+use crate::models::{NetworkType, WebhookNotification};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -146,14 +146,23 @@ impl TransactionSend {
 pub struct TransactionStatusCheck {
     pub transaction_id: String,
     pub relayer_id: String,
+    /// Network type for this transaction status check.
+    /// Optional for backward compatibility with older queued messages.
+    #[serde(default)]
+    pub network_type: Option<NetworkType>,
     pub metadata: Option<HashMap<String, String>>,
 }
 
 impl TransactionStatusCheck {
-    pub fn new(transaction_id: impl Into<String>, relayer_id: impl Into<String>) -> Self {
+    pub fn new(
+        transaction_id: impl Into<String>,
+        relayer_id: impl Into<String>,
+        network_type: NetworkType,
+    ) -> Self {
         Self {
             transaction_id: transaction_id.into(),
             relayer_id: relayer_id.into(),
+            network_type: Some(network_type),
             metadata: None,
         }
     }
@@ -284,19 +293,42 @@ mod tests {
 
     #[test]
     fn test_transaction_status_check() {
-        let tx_status = TransactionStatusCheck::new("tx123", "relayer-1");
+        let tx_status = TransactionStatusCheck::new("tx123", "relayer-1", NetworkType::Evm);
         assert_eq!(tx_status.transaction_id, "tx123");
         assert_eq!(tx_status.relayer_id, "relayer-1");
+        assert_eq!(tx_status.network_type, Some(NetworkType::Evm));
         assert!(tx_status.metadata.is_none());
 
         let mut metadata = HashMap::new();
         metadata.insert("retries".to_string(), "3".to_string());
 
         let tx_status_with_metadata =
-            TransactionStatusCheck::new("tx123", "relayer-1").with_metadata(metadata.clone());
+            TransactionStatusCheck::new("tx123", "relayer-1", NetworkType::Stellar)
+                .with_metadata(metadata.clone());
 
         assert!(tx_status_with_metadata.metadata.is_some());
         assert_eq!(tx_status_with_metadata.metadata.unwrap(), metadata);
+    }
+
+    #[test]
+    fn test_transaction_status_check_backward_compatibility() {
+        // Simulate an old message without network_type field
+        let old_json = r#"{
+            "transaction_id": "tx456",
+            "relayer_id": "relayer-2",
+            "metadata": null
+        }"#;
+
+        // Should deserialize successfully with network_type defaulting to None
+        let deserialized: TransactionStatusCheck = serde_json::from_str(old_json).unwrap();
+        assert_eq!(deserialized.transaction_id, "tx456");
+        assert_eq!(deserialized.relayer_id, "relayer-2");
+        assert_eq!(deserialized.network_type, None);
+        assert!(deserialized.metadata.is_none());
+
+        // New messages should include network_type
+        let new_status = TransactionStatusCheck::new("tx789", "relayer-3", NetworkType::Solana);
+        assert_eq!(new_status.network_type, Some(NetworkType::Solana));
     }
 
     #[test]

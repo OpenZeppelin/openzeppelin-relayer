@@ -3,11 +3,22 @@
 //! This module contains functions for initializing background workers,
 //! including job processors and other long-running tasks.
 use crate::{
+    config::ServerConfig,
+    constants::{
+        DEFAULT_CONCURRENCY_HEALTH_CHECK, DEFAULT_CONCURRENCY_NOTIFICATION,
+        DEFAULT_CONCURRENCY_SOLANA_SWAP, DEFAULT_CONCURRENCY_STATUS_CHECKER,
+        DEFAULT_CONCURRENCY_STATUS_CHECKER_EVM, DEFAULT_CONCURRENCY_STATUS_CHECKER_STELLAR,
+        DEFAULT_CONCURRENCY_TRANSACTION_REQUEST, DEFAULT_CONCURRENCY_TRANSACTION_SENDER,
+        WORKER_NOTIFICATION_SENDER_RETRIES, WORKER_RELAYER_HEALTH_CHECK_RETRIES,
+        WORKER_SOLANA_TOKEN_SWAP_REQUEST_RETRIES, WORKER_TRANSACTION_CLEANUP_RETRIES,
+        WORKER_TRANSACTION_REQUEST_RETRIES, WORKER_TRANSACTION_STATUS_CHECKER_RETRIES,
+        WORKER_TRANSACTION_SUBMIT_RETRIES,
+    },
     jobs::{
         notification_handler, relayer_health_check_handler, solana_token_swap_cron_handler,
         solana_token_swap_request_handler, transaction_cleanup_handler,
         transaction_request_handler, transaction_status_handler, transaction_submission_handler,
-        BackoffRetryPolicy, JobProducerTrait,
+        JobProducerTrait,
     },
     models::{
         NetworkRepoModel, NotificationRepoModel, RelayerRepoModel, SignerRepoModel,
@@ -18,86 +29,51 @@ use crate::{
         Repository, TransactionCounterTrait, TransactionRepository,
     },
 };
-use apalis::{layers::ErrorHandlingLayer, prelude::*};
+use apalis::prelude::*;
+
+use apalis::layers::retry::backoff::MakeBackoff;
+use apalis::layers::retry::{backoff::ExponentialBackoffMaker, RetryPolicy};
+use apalis::layers::ErrorHandlingLayer;
+
+/// Re-exports from [`tower::util`]
+pub use tower::util::rng::HasherRng;
+
 use apalis_cron::CronStream;
 use eyre::Result;
 use std::{str::FromStr, time::Duration};
 use tokio::signal::unix::SignalKind;
 use tracing::{debug, error, info};
 
-// Worker configuration constants
-const DEFAULT_CONCURRENCY: usize = 10;
-const DEFAULT_RATE_LIMIT: u64 = 100;
-const DEFAULT_RATE_LIMIT_DURATION: Duration = Duration::from_secs(1);
-
 const TRANSACTION_REQUEST: &str = "transaction_request";
 const TRANSACTION_SENDER: &str = "transaction_sender";
+// Generic transaction status checker
 const TRANSACTION_STATUS_CHECKER: &str = "transaction_status_checker";
+// Network specific status checkers
+const TRANSACTION_STATUS_CHECKER_EVM: &str = "transaction_status_checker_evm";
+const TRANSACTION_STATUS_CHECKER_STELLAR: &str = "transaction_status_checker_stellar";
 const NOTIFICATION_SENDER: &str = "notification_sender";
 const SOLANA_TOKEN_SWAP_REQUEST: &str = "solana_token_swap_request";
 const TRANSACTION_CLEANUP: &str = "transaction_cleanup";
 const RELAYER_HEALTH_CHECK: &str = "relayer_health_check";
 
-/// Configuration for a worker
-#[derive(Debug, Clone)]
-pub struct WorkerConfig {
-    pub name: &'static str,
-    pub concurrency: usize,
-    pub rate_limit: u64,
-    pub rate_limit_duration: Duration,
-    /// Optional cron schedule for periodic workers (e.g., cleanup tasks)
-    pub cron_schedule: Option<&'static str>,
-}
-
-impl WorkerConfig {
-    pub const fn new(name: &'static str, concurrency: usize) -> Self {
-        Self {
-            name,
-            concurrency,
-            rate_limit: DEFAULT_RATE_LIMIT,
-            rate_limit_duration: DEFAULT_RATE_LIMIT_DURATION,
-            cron_schedule: None,
-        }
-    }
-
-    pub const fn with_cron(name: &'static str, concurrency: usize, cron: &'static str) -> Self {
-        Self {
-            name,
-            concurrency,
-            rate_limit: DEFAULT_RATE_LIMIT,
-            rate_limit_duration: DEFAULT_RATE_LIMIT_DURATION,
-            cron_schedule: Some(cron),
-        }
-    }
-}
-
-/// Get worker configurations for all standard workers
+/// Creates an exponential backoff with configurable parameters
 ///
-/// Concurrency reasoning:
-/// - Transaction processing (request/sender/status): I/O-bound blockchain calls → high concurrency
-/// - Notifications: I/O-bound webhook calls → high concurrency
-/// - Solana swap: DEX operations with multiple tokens → very high concurrency
-/// - Cleanup: Resource-intensive DB operations → low concurrency to avoid conflicts
-/// - Health checks: Multiple relayers checked independently → moderate-high concurrency
-pub fn get_worker_configs() -> Vec<WorkerConfig> {
-    vec![
-        // High concurrency for I/O-bound blockchain operations
-        WorkerConfig::new(TRANSACTION_REQUEST, DEFAULT_CONCURRENCY), // 10: Validate/parse requests
-        WorkerConfig::new(TRANSACTION_SENDER, DEFAULT_CONCURRENCY),  // 10: Submit to blockchains
-        WorkerConfig::new(TRANSACTION_STATUS_CHECKER, 20), // 20: Poll RPC endpoints (read-only)
-        // High concurrency for webhook notifications (I/O-bound HTTP calls)
-        WorkerConfig::new(NOTIFICATION_SENDER, DEFAULT_CONCURRENCY), // 10: Send webhooks
-        // Very high concurrency for DEX operations (multiple tokens/swaps)
-        WorkerConfig::new(SOLANA_TOKEN_SWAP_REQUEST, 25), // 25: Handle swap requests
-        // Low concurrency for resource-intensive periodic cleanup (cron-based)
-        WorkerConfig::with_cron(
-            TRANSACTION_CLEANUP,
-            1,                // 1: Avoid DB conflicts
-            "0 */30 * * * *", // Every 30 minutes
-        ),
-        // Moderate-high concurrency for independent health checks
-        WorkerConfig::new(RELAYER_HEALTH_CHECK, 10), // 10: Check multiple relayers
-    ]
+/// # Arguments
+/// * `initial_ms` - Initial delay in milliseconds (e.g., 200)
+/// * `max_ms` - Maximum delay in milliseconds (e.g., 5000)
+/// * `jitter` - Jitter factor 0.0-1.0 (e.g., 0.99 for high jitter)
+///
+/// # Returns
+/// A configured backoff instance ready for use with RetryPolicy
+fn create_backoff(initial_ms: u64, max_ms: u64, jitter: f64) -> Result<ExponentialBackoffMaker> {
+    let maker = ExponentialBackoffMaker::new(
+        Duration::from_millis(initial_ms),
+        Duration::from_millis(max_ms),
+        jitter,
+        HasherRng::default(),
+    )?;
+
+    Ok(maker)
 }
 
 pub async fn initialize_workers<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
@@ -114,110 +90,155 @@ where
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
-    let queue = app_state.job_producer().get_queue().await?;
-    let configs = get_worker_configs();
+    let queue = app_state.job_producer.get_queue().await?;
 
-    // Helper function to find config by name
-    let get_config = |name: &str| -> &WorkerConfig {
-        configs
-            .iter()
-            .find(|c| c.name == name)
-            .unwrap_or_else(|| panic!("Worker config for '{}' should exist", name))
-    };
-
-    let tx_req_config = get_config(TRANSACTION_REQUEST);
-    let transaction_request_queue_worker = WorkerBuilder::new(tx_req_config.name)
+    let transaction_request_queue_worker = WorkerBuilder::new(TRANSACTION_REQUEST)
         .layer(ErrorHandlingLayer::new())
+        .retry(
+            RetryPolicy::retries(WORKER_TRANSACTION_REQUEST_RETRIES)
+                .with_backoff(create_backoff(500, 5000, 0.99)?.make_backoff()),
+        )
         .enable_tracing()
         .catch_panic()
-        .rate_limit(tx_req_config.rate_limit, tx_req_config.rate_limit_duration)
-        .retry(BackoffRetryPolicy::default())
-        .concurrency(tx_req_config.concurrency)
+        .concurrency(ServerConfig::get_worker_concurrency(
+            TRANSACTION_REQUEST,
+            DEFAULT_CONCURRENCY_TRANSACTION_REQUEST,
+        ))
         .data(app_state.clone())
         .backend(queue.transaction_request_queue.clone())
         .build_fn(transaction_request_handler);
 
-    let tx_sub_config = get_config(TRANSACTION_SENDER);
-    let transaction_submission_queue_worker = WorkerBuilder::new(tx_sub_config.name)
+    let transaction_submission_queue_worker = WorkerBuilder::new(TRANSACTION_SENDER)
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
         .catch_panic()
-        .rate_limit(tx_sub_config.rate_limit, tx_sub_config.rate_limit_duration)
-        .retry(BackoffRetryPolicy::default())
-        .concurrency(tx_sub_config.concurrency)
+        .retry(
+            RetryPolicy::retries(WORKER_TRANSACTION_SUBMIT_RETRIES)
+                .with_backoff(create_backoff(500, 2000, 0.99)?.make_backoff()),
+        )
+        .concurrency(ServerConfig::get_worker_concurrency(
+            TRANSACTION_SENDER,
+            DEFAULT_CONCURRENCY_TRANSACTION_SENDER,
+        ))
         .data(app_state.clone())
         .backend(queue.transaction_submission_queue.clone())
         .build_fn(transaction_submission_handler);
 
-    let tx_status_config = get_config(TRANSACTION_STATUS_CHECKER);
-    let transaction_status_queue_worker = WorkerBuilder::new(tx_status_config.name)
+    // Generic status checker
+    // Uses medium settings that work reasonably for most chains
+    let transaction_status_queue_worker = WorkerBuilder::new(TRANSACTION_STATUS_CHECKER)
         .layer(ErrorHandlingLayer::new())
-        .catch_panic()
         .enable_tracing()
-        .rate_limit(
-            tx_status_config.rate_limit,
-            tx_status_config.rate_limit_duration,
+        .catch_panic()
+        .retry(
+            RetryPolicy::retries(WORKER_TRANSACTION_STATUS_CHECKER_RETRIES)
+                .with_backoff(create_backoff(5000, 8000, 0.99)?.make_backoff()),
         )
-        .retry(BackoffRetryPolicy::default())
-        .concurrency(tx_status_config.concurrency)
+        .concurrency(ServerConfig::get_worker_concurrency(
+            TRANSACTION_STATUS_CHECKER,
+            DEFAULT_CONCURRENCY_STATUS_CHECKER,
+        ))
         .data(app_state.clone())
         .backend(queue.transaction_status_queue.clone())
         .build_fn(transaction_status_handler);
 
-    let notif_config = get_config(NOTIFICATION_SENDER);
-    let notification_queue_worker = WorkerBuilder::new(notif_config.name)
+    // EVM status checker - slower retries to avoid premature resubmission
+    // EVM has longer block times (~12s) and needs time for resubmission logic
+    let transaction_status_queue_worker_evm = WorkerBuilder::new(TRANSACTION_STATUS_CHECKER_EVM)
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
         .catch_panic()
-        .rate_limit(notif_config.rate_limit, notif_config.rate_limit_duration)
-        .retry(BackoffRetryPolicy::default())
-        .concurrency(notif_config.concurrency)
+        .retry(
+            RetryPolicy::retries(WORKER_TRANSACTION_STATUS_CHECKER_RETRIES)
+                .with_backoff(create_backoff(8000, 12000, 0.99)?.make_backoff()),
+        )
+        .concurrency(ServerConfig::get_worker_concurrency(
+            TRANSACTION_STATUS_CHECKER_EVM,
+            DEFAULT_CONCURRENCY_STATUS_CHECKER_EVM,
+        ))
+        .data(app_state.clone())
+        .backend(queue.transaction_status_queue_evm.clone())
+        .build_fn(transaction_status_handler);
+
+    // Stellar status checker - fast retries for fast finality
+    // Stellar has sub-second finality, needs more frequent status checks
+    let transaction_status_queue_worker_stellar =
+        WorkerBuilder::new(TRANSACTION_STATUS_CHECKER_STELLAR)
+            .layer(ErrorHandlingLayer::new())
+            .enable_tracing()
+            .catch_panic()
+            .retry(
+                RetryPolicy::retries(WORKER_TRANSACTION_STATUS_CHECKER_RETRIES)
+                    .with_backoff(create_backoff(2000, 3000, 0.99)?.make_backoff()),
+            )
+            .concurrency(ServerConfig::get_worker_concurrency(
+                TRANSACTION_STATUS_CHECKER_STELLAR,
+                DEFAULT_CONCURRENCY_STATUS_CHECKER_STELLAR,
+            ))
+            .data(app_state.clone())
+            .backend(queue.transaction_status_queue_stellar.clone())
+            .build_fn(transaction_status_handler);
+
+    let notification_queue_worker = WorkerBuilder::new(NOTIFICATION_SENDER)
+        .layer(ErrorHandlingLayer::new())
+        .enable_tracing()
+        .catch_panic()
+        .retry(
+            RetryPolicy::retries(WORKER_NOTIFICATION_SENDER_RETRIES)
+                .with_backoff(create_backoff(2000, 8000, 0.99)?.make_backoff()),
+        )
+        .concurrency(ServerConfig::get_worker_concurrency(
+            NOTIFICATION_SENDER,
+            DEFAULT_CONCURRENCY_NOTIFICATION,
+        ))
         .data(app_state.clone())
         .backend(queue.notification_queue.clone())
         .build_fn(notification_handler);
 
-    let swap_config = get_config(SOLANA_TOKEN_SWAP_REQUEST);
-    let solana_token_swap_request_queue_worker = WorkerBuilder::new(swap_config.name)
+    let solana_token_swap_request_queue_worker = WorkerBuilder::new(SOLANA_TOKEN_SWAP_REQUEST)
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
         .catch_panic()
-        .rate_limit(swap_config.rate_limit, swap_config.rate_limit_duration)
-        .retry(BackoffRetryPolicy::default())
-        .concurrency(swap_config.concurrency)
+        .retry(
+            RetryPolicy::retries(WORKER_SOLANA_TOKEN_SWAP_REQUEST_RETRIES)
+                .with_backoff(create_backoff(5000, 20000, 0.99)?.make_backoff()),
+        )
+        .concurrency(ServerConfig::get_worker_concurrency(
+            SOLANA_TOKEN_SWAP_REQUEST,
+            DEFAULT_CONCURRENCY_SOLANA_SWAP,
+        ))
         .data(app_state.clone())
         .backend(queue.solana_token_swap_request_queue.clone())
         .build_fn(solana_token_swap_request_handler);
 
-    let cleanup_config = get_config(TRANSACTION_CLEANUP);
-    let transaction_cleanup_queue_worker = WorkerBuilder::new(cleanup_config.name)
+    let transaction_cleanup_queue_worker = WorkerBuilder::new(TRANSACTION_CLEANUP)
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
         .catch_panic()
-        .rate_limit(
-            cleanup_config.rate_limit,
-            cleanup_config.rate_limit_duration,
+        .retry(
+            RetryPolicy::retries(WORKER_TRANSACTION_CLEANUP_RETRIES)
+                .with_backoff(create_backoff(5000, 20000, 0.99)?.make_backoff()),
         )
-        .retry(BackoffRetryPolicy::default())
-        .concurrency(cleanup_config.concurrency)
+        .concurrency(ServerConfig::get_worker_concurrency(TRANSACTION_CLEANUP, 1)) // Default to 1 to avoid DB conflicts
         .data(app_state.clone())
         .backend(CronStream::new(
-            apalis_cron::Schedule::from_str(
-                cleanup_config
-                    .cron_schedule
-                    .expect("TRANSACTION_CLEANUP should have cron schedule"),
-            )
-            .expect("Valid cron schedule"),
+            // every 30 minutes
+            apalis_cron::Schedule::from_str("0 */30 * * * *")?,
         ))
         .build_fn(transaction_cleanup_handler);
 
-    let health_config = get_config(RELAYER_HEALTH_CHECK);
-    let relayer_health_check_worker = WorkerBuilder::new(health_config.name)
+    let relayer_health_check_worker = WorkerBuilder::new(RELAYER_HEALTH_CHECK)
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
         .catch_panic()
-        .rate_limit(health_config.rate_limit, health_config.rate_limit_duration)
-        .retry(BackoffRetryPolicy::default())
-        .concurrency(health_config.concurrency)
+        .retry(
+            RetryPolicy::retries(WORKER_RELAYER_HEALTH_CHECK_RETRIES)
+                .with_backoff(create_backoff(2000, 10000, 0.99)?.make_backoff()),
+        )
+        .concurrency(ServerConfig::get_worker_concurrency(
+            RELAYER_HEALTH_CHECK,
+            DEFAULT_CONCURRENCY_HEALTH_CHECK,
+        ))
         .data(app_state.clone())
         .backend(queue.relayer_health_check_queue.clone())
         .build_fn(relayer_health_check_handler);
@@ -226,6 +247,8 @@ where
         .register(transaction_request_queue_worker)
         .register(transaction_submission_queue_worker)
         .register(transaction_status_queue_worker)
+        .register(transaction_status_queue_worker_evm)
+        .register(transaction_status_queue_worker_stellar)
         .register(notification_queue_worker)
         .register(solana_token_swap_request_queue_worker)
         .register(transaction_cleanup_queue_worker)
@@ -239,14 +262,14 @@ where
         let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
             .expect("Failed to create SIGTERM signal");
 
-        info!("Monitor started");
+        debug!("Workers monitor started");
 
         tokio::select! {
-            _ = sigint.recv() => info!("Received SIGINT."),
-            _ = sigterm.recv() => info!("Received SIGTERM."),
+            _ = sigint.recv() => debug!("Received SIGINT."),
+            _ = sigterm.recv() => debug!("Received SIGTERM."),
         };
 
-        info!("Monitor shutting down");
+        debug!("Workers monitor shutting down");
 
         Ok(())
     });
@@ -255,7 +278,7 @@ where
             error!(error = %e, "monitor error");
         }
     });
-    info!("Monitor shutdown complete");
+    debug!("Workers monitor shutdown complete");
     Ok(())
 }
 
@@ -306,7 +329,7 @@ where
     let solena_relayers_with_swap_enabled = filter_relayers_for_swap(active_relayers);
 
     if solena_relayers_with_swap_enabled.is_empty() {
-        info!("No solana relayers with swap enabled");
+        debug!("No solana relayers with swap enabled");
         return Ok(());
     }
     info!(
@@ -316,6 +339,8 @@ where
 
     let mut workers = Vec::new();
 
+    let swap_backoff = create_backoff(2000, 5000, 0.99)?.make_backoff();
+
     for relayer in solena_relayers_with_swap_enabled {
         debug!(relayer = ?relayer, "found solana relayer with swap enabled");
 
@@ -323,7 +348,7 @@ where
         let swap_config = match policy.get_swap_config() {
             Some(config) => config,
             None => {
-                info!("No swap configuration specified; skipping validation.");
+                debug!("No swap configuration specified; skipping validation.");
                 continue;
             }
         };
@@ -341,8 +366,10 @@ where
             .layer(ErrorHandlingLayer::new())
             .enable_tracing()
             .catch_panic()
-            .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
-            .retry(BackoffRetryPolicy::default())
+            .retry(
+                RetryPolicy::retries(WORKER_SOLANA_TOKEN_SWAP_REQUEST_RETRIES)
+                    .with_backoff(swap_backoff.clone()),
+            )
             .concurrency(1)
             .data(relayer.id.clone())
             .data(app_state.clone())
@@ -350,7 +377,7 @@ where
             .build_fn(solana_token_swap_cron_handler);
 
         workers.push(worker);
-        info!(
+        debug!(
             "Created worker for solana relayer with swap enabled: {:?}",
             relayer
         );
@@ -371,14 +398,14 @@ where
         let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
             .expect("Failed to create SIGTERM signal");
 
-        info!("Solana Swap Monitor started");
+        debug!("Solana Swap Monitor started");
 
         tokio::select! {
-            _ = sigint.recv() => info!("Received SIGINT."),
-            _ = sigterm.recv() => info!("Received SIGTERM."),
+            _ = sigint.recv() => debug!("Received SIGINT."),
+            _ = sigterm.recv() => debug!("Received SIGTERM."),
         };
 
-        info!("Solana Swap Monitor shutting down");
+        debug!("Solana Swap Monitor shutting down");
 
         Ok(())
     });
@@ -597,256 +624,5 @@ mod tests {
         let policy = relayer.policies.get_solana_policy();
         let swap_config = policy.get_swap_config().expect("Should have swap config");
         assert_eq!(swap_config.cron_schedule.as_ref(), Some(&cron));
-    }
-
-    // ===== Worker Configuration Tests =====
-
-    #[test]
-    fn test_get_worker_configs_returns_all_workers() {
-        let configs = get_worker_configs();
-
-        assert_eq!(configs.len(), 7, "Should have 7 standard workers");
-    }
-
-    #[test]
-    fn test_worker_configs_have_correct_names() {
-        let configs = get_worker_configs();
-        let names: Vec<&str> = configs.iter().map(|c| c.name).collect();
-
-        // Verify all expected workers are present
-        assert!(
-            names.contains(&TRANSACTION_REQUEST),
-            "Should include transaction_request"
-        );
-        assert!(
-            names.contains(&TRANSACTION_SENDER),
-            "Should include transaction_sender"
-        );
-        assert!(
-            names.contains(&TRANSACTION_STATUS_CHECKER),
-            "Should include transaction_status_checker"
-        );
-        assert!(
-            names.contains(&NOTIFICATION_SENDER),
-            "Should include notification_sender"
-        );
-        assert!(
-            names.contains(&SOLANA_TOKEN_SWAP_REQUEST),
-            "Should include solana_token_swap_request"
-        );
-        assert!(
-            names.contains(&TRANSACTION_CLEANUP),
-            "Should include transaction_cleanup"
-        );
-        assert!(
-            names.contains(&RELAYER_HEALTH_CHECK),
-            "Should include relayer_health_check"
-        );
-    }
-
-    #[test]
-    fn test_worker_configs_have_correct_concurrency() {
-        let configs = get_worker_configs();
-
-        for config in configs {
-            match config.name {
-                TRANSACTION_REQUEST => assert_eq!(
-                    config.concurrency, 10,
-                    "transaction_request should have concurrency 10 (I/O-bound)"
-                ),
-                TRANSACTION_SENDER => assert_eq!(
-                    config.concurrency, 10,
-                    "transaction_sender should have concurrency 10 (I/O-bound)"
-                ),
-                TRANSACTION_STATUS_CHECKER => assert_eq!(
-                    config.concurrency, 20,
-                    "transaction_status_checker should have concurrency 20 (read-only RPC)"
-                ),
-                NOTIFICATION_SENDER => assert_eq!(
-                    config.concurrency, 10,
-                    "notification_sender should have concurrency 10 (I/O-bound)"
-                ),
-                SOLANA_TOKEN_SWAP_REQUEST => assert_eq!(
-                    config.concurrency, 25,
-                    "solana_token_swap_request should have concurrency 25 (DEX operations)"
-                ),
-                TRANSACTION_CLEANUP => assert_eq!(
-                    config.concurrency, 1,
-                    "transaction_cleanup should have concurrency 1 (DB conflicts)"
-                ),
-                RELAYER_HEALTH_CHECK => assert_eq!(
-                    config.concurrency, 10,
-                    "relayer_health_check should have concurrency 10 (independent checks)"
-                ),
-                _ => panic!("Unexpected worker name: {}", config.name),
-            }
-        }
-    }
-
-    #[test]
-    fn test_worker_configs_have_default_rate_limits() {
-        let configs = get_worker_configs();
-
-        for config in configs {
-            assert_eq!(
-                config.rate_limit, DEFAULT_RATE_LIMIT,
-                "Worker {} should have default rate limit",
-                config.name
-            );
-            assert_eq!(
-                config.rate_limit_duration, DEFAULT_RATE_LIMIT_DURATION,
-                "Worker {} should have default rate limit duration",
-                config.name
-            );
-        }
-    }
-
-    #[test]
-    fn test_worker_config_constants_are_unique() {
-        let configs = get_worker_configs();
-        let names: Vec<&str> = configs.iter().map(|c| c.name).collect();
-        let mut unique_names = names.clone();
-        unique_names.sort();
-        unique_names.dedup();
-
-        assert_eq!(
-            names.len(),
-            unique_names.len(),
-            "All worker names should be unique"
-        );
-    }
-
-    #[test]
-    fn test_worker_constants_match_strings() {
-        // Verify constants are set correctly
-        assert_eq!(TRANSACTION_REQUEST, "transaction_request");
-        assert_eq!(TRANSACTION_SENDER, "transaction_sender");
-        assert_eq!(TRANSACTION_STATUS_CHECKER, "transaction_status_checker");
-        assert_eq!(NOTIFICATION_SENDER, "notification_sender");
-        assert_eq!(SOLANA_TOKEN_SWAP_REQUEST, "solana_token_swap_request");
-        assert_eq!(TRANSACTION_CLEANUP, "transaction_cleanup");
-        assert_eq!(RELAYER_HEALTH_CHECK, "relayer_health_check");
-    }
-
-    #[test]
-    fn test_default_configuration_constants() {
-        // Verify defaults are sensible for I/O-bound operations
-        assert_eq!(
-            DEFAULT_CONCURRENCY, 10,
-            "Default concurrency should be 10 for I/O-bound ops"
-        );
-        assert_eq!(
-            DEFAULT_RATE_LIMIT, 100,
-            "Default rate limit should be 100 for higher throughput"
-        );
-        assert_eq!(
-            DEFAULT_RATE_LIMIT_DURATION,
-            Duration::from_secs(1),
-            "Default rate limit duration should be 1 second"
-        );
-    }
-
-    #[test]
-    fn test_specialized_worker_concurrency() {
-        let configs = get_worker_configs();
-
-        // Very high concurrency for DEX swap operations
-        let swap_worker = configs
-            .iter()
-            .find(|c| c.name == SOLANA_TOKEN_SWAP_REQUEST)
-            .expect("Should have solana swap worker");
-        assert_eq!(
-            swap_worker.concurrency, 25,
-            "Solana swap should handle 25 concurrent requests (DEX operations)"
-        );
-
-        // Highest concurrency for read-only status checks
-        let status_worker = configs
-            .iter()
-            .find(|c| c.name == TRANSACTION_STATUS_CHECKER)
-            .expect("Should have status checker");
-        assert_eq!(
-            status_worker.concurrency, 20,
-            "Status checker should have high concurrency 20 (read-only RPC calls)"
-        );
-
-        // Low concurrency for cleanup (resource-intensive, avoid DB conflicts)
-        let cleanup_worker = configs
-            .iter()
-            .find(|c| c.name == TRANSACTION_CLEANUP)
-            .expect("Should have cleanup worker");
-        assert_eq!(
-            cleanup_worker.concurrency, 1,
-            "Cleanup should run single-threaded to avoid DB conflicts"
-        );
-
-        // High concurrency for independent health checks
-        let health_worker = configs
-            .iter()
-            .find(|c| c.name == RELAYER_HEALTH_CHECK)
-            .expect("Should have health check worker");
-        assert_eq!(
-            health_worker.concurrency, 10,
-            "Health checks should handle 10 concurrent relayers"
-        );
-    }
-
-    #[test]
-    fn test_cron_scheduled_workers() {
-        let configs = get_worker_configs();
-
-        // Find cleanup worker which should have a cron schedule
-        let cleanup_worker = configs
-            .iter()
-            .find(|c| c.name == TRANSACTION_CLEANUP)
-            .expect("Should have cleanup worker");
-
-        assert!(
-            cleanup_worker.cron_schedule.is_some(),
-            "Cleanup worker should have a cron schedule"
-        );
-
-        assert_eq!(
-            cleanup_worker.cron_schedule,
-            Some("0 */30 * * * *"),
-            "Cleanup should run every 30 minutes"
-        );
-
-        // Verify the cron schedule is valid
-        let schedule_str = cleanup_worker.cron_schedule.unwrap();
-        let schedule = apalis_cron::Schedule::from_str(schedule_str);
-        assert!(
-            schedule.is_ok(),
-            "Cron schedule should be valid: {}",
-            schedule_str
-        );
-    }
-
-    #[test]
-    fn test_non_cron_workers_have_no_schedule() {
-        let configs = get_worker_configs();
-
-        // Regular queue-based workers should not have cron schedules
-        let queue_workers = vec![
-            TRANSACTION_REQUEST,
-            TRANSACTION_SENDER,
-            TRANSACTION_STATUS_CHECKER,
-            NOTIFICATION_SENDER,
-            SOLANA_TOKEN_SWAP_REQUEST,
-            RELAYER_HEALTH_CHECK,
-        ];
-
-        for worker_name in queue_workers {
-            let worker = configs
-                .iter()
-                .find(|c| c.name == worker_name)
-                .unwrap_or_else(|| panic!("Should have worker: {}", worker_name));
-
-            assert!(
-                worker.cron_schedule.is_none(),
-                "Queue-based worker {} should not have cron schedule",
-                worker_name
-            );
-        }
     }
 }
