@@ -21,7 +21,8 @@ use crate::{
         Address, NetworkTransactionData, SignerError, StellarTransactionData, TransactionInput,
     },
     services::{
-        signer::SignXdrTransactionResponseStellar, Signer, TurnkeyService, TurnkeyServiceTrait,
+        signer::{SignXdrTransactionResponseStellar, Signer},
+        TurnkeyService, TurnkeyServiceTrait,
     },
 };
 

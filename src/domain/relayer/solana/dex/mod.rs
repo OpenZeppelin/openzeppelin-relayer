@@ -5,8 +5,9 @@ use std::sync::Arc;
 use crate::domain::relayer::RelayerError;
 use crate::models::{RelayerRepoModel, SolanaSwapStrategy};
 use crate::services::{
-    JupiterService, JupiterServiceTrait, SolanaProvider, SolanaProviderTrait, SolanaSignTrait,
-    SolanaSigner,
+    provider::{SolanaProvider, SolanaProviderTrait},
+    signer::{SolanaSignTrait, SolanaSigner},
+    JupiterService, JupiterServiceTrait,
 };
 use async_trait::async_trait;
 #[cfg(test)]
@@ -151,7 +152,7 @@ mod tests {
             LocalSignerConfigStorage, RelayerSolanaPolicy, RelayerSolanaSwapConfig,
             SignerConfigStorage, SignerRepoModel,
         },
-        services::{MockSolanaProviderTrait, SolanaSignerFactory},
+        services::{provider::MockSolanaProviderTrait, signer::SolanaSignerFactory},
     };
 
     use super::*;

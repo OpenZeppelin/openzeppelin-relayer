@@ -30,7 +30,9 @@ use crate::{
         Repository, TransactionCounterTrait, TransactionRepository,
     },
     services::{
-        get_network_provider, EvmSignerFactory, StellarSignerFactory, TransactionCounterService,
+        provider::get_network_provider,
+        signer::{EvmSignerFactory, StellarSignerFactory},
+        TransactionCounterService,
     },
 };
 

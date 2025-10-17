@@ -1,7 +1,7 @@
 use crate::{
     jobs::JobProducerError,
     models::{SignerError, SignerFactoryError},
-    services::{ProviderError, SolanaProviderError},
+    services::provider::{ProviderError, SolanaProviderError},
 };
 
 use super::{ApiError, RepositoryError, StellarProviderError};

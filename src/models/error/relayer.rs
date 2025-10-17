@@ -1,7 +1,7 @@
 use crate::{
     models::{SignerError, SignerFactoryError},
     repositories::TransactionCounterError,
-    services::{ProviderError, SolanaProviderError},
+    services::provider::{ProviderError, SolanaProviderError},
 };
 
 use super::{ApiError, RepositoryError};
@@ -90,7 +90,7 @@ mod tests {
     use super::*;
     use crate::models::SignerError;
     use crate::repositories::TransactionCounterError;
-    use crate::services::{ProviderError, SolanaProviderError};
+    use crate::services::provider::{ProviderError, SolanaProviderError};
 
     #[test]
     fn test_relayer_error_variants() {
