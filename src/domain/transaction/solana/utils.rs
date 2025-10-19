@@ -9,22 +9,9 @@ use solana_sdk::{
 };
 use std::str::FromStr;
 
-use crate::{
-    models::{
-        EncodedSerializedTransaction, SolanaInstructionSpec, TransactionError, TransactionRepoModel,
-    },
-    services::provider::SolanaProviderError,
+use crate::models::{
+    EncodedSerializedTransaction, SolanaInstructionSpec, TransactionError, TransactionRepoModel,
 };
-
-/// Determines if a Solana provider error is transient (retriable) or permanent.
-///
-/// Transient errors are temporary issues that may succeed on retry (network issues, timeouts).
-/// Non-transient errors indicate permanent failures (insufficient funds, invalid transaction).
-///
-/// This is a convenience wrapper around `SolanaProviderError::is_transient()`.
-pub fn is_transient_error(error: &SolanaProviderError) -> bool {
-    error.is_transient()
-}
 
 /// Determines if a transaction's blockhash can be safely updated.
 ///

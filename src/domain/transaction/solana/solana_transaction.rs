@@ -18,7 +18,7 @@ use crate::{
             common::is_final_state,
             solana::utils::{
                 build_transaction_from_instructions, decode_solana_transaction,
-                decode_solana_transaction_from_string, is_resubmitable, is_transient_error,
+                decode_solana_transaction_from_string, is_resubmitable,
             },
             Transaction,
         },
@@ -206,46 +206,31 @@ where
         // Validate transaction before signing
         // Distinguish between transient errors (RPC issues) and permanent errors (policy violations)
         if let Err(validation_error) = self.validate_transaction_impl(&transaction).await {
-            // Pattern match on the error type to determine if it's transient
-            let is_transient = match &validation_error {
-                // SolanaValidation errors can be checked via is_transient()
-                TransactionError::SolanaValidation(solana_error) => solana_error.is_transient(),
-
-                // Other error types - check if they indicate RPC/network issues
-                TransactionError::UnexpectedError(msg) => {
-                    msg.contains("Fee estimation failed")
-                        || msg.contains("RPC")
-                        || msg.contains("timeout")
-                        || msg.contains("network")
-                }
-
-                // All other errors are considered permanent
-                _ => false,
-            };
+            // Determine if the error is transient
+            let is_transient = validation_error.is_transient();
 
             if is_transient {
-                // Transient error (RPC/network issue) - propagate to allow retry
                 warn!(
                     tx_id = %tx.id,
                     error = %validation_error,
                     "transient validation error (likely RPC/network issue), will retry"
                 );
                 return Err(validation_error);
+            } else {
+                // Permanent validation error (policy violation, insufficient balance, etc.) - mark as failed
+                warn!(
+                    tx_id = %tx.id,
+                    error = %validation_error,
+                    "permanent validation error, marking transaction as failed"
+                );
+
+                let updated_tx = self
+                    .fail_transaction_with_notification(&tx, &validation_error)
+                    .await?;
+
+                // Return Ok since transaction is in final Failed state - no retry needed
+                return Ok(updated_tx);
             }
-
-            // Permanent validation error (policy violation, insufficient balance, etc.) - mark as failed
-            warn!(
-                tx_id = %tx.id,
-                error = %validation_error,
-                "permanent validation error, marking transaction as failed"
-            );
-
-            let updated_tx = self
-                .fail_transaction_with_notification(&tx, &validation_error)
-                .await?;
-
-            // Return Ok since transaction is in final Failed state - no retry needed
-            return Ok(updated_tx);
         }
 
         // Sign transaction
@@ -308,7 +293,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!(tx_id = %tx.id, status = ?tx.status, "submitting Solana transaction to blockchain");
+        debug!(tx_id = %tx.id, status = ?tx.status, "submitting Solana transaction to blockchain");
 
         // If transaction is not in expected status, return Ok to avoid wasteful retries
         // (e.g., if it's already in a final state like Failed, Confirmed, etc.)
@@ -340,7 +325,7 @@ where
             Err(provider_error) => {
                 // Special case: AlreadyProcessed means transaction is already on-chain
                 if matches!(provider_error, SolanaProviderError::AlreadyProcessed(_)) {
-                    info!(
+                    debug!(
                         tx_id = %tx.id,
                         signature = ?solana_data.signature,
                         "transaction already processed on-chain"
@@ -357,7 +342,7 @@ where
                 {
                     // Single-signer: Can update blockhash on retry
                     // Return Ok to allow prepare phase to fetch fresh blockhash and resubmit
-                    info!(
+                    debug!(
                         tx_id = %tx.id,
                         error = %provider_error,
                         "blockhash expired for single-signer transaction, will retry with fresh blockhash"
@@ -372,7 +357,7 @@ where
                 );
 
                 // Check if error is transient or permanent
-                if is_transient_error(&provider_error) {
+                if provider_error.is_transient() {
                     // Transient error - propagate so job can retry
                     return Err(TransactionError::UnderlyingSolanaProvider(provider_error));
                 } else {

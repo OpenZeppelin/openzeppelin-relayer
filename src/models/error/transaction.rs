@@ -50,6 +50,47 @@ pub enum TransactionError {
     SimulationFailed(String),
 }
 
+impl TransactionError {
+    /// Determines if this error is transient (can retry) or permanent (should fail).
+    ///
+    /// **Transient (can retry):**
+    /// - `SolanaValidation`: Delegates to underlying error's is_transient()
+    /// - `UnderlyingSolanaProvider`: Delegates to underlying error's is_transient()
+    /// - `UnderlyingProvider`: Delegates to underlying error's is_transient()
+    /// - `UnexpectedError`: Unexpected errors may resolve on retry
+    /// - `JobProducerError`: Job queue issues are typically transient
+    ///
+    /// **Permanent (fail immediately):**
+    /// - `ValidationError`: Malformed data, missing fields, invalid state transitions
+    /// - `InsufficientBalance`: Balance issues won't resolve without funding
+    /// - `NetworkConfiguration`: Configuration errors are permanent
+    /// - `InvalidType`: Type mismatches are permanent
+    /// - `NotSupported`: Unsupported operations won't change
+    /// - `SignerError`: Signer issues are typically permanent
+    /// - `SimulationFailed`: Transaction simulation failures are permanent
+    pub fn is_transient(&self) -> bool {
+        match self {
+            // Delegate to underlying error's is_transient() method
+            TransactionError::SolanaValidation(err) => err.is_transient(),
+            TransactionError::UnderlyingSolanaProvider(err) => err.is_transient(),
+            TransactionError::UnderlyingProvider(err) => err.is_transient(),
+
+            // Transient errors - may resolve on retry
+            TransactionError::UnexpectedError(_) => true,
+            TransactionError::JobProducerError(_) => true,
+
+            // Permanent errors - fail immediately
+            TransactionError::ValidationError(_) => false,
+            TransactionError::InsufficientBalance(_) => false,
+            TransactionError::NetworkConfiguration(_) => false,
+            TransactionError::InvalidType(_) => false,
+            TransactionError::NotSupported(_) => false,
+            TransactionError::SignerError(_) => false,
+            TransactionError::SimulationFailed(_) => false,
+        }
+    }
+}
+
 impl From<TransactionError> for ApiError {
     fn from(error: TransactionError) -> Self {
         match error {

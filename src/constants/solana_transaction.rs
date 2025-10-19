@@ -1,9 +1,22 @@
 //! Constants for Solana transaction processing.
 //!
 //! This module contains default values used throughout the Solana transaction
-//! handling logic, including status check delays and timeout thresholds.
+//! handling logic, including validation limits, status check delays, and timeout thresholds.
 
 use chrono::Duration;
+
+// API request validation limits
+/// Maximum number of instructions allowed in a transaction request
+pub const REQUEST_MAX_INSTRUCTIONS: usize = 64;
+
+/// Maximum number of accounts allowed per instruction in a request
+pub const REQUEST_MAX_ACCOUNTS_PER_INSTRUCTION: usize = 64;
+
+/// Maximum total unique accounts allowed in a transaction request
+pub const REQUEST_MAX_TOTAL_ACCOUNTS: usize = 64;
+
+/// Maximum instruction data size in bytes allowed in a request
+pub const REQUEST_MAX_INSTRUCTION_DATA_SIZE: usize = 1232;
 
 // Status check scheduling
 /// Initial delay before first status check (in seconds)
