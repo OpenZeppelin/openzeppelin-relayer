@@ -9,9 +9,22 @@ use solana_sdk::{
 };
 use std::str::FromStr;
 
-use crate::models::{
-    EncodedSerializedTransaction, SolanaInstructionSpec, TransactionError, TransactionRepoModel,
+use crate::{
+    constants::MAXIMUM_SOLANA_TX_ATTEMPTS,
+    models::{
+        EncodedSerializedTransaction, SolanaInstructionSpec, TransactionError, TransactionRepoModel,
+    },
 };
+
+/// Checks if a Solana transaction has exceeded the maximum number of resubmission attempts.
+///
+/// Each time a transaction is resubmitted with a fresh blockhash, a new signature is generated
+/// and appended to tx.hashes. This function checks if that limit has been exceeded.
+///
+/// Similar to EVM's `too_many_attempts` but tailored for Solana's resubmission behavior.
+pub fn too_many_solana_attempts(tx: &TransactionRepoModel) -> bool {
+    tx.hashes.len() > MAXIMUM_SOLANA_TX_ATTEMPTS
+}
 
 /// Determines if a transaction's blockhash can be safely updated.
 ///

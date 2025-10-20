@@ -4,8 +4,9 @@
 //! including status updates, repository management, and webhook notifications.
 
 use crate::constants::{
+    MAXIMUM_SOLANA_TX_ATTEMPTS, SOLANA_DEFAULT_TX_VALID_TIMESPAN,
     SOLANA_MIN_AGE_FOR_RESUBMIT_CHECK_SECONDS, SOLANA_PENDING_TIMEOUT_MINUTES,
-    SOLANA_SENT_TIMEOUT_MINUTES, SOLANA_SUBMITTED_TIMEOUT_MINUTES,
+    SOLANA_SENT_TIMEOUT_MINUTES,
 };
 use chrono::{DateTime, Duration, Utc};
 use solana_commitment_config::CommitmentConfig;
@@ -14,6 +15,7 @@ use std::str::FromStr;
 use tracing::{debug, error, info, warn};
 
 use super::{utils::decode_solana_transaction, SolanaRelayerTransaction};
+use crate::domain::transaction::solana::utils::too_many_solana_attempts;
 use crate::domain::transaction::{common::is_final_state, solana::utils::is_resubmitable};
 use crate::services::{SolanaProviderError, SolanaSignTrait};
 use crate::{
@@ -342,12 +344,27 @@ where
     }
 
     /// Check if valid_until has expired
+    ///
+    /// This checks both:
+    /// 1. User-provided valid_until (if present)
+    /// 2. Default valid_until based on created_at + DEFAULT_TX_VALID_TIMESPAN
     fn is_valid_until_expired(&self, tx: &TransactionRepoModel) -> bool {
+        // Check user-provided valid_until first
         if let Some(valid_until_str) = &tx.valid_until {
             if let Ok(valid_until) = DateTime::parse_from_rfc3339(valid_until_str) {
                 return Utc::now() > valid_until.with_timezone(&Utc);
             }
         }
+
+        // Fall back to default valid_until based on created_at
+        if let Ok(created_at) = DateTime::parse_from_rfc3339(&tx.created_at) {
+            let default_valid_until = created_at.with_timezone(&Utc)
+                + Duration::milliseconds(SOLANA_DEFAULT_TX_VALID_TIMESPAN);
+            return Utc::now() > default_valid_until;
+        }
+
+        // If we can't parse created_at, consider it not expired
+        // (will be caught by other safety mechanisms)
         false
     }
 
@@ -362,7 +379,7 @@ where
         let timeout = match tx.status {
             TransactionStatus::Pending => Duration::minutes(SOLANA_PENDING_TIMEOUT_MINUTES),
             TransactionStatus::Sent => Duration::minutes(SOLANA_SENT_TIMEOUT_MINUTES),
-            TransactionStatus::Submitted => Duration::minutes(SOLANA_SUBMITTED_TIMEOUT_MINUTES),
+            // Submitted status uses attempt-based limiting, not time-based timeout
             _ => return Ok(false), // No timeout for other statuses
         };
 
@@ -396,12 +413,32 @@ where
                 .await;
         }
 
-        // Step 2: Check if transaction has exceeded timeout for its status
-        if self.has_exceeded_timeout(&tx)? {
+        // Step 2: Check if transaction has exceeded timeout or attempt limit
+        if tx.status == TransactionStatus::Submitted {
+            // For Submitted status, use attempt-based limiting instead of timeout
+            if too_many_solana_attempts(&tx) {
+                let attempt_count = tx.hashes.len();
+                warn!(
+                    tx_id = %tx.id,
+                    attempt_count = attempt_count,
+                    max_attempts = MAXIMUM_SOLANA_TX_ATTEMPTS,
+                    "transaction has exceeded maximum resubmission attempts"
+                );
+                return self
+                    .mark_as_failed(
+                        tx,
+                        format!(
+                            "Transaction exceeded maximum resubmission attempts ({} > {})",
+                            attempt_count, MAXIMUM_SOLANA_TX_ATTEMPTS
+                        ),
+                    )
+                    .await;
+            }
+        } else if self.has_exceeded_timeout(&tx)? {
+            // For other statuses (Pending, Sent), use time-based timeout
             let timeout_minutes = match tx.status {
                 TransactionStatus::Pending => SOLANA_PENDING_TIMEOUT_MINUTES,
                 TransactionStatus::Sent => SOLANA_SENT_TIMEOUT_MINUTES,
-                TransactionStatus::Submitted => SOLANA_SUBMITTED_TIMEOUT_MINUTES,
                 _ => 0,
             };
             let status = tx.status.clone();
@@ -821,6 +858,171 @@ mod tests {
         assert!(result.is_ok());
         let updated_tx = result.unwrap();
         assert_eq!(updated_tx.id, tx.id);
+        assert_eq!(updated_tx.status, TransactionStatus::Failed);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_default_valid_until_expired() -> Result<()> {
+        let provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let mut tx_repo = MockTransactionRepository::new();
+        let job_producer = MockJobProducerTrait::new();
+
+        // Create PENDING transaction with created_at older than SOLANA_DEFAULT_TX_VALID_TIMESPAN
+        let old_created_at = (Utc::now()
+            - Duration::milliseconds(SOLANA_DEFAULT_TX_VALID_TIMESPAN + 60000))
+        .to_rfc3339();
+        let mut tx = create_tx_with_signature(TransactionStatus::Pending, None);
+        tx.created_at = old_created_at;
+        tx.valid_until = None; // No user-provided valid_until
+
+        let tx_id = tx.id.clone();
+
+        // Should mark as expired
+        tx_repo
+            .expect_partial_update()
+            .withf(move |tx_id_param, update_req| {
+                tx_id_param == &tx_id && update_req.status == Some(TransactionStatus::Expired)
+            })
+            .times(1)
+            .returning(move |_, _| {
+                let mut expired_tx = create_tx_with_signature(TransactionStatus::Expired, None);
+                expired_tx.status = TransactionStatus::Expired;
+                Ok(expired_tx)
+            });
+
+        let handler = SolanaRelayerTransaction::new(
+            create_mock_solana_relayer("test-relayer".to_string(), false),
+            relayer_repo,
+            Arc::new(provider),
+            Arc::new(tx_repo),
+            Arc::new(job_producer),
+            Arc::new(MockSolanaSignTrait::new()),
+        )?;
+
+        let result = handler.handle_transaction_status_impl(tx).await;
+
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.status, TransactionStatus::Expired);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_default_valid_until_not_expired() -> Result<()> {
+        let mut provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let mut tx_repo = MockTransactionRepository::new();
+        let job_producer = MockJobProducerTrait::new();
+
+        // Create transaction with created_at within SOLANA_DEFAULT_TX_VALID_TIMESPAN
+        let recent_created_at = (Utc::now()
+            - Duration::milliseconds(SOLANA_DEFAULT_TX_VALID_TIMESPAN - 60000))
+        .to_rfc3339();
+        let signature_str =
+            "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
+        let mut tx = create_tx_with_signature(TransactionStatus::Submitted, Some(signature_str));
+        tx.created_at = recent_created_at;
+        tx.valid_until = None; // No user-provided valid_until
+
+        let tx_id = tx.id.clone();
+
+        // Mock provider to return processed status
+        provider
+            .expect_get_transaction_status()
+            .with(eq(Signature::from_str(signature_str)?))
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(SolanaTransactionStatus::Processed) }));
+
+        // Expect status update from Submitted to Mined (Processed maps to Mined)
+        tx_repo
+            .expect_partial_update()
+            .withf(move |tx_id_param, update_req| {
+                tx_id_param == &tx_id && update_req.status == Some(TransactionStatus::Mined)
+            })
+            .times(1)
+            .returning(move |_, _| {
+                Ok(create_tx_with_signature(
+                    TransactionStatus::Mined,
+                    Some(signature_str),
+                ))
+            });
+
+        let handler = SolanaRelayerTransaction::new(
+            create_mock_solana_relayer("test-relayer".to_string(), false),
+            relayer_repo,
+            Arc::new(provider),
+            Arc::new(tx_repo),
+            Arc::new(job_producer),
+            Arc::new(MockSolanaSignTrait::new()),
+        )?;
+
+        let result = handler.handle_transaction_status_impl(tx.clone()).await;
+
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+        // Should not be expired since within default timespan, status changes to Mined
+        assert_eq!(updated_tx.status, TransactionStatus::Mined);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_too_many_resubmission_attempts() -> Result<()> {
+        let mut provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let mut tx_repo = MockTransactionRepository::new();
+        let job_producer = MockJobProducerTrait::new();
+
+        // Create transaction with too many signatures (attempts exceeded)
+        use MAXIMUM_SOLANA_TX_ATTEMPTS;
+        let signature_str =
+            "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
+        let mut tx = create_tx_with_signature(TransactionStatus::Submitted, Some(signature_str));
+        tx.hashes = vec!["sig".to_string(); MAXIMUM_SOLANA_TX_ATTEMPTS + 1];
+        tx.sent_at = Some(Utc::now().to_rfc3339()); // Ensure sent_at is set
+
+        let tx_id = tx.id.clone();
+
+        // Mock provider call - return error to skip status update, go straight to resubmit check
+        provider
+            .expect_get_transaction_status()
+            .with(eq(Signature::from_str(signature_str)?))
+            .times(1)
+            .returning(|_| {
+                Box::pin(async {
+                    Err(crate::services::SolanaProviderError::RpcError(
+                        "test error".to_string(),
+                    ))
+                })
+            });
+
+        // Should mark as failed due to too many attempts (happens after status check)
+        tx_repo
+            .expect_partial_update()
+            .withf(move |tx_id_param, update_req| {
+                tx_id_param == &tx_id && update_req.status == Some(TransactionStatus::Failed)
+            })
+            .times(1)
+            .returning(move |_, _| {
+                let mut failed_tx = create_tx_with_signature(TransactionStatus::Failed, None);
+                failed_tx.status = TransactionStatus::Failed;
+                Ok(failed_tx)
+            });
+
+        let handler = SolanaRelayerTransaction::new(
+            create_mock_solana_relayer("test-relayer".to_string(), false),
+            relayer_repo,
+            Arc::new(provider),
+            Arc::new(tx_repo),
+            Arc::new(job_producer),
+            Arc::new(MockSolanaSignTrait::new()),
+        )?;
+
+        let result = handler.handle_transaction_status_impl(tx).await;
+
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
         assert_eq!(updated_tx.status, TransactionStatus::Failed);
         Ok(())
     }

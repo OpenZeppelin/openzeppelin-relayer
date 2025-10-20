@@ -159,7 +159,7 @@ pub mod mockutils {
             relayer_id: "test".to_string(),
             status: TransactionStatus::Pending,
             status_reason: None,
-            created_at: Utc::now().to_string(),
+            created_at: Utc::now().to_rfc3339(),
             sent_at: None,
             confirmed_at: None,
             valid_until: None,

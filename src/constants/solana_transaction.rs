@@ -5,6 +5,13 @@
 
 use chrono::Duration;
 
+/// Default transaction valid timespan for Solana when no explicit valid_until is provided (in milliseconds)
+/// Set to 30 minutes to balance between:
+/// - Preventing infinite resubmission loops
+/// - Allowing reasonable time for transaction processing during network congestion
+/// - Aligning with Solana's fast finality expectations
+pub const SOLANA_DEFAULT_TX_VALID_TIMESPAN: i64 = 30 * 60 * 1000; // 30 minutes in milliseconds
+
 // API request validation limits
 /// Maximum number of instructions allowed in a transaction request
 pub const REQUEST_MAX_INSTRUCTIONS: usize = 64;
@@ -35,9 +42,10 @@ pub const SOLANA_PENDING_TIMEOUT_MINUTES: i64 = 3;
 /// If a transaction stays in Sent for longer than this, mark as Failed
 pub const SOLANA_SENT_TIMEOUT_MINUTES: i64 = 3;
 
-/// Timeout for Submitted status: waiting for on-chain confirmation (in minutes)
-/// If a transaction stays in Submitted for longer than this and blockhash expired, mark as Failed
-pub const SOLANA_SUBMITTED_TIMEOUT_MINUTES: i64 = 3;
+/// Maximum number of transaction resubmission attempts before marking as Failed
+/// Each attempt creates a new signature (when blockhash expires and tx is resubmitted)
+/// Similar to EVM's MAXIMUM_TX_ATTEMPTS but tailored for Solana's resubmission behavior
+pub const MAXIMUM_SOLANA_TX_ATTEMPTS: usize = 20;
 
 /// Get status check initial delay duration
 pub fn get_solana_status_check_initial_delay() -> Duration {

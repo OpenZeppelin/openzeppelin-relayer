@@ -345,10 +345,15 @@ where
         debug!(tx_id = %tx.id, "transaction submitted successfully to blockchain");
 
         // Transaction is now on-chain - update status and timestamp
-        // Signature is already stored from signing phase, no need to update it
+        // Append signature to hashes array to track attempts
+        let signature_str = transaction.signatures[0].to_string();
+        let mut updated_hashes = tx.hashes.clone();
+        updated_hashes.push(signature_str.clone());
+
         let update = TransactionUpdateRequest {
             status: Some(TransactionStatus::Submitted),
             sent_at: Some(Utc::now().to_rfc3339()),
+            hashes: Some(updated_hashes),
             ..Default::default()
         };
 
@@ -443,6 +448,10 @@ where
         let tx_base64 = base64_encode(&serialized_tx);
         let signature_str = signature.to_string();
 
+        // Append new signature to hashes array to track resubmission attempts
+        let mut updated_hashes = tx.hashes.clone();
+        updated_hashes.push(signature_str.clone());
+
         // Update transaction data
         let solana_data = tx.network_data.get_solana_transaction_data()?;
         let updated_solana_data = SolanaTransactionData {
@@ -456,6 +465,7 @@ where
             status: Some(TransactionStatus::Submitted),
             network_data: Some(NetworkTransactionData::Solana(updated_solana_data)),
             sent_at: Some(Utc::now().to_rfc3339()),
+            hashes: Some(updated_hashes),
             ..Default::default()
         };
 
