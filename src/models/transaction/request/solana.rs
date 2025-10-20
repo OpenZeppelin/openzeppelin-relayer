@@ -7,7 +7,7 @@ use crate::{
     utils::base64_decode,
 };
 use serde::{Deserialize, Serialize};
-use solana_sdk::pubkey::Pubkey;
+use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
 use std::{collections::HashSet, str::FromStr};
 use utoipa::ToSchema;
 
@@ -27,7 +27,7 @@ pub struct SolanaTransactionRequest {
 }
 
 impl SolanaTransactionRequest {
-    pub fn validate(&self, _relayer: &RelayerRepoModel) -> Result<(), ApiError> {
+    pub fn validate(&self, relayer: &RelayerRepoModel) -> Result<(), ApiError> {
         let has_transaction = self.transaction.is_some();
         let has_instructions = self
             .instructions
@@ -49,9 +49,14 @@ impl SolanaTransactionRequest {
             _ => {}
         }
 
+        // Validate pre-built transaction if provided
+        if let Some(ref transaction) = self.transaction {
+            Self::validate_transaction(transaction, relayer)?;
+        }
+
         // Validate instructions if provided
         if let Some(ref instructions) = self.instructions {
-            Self::validate_instructions(instructions)?;
+            Self::validate_instructions(instructions, relayer)?;
         }
 
         // Validate valid_until if provided
@@ -75,6 +80,39 @@ impl SolanaTransactionRequest {
         Ok(())
     }
 
+    /// Validates a pre-built Solana transaction
+    ///
+    /// Ensures the transaction meets requirements:
+    /// - Transaction can be decoded from base64
+    /// - Fee payer (source) matches the relayer address
+    fn validate_transaction(
+        transaction: &EncodedSerializedTransaction,
+        relayer: &RelayerRepoModel,
+    ) -> Result<(), ApiError> {
+        // Parse the transaction from encoded bytes
+        let tx = Transaction::try_from(transaction.clone())
+            .map_err(|e| ApiError::BadRequest(format!("Failed to decode transaction: {}", e)))?;
+
+        // Get the fee payer (first account in account_keys)
+        let fee_payer = tx.message.account_keys.first().ok_or_else(|| {
+            ApiError::BadRequest("Transaction has no fee payer account".to_string())
+        })?;
+
+        // Parse relayer address
+        let relayer_pubkey = Pubkey::from_str(&relayer.address)
+            .map_err(|e| ApiError::BadRequest(format!("Invalid relayer address: {}", e)))?;
+
+        // Validate fee payer matches relayer address
+        if fee_payer != &relayer_pubkey {
+            return Err(ApiError::BadRequest(format!(
+                "Transaction fee payer {} does not match relayer address {}",
+                fee_payer, relayer_pubkey
+            )));
+        }
+
+        Ok(())
+    }
+
     /// Validates Solana instruction specifications
     ///
     /// Ensures all instruction fields are valid:
@@ -84,7 +122,14 @@ impl SolanaTransactionRequest {
     /// - Accounts per instruction within Solana's limit (max 64)
     /// - Total unique accounts don't exceed Solana's limit (max 64)
     /// - Instruction data is valid base64 and within size limits (max 1000 bytes)
-    fn validate_instructions(instructions: &[SolanaInstructionSpec]) -> Result<(), ApiError> {
+    /// - Only the relayer can be marked as a signer (relayer auto-signs as fee payer)
+    fn validate_instructions(
+        instructions: &[SolanaInstructionSpec],
+        relayer: &RelayerRepoModel,
+    ) -> Result<(), ApiError> {
+        // Parse relayer address once for validation
+        let relayer_pubkey = Pubkey::from_str(&relayer.address)
+            .map_err(|e| ApiError::BadRequest(format!("Invalid relayer address: {}", e)))?;
         if instructions.is_empty() {
             return Err(ApiError::BadRequest(
                 "Instructions cannot be empty".to_string(),
@@ -155,6 +200,16 @@ impl SolanaTransactionRequest {
                         idx, acc_idx, trimmed_pubkey, e
                     ))
                 })?;
+
+                // Validate that only the relayer can be marked as a signer
+                if account.is_signer && pubkey != relayer_pubkey {
+                    return Err(ApiError::BadRequest(format!(
+                        "Instruction {} account {}: Only the relayer address {} can be marked as \
+                         a signer, but '{}' is marked as a signer. The relayer can only provide \
+                         its own signature.",
+                        idx, acc_idx, relayer_pubkey, pubkey
+                    )));
+                }
 
                 unique_accounts.insert(pubkey);
             }
