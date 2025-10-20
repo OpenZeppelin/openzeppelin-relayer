@@ -23,10 +23,8 @@
 //! * `valid_until_block_height` - The block height until which the transaction remains valid.use
 //!   std::str::FromStr;
 use futures::try_join;
-use solana_sdk::{
-    commitment_config::CommitmentConfig, hash::Hash, pubkey::Pubkey, signature::Signature,
-    transaction::Transaction,
-};
+use solana_commitment_config::CommitmentConfig;
+use solana_sdk::{hash::Hash, pubkey::Pubkey, signature::Signature, transaction::Transaction};
 use std::str::FromStr;
 use tracing::info;
 
@@ -245,8 +243,8 @@ mod tests {
         hash::Hash, message::Message, program_pack::Pack, signature::Keypair, signer::Signer,
     };
     use solana_system_interface::instruction;
-    use spl_associated_token_account::get_associated_token_address;
-    use spl_token::state::Account;
+    use spl_associated_token_account_interface::address::get_associated_token_address;
+    use spl_token_interface::state::Account;
 
     #[tokio::test]
     async fn test_prepare_transaction_success_relayer_fee_strategy() {
@@ -305,6 +303,12 @@ mod tests {
                     inner_instructions: None,
                     replacement_blockhash: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -350,59 +354,62 @@ mod tests {
 
                     if pubkey == ctx.relayer_token_account {
                         // Create relayer's token account
-                        let token_account = spl_token::state::Account {
+                        let token_account = spl_token_interface::state::Account {
                             mint: ctx.token_mint,
                             owner: relayer_pubkey,
                             amount: 10000000,
-                            state: spl_token::state::AccountState::Initialized,
+                            state: spl_token_interface::state::AccountState::Initialized,
                             ..Default::default()
                         };
-                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                        spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                            .unwrap();
 
                         Ok(solana_sdk::account::Account {
                             lamports: 1_000_000,
                             data: account_data,
-                            owner: spl_token::id(),
+                            owner: spl_token_interface::id(),
                             executable: false,
                             rent_epoch: 0,
                         })
                     } else if pubkey == ctx.user_token_account {
                         // Create user's token account with sufficient balance
-                        let token_account = spl_token::state::Account {
+                        let token_account = spl_token_interface::state::Account {
                             mint: ctx.token_mint,
                             owner: user_pubkey,
                             amount: ctx.main_transfer_amount,
-                            state: spl_token::state::AccountState::Initialized,
+                            state: spl_token_interface::state::AccountState::Initialized,
                             ..Default::default()
                         };
-                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                        spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                            .unwrap();
                         Ok(solana_sdk::account::Account {
                             lamports: 1_000_000,
                             data: account_data,
-                            owner: spl_token::id(),
+                            owner: spl_token_interface::id(),
                             executable: false,
                             rent_epoch: 0,
                         })
                     } else if pubkey == ctx.payer_token_account {
                         // Create payers's token account with sufficient balance
-                        let token_account = spl_token::state::Account {
+                        let token_account = spl_token_interface::state::Account {
                             mint: ctx.token_mint,
                             owner: payer_pubkey,
                             amount: ctx.main_transfer_amount + ctx.fee_amount,
-                            state: spl_token::state::AccountState::Initialized,
+                            state: spl_token_interface::state::AccountState::Initialized,
                             ..Default::default()
                         };
-                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                        spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                            .unwrap();
                         Ok(solana_sdk::account::Account {
                             lamports: 1_000_000,
                             data: account_data,
-                            owner: spl_token::id(),
+                            owner: spl_token_interface::id(),
                             executable: false,
                             rent_epoch: 0,
                         })
                     } else if pubkey == ctx.token_mint {
-                        let mut mint_data = vec![0; spl_token::state::Mint::LEN];
-                        let mint = spl_token::state::Mint {
+                        let mut mint_data = vec![0; spl_token_interface::state::Mint::LEN];
+                        let mint = spl_token_interface::state::Mint {
                             is_initialized: true,
                             mint_authority: solana_sdk::program_option::COption::Some(
                                 Pubkey::new_unique(),
@@ -411,12 +418,12 @@ mod tests {
                             decimals: 6,
                             ..Default::default()
                         };
-                        spl_token::state::Mint::pack(mint, &mut mint_data).unwrap();
+                        spl_token_interface::state::Mint::pack(mint, &mut mint_data).unwrap();
 
                         Ok(solana_sdk::account::Account {
                             lamports: 1_000_000,
                             data: mint_data,
-                            owner: spl_token::id(),
+                            owner: spl_token_interface::id(),
                             executable: false,
                             rent_epoch: 0,
                         })
@@ -484,6 +491,12 @@ mod tests {
                     inner_instructions: None,
                     replacement_blockhash: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -569,6 +582,12 @@ mod tests {
                     inner_instructions: None,
                     replacement_blockhash: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -646,6 +665,12 @@ mod tests {
                     inner_instructions: None,
                     replacement_blockhash: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -727,6 +752,12 @@ mod tests {
                     inner_instructions: None,
                     replacement_blockhash: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -800,8 +831,8 @@ mod tests {
         let recipient = Pubkey::new_unique();
         let not_allowed_token = Pubkey::new_unique();
 
-        let ix = spl_token::instruction::transfer(
-            &spl_token::id(),
+        let ix = spl_token_interface::instruction::transfer(
+            &spl_token_interface::id(),
             &get_associated_token_address(&payer.pubkey(), &not_allowed_token),
             &get_associated_token_address(&recipient, &not_allowed_token),
             &payer.pubkey(),
@@ -826,6 +857,12 @@ mod tests {
                     inner_instructions: None,
                     replacement_blockhash: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });

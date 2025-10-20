@@ -20,9 +20,9 @@ use solana_client::{
     nonblocking::rpc_client::RpcClient,
     rpc_response::{RpcPrioritizationFee, RpcSimulateTransactionResult},
 };
+use solana_commitment_config::CommitmentConfig;
 use solana_sdk::{
     account::Account,
-    commitment_config::CommitmentConfig,
     hash::Hash,
     message::Message,
     program_pack::Pack,
@@ -30,7 +30,7 @@ use solana_sdk::{
     signature::Signature,
     transaction::{Transaction, VersionedTransaction},
 };
-use spl_token::state::Mint;
+use spl_token_interface::state::Mint;
 use std::{str::FromStr, sync::Arc, time::Duration};
 use thiserror::Error;
 
@@ -763,7 +763,15 @@ impl SolanaProviderTrait for SolanaProvider {
         let decimals = mint_info.decimals;
 
         // Derive the PDA for the token metadata
-        let metadata_pda = Metadata::find_pda(&mint_pubkey).0;
+        // Convert solana_sdk::Pubkey to solana_program::Pubkey for mpl-token-metadata
+        let mint_pubkey_program =
+            solana_program::pubkey::Pubkey::from_str(&mint_pubkey.to_string()).map_err(|e| {
+                SolanaProviderError::InvalidAddress(format!("Invalid mint pubkey: {}", e))
+            })?;
+        let metadata_pda_program = Metadata::find_pda(&mint_pubkey_program).0;
+        let metadata_pda = Pubkey::from_str(&metadata_pda_program.to_string()).map_err(|e| {
+            SolanaProviderError::InvalidAddress(format!("Invalid metadata PDA: {}", e))
+        })?;
 
         let symbol = match self.get_account_from_pubkey(&metadata_pda).await {
             Ok(metadata_account) => match Metadata::from_bytes(&metadata_account.data) {

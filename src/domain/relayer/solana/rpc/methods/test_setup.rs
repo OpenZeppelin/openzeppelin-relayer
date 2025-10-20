@@ -4,7 +4,7 @@ use solana_sdk::{
     transaction::Transaction,
 };
 use solana_system_interface::instruction;
-use spl_associated_token_account::get_associated_token_address;
+use spl_associated_token_account_interface::address::get_associated_token_address;
 use std::str::FromStr;
 
 use crate::{
@@ -121,8 +121,8 @@ pub fn setup_test_context_relayer_fee_strategy() -> RelayerFeeStrategyTestContex
 
     let main_transfer_amount = 5_000_000u64; // Main transfer amount (5 USDC)
 
-    let main_transfer_ix = spl_token::instruction::transfer_checked(
-        &spl_token::id(),           // Token program ID
+    let main_transfer_ix = spl_token_interface::instruction::transfer_checked(
+        &spl_token_interface::id(), // Token program ID
         &source_token_account,      // Source token account
         &token_mint,                // Token mint
         &destination_token_account, // Destination token account
@@ -237,8 +237,8 @@ pub fn setup_test_context_user_fee_strategy() -> UserFeeStrategyTestContext {
     let main_transfer_amount = 5_000_000u64; // Main transfer amount (5 USDC)
     let fee_amount = 1_000_000u64; // Fee amount (1 USDC)
 
-    let main_transfer_ix = spl_token::instruction::transfer_checked(
-        &spl_token::id(),           // Token program ID
+    let main_transfer_ix = spl_token_interface::instruction::transfer_checked(
+        &spl_token_interface::id(), // Token program ID
         &source_token_account,      // Source token account
         &token_mint,                // Token mint
         &destination_token_account, // Destination token account
@@ -250,15 +250,15 @@ pub fn setup_test_context_user_fee_strategy() -> UserFeeStrategyTestContext {
     .unwrap();
 
     // Create fee transfer instruction using standard SPL Token method
-    let fee_transfer_ix = spl_token::instruction::transfer_checked(
-        &spl_token::id(),       // Token program ID
-        &source_token_account,  // Source token account
-        &token_mint,            // Token mint
-        &relayer_token_account, // Relayer's token account
-        &token_owner.pubkey(),  // Owner of the source token account
-        &[],                    // Additional signers (empty array)
-        fee_amount,             // Fee amount
-        6,                      // Decimals (6 for USDC)
+    let fee_transfer_ix = spl_token_interface::instruction::transfer_checked(
+        &spl_token_interface::id(), // Token program ID
+        &source_token_account,      // Source token account
+        &token_mint,                // Token mint
+        &relayer_token_account,     // Relayer's token account
+        &token_owner.pubkey(),      // Owner of the source token account
+        &[],                        // Additional signers (empty array)
+        fee_amount,                 // Fee amount
+        6,                          // Decimals (6 for USDC)
     )
     .unwrap();
 
@@ -377,8 +377,8 @@ pub fn setup_test_context_single_tx_user_fee_strategy() -> UserFeeStrategySingle
     let main_transfer_amount = 5_000_000u64; // Main transfer amount (5 USDC)
     let fee_amount = 1_000_000u64; // Fee amount (1 USDC)
 
-    let transfer_ix = spl_token::instruction::transfer_checked(
-        &spl_token::id(),           // Token program ID
+    let transfer_ix = spl_token_interface::instruction::transfer_checked(
+        &spl_token_interface::id(), // Token program ID
         &source_token_account,      // Source token account
         &token_mint,                // Token mint
         &destination_token_account, // Destination token account

@@ -149,6 +149,8 @@ mod tests {
         TransactionStatus,
     };
     use chrono::Utc;
+    use solana_sdk::message::Message;
+    use solana_system_interface::instruction as system_instruction;
 
     #[test]
     fn test_decode_solana_transaction_invalid_data() {
@@ -268,9 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn test_is_resub_single_signer() {
-        use solana_sdk::system_instruction;
-
+    fn test_is_resubmitable_single_signer() {
         let payer = Pubkey::new_unique();
         let recipient = Pubkey::new_unique();
         let instruction = system_instruction::transfer(&payer, &recipient, 1000);
@@ -285,12 +285,10 @@ mod tests {
 
     #[test]
     fn test_is_resubmitable_multi_signer() {
-        use solana_sdk::message::Message;
-
         let payer = Pubkey::new_unique();
         let recipient = Pubkey::new_unique();
         let additional_signer = Pubkey::new_unique();
-        let instruction = solana_sdk::system_instruction::transfer(&payer, &recipient, 1000);
+        let instruction = system_instruction::transfer(&payer, &recipient, 1000);
 
         // Create transaction with multiple signers
         let mut message = Message::new(&[instruction], Some(&payer));
@@ -307,11 +305,9 @@ mod tests {
 
     #[test]
     fn test_is_resubmitable_no_signers() {
-        use solana_sdk::message::Message;
-
         let payer = Pubkey::new_unique();
         let recipient = Pubkey::new_unique();
-        let instruction = solana_sdk::system_instruction::transfer(&payer, &recipient, 1000);
+        let instruction = system_instruction::transfer(&payer, &recipient, 1000);
 
         // Create transaction with no required signatures (edge case)
         let mut message = Message::new(&[instruction], Some(&payer));

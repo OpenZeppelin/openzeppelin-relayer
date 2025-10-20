@@ -16,11 +16,9 @@ use crate::{
     services::SolanaProviderTrait,
 };
 use solana_client::rpc_response::RpcSimulateTransactionResult;
-use solana_sdk::{
-    commitment_config::CommitmentConfig, pubkey::Pubkey, system_instruction::SystemInstruction,
-    transaction::Transaction,
-};
-use solana_system_interface::program;
+use solana_commitment_config::CommitmentConfig;
+use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
+use solana_system_interface::{instruction::SystemInstruction, program};
 use thiserror::Error;
 use tracing::info;
 
@@ -699,7 +697,7 @@ mod tests {
         signature::{Keypair, Signer},
     };
     use solana_system_interface::{instruction, program};
-    use spl_token::{instruction as token_instruction, state::Account};
+    use spl_token_interface::{instruction as token_instruction, state::Account};
 
     fn setup_token_transfer_test(
         transfer_amount: Option<u64>,
@@ -719,7 +717,7 @@ mod tests {
 
         // Create token transfer instruction
         let transfer_ix = token_instruction::transfer(
-            &spl_token::id(),
+            &spl_token_interface::id(),
             &source,
             &destination,
             &owner.pubkey(),
@@ -762,7 +760,7 @@ mod tests {
             mint,
             owner: owner.pubkey(),
             amount: 999,
-            state: spl_token::state::AccountState::Initialized,
+            state: spl_token_interface::state::AccountState::Initialized,
             ..Default::default()
         };
         let mut account_data = vec![0; Account::LEN];
@@ -776,7 +774,7 @@ mod tests {
                     Ok(solana_sdk::account::Account {
                         lamports: 1000000,
                         data: local_account_data,
-                        owner: spl_token::id(),
+                        owner: spl_token_interface::id(),
                         executable: false,
                         rent_epoch: 0,
                     })
@@ -1269,6 +1267,12 @@ mod tests {
                     inner_instructions: None,
                     replacement_blockhash: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 };
                 Box::pin(async { Ok(simulation_result) })
             });

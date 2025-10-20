@@ -8,10 +8,8 @@ use crate::constants::{
     SOLANA_SENT_TIMEOUT_MINUTES, SOLANA_SUBMITTED_TIMEOUT_MINUTES,
 };
 use chrono::{DateTime, Duration, Utc};
-use solana_sdk::{
-    commitment_config::CommitmentConfig, signature::Signature,
-    transaction::Transaction as SolanaTransaction,
-};
+use solana_commitment_config::CommitmentConfig;
+use solana_sdk::{signature::Signature, transaction::Transaction as SolanaTransaction};
 use std::str::FromStr;
 use tracing::{debug, error, info, warn};
 

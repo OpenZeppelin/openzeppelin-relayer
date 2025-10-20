@@ -396,7 +396,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_transaction_success() {
-        use solana_sdk::{hash::Hash, message::Message, system_instruction};
+        use solana_sdk::{hash::Hash, message::Message};
+        use solana_system_interface::instruction as system_instruction;
 
         let mut mock_service = MockCdpServiceTrait::new();
 

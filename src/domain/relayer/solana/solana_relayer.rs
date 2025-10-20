@@ -1036,9 +1036,9 @@ mod tests {
         jobs::MockJobProducerTrait,
         models::{
             EncodedSerializedTransaction, FeeEstimateRequestParams,
-            GetFeaturesEnabledRequestParams, HealthCheckFailure, JsonRpcId, NetworkConfigData,
-            NetworkRepoModel, RelayerSolanaSwapConfig, SolanaAllowedTokensSwapConfig,
-            SolanaRpcResult, SolanaSwapStrategy,
+            GetFeaturesEnabledRequestParams, JsonRpcId, NetworkConfigData, NetworkRepoModel,
+            RelayerSolanaSwapConfig, SolanaAllowedTokensSwapConfig, SolanaRpcResult,
+            SolanaSwapStrategy,
         },
         repositories::{MockNetworkRepository, MockRelayerRepository, MockTransactionRepository},
         services::{
@@ -1050,7 +1050,7 @@ mod tests {
     };
     use mockall::predicate::*;
     use solana_sdk::{hash::Hash, program_pack::Pack, signature::Signature};
-    use spl_token::state::Account as SplAccount;
+    use spl_token_interface::state::Account as SplAccount;
 
     /// Bundles all the pieces you need to instantiate a SolanaRelayer.
     /// Default::default gives you fresh mocks, but you can override any of them.
@@ -1359,19 +1359,20 @@ mod tests {
                 Box::pin(async {
                     let mut account_data = vec![0; SplAccount::LEN];
 
-                    let token_account = spl_token::state::Account {
+                    let token_account = spl_token_interface::state::Account {
                         mint: Pubkey::new_unique(),
                         owner: Pubkey::new_unique(),
                         amount: 10000000,
-                        state: spl_token::state::AccountState::Initialized,
+                        state: spl_token_interface::state::AccountState::Initialized,
                         ..Default::default()
                     };
-                    spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                    spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                        .unwrap();
 
                     Ok(solana_sdk::account::Account {
                         lamports: 1_000_000,
                         data: account_data,
-                        owner: spl_token::id(),
+                        owner: spl_token_interface::id(),
                         executable: false,
                         rent_epoch: 0,
                     })
@@ -1521,19 +1522,20 @@ mod tests {
                 Box::pin(async {
                     let mut account_data = vec![0; SplAccount::LEN];
 
-                    let token_account = spl_token::state::Account {
+                    let token_account = spl_token_interface::state::Account {
                         mint: Pubkey::new_unique(),
                         owner: Pubkey::new_unique(),
                         amount: 10000000,
-                        state: spl_token::state::AccountState::Initialized,
+                        state: spl_token_interface::state::AccountState::Initialized,
                         ..Default::default()
                     };
-                    spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                    spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                        .unwrap();
 
                     Ok(solana_sdk::account::Account {
                         lamports: 1_000_000,
                         data: account_data,
-                        owner: spl_token::id(),
+                        owner: spl_token_interface::id(),
                         executable: false,
                         rent_epoch: 0,
                     })

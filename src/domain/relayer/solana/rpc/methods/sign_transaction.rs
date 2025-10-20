@@ -170,7 +170,7 @@ mod tests {
         signer::Signer,
     };
     use solana_system_interface::instruction;
-    use spl_token::state::Account;
+    use spl_token_interface::state::Account;
 
     #[tokio::test]
     async fn test_sign_transaction_success_relayer_fee_strategy() {
@@ -207,6 +207,12 @@ mod tests {
                     replacement_blockhash: None,
                     inner_instructions: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -252,36 +258,38 @@ mod tests {
 
                     if pubkey == ctx.relayer_token_account {
                         // Create relayer's token account
-                        let token_account = spl_token::state::Account {
+                        let token_account = spl_token_interface::state::Account {
                             mint: ctx.token_mint,
                             owner: relayer_pubkey,
                             amount: 0, // Current balance doesn't matter
-                            state: spl_token::state::AccountState::Initialized,
+                            state: spl_token_interface::state::AccountState::Initialized,
                             ..Default::default()
                         };
-                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                        spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                            .unwrap();
 
                         Ok(solana_sdk::account::Account {
                             lamports: 1_000_000,
                             data: account_data,
-                            owner: spl_token::id(),
+                            owner: spl_token_interface::id(),
                             executable: false,
                             rent_epoch: 0,
                         })
                     } else if pubkey == ctx.user_token_account {
                         // Create user's token account with sufficient balance
-                        let token_account = spl_token::state::Account {
+                        let token_account = spl_token_interface::state::Account {
                             mint: ctx.token_mint,
                             owner: user_pubkey,
                             amount: ctx.main_transfer_amount + ctx.fee_amount, // Enough for both transfers
-                            state: spl_token::state::AccountState::Initialized,
+                            state: spl_token_interface::state::AccountState::Initialized,
                             ..Default::default()
                         };
-                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                        spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                            .unwrap();
                         Ok(solana_sdk::account::Account {
                             lamports: 1_000_000,
                             data: account_data,
-                            owner: spl_token::id(),
+                            owner: spl_token_interface::id(),
                             executable: false,
                             rent_epoch: 0,
                         })
@@ -358,6 +366,12 @@ mod tests {
                     replacement_blockhash: None,
                     inner_instructions: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -427,6 +441,12 @@ mod tests {
                     replacement_blockhash: None,
                     inner_instructions: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -477,36 +497,38 @@ mod tests {
 
                     if pubkey == ctx.relayer_token_account {
                         // Create relayer's token account
-                        let token_account = spl_token::state::Account {
+                        let token_account = spl_token_interface::state::Account {
                             mint: ctx.token_mint,
                             owner: relayer_pubkey,
                             amount: 0, // Current balance doesn't matter
-                            state: spl_token::state::AccountState::Initialized,
+                            state: spl_token_interface::state::AccountState::Initialized,
                             ..Default::default()
                         };
-                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                        spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                            .unwrap();
 
                         Ok(solana_sdk::account::Account {
                             lamports: 1_000_000,
                             data: account_data,
-                            owner: spl_token::id(),
+                            owner: spl_token_interface::id(),
                             executable: false,
                             rent_epoch: 0,
                         })
                     } else if pubkey == ctx.user_token_account {
                         // Create user's token account with sufficient balance
-                        let token_account = spl_token::state::Account {
+                        let token_account = spl_token_interface::state::Account {
                             mint: ctx.token_mint,
                             owner: user_pubkey,
                             amount: ctx.main_transfer_amount + ctx.fee_amount, // Enough for both transfers
-                            state: spl_token::state::AccountState::Initialized,
+                            state: spl_token_interface::state::AccountState::Initialized,
                             ..Default::default()
                         };
-                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                        spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                            .unwrap();
                         Ok(solana_sdk::account::Account {
                             lamports: 1_000_000,
                             data: account_data,
-                            owner: spl_token::id(),
+                            owner: spl_token_interface::id(),
                             executable: false,
                             rent_epoch: 0,
                         })
@@ -583,6 +605,12 @@ mod tests {
                     replacement_blockhash: None,
                     inner_instructions: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -678,6 +706,12 @@ mod tests {
                     replacement_blockhash: None,
                     inner_instructions: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -735,6 +769,12 @@ mod tests {
                     replacement_blockhash: None,
                     inner_instructions: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -797,6 +837,12 @@ mod tests {
                     replacement_blockhash: None,
                     inner_instructions: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -927,6 +973,12 @@ mod tests {
                     replacement_blockhash: None,
                     inner_instructions: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -986,6 +1038,12 @@ mod tests {
                     replacement_blockhash: None,
                     inner_instructions: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -1063,6 +1121,12 @@ mod tests {
                     replacement_blockhash: None,
                     inner_instructions: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });

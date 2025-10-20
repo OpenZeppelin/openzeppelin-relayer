@@ -27,19 +27,24 @@ use super::*;
 use std::str::FromStr;
 
 use crate::utils::calculate_scheduled_timestamp;
+
+/// Convert raw token amount to UI amount based on decimals
+fn amount_to_ui_amount(amount: u64, decimals: u8) -> f64 {
+    amount as f64 / 10_f64.powi(decimals as i32)
+}
+
+use solana_commitment_config::CommitmentConfig;
 use solana_sdk::{
-    commitment_config::CommitmentConfig,
     hash::Hash,
-    instruction::{AccountMeta, CompiledInstruction, Instruction},
-    message::{Message, MessageHeader},
+    instruction::{AccountMeta, Instruction},
+    message::{compiled_instruction::CompiledInstruction, Message, MessageHeader},
     program_pack::Pack,
     pubkey::Pubkey,
     signature::Signature,
-    system_instruction::SystemInstruction,
     transaction::Transaction,
 };
-use solana_system_interface::program;
-use spl_token::{amount_to_ui_amount, state::Account};
+use solana_system_interface::{instruction::SystemInstruction, program};
+use spl_token_interface::state::Account;
 use tracing::debug;
 
 use crate::{
@@ -103,7 +108,7 @@ where
                 SolanaRpcError::Internal(format!("Failed to fetch mint account: {}", e))
             })?;
 
-        let mint_info = spl_token::state::Mint::unpack(&mint_account.data)
+        let mint_info = spl_token_interface::state::Mint::unpack(&mint_account.data)
             .map_err(|e| SolanaRpcError::Internal(format!("Failed to unpack mint data: {}", e)))?;
 
         Ok(mint_info.decimals)
@@ -226,7 +231,7 @@ where
             .iter()
             .filter(|ix| {
                 transaction.message.account_keys[ix.program_id_index as usize]
-                    == spl_associated_token_account::id()
+                    == spl_associated_token_account_interface::program::id()
             })
             .count();
 
@@ -983,8 +988,8 @@ mod tests {
         signer::Signer,
     };
     use solana_system_interface::instruction;
-    use spl_associated_token_account::{
-        get_associated_token_address, instruction::create_associated_token_account,
+    use spl_associated_token_account_interface::{
+        address::get_associated_token_address, instruction::create_associated_token_account,
     };
 
     #[tokio::test]
@@ -1200,8 +1205,12 @@ mod tests {
         let owner = Pubkey::new_unique();
         let mint = Pubkey::new_unique();
 
-        let ata_ix =
-            create_associated_token_account(&payer.pubkey(), &owner, &mint, &spl_token::id());
+        let ata_ix = create_associated_token_account(
+            &payer.pubkey(),
+            &owner,
+            &mint,
+            &spl_token_interface::id(),
+        );
 
         let message = Message::new(&[ata_ix], Some(&payer.pubkey()));
         let transaction = Transaction::new_unsigned(message);
@@ -1245,10 +1254,18 @@ mod tests {
         let owner2 = Pubkey::new_unique();
         let mint = Pubkey::new_unique();
 
-        let ata_ix1 =
-            create_associated_token_account(&payer.pubkey(), &owner1, &mint, &spl_token::id());
-        let ata_ix2 =
-            create_associated_token_account(&payer.pubkey(), &owner2, &mint, &spl_token::id());
+        let ata_ix1 = create_associated_token_account(
+            &payer.pubkey(),
+            &owner1,
+            &mint,
+            &spl_token_interface::id(),
+        );
+        let ata_ix2 = create_associated_token_account(
+            &payer.pubkey(),
+            &owner2,
+            &mint,
+            &spl_token_interface::id(),
+        );
 
         let message = Message::new(&[ata_ix1, ata_ix2], Some(&payer.pubkey()));
         let transaction = Transaction::new_unsigned(message);
@@ -1991,8 +2008,8 @@ mod tests {
         let destination = get_associated_token_address(&Pubkey::new_unique(), &mint);
         let amount = 1_000_000;
 
-        let transfer_ix = spl_token::instruction::transfer_checked(
-            &spl_token::id(),
+        let transfer_ix = spl_token_interface::instruction::transfer_checked(
+            &spl_token_interface::id(),
             &source,
             &mint,
             &destination,
@@ -2016,13 +2033,13 @@ mod tests {
             &message.header,
         );
 
-        assert_eq!(converted_ix.program_id, spl_token::id());
+        assert_eq!(converted_ix.program_id, spl_token_interface::id());
 
         let decoded_ix =
-            spl_token::instruction::TokenInstruction::unpack(&converted_ix.data).unwrap();
+            spl_token_interface::instruction::TokenInstruction::unpack(&converted_ix.data).unwrap();
 
         match decoded_ix {
-            spl_token::instruction::TokenInstruction::TransferChecked {
+            spl_token_interface::instruction::TokenInstruction::TransferChecked {
                 amount: decoded_amount,
                 decimals,
                 ..
@@ -2094,12 +2111,12 @@ mod tests {
                 let pubkey = *pubkey;
                 Box::pin(async move {
                     // Create a token account with sufficient balance
-                    let mut account_data = vec![0; spl_token::state::Account::LEN];
+                    let mut account_data = vec![0; spl_token_interface::state::Account::LEN];
                     let mut token_account = Account {
                         mint: token_mint,
                         owner: user_pubkey,
                         amount: 10_000_000,
-                        state: spl_token::state::AccountState::Initialized,
+                        state: spl_token_interface::state::AccountState::Initialized,
                         ..Default::default()
                     };
                     if pubkey == user_token_account {
@@ -2108,12 +2125,13 @@ mod tests {
                         token_account.owner = relayer_pubkey;
                     }
 
-                    spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                    spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                        .unwrap();
 
                     Ok(solana_sdk::account::Account {
                         lamports: 1_000_000,
                         data: account_data,
-                        owner: spl_token::id(),
+                        owner: spl_token_interface::id(),
                         executable: false,
                         rent_epoch: 0,
                     })
@@ -2182,11 +2200,13 @@ mod tests {
             let program_idx = ix.program_id_index as usize;
 
             if program_idx < modified_tx.message.account_keys.len()
-                && modified_tx.message.account_keys[program_idx] == spl_token::id()
+                && modified_tx.message.account_keys[program_idx] == spl_token_interface::id()
             {
-                if let Ok(token_ix) = spl_token::instruction::TokenInstruction::unpack(&ix.data) {
+                if let Ok(token_ix) =
+                    spl_token_interface::instruction::TokenInstruction::unpack(&ix.data)
+                {
                     match token_ix {
-                        spl_token::instruction::TokenInstruction::TransferChecked {
+                        spl_token_interface::instruction::TokenInstruction::TransferChecked {
                             amount,
                             ..
                         } => {
@@ -2315,12 +2335,12 @@ mod tests {
                 let pubkey = *pubkey;
                 Box::pin(async move {
                     // Create a token account with sufficient balance
-                    let mut account_data = vec![0; spl_token::state::Account::LEN];
+                    let mut account_data = vec![0; spl_token_interface::state::Account::LEN];
                     let mut token_account = Account {
                         mint: token_mint,
                         owner: user_pubkey,
                         amount: 1_000,
-                        state: spl_token::state::AccountState::Initialized,
+                        state: spl_token_interface::state::AccountState::Initialized,
                         ..Default::default()
                     };
                     if pubkey == user_token_account {
@@ -2329,12 +2349,13 @@ mod tests {
                         token_account.owner = relayer_pubkey;
                     }
 
-                    spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                    spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                        .unwrap();
 
                     Ok(solana_sdk::account::Account {
                         lamports: 1_000_000,
                         data: account_data,
-                        owner: spl_token::id(),
+                        owner: spl_token_interface::id(),
                         executable: false,
                         rent_epoch: 0,
                     })
@@ -2530,12 +2551,12 @@ mod tests {
                 let pubkey = *pubkey;
                 Box::pin(async move {
                     // Create a token account with sufficient balance
-                    let mut account_data = vec![0; spl_token::state::Account::LEN];
+                    let mut account_data = vec![0; spl_token_interface::state::Account::LEN];
                     let mut token_account = Account {
                         mint: token_mint,
                         owner: user_pubkey,
                         amount: 10000000,
-                        state: spl_token::state::AccountState::Initialized,
+                        state: spl_token_interface::state::AccountState::Initialized,
                         ..Default::default()
                     };
                     if pubkey == user_token_account {
@@ -2544,12 +2565,13 @@ mod tests {
                         token_account.owner = relayer_pubkey;
                     }
 
-                    spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                    spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                        .unwrap();
 
                     Ok(solana_sdk::account::Account {
                         lamports: 1_000_000,
                         data: account_data,
-                        owner: spl_token::id(),
+                        owner: spl_token_interface::id(),
                         executable: false,
                         rent_epoch: 0,
                     })
@@ -2569,8 +2591,8 @@ mod tests {
         let token_payment = 1_000_000; // Amount in token units
         let sol_fee = 5000; // Equivalent amount in SOL
 
-        let transfer_ix = spl_token::instruction::transfer_checked(
-            &spl_token::id(),
+        let transfer_ix = spl_token_interface::instruction::transfer_checked(
+            &spl_token_interface::id(),
             &user_token_account,
             &token_mint,
             &relayer_token_account,
@@ -2672,12 +2694,12 @@ mod tests {
                 let pubkey = *pubkey;
                 Box::pin(async move {
                     // Create a token account with sufficient balance
-                    let mut account_data = vec![0; spl_token::state::Account::LEN];
+                    let mut account_data = vec![0; spl_token_interface::state::Account::LEN];
                     let mut token_account = Account {
                         mint: token_mint,
                         owner: user_pubkey,
                         amount: 10000000,
-                        state: spl_token::state::AccountState::Initialized,
+                        state: spl_token_interface::state::AccountState::Initialized,
                         ..Default::default()
                     };
                     if pubkey == user_token_account {
@@ -2686,12 +2708,13 @@ mod tests {
                         token_account.owner = relayer_pubkey;
                     }
 
-                    spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                    spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                        .unwrap();
 
                     Ok(solana_sdk::account::Account {
                         lamports: 1_000_000,
                         data: account_data,
-                        owner: spl_token::id(),
+                        owner: spl_token_interface::id(),
                         executable: false,
                         rent_epoch: 0,
                     })
@@ -2709,8 +2732,8 @@ mod tests {
         );
         let token_payment = 1_000_000; // 1 USDC
 
-        let transfer_ix = spl_token::instruction::transfer_checked(
-            &spl_token::id(),
+        let transfer_ix = spl_token_interface::instruction::transfer_checked(
+            &spl_token_interface::id(),
             &user_token_account,
             &token_mint,
             &relayer_token_account,
@@ -2806,15 +2829,15 @@ mod tests {
 
         // Mock the provider to return mint account data when get_account_from_pubkey is called
         let mint_data = {
-            let mint_info = spl_token::state::Mint {
+            let mint_info = spl_token_interface::state::Mint {
                 mint_authority: None.into(),
                 supply: 1_000_000_000_000,
                 decimals: 6, // USDC decimals
                 is_initialized: true,
                 freeze_authority: None.into(),
             };
-            let mut data = vec![0u8; spl_token::state::Mint::LEN];
-            spl_token::state::Mint::pack(mint_info, &mut data).unwrap();
+            let mut data = vec![0u8; spl_token_interface::state::Mint::LEN];
+            spl_token_interface::state::Mint::pack(mint_info, &mut data).unwrap();
             data
         };
 
@@ -2826,7 +2849,7 @@ mod tests {
                     Ok(solana_sdk::account::Account {
                         lamports: 1000000,
                         data: mint_data_clone,
-                        owner: spl_token::id(),
+                        owner: spl_token_interface::id(),
                         executable: false,
                         rent_epoch: 0,
                     })
