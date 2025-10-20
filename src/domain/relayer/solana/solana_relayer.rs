@@ -639,17 +639,17 @@ where
         request: &SignTransactionRequest,
     ) -> Result<SignTransactionExternalResponse, RelayerError> {
         let policy = self.relayer.policies.get_solana_policy();
-        if policy
-            .fee_payment_strategy
-            .unwrap_or(SolanaFeePaymentStrategy::User)
-            != SolanaFeePaymentStrategy::Relayer
-        {
-            error!(
-                id = %self.relayer.id,
-                "Fee payment strategy must be relayer when signing a transaction via the API",
-            );
+
+        if matches!(
+            policy
+                .fee_payment_strategy
+                .as_ref()
+                .unwrap_or(&SolanaFeePaymentStrategy::Relayer),
+            SolanaFeePaymentStrategy::User
+        ) {
             return Err(RelayerError::ValidationError(
-                "Fee payment strategy must be relayer when signing a transaction via the API"
+                "Sign transaction endpoint requires fee_payment_strategy to be 'relayer'. \
+                For user-paid fees, use the custom RPC methods (signTransaction, signAndSendTransaction) instead."
                     .to_string(),
             ));
         }

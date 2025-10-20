@@ -6008,14 +6008,7 @@
             "format": "float"
           },
           "fee_payment_strategy": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/SolanaFeePaymentStrategy"
-              }
-            ]
+            "$ref": "#/components/schemas/SolanaFeePaymentStrategy"
           },
           "max_allowed_fee_lamports": {
             "type": [
@@ -6050,14 +6043,7 @@
             "minimum": 0
           },
           "swap_config": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/RelayerSolanaSwapConfig"
-              }
-            ]
+            "$ref": "#/components/schemas/RelayerSolanaSwapConfig"
           }
         },
         "additionalProperties": false
@@ -7593,15 +7579,8 @@
             "type": "boolean"
           },
           "policies": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/CreateRelayerPolicyRequest",
-                "description": "Raw policy JSON - will be validated against relayer's network type during application"
-              }
-            ]
+            "$ref": "#/components/schemas/CreateRelayerPolicyRequest",
+            "description": "Raw policy JSON - will be validated against relayer's network type during application"
           }
         },
         "additionalProperties": false
