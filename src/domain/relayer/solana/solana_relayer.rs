@@ -531,13 +531,27 @@ where
     ) -> Result<TransactionRepoModel, RelayerError> {
         // Validate fee payment strategy - send transaction endpoint only supports relayer-paid fees
         let policy = self.relayer.policies.get_solana_policy();
-        if policy
-            .fee_payment_strategy
-            .unwrap_or(SolanaFeePaymentStrategy::User)
-            != SolanaFeePaymentStrategy::Relayer
-        {
+
+        // Send transaction endpoint only supports Relayer fee payment mode
+        // Custom RPC methods (signTransaction, signAndSendTransaction) support both User and Relayer modes
+        //
+        // Note: When fee_payment_strategy is not explicitly set (None), we default to Relayer
+        // for the send transaction endpoint (via unwrap_or), while RPC methods use the enum
+        // default (User) for backward compatibility. This allows:
+        // - Existing RPC method users: continue working with User mode (backward compatible)
+        // - New send transaction users: work by default with Relayer mode (intuitive)
+        // - Explicit User mode: rejected for send transaction with clear error message
+        if matches!(
+            policy
+                .fee_payment_strategy
+                .as_ref()
+                .unwrap_or(&SolanaFeePaymentStrategy::Relayer),
+            SolanaFeePaymentStrategy::User
+        ) {
             return Err(RelayerError::ValidationError(
-                "Send transaction endpoint only available for Solana relayers with fee_payment_strategy set to 'relayer'".to_string()
+                "Send transaction endpoint requires fee_payment_strategy to be 'relayer'. \
+                For user-paid fees, use the custom RPC methods (signTransaction, signAndSendTransaction) instead."
+                    .to_string(),
             ));
         }
 

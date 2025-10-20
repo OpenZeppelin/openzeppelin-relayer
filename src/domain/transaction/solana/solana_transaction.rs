@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use eyre::Result;
-use solana_sdk::{hash::Hash, pubkey::Pubkey, transaction::Transaction as SolanaTransaction};
+use solana_sdk::{pubkey::Pubkey, transaction::Transaction as SolanaTransaction};
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
@@ -136,18 +136,29 @@ where
         // Build or decode transaction based on input mode
         let mut transaction = if let Some(transaction_str) = &solana_data.transaction {
             // Transaction mode: decode pre-built transaction
+            // Use the provided blockhash from user - resubmit logic will handle expiration if needed
+            debug!(
+                tx_id = %tx.id,
+                "transaction mode: using pre-built transaction with provided blockhash"
+            );
             decode_solana_transaction_from_string(transaction_str)?
         } else if let Some(instructions) = &solana_data.instructions {
-            // Instructions mode: build transaction from instructions
+            // Instructions mode: build transaction from instructions with fresh blockhash
+            debug!(
+                tx_id = %tx.id,
+                "instructions mode: building transaction with fresh blockhash"
+            );
+
             let payer = Pubkey::from_str(&self.relayer.address).map_err(|e| {
                 TransactionError::ValidationError(format!("Invalid relayer address: {}", e))
             })?;
 
-            // Use default blockhash for now - will be updated to fresh one below
-            // This ensures we get the freshest possible blockhash right before signing
-            let dummy_blockhash = Hash::default();
+            // Fetch fresh blockhash for instructions mode
+            let latest_blockhash = self.provider.get_latest_blockhash().await.map_err(|e| {
+                TransactionError::UnexpectedError(format!("Failed to get latest blockhash: {}", e))
+            })?;
 
-            build_transaction_from_instructions(instructions, &payer, dummy_blockhash)?
+            build_transaction_from_instructions(instructions, &payer, latest_blockhash)?
         } else {
             // Neither transaction nor instructions provided - permanent validation error
             let validation_error = TransactionError::ValidationError(
@@ -161,47 +172,6 @@ where
             // Return Ok since transaction is in final Failed state - no retry needed
             return Ok(updated_tx);
         };
-
-        // IMPORTANT: Blockhash handling - fetch fresh blockhash before signing
-        //
-        // For instructions mode: Always update (we control everything)
-        // For transaction mode with single signer: Safe to update (only relayer signs)
-        // For transaction mode with multi-sig: CANNOT update (would invalidate other signatures)
-        //
-        // Multi-sig workflow:
-        // 1. User constructs tx with relayer as fee payer (index 0)
-        // 2. User signs at their index (1, 2, etc.)
-        // 3. Relayer signs at index 0 and submits
-
-        let should_update_blockhash = if solana_data.instructions.is_some() {
-            // Instructions mode: always update (we're building from scratch)
-            true
-        } else if solana_data.transaction.is_some() {
-            // Transaction mode: only update if we can (single signer)
-            is_resubmitable(&transaction)
-        } else {
-            false
-        };
-
-        if should_update_blockhash {
-            debug!(
-                tx_id = %tx.id,
-                mode = if solana_data.instructions.is_some() { "instructions" } else { "transaction" },
-                "fetching fresh blockhash before signing"
-            );
-
-            let latest_blockhash = self.provider.get_latest_blockhash().await.map_err(|e| {
-                TransactionError::UnexpectedError(format!("Failed to get latest blockhash: {}", e))
-            })?;
-
-            transaction.message.recent_blockhash = latest_blockhash;
-        } else {
-            debug!(
-                tx_id = %tx.id,
-                required_signatures = transaction.message.header.num_required_signatures,
-                "multi-signer transaction detected, keeping original blockhash"
-            );
-        }
 
         // Validate transaction before signing
         // Distinguish between transient errors (RPC issues) and permanent errors (policy violations)
@@ -340,12 +310,13 @@ where
                 if matches!(provider_error, SolanaProviderError::BlockhashNotFound(_))
                     && is_resubmitable(&transaction)
                 {
-                    // Single-signer: Can update blockhash on retry
-                    // Return Ok to allow prepare phase to fetch fresh blockhash and resubmit
+                    // Single-signer: Can update blockhash via resubmit
+                    // Return Ok to allow status check to detect expiration and trigger resubmit
+                    // The resubmit logic will fetch fresh blockhash, re-sign, and resubmit
                     debug!(
                         tx_id = %tx.id,
                         error = %provider_error,
-                        "blockhash expired for single-signer transaction, will retry with fresh blockhash"
+                        "blockhash expired for single-signer transaction, status check will trigger resubmit"
                     );
                     return Ok(tx);
                 }
@@ -509,50 +480,68 @@ where
                     );
                     // Don't update with new signature - the original transaction is what's on-chain
                     true
+                } else if e.is_transient() {
+                    // Transient error (network, RPC) - return for retry
+                    warn!(
+                        tx_id = %tx.id,
+                        error = %e,
+                        "transient error during resubmission, will retry"
+                    );
+                    return Err(TransactionError::UnderlyingSolanaProvider(e));
                 } else {
-                    // Real error - propagate it
-                    return Err(TransactionError::from(e));
+                    // Permanent error (invalid tx, insufficient funds) - mark as failed
+                    warn!(
+                        tx_id = %tx.id,
+                        error = %e,
+                        "permanent error during resubmission, marking transaction as failed"
+                    );
+                    let updated_tx = self
+                        .fail_transaction_with_notification(
+                            &tx,
+                            &TransactionError::UnderlyingSolanaProvider(e),
+                        )
+                        .await?;
+                    return Ok(updated_tx);
                 }
             }
         };
 
-        // If transaction was already processed, just update status without changing signature
-        let update = if was_already_processed {
-            // Keep original signature and data - just ensure status is Submitted
-            TransactionUpdateRequest {
-                status: Some(TransactionStatus::Submitted),
-                sent_at: Some(Utc::now().to_rfc3339()),
-                ..Default::default()
-            }
+        // If transaction was already processed, don't update anything - status check will handle it
+        let updated_tx = if was_already_processed {
+            // Transaction already on-chain - return as-is, status check job will update to Confirmed/Mined
+            info!(
+                tx_id = %tx.id,
+                "transaction already on-chain, no update needed - status check will handle confirmation"
+            );
+            tx
         } else {
             // Transaction resubmitted successfully - update with new signature and blockhash
-            update_request
-        };
+            let tx = match self
+                .transaction_repository
+                .partial_update(tx.id.clone(), update_request)
+                .await
+            {
+                Ok(tx) => tx,
+                Err(e) => {
+                    error!(
+                        error = %e,
+                        tx_id = %tx.id,
+                        "CRITICAL: resubmitted transaction sent to blockchain but failed to update database"
+                    );
+                    // Transaction is on-chain - return original tx data to avoid wasteful retries
+                    tx
+                }
+            };
 
-        // Update transaction in repository
-        let updated_tx = match self
-            .transaction_repository
-            .partial_update(tx.id.clone(), update)
-            .await
-        {
-            Ok(tx) => tx,
-            Err(e) => {
-                error!(
-                    error = %e,
-                    tx_id = %tx.id,
-                    "CRITICAL: resubmitted transaction sent to blockchain but failed to update database"
-                );
-                // Transaction is on-chain - return original tx data to avoid wasteful retries
-                tx
-            }
-        };
+            info!(
+                tx_id = %tx.id,
+                new_signature = %signature_str,
+                new_blockhash = %fresh_blockhash,
+                "transaction resubmitted with fresh blockhash"
+            );
 
-        info!(
-            tx_id = %updated_tx.id,
-            new_signature = %signature_str,
-            new_blockhash = %fresh_blockhash,
-            "transaction resubmitted with fresh blockhash"
-        );
+            tx
+        };
 
         Ok(updated_tx)
     }
