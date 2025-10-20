@@ -130,5 +130,9 @@ path = "helpers/generate_encryption_key.rs"
 name = "generate_openapi"
 path = "helpers/generate_openapi.rs"
 
+[[example]]
+name = "verify_eip712"
+path = "helpers/verify_eip712.rs"
+
 [lib]
 path = "src/lib.rs"

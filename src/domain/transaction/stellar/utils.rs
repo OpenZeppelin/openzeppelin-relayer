@@ -1,7 +1,7 @@
 //! Utility functions for Stellar transaction domain logic.
 use crate::models::OperationSpec;
 use crate::models::RelayerError;
-use crate::services::StellarProviderTrait;
+use crate::services::provider::StellarProviderTrait;
 use soroban_rs::xdr;
 use tracing::info;
 

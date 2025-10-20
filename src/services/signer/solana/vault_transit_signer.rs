@@ -29,7 +29,7 @@ use crate::{
         Address, NetworkTransactionData, Signer as SignerDomainModel, SignerError,
         TransactionRepoModel,
     },
-    services::{Signer, VaultConfig, VaultService, VaultServiceTrait},
+    services::{signer::Signer, VaultConfig, VaultService, VaultServiceTrait},
     utils::{base64_decode, base64_encode},
 };
 

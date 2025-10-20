@@ -10,7 +10,7 @@ use crate::{
     models::{EvmNetwork, EvmTransactionData, TransactionError},
     services::{
         gas::handlers::{OptimismPriceHandler, PolygonZKEvmPriceHandler},
-        EvmProvider,
+        provider::EvmProvider,
     },
 };
 #[derive(Clone)]

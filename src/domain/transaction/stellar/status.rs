@@ -15,7 +15,7 @@ use crate::{
         TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
-    services::{Signer, StellarProviderTrait},
+    services::{provider::StellarProviderTrait, signer::Signer},
     utils::calculate_scheduled_timestamp,
 };
 

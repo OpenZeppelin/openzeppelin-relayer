@@ -45,7 +45,8 @@ use tokio::sync::RwLock;
 
 use crate::{
     models::{Address, AwsKmsSignerConfig},
-    utils::{self, derive_ethereum_address_from_der, extract_public_key_from_der},
+    services::signer::evm::utils::recover_evm_signature_from_der,
+    utils::{self, derive_ethereum_address_from_der},
 };
 
 #[cfg(test)]
@@ -78,9 +79,27 @@ pub type AwsKmsResult<T> = Result<T, AwsKmsError>;
 pub trait AwsKmsEvmService: Send + Sync {
     /// Returns the EVM address derived from the configured public key.
     async fn get_evm_address(&self) -> AwsKmsResult<Address>;
-    /// Signs a payload using the EVM signing scheme.
-    /// Pre-hashes the message with keccak-256.
+    /// Signs a payload using the EVM signing scheme (hashes before signing).
+    ///
+    /// This method applies keccak256 hashing before signing.
+    ///
+    /// **Use for:**
+    /// - Raw transaction data (TxLegacy, TxEip1559)
+    /// - EIP-191 personal messages
+    ///
+    /// **Note:** For EIP-712 typed data, use `sign_hash_evm()` to avoid double-hashing.
     async fn sign_payload_evm(&self, payload: &[u8]) -> AwsKmsResult<Vec<u8>>;
+
+    /// Signs a pre-computed hash using the EVM signing scheme (no hashing).
+    ///
+    /// This method signs the hash directly without applying keccak256.
+    ///
+    /// **Use for:**
+    /// - EIP-712 typed data (already hashed)
+    /// - Pre-computed message digests
+    ///
+    /// **Note:** For raw data, use `sign_payload_evm()` instead.
+    async fn sign_hash_evm(&self, hash: &[u8; 32]) -> AwsKmsResult<Vec<u8>>;
 }
 
 #[async_trait]
@@ -226,42 +245,62 @@ impl<T: AwsKmsK256 + Clone> AwsKmsService<T> {
 }
 
 impl<T: AwsKmsK256 + Clone> AwsKmsService<T> {
-    /// Signs a bytes with the private key stored in AWS KMS.
+    /// Common signing logic for EVM signatures.
     ///
-    /// Pre-hashes the message with keccak256.
-    pub async fn sign_bytes_evm(&self, bytes: &[u8]) -> AwsKmsResult<Vec<u8>> {
-        // Create a digest of a message payload
-        let digest = keccak256(bytes).0;
-
-        // Sign the digest with the AWS KMS
-        // Process the result, extract DER signature
+    /// This internal helper eliminates duplication between `sign_payload_evm` and `sign_hash_evm`.
+    ///
+    /// # Parameters
+    /// * `digest` - The 32-byte hash to sign
+    /// * `original_bytes` - The original message bytes for recovery verification (if applicable)
+    /// * `use_prehash_recovery` - If true, recovers using hash directly; if false, uses original bytes
+    async fn sign_and_recover_evm(
+        &self,
+        digest: [u8; 32],
+        original_bytes: &[u8],
+        use_prehash_recovery: bool,
+    ) -> AwsKmsResult<Vec<u8>> {
+        // Sign the digest with AWS KMS
         let der_signature = self.client.sign_digest(&self.kms_key_id, digest).await?;
 
-        // Parse DER into Secp256k1 format
-        let mut rs = k256::ecdsa::Signature::from_der(&der_signature)
-            .map_err(|e| AwsKmsError::ParseError(e.to_string()))?;
-
-        // Normalize to low-s if necessary
-        if let Some(normalized) = rs.normalize_s() {
-            rs = normalized;
-        }
+        // Get public key
         let der_pk = self.client.get_der_public_key(&self.kms_key_id).await?;
 
-        // Extract public key from AWS KMS and convert it to an uncompressed 64 pk
-        let pk = extract_public_key_from_der(&der_pk)
-            .map_err(|e| AwsKmsError::ConvertError(e.to_string()))?;
+        // Use shared signature recovery logic
+        recover_evm_signature_from_der(
+            &der_signature,
+            &der_pk,
+            digest,
+            original_bytes,
+            use_prehash_recovery,
+        )
+        .map_err(|e| AwsKmsError::ParseError(e.to_string()))
+    }
 
-        // Extract v value from the public key recovery
-        let v = utils::recover_public_key(&pk, &rs, bytes)?;
+    /// Signs a payload using the EVM signing scheme (hashes before signing).
+    ///
+    /// This method applies keccak256 hashing before signing.
+    ///
+    /// **Use for:**
+    /// - Raw transaction data (TxLegacy, TxEip1559)
+    /// - EIP-191 personal messages
+    ///
+    /// **Note:** For EIP-712 typed data, use `sign_hash_evm()` to avoid double-hashing.
+    pub async fn sign_payload_evm(&self, bytes: &[u8]) -> AwsKmsResult<Vec<u8>> {
+        let digest = keccak256(bytes).0;
+        self.sign_and_recover_evm(digest, bytes, false).await
+    }
 
-        // Adjust v value for Ethereum legacy transaction.
-        let eth_v = 27 + v;
-
-        // Append `v` to a signature bytes
-        let mut sig_bytes = rs.to_vec();
-        sig_bytes.push(eth_v);
-
-        Ok(sig_bytes)
+    /// Signs a pre-computed hash using the EVM signing scheme (no hashing).
+    ///
+    /// This method signs the hash directly without applying keccak256.
+    ///
+    /// **Use for:**
+    /// - EIP-712 typed data (already hashed)
+    /// - Pre-computed message digests
+    ///
+    /// **Note:** For raw data, use `sign_payload_evm()` instead.
+    pub async fn sign_hash_evm(&self, hash: &[u8; 32]) -> AwsKmsResult<Vec<u8>> {
+        self.sign_and_recover_evm(*hash, hash, true).await
     }
 }
 
@@ -275,7 +314,13 @@ impl<T: AwsKmsK256 + Clone> AwsKmsEvmService for AwsKmsService<T> {
     }
 
     async fn sign_payload_evm(&self, message: &[u8]) -> AwsKmsResult<Vec<u8>> {
-        self.sign_bytes_evm(message).await
+        let digest = keccak256(message).0;
+        self.sign_and_recover_evm(digest, message, false).await
+    }
+
+    async fn sign_hash_evm(&self, hash: &[u8; 32]) -> AwsKmsResult<Vec<u8>> {
+        // Delegates to the implementation method on AwsKmsService
+        self.sign_and_recover_evm(*hash, hash, true).await
     }
 }
 

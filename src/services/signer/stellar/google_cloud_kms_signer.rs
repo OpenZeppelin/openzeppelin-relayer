@@ -12,7 +12,8 @@ use crate::{
     },
     models::{Address, NetworkTransactionData, SignerError},
     services::{
-        GoogleCloudKmsService, GoogleCloudKmsServiceTrait, GoogleCloudKmsStellarService, Signer,
+        signer::Signer, GoogleCloudKmsService, GoogleCloudKmsServiceTrait,
+        GoogleCloudKmsStellarService,
     },
 };
 
