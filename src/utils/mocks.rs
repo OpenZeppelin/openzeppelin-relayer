@@ -8,8 +8,8 @@ pub mod mockutils {
 
     use crate::{
         config::{
-            EvmNetworkConfig, NetworkConfigCommon, RepositoryStorageType, ServerConfig,
-            SolanaNetworkConfig,
+            network::StringOrEnvValue, EvmNetworkConfig, NetworkConfigCommon,
+            RepositoryStorageType, ServerConfig, SolanaNetworkConfig,
         },
         jobs::MockJobProducerTrait,
         models::{
@@ -99,7 +99,7 @@ pub mod mockutils {
                 common: NetworkConfigCommon {
                     network: "test".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["http://localhost:8545".to_string()]),
+                    rpc_urls: Some(vec![StringOrEnvValue::plain("http://localhost:8545")]),
                     explorer_urls: None,
                     average_blocktime_ms: Some(1000),
                     is_testnet: Some(true),
@@ -123,7 +123,7 @@ pub mod mockutils {
                 common: NetworkConfigCommon {
                     network: "devnet".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["http://localhost:8545".to_string()]),
+                    rpc_urls: Some(vec![StringOrEnvValue::plain("http://localhost:8545")]),
                     explorer_urls: None,
                     average_blocktime_ms: Some(1000),
                     is_testnet: Some(true),

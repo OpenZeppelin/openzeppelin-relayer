@@ -219,7 +219,7 @@ pub fn init(cfg: &mut web::ServiceConfig) {
 mod tests {
     use super::*;
     use crate::{
-        config::{EvmNetworkConfig, NetworkConfigCommon},
+        config::{network::StringOrEnvValue, EvmNetworkConfig, NetworkConfigCommon},
         jobs::MockJobProducerTrait,
         models::{
             ApiKeyRepoModel, AppState, EvmTransactionData, LocalSignerConfigStorage,
@@ -266,7 +266,7 @@ mod tests {
                 common: NetworkConfigCommon {
                     network: "ethereum".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+                    rpc_urls: Some(vec![StringOrEnvValue::plain("https://rpc.example.com")]),
                     explorer_urls: None,
                     average_blocktime_ms: Some(12000),
                     is_testnet: Some(false),
