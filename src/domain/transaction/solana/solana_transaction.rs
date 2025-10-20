@@ -13,7 +13,10 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     domain::{
-        solana::{validate_prepared_transaction, SolanaTransactionValidator},
+        solana::{
+            validate_prepared_transaction, SolanaTransactionValidationError,
+            SolanaTransactionValidator,
+        },
         transaction::{
             common::is_final_state,
             solana::utils::{
@@ -176,6 +179,24 @@ where
         // Validate transaction before signing
         // Distinguish between transient errors (RPC issues) and permanent errors (policy violations)
         if let Err(validation_error) = self.validate_transaction_impl(&transaction).await {
+            // Special case: Expired blockhash for resubmittable transactions
+            // For single-signer transactions, expired blockhash can be refreshed during resubmit
+            // So we treat it as transient and let the resubmit flow handle it
+            // For multi-signer transactions, the logic below will mark as failed (is_transient = false)
+            if matches!(
+                validation_error,
+                TransactionError::SolanaValidation(
+                    SolanaTransactionValidationError::ExpiredBlockhash(_)
+                )
+            ) && is_resubmitable(&transaction)
+            {
+                info!(
+                    tx_id = %tx.id,
+                    "expired blockhash detected for single-signer transaction, will retry (resubmit will refresh blockhash)"
+                );
+                return Err(validation_error);
+            }
+
             // Determine if the error is transient
             let is_transient = validation_error.is_transient();
 

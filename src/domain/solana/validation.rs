@@ -164,23 +164,17 @@ impl SolanaTransactionValidator {
 
     /// Validates that the transaction's blockhash is still valid.
     ///
-    /// **Smart Validation**: This method automatically determines whether validation is needed:
-    /// - **Single-signer transactions** (`num_required_signatures == 1`): Skips validation
-    ///   because the blockhash will be updated to a fresh value before signing
-    /// - **Multi-signer transactions** (`num_required_signatures > 1`): Performs validation
-    ///   because the blockhash cannot be updated without invalidating existing signatures
+    /// Checks if the provided blockhash is still valid on-chain. If the blockhash has expired,
+    /// the transaction will fail when submitted.
+    ///
+    /// **Note**: For single-signer transactions, expired blockhashes can be refreshed during
+    /// resubmission. However, validation still occurs to provide early feedback.
+    /// For multi-signer transactions, expired blockhashes cannot be refreshed without
+    /// invalidating existing signatures, so validation is critical.
     pub async fn validate_blockhash<T: SolanaProviderTrait>(
         tx: &Transaction,
         provider: &T,
     ) -> Result<(), SolanaTransactionValidationError> {
-        let num_required_signatures = tx.message.header.num_required_signatures;
-
-        // Skip validation for single-signer transactions (blockhash will be updated)
-        if num_required_signatures <= 1 {
-            return Ok(());
-        }
-
-        // Multi-signer transactions: must validate blockhash
         let blockhash = tx.message.recent_blockhash;
 
         // Check if blockhash is still valid
@@ -906,16 +900,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_validate_blockhash_skips_for_single_signer() {
-        // Single-signer transaction should skip blockhash validation
+    async fn test_validate_blockhash_validates_single_signer() {
+        // Single-signer transactions are now validated (no longer skipped)
+        // This provides early feedback even though blockhash can be refreshed during resubmit
         let transaction = create_test_transaction(&Keypair::new().pubkey());
-        let mock_provider = MockSolanaProviderTrait::new();
-        // No expectations set - if validation runs, it will panic
+        let mut mock_provider = MockSolanaProviderTrait::new();
+
+        // Expect provider call for blockhash validation
+        mock_provider
+            .expect_is_blockhash_valid()
+            .returning(|_, _| Box::pin(async { Ok(true) }));
 
         let result =
             SolanaTransactionValidator::validate_blockhash(&transaction, &mock_provider).await;
 
-        // Should succeed without calling provider (validation skipped)
+        // Should succeed after validation
         assert!(result.is_ok());
     }
 

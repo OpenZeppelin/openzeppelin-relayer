@@ -6814,7 +6814,7 @@
       },
       "SolanaFeePaymentStrategy": {
         "type": "string",
-        "description": "Solana fee payment strategy",
+        "description": "Solana fee payment strategy\n\nDetermines who pays transaction fees:\n- `User`: User must include fee payment to relayer in transaction (for custom RPC methods)\n- `Relayer`: Relayer pays all transaction fees (recommended for send transaction endpoint)\n\nDefault is `User`.",
         "enum": [
           "user",
           "relayer"
