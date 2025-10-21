@@ -161,14 +161,10 @@ mod tests {
         services::{QuoteResponse, RoutePlan, SwapInfo},
     };
 
+    use super::super::test_setup::setup_signer_mocks;
     use super::*;
     use mockall::predicate::{self};
-    use solana_sdk::{
-        message::Message,
-        program_pack::Pack,
-        signature::{Keypair, Signature},
-        signer::Signer,
-    };
+    use solana_sdk::{message::Message, program_pack::Pack, signature::Keypair, signer::Signer};
     use solana_system_interface::instruction;
     use spl_token_interface::state::Account;
 
@@ -177,12 +173,8 @@ mod tests {
         let (relayer, mut signer, mut provider, jupiter_service, encoded_tx, job_producer, network) =
             setup_test_context();
 
-        let signature = Signature::new_unique();
-
-        signer.expect_sign().returning(move |_| {
-            let signature_clone = signature;
-            Box::pin(async move { Ok(signature_clone) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut signer, relayer.address.clone());
         provider
             .expect_is_blockhash_valid()
             .with(predicate::always(), predicate::always())
@@ -301,11 +293,8 @@ mod tests {
                 })
             });
 
-        let signature = Signature::new_unique();
-        ctx.signer.expect_sign().returning(move |_| {
-            let signature_clone = signature;
-            Box::pin(async move { Ok(signature_clone) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut ctx.signer, ctx.relayer.address.clone());
 
         ctx.provider
             .expect_is_blockhash_valid()
@@ -410,12 +399,8 @@ mod tests {
         let (relayer, mut signer, mut provider, jupiter_service, encoded_tx, job_producer, network) =
             setup_test_context();
 
-        let signature = Signature::new_unique();
-
-        signer.expect_sign().returning(move |_| {
-            let signature_clone = signature;
-            Box::pin(async move { Ok(signature_clone) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut signer, relayer.address.clone());
         provider
             .expect_is_blockhash_valid()
             .with(predicate::always(), predicate::always())
@@ -540,11 +525,8 @@ mod tests {
                 })
             });
 
-        let signature = Signature::new_unique();
-        ctx.signer.expect_sign().returning(move |_| {
-            let signature_clone = signature;
-            Box::pin(async move { Ok(signature_clone) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut ctx.signer, ctx.relayer.address.clone());
 
         ctx.provider
             .expect_is_blockhash_valid()
@@ -943,12 +925,8 @@ mod tests {
             ..Default::default()
         });
 
-        let signature = Signature::new_unique();
-
-        signer.expect_sign().returning(move |_| {
-            let signature = signature;
-            Box::pin(async move { Ok(signature) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut signer, relayer.address.clone());
         provider
             .expect_is_blockhash_valid()
             .with(predicate::always(), predicate::always())
@@ -1093,11 +1071,8 @@ mod tests {
 
         relayer.notification_id = Some("test-webhook-id".to_string());
 
-        let signature = Signature::new_unique();
-        signer.expect_sign().returning(move |_| {
-            let signature = signature;
-            Box::pin(async move { Ok(signature) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut signer, relayer.address.clone());
         provider
             .expect_is_blockhash_valid()
             .returning(|_, _| Box::pin(async { Ok(true) }));

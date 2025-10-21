@@ -811,11 +811,15 @@ mod tests {
         let relayer_repository = Arc::new(MockRelayerRepository::new());
         let provider = Arc::new(MockSolanaProviderTrait::new());
         let transaction_repository = Arc::new(MockTransactionRepository::new());
-        let job_producer = Arc::new(MockJobProducerTrait::new());
+        let mut job_producer = MockJobProducerTrait::new();
         let signer = Arc::new(MockSolanaSignTrait::new());
 
         // Create test transaction (will be in Pending status by default)
         let test_tx = create_mock_solana_transaction();
+
+        job_producer
+            .expect_produce_transaction_request_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
 
         // Create transaction handler
         let transaction_handler = SolanaRelayerTransaction::new(
@@ -823,7 +827,7 @@ mod tests {
             relayer_repository,
             provider,
             transaction_repository,
-            job_producer,
+            Arc::new(job_producer),
             signer,
         )
         .unwrap();

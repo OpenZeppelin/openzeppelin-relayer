@@ -246,6 +246,8 @@ mod tests {
     use spl_associated_token_account_interface::address::get_associated_token_address;
     use spl_token_interface::state::Account;
 
+    use super::super::test_setup::setup_signer_mocks;
+
     #[tokio::test]
     async fn test_prepare_transaction_success_relayer_fee_strategy() {
         let (
@@ -273,11 +275,8 @@ mod tests {
             ..Default::default()
         });
 
-        let signature = Signature::new_unique();
-
-        signer
-            .expect_sign()
-            .returning(move |_| Box::pin(async move { Ok(signature) }));
+        // Setup signer mocks
+        setup_signer_mocks(&mut signer, relayer.address.clone());
 
         // Mock provider responses
         provider
@@ -501,11 +500,8 @@ mod tests {
             })
         });
 
-        let signature = Signature::new_unique();
-        ctx.signer.expect_sign().returning(move |_| {
-            let signature_clone = signature;
-            Box::pin(async move { Ok(signature_clone) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut ctx.signer, ctx.relayer.address.clone());
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             ctx.relayer,
@@ -637,11 +633,9 @@ mod tests {
         let message = Message::new(&[ix], Some(&wrong_fee_payer.pubkey()));
         let transaction = Transaction::new_unsigned(message);
         let encoded_tx = EncodedSerializedTransaction::try_from(&transaction).unwrap();
-        let signature = Signature::new_unique();
 
-        signer
-            .expect_sign()
-            .returning(move |_| Box::pin(async move { Ok(signature) }));
+        // Setup signer mocks
+        setup_signer_mocks(&mut signer, relayer.address.clone());
         provider
             .expect_get_latest_blockhash_with_commitment()
             .returning(|_| Box::pin(async { Ok((Hash::new_unique(), 100)) }));
@@ -707,7 +701,6 @@ mod tests {
             setup_test_context();
         println!("Setting up known keypair for signature verification");
         let relayer_keypair = Keypair::new();
-        let expected_signature = Signature::new_unique();
 
         relayer.address = relayer_keypair.pubkey().to_string();
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
@@ -725,10 +718,8 @@ mod tests {
             ..Default::default()
         });
 
-        signer.expect_sign().returning(move |_| {
-            let signature = expected_signature;
-            Box::pin(async move { Ok(signature) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut signer, relayer.address.clone());
         provider
             .expect_get_latest_blockhash_with_commitment()
             .returning(|_| Box::pin(async { Ok((Hash::new_unique(), 100)) }));
@@ -795,9 +786,10 @@ mod tests {
             1,
             "Transaction should have exactly one signature"
         );
-        assert_eq!(
-            final_tx.signatures[0], expected_signature,
-            "Transaction should have the expected signature"
+        assert_ne!(
+            final_tx.signatures[0].as_ref(),
+            &[0u8; 64],
+            "Transaction signature should not be default/empty"
         );
         assert_eq!(
             final_tx.message.account_keys[0].to_string(),

@@ -250,13 +250,10 @@ mod tests {
         services::{QuoteResponse, RoutePlan, SwapInfo},
     };
 
+    use super::super::test_setup::setup_signer_mocks;
     use super::*;
     use solana_sdk::{
-        hash::Hash,
-        program_option::COption,
-        program_pack::Pack,
-        signature::{Keypair, Signature},
-        signer::Signer,
+        hash::Hash, program_option::COption, program_pack::Pack, signature::Keypair, signer::Signer,
     };
     use spl_token_interface::state::Account;
 
@@ -297,12 +294,8 @@ mod tests {
             ..Default::default()
         });
 
-        let signature = Signature::new_unique();
-
-        signer.expect_sign().returning(move |_| {
-            let signature_clone = signature;
-            Box::pin(async move { Ok(signature_clone) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut signer, relayer.address.clone());
 
         // Mock provider responses
         provider
@@ -395,12 +388,8 @@ mod tests {
             ..Default::default()
         });
 
-        let signature = Signature::new_unique();
-
-        signer.expect_sign().returning(move |_| {
-            let signature_clone = signature;
-            Box::pin(async move { Ok(signature_clone) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut signer, relayer.address.clone());
 
         provider
             .expect_get_latest_blockhash_with_commitment()
@@ -493,12 +482,8 @@ mod tests {
             ..Default::default()
         });
 
-        let signature = Signature::new_unique();
-
-        signer.expect_sign().returning(move |_| {
-            let signature_clone = signature;
-            Box::pin(async move { Ok(signature_clone) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut signer, relayer.address.clone());
 
         // Mock provider responses
         provider
@@ -625,12 +610,8 @@ mod tests {
             ..Default::default()
         });
 
-        let signature = Signature::new_unique();
-
-        ctx.signer.expect_sign().returning(move |_| {
-            let signature_clone = signature;
-            Box::pin(async move { Ok(signature_clone) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut ctx.signer, ctx.relayer.address.clone());
 
         ctx.provider
             .expect_get_latest_blockhash_with_commitment()

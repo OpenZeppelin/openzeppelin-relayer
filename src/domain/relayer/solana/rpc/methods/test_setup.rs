@@ -10,7 +10,7 @@ use std::str::FromStr;
 use crate::{
     jobs::MockJobProducerTrait,
     models::{
-        EncodedSerializedTransaction, NetworkRepoModel, NetworkType, RelayerNetworkPolicy,
+        Address, EncodedSerializedTransaction, NetworkRepoModel, NetworkType, RelayerNetworkPolicy,
         RelayerRepoModel, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
         SolanaAllowedTokensSwapConfig, SolanaFeePaymentStrategy,
     },
@@ -18,6 +18,29 @@ use crate::{
     services::{MockJupiterServiceTrait, MockSolanaProviderTrait, MockSolanaSignTrait},
     utils::mocks::mockutils::create_mock_solana_network,
 };
+
+/// Sets up common mock expectations for `pubkey()` and `sign()` that all SDK transaction signing needs
+/// Returns the signature that will be used by the mock, so tests can assert on it
+pub fn setup_signer_mocks(
+    signer: &mut MockSolanaSignTrait,
+    relayer_address: String,
+) -> solana_sdk::signature::Signature {
+    // Generate a unique signature for this test
+    let signature = solana_sdk::signature::Signature::new_unique();
+
+    // Mock pubkey() to return the relayer's address
+    signer.expect_pubkey().returning(move || {
+        let addr = relayer_address.clone();
+        Box::pin(async move { Ok(Address::Solana(addr)) })
+    });
+
+    // Mock sign() to return the generated signature
+    signer
+        .expect_sign()
+        .returning(move |_| Box::pin(async move { Ok(signature) }));
+
+    signature
+}
 
 /// Creates a test context for Solana RPC methods
 /// It includes a test transaction, relayer, and mock services

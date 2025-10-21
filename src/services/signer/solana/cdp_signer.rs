@@ -145,69 +145,6 @@ impl<T: CdpServiceTrait> SolanaSignTrait for CdpSigner<T> {
     }
 }
 
-#[async_trait]
-impl<T: CdpServiceTrait> Signer for CdpSigner<T> {
-    async fn address(&self) -> Result<Address, SignerError> {
-        let address = self
-            .cdp_service
-            .account_address()
-            .await
-            .map_err(SignerError::CdpError)?;
-
-        Ok(address)
-    }
-
-    async fn sign_transaction(
-        &self,
-        transaction: NetworkTransactionData,
-    ) -> Result<SignTransactionResponse, SignerError> {
-        let solana_data = transaction.get_solana_transaction_data()?;
-
-        let transaction_str = solana_data.transaction.ok_or_else(|| {
-            SignerError::InvalidTransaction(TransactionError::ValidationError(
-                "Transaction not yet built".to_string(),
-            ))
-        })?;
-
-        let signed_transaction_bytes = self
-            .cdp_service
-            .sign_solana_transaction(transaction_str)
-            .await
-            .map_err(SignerError::CdpError)?;
-
-        // Deserialize to extract signature
-        let signed_transaction: Transaction = bincode::deserialize(&signed_transaction_bytes)
-            .map_err(|e| {
-                SignerError::InvalidTransaction(TransactionError::UnexpectedError(format!(
-                    "Failed to deserialize signed transaction: {}",
-                    e
-                )))
-            })?;
-
-        // Extract the first signature (relayer's signature)
-        let signature = signed_transaction
-            .signatures
-            .first()
-            .ok_or_else(|| {
-                SignerError::InvalidTransaction(TransactionError::ValidationError(
-                    "Signed transaction has no signatures".to_string(),
-                ))
-            })?
-            .to_string();
-
-        // Encode the transaction bytes to base64
-        let encoded_transaction =
-            EncodedSerializedTransaction::new(base64_encode(&signed_transaction_bytes));
-
-        Ok(SignTransactionResponse::Solana(
-            SignTransactionResponseSolana {
-                transaction: encoded_transaction,
-                signature,
-            },
-        ))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,7 +171,7 @@ mod tests {
             });
 
         let signer = CdpSigner::new_for_testing(mock_service);
-        let result = signer.address().await.unwrap();
+        let result = signer.pubkey().await.unwrap();
 
         match result {
             Address::Solana(addr) => {
@@ -395,93 +332,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sign_transaction_success() {
-        use solana_sdk::{hash::Hash, message::Message};
-        use solana_system_interface::instruction as system_instruction;
-
-        let mut mock_service = MockCdpServiceTrait::new();
-
-        let test_transaction = "transaction_123".to_string();
-
-        // Create a valid Solana transaction for testing
-        let from_pubkey = Pubkey::from_str("11111111111111111111111111111111").unwrap();
-        let to_pubkey = Pubkey::from_str("22222222222222222222222222222222").unwrap();
-        let instruction = system_instruction::transfer(&from_pubkey, &to_pubkey, 1000);
-        let message = Message::new(&[instruction], Some(&from_pubkey));
-        let mut transaction = Transaction::new_unsigned(message);
-
-        // Add a signature
-        transaction.signatures = vec![Signature::default()];
-
-        // Serialize the transaction
-        let mock_signed_transaction = bincode::serialize(&transaction).unwrap();
-        let expected_signature = transaction.signatures[0].to_string();
-
-        mock_service
-            .expect_sign_solana_transaction()
-            .times(1)
-            .with(eq(test_transaction.clone()))
-            .returning(move |_| {
-                let signed_tx = mock_signed_transaction.clone();
-                Box::pin(async { Ok(signed_tx) })
-            });
-
-        let signer = CdpSigner::new_for_testing(mock_service);
-
-        let tx_data = SolanaTransactionData {
-            transaction: Some(test_transaction),
-            ..Default::default()
-        };
-
-        let result = signer
-            .sign_transaction(NetworkTransactionData::Solana(tx_data))
-            .await;
-
-        assert!(result.is_ok());
-        match result.unwrap() {
-            SignTransactionResponse::Solana(signed_tx) => {
-                assert_eq!(signed_tx.signature, expected_signature);
-                assert!(!signed_tx.transaction.into_inner().is_empty());
-            }
-            _ => panic!("Expected Solana SignTransactionResponse"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_sign_transaction_error() {
-        let mut mock_service = MockCdpServiceTrait::new();
-
-        let test_transaction = "transaction_123".to_string();
-
-        mock_service
-            .expect_sign_solana_transaction()
-            .times(1)
-            .with(eq(test_transaction.clone()))
-            .returning(move |_| {
-                Box::pin(async { Err(CdpError::SigningError("Mock signing error".into())) })
-            });
-
-        let signer = CdpSigner::new_for_testing(mock_service);
-
-        let tx_data = SolanaTransactionData {
-            transaction: Some(test_transaction),
-            ..Default::default()
-        };
-
-        let result = signer
-            .sign_transaction(NetworkTransactionData::Solana(tx_data))
-            .await;
-
-        assert!(result.is_err());
-        match result {
-            Err(SignerError::CdpError(err)) => {
-                assert_eq!(err.to_string(), "Signing error: Mock signing error");
-            }
-            _ => panic!("Expected CdpError error variant"),
-        }
-    }
-
-    #[tokio::test]
     async fn test_address_error_handling() {
         let mut mock_service = MockCdpServiceTrait::new();
 
@@ -493,7 +343,7 @@ mod tests {
             });
 
         let signer = CdpSigner::new_for_testing(mock_service);
-        let result = signer.address().await;
+        let result = signer.pubkey().await;
 
         assert!(result.is_err());
     }

@@ -92,30 +92,6 @@ impl<T: GoogleCloudKmsServiceTrait> SolanaSignTrait for GoogleCloudKmsSigner<T> 
     }
 }
 
-#[async_trait]
-impl<T: GoogleCloudKmsServiceTrait> Signer for GoogleCloudKmsSigner<T> {
-    async fn address(&self) -> Result<Address, SignerError> {
-        let pubkey = self
-            .google_cloud_kms_service
-            .get_solana_address()
-            .await
-            .map_err(|e| SignerError::SigningError(e.to_string()));
-
-        let address = pubkey.map(|pubkey| Address::Solana(pubkey.to_string()))?;
-
-        Ok(address)
-    }
-
-    async fn sign_transaction(
-        &self,
-        _transaction: NetworkTransactionData,
-    ) -> Result<SignTransactionResponse, SignerError> {
-        Err(SignerError::NotImplemented(
-            "sign_transaction is not implemented".to_string(),
-        ))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,7 +113,7 @@ mod tests {
             });
 
         let signer = GoogleCloudKmsSigner::new_for_testing(mock_service);
-        let result = signer.address().await.unwrap();
+        let result = signer.pubkey().await.unwrap();
 
         match result {
             Address::Solana(addr) => {
@@ -257,7 +233,7 @@ mod tests {
             });
 
         let signer = GoogleCloudKmsSigner::new_for_testing(mock_service);
-        let result = signer.address().await;
+        let result = signer.pubkey().await;
 
         assert!(result.is_err());
         match result {

@@ -76,24 +76,6 @@ impl<T: TurnkeyServiceTrait> SolanaSignTrait for TurnkeySigner<T> {
     }
 }
 
-#[async_trait]
-impl<T: TurnkeyServiceTrait> Signer for TurnkeySigner<T> {
-    async fn address(&self) -> Result<Address, SignerError> {
-        let address = self.turnkey_service.address_solana()?;
-
-        Ok(address)
-    }
-
-    async fn sign_transaction(
-        &self,
-        _transaction: NetworkTransactionData,
-    ) -> Result<SignTransactionResponse, SignerError> {
-        Err(SignerError::NotImplemented(
-            "sign_transaction is not implemented".to_string(),
-        ))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,7 +96,7 @@ mod tests {
         });
 
         let signer = TurnkeySigner::new_for_testing(mock_service);
-        let result = signer.address().await.unwrap();
+        let result = signer.pubkey().await.unwrap();
 
         match result {
             Address::Solana(addr) => {
@@ -221,26 +203,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sign_transaction_not_implemented() {
-        let mock_service = MockTurnkeyServiceTrait::new();
-        let signer = TurnkeySigner::new_for_testing(mock_service);
-
-        let tx_data = SolanaTransactionData {
-            transaction: Some("transaction_123".to_string()),
-            ..Default::default()
-        };
-
-        let result = signer
-            .sign_transaction(NetworkTransactionData::Solana(tx_data))
-            .await;
-        assert!(result.is_err());
-        match result {
-            Err(SignerError::NotImplemented(_)) => {}
-            _ => panic!("Expected NotImplemented error variant"),
-        }
-    }
-
-    #[tokio::test]
     async fn test_address_error_handling() {
         let mut mock_service = MockTurnkeyServiceTrait::new();
 
@@ -250,7 +212,7 @@ mod tests {
             .returning(|| Err(TurnkeyError::ConfigError("Invalid public key".to_string())));
 
         let signer = TurnkeySigner::new_for_testing(mock_service);
-        let result = signer.address().await;
+        let result = signer.pubkey().await;
 
         assert!(result.is_err());
     }

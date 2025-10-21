@@ -158,41 +158,11 @@ where
     /// * The transaction format is invalid
     pub(crate) async fn relayer_sign_transaction(
         &self,
-        mut transaction: Transaction,
+        transaction: Transaction,
     ) -> Result<(Transaction, Signature), SolanaRpcError> {
-        // Parse relayer public key
-        let relayer_pubkey = Pubkey::from_str(&self.relayer.address)
-            .map_err(|e| SolanaRpcError::Internal(e.to_string()))?;
-
-        // Find the position of the relayer's public key in account_keys
-        let signer_index = transaction
-            .message
-            .account_keys
-            .iter()
-            .position(|key| *key == relayer_pubkey)
-            .ok_or_else(|| {
-                SolanaRpcError::Internal(
-                    "Relayer public key not found in transaction signers".to_string(),
-                )
-            })?;
-
-        // Check if this is a signer position (within num_required_signatures)
-        if signer_index >= transaction.message.header.num_required_signatures as usize {
-            return Err(SolanaRpcError::Internal(
-                "Relayer is not marked as a required signer in the transaction".to_string(),
-            ));
-        }
-
-        // Generate signature
-        let signature = self.signer.sign(&transaction.message_data()).await?;
-
-        // Resize signatures array and insert signature
-        transaction
-            .signatures
-            .resize(signer_index + 1, Signature::default());
-        transaction.signatures[signer_index] = signature;
-
-        Ok((transaction, signature))
+        crate::services::sign_sdk_transaction(&*self.signer, transaction)
+            .await
+            .map_err(|e| SolanaRpcError::Internal(e.to_string()))
     }
 
     /// Estimates the total fee that the fee payer will incur for a given transaction.
@@ -982,11 +952,7 @@ mod tests {
     };
 
     use super::*;
-    use solana_sdk::{
-        instruction::AccountMeta,
-        signature::{Keypair, Signature},
-        signer::Signer,
-    };
+    use solana_sdk::{instruction::AccountMeta, signature::Keypair, signer::Signer};
     use solana_system_interface::instruction;
     use spl_associated_token_account_interface::{
         address::get_associated_token_address, instruction::create_associated_token_account,
@@ -1001,11 +967,9 @@ mod tests {
         let instruction = instruction::transfer(&relayer_pubkey, &recipient, 1000);
         let message = Message::new(&[instruction], Some(&relayer_pubkey));
         let transaction = Transaction::new_unsigned(message);
-        signer.expect_sign().returning(move |_| {
-            let signature = Signature::new_unique();
-            let signature_clone = signature;
-            Box::pin(async move { Ok(signature_clone) })
-        });
+
+        // Setup signer mocks
+        super::test_setup::setup_signer_mocks(&mut signer, relayer.address.clone());
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
@@ -1476,11 +1440,8 @@ mod tests {
         let recipient = Pubkey::new_unique();
         let amount = 1_000_000;
 
-        let expected_signature = Signature::new_unique();
-        signer.expect_sign().returning(move |_| {
-            let signature_clone = expected_signature;
-            Box::pin(async move { Ok(signature_clone) })
-        });
+        // Setup signer mocks
+        super::test_setup::setup_signer_mocks(&mut signer, relayer.address.clone());
 
         let expected_blockhash = Hash::new_unique();
         let expected_slot = 100u64;
@@ -1511,7 +1472,16 @@ mod tests {
 
         assert_eq!(signed_tx.message.recent_blockhash, expected_blockhash);
         assert_eq!(slot, expected_slot);
-        assert_eq!(signed_tx.signatures[0], expected_signature);
+        assert_eq!(
+            signed_tx.signatures.len(),
+            1,
+            "Transaction should have exactly one signature"
+        );
+        assert_ne!(
+            signed_tx.signatures[0].as_ref(),
+            &[0u8; 64],
+            "Signature should not be default/empty"
+        );
         assert_eq!(
             signed_tx.message.account_keys[0],
             Pubkey::from_str(&relayer_keypair.pubkey().to_string()).unwrap()
@@ -1526,9 +1496,8 @@ mod tests {
         let relayer_keypair = Keypair::new();
         relayer.address = relayer_keypair.pubkey().to_string();
 
-        signer
-            .expect_sign()
-            .returning(|_| Box::pin(async { Ok(Signature::new_unique()) }));
+        // Setup signer mocks
+        super::test_setup::setup_signer_mocks(&mut signer, relayer.address.clone());
 
         provider
             .expect_get_latest_blockhash_with_commitment()

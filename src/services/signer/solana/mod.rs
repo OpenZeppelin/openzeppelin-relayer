@@ -33,16 +33,19 @@ use cdp_signer::*;
 mod google_cloud_kms_signer;
 use google_cloud_kms_signer::*;
 
+use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
+use solana_sdk::transaction::Transaction as SolanaTransaction;
+use std::str::FromStr;
 
 use crate::{
     domain::{
         SignDataRequest, SignDataResponse, SignDataResponseEvm, SignTransactionResponse,
-        SignTypedDataRequest,
+        SignTransactionResponseSolana, SignTypedDataRequest,
     },
     models::{
-        Address, NetworkTransactionData, Signer as SignerDomainModel, SignerConfig,
-        SignerRepoModel, SignerType, TransactionRepoModel, VaultSignerConfig,
+        Address, EncodedSerializedTransaction, NetworkTransactionData, Signer as SignerDomainModel,
+        SignerConfig, SignerRepoModel, SignerType, TransactionRepoModel, VaultSignerConfig,
     },
     services::{CdpService, GoogleCloudKmsService, TurnkeyService, VaultConfig, VaultService},
 };
@@ -64,28 +67,48 @@ pub enum SolanaSigner {
 #[async_trait]
 impl Signer for SolanaSigner {
     async fn address(&self) -> Result<Address, SignerError> {
-        match self {
-            Self::Local(signer) => signer.address().await,
-            Self::Vault(signer) => signer.address().await,
-            Self::VaultTransit(signer) => signer.address().await,
-            Self::Turnkey(signer) => signer.address().await,
-            Self::Cdp(signer) => signer.address().await,
-            Self::GoogleCloudKms(signer) => signer.address().await,
-        }
+        // Delegate to SolanaSignTrait::pubkey() which all inner types implement
+        self.pubkey().await
     }
 
     async fn sign_transaction(
         &self,
         transaction: NetworkTransactionData,
     ) -> Result<SignTransactionResponse, SignerError> {
-        match self {
-            Self::Local(signer) => signer.sign_transaction(transaction).await,
-            Self::Vault(signer) => signer.sign_transaction(transaction).await,
-            Self::VaultTransit(signer) => signer.sign_transaction(transaction).await,
-            Self::Turnkey(signer) => signer.sign_transaction(transaction).await,
-            Self::Cdp(signer) => signer.sign_transaction(transaction).await,
-            Self::GoogleCloudKms(signer) => signer.sign_transaction(transaction).await,
-        }
+        // Extract Solana transaction data
+        let solana_data = transaction.get_solana_transaction_data().map_err(|e| {
+            SignerError::SigningError(format!("Invalid transaction type for Solana signer: {}", e))
+        })?;
+
+        // Get the pre-built transaction string
+        let transaction_str = solana_data.transaction.ok_or_else(|| {
+            SignerError::SigningError(
+                "Transaction not yet built - only available after preparation".to_string(),
+            )
+        })?;
+
+        // Decode transaction from base64
+        let encoded_tx = EncodedSerializedTransaction::new(transaction_str);
+        let sdk_transaction = SolanaTransaction::try_from(encoded_tx).map_err(|e| {
+            SignerError::SigningError(format!("Failed to decode transaction: {}", e))
+        })?;
+
+        // Sign using the SDK transaction signing helper function
+        let (signed_tx, signature) = sign_sdk_transaction(self, sdk_transaction).await?;
+
+        // Encode back to base64
+        let encoded_signed_tx =
+            EncodedSerializedTransaction::try_from(&signed_tx).map_err(|e| {
+                SignerError::SigningError(format!("Failed to encode signed transaction: {}", e))
+            })?;
+
+        // Return Solana-specific response
+        Ok(SignTransactionResponse::Solana(
+            SignTransactionResponseSolana {
+                transaction: encoded_signed_tx,
+                signature: signature.to_string(),
+            },
+        ))
     }
 }
 
@@ -109,6 +132,69 @@ pub trait SolanaSignTrait: Sync + Send {
     ///
     /// A Result containing either the Solana Signature or a SignerError
     async fn sign(&self, message: &[u8]) -> Result<Signature, SignerError>;
+}
+
+/// Signs a raw Solana SDK transaction by finding the signer's position and adding the signature
+///
+/// This helper function:
+/// 1. Retrieves the signer's public key
+/// 2. Finds its position in the transaction's account_keys
+/// 3. Validates it's marked as a required signer
+/// 4. Signs the transaction message
+/// 5. Inserts the signature at the correct position
+///
+/// # Arguments
+///
+/// * `signer` - A type implementing SolanaSignTrait
+/// * `transaction` - The Solana SDK transaction to sign
+///
+/// # Returns
+///
+/// A Result containing either a tuple of (signed Transaction, Signature) or a SignerError
+///
+/// # Note
+///
+/// This is distinct from the `Signer::sign_transaction` method which operates on domain models.
+/// This function works directly with `solana_sdk::transaction::Transaction`.
+pub async fn sign_sdk_transaction<T: SolanaSignTrait + ?Sized>(
+    signer: &T,
+    mut transaction: solana_sdk::transaction::Transaction,
+) -> Result<(solana_sdk::transaction::Transaction, Signature), SignerError> {
+    // Get signer's public key
+    let signer_address = signer.pubkey().await?;
+    let signer_pubkey = Pubkey::from_str(&signer_address.to_string())
+        .map_err(|e| SignerError::KeyError(format!("Invalid signer address: {}", e)))?;
+
+    // Find the position of the signer's public key in account_keys
+    let signer_index = transaction
+        .message
+        .account_keys
+        .iter()
+        .position(|key| *key == signer_pubkey)
+        .ok_or_else(|| {
+            SignerError::SigningError(
+                "Signer public key not found in transaction signers".to_string(),
+            )
+        })?;
+
+    // Check if this is a signer position (within num_required_signatures)
+    if signer_index >= transaction.message.header.num_required_signatures as usize {
+        return Err(SignerError::SigningError(format!(
+            "Signer is not marked as a required signer in the transaction (position {} >= {})",
+            signer_index, transaction.message.header.num_required_signatures
+        )));
+    }
+
+    // Generate signature
+    let signature = signer.sign(&transaction.message_data()).await?;
+
+    // Resize signatures array and insert signature
+    transaction
+        .signatures
+        .resize(signer_index + 1, Signature::default());
+    transaction.signatures[signer_index] = signature;
+
+    Ok((transaction, signature))
 }
 
 #[async_trait]
@@ -549,5 +635,22 @@ mod solana_signer_factory_tests {
         let signature = signer.sign(message).await;
 
         assert!(signature.is_ok());
+    }
+}
+
+#[cfg(test)]
+#[async_trait]
+impl Signer for MockSolanaSignTrait {
+    async fn address(&self) -> Result<Address, SignerError> {
+        self.pubkey().await
+    }
+
+    async fn sign_transaction(
+        &self,
+        _transaction: NetworkTransactionData,
+    ) -> Result<SignTransactionResponse, SignerError> {
+        Err(SignerError::NotImplemented(
+            "sign_transaction not implemented for MockSolanaSignTrait".to_string(),
+        ))
     }
 }

@@ -114,27 +114,6 @@ impl<T: VaultServiceTrait> SolanaSignTrait for VaultTransitSigner<T> {
     }
 }
 
-#[async_trait]
-impl<T: VaultServiceTrait> Signer for VaultTransitSigner<T> {
-    async fn address(&self) -> Result<Address, SignerError> {
-        let raw_pubkey =
-            base64_decode(&self.pubkey).map_err(|e| SignerError::KeyError(e.to_string()))?;
-        let pubkey = bs58::encode(&raw_pubkey).into_string();
-        let address: Address = Address::Solana(pubkey);
-
-        Ok(address)
-    }
-
-    async fn sign_transaction(
-        &self,
-        _transaction: NetworkTransactionData,
-    ) -> Result<SignTransactionResponse, SignerError> {
-        Err(SignerError::NotImplemented(
-            "sign_transaction is not implemented".to_string(),
-        ))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,31 +201,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sign_transaction_with_mock() {
-        let mock_vault_service = MockVaultServiceTrait::new();
-        let key_name = "test-key";
-
-        let signer = VaultTransitSigner::new_for_testing(
-            key_name.to_string(),
-            "9zzYYGQM9prm/xXgn6Vwas/TVgteDaACCm1zW1ouKQs=".to_string(),
-            mock_vault_service,
-        );
-        let transaction_data = NetworkTransactionData::Solana(SolanaTransactionData {
-            transaction: Some("transaction_123".to_string()),
-            ..Default::default()
-        });
-
-        let result = signer.sign_transaction(transaction_data).await;
-
-        match result {
-            Err(SignerError::NotImplemented(msg)) => {
-                assert_eq!(msg, "sign_transaction is not implemented".to_string());
-            }
-            _ => panic!("Expected SignerError::NotImplemented"),
-        }
-    }
-
-    #[tokio::test]
     async fn test_pubkey_returns_correct_address() {
         let mock_vault_service = MockVaultServiceTrait::new();
         let base64_pubkey = "9zzYYGQM9prm/xXgn6Vwas/TVgteDaACCm1zW1ouKQs=";
@@ -258,19 +212,10 @@ mod tests {
         );
 
         let result = signer.pubkey().await;
-        let result_address = signer.address().await;
 
         // Assert
         assert!(result.is_ok());
-        assert!(result_address.is_ok());
         match result.unwrap() {
-            Address::Solana(pubkey) => {
-                // The expected base58 encoded representation of the public key
-                assert_eq!(pubkey, "He7WmJPCHfaJYHhMqK7QePfRT1JC5JC4UXxf3gnQhN3L");
-            }
-            _ => panic!("Expected Address::Solana variant"),
-        }
-        match result_address.unwrap() {
             Address::Solana(pubkey) => {
                 // The expected base58 encoded representation of the public key
                 assert_eq!(pubkey, "He7WmJPCHfaJYHhMqK7QePfRT1JC5JC4UXxf3gnQhN3L");

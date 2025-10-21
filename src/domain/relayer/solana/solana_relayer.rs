@@ -12,7 +12,7 @@ use std::{str::FromStr, sync::Arc};
 use crate::constants::SOLANA_STATUS_CHECK_INITIAL_DELAY_SECONDS;
 use crate::domain::{
     Relayer, SignDataRequest, SignTransactionExternalResponse, SignTransactionRequest,
-    SignTransactionResponseSolana, SignTypedDataRequest,
+    SignTransactionResponse, SignTypedDataRequest,
 };
 use crate::jobs::{TransactionRequest, TransactionStatusCheck};
 use crate::models::{DeletePendingTransactionsResponse, RelayerStatus, RepositoryError};
@@ -29,24 +29,23 @@ use crate::{
     jobs::{JobProducerTrait, RelayerHealthCheck, SolanaTokenSwapRequest},
     models::{
         produce_relayer_disabled_payload, produce_solana_dex_webhook_payload, DisabledReason,
-        EncodedSerializedTransaction, HealthCheckFailure, JsonRpcRequest, JsonRpcResponse,
-        NetworkRepoModel, NetworkRpcRequest, NetworkRpcResult, NetworkType, RelayerNetworkPolicy,
+        HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest,
+        NetworkRpcResult, NetworkTransactionData, NetworkType, RelayerNetworkPolicy,
         RelayerRepoModel, RelayerSolanaPolicy, SolanaAllowedTokensPolicy, SolanaDexPayload,
-        SolanaFeePaymentStrategy, SolanaNetwork, TransactionRepoModel, TransactionStatus,
+        SolanaFeePaymentStrategy, SolanaNetwork, SolanaTransactionData, TransactionRepoModel,
+        TransactionStatus,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
-        JupiterService, JupiterServiceTrait, SolanaProvider, SolanaProviderTrait, SolanaSignTrait,
-        SolanaSigner,
+        JupiterService, JupiterServiceTrait, Signer, SolanaProvider, SolanaProviderTrait,
+        SolanaSignTrait, SolanaSigner,
     },
 };
 
 use async_trait::async_trait;
 use eyre::Result;
 use futures::future::try_join_all;
-use solana_sdk::{
-    account::Account, pubkey::Pubkey, signature::Signature, transaction::Transaction,
-};
+use solana_sdk::{account::Account, pubkey::Pubkey};
 use tracing::{debug, error, info, warn};
 
 use super::{NetworkDex, SolanaRpcError, SolanaTokenProgram, SwapResult, TokenAccount};
@@ -64,7 +63,7 @@ where
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
-    S: SolanaSignTrait + Send + Sync + 'static,
+    S: SolanaSignTrait + Signer + Send + Sync + 'static,
     JS: JupiterServiceTrait + Send + Sync + 'static,
     SP: SolanaProviderTrait + Send + Sync + 'static,
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
@@ -89,7 +88,7 @@ where
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
-    S: SolanaSignTrait + Send + Sync + 'static,
+    S: SolanaSignTrait + Signer + Send + Sync + 'static,
     JS: JupiterServiceTrait + Send + Sync + 'static,
     SP: SolanaProviderTrait + Send + Sync + 'static,
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
@@ -321,7 +320,7 @@ where
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
-    S: SolanaSignTrait + Send + Sync + 'static,
+    S: SolanaSignTrait + Signer + Send + Sync + 'static,
     JS: JupiterServiceTrait + Send + Sync + 'static,
     SP: SolanaProviderTrait + Send + Sync + 'static,
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
@@ -520,7 +519,7 @@ where
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
-    S: SolanaSignTrait + Send + Sync + 'static,
+    S: SolanaSignTrait + Signer + Send + Sync + 'static,
     JS: JupiterServiceTrait + Send + Sync + 'static,
     SP: SolanaProviderTrait + Send + Sync + 'static,
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
@@ -667,83 +666,37 @@ where
             }
         };
 
-        // Parse transaction from base64 encoded bytes
-        let mut transaction = Transaction::try_from(transaction_bytes.clone()).map_err(|e| {
-            error!(
-                %e,
-                id = %self.relayer.id,
-                "Failed to decode transaction",
-            );
-            RelayerError::ProviderError(format!("Failed to decode transaction: {}", e))
-        })?;
+        // Prepare transaction data for signing
+        let transaction_data = NetworkTransactionData::Solana(SolanaTransactionData {
+            transaction: Some(transaction_bytes.clone().into_inner()),
+            ..Default::default()
+        });
 
-        // Parse relayer public key
-        let relayer_pubkey = Pubkey::from_str(&self.relayer.address).map_err(|e| {
-            error!(
-                %e,
-                id = %self.relayer.id,
-                "Invalid relayer address",
-            );
-            RelayerError::NetworkConfiguration(format!("Invalid relayer address: {}", e))
-        })?;
-
-        // Find the position of the relayer's public key in account_keys
-        let signer_index = transaction
-            .message
-            .account_keys
-            .iter()
-            .position(|key| *key == relayer_pubkey)
-            .ok_or_else(|| {
-                error!(
-                    %relayer_pubkey,
-                    id = %self.relayer.id,
-                    "Relayer public key not found in transaction signers",
-                );
-                RelayerError::ProviderError(
-                    "Relayer public key not found in transaction signers".to_string(),
-                )
-            })?;
-
-        // Check if this is a signer position (within num_required_signatures)
-        if signer_index >= transaction.message.header.num_required_signatures as usize {
-            error!(
-                %signer_index,
-                %transaction.message.header.num_required_signatures,
-                %relayer_pubkey,
-                id = %self.relayer.id,
-                "Relayer is not marked as a required  signer in the transaction",
-            );
-            return Err(RelayerError::ProviderError(
-                "Relayer is not marked as a required signer in the transaction".to_string(),
-            ));
-        }
-
-        // Generate signature
-        let signature = self
+        // Sign the transaction using the signer trait
+        let response = self
             .signer
-            .sign(&transaction.message_data())
+            .sign_transaction(transaction_data)
             .await
-            .map_err(RelayerError::SignerError)?;
-
-        // Resize signatures array and insert signature
-        transaction
-            .signatures
-            .resize(signer_index + 1, Signature::default());
-
-        transaction.signatures[signer_index] = signature;
-
-        // Convert signed transaction to base64 encoded format
-        let encoded_transaction =
-            EncodedSerializedTransaction::try_from(&transaction).map_err(|e| {
-                RelayerError::ProviderError(format!("Failed to encode transaction: {}", e))
+            .map_err(|e| {
+                error!(
+                    %e,
+                    id = %self.relayer.id,
+                    "Failed to sign transaction",
+                );
+                RelayerError::SignerError(e)
             })?;
 
-        Ok(SignTransactionExternalResponse::Solana(
-            SignTransactionResponseSolana {
-                transaction: encoded_transaction,
-                signature: signature.to_string(),
-            },
-        ))
+        // Extract Solana-specific response
+        let solana_response = match response {
+            SignTransactionResponse::Solana(resp) => resp,
+            _ => {
+                return Err(RelayerError::ProviderError(
+                    "Unexpected response type from Solana signer".to_string(),
+                ))
+            }
+        };
+
+        Ok(SignTransactionExternalResponse::Solana(solana_response))
     }
 
     async fn rpc(
