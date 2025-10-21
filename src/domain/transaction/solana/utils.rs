@@ -12,7 +12,8 @@ use std::str::FromStr;
 use crate::{
     constants::MAXIMUM_SOLANA_TX_ATTEMPTS,
     models::{
-        EncodedSerializedTransaction, SolanaInstructionSpec, TransactionError, TransactionRepoModel,
+        EncodedSerializedTransaction, SolanaInstructionSpec, SolanaTransactionStatus,
+        TransactionError, TransactionRepoModel, TransactionStatus,
     },
 };
 
@@ -41,6 +42,25 @@ pub fn too_many_solana_attempts(tx: &TransactionRepoModel) -> bool {
 /// - **Submit phase**: Decide whether BlockhashNotFound error is retriable
 pub fn is_resubmitable(tx: &SolanaTransaction) -> bool {
     tx.message.header.num_required_signatures <= 1
+}
+
+/// Maps Solana on-chain transaction status to repository transaction status.
+///
+/// This mapping is used consistently across status checks to ensure uniform
+/// status transitions:
+/// - `Processed` → `Mined`: Transaction included in a block
+/// - `Confirmed` → `Mined`: Transaction confirmed by supermajority
+/// - `Finalized` → `Confirmed`: Transaction finalized (irreversible)
+/// - `Failed` → `Failed`: Transaction failed on-chain
+pub fn map_solana_status_to_transaction_status(
+    solana_status: SolanaTransactionStatus,
+) -> TransactionStatus {
+    match solana_status {
+        SolanaTransactionStatus::Processed => TransactionStatus::Mined,
+        SolanaTransactionStatus::Confirmed => TransactionStatus::Mined,
+        SolanaTransactionStatus::Finalized => TransactionStatus::Confirmed,
+        SolanaTransactionStatus::Failed => TransactionStatus::Failed,
+    }
 }
 
 /// Decodes a Solana transaction from the transaction repository model.

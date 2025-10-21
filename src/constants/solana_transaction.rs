@@ -31,7 +31,7 @@ pub const SOLANA_STATUS_CHECK_INITIAL_DELAY_SECONDS: i64 = 5;
 
 /// Minimum age before checking for resubmit/expiration (in seconds)
 /// If transaction is younger than this, we don't check blockhash expiration yet
-pub const SOLANA_MIN_AGE_FOR_RESUBMIT_CHECK_SECONDS: i64 = 60;
+pub const SOLANA_MIN_AGE_FOR_RESUBMIT_CHECK_SECONDS: i64 = 90;
 
 /// Timeout for Pending status: transaction preparation phase (in minutes)
 /// If a transaction stays in Pending for longer than this, mark as Failed

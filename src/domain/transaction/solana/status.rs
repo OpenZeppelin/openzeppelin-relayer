@@ -8,6 +8,7 @@ use crate::constants::{
     SOLANA_MIN_AGE_FOR_RESUBMIT_CHECK_SECONDS, SOLANA_PENDING_TIMEOUT_MINUTES,
     SOLANA_SENT_TIMEOUT_MINUTES,
 };
+use crate::models::{NetworkTransactionData, SolanaTransactionData};
 use chrono::{DateTime, Duration, Utc};
 use solana_commitment_config::CommitmentConfig;
 use solana_sdk::{signature::Signature, transaction::Transaction as SolanaTransaction};
@@ -15,8 +16,10 @@ use std::str::FromStr;
 use tracing::{debug, error, info, warn};
 
 use super::{utils::decode_solana_transaction, SolanaRelayerTransaction};
-use crate::domain::transaction::solana::utils::too_many_solana_attempts;
-use crate::domain::transaction::{common::is_final_state, solana::utils::is_resubmitable};
+use crate::domain::transaction::common::is_final_state;
+use crate::domain::transaction::solana::utils::{
+    is_resubmitable, map_solana_status_to_transaction_status, too_many_solana_attempts,
+};
 use crate::services::{SolanaProviderError, SolanaSignTrait};
 use crate::{
     jobs::{JobProducerTrait, TransactionRequest, TransactionSend},
@@ -116,13 +119,7 @@ where
         match self.provider().get_transaction_status(&signature).await {
             Ok(solana_status) => {
                 // Map Solana on-chain status to repository status
-                let new_status = match solana_status {
-                    SolanaTransactionStatus::Processed => TransactionStatus::Mined,
-                    SolanaTransactionStatus::Confirmed => TransactionStatus::Mined,
-                    SolanaTransactionStatus::Finalized => TransactionStatus::Confirmed,
-                    SolanaTransactionStatus::Failed => TransactionStatus::Failed,
-                };
-                Ok(new_status)
+                Ok(map_solana_status_to_transaction_status(solana_status))
             }
             Err(e) => {
                 // Transaction not found or error querying
@@ -140,14 +137,20 @@ where
 
     /// Update transaction status in DB and send notification (unconditionally)
     ///
-    /// Used internally by update_transaction_status_if_needed
+    /// Optionally updates network_data along with status. This is useful when
+    /// updating the signature field after finding a transaction on-chain.
+    ///
+    /// Used internally by update_transaction_status_if_needed and
+    /// handle_resubmit_or_expiration
     async fn update_transaction_status_and_send_notification(
         &self,
         tx: TransactionRepoModel,
         new_status: TransactionStatus,
+        network_data: Option<crate::models::NetworkTransactionData>,
     ) -> Result<TransactionRepoModel, TransactionError> {
         let update_request = TransactionUpdateRequest {
             status: Some(new_status.clone()),
+            network_data,
             confirmed_at: if matches!(new_status, TransactionStatus::Confirmed) {
                 Some(Utc::now().to_rfc3339())
             } else {
@@ -187,7 +190,7 @@ where
     ) -> Result<TransactionRepoModel, TransactionError> {
         if tx.status != new_status {
             return self
-                .update_transaction_status_and_send_notification(tx, new_status)
+                .update_transaction_status_and_send_notification(tx, new_status, None)
                 .await;
         }
         Ok(tx)
@@ -269,6 +272,68 @@ where
                 None
             }
         }
+    }
+
+    /// Check if any previous signature from the transaction is already on-chain.
+    ///
+    /// This prevents double-execution by verifying that none of the previous
+    /// submission attempts are already processed before resubmitting with a new blockhash.
+    ///
+    /// Returns:
+    /// - `Ok(Some((signature, status)))` if a signature was found on-chain
+    /// - `Ok(None)` if no signature was found on-chain
+    ///
+    /// Critical for handling race conditions where:
+    /// - Transaction was sent but DB update failed
+    /// - Transaction is in mempool when resubmit logic runs
+    /// - RPC indexing lag causes signature lookup to fail temporarily
+    async fn check_any_signature_on_chain(
+        &self,
+        tx: &TransactionRepoModel,
+    ) -> Result<Option<(String, SolanaTransactionStatus)>, TransactionError> {
+        // Check all previous signatures stored in hashes
+        for (idx, sig_str) in tx.hashes.iter().enumerate() {
+            let signature = match Signature::from_str(sig_str) {
+                Ok(sig) => sig,
+                Err(e) => {
+                    warn!(
+                        tx_id = %tx.id,
+                        signature = %sig_str,
+                        error = %e,
+                        "invalid signature format in hashes, skipping"
+                    );
+                    continue;
+                }
+            };
+
+            match self.provider().get_transaction_status(&signature).await {
+                Ok(solana_status) => {
+                    // Found on-chain! This signature was processed
+                    info!(
+                        tx_id = %tx.id,
+                        signature = %sig_str,
+                        signature_idx = idx,
+                        on_chain_status = ?solana_status,
+                        "found transaction on-chain with previous signature"
+                    );
+                    return Ok(Some((sig_str.clone(), solana_status)));
+                }
+                Err(e) => {
+                    // Signature not found or RPC error - continue checking others
+                    debug!(
+                        tx_id = %tx.id,
+                        signature = %sig_str,
+                        signature_idx = idx,
+                        error = %e,
+                        "signature not found on-chain or RPC error"
+                    );
+                    continue;
+                }
+            }
+        }
+
+        // No signatures found on-chain
+        Ok(None)
     }
 
     /// Check if the blockhash in the transaction is still valid
@@ -478,10 +543,47 @@ where
             return Ok(tx);
         }
 
-        // Step 4: Decode transaction to extract blockhash
+        // Step 4: Check if any previous signature is already on-chain
+        // This prevents double-execution if:
+        // - Transaction was sent but DB update failed
+        // - Transaction is still in mempool/processing
+        // - RPC had temporary indexing lag
+        // - Jobs timeouts causing double-execution
+        if let Some((found_signature, solana_status)) =
+            self.check_any_signature_on_chain(&tx).await?
+        {
+            info!(
+                tx_id = %tx.id,
+                signature = %found_signature,
+                on_chain_status = ?solana_status,
+                "transaction found on-chain with previous signature, updating to final state"
+            );
+
+            // Map Solana on-chain status to repository status
+            let new_status = map_solana_status_to_transaction_status(solana_status);
+
+            // Update transaction with correct signature and status
+            let solana_data = tx.network_data.get_solana_transaction_data()?;
+            let updated_solana_data = SolanaTransactionData {
+                signature: Some(found_signature),
+                ..solana_data
+            };
+            let updated_network_data = NetworkTransactionData::Solana(updated_solana_data);
+
+            // Update status, signature, and send notification using shared method
+            return self
+                .update_transaction_status_and_send_notification(
+                    tx,
+                    new_status,
+                    Some(updated_network_data),
+                )
+                .await;
+        }
+
+        // Step 5: Decode transaction to extract blockhash
         let transaction = decode_solana_transaction(&tx)?;
 
-        // Step 5: Check if blockhash is expired
+        // Step 6: Check if blockhash is expired
         let blockhash_valid = self.is_blockhash_valid(&transaction).await?;
 
         if blockhash_valid {
@@ -497,7 +599,7 @@ where
             "blockhash has expired, checking if transaction can be resubmitted"
         );
 
-        // Step 6: Check if transaction can be resubmitted
+        // Step 7: Check if transaction can be resubmitted
         if is_resubmitable(&transaction) {
             info!(
                 tx_id = %tx.id,
