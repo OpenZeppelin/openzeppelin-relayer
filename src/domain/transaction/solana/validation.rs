@@ -15,6 +15,7 @@ use crate::{
     models::RelayerSolanaPolicy,
     services::SolanaProviderTrait,
 };
+use serde::Serialize;
 use solana_client::rpc_response::RpcSimulateTransactionResult;
 use solana_commitment_config::CommitmentConfig;
 use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
@@ -22,7 +23,7 @@ use solana_system_interface::{instruction::SystemInstruction, program};
 use thiserror::Error;
 use tracing::info;
 
-#[derive(Debug, Error, serde::Serialize)]
+#[derive(Debug, Error, Serialize)]
 #[allow(dead_code)]
 pub enum SolanaTransactionValidationError {
     #[error("Failed to decode transaction: {0}")]

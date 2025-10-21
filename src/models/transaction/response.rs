@@ -1,7 +1,7 @@
 use crate::{
     models::{
-        evm::Speed, EvmTransactionDataSignature, NetworkTransactionData, TransactionRepoModel,
-        TransactionStatus, U256,
+        evm::Speed, EvmTransactionDataSignature, NetworkTransactionData, SolanaInstructionSpec,
+        TransactionRepoModel, TransactionStatus, U256,
     },
     utils::{deserialize_optional_u128, deserialize_optional_u64, serialize_optional_u128},
 };
@@ -69,17 +69,24 @@ pub struct EvmTransactionResponse {
 #[derive(Debug, Serialize, Clone, PartialEq, Deserialize, ToSchema)]
 pub struct SolanaTransactionResponse {
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub signature: Option<String>,
     pub status: TransactionStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub status_reason: Option<String>,
     pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub sent_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub confirmed_at: Option<String>,
-    #[schema(nullable = false)]
     pub transaction: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub instructions: Option<Vec<SolanaInstructionSpec>>,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Deserialize, ToSchema)]
@@ -136,6 +143,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     sent_at: model.sent_at,
                     confirmed_at: model.confirmed_at,
                     signature: solana_data.signature,
+                    instructions: solana_data.instructions,
                 }))
             }
             NetworkTransactionData::Stellar(stellar_data) => {

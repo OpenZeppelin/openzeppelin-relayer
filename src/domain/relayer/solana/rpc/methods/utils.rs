@@ -45,7 +45,7 @@ use solana_sdk::{
 };
 use solana_system_interface::{instruction::SystemInstruction, program};
 use spl_token_interface::state::Account;
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::{
     constants::{
@@ -936,6 +936,72 @@ where
                 SolanaRpcError::Internal(e.to_string())
             })?;
         Ok(())
+    }
+
+    /// Reconstruct a Transaction from an existing Transaction by replacing the fee payer
+    /// with `fee_payer`. This recalculates message metadata (num_required_signatures,
+    /// account ordering) and returns a new unsigned Transaction with signature slots initialized.
+    pub(crate) fn reconstruct_transaction_with_fee_payer(
+        &self,
+        message: &Message,
+        fee_payer: &Pubkey,
+        blockhash: &Hash,
+    ) -> Result<Transaction, SolanaRpcError> {
+        fn is_writable(index: usize, header: &MessageHeader, total: usize) -> bool {
+            if index < header.num_required_signatures as usize {
+                index
+                    < (header.num_required_signatures - header.num_readonly_signed_accounts)
+                        as usize
+            } else {
+                let non_signer_index = index - header.num_required_signatures as usize;
+                non_signer_index
+                    < (total - header.num_required_signatures as usize)
+                        - header.num_readonly_unsigned_accounts as usize
+            }
+        }
+
+        let account_keys = &message.account_keys;
+        let header = &message.header;
+        let mut instructions = Vec::with_capacity(message.instructions.len());
+
+        for compiled_ix in &message.instructions {
+            if compiled_ix.program_id_index as usize >= account_keys.len() {
+                return Err(SolanaRpcError::Internal(
+                    "Invalid program id index".to_string(),
+                ));
+            }
+
+            let mut accounts = Vec::with_capacity(compiled_ix.accounts.len());
+            for &index in &compiled_ix.accounts {
+                if index as usize >= account_keys.len() {
+                    return Err(SolanaRpcError::Internal(
+                        "Invalid account index".to_string(),
+                    ));
+                }
+                let pubkey = account_keys[index as usize];
+                let is_signer = (index as usize) < header.num_required_signatures as usize;
+                let writable = is_writable(index as usize, header, account_keys.len());
+
+                accounts.push(match (is_signer, writable) {
+                    (true, true) => AccountMeta::new(pubkey, true),
+                    (true, false) => AccountMeta::new_readonly(pubkey, true),
+                    (false, true) => AccountMeta::new(pubkey, false),
+                    (false, false) => AccountMeta::new_readonly(pubkey, false),
+                });
+            }
+
+            instructions.push(Instruction {
+                program_id: account_keys[compiled_ix.program_id_index as usize],
+                accounts,
+                data: compiled_ix.data.clone(),
+            });
+        }
+
+        let message = Message::new_with_blockhash(&instructions, Some(fee_payer), blockhash);
+        Ok(Transaction {
+            signatures: vec![Signature::default(); message.header.num_required_signatures as usize],
+            message,
+        })
     }
 }
 

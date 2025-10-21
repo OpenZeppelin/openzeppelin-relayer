@@ -241,7 +241,7 @@ where
                         })?
                         .into_inner(),
                 ),
-                ..Default::default()
+                instructions: solana_data.instructions,
             })),
             ..Default::default()
         };

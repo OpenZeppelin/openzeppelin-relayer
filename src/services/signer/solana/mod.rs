@@ -188,10 +188,14 @@ pub async fn sign_sdk_transaction<T: SolanaSignTrait + ?Sized>(
     // Generate signature
     let signature = signer.sign(&transaction.message_data()).await?;
 
-    // Resize signatures array and insert signature
+    // Ensure signatures array has exactly num_required_signatures slots
+    // This preserves any existing signatures and doesn't shrink the array
+    let num_required = transaction.message.header.num_required_signatures as usize;
     transaction
         .signatures
-        .resize(signer_index + 1, Signature::default());
+        .resize(num_required, Signature::default());
+
+    // Set our signature at the correct index
     transaction.signatures[signer_index] = signature;
 
     Ok((transaction, signature))

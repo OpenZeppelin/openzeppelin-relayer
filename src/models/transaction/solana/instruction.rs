@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 /// Specification for a Solana instruction
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq)]
 pub struct SolanaInstructionSpec {
     /// Program ID (base58-encoded pubkey)
     pub program_id: String,
@@ -15,7 +15,7 @@ pub struct SolanaInstructionSpec {
 }
 
 /// Account metadata for a Solana instruction
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq)]
 pub struct SolanaAccountMeta {
     /// Account public key (base58-encoded)
     pub pubkey: String,

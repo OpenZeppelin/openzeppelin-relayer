@@ -744,34 +744,32 @@ impl SolanaProviderTrait for SolanaProvider {
         &self,
         pubkey: &str,
     ) -> Result<TokenMetadata, SolanaProviderError> {
-        // Convert provided string into a Pubkey first (validation)
-        let mint_pubkey = Pubkey::try_from(pubkey).map_err(|e| {
+        // Parse and validate pubkey once
+        let mint_pubkey = Pubkey::from_str(pubkey).map_err(|e| {
             SolanaProviderError::InvalidAddress(format!("Invalid pubkey {}: {}", pubkey, e))
         })?;
 
-        // Retrieve account associated with the given pubkey
-        // Don't wrap error - it's already properly classified
-        let account = self.get_account_from_str(pubkey).await?;
+        // Retrieve account using already-parsed pubkey (avoids re-parsing)
+        let account = self.get_account_from_pubkey(&mint_pubkey).await?;
 
         // Unpack the mint info from the account's data
-        let mint_info = Mint::unpack(&account.data).map_err(|e| {
-            SolanaProviderError::InvalidTransaction(format!(
-                "Failed to unpack mint info for {}: {}",
-                pubkey, e
-            ))
-        })?;
-        let decimals = mint_info.decimals;
+        let decimals = Mint::unpack(&account.data)
+            .map_err(|e| {
+                SolanaProviderError::InvalidTransaction(format!(
+                    "Failed to unpack mint info for {}: {}",
+                    pubkey, e
+                ))
+            })?
+            .decimals;
 
         // Derive the PDA for the token metadata
-        // Convert solana_sdk::Pubkey to solana_program::Pubkey for mpl-token-metadata
+        // Convert bytes directly between Pubkey types (no string conversion needed)
         let mint_pubkey_program =
-            solana_program::pubkey::Pubkey::from_str(&mint_pubkey.to_string()).map_err(|e| {
-                SolanaProviderError::InvalidAddress(format!("Invalid mint pubkey: {}", e))
-            })?;
+            solana_program::pubkey::Pubkey::new_from_array(mint_pubkey.to_bytes());
         let metadata_pda_program = Metadata::find_pda(&mint_pubkey_program).0;
-        let metadata_pda = Pubkey::from_str(&metadata_pda_program.to_string()).map_err(|e| {
-            SolanaProviderError::InvalidAddress(format!("Invalid metadata PDA: {}", e))
-        })?;
+
+        // Convert bytes directly (no string conversion)
+        let metadata_pda = Pubkey::new_from_array(metadata_pda_program.to_bytes());
 
         let symbol = match self.get_account_from_pubkey(&metadata_pda).await {
             Ok(metadata_account) => match Metadata::from_bytes(&metadata_account.data) {

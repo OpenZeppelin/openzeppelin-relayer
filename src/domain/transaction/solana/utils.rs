@@ -24,7 +24,7 @@ use crate::{
 ///
 /// Similar to EVM's `too_many_attempts` but tailored for Solana's resubmission behavior.
 pub fn too_many_solana_attempts(tx: &TransactionRepoModel) -> bool {
-    tx.hashes.len() > MAXIMUM_SOLANA_TX_ATTEMPTS
+    tx.hashes.len() >= MAXIMUM_SOLANA_TX_ATTEMPTS
 }
 
 /// Determines if a transaction's blockhash can be safely updated.

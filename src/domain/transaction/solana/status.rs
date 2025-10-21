@@ -475,12 +475,15 @@ where
 
     /// Handle resubmit or expiration logic based on blockhash validity
     ///
-    /// This is the core logic that:
-    /// 1. Checks if valid_until has expired
-    /// 2. Checks if status-based timeout exceeded
-    /// 3. Checks if enough time has passed (60s)
-    /// 4. Checks if blockhash is expired
-    /// 5. Schedules resubmit if possible, or marks as expired/failed
+    /// This method performs the following steps:
+    /// 1. Checks if the transaction's `valid_until` timestamp has expired.
+    /// 2. Verifies if the transaction has exceeded status-based timeouts or attempt limits.
+    /// 3. Ensures enough time has passed since `sent_at` or `created_at` for resubmission checks.
+    /// 4. Checks if any previous signatures are already on-chain to prevent double-execution.
+    /// 5. Validates the blockhash and schedules a resubmit job if expired and resubmitable.
+    /// 6. Marks the transaction as expired or failed if resubmission is not possible.
+    ///
+    /// Returns the updated transaction or an error if the operation fails.
     async fn handle_resubmit_or_expiration(
         &self,
         tx: TransactionRepoModel,
@@ -1167,7 +1170,6 @@ mod tests {
         let job_producer = MockJobProducerTrait::new();
 
         // Create transaction with too many signatures (attempts exceeded)
-        use MAXIMUM_SOLANA_TX_ATTEMPTS;
         let signature_str =
             "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
         let mut tx = create_tx_with_signature(TransactionStatus::Submitted, Some(signature_str));

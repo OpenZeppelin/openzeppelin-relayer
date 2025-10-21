@@ -166,18 +166,28 @@ where
                 .get_latest_blockhash_with_commitment(CommitmentConfig::finalized())
                 .await?;
 
-            // Create new transaction message with relayer as fee payer
             let mut message = transaction_request.message.clone();
             message.recent_blockhash = recent_blockhash.0;
 
-            // Update fee payer if needed
             if message.account_keys[0] != *relayer_pubkey {
-                message.account_keys[0] = *relayer_pubkey;
+                // Reconstruct the message with relayer as fee payer
+                // This properly recalculates num_required_signatures, deduplicates accounts,
+                // and maintains correct account ordering (signers first, writable before readonly)
+                message = self
+                    .reconstruct_transaction_with_fee_payer(
+                        &message,
+                        relayer_pubkey,
+                        &recent_blockhash.0,
+                    )?
+                    .message;
             }
 
-            // Create transaction with updated message
+            // Create transaction with reconstructed message
             let transaction = Transaction {
-                signatures: vec![Signature::default()],
+                signatures: vec![
+                    Signature::default();
+                    message.header.num_required_signatures as usize
+                ],
                 message,
             };
 
@@ -229,6 +239,9 @@ async fn validate_prepare_transaction<P: SolanaProviderTrait + Send + Sync>(
 mod tests {
 
     use std::str::FromStr;
+
+    use base64::prelude::BASE64_STANDARD;
+    use base64::Engine;
 
     use super::*;
     use crate::{
@@ -753,9 +766,12 @@ mod tests {
             })
         });
 
-        // Create test transaction
-        let ix = instruction::transfer(&Pubkey::new_unique(), &Pubkey::new_unique(), 1000);
-        let message = Message::new(&[ix], Some(&relayer_keypair.pubkey()));
+        // Create test transaction from a user (not relayer)
+        // prepare_transaction will replace fee payer with relayer and sign with relayer's key
+        let user = Keypair::new();
+        let recipient = Pubkey::new_unique();
+        let ix = instruction::transfer(&user.pubkey(), &recipient, 1000);
+        let message = Message::new(&[ix], Some(&user.pubkey()));
         let transaction = Transaction::new_unsigned(message);
         let encoded_tx = EncodedSerializedTransaction::try_from(&transaction).unwrap();
 
@@ -780,21 +796,208 @@ mod tests {
         let prepare_result = result.unwrap();
         let final_tx = Transaction::try_from(prepare_result.transaction).unwrap();
 
-        // Verify signature presence and correctness
+        // Verify signature structure
+        // After reconstruction, the message should properly calculate that we need 2 signatures:
+        // 1. Relayer (fee payer)
+        // 2. User (source/owner of transferred funds)
         assert_eq!(
             final_tx.signatures.len(),
-            1,
-            "Transaction should have exactly one signature"
+            final_tx.message.header.num_required_signatures as usize,
+            "Signatures array should match num_required_signatures"
         );
-        assert_ne!(
-            final_tx.signatures[0].as_ref(),
-            &[0u8; 64],
-            "Transaction signature should not be default/empty"
+        assert_eq!(
+            final_tx.message.header.num_required_signatures, 2,
+            "Transaction should require 2 signatures (relayer as fee payer + user as source)"
         );
+
+        // Fee payer (first account) should be relayer
         assert_eq!(
             final_tx.message.account_keys[0].to_string(),
             relayer_keypair.pubkey().to_string(),
             "Fee payer should match relayer address"
+        );
+
+        // Relayer signature should be present and not default
+        assert_ne!(
+            final_tx.signatures[0].as_ref(),
+            &[0u8; 64],
+            "Relayer signature should not be default/empty"
+        );
+
+        // User signature slot should exist and remain default (unsigned - user signs later)
+        assert_eq!(
+            final_tx.signatures[1].as_ref(),
+            &[0u8; 64],
+            "User signature should remain default (unsigned)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_prepare_transaction_token_transfer_with_user_as_fee_payer() {
+        // This test verifies the fix for the critical bug where a user submits a token
+        // transfer with themselves as both fee payer AND token owner. Before the fix,
+        // prepare_transaction would incorrectly leave num_required_signatures=1 after
+        // replacing the fee payer, creating an invalid transaction.
+        let (mut relayer, mut signer, mut provider, jupiter_service, _, job_producer, network) =
+            setup_test_context();
+
+        let relayer_keypair = Keypair::new();
+        relayer.address = relayer_keypair.pubkey().to_string();
+        relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
+            min_balance: Some(100_000_000),
+            allowed_tokens: Some(vec![
+                SolanaAllowedTokensPolicy {
+                    mint: WRAPPED_SOL_MINT.to_string(),
+                    symbol: Some("SOL".to_string()),
+                    decimals: Some(9),
+                    max_allowed_fee: None,
+                    swap_config: Some(SolanaAllowedTokensSwapConfig {
+                        ..Default::default()
+                    }),
+                },
+                SolanaAllowedTokensPolicy {
+                    mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                    symbol: Some("USDC".to_string()),
+                    decimals: Some(6),
+                    max_allowed_fee: None,
+                    swap_config: None,
+                },
+            ]),
+            ..Default::default()
+        });
+
+        // User creates a token transfer where they are BOTH fee payer AND token owner
+        let user = Keypair::new();
+        let token_mint = Pubkey::from_str("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap();
+        let source_ata = get_associated_token_address(&user.pubkey(), &token_mint);
+        let dest_ata = get_associated_token_address(&Pubkey::new_unique(), &token_mint);
+
+        let transfer_ix = spl_token_interface::instruction::transfer_checked(
+            &spl_token_interface::id(),
+            &source_ata,
+            &token_mint,
+            &dest_ata,
+            &user.pubkey(), // User is the token owner (must sign!)
+            &[],
+            1_000_000,
+            6,
+        )
+        .unwrap();
+
+        // User sets themselves as fee payer too
+        let message = Message::new(&[transfer_ix], Some(&user.pubkey()));
+        // At this point: num_required_signatures = 1 (Solana deduplicates user)
+
+        let transaction = Transaction::new_unsigned(message);
+        let encoded_tx = EncodedSerializedTransaction::try_from(&transaction).unwrap();
+
+        // Setup mocks
+        setup_signer_mocks(&mut signer, relayer.address.clone());
+        provider
+            .expect_get_latest_blockhash_with_commitment()
+            .returning(|_| Box::pin(async { Ok((Hash::new_unique(), 100)) }));
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(5000u64) }));
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1_000_000_000) }));
+        provider.expect_get_account_from_pubkey().returning(|_| {
+            Box::pin(async {
+                let mut account_data = vec![0; Account::LEN];
+                let token_account = spl_token_interface::state::Account {
+                    mint: Pubkey::from_str("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap(),
+                    owner: Pubkey::new_unique(),
+                    amount: 10_000_000,
+                    state: spl_token_interface::state::AccountState::Initialized,
+                    ..Default::default()
+                };
+                spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                    .unwrap();
+
+                Ok(solana_sdk::account::Account {
+                    lamports: 1_000_000,
+                    data: account_data,
+                    owner: spl_token_interface::id(),
+                    executable: false,
+                    rent_epoch: 0,
+                })
+            })
+        });
+        provider.expect_simulate_transaction().returning(|_| {
+            Box::pin(async {
+                Ok(solana_client::rpc_response::RpcSimulateTransactionResult {
+                    err: None,
+                    logs: None,
+                    accounts: None,
+                    units_consumed: None,
+                    return_data: None,
+                    inner_instructions: None,
+                    replacement_blockhash: None,
+                    loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
+                })
+            })
+        });
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            network,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
+        );
+
+        let params = PrepareTransactionRequestParams {
+            transaction: encoded_tx,
+            fee_token: WRAPPED_SOL_MINT.to_string(),
+        };
+
+        let result = rpc.prepare_transaction(params).await;
+        assert!(result.is_ok());
+
+        let prepare_result = result.unwrap();
+        let final_tx = Transaction::try_from(prepare_result.transaction).unwrap();
+
+        // After the fix, the transaction should now have the correct structure:
+        // - Relayer is fee payer (first signer)
+        // - User is token owner (second signer)
+        // - num_required_signatures = 2
+        assert_eq!(
+            final_tx.message.header.num_required_signatures, 2,
+            "Transaction should require 2 signatures after reconstruction"
+        );
+        assert_eq!(
+            final_tx.signatures.len(),
+            2,
+            "Signatures array should have 2 slots"
+        );
+
+        // Relayer should be fee payer and signed
+        assert_eq!(
+            final_tx.message.account_keys[0],
+            relayer_keypair.pubkey(),
+            "Relayer should be first account (fee payer)"
+        );
+        assert_ne!(
+            final_tx.signatures[0].as_ref(),
+            &[0u8; 64],
+            "Relayer signature should be present"
+        );
+
+        // User signature slot should exist but be default (they sign later)
+        assert_eq!(
+            final_tx.signatures[1].as_ref(),
+            &[0u8; 64],
+            "User signature should be default (unsigned)"
         );
     }
 

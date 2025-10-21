@@ -7241,6 +7241,12 @@
           "id": {
             "type": "string"
           },
+          "instructions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SolanaInstructionSpec"
+            }
+          },
           "sent_at": {
             "type": "string"
           },
@@ -7251,10 +7257,7 @@
             "$ref": "#/components/schemas/TransactionStatus"
           },
           "status_reason": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "transaction": {
             "type": "string"
