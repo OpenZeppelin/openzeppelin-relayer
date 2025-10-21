@@ -13,7 +13,6 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     domain::transaction::{
-        common::is_final_state,
         solana::{
             utils::{
                 build_transaction_from_instructions, decode_solana_transaction,
@@ -36,7 +35,6 @@ use crate::{
     services::{
         SolanaProvider, SolanaProviderError, SolanaProviderTrait, SolanaSignTrait, SolanaSigner,
     },
-    utils::base64_encode,
 };
 
 #[allow(dead_code)]
@@ -154,9 +152,7 @@ where
             })?;
 
             // Fetch fresh blockhash for instructions mode
-            let latest_blockhash = self.provider.get_latest_blockhash().await.map_err(|e| {
-                TransactionError::UnexpectedError(format!("Failed to get latest blockhash: {}", e))
-            })?;
+            let latest_blockhash = self.provider.get_latest_blockhash().await?;
 
             build_transaction_from_instructions(instructions, &payer, latest_blockhash)?
         } else {
@@ -282,17 +278,6 @@ where
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
         debug!(tx_id = %tx.id, status = ?tx.status, "submitting Solana transaction to blockchain");
-
-        // If transaction is not in expected status, return Ok to avoid wasteful retries
-        // (e.g., if it's already in a final state like Failed, Confirmed, etc.)
-        if is_final_state(&tx.status) {
-            debug!(
-                tx_id = %tx.id,
-                status = ?tx.status,
-                "transaction already in final state, skipping submission"
-            );
-            return Ok(tx);
-        }
 
         if tx.status != TransactionStatus::Sent && tx.status != TransactionStatus::Submitted {
             debug!(
@@ -436,52 +421,40 @@ where
         );
 
         // Fetch fresh blockhash
-        let fresh_blockhash = self.provider.get_latest_blockhash().await.map_err(|e| {
-            TransactionError::UnexpectedError(format!(
-                "Failed to fetch fresh blockhash for resubmit: {}",
-                e
-            ))
-        })?;
+        // SolanaProviderError automatically converts to TransactionError::UnderlyingSolanaProvider
+        let fresh_blockhash = self.provider.get_latest_blockhash().await?;
 
         // Update transaction with fresh blockhash
         transaction.message.recent_blockhash = fresh_blockhash;
 
         // Re-sign the transaction with the updated message
-        let signature = self
-            .signer
-            .sign(&transaction.message_data())
-            .await
-            .map_err(|e| {
-                TransactionError::UnexpectedError(format!("Failed to re-sign transaction: {}", e))
-            })?;
+        // SignerError automatically converts to TransactionError::SignerError
+        let signature = self.signer.sign(&transaction.message_data()).await?;
 
         // Update transaction signature
         transaction.signatures[0] = signature;
 
-        // Serialize transaction back to base64
-        let serialized_tx = bincode::serialize(&transaction).map_err(|e| {
-            TransactionError::UnexpectedError(format!("Failed to serialize transaction: {}", e))
-        })?;
-
-        let tx_base64 = base64_encode(&serialized_tx);
-        let signature_str = signature.to_string();
-
         // Append new signature to hashes array to track resubmission attempts
         let mut updated_hashes = tx.hashes.clone();
-        updated_hashes.push(signature_str.clone());
-
-        // Update transaction data
-        let solana_data = tx.network_data.get_solana_transaction_data()?;
-        let updated_solana_data = SolanaTransactionData {
-            transaction: Some(tx_base64),
-            signature: Some(signature_str.clone()),
-            ..solana_data
-        };
+        updated_hashes.push(signature.to_string());
 
         // Update in repository with Submitted status and new sent_at
         let update_request = TransactionUpdateRequest {
             status: Some(TransactionStatus::Submitted),
-            network_data: Some(NetworkTransactionData::Solana(updated_solana_data)),
+            network_data: Some(NetworkTransactionData::Solana(SolanaTransactionData {
+                signature: Some(signature.to_string()),
+                transaction: Some(
+                    EncodedSerializedTransaction::try_from(&transaction)
+                        .map_err(|e| {
+                            TransactionError::ValidationError(format!(
+                                "Failed to encode transaction: {}",
+                                e
+                            ))
+                        })?
+                        .into_inner(),
+                ),
+                ..Default::default()
+            })),
             sent_at: Some(Utc::now().to_rfc3339()),
             hashes: Some(updated_hashes),
             ..Default::default()
@@ -563,7 +536,7 @@ where
 
             info!(
                 tx_id = %tx.id,
-                new_signature = %signature_str,
+                new_signature = %signature,
                 new_blockhash = %fresh_blockhash,
                 "transaction resubmitted with fresh blockhash"
             );

@@ -27,7 +27,6 @@ pub const REQUEST_MAX_INSTRUCTION_DATA_SIZE: usize = 1232;
 
 // Status check scheduling
 /// Initial delay before first status check (in seconds)
-/// Set to 8s to allow time for transaction propagation on Solana
 pub const SOLANA_STATUS_CHECK_INITIAL_DELAY_SECONDS: i64 = 5;
 
 /// Minimum age before checking for resubmit/expiration (in seconds)

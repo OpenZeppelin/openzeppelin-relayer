@@ -243,6 +243,7 @@ async fn validate_sign_and_send_transaction<P: SolanaProviderTrait + Send + Sync
         SolanaTransactionValidator::validate_blockhash(tx, provider),
         SolanaTransactionValidator::simulate_transaction(tx, provider).map_ok(|_| ()),
         SolanaTransactionValidator::validate_token_transfers(tx, policy, provider, &relayer_pubkey),
+        SolanaTransactionValidator::validate_lamports_transfers(tx, &relayer_pubkey),
     )?;
 
     Ok(())
