@@ -33,6 +33,10 @@ pub const SOLANA_STATUS_CHECK_INITIAL_DELAY_SECONDS: i64 = 5;
 /// If transaction is younger than this, we don't check blockhash expiration yet
 pub const SOLANA_MIN_AGE_FOR_RESUBMIT_CHECK_SECONDS: i64 = 90;
 
+/// Minimum age before triggering Pending status recovery (in seconds)
+/// Only schedule a recovery job if Pending transaction exceeds this age
+pub const SOLANA_PENDING_RECOVERY_TRIGGER_SECONDS: i64 = 30;
+
 /// Timeout for Pending status: transaction preparation phase (in minutes)
 /// If a transaction stays in Pending for longer than this, mark as Failed
 pub const SOLANA_PENDING_TIMEOUT_MINUTES: i64 = 3;

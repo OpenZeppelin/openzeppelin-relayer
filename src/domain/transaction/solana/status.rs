@@ -5,8 +5,8 @@
 
 use crate::constants::{
     MAXIMUM_SOLANA_TX_ATTEMPTS, SOLANA_DEFAULT_TX_VALID_TIMESPAN,
-    SOLANA_MIN_AGE_FOR_RESUBMIT_CHECK_SECONDS, SOLANA_PENDING_TIMEOUT_MINUTES,
-    SOLANA_SENT_TIMEOUT_MINUTES,
+    SOLANA_MIN_AGE_FOR_RESUBMIT_CHECK_SECONDS, SOLANA_PENDING_RECOVERY_TRIGGER_SECONDS,
+    SOLANA_PENDING_TIMEOUT_MINUTES, SOLANA_SENT_TIMEOUT_MINUTES,
 };
 use crate::models::{NetworkTransactionData, SolanaTransactionData};
 use chrono::{DateTime, Duration, Utc};
@@ -47,7 +47,7 @@ where
     /// 4. Handle based on detected status (handlers update DB if needed)
     pub async fn handle_transaction_status_impl(
         &self,
-        tx: TransactionRepoModel,
+        mut tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
         debug!(tx_id = %tx.id, status = ?tx.status, "handling solana transaction status");
 
@@ -60,12 +60,15 @@ where
         // Step 1: Check transaction status (query chain or return current)
         let detected_status = self.check_onchain_transaction_status(&tx).await?;
 
-        debug!(
-            tx_id = %tx.id,
-            current_status = ?tx.status,
-            detected_status = ?detected_status,
-            "transaction status check completed"
-        );
+        // Reload transaction from DB if status changed
+        // This ensures we have fresh data if check_transaction_status triggered a recovery
+        // or any other update that modified the transaction in the database.
+        if tx.status != detected_status {
+            tx = self
+                .transaction_repository()
+                .get_by_id(tx.id.clone())
+                .await?;
+        }
 
         // Step 2: Handle based on detected status (handlers will update if needed)
         match detected_status {
@@ -220,11 +223,12 @@ where
         }
 
         // Step 2: Check if transaction has exceeded pending timeout
+        // Only schedule recovery job if transaction is stuck (similar to EVM pattern)
         if self.has_exceeded_timeout(&tx)? {
             warn!(
                 tx_id = %tx.id,
                 timeout_minutes = SOLANA_PENDING_TIMEOUT_MINUTES,
-                "pending transaction has exceeded timeout"
+                "pending transaction has exceeded timeout, marking as failed"
             );
             return self
                 .mark_as_failed(
@@ -237,23 +241,41 @@ where
                 .await;
         }
 
-        // Step 3: Schedule transaction request job to prepare and submit the transaction
-        info!(
-            tx_id = %tx.id,
-            "scheduling transaction request job for pending transaction"
-        );
+        // Step 3: Check if transaction is stuck (prepare job may have failed)
+        // Only re-queue job if transaction age indicates it might be stuck
+        let age = self.get_time_since_sent_or_created_at(&tx).ok_or_else(|| {
+            TransactionError::UnexpectedError(
+                "Both sent_at and created_at are missing or invalid".to_string(),
+            )
+        })?;
 
-        let transaction_request = TransactionRequest::new(tx.id.clone(), tx.relayer_id.clone());
+        // Use a recovery trigger timeout (e.g., 30 seconds)
+        // This prevents scheduling a job on every 5-second status check
+        if age.num_seconds() >= SOLANA_PENDING_RECOVERY_TRIGGER_SECONDS {
+            info!(
+                tx_id = %tx.id,
+                age_seconds = age.num_seconds(),
+                "pending transaction may be stuck, scheduling recovery job"
+            );
 
-        self.job_producer()
-            .produce_transaction_request_job(transaction_request, None)
-            .await
-            .map_err(|e| {
-                TransactionError::UnexpectedError(format!(
-                    "Failed to enqueue transaction request job: {}",
-                    e
-                ))
-            })?;
+            let transaction_request = TransactionRequest::new(tx.id.clone(), tx.relayer_id.clone());
+
+            self.job_producer()
+                .produce_transaction_request_job(transaction_request, None)
+                .await
+                .map_err(|e| {
+                    TransactionError::UnexpectedError(format!(
+                        "Failed to enqueue transaction request job: {}",
+                        e
+                    ))
+                })?;
+        } else {
+            debug!(
+                tx_id = %tx.id,
+                age_seconds = age.num_seconds(),
+                "pending transaction too young for recovery check"
+            );
+        }
 
         Ok(tx)
     }
@@ -736,12 +758,25 @@ mod tests {
             .returning(|_| Box::pin(async { Ok(SolanaTransactionStatus::Processed) }));
 
         let tx_id = tx.id.clone();
+        let tx_id_clone = tx_id.clone();
+
+        // Expect get_by_id call when status changes (to reload fresh data)
+        tx_repo
+            .expect_get_by_id()
+            .with(eq(tx_id.clone()))
+            .times(1)
+            .returning(move |_| {
+                Ok(create_tx_with_signature(
+                    TransactionStatus::Submitted, // Return with original status before update
+                    Some(signature_str),
+                ))
+            });
 
         // Expect status update from Submitted to Mined (Processed maps to Mined)
         tx_repo
             .expect_partial_update()
             .withf(move |tx_id_param, update_req| {
-                tx_id_param == &tx_id && update_req.status == Some(TransactionStatus::Mined)
+                tx_id_param == &tx_id_clone && update_req.status == Some(TransactionStatus::Mined)
             })
             .times(1)
             .returning(move |_, _| {
@@ -788,11 +823,24 @@ mod tests {
             .returning(|_| Box::pin(async { Ok(SolanaTransactionStatus::Confirmed) }));
 
         let tx_id = tx.id.clone();
+        let tx_id_clone = tx_id.clone();
+
+        // Expect get_by_id call when status changes
+        tx_repo
+            .expect_get_by_id()
+            .with(eq(tx_id.clone()))
+            .times(1)
+            .returning(move |_| {
+                Ok(create_tx_with_signature(
+                    TransactionStatus::Submitted,
+                    Some(signature_str),
+                ))
+            });
 
         tx_repo
             .expect_partial_update()
             .withf(move |tx_id_param, update_req| {
-                tx_id_param == &tx_id && update_req.status == Some(TransactionStatus::Mined)
+                tx_id_param == &tx_id_clone && update_req.status == Some(TransactionStatus::Mined)
             })
             .times(1)
             .returning(move |_, _| {
@@ -838,11 +886,25 @@ mod tests {
             .returning(|_| Box::pin(async { Ok(SolanaTransactionStatus::Finalized) }));
 
         let tx_id = tx.id.clone();
+        let tx_id_clone = tx_id.clone();
+
+        // Expect get_by_id call when status changes
+        tx_repo
+            .expect_get_by_id()
+            .with(eq(tx_id.clone()))
+            .times(1)
+            .returning(move |_| {
+                Ok(create_tx_with_signature(
+                    TransactionStatus::Mined,
+                    Some(signature_str),
+                ))
+            });
 
         tx_repo
             .expect_partial_update()
             .withf(move |tx_id_param, update_req| {
-                tx_id_param == &tx_id && update_req.status == Some(TransactionStatus::Confirmed)
+                tx_id_param == &tx_id_clone
+                    && update_req.status == Some(TransactionStatus::Confirmed)
             })
             .times(1)
             .returning(move |_, _| {
@@ -932,11 +994,24 @@ mod tests {
             .returning(|_| Box::pin(async { Ok(SolanaTransactionStatus::Failed) }));
 
         let tx_id = tx.id.clone();
+        let tx_id_clone = tx_id.clone();
+
+        // Expect get_by_id call when status changes
+        tx_repo
+            .expect_get_by_id()
+            .with(eq(tx_id.clone()))
+            .times(1)
+            .returning(move |_| {
+                Ok(create_tx_with_signature(
+                    TransactionStatus::Submitted,
+                    Some(signature_str),
+                ))
+            });
 
         tx_repo
             .expect_partial_update()
             .withf(move |tx_id_param, update_req| {
-                tx_id_param == &tx_id && update_req.status == Some(TransactionStatus::Failed)
+                tx_id_param == &tx_id_clone && update_req.status == Some(TransactionStatus::Failed)
             })
             .times(1)
             .returning(move |_, _| {
@@ -1025,10 +1100,12 @@ mod tests {
         let signature_str =
             "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
         let mut tx = create_tx_with_signature(TransactionStatus::Submitted, Some(signature_str));
-        tx.created_at = recent_created_at;
+        tx.created_at = recent_created_at.clone();
         tx.valid_until = None; // No user-provided valid_until
 
         let tx_id = tx.id.clone();
+        let tx_id_clone = tx_id.clone();
+        let recent_created_at_clone = recent_created_at.clone();
 
         // Mock provider to return processed status
         provider
@@ -1037,11 +1114,24 @@ mod tests {
             .times(1)
             .returning(|_| Box::pin(async { Ok(SolanaTransactionStatus::Processed) }));
 
+        // Expect get_by_id call when status changes
+        tx_repo
+            .expect_get_by_id()
+            .with(eq(tx_id.clone()))
+            .times(1)
+            .returning(move |_| {
+                let mut tx =
+                    create_tx_with_signature(TransactionStatus::Submitted, Some(signature_str));
+                tx.created_at = recent_created_at_clone.clone();
+                tx.valid_until = None;
+                Ok(tx)
+            });
+
         // Expect status update from Submitted to Mined (Processed maps to Mined)
         tx_repo
             .expect_partial_update()
             .withf(move |tx_id_param, update_req| {
-                tx_id_param == &tx_id && update_req.status == Some(TransactionStatus::Mined)
+                tx_id_param == &tx_id_clone && update_req.status == Some(TransactionStatus::Mined)
             })
             .times(1)
             .returning(move |_, _| {
