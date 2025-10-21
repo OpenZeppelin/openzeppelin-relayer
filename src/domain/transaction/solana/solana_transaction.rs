@@ -12,19 +12,16 @@ use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    domain::{
+    domain::transaction::{
+        common::is_final_state,
         solana::{
-            validate_prepared_transaction, SolanaTransactionValidationError,
-            SolanaTransactionValidator,
-        },
-        transaction::{
-            common::is_final_state,
-            solana::utils::{
+            utils::{
                 build_transaction_from_instructions, decode_solana_transaction,
                 decode_solana_transaction_from_string, is_resubmitable,
             },
-            Transaction,
+            validation::{SolanaTransactionValidationError, SolanaTransactionValidator},
         },
+        Transaction,
     },
     jobs::{JobProducer, JobProducerTrait, TransactionSend},
     models::{
@@ -652,40 +649,67 @@ where
         &self,
         tx: &SolanaTransaction,
     ) -> Result<(), TransactionError> {
+        use futures::{try_join, TryFutureExt};
+
         let policy = self.relayer.policies.get_solana_policy();
         let relayer_pubkey = Pubkey::from_str(&self.relayer.address).map_err(|e| {
             TransactionError::ValidationError(format!("Invalid relayer address: {}", e))
         })?;
 
-        // Use comprehensive validation from shared domain module
-        // This validates: fee payer, allowed/disallowed accounts, programs,
-        // signatures, data size, blockhash, simulation, lamports/token transfers
-        // Note: Using ? preserves SolanaTransactionValidationError type via #[from]
-        validate_prepared_transaction(tx, &relayer_pubkey, &policy, self.provider.as_ref()).await?;
+        // Group all synchronous policy validations together
+        let sync_validations = async {
+            SolanaTransactionValidator::validate_tx_allowed_accounts(tx, &policy)?;
+            SolanaTransactionValidator::validate_tx_disallowed_accounts(tx, &policy)?;
+            SolanaTransactionValidator::validate_allowed_programs(tx, &policy)?;
+            SolanaTransactionValidator::validate_max_signatures(tx, &policy)?;
+            SolanaTransactionValidator::validate_fee_payer(tx, &relayer_pubkey)?;
+            SolanaTransactionValidator::validate_data_size(tx, &policy)?;
+            Ok::<(), TransactionError>(())
+        };
 
-        // Additional fee and balance checks specific to transaction endpoint
-        // (RPC methods handle this differently with user fee payments)
-        let fee = self
-            .provider
-            .calculate_total_fee(&tx.message)
-            .await
-            .map_err(|e| {
-                TransactionError::UnexpectedError(format!("Fee estimation failed: {}", e))
-            })?;
+        // Fee calculation and validation (async - needs RPC calls)
+        let fee_validations = async {
+            let fee = self
+                .provider
+                .calculate_total_fee(&tx.message)
+                .await
+                .map_err(|e| {
+                    TransactionError::from(SolanaTransactionValidationError::ValidationError(
+                        format!("Fee estimation failed: {}", e),
+                    ))
+                })?;
 
-        // Validate fee against max allowed fee policy
-        // Note: Using ? preserves SolanaTransactionValidationError type via #[from]
-        SolanaTransactionValidator::validate_max_fee(fee, &policy)?;
+            SolanaTransactionValidator::validate_max_fee(fee, &policy)?;
 
-        // Validate relayer has sufficient balance (fee + min_balance)
-        // Note: Using ? preserves SolanaTransactionValidationError type via #[from]
-        SolanaTransactionValidator::validate_sufficient_relayer_balance(
-            fee,
-            &self.relayer.address,
-            &policy,
-            self.provider.as_ref(),
-        )
-        .await?;
+            SolanaTransactionValidator::validate_sufficient_relayer_balance(
+                fee,
+                &self.relayer.address,
+                &policy,
+                self.provider.as_ref(),
+            )
+            .await?;
+
+            Ok::<(), TransactionError>(())
+        };
+
+        // Run all validations in parallel for optimal performance
+        // Use map_err to convert SolanaTransactionValidationError to TransactionError
+        try_join!(
+            sync_validations,
+            SolanaTransactionValidator::validate_blockhash(tx, self.provider.as_ref())
+                .map_err(TransactionError::from),
+            SolanaTransactionValidator::simulate_transaction(tx, self.provider.as_ref())
+                .map_ok(|_| ()) // Discard simulation result, we only care about errors
+                .map_err(TransactionError::from),
+            SolanaTransactionValidator::validate_token_transfers(
+                tx,
+                &policy,
+                self.provider.as_ref(),
+                &relayer_pubkey,
+            )
+            .map_err(TransactionError::from),
+            fee_validations,
+        )?;
 
         Ok(())
     }

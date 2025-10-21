@@ -23,9 +23,9 @@ use std::sync::Arc;
 #[cfg(test)]
 pub use test_setup::*;
 
-// Re-export validation types from shared Solana domain module
-pub use crate::domain::solana::{
-    validate_prepared_transaction, SolanaTransactionValidationError, SolanaTransactionValidator,
+// Re-export validation types from transaction domain module
+pub use crate::domain::transaction::solana::{
+    SolanaTransactionValidationError, SolanaTransactionValidator,
 };
 
 use crate::{

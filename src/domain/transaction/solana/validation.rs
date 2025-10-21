@@ -631,50 +631,6 @@ impl SolanaTransactionValidator {
     }
 }
 
-/// Validates a fully prepared Solana transaction according to relayer policies.
-///
-/// This is the comprehensive validation function used by both:
-/// - RPC methods (sign_and_send_transaction, sign_transaction, etc.)
-/// - Send transaction endpoint (prepare_transaction)
-///
-/// It ensures consistency across all transaction submission paths.
-///
-/// # Validations Performed
-/// - **Policy checks**: Allowed/disallowed accounts, programs, signatures, data size, fee payer
-/// - **Blockhash validation**: Smart validation (skips for single-signer, validates for multi-signer)
-/// - **Simulation**: Executes transaction simulation on-chain
-/// - **Transfer validation**: Validates lamports and token transfers
-pub async fn validate_prepared_transaction<P: SolanaProviderTrait + Send + Sync>(
-    tx: &Transaction,
-    relayer_pubkey: &Pubkey,
-    policy: &RelayerSolanaPolicy,
-    provider: &P,
-) -> Result<(), SolanaTransactionValidationError> {
-    use futures::try_join;
-
-    // Synchronous validations (policy checks)
-    let sync_validations = async {
-        SolanaTransactionValidator::validate_tx_allowed_accounts(tx, policy)?;
-        SolanaTransactionValidator::validate_tx_disallowed_accounts(tx, policy)?;
-        SolanaTransactionValidator::validate_allowed_programs(tx, policy)?;
-        SolanaTransactionValidator::validate_max_signatures(tx, policy)?;
-        SolanaTransactionValidator::validate_fee_payer(tx, relayer_pubkey)?;
-        SolanaTransactionValidator::validate_data_size(tx, policy)?;
-        Ok::<(), SolanaTransactionValidationError>(())
-    };
-
-    // Run all validations concurrently
-    try_join!(
-        sync_validations,
-        SolanaTransactionValidator::validate_blockhash(tx, provider),
-        SolanaTransactionValidator::simulate_transaction(tx, provider),
-        SolanaTransactionValidator::validate_lamports_transfers(tx, relayer_pubkey),
-        SolanaTransactionValidator::validate_token_transfers(tx, policy, provider, relayer_pubkey),
-    )?;
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use crate::{

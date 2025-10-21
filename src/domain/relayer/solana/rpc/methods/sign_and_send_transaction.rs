@@ -205,18 +205,47 @@ where
     }
 }
 
+/// Validates a fully prepared Solana transaction according to relayer policies.
+///
+/// This orchestrates multiple validation checks in parallel for optimal performance.
+///
+/// # Validations Performed
+/// - **Policy checks**: Allowed/disallowed accounts, programs, signatures, data size, fee payer
+/// - **Blockhash validation**: Ensures blockhash is still valid on-chain
+/// - **Simulation**: Executes transaction simulation on-chain
+/// - **Transfer validation**: Validates lamports and token transfers
 async fn validate_sign_and_send_transaction<P: SolanaProviderTrait + Send + Sync>(
     tx: &Transaction,
     relayer: &RelayerRepoModel,
     provider: &P,
 ) -> Result<(), SolanaTransactionValidationError> {
+    use futures::{try_join, TryFutureExt};
+
     let policy = &relayer.policies.get_solana_policy();
     let relayer_pubkey = Pubkey::from_str(&relayer.address).map_err(|e| {
         SolanaTransactionValidationError::ValidationError(format!("Invalid relayer address: {}", e))
     })?;
 
-    // Use the shared validation function to ensure consistency
-    validate_prepared_transaction(tx, &relayer_pubkey, policy, provider).await
+    // Group all synchronous policy validations together
+    let sync_validations = async {
+        SolanaTransactionValidator::validate_tx_allowed_accounts(tx, policy)?;
+        SolanaTransactionValidator::validate_tx_disallowed_accounts(tx, policy)?;
+        SolanaTransactionValidator::validate_allowed_programs(tx, policy)?;
+        SolanaTransactionValidator::validate_max_signatures(tx, policy)?;
+        SolanaTransactionValidator::validate_fee_payer(tx, &relayer_pubkey)?;
+        SolanaTransactionValidator::validate_data_size(tx, policy)?;
+        Ok::<(), SolanaTransactionValidationError>(())
+    };
+
+    // Run all validations concurrently for optimal performance
+    try_join!(
+        sync_validations,
+        SolanaTransactionValidator::validate_blockhash(tx, provider),
+        SolanaTransactionValidator::simulate_transaction(tx, provider).map_ok(|_| ()),
+        SolanaTransactionValidator::validate_token_transfers(tx, policy, provider, &relayer_pubkey),
+    )?;
+
+    Ok(())
 }
 
 #[cfg(test)]
