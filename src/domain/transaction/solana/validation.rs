@@ -13,7 +13,7 @@ use crate::{
     constants::{DEFAULT_SOLANA_MAX_TX_DATA_SIZE, DEFAULT_SOLANA_MIN_BALANCE},
     domain::{SolanaTokenProgram, TokenInstruction as SolanaTokenInstruction},
     models::RelayerSolanaPolicy,
-    services::SolanaProviderTrait,
+    services::{SolanaProviderError, SolanaProviderTrait},
 };
 use serde::Serialize;
 use solana_client::rpc_response::RpcSimulateTransactionResult;
@@ -32,8 +32,6 @@ pub enum SolanaTransactionValidationError {
     DeserializeError(String),
     #[error("Validation error: {0}")]
     SigningError(String),
-    #[error("Simulation error: {0}")]
-    SimulationError(String),
     #[error("Policy violation: {0}")]
     PolicyViolation(String),
     #[error("Blockhash {0} is expired")]
@@ -46,6 +44,8 @@ pub enum SolanaTransactionValidationError {
     InsufficientFunds(String),
     #[error("Insufficient balance: {0}")]
     InsufficientBalance(String),
+    #[error("Underlying Solana provider error: {0}")]
+    UnderlyingSolanaProvider(#[from] SolanaProviderError),
 }
 
 impl SolanaTransactionValidationError {
@@ -77,8 +77,10 @@ impl SolanaTransactionValidationError {
             // Signing errors are permanent
             Self::SigningError(_) => false,
 
+            Self::UnderlyingSolanaProvider(err) => err.is_transient(),
+
             // Generic validation errors - check message for transient patterns
-            Self::ValidationError(msg) | Self::SimulationError(msg) => {
+            Self::ValidationError(msg) => {
                 // Check for known transient error patterns in the message
                 msg.contains("RPC")
                     || msg.contains("timeout")
@@ -181,13 +183,7 @@ impl SolanaTransactionValidator {
         // Check if blockhash is still valid
         let is_valid = provider
             .is_blockhash_valid(&blockhash, CommitmentConfig::confirmed())
-            .await
-            .map_err(|e| {
-                SolanaTransactionValidationError::ValidationError(format!(
-                    "Failed to check blockhash validity: {}",
-                    e
-                ))
-            })?;
+            .await?;
 
         if !is_valid {
             return Err(SolanaTransactionValidationError::ExpiredBlockhash(format!(
@@ -401,11 +397,7 @@ impl SolanaTransactionValidator {
         policy: &RelayerSolanaPolicy,
         provider: &impl SolanaProviderTrait,
     ) -> Result<(), SolanaTransactionValidationError> {
-        let balance = provider
-            .get_balance(relayer_address)
-            .await
-            .map_err(|e| SolanaTransactionValidationError::ValidationError(e.to_string()))?;
-
+        let balance = provider.get_balance(relayer_address).await?;
         // Ensure minimum balance policy is maintained
         let min_balance = policy.min_balance.unwrap_or(DEFAULT_SOLANA_MIN_BALANCE);
         let required_balance = fee + min_balance;
@@ -625,10 +617,9 @@ impl SolanaTransactionValidator {
     ) -> Result<RpcSimulateTransactionResult, SolanaTransactionValidationError> {
         let new_tx = Transaction::new_unsigned(tx.message.clone());
 
-        provider
-            .simulate_transaction(&new_tx)
-            .await
-            .map_err(|e| SolanaTransactionValidationError::SimulationError(e.to_string()))
+        let result = provider.simulate_transaction(&new_tx).await?;
+
+        Ok(result)
     }
 }
 
@@ -1260,7 +1251,7 @@ mod tests {
 
         assert!(matches!(
             result.unwrap_err(),
-            SolanaTransactionValidationError::SimulationError(_)
+            SolanaTransactionValidationError::UnderlyingSolanaProvider(_)
         ));
     }
 

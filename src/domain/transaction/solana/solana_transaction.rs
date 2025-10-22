@@ -18,7 +18,7 @@ use crate::{
                 build_transaction_from_instructions, decode_solana_transaction,
                 decode_solana_transaction_from_string, is_resubmitable,
             },
-            validation::{SolanaTransactionValidationError, SolanaTransactionValidator},
+            validation::SolanaTransactionValidator,
         },
         Transaction,
     },
@@ -172,24 +172,6 @@ where
         // Validate transaction before signing
         // Distinguish between transient errors (RPC issues) and permanent errors (policy violations)
         if let Err(validation_error) = self.validate_transaction_impl(&transaction).await {
-            // Special case: Expired blockhash for resubmittable transactions
-            // For single-signer transactions, expired blockhash can be refreshed during resubmit
-            // So we treat it as transient and let the resubmit flow handle it
-            // For multi-signer transactions, the logic below will mark as failed (is_transient = false)
-            if matches!(
-                validation_error,
-                TransactionError::SolanaValidation(
-                    SolanaTransactionValidationError::ExpiredBlockhash(_)
-                )
-            ) && is_resubmitable(&transaction)
-            {
-                info!(
-                    tx_id = %tx.id,
-                    "expired blockhash detected for single-signer transaction, will retry (resubmit will refresh blockhash)"
-                );
-                return Err(validation_error);
-            }
-
             // Determine if the error is transient
             let is_transient = validation_error.is_transient();
 
@@ -646,11 +628,7 @@ where
                 .provider
                 .calculate_total_fee(&tx.message)
                 .await
-                .map_err(|e| {
-                    TransactionError::from(SolanaTransactionValidationError::ValidationError(
-                        format!("Fee estimation failed: {}", e),
-                    ))
-                })?;
+                .map_err(TransactionError::from)?;
 
             SolanaTransactionValidator::validate_max_fee(fee, &policy)?;
 

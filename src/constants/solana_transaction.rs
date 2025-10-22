@@ -35,7 +35,7 @@ pub const SOLANA_MIN_AGE_FOR_RESUBMIT_CHECK_SECONDS: i64 = 90;
 
 /// Minimum age before triggering Pending status recovery (in seconds)
 /// Only schedule a recovery job if Pending transaction exceeds this age
-pub const SOLANA_PENDING_RECOVERY_TRIGGER_SECONDS: i64 = 30;
+pub const SOLANA_PENDING_RECOVERY_TRIGGER_SECONDS: i64 = 20;
 
 /// Timeout for Pending status: transaction preparation phase (in minutes)
 /// If a transaction stays in Pending for longer than this, mark as Failed
