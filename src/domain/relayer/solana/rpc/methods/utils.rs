@@ -2957,4 +2957,548 @@ mod tests {
             quote.conversion_rate
         );
     }
+
+    #[tokio::test]
+    async fn test_reconstruct_transaction_with_fee_payer_basic() {
+        let (relayer, signer, provider, jupiter_service, _, job_producer, network) =
+            setup_test_context();
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            network,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
+        );
+
+        // Create original transaction with user as fee payer
+        let original_fee_payer = Keypair::new();
+        let recipient = Pubkey::new_unique();
+        let transfer_ix = instruction::transfer(&original_fee_payer.pubkey(), &recipient, 1000);
+        let blockhash = Hash::new_unique();
+        let original_message = Message::new_with_blockhash(
+            &[transfer_ix],
+            Some(&original_fee_payer.pubkey()),
+            &blockhash,
+        );
+        let original_tx = Transaction::new_unsigned(original_message);
+
+        // New fee payer (relayer)
+        let new_fee_payer = Keypair::new();
+
+        // Reconstruct transaction with new fee payer
+        let result = rpc.reconstruct_transaction_with_fee_payer(
+            &original_tx.message,
+            &new_fee_payer.pubkey(),
+            &blockhash,
+        );
+
+        assert!(result.is_ok(), "Transaction reconstruction should succeed");
+        let reconstructed_tx = result.unwrap();
+
+        // Verify fee payer changed
+        assert_eq!(
+            reconstructed_tx.message.account_keys[0],
+            new_fee_payer.pubkey(),
+            "Fee payer should be updated"
+        );
+
+        // Verify blockhash is preserved
+        assert_eq!(
+            reconstructed_tx.message.recent_blockhash, blockhash,
+            "Blockhash should be preserved"
+        );
+
+        // Verify signature slots are initialized
+        assert_eq!(
+            reconstructed_tx.signatures.len(),
+            reconstructed_tx.message.header.num_required_signatures as usize,
+            "Signature slots should be initialized"
+        );
+
+        // Verify all signatures are default (empty)
+        assert!(
+            reconstructed_tx
+                .signatures
+                .iter()
+                .all(|sig| sig.as_ref() == &[0u8; 64]),
+            "All signatures should be default"
+        );
+
+        // Verify instruction is preserved - program ID should still be at the same relative position
+        assert_eq!(
+            reconstructed_tx.message.instructions.len(),
+            1,
+            "Should have one instruction"
+        );
+        // The program ID index should be 3 (new_fee_payer, original_fee_payer, recipient, system_program)
+        assert_eq!(
+            reconstructed_tx.message.instructions[0].program_id_index, 3,
+            "Program ID index should be correct for system program"
+        );
+
+        // Verify the program ID is still the system program
+        assert_eq!(
+            reconstructed_tx.message.account_keys
+                [reconstructed_tx.message.instructions[0].program_id_index as usize],
+            program::id(),
+            "Program ID should be system program"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_reconstruct_transaction_with_fee_payer_multiple_signers() {
+        let (relayer, signer, provider, jupiter_service, _, job_producer, network) =
+            setup_test_context();
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            network,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
+        );
+
+        // Create transaction with multiple signers
+        let fee_payer = Keypair::new();
+        let signer1 = Keypair::new();
+        let signer2 = Keypair::new();
+        let recipient = Pubkey::new_unique();
+
+        // Create instruction that requires multiple signers
+        let transfer_ix = Instruction {
+            program_id: program::id(),
+            accounts: vec![
+                AccountMeta::new(fee_payer.pubkey(), true), // fee payer, signer, writable
+                AccountMeta::new(recipient, false),         // recipient, not signer, writable
+                AccountMeta::new(signer1.pubkey(), true),   // additional signer, writable
+                AccountMeta::new_readonly(signer2.pubkey(), true), // additional signer, readonly
+            ],
+            data: vec![2, 0, 0, 0, 232, 3, 0, 0, 0, 0, 0, 0], // transfer instruction data
+        };
+
+        let blockhash = Hash::new_unique();
+        let message =
+            Message::new_with_blockhash(&[transfer_ix], Some(&fee_payer.pubkey()), &blockhash);
+        let original_tx = Transaction::new_unsigned(message);
+
+        // New fee payer
+        let new_fee_payer = Keypair::new();
+
+        // Reconstruct transaction
+        let result = rpc.reconstruct_transaction_with_fee_payer(
+            &original_tx.message,
+            &new_fee_payer.pubkey(),
+            &blockhash,
+        );
+
+        assert!(result.is_ok(), "Transaction reconstruction should succeed");
+        let reconstructed_tx = result.unwrap();
+
+        // Verify fee payer is now first
+        assert_eq!(
+            reconstructed_tx.message.account_keys[0],
+            new_fee_payer.pubkey(),
+            "New fee payer should be first"
+        );
+
+        // Account ordering: fee_payer first, then other writable signers sorted by pubkey, then readonly signers, then writable non-signers, then program IDs
+        // Collect the expected writable signers (excluding fee_payer) and sort by pubkey
+        let mut other_writable_signers = vec![fee_payer.pubkey(), signer1.pubkey()];
+        other_writable_signers.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
+
+        // Expected order: new_fee_payer, then sorted other writable signers, then readonly signers, then non-signers, then program IDs
+        assert_eq!(
+            reconstructed_tx.message.account_keys[0],
+            new_fee_payer.pubkey(),
+            "New fee payer should be first"
+        );
+        assert_eq!(
+            reconstructed_tx.message.account_keys[1], other_writable_signers[0],
+            "First sorted writable signer should be second"
+        );
+        assert_eq!(
+            reconstructed_tx.message.account_keys[2], other_writable_signers[1],
+            "Second sorted writable signer should be third"
+        );
+        assert_eq!(
+            reconstructed_tx.message.account_keys[3],
+            signer2.pubkey(),
+            "Signer2 should be fourth"
+        );
+        assert_eq!(
+            reconstructed_tx.message.account_keys[4], recipient,
+            "Recipient should be fifth"
+        );
+        assert_eq!(
+            reconstructed_tx.message.account_keys[5],
+            program::id(),
+            "System program should be last"
+        );
+
+        // Verify header is correct
+        assert_eq!(
+            reconstructed_tx.message.header.num_required_signatures, 4,
+            "Should have 4 required signatures"
+        );
+        assert_eq!(
+            reconstructed_tx.message.header.num_readonly_signed_accounts, 1,
+            "Should have 1 readonly signed account"
+        );
+        assert_eq!(
+            reconstructed_tx
+                .message
+                .header
+                .num_readonly_unsigned_accounts,
+            1,
+            "Should have 1 readonly unsigned account (system program)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_reconstruct_transaction_with_fee_payer_readonly_accounts() {
+        let (relayer, signer, provider, jupiter_service, _, job_producer, network) =
+            setup_test_context();
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            network,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
+        );
+
+        // Create transaction with readonly accounts
+        let fee_payer = Keypair::new();
+        let writable_account = Pubkey::new_unique();
+        let readonly_account = Pubkey::new_unique();
+        let program_id = Pubkey::new_unique();
+
+        let test_ix = Instruction {
+            program_id,
+            accounts: vec![
+                AccountMeta::new(fee_payer.pubkey(), true), // fee payer, signer, writable
+                AccountMeta::new(writable_account, false),  // writable, not signer
+                AccountMeta::new_readonly(readonly_account, false), // readonly, not signer
+            ],
+            data: vec![0],
+        };
+
+        let blockhash = Hash::new_unique();
+        let message =
+            Message::new_with_blockhash(&[test_ix], Some(&fee_payer.pubkey()), &blockhash);
+        let original_tx = Transaction::new_unsigned(message);
+
+        // New fee payer
+        let new_fee_payer = Keypair::new();
+
+        // Reconstruct transaction
+        let result = rpc.reconstruct_transaction_with_fee_payer(
+            &original_tx.message,
+            &new_fee_payer.pubkey(),
+            &blockhash,
+        );
+
+        assert!(result.is_ok(), "Transaction reconstruction should succeed");
+        let reconstructed_tx = result.unwrap();
+
+        // Verify account ordering: signers first, then writable non-signers, then readonly non-signers
+        assert_eq!(
+            reconstructed_tx.message.account_keys[0],
+            new_fee_payer.pubkey(),
+            "Fee payer should be first"
+        );
+
+        // Expected ordering: new_fee_payer, fee_payer, writable_account, readonly_account, program_id
+        assert_eq!(
+            reconstructed_tx.message.account_keys[1],
+            fee_payer.pubkey(),
+            "Original fee payer should be second"
+        );
+        assert_eq!(
+            reconstructed_tx.message.account_keys[2], writable_account,
+            "Writable account should be third"
+        );
+        assert_eq!(
+            reconstructed_tx.message.account_keys[3], readonly_account,
+            "Readonly account should be fourth"
+        );
+        assert_eq!(
+            reconstructed_tx.message.account_keys[4], program_id,
+            "Program ID should be fifth"
+        );
+
+        // Verify header
+        assert_eq!(
+            reconstructed_tx.message.header.num_required_signatures, 2,
+            "Should have 2 required signatures"
+        );
+        assert_eq!(
+            reconstructed_tx.message.header.num_readonly_signed_accounts, 0,
+            "Should have 0 readonly signed accounts"
+        );
+        assert_eq!(
+            reconstructed_tx
+                .message
+                .header
+                .num_readonly_unsigned_accounts,
+            2,
+            "Should have 2 readonly unsigned accounts"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_reconstruct_transaction_with_fee_payer_invalid_program_id_index() {
+        let (relayer, signer, provider, jupiter_service, _, job_producer, network) =
+            setup_test_context();
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            network,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
+        );
+
+        // Create message with invalid program_id_index
+        let fee_payer = Keypair::new();
+        let account1 = Pubkey::new_unique();
+        let account2 = Pubkey::new_unique();
+
+        let message = Message {
+            account_keys: vec![fee_payer.pubkey(), account1, account2],
+            header: MessageHeader {
+                num_required_signatures: 1,
+                num_readonly_signed_accounts: 0,
+                num_readonly_unsigned_accounts: 0,
+            },
+            instructions: vec![CompiledInstruction {
+                program_id_index: 5, // Invalid index (only 3 accounts)
+                accounts: vec![0, 1],
+                data: vec![0],
+            }],
+            recent_blockhash: Hash::new_unique(),
+        };
+
+        let new_fee_payer = Keypair::new();
+        let blockhash = Hash::new_unique();
+
+        // Reconstruct transaction
+        let result = rpc.reconstruct_transaction_with_fee_payer(
+            &message,
+            &new_fee_payer.pubkey(),
+            &blockhash,
+        );
+
+        assert!(result.is_err(), "Should fail with invalid program ID index");
+        match result {
+            Err(SolanaRpcError::Internal(msg)) => {
+                assert!(
+                    msg.contains("Invalid program id index"),
+                    "Error should mention invalid program id index"
+                );
+            }
+            _ => panic!("Expected Internal error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reconstruct_transaction_with_fee_payer_invalid_account_index() {
+        let (relayer, signer, provider, jupiter_service, _, job_producer, network) =
+            setup_test_context();
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            network,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
+        );
+
+        // Create message with invalid account index in instruction
+        let fee_payer = Keypair::new();
+        let account1 = Pubkey::new_unique();
+        let account2 = Pubkey::new_unique();
+
+        let message = Message {
+            account_keys: vec![fee_payer.pubkey(), account1, account2],
+            header: MessageHeader {
+                num_required_signatures: 1,
+                num_readonly_signed_accounts: 0,
+                num_readonly_unsigned_accounts: 0,
+            },
+            instructions: vec![CompiledInstruction {
+                program_id_index: 2,
+                accounts: vec![0, 5], // Invalid account index 5 (only 3 accounts)
+                data: vec![0],
+            }],
+            recent_blockhash: Hash::new_unique(),
+        };
+
+        let new_fee_payer = Keypair::new();
+        let blockhash = Hash::new_unique();
+
+        // Reconstruct transaction
+        let result = rpc.reconstruct_transaction_with_fee_payer(
+            &message,
+            &new_fee_payer.pubkey(),
+            &blockhash,
+        );
+
+        assert!(result.is_err(), "Should fail with invalid account index");
+        match result {
+            Err(SolanaRpcError::Internal(msg)) => {
+                assert!(
+                    msg.contains("Invalid account index"),
+                    "Error should mention invalid account index"
+                );
+            }
+            _ => panic!("Expected Internal error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reconstruct_transaction_with_fee_payer_multiple_instructions() {
+        let (relayer, signer, provider, jupiter_service, _, job_producer, network) =
+            setup_test_context();
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            network,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
+        );
+
+        // Create transaction with multiple instructions
+        let fee_payer = Keypair::new();
+        let recipient1 = Pubkey::new_unique();
+        let recipient2 = Pubkey::new_unique();
+
+        let transfer1_ix = instruction::transfer(&fee_payer.pubkey(), &recipient1, 1000);
+        let transfer2_ix = instruction::transfer(&fee_payer.pubkey(), &recipient2, 2000);
+
+        let blockhash = Hash::new_unique();
+        let message = Message::new_with_blockhash(
+            &[transfer1_ix, transfer2_ix],
+            Some(&fee_payer.pubkey()),
+            &blockhash,
+        );
+        let original_tx = Transaction::new_unsigned(message);
+
+        // New fee payer
+        let new_fee_payer = Keypair::new();
+
+        // Reconstruct transaction
+        let result = rpc.reconstruct_transaction_with_fee_payer(
+            &original_tx.message,
+            &new_fee_payer.pubkey(),
+            &blockhash,
+        );
+
+        assert!(result.is_ok(), "Transaction reconstruction should succeed");
+        let reconstructed_tx = result.unwrap();
+
+        // Verify fee payer changed
+        assert_eq!(
+            reconstructed_tx.message.account_keys[0],
+            new_fee_payer.pubkey(),
+            "Fee payer should be updated"
+        );
+
+        // Verify both instructions are preserved
+        assert_eq!(
+            reconstructed_tx.message.instructions.len(),
+            2,
+            "Should have two instructions"
+        );
+
+        // Verify program ID indices are updated correctly (system program is at index 4)
+        assert_eq!(
+            reconstructed_tx.message.instructions[0].program_id_index, 4,
+            "First instruction program ID index should be updated"
+        );
+        assert_eq!(
+            reconstructed_tx.message.instructions[1].program_id_index, 4,
+            "Second instruction program ID index should be updated"
+        );
+
+        // Verify account indices in instructions are updated (fee_payer is at index 1, not 0)
+        assert_eq!(
+            reconstructed_tx.message.instructions[0].accounts[0], 1,
+            "Fee payer account index should be 1 in first instruction"
+        );
+        assert_eq!(
+            reconstructed_tx.message.instructions[1].accounts[0], 1,
+            "Fee payer account index should be 1 in second instruction"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_reconstruct_transaction_with_fee_payer_same_fee_payer() {
+        let (relayer, signer, provider, jupiter_service, _, job_producer, network) =
+            setup_test_context();
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            network,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
+        );
+
+        // Create transaction
+        let fee_payer = Keypair::new();
+        let recipient = Pubkey::new_unique();
+        let transfer_ix = instruction::transfer(&fee_payer.pubkey(), &recipient, 1000);
+        let blockhash = Hash::new_unique();
+        let message =
+            Message::new_with_blockhash(&[transfer_ix], Some(&fee_payer.pubkey()), &blockhash);
+        let original_tx = Transaction::new_unsigned(message);
+
+        // Use same fee payer
+        let result = rpc.reconstruct_transaction_with_fee_payer(
+            &original_tx.message,
+            &fee_payer.pubkey(),
+            &blockhash,
+        );
+
+        assert!(
+            result.is_ok(),
+            "Transaction reconstruction should succeed even with same fee payer"
+        );
+        let reconstructed_tx = result.unwrap();
+
+        // Verify fee payer remains the same
+        assert_eq!(
+            reconstructed_tx.message.account_keys[0],
+            fee_payer.pubkey(),
+            "Fee payer should remain the same"
+        );
+
+        // Verify account ordering is still correct
+        assert_eq!(
+            reconstructed_tx.message.account_keys[1], recipient,
+            "Recipient should be second"
+        );
+        assert_eq!(
+            reconstructed_tx.message.account_keys[2],
+            program::id(),
+            "Program ID should be third"
+        );
+    }
 }

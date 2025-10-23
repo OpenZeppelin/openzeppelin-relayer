@@ -1,6 +1,5 @@
 //! Utility functions for Solana transaction domain logic.
 
-use base64::{engine::general_purpose, Engine as _};
 use solana_sdk::{
     hash::Hash,
     instruction::{AccountMeta, Instruction},
@@ -15,6 +14,7 @@ use crate::{
         EncodedSerializedTransaction, SolanaInstructionSpec, SolanaTransactionStatus,
         TransactionError, TransactionRepoModel, TransactionStatus,
     },
+    utils::base64_decode,
 };
 
 /// Checks if a Solana transaction has exceeded the maximum number of resubmission attempts.
@@ -136,7 +136,7 @@ pub fn convert_instruction_specs_to_instructions(
             })
             .collect::<Result<Vec<_>, TransactionError>>()?;
 
-        let data = general_purpose::STANDARD.decode(&spec.data).map_err(|e| {
+        let data = base64_decode(&spec.data).map_err(|e| {
             TransactionError::ValidationError(format!(
                 "Instruction {}: Invalid base64 data: {}",
                 idx, e
@@ -177,9 +177,12 @@ pub fn build_transaction_from_instructions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{
-        NetworkTransactionData, NetworkType, SolanaAccountMeta, SolanaTransactionData,
-        TransactionStatus,
+    use crate::{
+        models::{
+            NetworkTransactionData, NetworkType, SolanaAccountMeta, SolanaTransactionData,
+            TransactionStatus,
+        },
+        utils::base64_encode,
     };
     use chrono::Utc;
     use solana_sdk::message::Message;
@@ -220,6 +223,40 @@ mod tests {
     }
 
     #[test]
+    fn test_decode_solana_transaction_not_built() {
+        // Create a transaction that hasn't been built yet (transaction field is None)
+        let tx = TransactionRepoModel {
+            id: "test-tx".to_string(),
+            relayer_id: "test-relayer".to_string(),
+            status: TransactionStatus::Pending,
+            status_reason: None,
+            created_at: Utc::now().to_rfc3339(),
+            sent_at: None,
+            confirmed_at: None,
+            valid_until: None,
+            delete_at: None,
+            network_type: NetworkType::Solana,
+            network_data: NetworkTransactionData::Solana(SolanaTransactionData {
+                transaction: None, // Not built yet
+                ..Default::default()
+            }),
+            priced_at: None,
+            hashes: Vec::new(),
+            noop_count: None,
+            is_canceled: Some(false),
+        };
+
+        let result = decode_solana_transaction(&tx);
+        assert!(result.is_err());
+
+        if let Err(TransactionError::ValidationError(msg)) = result {
+            assert!(msg.contains("not yet built"));
+        } else {
+            panic!("Expected ValidationError");
+        }
+    }
+
+    #[test]
     fn test_convert_instruction_specs_to_instructions_success() {
         let program_id = Pubkey::new_unique();
         let account = Pubkey::new_unique();
@@ -231,7 +268,7 @@ mod tests {
                 is_signer: false,
                 is_writable: true,
             }],
-            data: general_purpose::STANDARD.encode(b"test data"),
+            data: base64_encode(b"test data"),
         }];
 
         let result = convert_instruction_specs_to_instructions(&specs);
@@ -260,7 +297,7 @@ mod tests {
                 is_signer: false,
                 is_writable: true,
             }],
-            data: general_purpose::STANDARD.encode(b"test data"),
+            data: base64_encode(b"test data"),
         }];
 
         let result = build_transaction_from_instructions(&instructions, &payer, blockhash);
@@ -279,7 +316,7 @@ mod tests {
         let instructions = vec![SolanaInstructionSpec {
             program_id: "invalid".to_string(),
             accounts: vec![],
-            data: general_purpose::STANDARD.encode(b"test"),
+            data: base64_encode(b"test"),
         }];
 
         let result = build_transaction_from_instructions(&instructions, &payer, blockhash);
@@ -351,5 +388,101 @@ mod tests {
         // No signers (edge case) - should be able to update
         assert!(is_resubmitable(&tx));
         assert_eq!(tx.message.header.num_required_signatures, 0);
+    }
+
+    #[test]
+    fn test_too_many_solana_attempts_under_limit() {
+        let tx = TransactionRepoModel {
+            id: "test-tx".to_string(),
+            relayer_id: "test-relayer".to_string(),
+            status: TransactionStatus::Pending,
+            status_reason: None,
+            created_at: Utc::now().to_rfc3339(),
+            sent_at: None,
+            confirmed_at: None,
+            valid_until: None,
+            delete_at: None,
+            network_type: NetworkType::Solana,
+            network_data: NetworkTransactionData::Solana(SolanaTransactionData::default()),
+            priced_at: None,
+            hashes: vec!["hash1".to_string(), "hash2".to_string()], // Less than limit
+            noop_count: None,
+            is_canceled: Some(false),
+        };
+
+        // Should not be too many attempts when under limit
+        assert!(!too_many_solana_attempts(&tx));
+    }
+
+    #[test]
+    fn test_too_many_solana_attempts_at_limit() {
+        let tx = TransactionRepoModel {
+            id: "test-tx".to_string(),
+            relayer_id: "test-relayer".to_string(),
+            status: TransactionStatus::Pending,
+            status_reason: None,
+            created_at: Utc::now().to_rfc3339(),
+            sent_at: None,
+            confirmed_at: None,
+            valid_until: None,
+            delete_at: None,
+            network_type: NetworkType::Solana,
+            network_data: NetworkTransactionData::Solana(SolanaTransactionData::default()),
+            priced_at: None,
+            hashes: vec!["hash".to_string(); MAXIMUM_SOLANA_TX_ATTEMPTS], // Exactly at limit
+            noop_count: None,
+            is_canceled: Some(false),
+        };
+
+        // Should be too many attempts when at limit
+        assert!(too_many_solana_attempts(&tx));
+    }
+
+    #[test]
+    fn test_too_many_solana_attempts_over_limit() {
+        let tx = TransactionRepoModel {
+            id: "test-tx".to_string(),
+            relayer_id: "test-relayer".to_string(),
+            status: TransactionStatus::Pending,
+            status_reason: None,
+            created_at: Utc::now().to_rfc3339(),
+            sent_at: None,
+            confirmed_at: None,
+            valid_until: None,
+            delete_at: None,
+            network_type: NetworkType::Solana,
+            network_data: NetworkTransactionData::Solana(SolanaTransactionData::default()),
+            priced_at: None,
+            hashes: vec!["hash".to_string(); MAXIMUM_SOLANA_TX_ATTEMPTS + 1], // Over limit
+            noop_count: None,
+            is_canceled: Some(false),
+        };
+
+        // Should be too many attempts when over limit
+        assert!(too_many_solana_attempts(&tx));
+    }
+
+    #[test]
+    fn test_map_solana_status_to_transaction_status_processed() {
+        let result = map_solana_status_to_transaction_status(SolanaTransactionStatus::Processed);
+        assert_eq!(result, TransactionStatus::Mined);
+    }
+
+    #[test]
+    fn test_map_solana_status_to_transaction_status_confirmed() {
+        let result = map_solana_status_to_transaction_status(SolanaTransactionStatus::Confirmed);
+        assert_eq!(result, TransactionStatus::Mined);
+    }
+
+    #[test]
+    fn test_map_solana_status_to_transaction_status_finalized() {
+        let result = map_solana_status_to_transaction_status(SolanaTransactionStatus::Finalized);
+        assert_eq!(result, TransactionStatus::Confirmed);
+    }
+
+    #[test]
+    fn test_map_solana_status_to_transaction_status_failed() {
+        let result = map_solana_status_to_transaction_status(SolanaTransactionStatus::Failed);
+        assert_eq!(result, TransactionStatus::Failed);
     }
 }

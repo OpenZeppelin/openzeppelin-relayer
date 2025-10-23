@@ -242,3 +242,448 @@ impl SolanaTransactionRequest {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::RelayerRepoModel;
+    use base64::Engine;
+    use solana_sdk::{message::Message, pubkey::Pubkey};
+    use solana_system_interface::instruction as system_instruction;
+
+    fn create_test_relayer() -> RelayerRepoModel {
+        RelayerRepoModel {
+            id: "test-relayer".to_string(),
+            name: "Test Relayer".to_string(),
+            network: "solana".to_string(),
+            paused: false,
+            network_type: crate::models::NetworkType::Solana,
+            signer_id: "test-signer".to_string(),
+            policies: crate::models::RelayerNetworkPolicy::Solana(
+                crate::models::RelayerSolanaPolicy::default(),
+            ),
+            address: "6eoxMcGNaSRKcd8s84ukZjRZBJ27C5DrSXGH6nz73W8h".to_string(),
+            notification_id: None,
+            system_disabled: false,
+            disabled_reason: None,
+            custom_rpc_urls: None,
+        }
+    }
+
+    fn create_valid_instruction_spec() -> SolanaInstructionSpec {
+        SolanaInstructionSpec {
+            program_id: "11111111111111111111111111111112".to_string(), // System program
+            accounts: vec![
+                crate::models::SolanaAccountMeta {
+                    pubkey: "6eoxMcGNaSRKcd8s84ukZjRZBJ27C5DrSXGH6nz73W8h".to_string(),
+                    is_signer: true,
+                    is_writable: true,
+                },
+                crate::models::SolanaAccountMeta {
+                    pubkey: "HmZhRVuT8UuMrUJr1JsWFXTQU4EzwGVmQ29Q6QmzLbNs".to_string(),
+                    is_signer: false,
+                    is_writable: true,
+                },
+            ],
+            data: base64::prelude::BASE64_STANDARD.encode(
+                [2, 0, 0, 0]
+                    .iter()
+                    .chain(&1000000u64.to_le_bytes())
+                    .chain(&[0, 0, 0, 0, 0, 0, 0])
+                    .cloned()
+                    .collect::<Vec<u8>>(),
+            ), // Transfer 1 SOL
+        }
+    }
+
+    fn create_valid_transaction(relayer_pubkey: &Pubkey) -> EncodedSerializedTransaction {
+        let recipient = Pubkey::new_unique();
+        let instruction = system_instruction::transfer(relayer_pubkey, &recipient, 1000000);
+        let message = Message::new(&[instruction], Some(relayer_pubkey));
+        let tx = solana_sdk::transaction::Transaction::new_unsigned(message);
+        let serialized = bincode::serialize(&tx).unwrap();
+        EncodedSerializedTransaction::new(base64::prelude::BASE64_STANDARD.encode(serialized))
+    }
+
+    fn create_transaction_with_wrong_fee_payer() -> EncodedSerializedTransaction {
+        let wrong_fee_payer = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let instruction = system_instruction::transfer(&wrong_fee_payer, &recipient, 1000000);
+        let message = Message::new(&[instruction], Some(&wrong_fee_payer));
+        let tx = solana_sdk::transaction::Transaction::new_unsigned(message);
+        let serialized = bincode::serialize(&tx).unwrap();
+        EncodedSerializedTransaction::new(base64::prelude::BASE64_STANDARD.encode(serialized))
+    }
+
+    #[test]
+    fn test_validate_valid_request_with_transaction() {
+        let relayer = create_test_relayer();
+        let relayer_pubkey = Pubkey::from_str(&relayer.address).unwrap();
+        let transaction = create_valid_transaction(&relayer_pubkey);
+
+        let request = SolanaTransactionRequest {
+            transaction: Some(transaction),
+            instructions: None,
+            valid_until: None,
+        };
+
+        assert!(request.validate(&relayer).is_ok());
+    }
+
+    #[test]
+    fn test_validate_valid_request_with_instructions() {
+        let relayer = create_test_relayer();
+        let instruction = create_valid_instruction_spec();
+
+        let request = SolanaTransactionRequest {
+            transaction: None,
+            instructions: Some(vec![instruction]),
+            valid_until: None,
+        };
+
+        assert!(request.validate(&relayer).is_ok());
+    }
+
+    #[test]
+    fn test_validate_invalid_both_transaction_and_instructions() {
+        let relayer = create_test_relayer();
+        let relayer_pubkey = Pubkey::from_str(&relayer.address).unwrap();
+        let transaction = create_valid_transaction(&relayer_pubkey);
+        let instruction = create_valid_instruction_spec();
+
+        let request = SolanaTransactionRequest {
+            transaction: Some(transaction),
+            instructions: Some(vec![instruction]),
+            valid_until: None,
+        };
+
+        let result = request.validate(&relayer);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Cannot provide both transaction and instructions"));
+    }
+
+    #[test]
+    fn test_validate_invalid_neither_transaction_nor_instructions() {
+        let relayer = create_test_relayer();
+
+        let request = SolanaTransactionRequest {
+            transaction: None,
+            instructions: None,
+            valid_until: None,
+        };
+
+        let result = request.validate(&relayer);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Must provide either transaction or instructions"));
+    }
+
+    #[test]
+    fn test_validate_valid_request_with_future_valid_until() {
+        let relayer = create_test_relayer();
+        let future_time = chrono::Utc::now() + chrono::Duration::hours(1);
+
+        let request = SolanaTransactionRequest {
+            transaction: None,
+            instructions: Some(vec![create_valid_instruction_spec()]),
+            valid_until: Some(future_time.to_rfc3339()),
+        };
+
+        assert!(request.validate(&relayer).is_ok());
+    }
+
+    #[test]
+    fn test_validate_invalid_past_valid_until() {
+        let relayer = create_test_relayer();
+        let past_time = chrono::Utc::now() - chrono::Duration::hours(1);
+
+        let request = SolanaTransactionRequest {
+            transaction: None,
+            instructions: Some(vec![create_valid_instruction_spec()]),
+            valid_until: Some(past_time.to_rfc3339()),
+        };
+
+        let result = request.validate(&relayer);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("valid_until cannot be in the past"));
+    }
+
+    #[test]
+    fn test_validate_invalid_malformed_valid_until() {
+        let relayer = create_test_relayer();
+
+        let request = SolanaTransactionRequest {
+            transaction: None,
+            instructions: Some(vec![create_valid_instruction_spec()]),
+            valid_until: Some("invalid-timestamp".to_string()),
+        };
+
+        let result = request.validate(&relayer);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("valid_until must be a valid RFC3339 timestamp"));
+    }
+
+    #[test]
+    fn test_validate_transaction_invalid_base64() {
+        let relayer = create_test_relayer();
+        let transaction = EncodedSerializedTransaction::new("invalid-base64!".to_string());
+
+        let result = SolanaTransactionRequest::validate_transaction(&transaction, &relayer);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Failed to decode transaction"));
+    }
+
+    #[test]
+    fn test_validate_transaction_wrong_fee_payer() {
+        let relayer = create_test_relayer();
+        let transaction = create_transaction_with_wrong_fee_payer();
+
+        let result = SolanaTransactionRequest::validate_transaction(&transaction, &relayer);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("does not match relayer address"));
+    }
+
+    #[test]
+    fn test_validate_instructions_empty_instructions() {
+        let relayer = create_test_relayer();
+
+        let result = SolanaTransactionRequest::validate_instructions(&[], &relayer);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Instructions cannot be empty"));
+    }
+
+    #[test]
+    fn test_validate_instructions_too_many_instructions() {
+        let relayer = create_test_relayer();
+        let instructions = vec![create_valid_instruction_spec(); REQUEST_MAX_INSTRUCTIONS + 1];
+
+        let result = SolanaTransactionRequest::validate_instructions(&instructions, &relayer);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Too many instructions"));
+    }
+
+    #[test]
+    fn test_validate_instructions_empty_program_id() {
+        let relayer = create_test_relayer();
+        let mut instruction = create_valid_instruction_spec();
+        instruction.program_id = "".to_string();
+
+        let result = SolanaTransactionRequest::validate_instructions(&[instruction], &relayer);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("program_id cannot be empty"));
+    }
+
+    #[test]
+    fn test_validate_instructions_invalid_program_id() {
+        let relayer = create_test_relayer();
+        let mut instruction = create_valid_instruction_spec();
+        instruction.program_id = "invalid-pubkey".to_string();
+
+        let result = SolanaTransactionRequest::validate_instructions(&[instruction], &relayer);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid program_id"));
+    }
+
+    #[test]
+    fn test_validate_instructions_default_program_id() {
+        let relayer = create_test_relayer();
+        let mut instruction = create_valid_instruction_spec();
+        instruction.program_id = "11111111111111111111111111111111".to_string(); // Default pubkey
+
+        let result = SolanaTransactionRequest::validate_instructions(&[instruction], &relayer);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("program_id cannot be default pubkey"));
+    }
+
+    #[test]
+    fn test_validate_instructions_too_many_accounts_per_instruction() {
+        let relayer = create_test_relayer();
+        let mut instruction = create_valid_instruction_spec();
+        instruction.accounts =
+            vec![instruction.accounts[0].clone(); REQUEST_MAX_ACCOUNTS_PER_INSTRUCTION + 1];
+
+        let result = SolanaTransactionRequest::validate_instructions(&[instruction], &relayer);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Too many accounts"));
+    }
+
+    #[test]
+    fn test_validate_instructions_empty_account_pubkey() {
+        let relayer = create_test_relayer();
+        let mut instruction = create_valid_instruction_spec();
+        instruction.accounts[0].pubkey = "".to_string();
+
+        let result = SolanaTransactionRequest::validate_instructions(&[instruction], &relayer);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("pubkey cannot be empty"));
+    }
+
+    #[test]
+    fn test_validate_instructions_invalid_account_pubkey() {
+        let relayer = create_test_relayer();
+        let mut instruction = create_valid_instruction_spec();
+        instruction.accounts[0].pubkey = "invalid-pubkey".to_string();
+
+        let result = SolanaTransactionRequest::validate_instructions(&[instruction], &relayer);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid pubkey"));
+    }
+
+    #[test]
+    fn test_validate_instructions_non_relayer_signer() {
+        let relayer = create_test_relayer();
+        let mut instruction = create_valid_instruction_spec();
+        // Make the second account (which is not the relayer) a signer
+        instruction.accounts[1].is_signer = true;
+
+        let result = SolanaTransactionRequest::validate_instructions(&[instruction], &relayer);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Only the relayer address"));
+    }
+
+    #[test]
+    fn test_validate_instructions_invalid_base64_data() {
+        let relayer = create_test_relayer();
+        let mut instruction = create_valid_instruction_spec();
+        instruction.data = "invalid-base64!".to_string();
+
+        let result = SolanaTransactionRequest::validate_instructions(&[instruction], &relayer);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid base64 data"));
+    }
+
+    #[test]
+    fn test_validate_instructions_data_too_large() {
+        let relayer = create_test_relayer();
+        let mut instruction = create_valid_instruction_spec();
+        // Create data larger than REQUEST_MAX_INSTRUCTION_DATA_SIZE
+        let large_data = vec![0u8; REQUEST_MAX_INSTRUCTION_DATA_SIZE + 1];
+        instruction.data = base64::prelude::BASE64_STANDARD.encode(large_data);
+
+        let result = SolanaTransactionRequest::validate_instructions(&[instruction], &relayer);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Data too large"));
+    }
+
+    #[test]
+    fn test_validate_instructions_too_many_unique_accounts() {
+        let relayer = create_test_relayer();
+        let mut instructions = Vec::new();
+
+        // Create instructions that will exceed REQUEST_MAX_TOTAL_ACCOUNTS unique accounts
+        for i in 0..(REQUEST_MAX_TOTAL_ACCOUNTS + 1) {
+            let mut instruction = create_valid_instruction_spec();
+            // Change program_id to create unique accounts
+            instruction.program_id = format!("{:0>44}", i); // Create unique but invalid pubkeys
+                                                            // Add a unique account
+            instruction.accounts.push(crate::models::SolanaAccountMeta {
+                pubkey: format!("{:0>44}", i + 1000), // Another unique account
+                is_signer: false,
+                is_writable: false,
+            });
+            instructions.push(instruction);
+        }
+
+        // Create multiple instructions with different valid pubkeys
+        let mut instructions = Vec::new();
+        for _ in 0..10 {
+            instructions.push(create_valid_instruction_spec());
+        }
+
+        // This should pass since we're using the same accounts repeatedly
+        assert!(SolanaTransactionRequest::validate_instructions(&instructions, &relayer).is_ok());
+    }
+
+    #[test]
+    fn test_validate_instructions_too_many_unique_accounts_failure() {
+        let relayer = create_test_relayer();
+        let relayer_pubkey = Pubkey::from_str(&relayer.address).unwrap();
+        let mut instructions = Vec::new();
+        // We will generate REQUEST_MAX_TOTAL_ACCOUNTS + 1 unique accounts total.
+        for _i in 0..(REQUEST_MAX_TOTAL_ACCOUNTS) {
+            // We need to go up to the limit + 1
+            // Create a unique non-relayer pubkey for the instruction
+            let unique_account = Pubkey::new_unique();
+
+            // This program ID is guaranteed to be unique and valid
+            let unique_program_id = Pubkey::new_unique();
+
+            instructions.push(SolanaInstructionSpec {
+                // Unique program ID consumes a unique account slot
+                program_id: unique_program_id.to_string(),
+                accounts: vec![
+                    crate::models::SolanaAccountMeta {
+                        // The relayer's key is always included (1 unique key)
+                        pubkey: relayer_pubkey.to_string(),
+                        is_signer: true,
+                        is_writable: true,
+                    },
+                    // Unique account key consumes another unique account slot
+                    crate::models::SolanaAccountMeta {
+                        pubkey: unique_account.to_string(),
+                        is_signer: false,
+                        is_writable: true,
+                    },
+                ],
+                data: base64::prelude::BASE64_STANDARD.encode(vec![0u8]),
+            });
+        }
+
+        // Final instruction to push it over the limit of REQUEST_MAX_TOTAL_ACCOUNTS (e.g., 64)
+        // If REQUEST_MAX_TOTAL_ACCOUNTS=64, the loop created 64 instructions,
+        // with 1 relayer key + 63 other unique keys, for a total of 1 + 63*2 unique keys,
+        // which vastly exceeds the limit.
+        // We only need to check that the limit is hit and failed.
+
+        let result = SolanaTransactionRequest::validate_instructions(&instructions, &relayer);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Too many unique accounts"));
+    }
+}

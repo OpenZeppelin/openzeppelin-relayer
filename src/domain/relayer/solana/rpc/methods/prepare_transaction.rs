@@ -238,11 +238,6 @@ async fn validate_prepare_transaction<P: SolanaProviderTrait + Send + Sync>(
 #[cfg(test)]
 mod tests {
 
-    use std::str::FromStr;
-
-    use base64::prelude::BASE64_STANDARD;
-    use base64::Engine;
-
     use super::*;
     use crate::{
         constants::WRAPPED_SOL_MINT,
@@ -258,6 +253,7 @@ mod tests {
     use solana_system_interface::instruction;
     use spl_associated_token_account_interface::address::get_associated_token_address;
     use spl_token_interface::state::Account;
+    use std::str::FromStr;
 
     use super::super::test_setup::setup_signer_mocks;
 

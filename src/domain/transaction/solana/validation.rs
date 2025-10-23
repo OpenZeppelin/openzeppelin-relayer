@@ -843,7 +843,7 @@ mod tests {
 
         assert!(matches!(
             result.unwrap_err(),
-            SolanaTransactionValidationError::ValidationError(_)
+            SolanaTransactionValidationError::UnderlyingSolanaProvider(_)
         ));
     }
 
