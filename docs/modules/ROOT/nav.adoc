@@ -11,4 +11,5 @@
 * xref:structure.adoc[Project Structure]
 * xref:roadmap.adoc[Project Roadmap]
 * xref:plugins.adoc[Plugins]
+** xref:launchtube.adoc[Launchtube]
 * link:https://release-v1-1-0%2D%2Dopenzeppelin-relayer.netlify.app/openzeppelin_relayer/[Technical Rust Documentation^]
