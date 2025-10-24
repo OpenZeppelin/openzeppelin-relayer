@@ -525,7 +525,8 @@ mod solana_signer_factory_tests {
                 api_public_key: "api_public_key".to_string(),
                 organization_id: "organization_id".to_string(),
                 private_key_id: "private_key_id".to_string(),
-                public_key: "public_key".to_string(),
+                public_key: "5720be8aa9d2bb4be8e91f31d2c44c8629e42da16981c2cebabd55cafa0b76bd"
+                    .to_string(),
             }),
         };
         let expected_pubkey =
