@@ -1,0 +1,23 @@
+{
+  "networks": [
+    {
+      "average_blocktime_ms": 6000,
+      "chain_id": 420420422,
+      "explorer_urls": [
+        "https://blockscout-passet-hub.parity-testnet.parity.io/"
+      ],
+      "features": [],
+      "is_testnet": true,
+      "network": "polkadot-hub-testnet",
+      "required_confirmations": 2,
+      "rpc_urls": [
+        "https://testnet-passet-hub-eth-rpc.polkadot.io"
+      ],
+      "symbol": "PAS",
+      "tags": [
+        "polkadot-based"
+      ],
+      "type": "evm"
+    }
+  ]
+}
