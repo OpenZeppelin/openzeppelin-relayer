@@ -91,7 +91,7 @@ use mockall::automock;
 use crate::models::SecretString;
 use crate::utils::base64_encode;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct VaultConfig {
     pub address: String,
     pub namespace: Option<String>,
@@ -137,7 +137,7 @@ pub trait VaultServiceTrait: Send + Sync {
     async fn sign(&self, key_name: &str, message: &[u8]) -> Result<String, VaultError>;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct VaultService {
     pub config: VaultConfig,
 }

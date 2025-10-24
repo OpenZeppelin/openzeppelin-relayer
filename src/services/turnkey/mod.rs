@@ -199,7 +199,7 @@ pub trait TurnkeyServiceTrait: Send + Sync {
     ) -> TurnkeyResult<(Transaction, Signature)>;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TurnkeyService {
     pub api_public_key: String,
     pub api_private_key: SecretString,

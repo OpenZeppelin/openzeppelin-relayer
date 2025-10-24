@@ -101,7 +101,7 @@ pub trait GoogleCloudKmsK256: Send + Sync {
     async fn sign_digest(&self, digest: [u8; 32]) -> GoogleCloudKmsResult<Vec<u8>>;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct GoogleCloudKmsService {
     pub config: GoogleCloudKmsSignerConfig,

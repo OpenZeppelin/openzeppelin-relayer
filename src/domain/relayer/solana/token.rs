@@ -7,14 +7,14 @@
 //! This module abstracts away differences between token program versions, allowing
 //! for consistent interaction regardless of which token program (SPL Token or Token-2022)
 //! is being used.
-use ::spl_token::state::Account as SplTokenAccount;
+use ::spl_token_interface::state::Account as SplTokenAccount;
 use solana_sdk::{
     account::Account as SolanaAccount, instruction::Instruction, program_pack::Pack, pubkey::Pubkey,
 };
-use spl_associated_token_account::get_associated_token_address_with_program_id;
+use spl_associated_token_account_interface::address::get_associated_token_address_with_program_id;
 use tracing::error;
 
-use spl_associated_token_account::instruction::create_associated_token_account;
+use spl_associated_token_account_interface::instruction::create_associated_token_account;
 
 use crate::services::SolanaProviderTrait;
 
@@ -88,10 +88,10 @@ impl SolanaTokenProgram {
             .await
             .map_err(|e| TokenError::InvalidTokenMint(e.to_string()))?;
 
-        if account.owner == spl_token::id() {
-            Ok(spl_token::id())
-        } else if account.owner == spl_token_2022::id() {
-            Ok(spl_token_2022::id())
+        if account.owner == spl_token_interface::id() {
+            Ok(spl_token_interface::id())
+        } else if account.owner == spl_token_2022_interface::id() {
+            Ok(spl_token_2022_interface::id())
         } else {
             Err(TokenError::InvalidTokenProgram(format!(
                 "Unknown token program: {}",
@@ -110,7 +110,7 @@ impl SolanaTokenProgram {
     ///
     /// `true` if the program ID is SPL Token or Token-2022, `false` otherwise
     pub fn is_token_program(program_id: &Pubkey) -> bool {
-        program_id == &spl_token::id() || program_id == &spl_token_2022::id()
+        program_id == &spl_token_interface::id() || program_id == &spl_token_2022_interface::id()
     }
 
     /// Creates a transfer checked instruction.
@@ -143,8 +143,8 @@ impl SolanaTokenProgram {
                 program_id
             )));
         }
-        if program_id == &spl_token::id() {
-            return spl_token::instruction::transfer_checked(
+        if program_id == &spl_token_interface::id() {
+            return spl_token_interface::instruction::transfer_checked(
                 program_id,
                 source,
                 mint,
@@ -155,8 +155,8 @@ impl SolanaTokenProgram {
                 decimals,
             )
             .map_err(|e| TokenError::Instruction(e.to_string()));
-        } else if program_id == &spl_token_2022::id() {
-            return spl_token_2022::instruction::transfer_checked(
+        } else if program_id == &spl_token_2022_interface::id() {
+            return spl_token_2022_interface::instruction::transfer_checked(
                 program_id,
                 source,
                 mint,
@@ -194,7 +194,7 @@ impl SolanaTokenProgram {
                 program_id
             )));
         }
-        if program_id == &spl_token::id() {
+        if program_id == &spl_token_interface::id() {
             let account = SplTokenAccount::unpack(&account.data)
                 .map_err(|e| TokenError::AccountError(format!("Invalid token account1: {}", e)))?;
 
@@ -204,9 +204,9 @@ impl SolanaTokenProgram {
                 amount: account.amount,
                 is_frozen: account.is_frozen(),
             });
-        } else if program_id == &spl_token_2022::id() {
-            let state_with_extensions = spl_token_2022::extension::StateWithExtensions::<
-                spl_token_2022::state::Account,
+        } else if program_id == &spl_token_2022_interface::id() {
+            let state_with_extensions = spl_token_2022_interface::extension::StateWithExtensions::<
+                spl_token_2022_interface::state::Account,
             >::unpack(&account.data)
             .map_err(|e| TokenError::AccountError(format!("Invalid token account2: {}", e)))?;
 
@@ -285,13 +285,13 @@ impl SolanaTokenProgram {
                 program_id
             )));
         }
-        if program_id == &spl_token::id() {
-            match spl_token::instruction::TokenInstruction::unpack(data) {
+        if program_id == &spl_token_interface::id() {
+            match spl_token_interface::instruction::TokenInstruction::unpack(data) {
                 Ok(instr) => match instr {
-                    spl_token::instruction::TokenInstruction::Transfer { amount } => {
+                    spl_token_interface::instruction::TokenInstruction::Transfer { amount } => {
                         Ok(TokenInstruction::Transfer { amount })
                     }
-                    spl_token::instruction::TokenInstruction::TransferChecked {
+                    spl_token_interface::instruction::TokenInstruction::TransferChecked {
                         amount,
                         decimals,
                     } => Ok(TokenInstruction::TransferChecked { amount, decimals }),
@@ -299,14 +299,14 @@ impl SolanaTokenProgram {
                 },
                 Err(e) => Err(TokenError::InvalidTokenInstruction(e.to_string())),
             }
-        } else if program_id == &spl_token_2022::id() {
-            match spl_token_2022::instruction::TokenInstruction::unpack(data) {
+        } else if program_id == &spl_token_2022_interface::id() {
+            match spl_token_2022_interface::instruction::TokenInstruction::unpack(data) {
                 Ok(instr) => match instr {
                     #[allow(deprecated)]
-                    spl_token_2022::instruction::TokenInstruction::Transfer { amount } => {
-                        Ok(TokenInstruction::Transfer { amount })
-                    }
-                    spl_token_2022::instruction::TokenInstruction::TransferChecked {
+                    spl_token_2022_interface::instruction::TokenInstruction::Transfer {
+                        amount,
+                    } => Ok(TokenInstruction::Transfer { amount }),
+                    spl_token_2022_interface::instruction::TokenInstruction::TransferChecked {
                         amount,
                         decimals,
                     } => Ok(TokenInstruction::TransferChecked { amount, decimals }),
@@ -370,9 +370,9 @@ impl SolanaTokenProgram {
 mod tests {
     use mockall::predicate::eq;
     use solana_sdk::{program_pack::Pack, pubkey::Pubkey};
-    use spl_associated_token_account::get_associated_token_address_with_program_id;
-    use spl_associated_token_account::instruction::create_associated_token_account;
-    use spl_token::state::Account;
+    use spl_associated_token_account_interface::address::get_associated_token_address_with_program_id;
+    use spl_associated_token_account_interface::instruction::create_associated_token_account;
+    use spl_token_interface::state::Account;
 
     use crate::{
         domain::{SolanaTokenProgram, TokenError, TokenInstruction},
@@ -393,7 +393,7 @@ mod tests {
                     Ok(solana_sdk::account::Account {
                         lamports: 1000000,
                         data: vec![],
-                        owner: spl_token::id(),
+                        owner: spl_token_interface::id(),
                         executable: false,
                         rent_epoch: 0,
                     })
@@ -403,7 +403,7 @@ mod tests {
         let result = SolanaTokenProgram::get_token_program_for_mint(&mock_provider, &mint).await;
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), spl_token::id());
+        assert_eq!(result.unwrap(), spl_token_interface::id());
     }
 
     #[tokio::test]
@@ -420,7 +420,7 @@ mod tests {
                     Ok(solana_sdk::account::Account {
                         lamports: 1000000,
                         data: vec![],
-                        owner: spl_token_2022::id(),
+                        owner: spl_token_2022_interface::id(),
                         executable: false,
                         rent_epoch: 0,
                     })
@@ -429,7 +429,7 @@ mod tests {
 
         let result = SolanaTokenProgram::get_token_program_for_mint(&mock_provider, &mint).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), spl_token_2022::id());
+        assert_eq!(result.unwrap(), spl_token_2022_interface::id());
     }
 
     #[tokio::test]
@@ -463,14 +463,18 @@ mod tests {
 
     #[test]
     fn test_is_token_program() {
-        assert!(SolanaTokenProgram::is_token_program(&spl_token::id()));
-        assert!(SolanaTokenProgram::is_token_program(&spl_token_2022::id()));
+        assert!(SolanaTokenProgram::is_token_program(
+            &spl_token_interface::id()
+        ));
+        assert!(SolanaTokenProgram::is_token_program(
+            &spl_token_2022_interface::id()
+        ));
         assert!(!SolanaTokenProgram::is_token_program(&Pubkey::new_unique()));
     }
 
     #[test]
     fn test_create_transfer_checked_instruction_spl_token() {
-        let program_id = spl_token::id();
+        let program_id = spl_token_interface::id();
         let source = Pubkey::new_unique();
         let mint = Pubkey::new_unique();
         let destination = Pubkey::new_unique();
@@ -500,7 +504,7 @@ mod tests {
 
     #[test]
     fn test_create_transfer_checked_instruction_token_2022() {
-        let program_id = spl_token_2022::id();
+        let program_id = spl_token_2022_interface::id();
         let source = Pubkey::new_unique();
         let mint = Pubkey::new_unique();
         let destination = Pubkey::new_unique();
@@ -557,7 +561,7 @@ mod tests {
 
     #[test]
     fn test_unpack_account_spl_token() {
-        let program_id = spl_token::id();
+        let program_id = spl_token_interface::id();
         let mint = Pubkey::new_unique();
         let owner = Pubkey::new_unique();
         let amount = 1000;
@@ -566,7 +570,7 @@ mod tests {
             mint,
             owner,
             amount,
-            state: spl_token::state::AccountState::Initialized,
+            state: spl_token_interface::state::AccountState::Initialized,
             ..Default::default()
         };
 
@@ -593,7 +597,7 @@ mod tests {
 
     #[test]
     fn test_unpack_account_token_2022() {
-        let program_id = spl_token_2022::id();
+        let program_id = spl_token_2022_interface::id();
         let mint = Pubkey::new_unique();
         let owner = Pubkey::new_unique();
         let amount = 1000;
@@ -602,7 +606,7 @@ mod tests {
             mint,
             owner,
             amount,
-            state: spl_token::state::AccountState::Initialized,
+            state: spl_token_interface::state::AccountState::Initialized,
             ..Default::default()
         };
 
@@ -638,7 +642,7 @@ mod tests {
             mint,
             owner,
             amount,
-            state: spl_token::state::AccountState::Initialized,
+            state: spl_token_interface::state::AccountState::Initialized,
             ..Default::default()
         };
 
@@ -663,7 +667,7 @@ mod tests {
 
     #[test]
     fn test_get_associated_token_address_spl_token() {
-        let program_id = spl_token::id();
+        let program_id = spl_token_interface::id();
         let wallet = Pubkey::new_unique();
         let mint = Pubkey::new_unique();
 
@@ -675,7 +679,7 @@ mod tests {
 
     #[test]
     fn test_get_associated_token_address_token_2022() {
-        let program_id = spl_token_2022::id();
+        let program_id = spl_token_2022_interface::id();
         let wallet = Pubkey::new_unique();
         let mint = Pubkey::new_unique();
 
@@ -687,7 +691,7 @@ mod tests {
 
     #[test]
     fn test_create_associated_token_account() {
-        let program_id = spl_token::id();
+        let program_id = spl_token_interface::id();
         let payer = Pubkey::new_unique();
         let wallet = Pubkey::new_unique();
         let mint = Pubkey::new_unique();
@@ -713,10 +717,10 @@ mod tests {
 
     #[test]
     fn test_unpack_instruction_spl_token_transfer() {
-        let program_id = spl_token::id();
+        let program_id = spl_token_interface::id();
         let amount = 1000u64;
 
-        let instruction = spl_token::instruction::transfer(
+        let instruction = spl_token_interface::instruction::transfer(
             &program_id,
             &Pubkey::new_unique(),
             &Pubkey::new_unique(),
@@ -741,11 +745,11 @@ mod tests {
 
     #[test]
     fn test_unpack_instruction_spl_token_transfer_checked() {
-        let program_id = spl_token::id();
+        let program_id = spl_token_interface::id();
         let amount = 1000u64;
         let decimals = 9u8;
 
-        let instruction = spl_token::instruction::transfer_checked(
+        let instruction = spl_token_interface::instruction::transfer_checked(
             &program_id,
             &Pubkey::new_unique(),
             &Pubkey::new_unique(),
@@ -774,11 +778,11 @@ mod tests {
 
     #[test]
     fn test_unpack_instruction_token_2022_transfer() {
-        let program_id = spl_token_2022::id();
+        let program_id = spl_token_2022_interface::id();
         let amount = 1000u64;
 
         #[allow(deprecated)]
-        let instruction = spl_token_2022::instruction::transfer(
+        let instruction = spl_token_2022_interface::instruction::transfer(
             &program_id,
             &Pubkey::new_unique(),
             &Pubkey::new_unique(),
@@ -803,11 +807,11 @@ mod tests {
 
     #[test]
     fn test_unpack_instruction_token_2022_transfer_checked() {
-        let program_id = spl_token_2022::id();
+        let program_id = spl_token_2022_interface::id();
         let amount = 1000u64;
         let decimals = 9u8;
 
-        let instruction = spl_token_2022::instruction::transfer_checked(
+        let instruction = spl_token_2022_interface::instruction::transfer_checked(
             &program_id,
             &Pubkey::new_unique(),
             &Pubkey::new_unique(),
