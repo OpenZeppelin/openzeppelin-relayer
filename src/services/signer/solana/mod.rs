@@ -33,10 +33,13 @@ use cdp_signer::*;
 mod google_cloud_kms_signer;
 use google_cloud_kms_signer::*;
 
+use solana_program::message::compiled_instruction::CompiledInstruction;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
 use solana_sdk::transaction::Transaction as SolanaTransaction;
 use std::str::FromStr;
+
+use solana_system_interface::instruction as system_instruction;
 
 use crate::{
     domain::{
@@ -55,6 +58,7 @@ use super::{Signer, SignerError, SignerFactoryError};
 #[cfg(test)]
 use mockall::automock;
 
+#[derive(Debug)]
 pub enum SolanaSigner {
     Local(LocalSigner),
     Vault(VaultSigner<VaultService>),
@@ -318,6 +322,7 @@ mod solana_signer_factory_tests {
     };
     use mockall::predicate::*;
     use secrets::SecretVec;
+    use std::str::FromStr;
     use std::sync::Arc;
 
     fn test_key_bytes() -> SecretVec<u8> {
@@ -334,23 +339,6 @@ mod solana_signer_factory_tests {
 
     #[test]
     fn test_create_solana_signer_local() {
-        let signer_model = SignerDomainModel {
-            id: "test".to_string(),
-            config: SignerConfig::Local(LocalSignerConfig {
-                raw_key: test_key_bytes(),
-            }),
-        };
-
-        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
-
-        match signer {
-            SolanaSigner::Local(_) => {}
-            _ => panic!("Expected Local signer"),
-        }
-    }
-
-    #[test]
-    fn test_create_solana_signer_test() {
         let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Local(LocalSignerConfig {
@@ -537,8 +525,7 @@ mod solana_signer_factory_tests {
                 api_public_key: "api_public_key".to_string(),
                 organization_id: "organization_id".to_string(),
                 private_key_id: "private_key_id".to_string(),
-                public_key: "5720be8aa9d2bb4be8e91f31d2c44c8629e42da16981c2cebabd55cafa0b76bd"
-                    .to_string(),
+                public_key: "public_key".to_string(),
             }),
         };
         let expected_pubkey =
@@ -640,21 +627,231 @@ mod solana_signer_factory_tests {
 
         assert!(signature.is_ok());
     }
-}
 
-#[cfg(test)]
-#[async_trait]
-impl Signer for MockSolanaSignTrait {
-    async fn address(&self) -> Result<Address, SignerError> {
-        self.pubkey().await
+    #[tokio::test]
+    async fn test_sign_sdk_transaction_success() {
+        use solana_sdk::message::Message;
+        use solana_sdk::pubkey::Pubkey;
+        use solana_sdk::signature::Signature;
+        use solana_sdk::transaction::Transaction;
+
+        // Create a mock signer
+        let signer_model = SignerDomainModel {
+            id: "test".to_string(),
+            config: SignerConfig::Local(LocalSignerConfig {
+                raw_key: test_key_bytes(),
+            }),
+        };
+        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+
+        // Create a simple transaction with our signer as the first account
+        let signer_pubkey = Pubkey::from_str(&test_key_bytes_pubkey().to_string()).unwrap();
+        let recipient = Pubkey::new_unique();
+
+        let message = Message::new(
+            &[solana_system_interface::instruction::transfer(
+                &signer_pubkey,
+                &recipient,
+                1000,
+            )],
+            Some(&signer_pubkey),
+        );
+        let transaction = Transaction::new_unsigned(message);
+
+        // Sign the transaction
+        let result = sign_sdk_transaction(&signer, transaction).await;
+        assert!(result.is_ok());
+
+        let (signed_tx, signature) = result.unwrap();
+        assert!(!signature.to_string().is_empty());
+        assert_eq!(signed_tx.signatures.len(), 1);
+        assert_eq!(signed_tx.signatures[0], signature);
     }
 
-    async fn sign_transaction(
-        &self,
-        _transaction: NetworkTransactionData,
-    ) -> Result<SignTransactionResponse, SignerError> {
-        Err(SignerError::NotImplemented(
-            "sign_transaction not implemented for MockSolanaSignTrait".to_string(),
-        ))
+    #[tokio::test]
+    async fn test_sign_sdk_transaction_signer_not_in_accounts() {
+        use solana_sdk::message::Message;
+        use solana_sdk::pubkey::Pubkey;
+        use solana_sdk::transaction::Transaction;
+
+        // Create a mock signer
+        let signer_model = SignerDomainModel {
+            id: "test".to_string(),
+            config: SignerConfig::Local(LocalSignerConfig {
+                raw_key: test_key_bytes(),
+            }),
+        };
+        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+
+        // Create a transaction where our signer is NOT in the account keys
+        let other_pubkey = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+
+        let message = Message::new(
+            &[solana_system_interface::instruction::transfer(
+                &other_pubkey,
+                &recipient,
+                1000,
+            )],
+            Some(&other_pubkey),
+        );
+        let transaction = Transaction::new_unsigned(message);
+
+        // Try to sign - should fail because signer is not in account_keys
+        let result = sign_sdk_transaction(&signer, transaction).await;
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        match error {
+            SignerError::SigningError(msg) => {
+                assert!(msg.contains("Signer public key not found in transaction signers"));
+            }
+            _ => panic!("Expected SigningError, got {:?}", error),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_sdk_transaction_signer_not_required() {
+        use solana_sdk::message::Message;
+        use solana_sdk::pubkey::Pubkey;
+        use solana_sdk::transaction::Transaction;
+
+        // Create a mock signer
+        let signer_model = SignerDomainModel {
+            id: "test".to_string(),
+            config: SignerConfig::Local(LocalSignerConfig {
+                raw_key: test_key_bytes(),
+            }),
+        };
+        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+
+        // Create a transaction where our signer is in account_keys but NOT marked as required
+        let signer_pubkey = Pubkey::from_str(&test_key_bytes_pubkey().to_string()).unwrap();
+        let fee_payer = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+
+        // Create message with signer as a readonly account (not required signer)
+        // Use a different approach - create a message where signer is not the fee payer
+        let message = Message::new(
+            &[solana_system_interface::instruction::transfer(
+                &fee_payer, &recipient, 1000,
+            )],
+            Some(&fee_payer),
+        );
+        let transaction = Transaction::new_unsigned(message);
+
+        // Manually modify the message to include our signer as a readonly account
+        // This simulates a transaction where our signer is present but not required
+        let mut modified_message = transaction.message.clone();
+        modified_message.account_keys.push(signer_pubkey); // Add signer as additional account
+        modified_message.header.num_readonly_unsigned_accounts += 1; // Make it readonly unsigned
+
+        let modified_transaction = Transaction::new_unsigned(modified_message);
+
+        // Try to sign - should fail because signer is not a required signer
+        let result = sign_sdk_transaction(&signer, modified_transaction).await;
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        match error {
+            SignerError::SigningError(msg) => {
+                assert!(msg.contains("Signer is not marked as a required signer"));
+            }
+            _ => panic!("Expected SigningError, got {:?}", error),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_transaction_with_domain_model() {
+        use crate::models::{NetworkTransactionData, SolanaTransactionData};
+        use solana_sdk::message::Message;
+        use solana_sdk::pubkey::Pubkey;
+
+        // Create a mock signer
+        let signer_model = SignerDomainModel {
+            id: "test".to_string(),
+            config: SignerConfig::Local(LocalSignerConfig {
+                raw_key: test_key_bytes(),
+            }),
+        };
+        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+
+        // Create a domain transaction data
+        let signer_pubkey = Pubkey::from_str(&test_key_bytes_pubkey().to_string()).unwrap();
+        let recipient = Pubkey::new_unique();
+
+        let message = Message::new(
+            &[solana_system_interface::instruction::transfer(
+                &signer_pubkey,
+                &recipient,
+                1000,
+            )],
+            Some(&signer_pubkey),
+        );
+        let transaction = solana_sdk::transaction::Transaction::new_unsigned(message);
+        let encoded_tx =
+            crate::models::EncodedSerializedTransaction::try_from(&transaction).unwrap();
+
+        let solana_data = SolanaTransactionData {
+            transaction: Some(encoded_tx.into_inner()),
+            ..Default::default()
+        };
+
+        let network_data = NetworkTransactionData::Solana(solana_data);
+
+        // Sign using the domain model method
+        let result = signer.sign_transaction(network_data).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        match response {
+            crate::domain::SignTransactionResponse::Solana(solana_response) => {
+                assert!(!solana_response.transaction.into_inner().is_empty());
+                assert!(!solana_response.signature.is_empty());
+            }
+            _ => panic!("Expected Solana response"),
+        }
+    }
+
+    #[test]
+    fn test_create_solana_signer_aws_kms_unsupported() {
+        let signer_model = SignerDomainModel {
+            id: "test".to_string(),
+            config: SignerConfig::AwsKms(AwsKmsSignerConfig {
+                region: Some("us-east-1".to_string()),
+                key_id: "test-key-id".to_string(),
+            }),
+        };
+
+        let result = SolanaSignerFactory::create_solana_signer(&signer_model);
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        match error {
+            SignerFactoryError::UnsupportedType(msg) => {
+                assert_eq!(msg, "AWS KMS");
+            }
+            _ => panic!("Expected UnsupportedType error, got {:?}", error),
+        }
+    }
+
+    #[cfg(test)]
+    #[async_trait]
+    impl Signer for MockSolanaSignTrait {
+        async fn address(&self) -> Result<Address, SignerError> {
+            self.pubkey().await
+        }
+
+        async fn sign_transaction(
+            &self,
+            _transaction: NetworkTransactionData,
+        ) -> Result<SignTransactionResponse, SignerError> {
+            // For testing, return a mock response
+            Ok(SignTransactionResponse::Solana(
+                crate::domain::SignTransactionResponseSolana {
+                    transaction: crate::models::EncodedSerializedTransaction::new(
+                        "signed_transaction_data".to_string(),
+                    ),
+                    signature: "signature_data".to_string(),
+                },
+            ))
+        }
     }
 }

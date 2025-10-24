@@ -22,6 +22,7 @@ use crate::models::{Address, Signer as SignerDomainModel, SignerError};
 
 use super::SolanaSignTrait;
 
+#[derive(Debug)]
 pub struct LocalSigner {
     local_signer_client: Keypair,
 }

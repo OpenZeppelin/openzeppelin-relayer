@@ -32,6 +32,7 @@ use crate::{
 use super::SolanaSignTrait;
 
 pub type DefaultTurnkeyService = TurnkeyService;
+#[derive(Debug)]
 pub struct TurnkeySigner<T = DefaultTurnkeyService>
 where
     T: TurnkeyServiceTrait,

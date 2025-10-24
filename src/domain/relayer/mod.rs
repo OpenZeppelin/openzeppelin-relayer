@@ -509,19 +509,19 @@ pub enum SignTransactionRequest {
     Solana(SignTransactionRequestSolana),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SignTransactionResponseEvm {
     pub hash: String,
     pub signature: EvmTransactionDataSignature,
     pub raw: Vec<u8>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SignTransactionResponseStellar {
     pub signature: DecoratedSignature,
 }
 
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
 pub struct SignTransactionResponseSolana {
     pub transaction: EncodedSerializedTransaction,
     pub signature: String,
@@ -534,7 +534,7 @@ pub struct SignXdrTransactionResponseStellar {
     pub signature: DecoratedSignature,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum SignTransactionResponse {
     Evm(SignTransactionResponseEvm),
     Solana(SignTransactionResponseSolana),

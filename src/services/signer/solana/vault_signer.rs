@@ -63,7 +63,7 @@ static VAULT_SIGNER_CACHE: Lazy<RwLock<HashMap<VaultCacheKey, Arc<LocalSigner>>>
     Lazy::new(|| RwLock::new(HashMap::new()));
 
 /// Solana signer that fetches private keys from HashiCorp Vault KV2 engine
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct VaultSigner<T>
 where
     T: VaultServiceTrait + Clone,

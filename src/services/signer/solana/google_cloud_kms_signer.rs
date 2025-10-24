@@ -32,6 +32,7 @@ use crate::{
 use super::SolanaSignTrait;
 
 pub type DefaultGoogleCloudKmsService = GoogleCloudKmsService;
+#[derive(Debug)]
 pub struct GoogleCloudKmsSigner<T = DefaultGoogleCloudKmsService>
 where
     T: GoogleCloudKmsServiceTrait,

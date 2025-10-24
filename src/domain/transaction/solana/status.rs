@@ -33,7 +33,7 @@ use crate::{
 
 impl<P, RR, TR, J, S> SolanaRelayerTransaction<P, RR, TR, J, S>
 where
-    P: SolanaProviderTrait,
+    P: SolanaProviderTrait + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
@@ -671,14 +671,19 @@ where
 mod tests {
     use super::*;
     use crate::{
-        jobs::MockJobProducerTrait,
+        jobs::{MockJobProducerTrait, TransactionCommand},
         models::{NetworkTransactionData, SolanaTransactionData},
         repositories::{MockRelayerRepository, MockTransactionRepository},
         services::{MockSolanaProviderTrait, MockSolanaSignTrait, SolanaProviderError},
-        utils::mocks::mockutils::{create_mock_solana_relayer, create_mock_solana_transaction},
+        utils::{
+            base64_encode,
+            mocks::mockutils::{create_mock_solana_relayer, create_mock_solana_transaction},
+        },
     };
     use eyre::Result;
     use mockall::predicate::*;
+    use solana_sdk::{hash::Hash, message::Message, pubkey::Pubkey};
+    use solana_system_interface::instruction as system_instruction;
     use std::sync::Arc;
 
     // Helper to create a transaction with a specific status and optional signature
@@ -700,7 +705,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_status_already_final() {
-        let provider = Arc::new(MockSolanaProviderTrait::new());
+        let provider = MockSolanaProviderTrait::new();
         let relayer_repo = Arc::new(MockRelayerRepository::new());
         let tx_repo = Arc::new(MockTransactionRepository::new());
         let job_producer = Arc::new(MockJobProducerTrait::new());
@@ -709,7 +714,7 @@ mod tests {
         let handler = SolanaRelayerTransaction::new(
             relayer,
             relayer_repo,
-            provider,
+            Arc::new(provider),
             tx_repo,
             job_producer,
             Arc::new(MockSolanaSignTrait::new()),
@@ -1218,6 +1223,765 @@ mod tests {
         assert!(result.is_ok());
         let updated_tx = result.unwrap();
         assert_eq!(updated_tx.status, TransactionStatus::Failed);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_pending_status_schedules_recovery_job() -> Result<()> {
+        let provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let mut job_producer = MockJobProducerTrait::new();
+
+        // Create transaction that's been pending long enough to trigger recovery
+        let mut tx = create_tx_with_signature(TransactionStatus::Pending, None);
+        tx.created_at = (Utc::now()
+            - Duration::seconds(SOLANA_PENDING_RECOVERY_TRIGGER_SECONDS + 10))
+        .to_rfc3339();
+
+        let tx_id = tx.id.clone();
+
+        // Expect transaction request job to be produced
+        job_producer
+            .expect_produce_transaction_request_job()
+            .withf(move |job, _delay| job.transaction_id == tx_id)
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        let handler = SolanaRelayerTransaction::new(
+            create_mock_solana_relayer("test-relayer".to_string(), false),
+            relayer_repo,
+            Arc::new(provider),
+            tx_repo,
+            Arc::new(job_producer),
+            Arc::new(MockSolanaSignTrait::new()),
+        )?;
+
+        let result = handler.handle_pending_status(tx.clone()).await;
+
+        assert!(result.is_ok());
+        let returned_tx = result.unwrap();
+        assert_eq!(returned_tx.status, TransactionStatus::Pending); // Status unchanged
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_pending_status_too_young() -> Result<()> {
+        let provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+
+        // Create transaction that's too young for recovery
+        let mut tx = create_tx_with_signature(TransactionStatus::Pending, None);
+        tx.created_at = (Utc::now()
+            - Duration::seconds(SOLANA_PENDING_RECOVERY_TRIGGER_SECONDS - 10))
+        .to_rfc3339();
+
+        let handler = SolanaRelayerTransaction::new(
+            create_mock_solana_relayer("test-relayer".to_string(), false),
+            relayer_repo,
+            Arc::new(provider),
+            tx_repo,
+            job_producer,
+            Arc::new(MockSolanaSignTrait::new()),
+        )?;
+
+        let result = handler.handle_pending_status(tx.clone()).await;
+
+        assert!(result.is_ok());
+        let returned_tx = result.unwrap();
+        assert_eq!(returned_tx.status, TransactionStatus::Pending); // Status unchanged, no job scheduled
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_pending_status_timeout() -> Result<()> {
+        let provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let mut tx_repo = MockTransactionRepository::new();
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+
+        // Create transaction that's exceeded pending timeout
+        let mut tx = create_tx_with_signature(TransactionStatus::Pending, None);
+        tx.created_at =
+            (Utc::now() - Duration::minutes(SOLANA_PENDING_TIMEOUT_MINUTES + 1)).to_rfc3339();
+
+        let tx_id = tx.id.clone();
+
+        // Should mark as failed due to timeout
+        tx_repo
+            .expect_partial_update()
+            .withf(move |tx_id_param, update_req| {
+                tx_id_param == &tx_id && update_req.status == Some(TransactionStatus::Failed)
+            })
+            .times(1)
+            .returning(move |_, _| {
+                let mut failed_tx = create_tx_with_signature(TransactionStatus::Failed, None);
+                failed_tx.status = TransactionStatus::Failed;
+                Ok(failed_tx)
+            });
+
+        let handler = SolanaRelayerTransaction::new(
+            create_mock_solana_relayer("test-relayer".to_string(), false),
+            relayer_repo,
+            Arc::new(provider),
+            Arc::new(tx_repo),
+            job_producer,
+            Arc::new(MockSolanaSignTrait::new()),
+        )?;
+
+        let result = handler.handle_pending_status(tx).await;
+
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.status, TransactionStatus::Failed);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_resubmit_blockhash_expired_resubmitable() -> Result<()> {
+        let mut provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let mut job_producer = MockJobProducerTrait::new();
+
+        // Create a simple transaction for testing
+        let payer = Pubkey::new_unique();
+        let instruction =
+            solana_system_interface::instruction::transfer(&payer, &Pubkey::new_unique(), 1000);
+        let mut transaction = SolanaTransaction::new_with_payer(&[instruction], Some(&payer));
+        transaction.message.recent_blockhash = Hash::from_str("11111111111111111111111111111112")?;
+        let transaction_bytes = bincode::serialize(&transaction)?;
+        let transaction_b64 = base64_encode(&transaction_bytes);
+
+        // Create transaction with expired blockhash that's resubmitable
+        let signature_str = "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
+        let mut tx = create_tx_with_signature(TransactionStatus::Submitted, Some(signature_str));
+        tx.sent_at = Some(
+            (Utc::now() - Duration::seconds(SOLANA_MIN_AGE_FOR_RESUBMIT_CHECK_SECONDS + 10))
+                .to_rfc3339(),
+        );
+        tx.network_data = NetworkTransactionData::Solana(SolanaTransactionData {
+            transaction: Some(transaction_b64),
+            instructions: None,
+            signature: Some(signature_str.to_string()),
+        });
+
+        let tx_id = tx.id.clone();
+
+        // Mock provider calls
+        provider
+            .expect_is_blockhash_valid()
+            .with(
+                eq(Hash::from_str("11111111111111111111111111111112")?),
+                eq(CommitmentConfig::confirmed()),
+            )
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(false) })); // Blockhash expired
+
+        // Expect resubmit job to be produced
+        job_producer
+            .expect_produce_submit_transaction_job()
+            .withf(move |job, _delay| {
+                matches!(job.command, TransactionCommand::Resubmit) && job.transaction_id == tx_id
+            })
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        let handler = SolanaRelayerTransaction::new(
+            create_mock_solana_relayer("test-relayer".to_string(), false),
+            relayer_repo,
+            Arc::new(provider),
+            tx_repo,
+            Arc::new(job_producer),
+            Arc::new(MockSolanaSignTrait::new()),
+        )?;
+
+        let result = handler.handle_resubmit_or_expiration(tx.clone()).await;
+
+        assert!(result.is_ok());
+        let returned_tx = result.unwrap();
+        assert_eq!(returned_tx.status, TransactionStatus::Submitted); // Status unchanged
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_resubmit_blockhash_expired_not_resubmitable() -> Result<()> {
+        let mut provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let mut tx_repo = MockTransactionRepository::new();
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+
+        // Create multi-signature transaction (not resubmitable)
+        let payer = Pubkey::new_unique();
+        let recipient = Pubkey::new_unique();
+        let additional_signer = Pubkey::new_unique();
+        let instruction = system_instruction::transfer(&payer, &recipient, 1000);
+
+        // Create message with multiple signers
+        let mut message = Message::new(&[instruction], Some(&payer));
+        message.account_keys.push(additional_signer);
+        message.header.num_required_signatures = 2; // Multi-sig
+        message.recent_blockhash = Hash::from_str("11111111111111111111111111111112")?;
+
+        let transaction = SolanaTransaction::new_unsigned(message);
+        let transaction_bytes = bincode::serialize(&transaction)?;
+        let transaction_b64 = base64_encode(&transaction_bytes);
+
+        let signature_str = "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
+        let mut tx = create_tx_with_signature(TransactionStatus::Submitted, Some(signature_str));
+        tx.sent_at = Some(
+            (Utc::now() - Duration::seconds(SOLANA_MIN_AGE_FOR_RESUBMIT_CHECK_SECONDS + 10))
+                .to_rfc3339(),
+        );
+        tx.network_data = NetworkTransactionData::Solana(SolanaTransactionData {
+            transaction: Some(transaction_b64),
+            instructions: None,
+            signature: Some(signature_str.to_string()),
+        });
+
+        let tx_id = tx.id.clone();
+
+        // Mock provider calls
+        provider
+            .expect_is_blockhash_valid()
+            .with(
+                eq(Hash::from_str("11111111111111111111111111111112")?),
+                eq(CommitmentConfig::confirmed()),
+            )
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(false) })); // Blockhash expired
+
+        // Should mark as expired
+        tx_repo
+            .expect_partial_update()
+            .withf(move |tx_id_param, update_req| {
+                tx_id_param == &tx_id && update_req.status == Some(TransactionStatus::Expired)
+            })
+            .times(1)
+            .returning(move |_, _| {
+                let mut expired_tx = create_tx_with_signature(TransactionStatus::Expired, None);
+                expired_tx.status = TransactionStatus::Expired;
+                Ok(expired_tx)
+            });
+
+        let handler = SolanaRelayerTransaction::new(
+            create_mock_solana_relayer("test-relayer".to_string(), false),
+            relayer_repo,
+            Arc::new(provider),
+            Arc::new(tx_repo),
+            job_producer,
+            Arc::new(MockSolanaSignTrait::new()),
+        )?;
+
+        let result = handler.handle_resubmit_or_expiration(tx).await;
+
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.status, TransactionStatus::Expired);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_check_any_signature_on_chain_found() -> Result<()> {
+        let mut provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+
+        let signature1 = "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
+        let signature2 = "3XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
+
+        let mut tx = create_tx_with_signature(TransactionStatus::Submitted, Some(signature1));
+        tx.hashes = vec![signature1.to_string(), signature2.to_string()];
+
+        // Mock provider to return error for first signature, success for second
+        provider
+            .expect_get_transaction_status()
+            .with(eq(Signature::from_str(signature1)?))
+            .times(1)
+            .returning(|_| {
+                Box::pin(async { Err(SolanaProviderError::RpcError("not found".to_string())) })
+            });
+
+        provider
+            .expect_get_transaction_status()
+            .with(eq(Signature::from_str(signature2)?))
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(SolanaTransactionStatus::Processed) }));
+
+        let handler = SolanaRelayerTransaction::new(
+            create_mock_solana_relayer("test-relayer".to_string(), false),
+            relayer_repo,
+            Arc::new(provider),
+            tx_repo,
+            job_producer,
+            Arc::new(MockSolanaSignTrait::new()),
+        )?;
+
+        let result = handler.check_any_signature_on_chain(&tx).await;
+
+        assert!(result.is_ok());
+        let found = result.unwrap();
+        assert!(found.is_some());
+        let (found_sig, status) = found.unwrap();
+        assert_eq!(found_sig, signature2);
+        assert_eq!(status, SolanaTransactionStatus::Processed);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_check_any_signature_on_chain_not_found() -> Result<()> {
+        let mut provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+
+        let signature1 = "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
+        let signature2 = "3XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
+
+        let mut tx = create_tx_with_signature(TransactionStatus::Submitted, Some(signature1));
+        tx.hashes = vec![signature1.to_string(), signature2.to_string()];
+
+        // Mock provider to return error for both signatures
+        provider
+            .expect_get_transaction_status()
+            .with(eq(Signature::from_str(signature1)?))
+            .times(1)
+            .returning(|_| {
+                Box::pin(async { Err(SolanaProviderError::RpcError("not found".to_string())) })
+            });
+
+        provider
+            .expect_get_transaction_status()
+            .with(eq(Signature::from_str(signature2)?))
+            .times(1)
+            .returning(|_| {
+                Box::pin(async { Err(SolanaProviderError::RpcError("not found".to_string())) })
+            });
+
+        let handler = SolanaRelayerTransaction::new(
+            create_mock_solana_relayer("test-relayer".to_string(), false),
+            relayer_repo,
+            Arc::new(provider),
+            tx_repo,
+            job_producer,
+            Arc::new(MockSolanaSignTrait::new()),
+        )?;
+
+        let result = handler.check_any_signature_on_chain(&tx).await;
+
+        assert!(result.is_ok());
+        let found = result.unwrap();
+        assert!(found.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_is_blockhash_valid_true() -> Result<()> {
+        let mut provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+
+        let blockhash = Hash::from_str("11111111111111111111111111111112")?;
+
+        provider
+            .expect_is_blockhash_valid()
+            .with(eq(blockhash), eq(CommitmentConfig::confirmed()))
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+
+        let handler = SolanaRelayerTransaction::new(
+            create_mock_solana_relayer("test-relayer".to_string(), false),
+            relayer_repo,
+            Arc::new(provider),
+            tx_repo,
+            job_producer,
+            Arc::new(MockSolanaSignTrait::new()),
+        )?;
+
+        let mut transaction =
+            SolanaTransaction::new_unsigned(Message::new(&[], Some(&Pubkey::new_unique())));
+        transaction.message.recent_blockhash = blockhash;
+
+        let result = handler.is_blockhash_valid(&transaction).await;
+
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_is_blockhash_valid_false() -> Result<()> {
+        let mut provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+
+        let blockhash = Hash::from_str("11111111111111111111111111111112")?;
+
+        provider
+            .expect_is_blockhash_valid()
+            .with(eq(blockhash), eq(CommitmentConfig::confirmed()))
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(false) }));
+
+        let handler = SolanaRelayerTransaction::new(
+            create_mock_solana_relayer("test-relayer".to_string(), false),
+            relayer_repo,
+            Arc::new(provider),
+            tx_repo,
+            job_producer,
+            Arc::new(MockSolanaSignTrait::new()),
+        )?;
+
+        let mut transaction =
+            SolanaTransaction::new_unsigned(Message::new(&[], Some(&Pubkey::new_unique())));
+        transaction.message.recent_blockhash = blockhash;
+
+        let result = handler.is_blockhash_valid(&transaction).await;
+
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_is_blockhash_valid_error() -> Result<()> {
+        let mut provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+
+        let blockhash = Hash::from_str("11111111111111111111111111111112")?;
+
+        provider
+            .expect_is_blockhash_valid()
+            .with(eq(blockhash), eq(CommitmentConfig::confirmed()))
+            .times(1)
+            .returning(|_, _| {
+                Box::pin(async { Err(SolanaProviderError::RpcError("test error".to_string())) })
+            });
+
+        let handler = SolanaRelayerTransaction::new(
+            create_mock_solana_relayer("test-relayer".to_string(), false),
+            relayer_repo,
+            Arc::new(provider),
+            tx_repo,
+            job_producer,
+            Arc::new(MockSolanaSignTrait::new()),
+        )?;
+
+        let mut transaction =
+            SolanaTransaction::new_unsigned(Message::new(&[], Some(&Pubkey::new_unique())));
+        transaction.message.recent_blockhash = blockhash;
+
+        let result = handler.is_blockhash_valid(&transaction).await;
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        match error {
+            TransactionError::UnderlyingSolanaProvider(_) => {} // Expected
+            _ => panic!("Expected UnderlyingSolanaProvider error"),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_time_since_sent_or_created_at_with_sent_at() {
+        let provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+
+        let handler = SolanaRelayerTransaction::new(
+            create_mock_solana_relayer("test-relayer".to_string(), false),
+            relayer_repo,
+            Arc::new(provider),
+            tx_repo,
+            job_producer,
+            Arc::new(MockSolanaSignTrait::new()),
+        )
+        .unwrap();
+
+        let mut tx = create_tx_with_signature(TransactionStatus::Pending, None);
+        let past_time = Utc::now() - Duration::minutes(5);
+        tx.sent_at = Some(past_time.to_rfc3339());
+
+        let result = handler.get_time_since_sent_or_created_at(&tx);
+
+        assert!(result.is_some());
+        let duration = result.unwrap();
+        assert!(duration.num_minutes() >= 5);
+    }
+
+    #[tokio::test]
+    async fn test_get_time_since_sent_or_created_at_with_created_at() {
+        let provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+
+        let handler = SolanaRelayerTransaction::new(
+            create_mock_solana_relayer("test-relayer".to_string(), false),
+            relayer_repo,
+            Arc::new(provider),
+            tx_repo,
+            job_producer,
+            Arc::new(MockSolanaSignTrait::new()),
+        )
+        .unwrap();
+
+        let mut tx = create_tx_with_signature(TransactionStatus::Pending, None);
+        let past_time = Utc::now() - Duration::minutes(10);
+        tx.created_at = past_time.to_rfc3339();
+        tx.sent_at = None; // No sent_at
+
+        let result = handler.get_time_since_sent_or_created_at(&tx);
+
+        assert!(result.is_some());
+        let duration = result.unwrap();
+        assert!(duration.num_minutes() >= 10);
+    }
+
+    #[tokio::test]
+    async fn test_has_exceeded_timeout_pending() {
+        let provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+
+        let handler = SolanaRelayerTransaction::new(
+            create_mock_solana_relayer("test-relayer".to_string(), false),
+            relayer_repo,
+            Arc::new(provider),
+            tx_repo,
+            job_producer,
+            Arc::new(MockSolanaSignTrait::new()),
+        )
+        .unwrap();
+
+        let mut tx = create_tx_with_signature(TransactionStatus::Pending, None);
+        tx.created_at =
+            (Utc::now() - Duration::minutes(SOLANA_PENDING_TIMEOUT_MINUTES + 1)).to_rfc3339();
+
+        let result = handler.has_exceeded_timeout(&tx);
+
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_has_exceeded_timeout_sent() {
+        let provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+
+        let handler = SolanaRelayerTransaction::new(
+            create_mock_solana_relayer("test-relayer".to_string(), false),
+            relayer_repo,
+            Arc::new(provider),
+            tx_repo,
+            job_producer,
+            Arc::new(MockSolanaSignTrait::new()),
+        )
+        .unwrap();
+
+        let mut tx = create_tx_with_signature(TransactionStatus::Sent, None);
+        tx.sent_at =
+            Some((Utc::now() - Duration::minutes(SOLANA_SENT_TIMEOUT_MINUTES + 1)).to_rfc3339());
+
+        let result = handler.has_exceeded_timeout(&tx);
+
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_is_valid_until_expired_user_provided() {
+        let provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+
+        let handler = SolanaRelayerTransaction::new(
+            create_mock_solana_relayer("test-relayer".to_string(), false),
+            relayer_repo,
+            Arc::new(provider),
+            tx_repo,
+            job_producer,
+            Arc::new(MockSolanaSignTrait::new()),
+        )
+        .unwrap();
+
+        let mut tx = create_tx_with_signature(TransactionStatus::Pending, None);
+        let past_time = Utc::now() - Duration::minutes(1);
+        tx.valid_until = Some(past_time.to_rfc3339());
+
+        assert!(handler.is_valid_until_expired(&tx));
+    }
+
+    #[tokio::test]
+    async fn test_is_valid_until_expired_default() {
+        let provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+
+        let handler = SolanaRelayerTransaction::new(
+            create_mock_solana_relayer("test-relayer".to_string(), false),
+            relayer_repo,
+            Arc::new(provider),
+            tx_repo,
+            job_producer,
+            Arc::new(MockSolanaSignTrait::new()),
+        )
+        .unwrap();
+
+        let mut tx = create_tx_with_signature(TransactionStatus::Pending, None);
+        let past_time =
+            Utc::now() - Duration::milliseconds(SOLANA_DEFAULT_TX_VALID_TIMESPAN + 1000);
+        tx.created_at = past_time.to_rfc3339();
+        tx.valid_until = None; // Use default
+
+        assert!(handler.is_valid_until_expired(&tx));
+    }
+
+    #[tokio::test]
+    async fn test_mark_as_expired() -> Result<()> {
+        let provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let mut tx_repo = MockTransactionRepository::new();
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+
+        let tx = create_tx_with_signature(TransactionStatus::Pending, None);
+        let tx_id = tx.id.clone();
+        let reason = "Test expiration";
+
+        tx_repo
+            .expect_partial_update()
+            .withf(move |tx_id_param, update_req| {
+                tx_id_param == &tx_id
+                    && update_req.status == Some(TransactionStatus::Expired)
+                    && update_req.status_reason == Some(reason.to_string())
+            })
+            .times(1)
+            .returning(move |_, _| {
+                let mut expired_tx = create_tx_with_signature(TransactionStatus::Expired, None);
+                expired_tx.status = TransactionStatus::Expired;
+                Ok(expired_tx)
+            });
+
+        let handler = SolanaRelayerTransaction::new(
+            create_mock_solana_relayer("test-relayer".to_string(), false),
+            relayer_repo,
+            Arc::new(provider),
+            Arc::new(tx_repo),
+            job_producer,
+            Arc::new(MockSolanaSignTrait::new()),
+        )?;
+
+        let result = handler.mark_as_expired(tx, reason.to_string()).await;
+
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.status, TransactionStatus::Expired);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_mark_as_failed() -> Result<()> {
+        let provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let mut tx_repo = MockTransactionRepository::new();
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+
+        let tx = create_tx_with_signature(TransactionStatus::Pending, None);
+        let tx_id = tx.id.clone();
+        let reason = "Test failure";
+
+        tx_repo
+            .expect_partial_update()
+            .withf(move |tx_id_param, update_req| {
+                tx_id_param == &tx_id
+                    && update_req.status == Some(TransactionStatus::Failed)
+                    && update_req.status_reason == Some(reason.to_string())
+            })
+            .times(1)
+            .returning(move |_, _| {
+                let mut failed_tx = create_tx_with_signature(TransactionStatus::Failed, None);
+                failed_tx.status = TransactionStatus::Failed;
+                Ok(failed_tx)
+            });
+
+        let handler = SolanaRelayerTransaction::new(
+            create_mock_solana_relayer("test-relayer".to_string(), false),
+            relayer_repo,
+            Arc::new(provider),
+            Arc::new(tx_repo),
+            job_producer,
+            Arc::new(MockSolanaSignTrait::new()),
+        )?;
+
+        let result = handler.mark_as_failed(tx, reason.to_string()).await;
+
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.status, TransactionStatus::Failed);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_update_transaction_status_and_send_notification() -> Result<()> {
+        let provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let mut tx_repo = MockTransactionRepository::new();
+        let mut job_producer = MockJobProducerTrait::new();
+
+        // Create relayer with notification configured
+        let mut relayer = create_mock_solana_relayer("test-relayer".to_string(), false);
+        relayer.notification_id = Some("test-notification".to_string());
+
+        let tx = create_tx_with_signature(TransactionStatus::Submitted, None);
+        let tx_id = tx.id.clone();
+        let new_status = TransactionStatus::Confirmed;
+
+        tx_repo
+            .expect_partial_update()
+            .withf(move |tx_id_param, update_req| {
+                tx_id_param == &tx_id && update_req.status == Some(TransactionStatus::Confirmed)
+            })
+            .times(1)
+            .returning(move |_, _| {
+                let mut confirmed_tx = create_tx_with_signature(TransactionStatus::Confirmed, None);
+                confirmed_tx.status = TransactionStatus::Confirmed;
+                Ok(confirmed_tx)
+            });
+
+        job_producer
+            .expect_produce_send_notification_job()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        let handler = SolanaRelayerTransaction::new(
+            relayer,
+            relayer_repo,
+            Arc::new(provider),
+            Arc::new(tx_repo),
+            Arc::new(job_producer),
+            Arc::new(MockSolanaSignTrait::new()),
+        )?;
+
+        let result = handler
+            .update_transaction_status_and_send_notification(tx, new_status, None)
+            .await;
+
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.status, TransactionStatus::Confirmed);
         Ok(())
     }
 }

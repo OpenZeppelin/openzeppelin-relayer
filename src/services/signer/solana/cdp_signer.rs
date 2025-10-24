@@ -32,6 +32,7 @@ use super::SolanaSignTrait;
 
 pub type DefaultCdpService = CdpService;
 
+#[derive(Debug)]
 pub struct CdpSigner<T = DefaultCdpService>
 where
     T: CdpServiceTrait,

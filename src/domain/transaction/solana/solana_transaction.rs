@@ -40,7 +40,7 @@ use crate::{
 #[allow(dead_code)]
 pub struct SolanaRelayerTransaction<P, RR, TR, J, S>
 where
-    P: SolanaProviderTrait,
+    P: SolanaProviderTrait + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
@@ -65,7 +65,7 @@ pub type DefaultSolanaTransaction = SolanaRelayerTransaction<
 #[allow(dead_code)]
 impl<P, RR, TR, J, S> SolanaRelayerTransaction<P, RR, TR, J, S>
 where
-    P: SolanaProviderTrait,
+    P: SolanaProviderTrait + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
@@ -83,13 +83,13 @@ where
             relayer,
             relayer_repository,
             provider,
+
             transaction_repository,
             job_producer,
             signer,
         })
     }
 
-    // Getter methods for status module access
     pub(super) fn provider(&self) -> &P {
         &self.provider
     }
@@ -753,10 +753,15 @@ mod tests {
     use super::*;
     use crate::{
         jobs::MockJobProducerTrait,
+        models::{
+            Address, NetworkTransactionData, SignerError, SolanaTransactionData, TransactionStatus,
+        },
         repositories::{MockRelayerRepository, MockTransactionRepository},
-        services::{MockSolanaProviderTrait, MockSolanaSignTrait},
+        services::{MockSolanaProviderTrait, MockSolanaSignTrait, SolanaProviderError},
         utils::mocks::mockutils::{create_mock_solana_relayer, create_mock_solana_transaction},
     };
+    use solana_sdk::{hash::Hash, message::Message, pubkey::Pubkey, signature::Signature};
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_solana_transaction_creation() {
@@ -780,14 +785,898 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_prepare_transaction_transaction_mode_success() {
+        let mut provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let mut tx_repo = MockTransactionRepository::new();
+        let mut job_producer = MockJobProducerTrait::new();
+        let mut signer = MockSolanaSignTrait::new();
+
+        let relayer = create_mock_solana_relayer("test-relayer".to_string(), false);
+        let mut tx = create_mock_solana_transaction();
+        tx.status = TransactionStatus::Pending;
+
+        // Create a valid base64-encoded transaction
+        let signer_pubkey = Pubkey::from_str("11111111111111111111111111111112").unwrap();
+        let recipient = Pubkey::new_unique();
+        let message = Message::new(
+            &[solana_system_interface::instruction::transfer(
+                &signer_pubkey,
+                &recipient,
+                1000,
+            )],
+            Some(&signer_pubkey),
+        );
+        let transaction = solana_sdk::transaction::Transaction::new_unsigned(message);
+        let encoded_tx = EncodedSerializedTransaction::try_from(&transaction).unwrap();
+
+        // Set up transaction with pre-built transaction data
+        tx.network_data = NetworkTransactionData::Solana(SolanaTransactionData {
+            transaction: Some(encoded_tx.into_inner()),
+            ..Default::default()
+        });
+
+        let tx_id = tx.id.clone();
+        let tx_id_clone = tx_id.clone();
+        let tx_clone = tx.clone();
+
+        // Mock validation calls
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(5000) }));
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1000000) }));
+        provider
+            .expect_is_blockhash_valid()
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+        provider.expect_simulate_transaction().returning(|_| {
+            Box::pin(async {
+                Ok(solana_client::rpc_response::RpcSimulateTransactionResult {
+                    err: None,
+                    logs: Some(vec![]),
+                    accounts: None,
+                    units_consumed: Some(0),
+                    return_data: None,
+                    fee: Some(0),
+                    inner_instructions: None,
+                    loaded_accounts_data_size: Some(0),
+                    replacement_blockhash: None,
+                    pre_balances: Some(vec![]),
+                    post_balances: Some(vec![]),
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
+                })
+            })
+        });
+
+        // Mock signer
+        let signer_pubkey_str = signer_pubkey.to_string();
+        signer.expect_pubkey().returning(move || {
+            let value = signer_pubkey_str.clone();
+            Box::pin(async move { Ok(Address::Solana(value)) })
+        });
+        signer
+            .expect_sign()
+            .returning(|_| Box::pin(async { Ok(Signature::new_unique()) }));
+
+        // Mock repository update
+        tx_repo
+            .expect_partial_update()
+            .withf(move |id, update| {
+                id == &tx_id_clone && matches!(update.status, Some(TransactionStatus::Sent))
+            })
+            .times(1)
+            .returning(move |_, _| {
+                let mut updated_tx = tx_clone.clone();
+                updated_tx.status = TransactionStatus::Sent;
+                Ok(updated_tx)
+            });
+
+        // Mock job producer
+        job_producer
+            .expect_produce_submit_transaction_job()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        let handler = SolanaRelayerTransaction {
+            relayer,
+            relayer_repository: relayer_repo,
+            provider: Arc::new(provider),
+            transaction_repository: Arc::new(tx_repo),
+            job_producer: Arc::new(job_producer),
+            signer: Arc::new(signer),
+        };
+
+        let tx_for_test = tx.clone();
+        let result = handler.prepare_transaction_impl(tx_for_test).await;
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.status, TransactionStatus::Sent);
+    }
+
+    #[tokio::test]
+    async fn test_prepare_transaction_instructions_mode_success() {
+        let mut provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let mut tx_repo = MockTransactionRepository::new();
+        let mut job_producer = MockJobProducerTrait::new();
+        let mut signer = MockSolanaSignTrait::new();
+
+        let relayer = create_mock_solana_relayer("test-relayer".to_string(), false);
+        let mut tx = create_mock_solana_transaction();
+        tx.status = TransactionStatus::Pending;
+
+        // Set up transaction with instructions data
+        let instructions = vec![crate::models::SolanaInstructionSpec {
+            program_id: "11111111111111111111111111111112".to_string(),
+            accounts: vec![crate::models::SolanaAccountMeta {
+                pubkey: "11111111111111111111111111111112".to_string(),
+                is_signer: false,
+                is_writable: true,
+            }],
+            data: "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
+        }];
+
+        tx.network_data = NetworkTransactionData::Solana(SolanaTransactionData {
+            instructions: Some(instructions),
+            ..Default::default()
+        });
+
+        let tx_id = tx.id.clone();
+        let tx_id_clone = tx_id.clone();
+        let tx_clone = tx.clone();
+
+        // Mock blockhash fetch
+        provider
+            .expect_get_latest_blockhash()
+            .returning(|| Box::pin(async { Ok(Hash::new_unique()) }));
+
+        // Mock validation calls
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(5000) }));
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1000000) }));
+        provider
+            .expect_is_blockhash_valid()
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+        provider.expect_simulate_transaction().returning(|_| {
+            Box::pin(async {
+                Ok(solana_client::rpc_response::RpcSimulateTransactionResult {
+                    err: None,
+                    logs: Some(vec![]),
+                    accounts: None,
+                    units_consumed: Some(0),
+                    return_data: None,
+                    fee: Some(0),
+                    inner_instructions: None,
+                    loaded_accounts_data_size: Some(0),
+                    replacement_blockhash: None,
+                    pre_balances: Some(vec![]),
+                    post_balances: Some(vec![]),
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
+                })
+            })
+        });
+
+        // Mock signer
+        let signer_pubkey = Pubkey::from_str("11111111111111111111111111111112").unwrap();
+        signer.expect_pubkey().returning(move || {
+            Box::pin(async move { Ok(Address::Solana(signer_pubkey.to_string())) })
+        });
+        signer
+            .expect_sign()
+            .returning(|_| Box::pin(async { Ok(Signature::new_unique()) }));
+
+        // Mock repository update
+        tx_repo
+            .expect_partial_update()
+            .withf(move |id, update| {
+                id == &tx_id_clone && matches!(update.status, Some(TransactionStatus::Sent))
+            })
+            .times(1)
+            .returning(move |_, _| {
+                let mut updated_tx = tx_clone.clone();
+                updated_tx.status = TransactionStatus::Sent;
+                Ok(updated_tx)
+            });
+
+        // Mock job producer
+        job_producer
+            .expect_produce_submit_transaction_job()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        let handler = SolanaRelayerTransaction {
+            relayer,
+            relayer_repository: relayer_repo,
+            provider: Arc::new(provider),
+            transaction_repository: Arc::new(tx_repo),
+            job_producer: Arc::new(job_producer),
+            signer: Arc::new(signer),
+        };
+
+        let tx_for_test = tx.clone();
+        let result = handler.prepare_transaction_impl(tx_for_test).await;
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.status, TransactionStatus::Sent);
+    }
+
+    #[tokio::test]
+    async fn test_prepare_transaction_validation_failure() {
+        let provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let mut tx_repo = MockTransactionRepository::new();
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+        let signer = MockSolanaSignTrait::new();
+
+        let relayer = create_mock_solana_relayer("test-relayer".to_string(), false);
+        let mut tx = create_mock_solana_transaction();
+        tx.status = TransactionStatus::Pending;
+
+        // Create transaction with invalid data (missing both transaction and instructions)
+        tx.network_data = NetworkTransactionData::Solana(SolanaTransactionData::default());
+
+        let tx_id = tx.id.clone();
+
+        // Mock repository update
+        let tx_for_closure = tx.clone();
+        tx_repo
+            .expect_partial_update()
+            .withf(move |id, update| {
+                id == &tx_id && matches!(update.status, Some(TransactionStatus::Failed))
+            })
+            .times(1)
+            .returning(move |_, _| {
+                let mut updated_tx = tx_for_closure.clone();
+                updated_tx.status = TransactionStatus::Failed;
+                Ok(updated_tx)
+            });
+
+        let handler = SolanaRelayerTransaction {
+            relayer,
+            relayer_repository: relayer_repo,
+            provider: Arc::new(provider),
+            transaction_repository: Arc::new(tx_repo),
+            job_producer,
+            signer: Arc::new(signer),
+        };
+
+        let tx_for_test = tx.clone();
+        let result = handler.prepare_transaction_impl(tx_for_test).await;
+        assert!(result.is_ok()); // Returns Ok with failed transaction
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.status, TransactionStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn test_prepare_transaction_signer_error() {
+        let mut provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+        let mut signer = MockSolanaSignTrait::new();
+
+        let relayer = create_mock_solana_relayer("test-relayer".to_string(), false);
+        let mut tx = create_mock_solana_transaction();
+        tx.status = TransactionStatus::Pending;
+
+        // Create a valid transaction
+        let signer_pubkey = Pubkey::from_str("11111111111111111111111111111112").unwrap();
+        let recipient = Pubkey::new_unique();
+        let message = Message::new(
+            &[solana_system_interface::instruction::transfer(
+                &signer_pubkey,
+                &recipient,
+                1000,
+            )],
+            Some(&signer_pubkey),
+        );
+        let transaction = solana_sdk::transaction::Transaction::new_unsigned(message);
+        let encoded_tx = EncodedSerializedTransaction::try_from(&transaction).unwrap();
+
+        tx.network_data = NetworkTransactionData::Solana(SolanaTransactionData {
+            transaction: Some(encoded_tx.into_inner()),
+            ..Default::default()
+        });
+
+        // Mock validation calls (needed before signer is called)
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(5000) }));
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1000000) }));
+        provider
+            .expect_is_blockhash_valid()
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+        provider.expect_simulate_transaction().returning(|_| {
+            Box::pin(async {
+                Ok(solana_client::rpc_response::RpcSimulateTransactionResult {
+                    err: None,
+                    logs: Some(vec![]),
+                    accounts: None,
+                    units_consumed: Some(0),
+                    return_data: None,
+                    fee: Some(0),
+                    inner_instructions: None,
+                    loaded_accounts_data_size: Some(0),
+                    replacement_blockhash: None,
+                    pre_balances: Some(vec![]),
+                    post_balances: Some(vec![]),
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
+                })
+            })
+        });
+
+        // Mock signer to return error
+        let signer_pubkey_str = signer_pubkey.to_string();
+        signer.expect_pubkey().returning(move || {
+            let value = signer_pubkey_str.clone();
+            Box::pin(async move { Ok(Address::Solana(value)) })
+        });
+        signer.expect_sign().returning(|_| {
+            Box::pin(async { Err(SignerError::SigningError("Signer failed".to_string())) })
+        });
+
+        let handler = SolanaRelayerTransaction {
+            relayer,
+            relayer_repository: relayer_repo,
+            provider: Arc::new(provider),
+            transaction_repository: tx_repo,
+            job_producer,
+            signer: Arc::new(signer),
+        };
+
+        let tx_for_test = tx.clone();
+        let result = handler.prepare_transaction_impl(tx_for_test).await;
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        match error {
+            TransactionError::SignerError(msg) => assert!(msg.contains("Signer failed")),
+            _ => panic!("Expected SignerError"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_submit_transaction_success() {
+        let mut provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let mut tx_repo = MockTransactionRepository::new();
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+        let signer = MockSolanaSignTrait::new();
+
+        let relayer = create_mock_solana_relayer("test-relayer".to_string(), false);
+        let mut tx = create_mock_solana_transaction();
+        tx.status = TransactionStatus::Sent;
+
+        // Create a valid transaction with signature
+        let signer_pubkey = Pubkey::from_str("11111111111111111111111111111112").unwrap();
+        let recipient = Pubkey::new_unique();
+        let message = Message::new(
+            &[solana_system_interface::instruction::transfer(
+                &signer_pubkey,
+                &recipient,
+                1000,
+            )],
+            Some(&signer_pubkey),
+        );
+        let mut transaction = solana_sdk::transaction::Transaction::new_unsigned(message);
+        let signature = Signature::new_unique();
+        transaction.signatures = vec![signature];
+
+        let encoded_tx = EncodedSerializedTransaction::try_from(&transaction).unwrap();
+
+        tx.network_data = NetworkTransactionData::Solana(SolanaTransactionData {
+            transaction: Some(encoded_tx.into_inner()),
+            signature: Some(signature.to_string()),
+            ..Default::default()
+        });
+
+        let tx_id = tx.id.clone();
+        let tx_id_clone = tx_id.clone();
+        let tx_clone = tx.clone();
+
+        // Mock successful send
+        provider
+            .expect_send_transaction()
+            .returning(|_| Box::pin(async { Ok(Signature::new_unique()) }));
+
+        // Mock repository update
+        tx_repo
+            .expect_partial_update()
+            .withf(move |id, update| {
+                id == &tx_id_clone && matches!(update.status, Some(TransactionStatus::Submitted))
+            })
+            .times(1)
+            .returning(move |_, _| {
+                let mut updated_tx = tx_clone.clone();
+                updated_tx.status = TransactionStatus::Submitted;
+                Ok(updated_tx)
+            });
+
+        let handler = SolanaRelayerTransaction {
+            relayer,
+            relayer_repository: relayer_repo,
+            provider: Arc::new(provider),
+            transaction_repository: Arc::new(tx_repo),
+            job_producer,
+            signer: Arc::new(signer),
+        };
+
+        let tx_for_test = tx.clone();
+        let result = handler.submit_transaction_impl(tx_for_test).await;
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.status, TransactionStatus::Submitted);
+    }
+
+    #[tokio::test]
+    async fn test_submit_transaction_already_processed() {
+        let mut provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+        let signer = MockSolanaSignTrait::new();
+
+        let relayer = create_mock_solana_relayer("test-relayer".to_string(), false);
+        let mut tx = create_mock_solana_transaction();
+        tx.status = TransactionStatus::Sent;
+
+        // Create a valid transaction
+        let signer_pubkey = Pubkey::from_str("11111111111111111111111111111112").unwrap();
+        let recipient = Pubkey::new_unique();
+        let message = Message::new(
+            &[solana_system_interface::instruction::transfer(
+                &signer_pubkey,
+                &recipient,
+                1000,
+            )],
+            Some(&signer_pubkey),
+        );
+        let mut transaction = solana_sdk::transaction::Transaction::new_unsigned(message);
+        let signature = Signature::new_unique();
+        transaction.signatures = vec![signature];
+
+        let encoded_tx = EncodedSerializedTransaction::try_from(&transaction).unwrap();
+
+        tx.network_data = NetworkTransactionData::Solana(SolanaTransactionData {
+            transaction: Some(encoded_tx.into_inner()),
+            signature: Some(signature.to_string()),
+            ..Default::default()
+        });
+
+        // Mock provider to return AlreadyProcessed
+        provider.expect_send_transaction().returning(|_| {
+            Box::pin(async {
+                Err(SolanaProviderError::AlreadyProcessed(
+                    "Already processed".to_string(),
+                ))
+            })
+        });
+
+        let handler = SolanaRelayerTransaction {
+            relayer,
+            relayer_repository: relayer_repo,
+            provider: Arc::new(provider),
+            transaction_repository: tx_repo,
+            job_producer,
+            signer: Arc::new(signer),
+        };
+
+        let result = handler.submit_transaction_impl(tx.clone()).await;
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.status, tx.status); // Status unchanged
+    }
+
+    #[tokio::test]
+    async fn test_submit_transaction_blockhash_expired_resubmitable() {
+        let mut provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+        let signer = MockSolanaSignTrait::new();
+
+        let relayer = create_mock_solana_relayer("test-relayer".to_string(), false);
+        let mut tx = create_mock_solana_transaction();
+        tx.status = TransactionStatus::Sent;
+
+        // Create a single-signer transaction (resubmitable)
+        let signer_pubkey = Pubkey::from_str("11111111111111111111111111111112").unwrap();
+        let recipient = Pubkey::new_unique();
+        let message = Message::new(
+            &[solana_system_interface::instruction::transfer(
+                &signer_pubkey,
+                &recipient,
+                1000,
+            )],
+            Some(&signer_pubkey),
+        );
+        let mut transaction = solana_sdk::transaction::Transaction::new_unsigned(message);
+        let signature = Signature::new_unique();
+        transaction.signatures = vec![signature];
+
+        let encoded_tx = EncodedSerializedTransaction::try_from(&transaction).unwrap();
+
+        tx.network_data = NetworkTransactionData::Solana(SolanaTransactionData {
+            transaction: Some(encoded_tx.into_inner()),
+            signature: Some(signature.to_string()),
+            ..Default::default()
+        });
+
+        // Mock provider to return BlockhashNotFound
+        provider.expect_send_transaction().returning(|_| {
+            Box::pin(async {
+                Err(SolanaProviderError::BlockhashNotFound(
+                    "Blockhash not found".to_string(),
+                ))
+            })
+        });
+
+        let handler = SolanaRelayerTransaction {
+            relayer,
+            relayer_repository: relayer_repo,
+            provider: Arc::new(provider),
+            transaction_repository: tx_repo,
+            job_producer,
+            signer: Arc::new(signer),
+        };
+
+        let result = handler.submit_transaction_impl(tx.clone()).await;
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.status, tx.status); // Status unchanged, resubmit scheduled
+    }
+
+    #[tokio::test]
+    async fn test_submit_transaction_permanent_error() {
+        let mut provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let mut tx_repo = MockTransactionRepository::new();
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+        let signer = MockSolanaSignTrait::new();
+
+        let relayer = create_mock_solana_relayer("test-relayer".to_string(), false);
+        let mut tx = create_mock_solana_transaction();
+        tx.status = TransactionStatus::Sent;
+
+        // Create a valid transaction
+        let signer_pubkey = Pubkey::from_str("11111111111111111111111111111112").unwrap();
+        let recipient = Pubkey::new_unique();
+        let message = Message::new(
+            &[solana_system_interface::instruction::transfer(
+                &signer_pubkey,
+                &recipient,
+                1000,
+            )],
+            Some(&signer_pubkey),
+        );
+        let mut transaction = solana_sdk::transaction::Transaction::new_unsigned(message);
+        let signature = Signature::new_unique();
+        transaction.signatures = vec![signature];
+
+        let encoded_tx = EncodedSerializedTransaction::try_from(&transaction).unwrap();
+
+        tx.network_data = NetworkTransactionData::Solana(SolanaTransactionData {
+            transaction: Some(encoded_tx.into_inner()),
+            signature: Some(signature.to_string()),
+            ..Default::default()
+        });
+
+        let tx_id = tx.id.clone();
+        let tx_clone = tx.clone();
+
+        // Mock provider to return permanent error
+        provider.expect_send_transaction().returning(|_| {
+            Box::pin(async {
+                Err(SolanaProviderError::InsufficientFunds(
+                    "Insufficient balance".to_string(),
+                ))
+            })
+        });
+
+        // Mock repository update to failed
+        tx_repo
+            .expect_partial_update()
+            .withf(move |id, update| {
+                id == &tx_id && matches!(update.status, Some(TransactionStatus::Failed))
+            })
+            .times(1)
+            .returning(move |_, _| {
+                let mut updated_tx = tx_clone.clone();
+                updated_tx.status = TransactionStatus::Failed;
+                Ok(updated_tx)
+            });
+
+        let handler = SolanaRelayerTransaction {
+            relayer,
+            relayer_repository: relayer_repo,
+            provider: Arc::new(provider),
+            transaction_repository: Arc::new(tx_repo),
+            job_producer,
+            signer: Arc::new(signer),
+        };
+
+        let tx_for_test = tx.clone();
+        let result = handler.submit_transaction_impl(tx_for_test).await;
+        assert!(result.is_ok()); // Returns Ok with failed transaction
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.status, TransactionStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn test_resubmit_transaction_success() {
+        let mut provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let mut tx_repo = MockTransactionRepository::new();
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+        let mut signer = MockSolanaSignTrait::new();
+
+        let relayer = create_mock_solana_relayer("test-relayer".to_string(), false);
+        let mut tx = create_mock_solana_transaction();
+        tx.status = TransactionStatus::Submitted;
+
+        // Create a valid transaction
+        let signer_pubkey = Pubkey::from_str("11111111111111111111111111111112").unwrap();
+        let recipient = Pubkey::new_unique();
+        let message = Message::new(
+            &[solana_system_interface::instruction::transfer(
+                &signer_pubkey,
+                &recipient,
+                1000,
+            )],
+            Some(&signer_pubkey),
+        );
+        let mut transaction = solana_sdk::transaction::Transaction::new_unsigned(message);
+        let signature = Signature::new_unique();
+        transaction.signatures = vec![signature];
+
+        let encoded_tx = EncodedSerializedTransaction::try_from(&transaction).unwrap();
+
+        tx.network_data = NetworkTransactionData::Solana(SolanaTransactionData {
+            transaction: Some(encoded_tx.into_inner()),
+            signature: Some(signature.to_string()),
+            ..Default::default()
+        });
+
+        let tx_id = tx.id.clone();
+        let tx_id_clone = tx_id.clone();
+        let tx_clone = tx.clone();
+        let tx_for_test = tx.clone();
+
+        // Mock fresh blockhash
+        provider
+            .expect_get_latest_blockhash()
+            .returning(|| Box::pin(async { Ok(Hash::new_unique()) }));
+
+        // Mock signer
+        let signer_pubkey_str = signer_pubkey.to_string();
+        signer.expect_pubkey().returning(move || {
+            let value = signer_pubkey_str.clone();
+            Box::pin(async move { Ok(Address::Solana(value)) })
+        });
+        signer
+            .expect_sign()
+            .returning(|_| Box::pin(async { Ok(Signature::new_unique()) }));
+
+        // Mock successful resubmit
+        provider
+            .expect_send_transaction()
+            .returning(|_| Box::pin(async { Ok(Signature::new_unique()) }));
+
+        // Mock repository update
+        tx_repo
+            .expect_partial_update()
+            .withf(move |id, update| {
+                id == &tx_id_clone && matches!(update.status, Some(TransactionStatus::Submitted))
+            })
+            .times(1)
+            .returning(move |_, _| {
+                let mut updated_tx = tx_clone.clone();
+                updated_tx.status = TransactionStatus::Submitted;
+                Ok(updated_tx)
+            });
+
+        let handler = SolanaRelayerTransaction {
+            relayer,
+            relayer_repository: relayer_repo,
+            provider: Arc::new(provider),
+            transaction_repository: Arc::new(tx_repo),
+            job_producer,
+            signer: Arc::new(signer),
+        };
+
+        let result = handler.resubmit_transaction_impl(tx_for_test).await;
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.status, TransactionStatus::Submitted);
+    }
+
+    #[tokio::test]
+    async fn test_validate_transaction_success() {
+        let mut provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+        let signer = MockSolanaSignTrait::new();
+
+        let relayer = create_mock_solana_relayer("test-relayer".to_string(), false);
+        let _tx = create_mock_solana_transaction();
+
+        // Create a valid transaction
+        let signer_pubkey = Pubkey::from_str("11111111111111111111111111111112").unwrap();
+        let recipient = Pubkey::new_unique();
+        let message = Message::new(
+            &[solana_system_interface::instruction::transfer(
+                &signer_pubkey,
+                &recipient,
+                1000,
+            )],
+            Some(&signer_pubkey),
+        );
+        let transaction = solana_sdk::transaction::Transaction::new_unsigned(message);
+
+        // Mock all validation calls
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(5000) }));
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1000000) }));
+        provider.expect_get_transaction_status().returning(|_| {
+            Box::pin(async { Ok(crate::models::SolanaTransactionStatus::Processed) })
+        });
+        provider
+            .expect_is_blockhash_valid()
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+        provider.expect_simulate_transaction().returning(|_| {
+            Box::pin(async {
+                Ok(solana_client::rpc_response::RpcSimulateTransactionResult {
+                    err: None,
+                    logs: Some(vec![]),
+                    accounts: None,
+                    units_consumed: Some(0),
+                    return_data: None,
+                    fee: Some(0),
+                    inner_instructions: None,
+                    loaded_accounts_data_size: Some(0),
+                    replacement_blockhash: None,
+                    pre_balances: Some(vec![]),
+                    post_balances: Some(vec![]),
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
+                })
+            })
+        });
+
+        let handler = SolanaRelayerTransaction {
+            relayer,
+            relayer_repository: relayer_repo,
+            provider: Arc::new(provider),
+            transaction_repository: tx_repo,
+            job_producer,
+            signer: Arc::new(signer),
+        };
+
+        let result = handler.validate_transaction_impl(&transaction).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_cancel_transaction_not_supported() {
+        let provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+        let signer = MockSolanaSignTrait::new();
+
+        let relayer = create_mock_solana_relayer("test-relayer".to_string(), false);
+        let tx = create_mock_solana_transaction();
+
+        let handler = SolanaRelayerTransaction {
+            relayer,
+            relayer_repository: relayer_repo,
+            provider: Arc::new(provider),
+            transaction_repository: tx_repo,
+            job_producer,
+            signer: Arc::new(signer),
+        };
+
+        let result = handler.cancel_transaction(tx).await;
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        match error {
+            TransactionError::NotSupported(msg) => {
+                assert!(msg.contains("Transaction cancellation is not supported for Solana"));
+            }
+            _ => panic!("Expected NotSupported error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_replace_transaction_not_supported() {
+        let provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+        let signer = MockSolanaSignTrait::new();
+
+        let relayer = create_mock_solana_relayer("test-relayer".to_string(), false);
+        let old_tx = create_mock_solana_transaction();
+        let new_request = crate::models::NetworkTransactionRequest::Evm(
+            crate::models::EvmTransactionRequest::default(),
+        );
+
+        let handler = SolanaRelayerTransaction {
+            relayer,
+            relayer_repository: relayer_repo,
+            provider: Arc::new(provider),
+            transaction_repository: tx_repo,
+            job_producer,
+            signer: Arc::new(signer),
+        };
+
+        let result = handler.replace_transaction(old_tx, new_request).await;
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        match error {
+            TransactionError::NotSupported(msg) => {
+                assert!(msg.contains("Transaction replacement is not supported for Solana"));
+            }
+            _ => panic!("Expected NotSupported error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_transaction_not_supported() {
+        let provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+        let signer = MockSolanaSignTrait::new();
+
+        let relayer = create_mock_solana_relayer("test-relayer".to_string(), false);
+        let tx = create_mock_solana_transaction();
+
+        let handler = SolanaRelayerTransaction {
+            relayer,
+            relayer_repository: relayer_repo,
+            provider: Arc::new(provider),
+            transaction_repository: tx_repo,
+            job_producer,
+            signer: Arc::new(signer),
+        };
+
+        let result = handler.sign_transaction(tx).await;
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        match error {
+            TransactionError::NotSupported(msg) => {
+                assert!(msg.contains("Standalone transaction signing is not supported for Solana"));
+            }
+            _ => panic!("Expected NotSupported error"),
+        }
+    }
+
+    #[tokio::test]
     async fn test_handle_transaction_status_calls_impl() {
         // Create test data
         let relayer = create_mock_solana_relayer("test-solana-relayer".to_string(), false);
         let relayer_repository = Arc::new(MockRelayerRepository::new());
-        let provider = Arc::new(MockSolanaProviderTrait::new());
+        let provider = MockSolanaProviderTrait::new();
         let transaction_repository = Arc::new(MockTransactionRepository::new());
         let mut job_producer = MockJobProducerTrait::new();
-        let signer = Arc::new(MockSolanaSignTrait::new());
+        let signer = MockSolanaSignTrait::new();
 
         // Create test transaction (will be in Pending status by default)
         let test_tx = create_mock_solana_transaction();
@@ -797,15 +1686,14 @@ mod tests {
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
         // Create transaction handler
-        let transaction_handler = SolanaRelayerTransaction::new(
+        let transaction_handler = SolanaRelayerTransaction {
             relayer,
             relayer_repository,
-            provider,
+            provider: Arc::new(provider),
             transaction_repository,
-            Arc::new(job_producer),
-            signer,
-        )
-        .unwrap();
+            job_producer: Arc::new(job_producer),
+            signer: Arc::new(signer),
+        };
 
         // Call handle_transaction_status - with new implementation,
         // Pending transactions just return Ok without querying provider

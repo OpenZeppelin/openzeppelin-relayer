@@ -984,7 +984,10 @@ mod tests {
     use super::*;
     use crate::{
         config::{NetworkConfigCommon, SolanaNetworkConfig},
-        domain::{create_network_dex_generic, Relayer, SolanaRpcHandler, SolanaRpcMethodsImpl},
+        domain::{
+            create_network_dex_generic, Relayer, SignTransactionRequestSolana, SolanaRpcHandler,
+            SolanaRpcMethodsImpl,
+        },
         jobs::MockJobProducerTrait,
         models::{
             EncodedSerializedTransaction, FeeEstimateRequestParams,
@@ -1000,6 +1003,7 @@ mod tests {
         },
         utils::mocks::mockutils::create_mock_solana_network,
     };
+    use chrono::Utc;
     use mockall::predicate::*;
     use solana_sdk::{hash::Hash, program_pack::Pack, signature::Signature};
     use spl_token_interface::state::Account as SplAccount;
@@ -1528,7 +1532,7 @@ mod tests {
 
         jupiter_mock.expect_execute_ultra_order().returning(|_| {
             Box::pin(async {
-                Ok(UltraExecuteResponse {
+               Ok(UltraExecuteResponse {
                     signature: Some("2jg9xbGLtZRsiJBrDWQnz33JuLjDkiKSZuxZPdjJ3qrJbMeTEerXFAKynkPW63J88nq63cvosDNRsg9VqHtGixvP".to_string()),
                     status: "success".to_string(),
                     slot: Some("123456789".to_string()),
@@ -1569,6 +1573,7 @@ mod tests {
             )
             .unwrap(),
         );
+
         let mut job_producer = MockJobProducerTrait::new();
         job_producer
             .expect_produce_send_notification_job()
@@ -2314,6 +2319,225 @@ mod tests {
                 assert!(msg.contains("Error while processing allowed tokens policy"));
             }
             other => panic!("Expected PolicyConfigurationError, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_transaction_success() {
+        let signer = MockSolanaSignTrait::new();
+
+        let relayer_model = RelayerRepoModel {
+            id: "test-relayer-id".to_string(),
+            address: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin".to_string(),
+            network: "devnet".to_string(),
+            policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+                fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
+                min_balance: Some(0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let ctx = TestCtx {
+            relayer_model,
+            signer: Arc::new(signer),
+            ..Default::default()
+        };
+
+        let solana_relayer = ctx.into_relayer().await;
+
+        let sign_request = SignTransactionRequest::Solana(SignTransactionRequestSolana {
+            transaction: EncodedSerializedTransaction::new("raw_transaction_data".to_string()),
+        });
+
+        let result = solana_relayer.sign_transaction(&sign_request).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        match response {
+            SignTransactionExternalResponse::Solana(solana_resp) => {
+                assert_eq!(
+                    solana_resp.transaction.into_inner(),
+                    "signed_transaction_data"
+                );
+                assert_eq!(solana_resp.signature, "signature_data");
+            }
+            _ => panic!("Expected Solana response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_transaction_fee_payment_mismatch() {
+        let relayer_model = create_test_relayer(); // Uses default fee_payment_strategy (User)
+
+        let ctx = TestCtx {
+            relayer_model,
+            ..Default::default()
+        };
+
+        let solana_relayer = ctx.into_relayer().await;
+
+        let sign_request = SignTransactionRequest::Solana(SignTransactionRequestSolana {
+            transaction: EncodedSerializedTransaction::new("raw_transaction_data".to_string()),
+        });
+
+        let result = solana_relayer.sign_transaction(&sign_request).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            RelayerError::ValidationError(msg) => {
+                assert!(msg.contains("fee_payment_strategy"));
+            }
+            other => panic!("Expected ValidationError, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_status_success() {
+        let mut raw_provider = MockSolanaProviderTrait::new();
+        let mut tx_repo = MockTransactionRepository::new();
+
+        // Mock balance retrieval
+        raw_provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1000000) }));
+
+        // Mock transaction counts
+        tx_repo
+            .expect_find_by_status()
+            .with(
+                eq("test-id"),
+                eq(vec![
+                    TransactionStatus::Pending,
+                    TransactionStatus::Submitted,
+                ]),
+            )
+            .returning(|_, _| {
+                Ok(vec![
+                    TransactionRepoModel::default(),
+                    TransactionRepoModel::default(),
+                ])
+            });
+
+        // Mock recent confirmed transaction
+        let recent_tx = TransactionRepoModel {
+            id: "recent-tx".to_string(),
+            relayer_id: "test-id".to_string(),
+            network_data: NetworkTransactionData::Solana(SolanaTransactionData::default()),
+            network_type: NetworkType::Solana,
+            status: TransactionStatus::Confirmed,
+            confirmed_at: Some(Utc::now().to_string()),
+            ..Default::default()
+        };
+        tx_repo
+            .expect_find_by_status()
+            .with(eq("test-id"), eq(vec![TransactionStatus::Confirmed]))
+            .returning(move |_, _| Ok(vec![recent_tx.clone()]));
+
+        let ctx = TestCtx {
+            tx_repo: Arc::new(tx_repo),
+            provider: Arc::new(raw_provider),
+            ..Default::default()
+        };
+
+        let solana_relayer = ctx.into_relayer().await;
+
+        let result = solana_relayer.get_status().await;
+        assert!(result.is_ok());
+        let status = result.unwrap();
+
+        match status {
+            RelayerStatus::Solana {
+                balance,
+                pending_transactions_count,
+                last_confirmed_transaction_timestamp,
+                ..
+            } => {
+                assert_eq!(balance, "1000000");
+                assert_eq!(pending_transactions_count, 2);
+                assert!(last_confirmed_transaction_timestamp.is_some());
+            }
+            _ => panic!("Expected Solana status"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_status_balance_error() {
+        let mut raw_provider = MockSolanaProviderTrait::new();
+        let tx_repo = MockTransactionRepository::new();
+
+        // Mock balance error
+        raw_provider.expect_get_balance().returning(|_| {
+            Box::pin(async { Err(SolanaProviderError::RpcError("RPC error".to_string())) })
+        });
+
+        let ctx = TestCtx {
+            tx_repo: Arc::new(tx_repo),
+            provider: Arc::new(raw_provider),
+            ..Default::default()
+        };
+
+        let solana_relayer = ctx.into_relayer().await;
+
+        let result = solana_relayer.get_status().await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            RelayerError::UnderlyingSolanaProvider(err) => {
+                assert!(err.to_string().contains("RPC error"));
+            }
+            other => panic!("Expected UnderlyingSolanaProvider, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_status_no_recent_transactions() {
+        let mut raw_provider = MockSolanaProviderTrait::new();
+        let mut tx_repo = MockTransactionRepository::new();
+
+        // Mock balance retrieval
+        raw_provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(500000) }));
+
+        // Mock transaction counts
+        tx_repo
+            .expect_find_by_status()
+            .with(
+                eq("test-id"),
+                eq(vec![
+                    TransactionStatus::Pending,
+                    TransactionStatus::Submitted,
+                ]),
+            )
+            .returning(|_, _| Ok(vec![]));
+
+        tx_repo
+            .expect_find_by_status()
+            .with(eq("test-id"), eq(vec![TransactionStatus::Confirmed]))
+            .returning(|_, _| Ok(vec![]));
+
+        let ctx = TestCtx {
+            tx_repo: Arc::new(tx_repo),
+            provider: Arc::new(raw_provider),
+            ..Default::default()
+        };
+
+        let solana_relayer = ctx.into_relayer().await;
+
+        let result = solana_relayer.get_status().await;
+        assert!(result.is_ok());
+        let status = result.unwrap();
+
+        match status {
+            RelayerStatus::Solana {
+                balance,
+                pending_transactions_count,
+                last_confirmed_transaction_timestamp,
+                ..
+            } => {
+                assert_eq!(balance, "500000");
+                assert_eq!(pending_transactions_count, 0);
+                assert!(last_confirmed_transaction_timestamp.is_none());
+            }
+            _ => panic!("Expected Solana status"),
         }
     }
 }

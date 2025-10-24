@@ -40,7 +40,7 @@ pub mod mockutils {
                 ..Default::default()
             }),
             signer_id: "test".to_string(),
-            address: "0x".to_string(),
+            address: "11111111111111111111111111111112".to_string(),
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,

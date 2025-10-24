@@ -1290,6 +1290,151 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_matches_error_pattern() {
+        // Test exact matches
+        assert!(matches_error_pattern(
+            "blockhash not found",
+            "blockhash not found"
+        ));
+        assert!(matches_error_pattern(
+            "insufficient funds",
+            "insufficient funds"
+        ));
+
+        // Test case insensitive matching
+        assert!(matches_error_pattern(
+            "BLOCKHASH NOT FOUND",
+            "blockhash not found"
+        ));
+        assert!(matches_error_pattern(
+            "blockhash not found",
+            "BLOCKHASH NOT FOUND"
+        ));
+        assert!(matches_error_pattern(
+            "BlockHash Not Found",
+            "blockhash not found"
+        ));
+
+        // Test space insensitive matching
+        assert!(matches_error_pattern(
+            "blockhashnotfound",
+            "blockhash not found"
+        ));
+        assert!(matches_error_pattern(
+            "blockhash not found",
+            "blockhashnotfound"
+        ));
+        assert!(matches_error_pattern(
+            "insufficientfunds",
+            "insufficient funds"
+        ));
+
+        // Test mixed case and space insensitive
+        assert!(matches_error_pattern(
+            "BLOCKHASHNOTFOUND",
+            "blockhash not found"
+        ));
+        assert!(matches_error_pattern(
+            "blockhash not found",
+            "BLOCKHASHNOTFOUND"
+        ));
+        assert!(matches_error_pattern(
+            "BlockHashNotFound",
+            "blockhash not found"
+        ));
+        assert!(matches_error_pattern(
+            "INSUFFICIENTFUNDS",
+            "insufficient funds"
+        ));
+
+        // Test partial matches within longer strings
+        assert!(matches_error_pattern(
+            "transaction failed: blockhash not found",
+            "blockhash not found"
+        ));
+        assert!(matches_error_pattern(
+            "error: insufficient funds for transaction",
+            "insufficient funds"
+        ));
+        assert!(matches_error_pattern(
+            "BLOCKHASHNOTFOUND in simulation",
+            "blockhash not found"
+        ));
+
+        // Test multiple spaces handling
+        assert!(matches_error_pattern(
+            "blockhash  not   found",
+            "blockhash not found"
+        ));
+        assert!(matches_error_pattern(
+            "insufficient   funds",
+            "insufficient funds"
+        ));
+
+        // Test no matches
+        assert!(!matches_error_pattern(
+            "account not found",
+            "blockhash not found"
+        ));
+        assert!(!matches_error_pattern(
+            "invalid signature",
+            "insufficient funds"
+        ));
+        assert!(!matches_error_pattern(
+            "timeout error",
+            "blockhash not found"
+        ));
+
+        // Test empty strings
+        assert!(matches_error_pattern("", ""));
+        assert!(matches_error_pattern("blockhash not found", "")); // Empty pattern matches everything
+        assert!(!matches_error_pattern("", "blockhash not found"));
+
+        // Test special characters and numbers
+        assert!(matches_error_pattern(
+            "error code -32008: blockhash not found",
+            "-32008"
+        ));
+        assert!(matches_error_pattern("slot 123456 skipped", "slot"));
+        assert!(matches_error_pattern("RPC_ERROR_503", "rpc_error_503"));
+    }
+
+    #[test]
+    fn test_solana_provider_error_is_transient() {
+        // Test transient errors (should return true)
+        assert!(SolanaProviderError::NetworkError("connection timeout".to_string()).is_transient());
+        assert!(SolanaProviderError::RpcError("node is behind".to_string()).is_transient());
+        assert!(
+            SolanaProviderError::BlockhashNotFound("blockhash expired".to_string()).is_transient()
+        );
+        assert!(
+            SolanaProviderError::SelectorError(RpcSelectorError::AllProvidersFailed).is_transient()
+        );
+
+        // Test permanent errors (should return false)
+        assert!(
+            !SolanaProviderError::InsufficientFunds("not enough balance".to_string())
+                .is_transient()
+        );
+        assert!(
+            !SolanaProviderError::InvalidTransaction("invalid signature".to_string())
+                .is_transient()
+        );
+        assert!(
+            !SolanaProviderError::AlreadyProcessed("duplicate transaction".to_string())
+                .is_transient()
+        );
+        assert!(
+            !SolanaProviderError::InvalidAddress("invalid pubkey format".to_string())
+                .is_transient()
+        );
+        assert!(
+            !SolanaProviderError::NetworkConfiguration("unsupported operation".to_string())
+                .is_transient()
+        );
+    }
+
     #[tokio::test]
     async fn test_get_minimum_balance_for_rent_exemption() {
         let _env_guard = super::tests::setup_test_env();
@@ -1347,5 +1492,170 @@ mod tests {
         // Blockhash should not be all zeros and block height should be > 0
         assert_ne!(blockhash, solana_sdk::hash::Hash::new_from_array([0u8; 32]));
         assert!(last_valid_block_height > 0);
+    }
+
+    #[test]
+    fn test_from_rpc_response_error_transaction_simulation_failed() {
+        // Create a simple mock ClientError for testing
+        let mock_error = create_mock_client_error();
+
+        // -32002 with "blockhash not found" should be BlockhashNotFound
+        let error_str =
+            r#"{"code": -32002, "message": "Transaction simulation failed: Blockhash not found"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::BlockhashNotFound(_)));
+
+        // -32002 with "insufficient funds" should be InsufficientFunds
+        let error_str =
+            r#"{"code": -32002, "message": "Transaction simulation failed: Insufficient funds"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::InsufficientFunds(_)));
+
+        // -32002 with other message should be InvalidTransaction
+        let error_str = r#"{"code": -32002, "message": "Transaction simulation failed: Invalid instruction data"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::InvalidTransaction(_)));
+    }
+
+    #[test]
+    fn test_from_rpc_response_error_signature_verification() {
+        let mock_error = create_mock_client_error();
+
+        // -32003 should be InvalidTransaction
+        let error_str = r#"{"code": -32003, "message": "Signature verification failure"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::InvalidTransaction(_)));
+    }
+
+    #[test]
+    fn test_from_rpc_response_error_transient_errors() {
+        let mock_error = create_mock_client_error();
+
+        // -32004: Block not available - should be RpcError (transient)
+        let error_str = r#"{"code": -32004, "message": "Block not available for slot"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::RpcError(_)));
+
+        // -32005: Node is behind - should be RpcError (transient)
+        let error_str = r#"{"code": -32005, "message": "Node is behind"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::RpcError(_)));
+
+        // -32008: Blockhash not found - should be BlockhashNotFound (transient)
+        let error_str = r#"{"code": -32008, "message": "Blockhash not found"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::BlockhashNotFound(_)));
+
+        // -32014: Block status not available - should be RpcError (transient)
+        let error_str = r#"{"code": -32014, "message": "Block status not yet available"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::RpcError(_)));
+
+        // -32016: Minimum context slot not reached - should be RpcError (transient)
+        let error_str = r#"{"code": -32016, "message": "Minimum context slot not reached"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::RpcError(_)));
+    }
+
+    #[test]
+    fn test_from_rpc_response_error_permanent_errors() {
+        let mock_error = create_mock_client_error();
+
+        // -32007: Slot skipped - should be NetworkConfiguration (permanent)
+        let error_str = r#"{"code": -32007, "message": "Slot skipped"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(
+            result,
+            SolanaProviderError::NetworkConfiguration(_)
+        ));
+
+        // -32009: Already processed - should be AlreadyProcessed (permanent)
+        let error_str = r#"{"code": -32009, "message": "Already processed"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::AlreadyProcessed(_)));
+
+        // -32010: Key excluded from secondary indexes - should be NetworkConfiguration (permanent)
+        let error_str = r#"{"code": -32010, "message": "Key excluded from secondary indexes"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(
+            result,
+            SolanaProviderError::NetworkConfiguration(_)
+        ));
+
+        // -32013: Transaction signature length mismatch - should be InvalidTransaction (permanent)
+        let error_str = r#"{"code": -32013, "message": "Transaction signature length mismatch"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::InvalidTransaction(_)));
+
+        // -32015: Transaction version not supported - should be InvalidTransaction (permanent)
+        let error_str = r#"{"code": -32015, "message": "Transaction version not supported"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::InvalidTransaction(_)));
+
+        // -32602: Invalid params - should be InvalidTransaction (permanent)
+        let error_str = r#"{"code": -32602, "message": "Invalid params"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::InvalidTransaction(_)));
+    }
+
+    #[test]
+    fn test_from_rpc_response_error_string_pattern_matching() {
+        let mock_error = create_mock_client_error();
+
+        // Test case-insensitive and space-insensitive pattern matching
+        let error_str = r#"{"code": -32000, "message": "INSUFFICIENTFUNDS for transaction"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::InsufficientFunds(_)));
+
+        let error_str = r#"{"code": -32000, "message": "BlockhashNotFound"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::BlockhashNotFound(_)));
+
+        let error_str = r#"{"code": -32000, "message": "AlreadyProcessed"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::AlreadyProcessed(_)));
+    }
+
+    #[test]
+    fn test_from_rpc_response_error_unknown_code() {
+        let mock_error = create_mock_client_error();
+
+        // Unknown error code should default to RpcError (transient)
+        let error_str = r#"{"code": -99999, "message": "Unknown error"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::RpcError(_)));
+    }
+
+    // Helper function to create a mock ClientError for testing
+    fn create_mock_client_error() -> ClientError {
+        use solana_client::rpc_request::RpcRequest;
+        // Create a simple ClientError using available constructors
+        ClientError::new_with_request(
+            ClientErrorKind::RpcError(solana_client::rpc_request::RpcError::RpcRequestError(
+                "test".to_string(),
+            )),
+            RpcRequest::GetHealth,
+        )
+    }
+
+    #[test]
+    fn test_from_rpc_error_integration() {
+        // Test that a typical RPC error string gets classified correctly
+        let mock_error = create_mock_client_error();
+
+        // Test the fallback string matching for "insufficient funds"
+        let error_str = r#"{"code": -32000, "message": "Account has insufficient funds"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::InsufficientFunds(_)));
+
+        // Test the fallback string matching for "blockhash not found"
+        let error_str = r#"{"code": -32000, "message": "Blockhash not found"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::BlockhashNotFound(_)));
+
+        // Test the fallback string matching for "already processed"
+        let error_str = r#"{"code": -32000, "message": "Transaction was already processed"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::AlreadyProcessed(_)));
     }
 }

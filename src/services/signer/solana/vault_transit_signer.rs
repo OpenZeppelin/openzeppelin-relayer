@@ -37,6 +37,7 @@ use super::SolanaSignTrait;
 
 pub type DefaultVaultService = VaultService;
 
+#[derive(Debug)]
 pub struct VaultTransitSigner<T = DefaultVaultService>
 where
     T: VaultServiceTrait,
