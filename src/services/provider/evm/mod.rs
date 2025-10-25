@@ -254,8 +254,10 @@ impl EvmProvider {
             ProviderError::NetworkConfiguration(format!("Invalid URL format: {}", e))
         })?;
 
-        let client = ReqwestClientBuilder::default()
+        // Using use_rustls_tls() forces the use of rustls instead of native-tls to support TLS 1.3
+        let client = ReqwestClientBuilder::new()
             .timeout(Duration::from_secs(self.timeout_seconds))
+            .use_rustls_tls()
             .build()
             .map_err(|e| ProviderError::Other(format!("Failed to build HTTP client: {}", e)))?;
 
