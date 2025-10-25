@@ -13,7 +13,7 @@
       "from": "mainnet",
       "type": "stellar",
       "network": "testnet",
-      "rpc_urls": ["https://soroban-testnet.stellar.org"],
+      "rpc_urls": ["https://soroban-testnet.stellar.org", "https://stellar-soroban-testnet-public.nodies.app", "https://soroban-rpc.testnet.stellar.gateway.fm"],
       "explorer_urls": ["https://stellar.expert/explorer/testnet"],
       "is_testnet": true,
       "passphrase": "Test SDF Network ; September 2015"

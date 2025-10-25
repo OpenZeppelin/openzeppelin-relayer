@@ -301,7 +301,7 @@ async function waitForTransactionConfirmation(
       if (data && 'status' in data) {
         const status = (data as { status?: string }).status ?? 'unknown';
         const reason = (data as { status_reason?: string | null }).status_reason ?? undefined;
-        if (status === 'submitted' || status === 'pending') {
+        if (status === 'submitted' || status === 'pending' || status === 'sent') {
           // Keep waiting
         } else if (status === 'confirmed') {
           return;
