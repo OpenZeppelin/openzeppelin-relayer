@@ -16,7 +16,7 @@ use tracing::error;
 
 use spl_associated_token_account::instruction::create_associated_token_account;
 
-use crate::services::SolanaProviderTrait;
+use crate::services::provider::SolanaProviderTrait;
 
 /// Represents a Solana token account with its key properties.
 ///
@@ -376,7 +376,7 @@ mod tests {
 
     use crate::{
         domain::{SolanaTokenProgram, TokenError, TokenInstruction},
-        services::MockSolanaProviderTrait,
+        services::provider::MockSolanaProviderTrait,
     };
 
     #[tokio::test]

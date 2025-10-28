@@ -3,7 +3,7 @@ use thiserror::Error;
 use crate::{
     constants::DEFAULT_EVM_MIN_BALANCE,
     models::{types::U256, RelayerEvmPolicy},
-    services::EvmProviderTrait,
+    services::provider::EvmProviderTrait,
 };
 
 #[derive(Debug, Error)]
@@ -80,7 +80,7 @@ mod tests {
 
     use super::*;
     use crate::services::provider::evm::MockEvmProviderTrait;
-    use crate::services::ProviderError;
+    use crate::services::provider::ProviderError;
     use mockall::predicate::*;
 
     fn create_test_policy(min_balance: u128) -> RelayerEvmPolicy {

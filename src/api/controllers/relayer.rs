@@ -29,7 +29,7 @@ use crate::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
         Repository, TransactionCounterTrait, TransactionRepository,
     },
-    services::{Signer, SignerFactory},
+    services::signer::{Signer, SignerFactory},
 };
 use actix_web::{web, HttpResponse};
 use eyre::Result;

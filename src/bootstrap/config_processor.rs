@@ -14,7 +14,7 @@ use crate::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
         Repository, TransactionCounterTrait, TransactionRepository,
     },
-    services::{Signer as SignerService, SignerFactory},
+    services::signer::{Signer as SignerService, SignerFactory},
 };
 use color_eyre::{eyre::WrapErr, Report, Result};
 use futures::future::try_join_all;

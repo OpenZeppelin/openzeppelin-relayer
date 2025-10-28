@@ -7,7 +7,7 @@ use crate::models::EvmNetwork;
 use crate::models::{
     EvmTransactionData, TransactionError, TransactionRepoModel, TransactionStatus, U256,
 };
-use crate::services::EvmProviderTrait;
+use crate::services::provider::EvmProviderTrait;
 use chrono::{DateTime, Duration, Utc};
 use eyre::Result;
 
@@ -230,7 +230,7 @@ mod tests {
     use crate::constants::{ARBITRUM_BASED_TAG, ROLLUP_TAG};
     use crate::domain::transaction::evm::test_helpers::test_utils::make_test_transaction;
     use crate::models::{evm::Speed, EvmTransactionData, NetworkTransactionData, U256};
-    use crate::services::{MockEvmProviderTrait, ProviderError};
+    use crate::services::provider::{MockEvmProviderTrait, ProviderError};
     use crate::utils::mocks::mockutils::create_mock_transaction;
 
     fn create_standard_network() -> EvmNetwork {

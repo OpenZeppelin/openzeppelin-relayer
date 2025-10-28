@@ -30,7 +30,7 @@ use crate::{
         TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
-    services::{EvmProviderTrait, Signer},
+    services::{provider::EvmProviderTrait, signer::Signer},
     utils::{get_resubmit_timeout_for_speed, get_resubmit_timeout_with_backoff},
 };
 
@@ -671,7 +671,7 @@ mod tests {
             MockNetworkRepository, MockRelayerRepository, MockTransactionCounterTrait,
             MockTransactionRepository,
         },
-        services::{MockEvmProviderTrait, MockSigner},
+        services::{provider::MockEvmProviderTrait, signer::MockSigner},
     };
     use alloy::{
         consensus::{Eip658Value, Receipt, ReceiptWithBloom},
@@ -2070,7 +2070,7 @@ mod tests {
                 .expect_get_transaction_receipt()
                 .returning(|hash| {
                     if hash == "0xHash2" {
-                        Box::pin(async { Err(crate::services::ProviderError::Timeout) })
+                        Box::pin(async { Err(crate::services::provider::ProviderError::Timeout) })
                     } else if hash == "0xHash3" {
                         Box::pin(async { Ok(Some(make_mock_receipt(true, Some(100)))) })
                     } else {

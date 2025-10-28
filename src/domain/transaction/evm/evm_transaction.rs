@@ -32,7 +32,9 @@ use crate::{
         TransactionRepository, TransactionRepositoryStorage,
     },
     services::{
-        gas::evm_gas_price::EvmGasPriceService, EvmProvider, EvmProviderTrait, EvmSigner, Signer,
+        gas::evm_gas_price::EvmGasPriceService,
+        provider::{EvmProvider, EvmProviderTrait},
+        signer::{EvmSigner, Signer},
     },
     utils::{calculate_scheduled_timestamp, get_evm_default_gas_limit_for_tx},
 };
@@ -1048,7 +1050,7 @@ mod tests {
             MockNetworkRepository, MockRelayerRepository, MockTransactionCounterTrait,
             MockTransactionRepository,
         },
-        services::{MockEvmProviderTrait, MockSigner},
+        services::{provider::MockEvmProviderTrait, signer::MockSigner},
     };
     use chrono::Utc;
     use futures::future::ready;
@@ -2024,7 +2026,7 @@ mod tests {
         // Mock provider to return an error
         mock_provider.expect_estimate_gas().times(1).returning(|_| {
             Box::pin(async {
-                Err(crate::services::ProviderError::Other(
+                Err(crate::services::provider::ProviderError::Other(
                     "RPC error".to_string(),
                 ))
             })
@@ -2281,7 +2283,7 @@ mod tests {
             .times(1)
             .returning(|_| {
                 Box::pin(async {
-                    Err(crate::services::ProviderError::Other(
+                    Err(crate::services::provider::ProviderError::Other(
                         "already known: transaction already in mempool".to_string(),
                     ))
                 })
@@ -2349,7 +2351,7 @@ mod tests {
             .times(1)
             .returning(|_| {
                 Box::pin(async {
-                    Err(crate::services::ProviderError::Other(
+                    Err(crate::services::provider::ProviderError::Other(
                         "insufficient funds for gas * price + value".to_string(),
                     ))
                 })
@@ -2445,7 +2447,7 @@ mod tests {
             .times(1)
             .returning(|_| {
                 Box::pin(async {
-                    Err(crate::services::ProviderError::Other(
+                    Err(crate::services::provider::ProviderError::Other(
                         "already known: transaction with same nonce already in mempool".to_string(),
                     ))
                 })

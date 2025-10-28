@@ -1,6 +1,6 @@
 use crate::{
     domain::evm::PriceParams,
-    models::{evm::EvmTransactionRequest, TransactionError, U256},
+    models::{EvmTransactionData, TransactionError, U256},
 };
 
 #[derive(Debug, Clone, Default)]
@@ -13,11 +13,11 @@ impl MockPriceHandler {
 
     pub async fn handle_price_params(
         &self,
-        _tx: &EvmTransactionRequest,
+        _tx: &EvmTransactionData,
         mut original_params: PriceParams,
     ) -> Result<PriceParams, TransactionError> {
         original_params.extra_fee = Some(U256::from(42u128));
-        original_params.total_cost = original_params.total_cost + U256::from(42u128);
+        original_params.total_cost += U256::from(42u128);
         Ok(original_params)
     }
 }

@@ -29,7 +29,7 @@ use crate::{
     jobs::{JobProducer, JobProducerTrait},
     models::{NetworkRepoModel, RelayerRepoModel, TransactionRepoModel},
     repositories::{Repository, TransactionRepository, TransactionRepositoryStorage},
-    services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
+    services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
 };
 
 use super::*;
@@ -38,7 +38,9 @@ use super::*;
 use crate::{jobs::MockJobProducerTrait, repositories::MockTransactionRepository};
 
 #[cfg(test)]
-use crate::services::{MockJupiterServiceTrait, MockSolanaProviderTrait, MockSolanaSignTrait};
+use crate::services::{
+    provider::MockSolanaProviderTrait, signer::MockSolanaSignTrait, MockJupiterServiceTrait,
+};
 use async_trait::async_trait;
 
 use crate::{
@@ -50,7 +52,7 @@ use crate::{
         SignTransactionRequestParams, SignTransactionResult, TransferTransactionRequestParams,
         TransferTransactionResult,
     },
-    services::{JupiterService, SolanaProvider, SolanaSigner},
+    services::{provider::SolanaProvider, signer::SolanaSigner, JupiterService},
 };
 
 #[cfg_attr(test, automock)]

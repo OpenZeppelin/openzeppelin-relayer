@@ -8,7 +8,7 @@ use crate::{
     config::GasPriceCacheConfig,
     constants::{GAS_PRICE_CACHE_REFRESH_TIMEOUT_SECS, HISTORICAL_BLOCKS},
     models::{EvmNetwork, TransactionError},
-    services::EvmProviderTrait,
+    services::{gas::fetchers::GasPriceFetcherFactory, provider::EvmProviderTrait},
 };
 use alloy::rpc::types::{BlockNumberOrTag, FeeHistory};
 use dashmap::DashMap;
@@ -258,8 +258,14 @@ impl GasPriceCache {
         tokio::spawn(async move {
             let refresh = async {
                 // Get network provider and fetch fresh data
-                let provider = crate::services::get_network_provider(&network, None).ok()?;
-                let fresh_gas_price = provider.get_gas_price().await.ok()?;
+                let provider =
+                    crate::services::provider::get_network_provider(&network, None).ok()?;
+
+                // Use the generic fetcher factory to get the best gas price for this network
+                let fresh_gas_price = GasPriceFetcherFactory::fetch_gas_price(&provider, &network)
+                    .await
+                    .ok()?;
+
                 let block = provider.get_block_by_number().await.ok()?;
                 let fresh_base_fee: u128 = block.header.base_fee_per_gas.unwrap_or(0).into();
                 let fee_hist = provider
@@ -467,5 +473,32 @@ mod tests {
 
         // Removing again should return false (nothing to remove)
         assert!(!cache.remove_network(chain_id));
+    }
+
+    #[tokio::test]
+    async fn test_polygon_zkevm_network_detection() {
+        use crate::constants::POLYGON_ZKEVM_TAG;
+
+        // Create a mock zkEVM network
+        let mut zkevm_network = EvmNetwork {
+            network: "polygon-zkevm".to_string(),
+            rpc_urls: vec!["https://zkevm-rpc.com".to_string()],
+            explorer_urls: None,
+            average_blocktime_ms: 2000,
+            is_testnet: false,
+            tags: vec![POLYGON_ZKEVM_TAG.to_string()],
+            chain_id: 1101,
+            required_confirmations: 1,
+            features: vec!["eip1559".to_string()],
+            symbol: "ETH".to_string(),
+            gas_price_cache: None,
+        };
+
+        // Test zkEVM detection
+        assert!(zkevm_network.is_polygon_zkevm());
+
+        // Test non-zkEVM network
+        zkevm_network.tags = vec!["rollup".to_string()];
+        assert!(!zkevm_network.is_polygon_zkevm());
     }
 }

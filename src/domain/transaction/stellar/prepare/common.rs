@@ -22,7 +22,7 @@ use crate::{
     models::{TransactionRepoModel, TransactionStatus, TransactionUpdateRequest},
     repositories::TransactionCounterTrait,
     repositories::TransactionRepository,
-    services::{Signer, StellarProviderTrait},
+    services::{provider::StellarProviderTrait, signer::Signer},
     utils::calculate_scheduled_timestamp,
 };
 

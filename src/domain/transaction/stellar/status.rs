@@ -15,7 +15,7 @@ use crate::{
         TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
-    services::{Signer, StellarProviderTrait},
+    services::{provider::StellarProviderTrait, signer::Signer},
 };
 
 impl<R, T, J, S, P, C> StellarRelayerTransaction<R, T, J, S, P, C>

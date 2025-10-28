@@ -14,9 +14,6 @@ pub const STELLAR_DEFAULT_MAX_FEE: i64 = 1_000_000;
 /// Set to 2s for faster detection of transaction state changes
 pub const STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS: i64 = 2;
 
-/// Default delay (in seconds) for transaction status check job after submission
-pub const STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS: i64 = 2;
-
 // Other delays
 /// Default delay (in seconds) for retrying transaction after bad sequence error
 pub const STELLAR_BAD_SEQUENCE_RETRY_DELAY_SECONDS: i64 = 2;
