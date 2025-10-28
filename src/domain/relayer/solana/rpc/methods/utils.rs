@@ -26,7 +26,7 @@
 use super::*;
 use std::str::FromStr;
 
-use crate::utils::calculate_scheduled_timestamp;
+use crate::{services::signer::sign_sdk_transaction, utils::calculate_scheduled_timestamp};
 
 /// Convert raw token amount to UI amount based on decimals
 fn amount_to_ui_amount(amount: u64, decimals: u8) -> f64 {
@@ -53,7 +53,7 @@ use crate::{
     },
     domain::{SolanaTokenProgram, TokenInstruction},
     jobs::TransactionStatusCheck,
-    services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
+    services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
 };
 
 #[derive(Debug)]
@@ -160,7 +160,7 @@ where
         &self,
         transaction: Transaction,
     ) -> Result<(Transaction, Signature), SolanaRpcError> {
-        crate::services::sign_sdk_transaction(&*self.signer, transaction)
+        sign_sdk_transaction(&*self.signer, transaction)
             .await
             .map_err(|e| SolanaRpcError::Internal(e.to_string()))
     }

@@ -33,7 +33,8 @@ use crate::{
         TransactionRepositoryStorage,
     },
     services::{
-        SolanaProvider, SolanaProviderError, SolanaProviderTrait, SolanaSignTrait, SolanaSigner,
+        provider::{SolanaProvider, SolanaProviderError, SolanaProviderTrait},
+        signer::{SolanaSignTrait, SolanaSigner},
     },
 };
 
@@ -757,7 +758,10 @@ mod tests {
             Address, NetworkTransactionData, SignerError, SolanaTransactionData, TransactionStatus,
         },
         repositories::{MockRelayerRepository, MockTransactionRepository},
-        services::{MockSolanaProviderTrait, MockSolanaSignTrait, SolanaProviderError},
+        services::{
+            provider::{MockSolanaProviderTrait, SolanaProviderError},
+            signer::MockSolanaSignTrait,
+        },
         utils::mocks::mockutils::{create_mock_solana_relayer, create_mock_solana_transaction},
     };
     use solana_sdk::{hash::Hash, message::Message, pubkey::Pubkey, signature::Signature};

@@ -9,6 +9,7 @@ use crate::constants::{
     SOLANA_PENDING_TIMEOUT_MINUTES, SOLANA_SENT_TIMEOUT_MINUTES,
 };
 use crate::models::{NetworkTransactionData, SolanaTransactionData};
+use crate::services::provider::SolanaProviderError;
 use chrono::{DateTime, Duration, Utc};
 use solana_commitment_config::CommitmentConfig;
 use solana_sdk::{signature::Signature, transaction::Transaction as SolanaTransaction};
@@ -20,7 +21,6 @@ use crate::domain::transaction::common::is_final_state;
 use crate::domain::transaction::solana::utils::{
     is_resubmitable, map_solana_status_to_transaction_status, too_many_solana_attempts,
 };
-use crate::services::{SolanaProviderError, SolanaSignTrait};
 use crate::{
     jobs::{JobProducerTrait, TransactionRequest, TransactionSend},
     models::{
@@ -28,7 +28,7 @@ use crate::{
         TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{transaction::TransactionRepository, RelayerRepository, Repository},
-    services::provider::SolanaProviderTrait,
+    services::{provider::SolanaProviderTrait, signer::SolanaSignTrait},
 };
 
 impl<P, RR, TR, J, S> SolanaRelayerTransaction<P, RR, TR, J, S>
@@ -674,7 +674,10 @@ mod tests {
         jobs::{MockJobProducerTrait, TransactionCommand},
         models::{NetworkTransactionData, SolanaTransactionData},
         repositories::{MockRelayerRepository, MockTransactionRepository},
-        services::{MockSolanaProviderTrait, MockSolanaSignTrait, SolanaProviderError},
+        services::{
+            provider::{MockSolanaProviderTrait, SolanaProviderError},
+            signer::MockSolanaSignTrait,
+        },
         utils::{
             base64_encode,
             mocks::mockutils::{create_mock_solana_relayer, create_mock_solana_transaction},
@@ -1190,7 +1193,7 @@ mod tests {
             .times(1)
             .returning(|_| {
                 Box::pin(async {
-                    Err(crate::services::SolanaProviderError::RpcError(
+                    Err(crate::services::provider::SolanaProviderError::RpcError(
                         "test error".to_string(),
                     ))
                 })

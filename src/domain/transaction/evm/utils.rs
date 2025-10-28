@@ -7,7 +7,7 @@ use crate::models::EvmNetwork;
 use crate::models::{
     EvmTransactionData, TransactionError, TransactionRepoModel, TransactionStatus, U256,
 };
-use crate::services::EvmProviderTrait;
+use crate::services::provider::EvmProviderTrait;
 use chrono::{DateTime, Duration, Utc};
 use eyre::Result;
 

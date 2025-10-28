@@ -37,8 +37,9 @@ use crate::{
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
-        JupiterService, JupiterServiceTrait, Signer, SolanaProvider, SolanaProviderTrait,
-        SolanaSignTrait, SolanaSigner,
+        provider::{SolanaProvider, SolanaProviderTrait},
+        signer::{Signer, SolanaSignTrait, SolanaSigner},
+        JupiterService, JupiterServiceTrait,
     },
 };
 
@@ -997,8 +998,9 @@ mod tests {
         },
         repositories::{MockNetworkRepository, MockRelayerRepository, MockTransactionRepository},
         services::{
-            MockJupiterServiceTrait, MockSolanaProviderTrait, MockSolanaSignTrait, QuoteResponse,
-            RoutePlan, SolanaProviderError, SwapEvents, SwapInfo, SwapResponse,
+            provider::{MockSolanaProviderTrait, SolanaProviderError},
+            signer::MockSolanaSignTrait,
+            MockJupiterServiceTrait, QuoteResponse, RoutePlan, SwapEvents, SwapInfo, SwapResponse,
             UltraExecuteResponse, UltraOrderResponse,
         },
         utils::mocks::mockutils::create_mock_solana_network,

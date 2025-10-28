@@ -61,6 +61,12 @@ pub const EVM_RESEND_TIMEOUT_SECONDS: i64 = 25;
 /// Trigger recovery for stuck Pending transactions (in seconds)
 pub const EVM_PENDING_RECOVERY_TRIGGER_SECONDS: i64 = 20;
 
+/// Minimum age before attempting hash recovery for transactions (in minutes)
+pub const EVM_MIN_AGE_FOR_HASH_RECOVERY_MINUTES: i64 = 2;
+
+/// Minimum number of hashes required before attempting hash recovery
+pub const EVM_MIN_HASHES_FOR_RECOVERY: usize = 3;
+
 /// Get preparation timeout duration
 pub fn get_evm_prepare_timeout() -> Duration {
     Duration::minutes(EVM_PREPARE_TIMEOUT_MINUTES)
@@ -84,4 +90,9 @@ pub fn get_evm_pending_recovery_trigger_timeout() -> Duration {
 /// Get status check initial delay duration
 pub fn get_evm_status_check_initial_delay() -> Duration {
     Duration::seconds(EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS)
+}
+
+/// Get minimum age for hash recovery duration
+pub fn get_evm_min_age_for_hash_recovery() -> Duration {
+    Duration::minutes(EVM_MIN_AGE_FOR_HASH_RECOVERY_MINUTES)
 }

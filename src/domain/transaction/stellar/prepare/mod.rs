@@ -20,7 +20,7 @@ use crate::{
         TransactionUpdateRequest,
     },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
-    services::{Signer, StellarProviderTrait},
+    services::{provider::StellarProviderTrait, signer::Signer},
 };
 
 use common::{sign_and_finalize_transaction, update_and_notify_transaction};
@@ -39,7 +39,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!(tx_id = %tx.id, status = ?tx.status, "preparing stellar transaction");
+        debug!(status = ?tx.status, "preparing stellar transaction");
 
         // Defensive check: if transaction is in a final state or unexpected state, don't retry
         if is_final_state(&tx.status) {

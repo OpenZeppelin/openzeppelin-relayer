@@ -7,11 +7,15 @@
 use crate::services::gas::handlers::MockPriceHandler;
 use crate::{
     domain::evm::PriceParams,
-    models::{evm::EvmTransactionRequest, EvmNetwork, TransactionError},
-    services::{gas::handlers::OptimismPriceHandler, EvmProvider},
+    models::{EvmNetwork, EvmTransactionData, TransactionError},
+    services::{
+        gas::handlers::{OptimismPriceHandler, PolygonZKEvmPriceHandler},
+        provider::EvmProvider,
+    },
 };
 #[derive(Clone)]
 pub enum PriceParamsHandler {
+    PolygonZKEvm(PolygonZKEvmPriceHandler<EvmProvider>),
     Optimism(OptimismPriceHandler<EvmProvider>),
     #[cfg(test)]
     Mock(MockPriceHandler),
@@ -22,7 +26,11 @@ impl PriceParamsHandler {
     ///
     /// Returns None for networks that don't require custom price calculations.
     pub fn for_network(network: &EvmNetwork, provider: EvmProvider) -> Option<Self> {
-        if network.is_optimism() {
+        if network.is_polygon_zkevm() {
+            Some(PriceParamsHandler::PolygonZKEvm(
+                PolygonZKEvmPriceHandler::new(provider),
+            ))
+        } else if network.is_optimism() {
             Some(PriceParamsHandler::Optimism(OptimismPriceHandler::new(
                 provider,
             )))
@@ -37,10 +45,13 @@ impl PriceParamsHandler {
     /// according to the specific network's requirements.
     pub async fn handle_price_params(
         &self,
-        tx: &EvmTransactionRequest,
+        tx: &EvmTransactionData,
         original_params: PriceParams,
     ) -> Result<PriceParams, TransactionError> {
         match self {
+            PriceParamsHandler::PolygonZKEvm(handler) => {
+                handler.handle_price_params(tx, original_params).await
+            }
             PriceParamsHandler::Optimism(handler) => {
                 handler.handle_price_params(tx, original_params).await
             }
@@ -56,7 +67,7 @@ impl PriceParamsHandler {
 mod tests {
     use super::*;
     use crate::{
-        constants::OPTIMISM_BASED_TAG,
+        constants::{OPTIMISM_BASED_TAG, POLYGON_ZKEVM_TAG},
         models::{RpcConfig, U256},
     };
     use std::env;
@@ -81,6 +92,20 @@ mod tests {
         env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
         env::set_var("REDIS_URL", "redis://localhost:6379");
         env::set_var("RPC_TIMEOUT_MS", "5000");
+    }
+
+    #[test]
+    fn test_price_params_handler_for_polygon_zkevm() {
+        setup_test_env();
+        let rpc_configs = vec![RpcConfig::new("http://localhost:8545".to_string())];
+        let provider = EvmProvider::new(rpc_configs, 30).expect("Failed to create EvmProvider");
+        let network = create_test_network_with_tags(vec![POLYGON_ZKEVM_TAG]);
+        let handler = PriceParamsHandler::for_network(&network, provider);
+        assert!(handler.is_some());
+        assert!(
+            matches!(handler, Some(PriceParamsHandler::PolygonZKEvm(_))),
+            "Expected PolygonZKEvm handler variant"
+        );
     }
 
     #[test]
@@ -112,7 +137,8 @@ mod tests {
         setup_test_env();
         let handler = PriceParamsHandler::Mock(MockPriceHandler::new());
 
-        let tx = EvmTransactionRequest {
+        let tx = EvmTransactionData {
+            from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
             to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string()),
             value: U256::from(0u128),
             data: Some("0x".to_string()),
@@ -121,7 +147,11 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             speed: None,
-            valid_until: None,
+            nonce: None,
+            chain_id: 1,
+            hash: None,
+            signature: None,
+            raw: None,
         };
 
         let original = PriceParams {

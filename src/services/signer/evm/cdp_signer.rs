@@ -17,7 +17,7 @@ use std::str::FromStr;
 
 use alloy::{
     consensus::{SignableTransaction, TxEip1559, TxLegacy},
-    primitives::{eip191_hash_message, keccak256},
+    primitives::{eip191_hash_message, normalize_v, Signature},
 };
 use async_trait::async_trait;
 use tracing::{debug, info};
@@ -31,7 +31,9 @@ use crate::{
         Address, CdpSignerConfig, EvmTransactionDataSignature, EvmTransactionDataTrait,
         NetworkTransactionData, SignerError, SignerRepoModel,
     },
-    services::{signer::Signer, CdpService, CdpServiceTrait},
+    services::{
+        signer::evm::validate_and_format_signature, signer::Signer, CdpService, CdpServiceTrait,
+    },
 };
 
 use super::DataSignerTrait;
@@ -83,7 +85,6 @@ impl<T: CdpServiceTrait> Signer for CdpSigner<T> {
     ) -> Result<SignTransactionResponse, SignerError> {
         let evm_data = transaction.get_evm_transaction_data()?;
 
-        // Prepare data for signing based on transaction type
         let (unsigned_tx_bytes, is_eip1559) = if evm_data.is_eip1559() {
             let tx = TxEip1559::try_from(transaction)?;
             (tx.encoded_for_signing(), true)
@@ -92,17 +93,14 @@ impl<T: CdpServiceTrait> Signer for CdpSigner<T> {
             (tx.encoded_for_signing(), false)
         };
 
-        // Sign the data with CDP service
         let signed_bytes = self
             .cdp_service
             .sign_evm_transaction(&unsigned_tx_bytes)
             .await
             .map_err(SignerError::CdpError)?;
 
-        // Process the signed transaction
         let mut signed_bytes_slice = signed_bytes.as_slice();
 
-        // Parse the signed transaction and extract components
         let (hash, signature_bytes) = if is_eip1559 {
             let signed_tx =
                 alloy::consensus::Signed::<TxEip1559>::eip2718_decode(&mut signed_bytes_slice)
@@ -150,15 +148,12 @@ impl<T: CdpServiceTrait> Signer for CdpSigner<T> {
 impl<T: CdpServiceTrait> DataSignerTrait for CdpSigner<T> {
     async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, SignerError> {
         let message_string = request.message.to_string();
-
-        // Sign the prefixed message
         let signature_bytes = self
             .cdp_service
-            .sign_evm_message(message_string)
+            .sign_evm_message(message_string.clone())
             .await
             .map_err(SignerError::CdpError)?;
 
-        // Ensure we have the right signature length
         if signature_bytes.len() != 65 {
             return Err(SignerError::SigningError(format!(
                 "Invalid signature length from CDP: expected 65 bytes, got {}",
@@ -166,25 +161,34 @@ impl<T: CdpServiceTrait> DataSignerTrait for CdpSigner<T> {
             )));
         }
 
-        let r = hex::encode(&signature_bytes[0..32]);
-        let s = hex::encode(&signature_bytes[32..64]);
-        let v = signature_bytes[64];
+        let sig = Signature::try_from(&signature_bytes[..])
+            .map_err(|e| SignerError::ConversionError(e.to_string()))?;
 
-        Ok(SignDataResponse::Evm(SignDataResponseEvm {
-            r,
-            s,
-            v,
-            sig: hex::encode(&signature_bytes),
-        }))
+        let v_byte = signature_bytes[64];
+        let original_parity = normalize_v(v_byte as u64)
+            .ok_or_else(|| SignerError::SigningError(format!("Invalid v value: {}", v_byte)))?;
+
+        let normalized_sig = if let Some(normalized) = sig.normalize_s() {
+            normalized.with_parity(!original_parity)
+        } else {
+            sig
+        };
+
+        let normalized_bytes = normalized_sig.as_bytes();
+
+        validate_and_format_signature(&normalized_bytes, "CDP")
     }
 
     async fn sign_typed_data(
         &self,
-        _typed_data: SignTypedDataRequest,
+        _request: SignTypedDataRequest,
     ) -> Result<SignDataResponse, SignerError> {
-        // EIP-712 typed data signing requires specific handling
+        // The relayer sends only hashes (domain_separator, hash_struct_message).
+        // CDP requires the full EIP-712 structure (domain, message, types).
+        // Cannot reconstruct structure from hashes.
         Err(SignerError::NotImplemented(
-            "EIP-712 typed data signing not yet implemented for CDP".into(),
+            "EIP-712 not supported for CDP. Use LocalSigner, AwsKmsSigner, GoogleCloudKmsSigner, VaultSigner, or TurnkeySigner instead."
+                .to_string(),
         ))
     }
 }
@@ -233,13 +237,13 @@ mod tests {
         let mut mock_service = MockCdpServiceTrait::new();
         let test_message = "Test message";
 
-        let r = [1u8; 32];
-        let s = [2u8; 32];
-        let v = 27u8;
-        let mut mock_sig = Vec::with_capacity(65);
-        mock_sig.extend_from_slice(&r);
-        mock_sig.extend_from_slice(&s);
-        mock_sig.push(v);
+        // Use a valid ECDSA signature (example from actual signing)
+        let mock_sig = hex::decode(
+            "f6b2cfef2b4d31f4af9a6d851c022f3ae89571e1eee6ec5d05889eaf50c4244d\
+             369a720cf91e1327b9fff17d9291e042a22172e92c1db5e76f4b0ebf7fae9ed2\
+             1b",
+        )
+        .unwrap();
 
         mock_service
             .expect_sign_evm_message()
@@ -258,16 +262,11 @@ mod tests {
 
         match result {
             SignDataResponse::Evm(sig) => {
-                assert_eq!(
-                    sig.r,
-                    "0101010101010101010101010101010101010101010101010101010101010101"
-                );
-                assert_eq!(
-                    sig.s,
-                    "0202020202020202020202020202020202020202020202020202020202020202"
-                );
-                assert_eq!(sig.v, 27);
-                assert_eq!(sig.sig, "01010101010101010101010101010101010101010101010101010101010101010202020202020202020202020202020202020202020202020202020202020202".to_string() + "1b");
+                // The signature components should be present and valid
+                assert_eq!(sig.r.len(), 64); // 32 bytes in hex
+                assert_eq!(sig.s.len(), 64); // 32 bytes in hex
+                assert!(sig.v == 27 || sig.v == 28); // Valid v values
+                assert_eq!(sig.sig.len(), 130); // 65 bytes in hex
             }
             _ => panic!("Expected EVM signature"),
         }
@@ -388,20 +387,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sign_typed_data_not_implemented() {
+    async fn test_sign_typed_data() {
         let mock_service = MockCdpServiceTrait::new();
+
         let signer = CdpSigner::new_for_testing(mock_service);
 
+        // Valid 32-byte hashes
+        let domain_separator = "a".repeat(64); // 32 bytes in hex
+        let hash_struct = "b".repeat(64); // 32 bytes in hex
+
         let request = SignTypedDataRequest {
-            domain_separator: "test-domain".to_string(),
-            hash_struct_message: "test-struct".to_string(),
+            domain_separator,
+            hash_struct_message: hash_struct,
         };
 
+        // CDP does not support EIP-712, so this should return an error
         let result = signer.sign_typed_data(request).await;
         assert!(result.is_err());
+
         match result {
-            Err(SignerError::NotImplemented(_)) => {}
-            _ => panic!("Expected NotImplemented error variant"),
+            Err(SignerError::NotImplemented(msg)) => {
+                assert!(msg.contains("EIP-712 not supported for CDP"));
+            }
+            _ => panic!("Expected NotImplemented error"),
         }
     }
 

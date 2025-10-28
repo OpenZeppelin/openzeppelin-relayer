@@ -36,7 +36,8 @@ use crate::{
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
-        StellarProvider, StellarProviderTrait, StellarSignTrait, StellarSigner,
+        provider::{StellarProvider, StellarProviderTrait},
+        signer::{StellarSignTrait, StellarSigner},
         TransactionCounterService, TransactionCounterServiceTrait,
     },
     utils::calculate_scheduled_timestamp,
@@ -500,7 +501,8 @@ mod tests {
             InMemoryNetworkRepository, MockRelayerRepository, MockTransactionRepository,
         },
         services::{
-            MockStellarProviderTrait, MockStellarSignTrait, MockTransactionCounterServiceTrait,
+            provider::MockStellarProviderTrait, signer::MockStellarSignTrait,
+            MockTransactionCounterServiceTrait,
         },
     };
     use eyre::eyre;

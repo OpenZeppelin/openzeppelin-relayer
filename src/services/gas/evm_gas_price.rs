@@ -4,7 +4,10 @@
 use crate::{
     constants::HISTORICAL_BLOCKS,
     models::{evm::Speed, EvmNetwork, EvmTransactionData, TransactionError},
-    services::{gas::cache::GasPriceCache, EvmProviderTrait},
+    services::{
+        gas::{cache::GasPriceCache, fetchers::GasPriceFetcherFactory},
+        provider::EvmProviderTrait,
+    },
 };
 use alloy::rpc::types::{BlockNumberOrTag, FeeHistory};
 use eyre::Result;
@@ -133,7 +136,7 @@ impl IntoIterator for SpeedPrices {
 
 #[async_trait]
 #[cfg_attr(test, automock(
-    type Provider = crate::services::MockEvmProviderTrait;
+    type Provider = crate::services::provider::MockEvmProviderTrait;
 ))]
 #[allow(dead_code)]
 pub trait EvmGasPriceServiceTrait {
@@ -292,10 +295,14 @@ impl<P: EvmProviderTrait + Send + Sync + 'static> EvmGasPriceServiceTrait
                     &self.network,
                     Self::reward_percentiles_ordered(),
                 );
-                self.provider.get_gas_price().await?
+                GasPriceFetcherFactory::fetch_gas_price(&self.provider, &self.network)
+                    .await
+                    .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?
             }
         } else {
-            self.provider.get_gas_price().await?
+            GasPriceFetcherFactory::fetch_gas_price(&self.provider, &self.network)
+                .await
+                .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?
         };
 
         Ok(Self::build_legacy_prices_from_base(base))
@@ -478,7 +485,7 @@ mod tests {
         let mut mock_provider = MockEvmProviderTrait::new();
         let base_gas_price = 10_000_000_000u128; // 10 gwei base price
 
-        // Mock the provider's get_gas_price method
+        // Mock the provider's get_gas_price method (used by default fetcher)
         mock_provider
             .expect_get_gas_price()
             .times(1)
@@ -543,7 +550,7 @@ mod tests {
         let base_gas_price = 10_000_000_000u128;
         let base_fee = 5_000_000_000u128;
 
-        // Mock get_gas_price for legacy prices
+        // Mock get_gas_price for legacy prices (used by default fetcher)
         mock_provider
             .expect_get_gas_price()
             .times(1)

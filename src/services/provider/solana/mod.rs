@@ -36,7 +36,7 @@ use thiserror::Error;
 
 use crate::{
     models::{RpcConfig, SolanaTransactionStatus},
-    services::retry_rpc_call,
+    services::provider::retry_rpc_call,
 };
 
 use super::ProviderError;

@@ -213,20 +213,20 @@ services:
     command:
       - redis-server
       - --appendonly
-      - 'yes'
+      - 'yes' # Enable AOF persistence
       - --appendfsync
-      - everysec
+      - everysec # Flush AOF to disk every second
       - --maxmemory
-      - 4gb
+      - 4gb # Max memory usage
       - --maxmemory-policy
       - allkeys-lru
       - --save
-      - '300'
+      - '300' # Save the DB every 300 seconds if there are at least 10 changes
       - '10'
       - --tcp-backlog
-      - '511'
+      - '511' # Max number of connections in the backlog
       - --timeout
-      - '300'
+      - '300' # Connection timeout in seconds
     networks:
       - relayer-network
     restart: on-failure:5

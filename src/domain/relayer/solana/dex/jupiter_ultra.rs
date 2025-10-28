@@ -13,8 +13,8 @@ use super::{DexStrategy, SwapParams, SwapResult};
 use crate::domain::relayer::RelayerError;
 use crate::models::EncodedSerializedTransaction;
 use crate::services::{
-    JupiterService, JupiterServiceTrait, SolanaSignTrait, SolanaSigner, UltraExecuteRequest,
-    UltraOrderRequest,
+    signer::{SolanaSignTrait, SolanaSigner},
+    JupiterService, JupiterServiceTrait, UltraExecuteRequest, UltraOrderRequest,
 };
 use async_trait::async_trait;
 use solana_sdk::transaction::VersionedTransaction;
@@ -119,7 +119,7 @@ mod tests {
     use crate::{
         models::SignerError,
         services::{
-            MockJupiterServiceTrait, MockSolanaSignTrait, RoutePlan, SwapEvents, SwapInfo,
+            signer::MockSolanaSignTrait, MockJupiterServiceTrait, RoutePlan, SwapEvents, SwapInfo,
             UltraExecuteResponse, UltraOrderResponse,
         },
     };

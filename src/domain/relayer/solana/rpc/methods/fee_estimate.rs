@@ -33,7 +33,7 @@ use crate::{
         TransactionRepoModel,
     },
     repositories::{Repository, TransactionRepository},
-    services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
+    services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
 };
 
 use super::{
@@ -220,7 +220,8 @@ mod tests {
         },
         repositories::MockTransactionRepository,
         services::{
-            MockSolanaProviderTrait, QuoteResponse, RoutePlan, SolanaProviderError, SwapInfo,
+            provider::{MockSolanaProviderTrait, SolanaProviderError},
+            QuoteResponse, RoutePlan, SwapInfo,
         },
     };
 
