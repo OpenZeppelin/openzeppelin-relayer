@@ -23,9 +23,8 @@ use crate::{
     utils::calculate_scheduled_timestamp,
 };
 use async_trait::async_trait;
-use eyre::Result;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{error, info};
 
 use super::lane_gate;
 
@@ -143,22 +142,22 @@ where
     }
 
     /// Sends a transaction update notification if a notification ID is configured.
-    pub(super) async fn send_transaction_update_notification(
-        &self,
-        tx: &TransactionRepoModel,
-    ) -> Result<(), TransactionError> {
+    ///
+    /// This is a best-effort operation that logs errors but does not propagate them,
+    /// as notification failures should not affect the transaction lifecycle.
+    pub(super) async fn send_transaction_update_notification(&self, tx: &TransactionRepoModel) {
         if let Some(notification_id) = &self.relayer().notification_id {
-            self.job_producer()
+            if let Err(e) = self
+                .job_producer()
                 .produce_send_notification_job(
                     produce_transaction_update_notification_payload(notification_id, tx),
                     None,
                 )
                 .await
-                .map_err(|e| {
-                    TransactionError::UnexpectedError(format!("Failed to send notification: {}", e))
-                })?;
+            {
+                error!(error = %e, "failed to produce notification job");
+            }
         }
-        Ok(())
     }
 
     /// Helper function to update transaction status, save it, and send a notification.
@@ -172,8 +171,7 @@ where
             .partial_update(tx_id, update_req)
             .await?;
 
-        self.send_transaction_update_notification(&updated_tx)
-            .await?;
+        self.send_transaction_update_notification(&updated_tx).await;
         Ok(updated_tx)
     }
 
