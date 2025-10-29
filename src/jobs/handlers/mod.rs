@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use apalis::prelude::{Attempt, Error};
 use eyre::Report;
-use tracing::{error, info, warn};
+use tracing::{debug, error, warn};
 
 mod transaction_request_handler;
 pub use transaction_request_handler::*;
@@ -22,6 +22,14 @@ pub use solana_swap_request_handler::*;
 mod transaction_cleanup_handler;
 pub use transaction_cleanup_handler::*;
 
+// Handles job results for simple handlers (no transaction state management).
+//
+// Used by: notification_handler, solana_swap_request_handler, transaction_cleanup_handler
+//
+// # Retry Strategy
+// - On success: Job completes
+// - On error: Retry until max_attempts reached
+// - At max_attempts: Abort job
 mod relayer_health_check_handler;
 pub use relayer_health_check_handler::*;
 
@@ -32,7 +40,7 @@ pub fn handle_result(
     max_attempts: usize,
 ) -> Result<(), Error> {
     if result.is_ok() {
-        info!(
+        debug!(
             job_type = %job_type,
             "request handled successfully"
         );
@@ -54,12 +62,12 @@ pub fn handle_result(
             max_attempts = %max_attempts,
             "max attempts reached, failing job"
         );
-        Err(Error::Abort(Arc::new("Failed to handle request".into())))?
+        return Err(Error::Abort(Arc::new("Failed to handle request".into())));
     }
 
     Err(Error::Failed(Arc::new(
         "Failed to handle request. Retrying".into(),
-    )))?
+    )))
 }
 
 #[cfg(test)]
