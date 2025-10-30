@@ -220,7 +220,7 @@ jobs:
       - name: Cargo generate api
         id: update-openapi-spec-commit
         run: |-
-          OPENAPI_SPEC_FILE="docs/openapi.json"
+          OPENAPI_SPEC_FILE="./openapi.json"
           cargo generate_openapi
           if ! git diff --quiet "$OPENAPI_SPEC_FILE"; then
             echo "openapi_changed=true" >> $GITHUB_OUTPUT
@@ -235,7 +235,7 @@ jobs:
           token: ${{ steps.gh-app-token.outputs.token }}
           ref: ${{ needs.release-please.outputs.release_branch }}
           files: |-
-            docs/openapi.json
+            ./openapi.json
 
   # Update rust docs link in nav.adoc
   update-rust-docs-link:

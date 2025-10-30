@@ -1,0 +1,328 @@
+---
+title: Signers Configuration
+---
+
+## Overview
+
+Signers are responsible for cryptographically signing transactions before they are submitted to blockchain networks. OpenZeppelin Relayer supports multiple signer types to accommodate different security requirements and infrastructure setups.
+
+Each signer is referenced by its `id` in relayer configurations.
+
+## Configuration Structure
+
+Example signer configuration:
+```json
+"signers": [
+  {
+    "id": "my_id",
+    "type": "local",
+    "config": {
+      "path": "config/keys/local-signer.json",
+      "passphrase": {
+        "type": "env",
+        "value": "KEYSTORE_PASSPHRASE"
+      }
+    }
+  }
+]
+```
+
+## Supported Signer Types
+
+OpenZeppelin Relayer supports the following signer types:
+
+* `local`: Keystore file signer
+* `vault`: HashiCorp Vault secret signer
+* `vault_transit`: HashiCorp Vault Transit signer
+* `turnkey`: Turnkey signer
+* `google_cloud_kms`: Google Cloud KMS signer
+* `aws_kms`: Amazon AWS KMS signer
+
+## Network Compatibility Matrix
+
+The following table shows which signer types are compatible with each network type:
+
+| Signer Type | EVM Networks | Solana Networks | Stellar Networks |
+| --- | --- | --- | --- |
+| `local` | ✅ Supported | ✅ Supported | ✅ Supported |
+| `vault` | ✅ Supported | ✅ Supported | ❌ Not supported |
+| `vault_transit` | ❌ Not supported | ✅ Supported | ❌ Not supported |
+| `turnkey` | ✅ Supported | ✅ Supported | ❌ Not supported |
+| `google_cloud_kms` | ✅ Supported | ✅ Supported | ❌ Not supported |
+| `aws_kms` | ✅ Supported | ❌ Not supported | ❌ Not supported |
+
+
+
+***Network-specific considerations:***
+
+* ***EVM Networks***: Use secp256k1 cryptography. Most signers support EVM networks with proper key generation.
+* ***Solana Networks***: Use ed25519 cryptography. Ensure your signer supports ed25519 key generation and signing.
+* ***Stellar Networks***: Use ed25519 cryptography with specific Stellar requirements. Limited signer support due to network-specific implementation requirements.
+* ***AWS KMS***: Currently optimized for EVM networks with secp256k1 support.
+* ***Google Cloud KMS***: Supports both secp256k1 (EVM) and ed25519 (Solana) key types.
+* ***Turnkey***: Supports EVM and Solana networks with appropriate key management.
+
+
+## Common Configuration Fields
+
+All signer types share these common configuration fields:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `id` | String | Unique identifier for the signer (used to reference this signer in relayer configurations) |
+| `type` | String | Type of signer (see supported signer types above) |
+| `config` | Map | Signer type-specific configuration object |
+
+## Local Signer Configuration
+
+The local signer uses encrypted keystore files stored on the filesystem.
+
+```json
+{
+  "id": "local-signer",
+  "type": "local",
+  "config": {
+    "path": "config/keys/local-signer.json",
+    "passphrase": {
+      "type": "env",
+      "value": "KEYSTORE_PASSPHRASE"
+    }
+  }
+}
+```
+
+Configuration fields:
+| Field | Type | Description |
+| --- | --- | --- |
+| `path` | String | Path to the signer JSON file. Should be under the `./config` directory |
+| `passphrase.type` | String | Type of passphrase source (`env` or `plain`) |
+| `passphrase.value` | String | Passphrase value or environment variable name |
+
+## HashiCorp Vault Signer Configuration
+
+### Vault Secret Signer
+
+Uses HashiCorp Vault’s secret engine to store private keys.
+
+```json
+{
+  "id": "vault-signer",
+  "type": "vault",
+  "config": {
+    "address": "https://vault.example.com",
+    "role_id": {
+      "type": "env",
+      "value": "VAULT_ROLE_ID"
+    },
+    "secret_id": {
+      "type": "env",
+      "value": "VAULT_SECRET_ID"
+    },
+    "key_name": "relayer-key",
+    "mount_point": "secret"
+  }
+}
+```
+
+Configuration fields:
+| Field | Type | Description |
+| --- | --- | --- |
+| `address` | String | Specifies the Vault API endpoint |
+| `role_id.type` | String | Type of value source (`env` or `plain`) |
+| `role_id.value` | String | The Vault AppRole role identifier value, or the environment variable name where the AppRole role identifier is stored |
+| `secret_id.type` | String | Type of value source (`env` or `plain`) |
+| `secret_id.value` | String | The Vault AppRole role secret value, or the environment variable name where the AppRole secret value is stored |
+| `key_name` | String | The name of the cryptographic key within Vault's Secret engine that is used for signing operations |
+| `mount_point` | String | The mount point for the Secrets engine in Vault. Defaults to `secret` if not explicitly specified. Optional. |
+
+### Vault Transit Signer
+
+Uses HashiCorp Vault’s Transit secrets engine for cryptographic operations.
+
+```json
+{
+  "id": "vault-transit-signer",
+  "type": "vault_transit",
+  "config": {
+    "address": "https://vault.example.com",
+    "role_id": {
+      "type": "env",
+      "value": "VAULT_ROLE_ID"
+    },
+    "secret_id": {
+      "type": "env",
+      "value": "VAULT_SECRET_ID"
+    },
+    "key_name": "relayer-transit-key",
+    "mount_point": "transit",
+    "namespace": "production",
+    "pubkey": "your-public-key-here"
+  }
+}
+```
+
+Configuration fields:
+| Field | Type | Description |
+| --- | --- | --- |
+| `address` | String | Specifies the Vault API endpoint |
+| `role_id.type` | String | Type of value source (`env` or `plain`) |
+| `role_id.value` | String | The Vault AppRole role identifier value, or the environment variable name where the AppRole role identifier is stored |
+| `secret_id.type` | String | Type of value source (`env` or `plain`) |
+| `secret_id.value` | String | The Vault AppRole role secret value, or the environment variable name where the AppRole secret value is stored |
+| `key_name` | String | The name of the cryptographic key within Vault's Transit engine that is used for signing operations |
+| `mount_point` | String | The mount point for the Transit secrets engine in Vault. Defaults to `transit` if not explicitly specified. Optional. |
+| `namespace` | String | The Vault namespace for API calls. This is used only in Vault Enterprise environments. Optional. |
+| `pubkey` | String | Public key of the cryptographic key within Vault's Transit engine that is used for signing operations |
+
+## Turnkey Signer Configuration
+
+Uses Turnkey’s secure key management infrastructure.
+
+```json
+{
+  "id": "turnkey-signer",
+  "type": "turnkey",
+  "config": {
+    "api_public_key": "your-api-public-key",
+    "api_private_key": {
+      "type": "env",
+      "value": "TURNKEY_API_PRIVATE_KEY"
+    },
+    "organization_id": "your-org-id",
+    "private_key_id": "your-private-key-id",
+    "public_key": "your-public-key"
+  }
+}
+```
+
+Configuration fields:
+| Field | Type | Description |
+| --- | --- | --- |
+| `api_public_key` | String | The public key associated with your Turnkey API access credentials. Used for authentication to the Turnkey signing service |
+| `api_private_key.type` | String | Type of value source (`env` or `plain`) |
+| `api_private_key.value` | String | The Turnkey API private key or environment variable name containing it. Used with the public key to authenticate API requests |
+| `organization_id` | String | Your unique Turnkey organization identifier. Required to access resources within your specific organization |
+| `private_key_id` | String | The unique identifier of the private key in your Turnkey account that will be used for signing operations |
+| `public_key` | String | The public key corresponding to the private key identified by private_key_id. Used for address derivation and signature verification |
+
+## Google Cloud KMS Signer Configuration
+
+Uses Google Cloud Key Management Service for secure key operations.
+
+For EVM transaction signing, ensure your Google Cloud KMS key is created with:
+- Protection level: HSM
+- Purpose: Asymmetric sign
+- Algorithm: "Elliptic Curve secp256k1 - SHA256 Digest"
+
+This provides secp256k1 compatibility required for Ethereum transactions.
+
+
+```json
+{
+  "id": "gcp-kms-signer",
+  "type": "google_cloud_kms",
+  "config": {
+    "service_account": {
+      "project_id": "your-gcp-project",
+      "private_key_id": {
+        "type": "env",
+        "value": "GCP_PRIVATE_KEY_ID"
+      },
+      "private_key": {
+        "type": "env",
+        "value": "GCP_PRIVATE_KEY"
+      },
+      "client_email": {
+        "type": "env",
+        "value": "GCP_CLIENT_EMAIL"
+      },
+      "client_id": "your-client-id"
+    },
+    "key": {
+      "location": "us-west2",
+      "key_ring_id": "relayer-keyring",
+      "key_id": "relayer-key",
+      "key_version": 1
+    }
+  }
+}
+```
+
+Configuration fields:
+| Field | Type | Description |
+| --- | --- | --- |
+| service_account.project_id | String | The Google Cloud project ID where your KMS resources are located |
+| service_account.private_key_id.type | String | Type of value source for the private key ID (`env` or `plain`) |
+| service_account.private_key_id.value | String | The private key ID value or the environment variable name containing it |
+| service_account.private_key.type | String | Type of value source for the private key (`env` or `plain`) |
+| service_account.private_key.value | String | The Google Cloud service account private key (PEM format) or the environment variable name containing it |
+| service_account.client_email.type | String | Type of value source for the client email (`env` or `plain`) |
+| service_account.client_email.value | String | The Google Cloud service account client email or the environment variable name containing it |
+| service_account.client_id | String | The Google Cloud service account client ID |
+| key.location | String | The Google Cloud location (region) where your KMS key ring is located (e.g., "us-west2", "global") |
+| key.key_ring_id | String | The KMS key ring ID containing your cryptographic key |
+| key.key_id | String | The KMS key ID used for signing operations |
+| key.key_version | Integer | The version of the KMS key to use for signing operations. Defaults to 1 |
+
+## AWS KMS Signer Configuration
+
+Uses Amazon Web Services Key Management Service for cryptographic operations.
+
+```json
+{
+  "id": "aws-kms-signer",
+  "type": "aws_kms",
+  "config": {
+    "region": "us-west-2",
+    "key_id": "arn:aws:kms:us-west-2:123456789012:key/12345678-1234-1234-1234-123456789012"
+  }
+}
+```
+
+Configuration fields:
+| Field | Type | Description |
+| --- | --- | --- |
+| region | String | AWS region. If the key is non-replicated across regions, this must match the key’s original region. Optional. If not specified, the default region from shared credentials is used |
+| key_id | String | ID of the key in AWS KMS (can be key ID, key ARN, alias name, or alias ARN) |
+
+## Security Best Practices
+
+### File Permissions
+* Set restrictive permissions on keystore files: `chmod 0500 config/keys/*`
+* Ensure configuration directories are properly secured
+* Use environment variables for sensitive data like passphrases and API keys
+
+### Key Management
+* Use HSM-backed keys for production environments when available
+* Implement proper key rotation policies
+* Never commit private keys or sensitive configuration to version control
+* Use dedicated service accounts with minimal required permissions
+
+### Environment Separation
+* Use different signers for different environments (development, staging, production)
+* Implement proper secrets management in production deployments
+* Consider using cloud-native key management services for enhanced security
+
+## Troubleshooting
+
+### Common Issues
+
+***Invalid keystore passphrase***
+
+* Verify the passphrase environment variable is correctly set
+* Check that the keystore file is not corrupted
+* Ensure the keystore format is compatible
+
+***Cloud KMS authentication failures***
+
+* Verify service account credentials are valid and properly formatted
+* Check that the service account has necessary permissions for KMS operations
+* Ensure the KMS key exists and is in the correct region/project
+
+***Vault connection issues***
+
+* Verify Vault server address and network connectivity
+* Check AppRole credentials and permissions
+* Ensure the secret/transit engine is properly mounted and configured
+
+For additional troubleshooting help, check the application logs and refer to the specific cloud provider or service documentation.
