@@ -21,7 +21,7 @@ The OpenZeppelin Relayer supports two configuration approaches:
 - Changes take effect immediately (no container restart required)
 - See the ***API Reference*** page for detailed endpoints documentation
 
-See [Storage Configuration](storage) for detailed information about how file-based and API-based configurations work together, storage behavior, and best practices.
+See [Storage Configuration](./configuration/storage) for detailed information about how file-based and API-based configurations work together, storage behavior, and best practices.
 
 For quick setup examples with pre-configured files, see the [examples directory](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples) in our GitHub repository.
 
@@ -42,9 +42,9 @@ This table lists the environment variables and their default values.
 | Environment Variable | Default Value | Accepted Values | Description |
 | --- | --- | --- | --- |
 | `RUST_LOG` | `info` | `info, debug, warn, error, trace` | Log level. |
-| `REPOSITORY_STORAGE_TYPE` | `in-memory` | `in-memory, redis` | Type of storage used for storing repository config and resources. See [Storage Configuration](storage) for detailed information. |
-| `RESET_STORAGE_ON_START` | `false` | `bool` | Clears all resources from storage on startup and reloads entries from the config file. See [Storage Configuration](storage) for usage details. |
-| `TRANSACTION_EXPIRATION_HOURS` | `4` | `number` | Number of hours after which transactions in a final state are removed from storage. See [Storage Configuration](storage) for more information. |
+| `REPOSITORY_STORAGE_TYPE` | `in-memory` | `in-memory, redis` | Type of storage used for storing repository config and resources. See [Storage Configuration](./configuration/storage) for detailed information. |
+| `RESET_STORAGE_ON_START` | `false` | `bool` | Clears all resources from storage on startup and reloads entries from the config file. See [Storage Configuration](./configuration/storage) for usage details. |
+| `TRANSACTION_EXPIRATION_HOURS` | `4` | `number` | Number of hours after which transactions in a final state are removed from storage. See [Storage Configuration](./configuration/storage) for more information. |
 | `CONFIG_DIR` | `./config` | `<any relative file path where config.json is located>` | Relative path of directory where config files reside |
 | `CONFIG_FILE_NAME` | `config.json` | `<any file name>` | File Name of the configuration file. |
 | `RATE_LIMIT_REQUESTS_PER_SECOND` | `100` | `<any value>` | Rate limit for the API in requests per second. |
@@ -56,10 +56,10 @@ This table lists the environment variables and their default values.
 | `LOG_MAX_SIZE (in bytes)` | `1073741824` | `<any value in bytes>` | Size after which logs needs to be rolled. |
 | `METRICS_ENABLED` | `false` | `bool` | Enable metrics server for external tools to scrape metrics. |
 | `METRICS_PORT` | `8081` | `<any tcp port (preferably choose non-privileged ports i.e. (1024-65535))>` | Port to use for metrics server. |
-| `REDIS_URL` | `redis://localhost:6379` | `<redis connection string>` | Redis connection URL for the relayer. See [Storage Configuration](storage) for Redis setup details. |
-| `REDIS_CONNECTION_TIMEOUT_MS` | `10000` | `<timeout in milliseconds>` | Connection timeout for Redis in milliseconds. See [Storage Configuration](storage) for Redis configuration. |
-| `REDIS_KEY_PREFIX` | `oz-relayer` | `string` | Redis key prefix for namespacing. See [Storage Configuration](storage) for more information. |
-| `STORAGE_ENCRYPTION_KEY` | `` | `string` | Encryption key used to encrypt data at rest in Redis storage. See [Storage Configuration](storage) for security details. |
+| `REDIS_URL` | `redis://localhost:6379` | `<redis connection string>` | Redis connection URL for the relayer. See [Storage Configuration](./configuration/storage) for Redis setup details. |
+| `REDIS_CONNECTION_TIMEOUT_MS` | `10000` | `<timeout in milliseconds>` | Connection timeout for Redis in milliseconds. See [Storage Configuration](./configuration/storage) for Redis configuration. |
+| `REDIS_KEY_PREFIX` | `oz-relayer` | `string` | Redis key prefix for namespacing. See [Storage Configuration](./configuration/storage) for more information. |
+| `STORAGE_ENCRYPTION_KEY` | `` | `string` | Encryption key used to encrypt data at rest in Redis storage. See [Storage Configuration](./configuration/storage) for security details. |
 | `RPC_TIMEOUT_MS` | `10000` | `<timeout in milliseconds>` | Sets the maximum time to wait for RPC connections before timing out. |
 | `PROVIDER_MAX_RETRIES` | `3` | `<number of retries>` | Maximum number of retry attempts for provider operations. |
 | `PROVIDER_RETRY_BASE_DELAY_MS` | `100` | `<delay in milliseconds>` | Base delay between retry attempts in milliseconds. |
@@ -139,7 +139,7 @@ For comprehensive details on configuring all supported signer types including:
 * CDP signers
 * Security best practices and troubleshooting
 
-See the dedicated [Signers Configuration](signers) guide.
+See the dedicated [Signers Configuration](./configuration/signers) guide.
 
 
 
@@ -225,26 +225,26 @@ Available configuration fields
 | notification_id | String | ID of a configured notification object |
 | signer_id | String | ID of a configured signer |
 | network_type | String | Type of network the relayer will connect to (`evm`, `solana`) |
-| network | String | Network the relayer will connect to. Must match a network identifier defined in your network configuration files. See [Network Configuration](network_configuration) for details on defining networks. |
+| network | String | Network the relayer will connect to. Must match a network identifier defined in your network configuration files. See [Network Configuration](/relayer/network_configuration) for details on defining networks. |
 | custom_rpc_urls | list | Optional custom RPC URLs for the network. If provided, this will be used instead of the public RPC URLs. This is useful for using your own RPC node or a paid service provider. The first url of the list is going to be used as the default |
-| policies | list | Overrides default policies. Please refer to the [`Policies`](configuration#network_policies) table |
+| policies | list | Overrides default policies. Please refer to the [`Policies`](./configuration#network-policies) table |
 
 <a name="network_policies"></a>Policies
 | Network type | Policy | Type | Description |
 | --- | --- | --- | --- |
-| solana, evm | min_balance | unsigned 128 | Minimum balance (in lamports or wei) required for the relayer to operate. Optional. |
-| solana | fee_payment_strategy | enum(user,relayer) | Specifies who pays the fee. "user" (default) means the sender pays; "relayer" means the relayer pays. For "user", RPC methods add an instruction to transfer SPL tokens (calculated from the current SOL price plus a configurable margin) from the user to the relayer, ensuring fees are sustainably covered in tokens rather than SOL. |
-| solana | swap_config | SwapConfig | Optional object configuring automated token‐swaps on Solana. |
-| solana | fee_margin_percentage | f32 | Additional margin percentage added to estimated transaction fees to account for price fluctuations. For example, a value of 10 will add 10% to estimated fees. Optional. |
-| solana | max_allowed_fee_lamports | unsigned 64 | Maximum allowed fee (in lamports) for a transaction. Optional. |
+| solana, evm | min_balance | `unsigned 128` | Minimum balance (in lamports or wei) required for the relayer to operate. Optional. |
+| solana | fee_payment_strategy | `enum(user,relayer)` | Specifies who pays the fee. "user" (default) means the sender pays; "relayer" means the relayer pays. For "user", RPC methods add an instruction to transfer SPL tokens (calculated from the current SOL price plus a configurable margin) from the user to the relayer, ensuring fees are sustainably covered in tokens rather than SOL. |
+| solana | swap_config | `SwapConfig` | Optional object configuring automated token‐swaps on Solana. |
+| solana | fee_margin_percentage | `f32` | Additional margin percentage added to estimated transaction fees to account for price fluctuations. For example, a value of 10 will add 10% to estimated fees. Optional. |
+| solana | max_allowed_fee_lamports | `unsigned 64` | Maximum allowed fee (in lamports) for a transaction. Optional. |
 | solana | allowed_tokens | `Vector<AllowedToken>` | List of allowed tokens. Only these tokens are supported if provided. Optional. |
 | solana | allowed_programs | `Vector<String>` | List of allowed programs by their identifiers. Only these programs are supported if provided. |
 | solana | allowed_accounts | `Vector<String>` | List of allowed accounts by their public keys. The relayer will only operate with these accounts if provided. |
 | solana | disallowed_accounts | `Vector<String>` | List of disallowed accounts by their public keys. These accounts will be explicitly blocked. |
-| solana | max_tx_data_size | unsigned 16 | Maximum transaction size. Optional. |
-| solana | max_signatures | unsigned 8 | Maximum supported signatures. Optional. |
-| evm | gas_price_cap | unsigned 128 | Specify a maximum gas price for every transaction sent with the Relayer. When enabled, any transaction exceeding the cap will have its gasPrice or maxFeePerGas overwritten. (Optional) |
-| evm | gas_limit_estimation | bool | Automatic gas_limit calculation. Enabled by default. (Optional) |
+| solana | max_tx_data_size | `unsigned 16` | Maximum transaction size. Optional. |
+| solana | max_signatures | `unsigned 8` | Maximum supported signatures. Optional. |
+| evm | gas_price_cap | `unsigned 128` | Specify a maximum gas price for every transaction sent with the Relayer. When enabled, any transaction exceeding the cap will have its gasPrice or maxFeePerGas overwritten. (Optional) |
+| evm | gas_limit_estimation | `bool` | Automatic gas_limit calculation. Enabled by default. (Optional) |
 | evm | whitelist_receivers | `Vector<String>` | A list of authorized contracts for each transaction sent using the Relayer. Transactions will be rejected if the destination address is not on the list. (Optional) |
 
 #### RPC URL Configuration
@@ -315,7 +315,7 @@ See the ***API Reference*** page for detailed endpoints documentation.
 
 ### 4. Plugins
 
-For more information on how to write a plugin, please refer to the [Plugins](plugins) page.
+For more information on how to write a plugin, please refer to the [Plugins](/relayer/plugins) page.
 
 * `plugins` array, containing plugin configurations:
 
@@ -349,7 +349,7 @@ For comprehensive network configuration details, including:
 * Special tags and their behavior
 * Best practices and troubleshooting
 
-See the dedicated [Network Configuration](network_configuration) guide.
+See the dedicated [Network Configuration](/relayer/network_configuration) guide.
 
 ## Configuration File Example
 
@@ -536,6 +536,6 @@ The OpenZeppelin Relayer supports two complementary approaches for configuration
 <Callout>
 
 
-See [Storage Configuration](storage) for detailed information about how file-based and API-based configurations work together, storage behavior, and best practices.
+See [Storage Configuration](./configuration/storage) for detailed information about how file-based and API-based configurations work together, storage behavior, and best practices.
 
 </Callout>
