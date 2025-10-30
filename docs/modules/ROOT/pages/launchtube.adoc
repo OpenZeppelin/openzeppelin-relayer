@@ -234,7 +234,7 @@ pnpm exec tsx ./scripts/create-sequence-accounts.ts \
 
 === Script Location
 
-- Example directory: https://github.com/OpenZeppelin/openzeppelin-relayer/blob/0550c49444be585c6d40c43514758f57604d818b/examples/launchtube-plugin-example/launchtube/scripts/create-sequence-accounts.ts[`scripts/create-sequence-accounts.ts`]
+- Example directory: https://github.com/OpenZeppelin/relayer-plugin-launchtube/blob/main/scripts/create-sequence-accounts.ts[`scripts/create-sequence-accounts.ts`]
 
 
 == API Usage
