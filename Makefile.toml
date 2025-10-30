@@ -1,8 +1,8 @@
-[tasks.rust-antora]
-description = "Build Antora site and copy rust_docs"
+[tasks.rust-docs]
+description = "Build Rust Docs"
 script = [
   "cargo doc --target-dir docs/rust_docs --release --no-deps --quiet --locked",
-  "bash scripts/rust_antora.sh"
+  "bash scripts/rust_docs.sh"
 ]
 [tasks.docker-compose-up]
 description = "Run docker compose up according to the user defined settings"
