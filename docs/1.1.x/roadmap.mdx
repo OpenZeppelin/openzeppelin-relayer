@@ -1,0 +1,111 @@
+---
+title: OpenZeppelin Relayer Roadmap
+---
+
+This document outlines the planned development roadmap for the OpenZeppelin Relayer project. Please note that priorities and timelines may shift based on community feedback, security considerations, and emerging blockchain ecosystem needs.
+
+
+
+This roadmap represents our current plans and is subject to change. We will update this document regularly to reflect our progress and any changes in direction.
+
+
+## General Roadmap
+
+* **Stability Improvements**
+  * Enhanced error handling and recovery mechanisms: Implement robust exception management and failover processes to minimize downtime.
+  * Improved background job processing: Optimize task scheduling and queuing systems to ensure smooth and reliable asynchronous operations.
+  * Comprehensive test coverage: Extend unit, integration, and regression tests across all components.
+  * End-to-End (E2E) testing: Simulate real-world scenarios to verify complete system functionality.
+  * Performance optimizations: Enhance throughput and reduce latency for high-demand scenarios.
+  * Stress and load testing: Identify and address performance bottlenecks under extreme conditions.
+* **Security Enhancements**
+  * External security audit: Engage third-party experts to identify and remediate vulnerabilities.
+  * Continuous security monitoring: Implement ongoing surveillance and incident response protocols to swiftly address threats.
+* **Developer Experience**
+  * SDK improvements: Expand SDK capabilities, add multi-language support, and simplify integration processes.
+  * Enhanced documentation: Develop interactive guides, detailed API references, and comprehensive troubleshooting tips.
+  * Additional examples and best practices: Provide real-world usage scenarios and community-contributed tutorials to ease onboarding.
+* **Features**
+  * Redis storage integration: Leverage Redis for fast, scalable data storage across all system components.
+  * Enhanced relayer balance management: Implement real-time monitoring and alerts to maintain optimal balance status.
+  * Dynamic gas price updates: Regularly fetch and update gas prices from multiple reliable sources to ensure accurate fee estimations.
+* **Scaling Improvements**
+  * Horizontal scaling capabilities: Design the system architecture to seamlessly distribute workloads across multiple instances.
+
+## Network-Specific Roadmap
+
+### EVM Networks (🏗️ In Progress)
+
+#### Current Status
+* Basic Transaction Submission
+* Fee Estimation
+* Transaction Status Tracking
+* Flexible Network Configuration System (any EVM-compatible network via JSON configuration)
+* Hosted signers support (AWS KMS, GCP, Turnkey)
+* Custom RPC Endpoints
+* RPC Retries and Failover Mechanisms
+
+#### Upcoming Features
+* L2 improvements
+* SDK client improvements
+* Full CRUD API support
+
+### Solana (🏗️ In Progress)
+
+#### Current Status
+* Solana Paymaster Specification Support
+* Fee estimation
+* Gasless transactions
+* Hosted Signer Integrations (Vault, GCP, Turnkey)
+* Custom RPC Endpoints
+* RPC Retries and Failover Mechanisms
+
+#### Upcoming Features
+* Extended RPC Methods
+* Improved Transaction Status Checks
+* Full CRUD API support
+
+### Stellar (🏗️ In Progress)
+
+#### Current Status
+* Supports payment and InvokeHostFunction operations, pre-built XDR transactions, and fee bump transactions,
+* Advanced transaction status logic
+* Stellar-specific endpoints
+* Expanded signer support
+* Transaction lifecycle management logic
+* Custom RPC Endpoints
+* RPC Retries and Failover Mechanisms
+
+#### Upcoming Features
+* Relayer security policies: Transaction amount limits, destination whitelisting, time bound and limit operations
+* Hosted signers
+* Full CRUD API support
+
+## Community and Documentation
+
+### Continuous
+* **Documentation**
+  * Comprehensive API reference
+  * Tutorials and guides
+  * Integration examples
+* **Community Engagement**
+  * Contributing guidelines
+  * Support for community-driven improvements
+
+## Notes on Prioritization
+
+<Callout type='warn'>
+
+
+Our development priorities are influenced by several factors:
+
+1. **Security**: Security enhancements always take precedence
+2. **Stability**: Ensuring reliable operation across all supported networks
+3. **Community Feedback**: Features requested by the community
+4. **Ecosystem Developments**: Adapting to changes in blockchain protocols
+
+</Callout>
+
+This roadmap is a living document and will be updated regularly to reflect changing priorities and completed milestones. We welcome community input on our direction and priorities.
+
+To contribute to discussions about the roadmap, please join our community channels or open an issue on our GitHub repository with your suggestions.
