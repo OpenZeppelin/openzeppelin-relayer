@@ -10,8 +10,9 @@ use crate::domain::{
 };
 use crate::jobs::JobProducerTrait;
 use crate::models::{
-    AppState, NetworkRepoModel, NetworkTransactionRequest, NotificationRepoModel, RelayerRepoModel,
-    SignerRepoModel, ThinDataAppState, TransactionRepoModel, TransactionResponse,
+    AppState, JsonRpcRequest, NetworkRepoModel, NetworkRpcRequest, NetworkTransactionRequest,
+    NotificationRepoModel, RelayerRepoModel, SignerRepoModel, ThinDataAppState,
+    TransactionRepoModel, TransactionResponse,
 };
 use crate::observability::request_id::set_request_id;
 use crate::repositories::{
@@ -40,6 +41,7 @@ pub enum PluginMethod {
     SignTransaction,
     #[serde(rename = "getRelayer")]
     GetRelayer,
+    RpcRequest,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -188,6 +190,7 @@ impl RelayerApi {
             PluginMethod::GetRelayerStatus => self.handle_get_relayer_status(request, state).await,
             PluginMethod::SignTransaction => self.handle_sign_transaction(request, state).await,
             PluginMethod::GetRelayer => self.handle_get_relayer_info(request, state).await,
+            PluginMethod::RpcRequest => self.handle_rpc_request(request, state).await,
         }
     }
 
@@ -406,6 +409,62 @@ impl RelayerApi {
             result: Some(result),
             error: None,
         })
+    }
+
+    async fn handle_rpc_request<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+        &self,
+        request: Request,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    ) -> Result<Response, PluginError>
+    where
+        J: JobProducerTrait + 'static,
+        TR: TransactionRepository
+            + Repository<TransactionRepoModel, String>
+            + Send
+            + Sync
+            + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
+        AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+    {
+        let relayer_repo_model = get_relayer_by_id(request.relayer_id.clone(), state)
+            .await
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+
+        relayer_repo_model
+            .validate_active_state()
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+
+        let network_relayer = get_network_relayer(request.relayer_id.clone(), state)
+            .await
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+
+        let network_rpc_request: JsonRpcRequest<NetworkRpcRequest> =
+            serde_json::from_value(request.payload)
+                .map_err(|e| PluginError::InvalidPayload(e.to_string()))?;
+
+        let result = network_relayer.rpc(network_rpc_request).await;
+
+        match result {
+            Ok(json_rpc_response) => {
+                let result_value = serde_json::to_value(json_rpc_response)
+                    .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+                Ok(Response {
+                    request_id: request.request_id,
+                    result: Some(result_value),
+                    error: None,
+                })
+            }
+            Err(e) => Ok(Response {
+                request_id: request.request_id,
+                result: None,
+                error: Some(e.to_string()),
+            }),
+        }
     }
 }
 

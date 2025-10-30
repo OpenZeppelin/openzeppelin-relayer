@@ -1,3 +1,4 @@
+use crate::domain::relayer::evm::create_error_response;
 /// This module defines the `StellarRelayer` struct and its associated functionality for
 /// interacting with Stellar networks. The `StellarRelayer` is responsible for managing
 /// transactions, synchronizing sequence numbers, and ensuring the relayer's state is
@@ -23,16 +24,17 @@
 use crate::{
     constants::{STELLAR_SMALLEST_UNIT_NAME, STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS},
     domain::{
-        transaction::stellar::fetch_next_sequence_from_chain, BalanceResponse, SignDataRequest,
-        SignDataResponse, SignTransactionExternalResponse, SignTransactionExternalResponseStellar,
-        SignTransactionRequest, SignTypedDataRequest,
+        create_success_response, transaction::stellar::fetch_next_sequence_from_chain,
+        BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
+        SignTransactionExternalResponseStellar, SignTransactionRequest, SignTypedDataRequest,
     },
     jobs::{JobProducerTrait, RelayerHealthCheck, TransactionRequest, TransactionStatusCheck},
     models::{
         produce_relayer_disabled_payload, DeletePendingTransactionsResponse, DisabledReason,
         HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest,
         NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus,
-        RepositoryError, StellarNetwork, StellarRpcResult, TransactionRepoModel, TransactionStatus,
+        RepositoryError, RpcErrorCodes, StellarNetwork, StellarRpcRequest, TransactionRepoModel,
+        TransactionStatus,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
@@ -354,17 +356,42 @@ where
 
     async fn rpc(
         &self,
-        _request: JsonRpcRequest<NetworkRpcRequest>,
+        request: JsonRpcRequest<NetworkRpcRequest>,
     ) -> Result<JsonRpcResponse<NetworkRpcResult>, RelayerError> {
-        println!("Stellar rpc...");
-        Ok(JsonRpcResponse {
-            id: None,
-            jsonrpc: "2.0".to_string(),
-            result: Some(NetworkRpcResult::Stellar(
-                StellarRpcResult::GenericRpcResult("".to_string()),
-            )),
-            error: None,
-        })
+        let stellar_request = match request.params {
+            NetworkRpcRequest::Stellar(stellar_req) => stellar_req,
+            _ => {
+                return Ok(create_error_response(
+                    request.id,
+                    RpcErrorCodes::INVALID_PARAMS,
+                    "Invalid params",
+                    "Expected Stellar network request",
+                ))
+            }
+        };
+
+        // Parse method and params from the Stellar request (single unified variant)
+        let (method, params_json) = match stellar_request {
+            StellarRpcRequest::GenericRpcRequest { method, params } => (method, params),
+        };
+
+        match self
+            .provider
+            .raw_request_dyn(&method, params_json, request.id.clone())
+            .await
+        {
+            Ok(result_value) => Ok(create_success_response(request.id, result_value)),
+            Err(provider_error) => {
+                println!("stellar error {}", provider_error);
+                // let (error_code, error_message) = map_provider_error(&provider_error);
+                Ok(create_error_response(
+                    request.id,
+                    1,
+                    "",
+                    &provider_error.to_string(),
+                ))
+            }
+        }
     }
 
     async fn validate_min_balance(&self) -> Result<(), RelayerError> {

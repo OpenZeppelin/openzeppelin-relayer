@@ -35,8 +35,11 @@ use serde_json;
 
 use super::rpc_selector::RpcSelector;
 use super::{retry_rpc_call, RetryConfig};
-use crate::models::{
-    BlockResponse, EvmTransactionData, RpcConfig, TransactionError, TransactionReceipt, U256,
+use crate::{
+    models::{
+        BlockResponse, EvmTransactionData, RpcConfig, TransactionError, TransactionReceipt, U256,
+    },
+    services::provider::{is_retriable_error, should_mark_provider_failed},
 };
 
 #[cfg(test)]
@@ -180,74 +183,6 @@ impl EvmProvider {
         })
     }
 
-    // Error codes that indicate we can't use a provider
-    fn should_mark_provider_failed(error: &ProviderError) -> bool {
-        match error {
-            ProviderError::RequestError { status_code, .. } => {
-                match *status_code {
-                    // 5xx Server Errors - RPC node is having issues
-                    500..=599 => true,
-
-                    // 4xx Client Errors that indicate we can't use this provider
-                    401 => true, // Unauthorized - auth required but not provided
-                    403 => true, // Forbidden - node is blocking requests or auth issues
-                    404 => true, // Not Found - endpoint doesn't exist or misconfigured
-                    410 => true, // Gone - endpoint permanently removed
-
-                    _ => false,
-                }
-            }
-            _ => false,
-        }
-    }
-
-    // Errors that are retriable
-    fn is_retriable_error(error: &ProviderError) -> bool {
-        match error {
-            // HTTP-level errors that are retriable
-            ProviderError::Timeout | ProviderError::RateLimited | ProviderError::BadGateway => true,
-
-            // JSON-RPC error codes (EIP-1474)
-            ProviderError::RpcErrorCode { code, .. } => {
-                match code {
-                    // -32002: Resource unavailable (temporary state)
-                    -32002 => true,
-                    // -32005: Limit exceeded / rate limited
-                    -32005 => true,
-                    // -32603: Internal error (may be temporary)
-                    -32603 => true,
-                    // -32000: Invalid input
-                    -32000 => false,
-                    // -32001: Resource not found
-                    -32001 => false,
-                    // -32003: Transaction rejected
-                    -32003 => false,
-                    // -32004: Method not supported
-                    -32004 => false,
-
-                    // Standard JSON-RPC 2.0 errors (not retriable)
-                    // -32700: Parse error
-                    // -32600: Invalid request
-                    // -32601: Method not found
-                    // -32602: Invalid params
-                    -32700..=-32600 => false,
-
-                    // All other error codes: not retriable by default
-                    _ => false,
-                }
-            }
-
-            // Any other errors: check message for network-related issues
-            _ => {
-                let err_msg = format!("{}", error);
-                let msg_lower = err_msg.to_lowercase();
-                msg_lower.contains("timeout")
-                    || msg_lower.contains("connection")
-                    || msg_lower.contains("reset")
-            }
-        }
-    }
-
     /// Initialize a provider for a given URL
     fn initialize_provider(&self, url: &str) -> Result<EvmProviderType, ProviderError> {
         let rpc_url = url.parse().map_err(|e| {
@@ -297,8 +232,8 @@ impl EvmProvider {
         retry_rpc_call(
             &self.selector,
             operation_name,
-            Self::is_retriable_error,
-            Self::should_mark_provider_failed,
+            is_retriable_error,
+            should_mark_provider_failed,
             |url| match self.initialize_provider(url) {
                 Ok(provider) => Ok(provider),
                 Err(e) => Err(e),
@@ -735,7 +670,7 @@ mod tests {
                 status_code,
             };
             assert!(
-                EvmProvider::should_mark_provider_failed(&error),
+                should_mark_provider_failed(&error),
                 "Status code {} should mark provider as failed",
                 status_code
             );
@@ -752,7 +687,7 @@ mod tests {
                 status_code,
             };
             assert!(
-                EvmProvider::should_mark_provider_failed(&error),
+                should_mark_provider_failed(&error),
                 "Status code {} should mark provider as failed",
                 status_code
             );
@@ -769,7 +704,7 @@ mod tests {
                 status_code,
             };
             assert!(
-                EvmProvider::should_mark_provider_failed(&error),
+                should_mark_provider_failed(&error),
                 "Status code {} should mark provider as failed",
                 status_code
             );
@@ -786,7 +721,7 @@ mod tests {
                 status_code,
             };
             assert!(
-                !EvmProvider::should_mark_provider_failed(&error),
+                !should_mark_provider_failed(&error),
                 "Status code {} should NOT mark provider as failed",
                 status_code
             );
@@ -807,7 +742,7 @@ mod tests {
 
         for error in errors {
             assert!(
-                !EvmProvider::should_mark_provider_failed(&error),
+                !should_mark_provider_failed(&error),
                 "Error type {:?} should NOT mark provider as failed",
                 error
             );
@@ -831,7 +766,7 @@ mod tests {
                 status_code,
             };
             assert_eq!(
-                EvmProvider::should_mark_provider_failed(&error),
+                should_mark_provider_failed(&error),
                 should_fail,
                 "Status code {} should {} mark provider as failed",
                 status_code,
@@ -851,7 +786,7 @@ mod tests {
 
         for error in retriable_errors {
             assert!(
-                EvmProvider::is_retriable_error(&error),
+                is_retriable_error(&error),
                 "Error type {:?} should be retriable",
                 error
             );
@@ -872,7 +807,7 @@ mod tests {
 
         for error in non_retriable_errors {
             assert!(
-                !EvmProvider::is_retriable_error(&error),
+                !is_retriable_error(&error),
                 "Error type {:?} should NOT be retriable",
                 error
             );
@@ -893,7 +828,7 @@ mod tests {
         for message in retriable_messages {
             let error = ProviderError::Other(message.to_string());
             assert!(
-                EvmProvider::is_retriable_error(&error),
+                is_retriable_error(&error),
                 "Error with message '{}' should be retriable",
                 message
             );
@@ -914,7 +849,7 @@ mod tests {
         for message in non_retriable_messages {
             let error = ProviderError::Other(message.to_string());
             assert!(
-                !EvmProvider::is_retriable_error(&error),
+                !is_retriable_error(&error),
                 "Error with message '{}' should NOT be retriable",
                 message
             );
@@ -939,7 +874,7 @@ mod tests {
         for message in case_variations {
             let error = ProviderError::Other(message.to_string());
             assert!(
-                EvmProvider::is_retriable_error(&error),
+                is_retriable_error(&error),
                 "Error with message '{}' should be retriable (case insensitive)",
                 message
             );
@@ -1173,7 +1108,7 @@ mod tests {
                 message: message.to_string(),
             };
             assert!(
-                EvmProvider::is_retriable_error(&error),
+                is_retriable_error(&error),
                 "Error code {} should be retriable",
                 code
             );
@@ -1204,7 +1139,7 @@ mod tests {
                 message: message.to_string(),
             };
             assert!(
-                !EvmProvider::is_retriable_error(&error),
+                !is_retriable_error(&error),
                 "Error code {} with message '{}' should NOT be retriable",
                 code,
                 message
@@ -1245,7 +1180,7 @@ mod tests {
                 message: message.to_string(),
             };
             assert_eq!(
-                EvmProvider::is_retriable_error(&error),
+                is_retriable_error(&error),
                 should_retry,
                 "{}: -32000 with '{}' should{} be retriable",
                 description,

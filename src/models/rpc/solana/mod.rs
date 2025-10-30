@@ -195,6 +195,7 @@ pub enum SolanaRpcMethod {
     SignAndSendTransaction,
     GetSupportedTokens,
     GetFeaturesEnabled,
+    Generic(String),
 }
 
 impl SolanaRpcMethod {
@@ -207,7 +208,7 @@ impl SolanaRpcMethod {
             "signAndSendTransaction" => Some(SolanaRpcMethod::SignAndSendTransaction),
             "getSupportedTokens" => Some(SolanaRpcMethod::GetSupportedTokens),
             "getFeaturesEnabled" => Some(SolanaRpcMethod::GetFeaturesEnabled),
-            _ => None,
+            _ => Some(SolanaRpcMethod::Generic(method.to_string())),
         }
     }
 }
@@ -237,6 +238,12 @@ pub enum SolanaRpcRequest {
     #[serde(rename = "getFeaturesEnabled")]
     #[schema(example = "getFeaturesEnabled")]
     GetFeaturesEnabled(GetFeaturesEnabledRequestParams),
+    #[serde(rename = "rawRpcRequest")]
+    #[schema(example = "rawRpcRequest")]
+    RawRpcRequest {
+        method: String,
+        params: serde_json::Value,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq)]
@@ -249,6 +256,7 @@ pub enum SolanaRpcResult {
     SignAndSendTransaction(SignAndSendTransactionResult),
     GetSupportedTokens(GetSupportedTokensResult),
     GetFeaturesEnabled(GetFeaturesEnabledResult),
+    RawRpcResult(serde_json::Value),
 }
 
 #[cfg(test)]

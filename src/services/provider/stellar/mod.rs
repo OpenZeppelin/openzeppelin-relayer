@@ -5,7 +5,7 @@
 //! blockchain state and events.
 
 use async_trait::async_trait;
-use eyre::{eyre, Result};
+use eyre::Result;
 use soroban_rs::stellar_rpc_client::Client;
 use soroban_rs::stellar_rpc_client::{
     EventStart, EventType, GetEventsResponse, GetLatestLedgerResponse, GetLedgerEntriesResponse,
@@ -20,9 +20,46 @@ use soroban_rs::SorobanTransactionResponse;
 #[cfg(test)]
 use mockall::automock;
 
-use crate::models::RpcConfig;
+use crate::models::{JsonRpcId, RpcConfig};
+use crate::services::provider::is_retriable_error;
+use crate::services::provider::retry::retry_rpc_call;
+use crate::services::provider::rpc_selector::RpcSelector;
+use crate::services::provider::should_mark_provider_failed;
 use crate::services::provider::ProviderError;
+use crate::services::provider::RetryConfig;
+// Reqwest client is used for raw JSON-RPC HTTP requests. Alias to avoid name clash with the
+// soroban `Client` type imported above.
+use reqwest::Client as ReqwestClient;
+use std::sync::Arc;
+use std::time::Duration;
 
+/// Normalize a URL for logging by removing query strings, fragments and redacting userinfo.
+///
+/// Examples:
+/// - https://user:secret@api.example.com/path?api_key=XXX -> https://<redacted>@api.example.com/path
+/// - https://api.example.com/path?api_key=XXX -> https://api.example.com/path
+fn normalize_url_for_log(url: &str) -> String {
+    // Remove query and fragment first
+    let mut s = url.to_string();
+    if let Some(q) = s.find('?') {
+        s.truncate(q);
+    }
+    if let Some(h) = s.find('#') {
+        s.truncate(h);
+    }
+
+    // Redact userinfo if present (scheme://userinfo@host...)
+    if let Some(scheme_pos) = s.find("://") {
+        let start = scheme_pos + 3;
+        if let Some(at_pos) = s[start..].find('@') {
+            let after = &s[start + at_pos + 1..];
+            let prefix = &s[..start];
+            s = format!("{}<redacted>@{}", prefix, after);
+        }
+    }
+
+    s
+}
 #[derive(Debug, Clone)]
 pub struct GetEventsRequest {
     pub start: EventStart,
@@ -34,38 +71,57 @@ pub struct GetEventsRequest {
 
 #[derive(Clone, Debug)]
 pub struct StellarProvider {
-    client: Client,
-    rpc_url: String,
+    /// RPC selector for managing and selecting providers
+    selector: RpcSelector,
+    /// Timeout in seconds for RPC calls
+    timeout_seconds: Duration,
+    /// Configuration for retry behavior
+    retry_config: RetryConfig,
 }
 
 #[async_trait]
 #[cfg_attr(test, automock)]
 #[allow(dead_code)]
 pub trait StellarProviderTrait: Send + Sync {
-    async fn get_account(&self, account_id: &str) -> Result<AccountEntry>;
+    async fn get_account(&self, account_id: &str) -> Result<AccountEntry, ProviderError>;
     async fn simulate_transaction_envelope(
         &self,
         tx_envelope: &TransactionEnvelope,
-    ) -> Result<SimulateTransactionResponse>;
+    ) -> Result<SimulateTransactionResponse, ProviderError>;
     async fn send_transaction_polling(
         &self,
         tx_envelope: &TransactionEnvelope,
-    ) -> Result<SorobanTransactionResponse>;
-    async fn get_network(&self) -> Result<GetNetworkResponse>;
-    async fn get_latest_ledger(&self) -> Result<GetLatestLedgerResponse>;
-    async fn send_transaction(&self, tx_envelope: &TransactionEnvelope) -> Result<Hash>;
-    async fn get_transaction(&self, tx_id: &Hash) -> Result<GetTransactionResponse>;
+    ) -> Result<SorobanTransactionResponse, ProviderError>;
+    async fn get_network(&self) -> Result<GetNetworkResponse, ProviderError>;
+    async fn get_latest_ledger(&self) -> Result<GetLatestLedgerResponse, ProviderError>;
+    async fn send_transaction(
+        &self,
+        tx_envelope: &TransactionEnvelope,
+    ) -> Result<Hash, ProviderError>;
+    async fn get_transaction(&self, tx_id: &Hash) -> Result<GetTransactionResponse, ProviderError>;
     async fn get_transactions(
         &self,
         request: GetTransactionsRequest,
-    ) -> Result<GetTransactionsResponse>;
-    async fn get_ledger_entries(&self, keys: &[LedgerKey]) -> Result<GetLedgerEntriesResponse>;
-    async fn get_events(&self, request: GetEventsRequest) -> Result<GetEventsResponse>;
-    fn rpc_url(&self) -> &str;
+    ) -> Result<GetTransactionsResponse, ProviderError>;
+    async fn get_ledger_entries(
+        &self,
+        keys: &[LedgerKey],
+    ) -> Result<GetLedgerEntriesResponse, ProviderError>;
+    async fn get_events(
+        &self,
+        request: GetEventsRequest,
+    ) -> Result<GetEventsResponse, ProviderError>;
+    async fn raw_request_dyn(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+        id: Option<JsonRpcId>,
+    ) -> Result<serde_json::Value, ProviderError>;
 }
 
 impl StellarProvider {
-    pub fn new(mut rpc_configs: Vec<RpcConfig>, _timeout: u64) -> Result<Self, ProviderError> {
+    // Create new StellarProvider instance
+    pub fn new(rpc_configs: Vec<RpcConfig>, timeout_seconds: u64) -> Result<Self, ProviderError> {
         if rpc_configs.is_empty() {
             return Err(ProviderError::NetworkConfiguration(
                 "No RPC configurations provided for StellarProvider".to_string(),
@@ -75,132 +131,371 @@ impl StellarProvider {
         RpcConfig::validate_list(&rpc_configs)
             .map_err(|e| ProviderError::NetworkConfiguration(e.to_string()))?;
 
-        rpc_configs.retain(|config| config.get_weight() > 0);
+        let selector = RpcSelector::new(rpc_configs).map_err(|e| {
+            ProviderError::NetworkConfiguration(format!("Failed to create RPC selector: {}", e))
+        })?;
 
-        if rpc_configs.is_empty() {
-            return Err(ProviderError::NetworkConfiguration(
-                "No active RPC configurations provided (all weights are 0 or list was empty after filtering)".to_string(),
-            ));
-        }
+        let retry_config = RetryConfig::from_env();
 
-        rpc_configs.sort_by_key(|config| std::cmp::Reverse(config.get_weight()));
+        Ok(Self {
+            selector,
+            timeout_seconds: Duration::from_secs(timeout_seconds),
+            retry_config,
+        })
+    }
 
-        let selected_config = &rpc_configs[0];
-        let url = &selected_config.url;
-
+    /// Initialize a Stellar client for a given URL
+    fn initialize_provider(&self, url: &str) -> Result<Client, ProviderError> {
         let client = Client::new(url).map_err(|e| {
             ProviderError::NetworkConfiguration(format!(
                 "Failed to create Stellar RPC client: {} - URL: '{}'",
                 e, url
             ))
-        })?;
-        Ok(Self {
-            client,
-            rpc_url: url.clone(),
-        })
+        });
+
+        client
     }
 
-    pub fn rpc_url(&self) -> &str {
-        &self.rpc_url
+    /// Initialize a reqwest client for raw HTTP JSON-RPC calls.
+    ///
+    /// This centralizes client creation so we can configure timeouts and other options in one place.
+    fn initialize_raw_provider(&self, url: &str) -> Result<ReqwestClient, ProviderError> {
+        ReqwestClient::builder()
+            .timeout(self.timeout_seconds)
+            .build()
+            .map_err(|e| {
+                ProviderError::NetworkConfiguration(format!(
+                    "Failed to create HTTP client for raw RPC: {} - URL: '{}'",
+                    e, url
+                ))
+            })
     }
-}
 
-impl AsRef<StellarProvider> for StellarProvider {
-    fn as_ref(&self) -> &StellarProvider {
-        self
+    /// Helper method to retry RPC calls with exponential backoff
+    async fn retry_rpc_call<T, F, Fut>(
+        &self,
+        operation_name: &str,
+        operation: F,
+    ) -> Result<T, ProviderError>
+    where
+        F: Fn(Client) -> Fut,
+        Fut: std::future::Future<Output = Result<T, ProviderError>>,
+    {
+        let provider_url_raw = match self.selector.get_current_url() {
+            Ok(url) => url,
+            Err(e) => {
+                return Err(ProviderError::NetworkConfiguration(format!(
+                    "No RPC URL available for StellarProvider: {}",
+                    e
+                )));
+            }
+        };
+        let provider_url = normalize_url_for_log(&provider_url_raw);
+
+        tracing::debug!(
+            "Starting Stellar RPC operation '{}' with timeout: {}s, provider_url: {}",
+            operation_name,
+            self.timeout_seconds.as_secs(),
+            provider_url
+        );
+
+        retry_rpc_call(
+            &self.selector,
+            operation_name,
+            is_retriable_error,
+            should_mark_provider_failed,
+            |url| self.initialize_provider(url),
+            operation,
+            Some(self.retry_config.clone()),
+        )
+        .await
+    }
+
+    /// Retry helper for raw JSON-RPC requests
+    async fn retry_raw_request(
+        &self,
+        operation_name: &str,
+        request: serde_json::Value,
+    ) -> Result<serde_json::Value, ProviderError> {
+        let provider_url_raw = match self.selector.get_current_url() {
+            Ok(url) => url,
+            Err(e) => {
+                return Err(ProviderError::NetworkConfiguration(format!(
+                    "No RPC URL available for StellarProvider: {}",
+                    e
+                )));
+            }
+        };
+        let provider_url = normalize_url_for_log(&provider_url_raw);
+
+        tracing::debug!(
+            "Starting raw RPC operation '{}' with timeout: {}s, provider_url: {}",
+            operation_name,
+            self.timeout_seconds.as_secs(),
+            provider_url
+        );
+
+        let request_clone = request.clone();
+        retry_rpc_call(
+            &self.selector,
+            operation_name,
+            is_retriable_error,
+            should_mark_provider_failed,
+            |url| {
+                // Initialize an HTTP client for this URL and return it together with the URL string
+                self.initialize_raw_provider(url)
+                    .map(|client| (url.to_string(), client))
+            },
+            |(url, client): (String, ReqwestClient)| {
+                let request_for_call = request_clone.clone();
+                async move {
+                    let response = client
+                        .post(&url)
+                        .json(&request_for_call)
+                        // Keep a per-request timeout as a safeguard (client also has a default timeout)
+                        .timeout(self.timeout_seconds)
+                        .send()
+                        .await
+                        .map_err(|e| ProviderError::Other(e.to_string()))?;
+
+                    let json_response: serde_json::Value = response
+                        .json()
+                        .await
+                        .map_err(|e| ProviderError::Other(e.to_string()))?;
+
+                    Ok(json_response)
+                }
+            },
+            Some(self.retry_config.clone()),
+        )
+        .await
     }
 }
 
 #[async_trait]
 impl StellarProviderTrait for StellarProvider {
-    async fn get_account(&self, account_id: &str) -> Result<AccountEntry> {
-        self.client
-            .get_account(account_id)
-            .await
-            .map_err(|e| eyre!("Failed to get account: {}", e))
+    async fn get_account(&self, account_id: &str) -> Result<AccountEntry, ProviderError> {
+        // Use Arc to own the account id for the async closure without repeated allocations.
+        let account_id = Arc::new(account_id.to_string());
+
+        self.retry_rpc_call("get_account", move |client| {
+            let account_id = Arc::clone(&account_id);
+            async move {
+                client
+                    .get_account(&*account_id)
+                    .await
+                    .map_err(|e| ProviderError::Other(format!("Failed to get account: {}", e)))
+            }
+        })
+        .await
     }
 
     async fn simulate_transaction_envelope(
         &self,
         tx_envelope: &TransactionEnvelope,
-    ) -> Result<SimulateTransactionResponse> {
-        self.client
-            .simulate_transaction_envelope(tx_envelope, None)
-            .await
-            .map_err(|e| eyre!("Failed to simulate transaction: {}", e))
+    ) -> Result<SimulateTransactionResponse, ProviderError> {
+        let tx_envelope = Arc::new(tx_envelope.clone());
+
+        self.retry_rpc_call("simulate_transaction_envelope", move |client| {
+            let tx_envelope = Arc::clone(&tx_envelope);
+            async move {
+                client
+                    .simulate_transaction_envelope(&tx_envelope, None)
+                    .await
+                    .map_err(|e| {
+                        ProviderError::Other(format!("Failed to simulate transaction: {}", e))
+                    })
+            }
+        })
+        .await
     }
 
     async fn send_transaction_polling(
         &self,
         tx_envelope: &TransactionEnvelope,
-    ) -> Result<SorobanTransactionResponse> {
-        self.client
-            .send_transaction_polling(tx_envelope)
-            .await
-            .map(SorobanTransactionResponse::from)
-            .map_err(|e| eyre!("Failed to send transaction (polling): {}", e))
+    ) -> Result<SorobanTransactionResponse, ProviderError> {
+        // We must clone here because the trait takes `&TransactionEnvelope`.
+        // To avoid this clone we'd need to change the trait to accept an owned
+        // `TransactionEnvelope`; keeping the current signature preserves the
+        // public API while using `Arc` to cheaply share ownership inside the
+        // retry closure/attempts.
+        let tx_envelope = Arc::new(tx_envelope.clone());
+
+        self.retry_rpc_call("send_transaction_polling", move |client| {
+            let tx_envelope = Arc::clone(&tx_envelope);
+            async move {
+                client
+                    .send_transaction_polling(&tx_envelope)
+                    .await
+                    .map(SorobanTransactionResponse::from)
+                    .map_err(|e| {
+                        ProviderError::Other(format!("Failed to send transaction (polling): {}", e))
+                    })
+            }
+        })
+        .await
     }
 
-    async fn get_network(&self) -> Result<GetNetworkResponse> {
-        self.client
-            .get_network()
-            .await
-            .map_err(|e| eyre!("Failed to get network: {}", e))
+    async fn get_network(&self) -> Result<GetNetworkResponse, ProviderError> {
+        self.retry_rpc_call("get_network", |client| async move {
+            client
+                .get_network()
+                .await
+                .map_err(|e| ProviderError::Other(format!("Failed to get network: {}", e)))
+        })
+        .await
     }
 
-    async fn get_latest_ledger(&self) -> Result<GetLatestLedgerResponse> {
-        self.client
-            .get_latest_ledger()
-            .await
-            .map_err(|e| eyre!("Failed to get latest ledger: {}", e))
+    async fn get_latest_ledger(&self) -> Result<GetLatestLedgerResponse, ProviderError> {
+        self.retry_rpc_call("get_latest_ledger", |client| async move {
+            client
+                .get_latest_ledger()
+                .await
+                .map_err(|e| ProviderError::Other(format!("Failed to get latest ledger: {}", e)))
+        })
+        .await
     }
 
-    async fn send_transaction(&self, tx_envelope: &TransactionEnvelope) -> Result<Hash> {
-        self.client
-            .send_transaction(tx_envelope)
-            .await
-            .map_err(|e| eyre!("Failed to send transaction: {}", e))
+    async fn send_transaction(
+        &self,
+        tx_envelope: &TransactionEnvelope,
+    ) -> Result<Hash, ProviderError> {
+        let tx_envelope = Arc::new(tx_envelope.clone());
+
+        self.retry_rpc_call("send_transaction", move |client| {
+            let tx_envelope = Arc::clone(&tx_envelope);
+            async move {
+                client
+                    .send_transaction(&tx_envelope)
+                    .await
+                    .map_err(|e| ProviderError::Other(format!("Failed to send transaction: {}", e)))
+            }
+        })
+        .await
     }
 
-    async fn get_transaction(&self, tx_id: &Hash) -> Result<GetTransactionResponse> {
-        self.client
-            .get_transaction(tx_id)
-            .await
-            .map_err(|e| eyre!("Failed to get transaction: {}", e))
+    async fn get_transaction(&self, tx_id: &Hash) -> Result<GetTransactionResponse, ProviderError> {
+        // Wrap the transaction id in an Arc to avoid cloning the potentially-large id multiple times
+        // across retry attempts.
+        let tx_id = Arc::new(tx_id.clone());
+
+        self.retry_rpc_call("get_transaction", move |client| {
+            let tx_id = Arc::clone(&tx_id);
+            async move {
+                client
+                    .get_transaction(&*tx_id)
+                    .await
+                    .map_err(|e| ProviderError::Other(format!("Failed to get transaction: {}", e)))
+            }
+        })
+        .await
     }
 
     async fn get_transactions(
         &self,
         request: GetTransactionsRequest,
-    ) -> Result<GetTransactionsResponse> {
-        self.client
-            .get_transactions(request)
-            .await
-            .map_err(|e| eyre!("Failed to get transactions: {}", e))
+    ) -> Result<GetTransactionsResponse, ProviderError> {
+        let request = Arc::new(request);
+
+        self.retry_rpc_call("get_transactions", move |client| {
+            let request = Arc::clone(&request);
+            async move {
+                client
+                    .get_transactions((*request).clone())
+                    .await
+                    .map_err(|e| ProviderError::Other(format!("Failed to get transactions: {}", e)))
+            }
+        })
+        .await
     }
 
-    async fn get_ledger_entries(&self, keys: &[LedgerKey]) -> Result<GetLedgerEntriesResponse> {
-        self.client
-            .get_ledger_entries(keys)
-            .await
-            .map_err(|e| eyre!("Failed to get ledger entries: {}", e))
+    async fn get_ledger_entries(
+        &self,
+        keys: &[LedgerKey],
+    ) -> Result<GetLedgerEntriesResponse, ProviderError> {
+        // Use Arc to avoid cloning the keys multiple times when moving into async closure.
+        // We still need one allocation to own the data for the closure, but Arc avoids
+        // further per-attempt copies inside the retry loop.
+        let keys = Arc::new(keys.to_vec());
+
+        self.retry_rpc_call("get_ledger_entries", move |client| {
+            let keys = Arc::clone(&keys);
+            async move {
+                client.get_ledger_entries(&keys).await.map_err(|e| {
+                    ProviderError::Other(format!("Failed to get ledger entries: {}", e))
+                })
+            }
+        })
+        .await
     }
 
-    async fn get_events(&self, request: GetEventsRequest) -> Result<GetEventsResponse> {
-        self.client
-            .get_events(
-                request.start,
-                request.event_type,
-                &request.contract_ids,
-                &request.topics,
-                request.limit,
-            )
-            .await
-            .map_err(|e| eyre!("Failed to get events: {}", e))
+    async fn get_events(
+        &self,
+        request: GetEventsRequest,
+    ) -> Result<GetEventsResponse, ProviderError> {
+        // Wrap the request in an Arc so the async closure and retry loop can cheaply clone
+        // the reference without reconstructing the struct field-by-field.
+        let request = Arc::new(request);
+
+        self.retry_rpc_call("get_events", move |client| {
+            let request = Arc::clone(&request);
+            async move {
+                client
+                    .get_events(
+                        request.start.clone(),
+                        request.event_type.clone(),
+                        &request.contract_ids,
+                        &request.topics,
+                        request.limit,
+                    )
+                    .await
+                    .map_err(|e| ProviderError::Other(format!("Failed to get events: {}", e)))
+            }
+        })
+        .await
     }
 
-    fn rpc_url(&self) -> &str {
-        &self.rpc_url
+    async fn raw_request_dyn(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+        id: Option<JsonRpcId>,
+    ) -> Result<serde_json::Value, ProviderError> {
+        let id_value = match id {
+            Some(id) => serde_json::to_value(id)
+                .map_err(|e| ProviderError::Other(format!("Failed to serialize id: {}", e)))?,
+            None => serde_json::json!(1),
+        };
+
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id_value,
+            "method": method,
+            "params": params,
+        });
+
+        let response = self.retry_raw_request("raw_request_dyn", request).await?;
+
+        // Check for JSON-RPC error
+        if let Some(error) = response.get("error") {
+            if let Some(code) = error.get("code").and_then(|c| c.as_i64()) {
+                return Err(ProviderError::RpcErrorCode {
+                    code: code as i64,
+                    message: error
+                        .get("message")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("Unknown error")
+                        .to_string(),
+                });
+            }
+            return Err(ProviderError::Other(format!("JSON-RPC error: {}", error)));
+        }
+
+        // Extract result
+        response
+            .get("result")
+            .cloned()
+            .ok_or_else(|| ProviderError::Other("No result field in JSON-RPC response".to_string()))
     }
 }
 
@@ -210,7 +505,6 @@ mod tests {
     use crate::services::provider::stellar::{
         GetEventsRequest, StellarProvider, StellarProviderTrait,
     };
-    use eyre::eyre;
     use futures::FutureExt;
     use mockall::predicate as p;
     use soroban_rs::stellar_rpc_client::{
@@ -583,7 +877,7 @@ mod tests {
         let mut mock = MockStellarProviderTrait::new();
 
         mock.expect_get_account()
-            .returning(|_| async { Err(eyre!("boom")) }.boxed());
+            .returning(|_| async { Err(ProviderError::Other("boom".to_string())) }.boxed());
 
         let res = mock.get_account("BAD").await;
         assert!(res.is_err());

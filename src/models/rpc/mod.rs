@@ -412,8 +412,8 @@ mod tests {
 
         match result.params {
             NetworkRpcRequest::Stellar(stellar_request) => match stellar_request {
-                StellarRpcRequest::GenericRpcRequest(params) => {
-                    assert_eq!(params, "test_params");
+                StellarRpcRequest::GenericRpcRequest { method: _, params } => {
+                    assert_eq!(params, serde_json::Value::String("test_params".to_string()));
                 }
             },
             _ => unreachable!("Expected Stellar request"),

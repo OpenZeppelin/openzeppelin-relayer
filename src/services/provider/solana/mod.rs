@@ -17,6 +17,7 @@ use reqwest::Url;
 use serde::Serialize;
 use solana_client::{
     nonblocking::rpc_client::RpcClient,
+    rpc_request::RpcRequest,
     rpc_response::{RpcPrioritizationFee, RpcSimulateTransactionResult},
 };
 use solana_sdk::{
@@ -34,7 +35,7 @@ use std::{str::FromStr, sync::Arc, time::Duration};
 use thiserror::Error;
 
 use crate::{
-    models::{RpcConfig, SolanaTransactionStatus},
+    models::{JsonRpcId, RpcConfig, SolanaTransactionStatus},
     services::provider::retry_rpc_call,
 };
 
@@ -140,6 +141,14 @@ pub trait SolanaProviderTrait: Send + Sync {
         &self,
         signature: &Signature,
     ) -> Result<SolanaTransactionStatus, SolanaProviderError>;
+
+    /// Send a raw JSON-RPC request to the Solana node
+    async fn raw_request_dyn(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+        id: Option<JsonRpcId>,
+    ) -> Result<serde_json::Value, SolanaProviderError>;
 }
 
 #[derive(Debug)]
@@ -279,6 +288,24 @@ impl SolanaProvider {
         Ok(Arc::new(client))
     }
 
+    /// Initialize a reqwest client for raw HTTP JSON-RPC calls.
+    /// Centralizes client creation so we can configure timeouts and other options in one place.
+    fn initialize_raw_provider(
+        &self,
+        url: &str,
+    ) -> Result<Arc<reqwest::Client>, SolanaProviderError> {
+        reqwest::Client::builder()
+            .timeout(self.timeout_seconds)
+            .build()
+            .map(Arc::new)
+            .map_err(|e| {
+                SolanaProviderError::NetworkConfiguration(format!(
+                    "Failed to create HTTP client for raw RPC: {} - URL: '{}'",
+                    e, url
+                ))
+            })
+    }
+
     /// Retry helper for Solana RPC calls
     async fn retry_rpc_call<T, F, Fut>(
         &self,
@@ -310,6 +337,59 @@ impl SolanaProvider {
                 Err(e) => Err(e),
             },
             operation,
+            Some(self.retry_config.clone()),
+        )
+        .await
+    }
+
+    /// Retry helper for raw JSON-RPC requests
+    async fn retry_raw_request(
+        &self,
+        operation_name: &str,
+        request: serde_json::Value,
+    ) -> Result<serde_json::Value, SolanaProviderError> {
+        let is_retriable = |e: &SolanaProviderError| match e {
+            SolanaProviderError::RpcError(msg) => is_retriable_error(msg),
+            _ => false,
+        };
+
+        tracing::debug!(
+            "Starting raw RPC operation '{}' with timeout: {}s",
+            operation_name,
+            self.timeout_seconds.as_secs()
+        );
+
+        let request_clone = request.clone();
+        retry_rpc_call(
+            &self.selector,
+            operation_name,
+            is_retriable,
+            |_| false, // TODO: implement fn to mark provider failed based on error
+            |url| {
+                // Initialize an HTTP client for this URL and return it together with the URL string
+                self.initialize_raw_provider(url)
+                    .map(|client| (url.to_string(), client))
+            },
+            |(url, client): (String, Arc<reqwest::Client>)| {
+                let request_for_call = request_clone.clone();
+                let timeout = self.timeout_seconds;
+                async move {
+                    let response = client
+                        .post(&url)
+                        .json(&request_for_call)
+                        .timeout(timeout)
+                        .send()
+                        .await
+                        .map_err(|e| SolanaProviderError::RpcError(e.to_string()))?;
+
+                    let json_response: serde_json::Value = response
+                        .json()
+                        .await
+                        .map_err(|e| SolanaProviderError::RpcError(e.to_string()))?;
+
+                    Ok(json_response)
+                }
+            },
             Some(self.retry_config.clone()),
         )
         .await
@@ -592,6 +672,48 @@ impl SolanaProviderTrait for SolanaProvider {
                 "Transaction confirmation status not available".to_string(),
             )),
         }
+    }
+
+    /// Send a raw JSON-RPC request to the Solana node
+    async fn raw_request_dyn(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+        id: Option<JsonRpcId>,
+    ) -> Result<serde_json::Value, SolanaProviderError> {
+        // let id_value = match id {
+        //     Some(id) => serde_json::to_value(id)
+        //         .map_err(|e| SolanaProviderError::RpcError(e.to_string()))?,
+        //     None => serde_json::json!(1),
+        // };
+
+        // let request = serde_json::json!({
+        //     "jsonrpc": "2.0",
+        //     "id": id_value,
+        //     "method": method,
+        //     "params": params,
+        // });
+
+        // self.retry_rpc_call("raw_request_dyn", |client| async move {
+        //     let res: std::result::Result<bool, SolanaProviderError> = client.send(RpcRequest::Custom{ method }, params).await
+        //         .map_err(|e| SolanaProviderError::RpcError(e.to_string());
+
+        //     res
+        // })
+        // .await
+        //            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        let params_owned = params.clone();
+        let method_static: &'static str = Box::leak(method.to_string().into_boxed_str());
+        self.retry_rpc_call("raw_request_dyn", move |client| {
+            let params_for_call = params_owned.clone();
+            async move {
+                client
+                    .send(RpcRequest::Custom { method: method_static }, params_for_call)
+                    .await
+                    .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+            }
+        })
+        .await
     }
 }
 

@@ -273,6 +273,73 @@ pub fn get_network_provider<N: NetworkConfiguration>(
     N::new_provider(rpc_urls, timeout_seconds)
 }
 
+pub fn should_mark_provider_failed(error: &ProviderError) -> bool {
+    match error {
+        ProviderError::RequestError { status_code, .. } => {
+            match *status_code {
+                // 5xx Server Errors - RPC node is having issues
+                500..=599 => true,
+
+                // 4xx Client Errors that indicate we can't use this provider
+                401 => true, // Unauthorized - auth required but not provided
+                403 => true, // Forbidden - node is blocking requests or auth issues
+                404 => true, // Not Found - endpoint doesn't exist or misconfigured
+                410 => true, // Gone - endpoint permanently removed
+
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+// Errors that are retriable
+pub fn is_retriable_error(error: &ProviderError) -> bool {
+    match error {
+        // HTTP-level errors that are retriable
+        ProviderError::Timeout | ProviderError::RateLimited | ProviderError::BadGateway => true,
+
+        // JSON-RPC error codes (EIP-1474)
+        ProviderError::RpcErrorCode { code, .. } => {
+            match code {
+                // -32002: Resource unavailable (temporary state)
+                -32002 => true,
+                // -32005: Limit exceeded / rate limited
+                -32005 => true,
+                // -32603: Internal error (may be temporary)
+                -32603 => true,
+                // -32000: Invalid input
+                -32000 => false,
+                // -32001: Resource not found
+                -32001 => false,
+                // -32003: Transaction rejected
+                -32003 => false,
+                // -32004: Method not supported
+                -32004 => false,
+
+                // Standard JSON-RPC 2.0 errors (not retriable)
+                // -32700: Parse error
+                // -32600: Invalid request
+                // -32601: Method not found
+                // -32602: Invalid params
+                -32700..=-32600 => false,
+
+                // All other error codes: not retriable by default
+                _ => false,
+            }
+        }
+
+        // Any other errors: check message for network-related issues
+        _ => {
+            let err_msg = format!("{}", error);
+            let msg_lower = err_msg.to_lowercase();
+            msg_lower.contains("timeout")
+                || msg_lower.contains("connection")
+                || msg_lower.contains("reset")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

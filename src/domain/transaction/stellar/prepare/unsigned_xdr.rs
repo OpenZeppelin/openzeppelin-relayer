@@ -125,7 +125,7 @@ mod tests {
     use super::*;
     use crate::{
         domain::SignTransactionResponse,
-        models::{DecoratedSignature, NetworkTransactionData, RepositoryError},
+        models::{DecoratedSignature, JsonRpcId, NetworkTransactionData, RepositoryError},
     };
     use soroban_rs::xdr::{
         BytesM, Memo, MuxedAccount, Operation, OperationBody, PaymentOp, Preconditions,
@@ -254,7 +254,12 @@ mod tests {
             unimplemented!()
         }
 
-        fn rpc_url(&self) -> &str {
+        async fn raw_request_dyn(
+            &self,
+            _method: &str,
+            _params: serde_json::Value,
+            _id: Option<JsonRpcId>,
+        ) -> Result<serde_json::Value> {
             unimplemented!()
         }
     }
