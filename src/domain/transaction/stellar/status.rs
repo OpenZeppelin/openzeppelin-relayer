@@ -4,19 +4,18 @@
 
 use chrono::Utc;
 use soroban_rs::xdr::{Error, Hash};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::StellarRelayerTransaction;
+use crate::domain::transaction::common::is_final_state;
 use crate::{
-    constants::STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS,
-    jobs::{JobProducerTrait, TransactionStatusCheck},
+    jobs::JobProducerTrait,
     models::{
         NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
         TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
-    services::{Signer, StellarProviderTrait},
-    utils::calculate_scheduled_timestamp,
+    services::{provider::StellarProviderTrait, signer::Signer},
 };
 
 impl<R, T, J, S, P, C> StellarRelayerTransaction<R, T, J, S, P, C>
@@ -34,21 +33,53 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("handling transaction status");
+        info!(tx_id = %tx.id, status = ?tx.status, "handling transaction status");
 
-        // Call core status checking logic with error handling
+        // Early exit for final states - no need to check
+        if is_final_state(&tx.status) {
+            info!(tx_id = %tx.id, status = ?tx.status, "transaction in final state, skipping status check");
+            return Ok(tx);
+        }
+
         match self.status_core(tx.clone()).await {
-            Ok(updated_tx) => Ok(updated_tx),
+            Ok(updated_tx) => {
+                debug!(
+                    tx_id = %updated_tx.id,
+                    status = ?updated_tx.status,
+                    "status check completed successfully"
+                );
+                Ok(updated_tx)
+            }
             Err(error) => {
-                // Only retry for provider errors, not validation errors
+                debug!(
+                    tx_id = %tx.id,
+                    error = ?error,
+                    "status check encountered error"
+                );
+
+                // Handle different error types appropriately
                 match error {
-                    TransactionError::ValidationError(_) => {
-                        // Don't retry validation errors (like missing hash)
-                        Err(error)
+                    TransactionError::ValidationError(ref msg) => {
+                        // Validation errors (like missing hash) indicate a fundamental problem
+                        // that won't be fixed by retrying. Mark the transaction as Failed.
+                        warn!(
+                            tx_id = %tx.id,
+                            error = %msg,
+                            "validation error detected - marking transaction as failed"
+                        );
+
+                        self.mark_as_failed(tx, format!("Validation error: {}", msg))
+                            .await
                     }
                     _ => {
-                        // Handle status check failure - requeue for retry
-                        self.handle_status_failure(tx, error).await
+                        // For other errors (like provider errors), log and propagate
+                        // The job system will retry based on the job configuration
+                        warn!(
+                            tx_id = %tx.id,
+                            error = ?error,
+                            "status check failed with retriable error, will retry"
+                        );
+                        Err(error)
                     }
                 }
             }
@@ -80,44 +111,6 @@ where
         }
     }
 
-    /// Handles status check failures with retry logic.
-    /// This method ensures failed status checks are retried appropriately.
-    async fn handle_status_failure(
-        &self,
-        tx: TransactionRepoModel,
-        error: TransactionError,
-    ) -> Result<TransactionRepoModel, TransactionError> {
-        warn!(error = %error, "failed to get stellar transaction status, re-queueing check");
-
-        // Step 1: Re-queue status check for retry
-        if let Err(requeue_error) = self.requeue_status_check(&tx).await {
-            warn!(error = %requeue_error, "failed to requeue status check for transaction");
-            // Continue with original error even if requeue fails
-        }
-
-        // Step 2: Log failure for monitoring (status_check_fail_total metric would go here)
-        info!(error = %error, "transaction status check failure handled, will retry later");
-
-        // Step 3: Return original transaction unchanged (will be retried)
-        Ok(tx)
-    }
-
-    /// Helper function to re-queue a transaction status check job.
-    pub async fn requeue_status_check(
-        &self,
-        tx: &TransactionRepoModel,
-    ) -> Result<(), TransactionError> {
-        self.job_producer()
-            .produce_check_transaction_status_job(
-                TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
-                Some(calculate_scheduled_timestamp(
-                    STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS,
-                )),
-            )
-            .await?;
-        Ok(())
-    }
-
     /// Parses the transaction hash from the network data and validates it.
     /// Returns a `TransactionError::ValidationError` if the hash is missing, empty, or invalid.
     pub fn parse_and_validate_hash(
@@ -141,6 +134,32 @@ where
         })?;
 
         Ok(stellar_hash)
+    }
+
+    /// Mark a transaction as failed with a reason
+    async fn mark_as_failed(
+        &self,
+        tx: TransactionRepoModel,
+        reason: String,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        warn!(tx_id = %tx.id, reason = %reason, "marking transaction as failed");
+
+        let update_request = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Failed),
+            status_reason: Some(reason),
+            ..Default::default()
+        };
+
+        let failed_tx = self
+            .finalize_transaction_state(tx.id.clone(), update_request)
+            .await?;
+
+        // Try to enqueue next transaction
+        if let Err(e) = self.enqueue_next_pending_transaction(&tx.id).await {
+            warn!(error = %e, "failed to enqueue next pending transaction after failure");
+        }
+
+        Ok(failed_tx)
     }
 
     /// Handles the logic when a Stellar transaction is confirmed successfully.
@@ -217,8 +236,7 @@ where
         tx: TransactionRepoModel,
         original_status_str: String,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!(status = %original_status_str, "stellar transaction status is still pending, re-queueing check");
-        self.requeue_status_check(&tx).await?;
+        debug!(status = %original_status_str, "stellar transaction status is still pending, will retry check later");
         Ok(tx)
     }
 }
@@ -227,6 +245,7 @@ where
 mod tests {
     use super::*;
     use crate::models::{NetworkTransactionData, RepositoryError};
+    use chrono::Duration;
     use mockall::predicate::eq;
     use soroban_rs::stellar_rpc_client::GetTransactionResponse;
 
@@ -257,6 +276,7 @@ mod tests {
 
             let mut tx_to_handle = create_test_transaction(&relayer.id);
             tx_to_handle.id = "tx-confirm-this".to_string();
+            tx_to_handle.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
             let tx_hash_bytes = [1u8; 32];
             let tx_hash_hex = hex::encode(tx_hash_bytes);
             if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx_to_handle.network_data
@@ -327,6 +347,7 @@ mod tests {
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut initial_tx_for_handling = create_test_transaction(&relayer.id);
             initial_tx_for_handling.id = "tx-confirm-this".to_string();
+            initial_tx_for_handling.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
             if let NetworkTransactionData::Stellar(ref mut stellar_data) =
                 initial_tx_for_handling.network_data
             {
@@ -354,6 +375,7 @@ mod tests {
 
             let mut tx_to_handle = create_test_transaction(&relayer.id);
             tx_to_handle.id = "tx-pending-check".to_string();
+            tx_to_handle.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
             let tx_hash_bytes = [2u8; 32];
             if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx_to_handle.network_data
             {
@@ -377,16 +399,6 @@ mod tests {
 
             // 2. Mock partial_update: should NOT be called
             mocks.tx_repo.expect_partial_update().never();
-
-            // 3. Mock job_producer to expect a re-enqueue of status check
-            mocks
-                .job_producer
-                .expect_produce_check_transaction_status_job()
-                .withf(move |job, delay| {
-                    job.transaction_id == "tx-pending-check" && delay.is_some()
-                })
-                .times(1)
-                .returning(|_, _| Box::pin(async { Ok(()) }));
 
             // Notifications should NOT be sent for pending
             mocks
@@ -414,6 +426,7 @@ mod tests {
 
             let mut tx_to_handle = create_test_transaction(&relayer.id);
             tx_to_handle.id = "tx-fail-this".to_string();
+            tx_to_handle.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
             let tx_hash_bytes = [3u8; 32];
             if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx_to_handle.network_data
             {
@@ -479,6 +492,7 @@ mod tests {
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut initial_tx_for_handling = create_test_transaction(&relayer.id);
             initial_tx_for_handling.id = "tx-fail-this".to_string();
+            initial_tx_for_handling.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
             if let NetworkTransactionData::Stellar(ref mut stellar_data) =
                 initial_tx_for_handling.network_data
             {
@@ -510,6 +524,7 @@ mod tests {
 
             let mut tx_to_handle = create_test_transaction(&relayer.id);
             tx_to_handle.id = "tx-provider-error".to_string();
+            tx_to_handle.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
             let tx_hash_bytes = [4u8; 32];
             if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx_to_handle.network_data
             {
@@ -532,16 +547,6 @@ mod tests {
             // 2. Mock partial_update: should NOT be called
             mocks.tx_repo.expect_partial_update().never();
 
-            // 3. Mock job_producer to expect a re-enqueue of status check
-            mocks
-                .job_producer
-                .expect_produce_check_transaction_status_job()
-                .withf(move |job, delay| {
-                    job.transaction_id == "tx-provider-error" && delay.is_some()
-                })
-                .times(1)
-                .returning(|_, _| Box::pin(async { Ok(()) }));
-
             // Notifications should NOT be sent
             mocks
                 .job_producer
@@ -554,54 +559,70 @@ mod tests {
                 .never();
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
-            let original_tx_clone = tx_to_handle.clone();
 
             let result = handler.handle_transaction_status_impl(tx_to_handle).await;
 
-            assert!(result.is_ok()); // The handler itself should return Ok(original_tx)
-            let returned_tx = result.unwrap();
-            // Transaction should be returned unchanged
-            assert_eq!(returned_tx.id, original_tx_clone.id);
-            assert_eq!(returned_tx.status, original_tx_clone.status);
+            // Provider errors are now propagated as errors (retriable)
+            assert!(result.is_err());
+            matches!(result.unwrap_err(), TransactionError::UnderlyingProvider(_));
         }
 
         #[tokio::test]
         async fn handle_transaction_status_no_hashes() {
             let relayer = create_test_relayer();
-            let mut mocks = default_test_mocks(); // No mocks should be called, but make mutable for consistency
+            let mut mocks = default_test_mocks();
 
             let mut tx_to_handle = create_test_transaction(&relayer.id);
             tx_to_handle.id = "tx-no-hashes".to_string();
             tx_to_handle.status = TransactionStatus::Submitted;
+            tx_to_handle.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
 
+            // With our new error handling, validation errors mark the transaction as failed
             mocks.provider.expect_get_transaction().never();
-            mocks.tx_repo.expect_partial_update().never();
+
+            // Expect partial_update to be called to mark as failed
             mocks
-                .job_producer
-                .expect_produce_check_transaction_status_job()
-                .never();
+                .tx_repo
+                .expect_partial_update()
+                .times(1)
+                .returning(|_, update| {
+                    let mut updated_tx = create_test_transaction("test-relayer");
+                    updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                    updated_tx.status_reason = update.status_reason.clone();
+                    Ok(updated_tx)
+                });
+
+            // Expect notification to be sent after marking as failed
             mocks
                 .job_producer
                 .expect_produce_send_notification_job()
-                .never();
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            // Expect find_by_status to be called when enqueuing next transaction
+            mocks
+                .tx_repo
+                .expect_find_by_status()
+                .with(eq(relayer.id.clone()), eq(vec![TransactionStatus::Pending]))
+                .times(1)
+                .returning(move |_, _| Ok(vec![])); // No pending transactions
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let result = handler.handle_transaction_status_impl(tx_to_handle).await;
 
+            // Should succeed but mark transaction as Failed
+            assert!(result.is_ok(), "Expected Ok result");
+            let updated_tx = result.unwrap();
+            assert_eq!(updated_tx.status, TransactionStatus::Failed);
             assert!(
-                result.is_err(),
-                "Expected an error when hash is missing, but got Ok"
+                updated_tx
+                    .status_reason
+                    .as_ref()
+                    .unwrap()
+                    .contains("Validation error"),
+                "Expected validation error in status_reason, got: {:?}",
+                updated_tx.status_reason
             );
-            match result.unwrap_err() {
-                TransactionError::ValidationError(msg) => {
-                    assert!(
-                        msg.contains("Stellar transaction tx-no-hashes is missing or has an empty on-chain hash in network_data"),
-                        "Unexpected error message: {}",
-                        msg
-                    );
-                }
-                other => panic!("Expected ValidationError, got {:?}", other),
-            }
         }
 
         #[tokio::test]
@@ -611,6 +632,7 @@ mod tests {
 
             let mut tx_to_handle = create_test_transaction(&relayer.id);
             tx_to_handle.id = "tx-on-chain-fail".to_string();
+            tx_to_handle.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
             let tx_hash_bytes = [4u8; 32];
             if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx_to_handle.network_data
             {
@@ -678,6 +700,7 @@ mod tests {
 
             let mut tx_to_handle = create_test_transaction(&relayer.id);
             tx_to_handle.id = "tx-on-chain-success".to_string();
+            tx_to_handle.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
             let tx_hash_bytes = [5u8; 32];
             if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx_to_handle.network_data
             {
@@ -751,6 +774,7 @@ mod tests {
 
             let mut tx_to_handle = create_test_transaction(&relayer.id);
             tx_to_handle.id = "tx-xdr-error-requeue".to_string();
+            tx_to_handle.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
             let tx_hash_bytes = [8u8; 32];
             if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx_to_handle.network_data
             {
@@ -768,16 +792,6 @@ mod tests {
                 .times(1)
                 .returning(move |_| Box::pin(async { Err(eyre::eyre!("Network timeout")) }));
 
-            // Mock job_producer to expect a re-enqueue of status check
-            mocks
-                .job_producer
-                .expect_produce_check_transaction_status_job()
-                .withf(move |job, delay| {
-                    job.transaction_id == "tx-xdr-error-requeue" && delay.is_some()
-                })
-                .times(1)
-                .returning(|_, _| Box::pin(async { Ok(()) }));
-
             // No partial update should occur
             mocks.tx_repo.expect_partial_update().never();
             mocks
@@ -786,15 +800,12 @@ mod tests {
                 .never();
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
-            let original_tx_clone = tx_to_handle.clone();
 
             let result = handler.handle_transaction_status_impl(tx_to_handle).await;
 
-            assert!(result.is_ok()); // The handler returns Ok with the original transaction
-            let returned_tx = result.unwrap();
-            // Transaction should be returned unchanged
-            assert_eq!(returned_tx.id, original_tx_clone.id);
-            assert_eq!(returned_tx.status, original_tx_clone.status);
+            // Provider errors are now propagated as errors (retriable)
+            assert!(result.is_err());
+            matches!(result.unwrap_err(), TransactionError::UnderlyingProvider(_));
         }
     }
 }

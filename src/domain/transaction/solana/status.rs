@@ -6,22 +6,19 @@
 use chrono::Utc;
 use solana_sdk::signature::Signature;
 use std::str::FromStr;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 use super::SolanaRelayerTransaction;
+use crate::domain::transaction::common::is_final_state;
 use crate::{
-    jobs::{JobProducerTrait, TransactionStatusCheck},
+    jobs::JobProducerTrait,
     models::{
         produce_transaction_update_notification_payload, RelayerRepoModel, SolanaTransactionStatus,
         TransactionError, TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{transaction::TransactionRepository, RelayerRepository, Repository},
     services::provider::SolanaProviderTrait,
-    utils::calculate_scheduled_timestamp,
 };
-
-/// Default delay for retrying status checks after failures (in seconds)
-const SOLANA_DEFAULT_STATUS_RETRY_DELAY_SECONDS: i64 = 10;
 
 impl<P, RR, TR, J> SolanaRelayerTransaction<P, RR, TR, J>
 where
@@ -30,61 +27,23 @@ where
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
 {
-    /// Main status handling method with error handling and retries
+    /// Main status handling method with error handling
     pub async fn handle_transaction_status_impl(
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("handling solana transaction status");
+        debug!(tx_id = %tx.id, "handling solana transaction status");
 
         // Skip if already in final state
-        if matches!(
-            tx.status,
-            TransactionStatus::Confirmed | TransactionStatus::Failed | TransactionStatus::Expired
-        ) {
-            info!(status = ?tx.status, "transaction already in final state");
+        // Early return if transaction is already in a final state
+        if is_final_state(&tx.status) {
+            debug!(status = ?tx.status, "transaction already in final state");
             return Ok(tx);
         }
 
-        // Call core status checking logic with error handling
-        match self.check_and_update_status(tx.clone()).await {
-            Ok(updated_tx) => Ok(updated_tx),
-            Err(error) => {
-                // Only retry for provider errors, not validation errors
-                match error {
-                    TransactionError::ValidationError(_) => {
-                        // Don't retry validation errors (like missing signature)
-                        Err(error)
-                    }
-                    _ => {
-                        // Handle status check failure - requeue for retry
-                        self.handle_status_check_failure(tx, error).await
-                    }
-                }
-            }
-        }
-    }
-
-    /// Handles status check failures with retry logic.
-    /// This method ensures failed status checks are retried appropriately.
-    async fn handle_status_check_failure(
-        &self,
-        tx: TransactionRepoModel,
-        error: TransactionError,
-    ) -> Result<TransactionRepoModel, TransactionError> {
-        warn!(error = %error, "failed to get solana transaction status, re-queueing check");
-
-        if let Err(requeue_error) = self
-            .schedule_status_check(&tx, Some(2 * SOLANA_DEFAULT_STATUS_RETRY_DELAY_SECONDS))
-            .await
-        {
-            warn!(error = %requeue_error, "failed to requeue status check for transaction");
-        }
-
-        info!(error = %error, "transaction status check failure handled, will retry later");
-
-        // Return the original error even though we scheduled a retry
-        Err(error)
+        // Call core status checking logic
+        // Errors are propagated to trigger job system retry
+        self.check_and_update_status(tx).await
     }
 
     /// Core status checking logic
@@ -113,8 +72,6 @@ where
                     tx.id, signature_str, e
                 ))
             })?;
-
-        println!("solana_status: {:?}", solana_status);
 
         // Map Solana status to repository status and handle accordingly
         match solana_status {
@@ -148,34 +105,12 @@ where
         Ok(tx)
     }
 
-    /// Helper method to schedule a transaction status check job
-    async fn schedule_status_check(
-        &self,
-        tx: &TransactionRepoModel,
-        delay_seconds: Option<i64>,
-    ) -> Result<(), TransactionError> {
-        let delay = delay_seconds.map(calculate_scheduled_timestamp);
-        self.job_producer()
-            .produce_check_transaction_status_job(
-                TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
-                delay,
-            )
-            .await
-            .map_err(|e| {
-                TransactionError::UnexpectedError(format!("Failed to schedule status check: {}", e))
-            })
-    }
-
     /// Handle processed status (transaction processed by leader but not yet confirmed)
     async fn handle_processed_status(
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("transaction is processed but waiting for supermajority confirmation");
-
-        // Schedule another status check since transaction is not in final state
-        self.schedule_status_check(&tx, Some(SOLANA_DEFAULT_STATUS_RETRY_DELAY_SECONDS))
-            .await?;
+        debug!(tx_id = %tx.id, "transaction is processed but waiting for supermajority confirmation");
 
         // Keep current status - will check again later for confirmation/finalization
         Ok(tx)
@@ -188,15 +123,11 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!("transaction is confirmed by supermajority");
+        debug!(tx_id = %tx.id, "transaction is confirmed by supermajority");
 
         // Update status to mined only if not already mined
         let updated_tx = self
             .update_transaction_status_if_needed(tx, TransactionStatus::Mined)
-            .await?;
-
-        // Schedule another status check since transaction could progress to finalized
-        self.schedule_status_check(&updated_tx, Some(SOLANA_DEFAULT_STATUS_RETRY_DELAY_SECONDS))
             .await?;
 
         Ok(updated_tx)
@@ -209,7 +140,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("transaction is finalized and irreversible");
+        debug!(tx_id=%tx.id, "transaction is finalized and irreversible");
 
         // Update status to confirmed only if not already confirmed (final success state)
         self.update_transaction_status_if_needed(tx, TransactionStatus::Confirmed)
@@ -221,7 +152,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        warn!("transaction failed on-chain");
+        warn!(tx_id=%tx.id, "transaction failed on-chain");
 
         // Update status to failed only if not already failed (final failure state)
         self.update_transaction_status_if_needed(tx, TransactionStatus::Failed)
@@ -242,19 +173,18 @@ where
             .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
 
         // Send webhook notification if relayer has notification configured
-        self.send_transaction_update_notification(&updated_tx)
-            .await?;
+        self.send_transaction_update_notification(&updated_tx).await;
 
         Ok(updated_tx)
     }
 
-    /// Send webhook notification for transaction updates
-    async fn send_transaction_update_notification(
-        &self,
-        tx: &TransactionRepoModel,
-    ) -> Result<(), TransactionError> {
+    /// Send webhook notification for transaction updates.
+    ///
+    /// This is a best-effort operation that logs errors but does not propagate them,
+    /// as notification failures should not affect the transaction lifecycle.
+    async fn send_transaction_update_notification(&self, tx: &TransactionRepoModel) {
         if let Some(notification_id) = &self.relayer().notification_id {
-            info!("sending webhook notification for transaction");
+            debug!(tx_id = %tx.id, "sending webhook notification for transaction");
 
             let notification_payload =
                 produce_transaction_update_notification_payload(notification_id, tx);
@@ -267,8 +197,6 @@ where
                 error!(error = %e, "failed to produce notification job");
             }
         }
-
-        Ok(())
     }
 }
 
@@ -279,7 +207,7 @@ mod tests {
         jobs::MockJobProducerTrait,
         models::{NetworkTransactionData, SolanaTransactionData},
         repositories::{MockRelayerRepository, MockTransactionRepository},
-        services::{MockSolanaProviderTrait, SolanaProviderError},
+        services::provider::{MockSolanaProviderTrait, SolanaProviderError},
         utils::mocks::mockutils::{create_mock_solana_relayer, create_mock_solana_transaction},
     };
     use eyre::Result;
@@ -344,7 +272,7 @@ mod tests {
         let mut provider = MockSolanaProviderTrait::new();
         let relayer_repo = Arc::new(MockRelayerRepository::new());
         let tx_repo = Arc::new(MockTransactionRepository::new());
-        let mut job_producer = MockJobProducerTrait::new();
+        let job_producer = MockJobProducerTrait::new();
 
         let signature_str =
             "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
@@ -355,12 +283,6 @@ mod tests {
             .with(eq(Signature::from_str(signature_str)?))
             .times(1)
             .returning(|_| Box::pin(async { Ok(SolanaTransactionStatus::Processed) }));
-
-        job_producer
-            .expect_produce_check_transaction_status_job()
-            .withf(|check, delay| check.transaction_id == "test" && delay.is_some())
-            .times(1)
-            .returning(|_, _| Box::pin(async { Ok(()) }));
 
         let handler = SolanaRelayerTransaction::new(
             create_mock_solana_relayer("test-relayer".to_string(), false),
@@ -384,7 +306,7 @@ mod tests {
         let mut provider = MockSolanaProviderTrait::new();
         let relayer_repo = Arc::new(MockRelayerRepository::new());
         let mut tx_repo = MockTransactionRepository::new();
-        let mut job_producer = MockJobProducerTrait::new();
+        let job_producer = MockJobProducerTrait::new();
 
         let signature_str =
             "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
@@ -395,12 +317,6 @@ mod tests {
             .with(eq(Signature::from_str(signature_str)?))
             .times(1)
             .returning(|_| Box::pin(async { Ok(SolanaTransactionStatus::Confirmed) }));
-
-        job_producer
-            .expect_produce_check_transaction_status_job()
-            .withf(|check, delay| check.transaction_id == "test" && delay.is_some())
-            .times(1)
-            .returning(|_, _| Box::pin(async { Ok(()) }));
 
         let tx_id = tx.id.clone();
 
@@ -488,7 +404,7 @@ mod tests {
         let mut provider = MockSolanaProviderTrait::new();
         let relayer_repo = Arc::new(MockRelayerRepository::new());
         let tx_repo = Arc::new(MockTransactionRepository::new());
-        let mut job_producer = MockJobProducerTrait::new();
+        let job_producer = MockJobProducerTrait::new();
 
         let signature_str = "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
         let tx = create_tx_with_signature(TransactionStatus::Pending, Some(signature_str));
@@ -502,11 +418,8 @@ mod tests {
                 Box::pin(async { Err(SolanaProviderError::RpcError(error_message.to_string())) })
             });
 
-        job_producer
-            .expect_produce_check_transaction_status_job()
-            .withf(|check, delay| check.transaction_id == "test" && delay.is_some())
-            .times(1)
-            .returning(|_, _| Box::pin(async { Ok(()) }));
+        // No need to expect manual rescheduling - the job system handles retries
+        // when an error is returned
 
         let handler = SolanaRelayerTransaction::new(
             create_mock_solana_relayer("test-relayer".to_string(), false),
@@ -518,6 +431,7 @@ mod tests {
 
         let result = handler.handle_transaction_status_impl(tx.clone()).await;
 
+        // Verify that an error is returned, which triggers job system retry
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(err, TransactionError::UnexpectedError(_)));

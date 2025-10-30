@@ -25,7 +25,7 @@ use crate::{
         Address, GoogleCloudKmsSignerConfig, NetworkTransactionData, SignerError, SignerRepoModel,
         TransactionRepoModel,
     },
-    services::{GoogleCloudKmsService, GoogleCloudKmsServiceTrait, Signer},
+    services::{signer::Signer, GoogleCloudKmsService, GoogleCloudKmsServiceTrait},
     utils::{base64_decode, base64_encode},
 };
 

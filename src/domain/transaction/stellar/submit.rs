@@ -6,15 +6,16 @@ use chrono::Utc;
 use tracing::{info, warn};
 
 use super::{utils::is_bad_sequence_error, StellarRelayerTransaction};
+use crate::domain::transaction::common::is_final_state;
 use crate::{
-    constants::{STELLAR_BAD_SEQUENCE_RETRY_DELAY_SECONDS, STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS},
-    jobs::{JobProducerTrait, TransactionStatusCheck},
+    constants::STELLAR_BAD_SEQUENCE_RETRY_DELAY_SECONDS,
+    jobs::JobProducerTrait,
     models::{
         NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
         TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
-    services::{Signer, StellarProviderTrait},
+    services::{provider::StellarProviderTrait, signer::Signer},
     utils::calculate_scheduled_timestamp,
 };
 
@@ -33,7 +34,17 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("submitting stellar transaction");
+        info!(tx_id = %tx.id, status = ?tx.status, "submitting stellar transaction");
+
+        // Defensive check: if transaction is in a final state or unexpected state, don't retry
+        if is_final_state(&tx.status) {
+            warn!(
+                tx_id = %tx.id,
+                status = ?tx.status,
+                "transaction already in final state, skipping submission"
+            );
+            return Ok(tx);
+        }
 
         // Call core submission logic with error handling
         match self.submit_core(tx.clone()).await {
@@ -80,19 +91,8 @@ where
             .partial_update(tx.id.clone(), update_req)
             .await?;
 
-        // Enqueue status check job
-        self.job_producer()
-            .produce_check_transaction_status_job(
-                TransactionStatusCheck::new(updated_tx.id.clone(), updated_tx.relayer_id.clone()),
-                Some(calculate_scheduled_timestamp(
-                    STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS,
-                )),
-            )
-            .await?;
-
         // Send notification
-        self.send_transaction_update_notification(&updated_tx)
-            .await?;
+        self.send_transaction_update_notification(&updated_tx).await;
 
         Ok(updated_tx)
     }
@@ -228,12 +228,7 @@ mod tests {
                     Ok::<_, RepositoryError>(tx)
                 });
 
-            // enqueue status-check & notification
-            mocks
-                .job_producer
-                .expect_produce_check_transaction_status_job()
-                .times(1)
-                .returning(|_, _| Box::pin(async { Ok(()) }));
+            // Expect notification
             mocks
                 .job_producer
                 .expect_produce_send_notification_job()
@@ -392,12 +387,7 @@ mod tests {
                     Ok::<_, RepositoryError>(tx)
                 });
 
-            // Job and notification expectations
-            mocks
-                .job_producer
-                .expect_produce_check_transaction_status_job()
-                .times(1)
-                .returning(|_, _| Box::pin(async { Ok(()) }));
+            // Expect notification
             mocks
                 .job_producer
                 .expect_produce_send_notification_job()
@@ -433,12 +423,7 @@ mod tests {
                     Ok::<_, RepositoryError>(tx)
                 });
 
-            // enqueue status-check & notification
-            mocks
-                .job_producer
-                .expect_produce_check_transaction_status_job()
-                .times(1)
-                .returning(|_, _| Box::pin(async { Ok(()) }));
+            // Expect notification
             mocks
                 .job_producer
                 .expect_produce_send_notification_job()

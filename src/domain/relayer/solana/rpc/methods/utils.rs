@@ -48,7 +48,7 @@ use crate::{
     },
     domain::{SolanaTokenProgram, TokenInstruction},
     jobs::TransactionStatusCheck,
-    services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
+    services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
 };
 
 #[derive(Debug)]
@@ -950,7 +950,11 @@ where
         let scheduled_on = delay.map(calculate_scheduled_timestamp);
         self.job_producer
             .produce_check_transaction_status_job(
-                TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
+                TransactionStatusCheck::new(
+                    tx.id.clone(),
+                    tx.relayer_id.clone(),
+                    crate::models::NetworkType::Solana,
+                ),
                 scheduled_on,
             )
             .await

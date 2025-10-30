@@ -27,7 +27,6 @@ You only need to:
 3. Set up environment variables
 4. Start Docker to get account addresses
 5. Fund accounts on testnet
-6. Restart the service
 
 All configurations are pre-set for testnet use.
 
@@ -317,6 +316,49 @@ curl -X POST http://localhost:8080/api/v1/plugins/launchtube-plugin/call \
 }
 ```
 
+## Local Plugin Development (Swap Built Output Only)
+
+If you're actively developing `@openzeppelin/relayer-plugin-launchtube`, you can replace only the installed package's built output (`dist/`) with your local build — no code or package.json changes required.
+
+### One-time setup
+
+1. Set an environment variable pointing to your local plugin directory:
+
+```bash
+export LAUNCHTUBE_PLUGIN_DIR=/path/to/your/relayer-plugin-launchtube
+```
+
+Replace `/path/to/your/relayer-plugin-launchtube` with the actual path to your local plugin repository.
+
+2. Build the plugin so `dist/` exists (or run a watch build):
+
+```bash
+pnpm -C $LAUNCHTUBE_PLUGIN_DIR install
+pnpm -C $LAUNCHTUBE_PLUGIN_DIR build
+```
+
+### Start with the dev override
+
+`docker-compose.plugin-dev.yaml` mounts your local plugin's `dist/` over the installed package's `dist/` in the container.
+
+```bash
+export LAUNCHTUBE_PLUGIN_LOCAL_DIST=$LAUNCHTUBE_PLUGIN_DIR/dist
+docker compose -f docker-compose.yaml -f docker-compose.plugin-dev.yaml up -d --build
+```
+
+Under the hood:
+
+- Your local `dist/` is mounted at `/app/plugins/launchtube/node_modules/@openzeppelin/relayer-plugin-launchtube/dist` inside the container.
+- Dependencies remain intact from the installed npm package; only the runtime JS is swapped.
+
+### Iterating on code
+
+1. Edit code in your plugin repo.
+2. Rebuild the plugin outputs (e.g., `pnpm -C $LAUNCHTUBE_PLUGIN_DIR build`).
+3. Restart the relayer to reload the module: `docker compose restart relayer`.
+
+````
+
 ### Management API
 
 LaunchTube provides a management API to dynamically configure sequence accounts. This requires the `LAUNCHTUBE_ADMIN_SECRET` from your `.env` file.
@@ -335,7 +377,7 @@ curl -X POST http://localhost:8080/api/v1/plugins/launchtube-plugin/call \
       }
     }
   }'
-```
+````
 
 #### Add or Update Sequence Accounts
 

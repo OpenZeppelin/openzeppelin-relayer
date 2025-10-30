@@ -13,7 +13,7 @@ use crate::{
     constants::{DEFAULT_SOLANA_MAX_TX_DATA_SIZE, DEFAULT_SOLANA_MIN_BALANCE},
     domain::{SolanaTokenProgram, TokenInstruction as SolanaTokenInstruction},
     models::RelayerSolanaPolicy,
-    services::SolanaProviderTrait,
+    services::provider::SolanaProviderTrait,
 };
 use solana_client::rpc_response::RpcSimulateTransactionResult;
 use solana_sdk::{
@@ -574,7 +574,7 @@ impl SolanaTransactionValidator {
 mod tests {
     use crate::{
         models::{relayer::SolanaAllowedTokensSwapConfig, SolanaAllowedTokensPolicy},
-        services::{MockSolanaProviderTrait, SolanaProviderError},
+        services::provider::{MockSolanaProviderTrait, SolanaProviderError},
     };
 
     use super::*;

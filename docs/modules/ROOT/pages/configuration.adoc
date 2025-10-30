@@ -71,7 +71,7 @@ This table lists the environment variables and their default values.
 | `<any file name>`
 | File Name of the configuration file.
 
-| `RATE_LIMIT_RPS`
+| `RATE_LIMIT_REQUESTS_PER_SECOND`
 | `100`
 | `<any value>`
 | Rate limit for the API in requests per second.
@@ -171,6 +171,51 @@ This table lists the environment variables and their default values.
 | `<keystore passphrase>`
 | Passphrase for the keystore file used for signing transactions.
 
+| `BACKGROUND_WORKER_TRANSACTION_REQUEST_CONCURRENCY`
+| `50`
+| `<any positive number>`
+| Maximum number of concurrent transaction request jobs that can be processed simultaneously.
+
+| `BACKGROUND_WORKER_TRANSACTION_SENDER_CONCURRENCY`
+| `75`
+| `<any positive number>`
+| Maximum number of concurrent transaction submission jobs that can be processed simultaneously.
+
+| `BACKGROUND_WORKER_TRANSACTION_STATUS_CHECKER_CONCURRENCY`
+| `50`
+| `<any positive number>`
+| Maximum number of concurrent generic/default transaction status check jobs that can be processed simultaneously. This worker handles Solana and any future networks that don't have dedicated status checkers.
+
+| `BACKGROUND_WORKER_TRANSACTION_STATUS_CHECKER_EVM_CONCURRENCY`
+| `100`
+| `<any positive number>`
+| Maximum number of concurrent EVM transaction status check invocations that can be processed simultaneously. EVM handles the highest volume (~75% of all status checks) and uses optimized retries (8-20s) to avoid triggering premature resubmission.
+
+| `BACKGROUND_WORKER_TRANSACTION_STATUS_CHECKER_STELLAR_CONCURRENCY`
+| `50`
+| `<any positive number>`
+| Maximum number of concurrent Stellar transaction status checks that can be processed simultaneously. Stellar status checker uses fast retries (2-3s) optimized for Stellar's faster block times.
+
+| `BACKGROUND_WORKER_NOTIFICATION_SENDER_CONCURRENCY`
+| `30`
+| `<any positive number>`
+| Maximum number of concurrent notifications that can be processed simultaneously.
+
+| `BACKGROUND_WORKER_SOLANA_TOKEN_SWAP_REQUEST_CONCURRENCY`
+| `10`
+| `<any positive number>`
+| Maximum number of concurrent Solana token swap requests that can be processed simultaneously. Low volume worker.
+
+| `BACKGROUND_WORKER_TRANSACTION_CLEANUP_CONCURRENCY`
+| `1`
+| `<any positive number>`
+| Maximum number of concurrent transaction cleanup invocations that can be processed simultaneously. Defaults to 1 to avoid database conflicts.
+
+| `BACKGROUND_WORKER_RELAYER_HEALTH_CHECK_CONCURRENCY`
+| `10`
+| `<any positive number>`
+| Maximum number of concurrent relayer health check invocations that can be processed simultaneously. Low volume worker.
+
 |===
 
 
@@ -184,7 +229,7 @@ CONFIG_DIR=./config
 CONFIG_FILE_NAME=config.json
 WEBHOOK_SIGNING_KEY=e1d42480-6f74-4d0b-85f4-b7f0bb690fae
 API_KEY=5eefd216-0e44-4ca7-b421-2925f90d30d5
-RATE_LIMIT_RPS=100
+RATE_LIMIT_REQUESTS_PER_SECOND=100
 RATE_LIMIT_BURST_SIZE=300
 METRICS_ENABLED=true
 METRICS_PORT=8081

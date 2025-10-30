@@ -5,7 +5,7 @@ use soroban_rs::{
     stellar_rpc_client::SimulateTransactionResponse,
     xdr::{Limits, TransactionEnvelope, WriteXdr},
 };
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::{
     constants::STELLAR_DEFAULT_TRANSACTION_FEE,
@@ -22,7 +22,7 @@ use crate::{
     models::{TransactionRepoModel, TransactionStatus, TransactionUpdateRequest},
     repositories::TransactionCounterTrait,
     repositories::TransactionRepository,
-    services::{Signer, StellarProviderTrait},
+    services::{provider::StellarProviderTrait, signer::Signer},
     utils::calculate_scheduled_timestamp,
 };
 
@@ -304,9 +304,12 @@ where
     if let Some(notification_id) = notification_id {
         let notification =
             produce_transaction_update_notification_payload(notification_id, &saved_tx);
-        job_producer
+        if let Err(e) = job_producer
             .produce_send_notification_job(notification, None)
-            .await?;
+            .await
+        {
+            error!(error = %e, "failed to produce notification job");
+        }
     }
 
     Ok(saved_tx)

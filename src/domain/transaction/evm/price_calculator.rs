@@ -65,8 +65,6 @@ pub trait PriceCalculatorTrait: Send + Sync {
     ) -> Result<PriceParams, TransactionError>;
 }
 
-type GasPriceCapResult = (Option<u128>, Option<u128>, Option<u128>);
-
 const PRECISION: u128 = 1_000_000_000; // 10^9 (similar to Gwei)
 const MINUTE_AND_HALF_MS: u128 = 90000;
 const BASE_FEE_INCREASE_RATE: f64 = 1.125; // 12.5% increase per block (1 + 0.125)
@@ -162,24 +160,6 @@ where
         }
     }
 
-    /// Helper method to build an EvmTransactionRequest from transaction data and price parameters
-    fn build_request_from(
-        tx_data: &EvmTransactionData,
-        params: &PriceParams,
-    ) -> crate::models::EvmTransactionRequest {
-        crate::models::EvmTransactionRequest {
-            to: tx_data.to.clone(),
-            value: tx_data.value,
-            data: tx_data.data.clone(),
-            gas_limit: tx_data.gas_limit,
-            gas_price: params.gas_price,
-            speed: tx_data.speed.clone(),
-            max_fee_per_gas: params.max_fee_per_gas,
-            max_priority_fee_per_gas: params.max_priority_fee_per_gas,
-            valid_until: None,
-        }
-    }
-
     /// Calculates transaction price parameters based on the transaction type and network conditions.
     ///
     /// This function determines the appropriate gas pricing strategy based on the transaction type:
@@ -200,59 +180,16 @@ where
         tx_data: &EvmTransactionData,
         relayer: &RelayerRepoModel,
     ) -> Result<PriceParams, TransactionError> {
-        let price_params = self
+        let mut price_final_params = self
             .fetch_price_params_based_on_tx_type(tx_data, relayer)
             .await?;
-        let (gas_price_capped, max_fee_per_gas_capped, max_priority_fee_per_gas_capped) = self
-            .apply_gas_price_cap(
-                price_params.gas_price.unwrap_or_default(),
-                price_params.max_fee_per_gas,
-                price_params.max_priority_fee_per_gas,
-                relayer,
-            )?;
 
-        let mut final_params = PriceParams {
-            gas_price: gas_price_capped,
-            max_fee_per_gas: max_fee_per_gas_capped,
-            max_priority_fee_per_gas: max_priority_fee_per_gas_capped,
-            is_min_bumped: None,
-            extra_fee: None,
-            total_cost: U256::ZERO,
-        };
+        // Apply gas price caps and constraints
+        self.apply_gas_price_cap_and_constraints(&mut price_final_params, relayer)?;
 
-        // Use price params overrider if available for custom network pricing
-        let is_eip1559 = tx_data.is_eip1559();
-
-        let mut recompute_total_cost = true;
-        if let Some(handler) = &self.price_params_handler {
-            let req = Self::build_request_from(tx_data, &final_params);
-            final_params = handler.handle_price_params(&req, final_params).await?;
-
-            // Re-apply cap after overrider in case it changed fee fields
-            let (gas_price_capped, max_fee_per_gas_capped, max_priority_fee_per_gas_capped) = self
-                .apply_gas_price_cap(
-                    final_params.gas_price.unwrap_or_default(),
-                    final_params.max_fee_per_gas,
-                    final_params.max_priority_fee_per_gas,
-                    relayer,
-                )?;
-            final_params.gas_price = gas_price_capped;
-            final_params.max_fee_per_gas = max_fee_per_gas_capped;
-            final_params.max_priority_fee_per_gas = max_priority_fee_per_gas_capped;
-
-            recompute_total_cost = final_params.total_cost == U256::ZERO;
-        }
-
-        // Only recompute total cost if it was not set by the overrider
-        if recompute_total_cost {
-            final_params.total_cost = final_params.calculate_total_cost(
-                is_eip1559,
-                tx_data.gas_limit.unwrap_or(DEFAULT_GAS_LIMIT),
-                U256::from(tx_data.value),
-            );
-        }
-
-        Ok(final_params)
+        // Use price params handler if available for custom network pricing and finalize
+        self.finalize_price_params(relayer, tx_data, price_final_params)
+            .await
     }
 
     /// Computes bumped gas price for transaction resubmission, factoring in network conditions.
@@ -323,42 +260,9 @@ where
             }
         };
 
-        // Add extra fee if needed
-        let mut final_params = bumped_price_params;
-        let value = tx_data.value;
-        let gas_limit = tx_data.gas_limit;
-        let is_eip1559 = tx_data.is_eip1559();
-
-        // Use price params overrider if available for custom network pricing
-        let mut recompute_total_cost = true;
-        if let Some(handler) = &self.price_params_handler {
-            let req = Self::build_request_from(tx_data, &final_params);
-            final_params = handler.handle_price_params(&req, final_params).await?;
-
-            let (gas_price_capped, max_fee_per_gas_capped, max_priority_fee_per_gas_capped) = self
-                .apply_gas_price_cap(
-                    final_params.gas_price.unwrap_or_default(),
-                    final_params.max_fee_per_gas,
-                    final_params.max_priority_fee_per_gas,
-                    relayer,
-                )?;
-            final_params.gas_price = gas_price_capped;
-            final_params.max_fee_per_gas = max_fee_per_gas_capped;
-            final_params.max_priority_fee_per_gas = max_priority_fee_per_gas_capped;
-
-            recompute_total_cost = final_params.total_cost == U256::ZERO;
-        }
-
-        // Only recompute total cost if it was not set by the overrider
-        if recompute_total_cost {
-            final_params.total_cost = final_params.calculate_total_cost(
-                is_eip1559,
-                gas_limit.unwrap_or(DEFAULT_GAS_LIMIT),
-                U256::from(value),
-            );
-        }
-
-        Ok(final_params)
+        // Use price params handler if available for custom network pricing and finalize
+        self.finalize_price_params(relayer, tx_data, bumped_price_params)
+            .await
     }
 
     /// Computes the bumped gas parameters for an EIP-1559 transaction resubmission.
@@ -632,42 +536,81 @@ where
         })
     }
 
-    /// Applies gas price caps to the calculated prices.
+    /// Applies gas price caps and constraints to PriceParams in place.
     ///
     /// Ensures that gas prices don't exceed the configured maximum limits and
     /// maintains proper relationships between different price parameters.
-    fn apply_gas_price_cap(
+    /// This method modifies the provided PriceParams struct directly.
+    fn apply_gas_price_cap_and_constraints(
         &self,
-        gas_price: u128,
-        max_fee_per_gas: Option<u128>,
-        max_priority_fee_per_gas: Option<u128>,
+        price_params: &mut PriceParams,
         relayer: &RelayerRepoModel,
-    ) -> Result<GasPriceCapResult, TransactionError> {
+    ) -> Result<(), TransactionError> {
         let gas_price_cap = relayer
             .policies
             .get_evm_policy()
             .gas_price_cap
             .unwrap_or(u128::MAX);
 
-        if let (Some(max_fee), Some(max_priority)) = (max_fee_per_gas, max_priority_fee_per_gas) {
+        if let (Some(max_fee), Some(max_priority)) = (
+            price_params.max_fee_per_gas,
+            price_params.max_priority_fee_per_gas,
+        ) {
             // Cap the maxFeePerGas
             let capped_max_fee = Self::cap_gas_price(max_fee, gas_price_cap);
+            price_params.max_fee_per_gas = Some(capped_max_fee);
 
             // Ensure maxPriorityFeePerGas < maxFeePerGas to avoid client errors
-            let capped_max_priority = Self::cap_gas_price(max_priority, capped_max_fee);
-            Ok((None, Some(capped_max_fee), Some(capped_max_priority)))
+            price_params.max_priority_fee_per_gas =
+                Some(Self::cap_gas_price(max_priority, capped_max_fee));
+
+            // For EIP1559 transactions, gas_price should be None
+            price_params.gas_price = None;
         } else {
             // Handle legacy transaction
-            Ok((
-                Some(Self::cap_gas_price(gas_price, gas_price_cap)),
-                None,
-                None,
-            ))
+            price_params.gas_price = Some(Self::cap_gas_price(
+                price_params.gas_price.unwrap_or_default(),
+                gas_price_cap,
+            ));
+
+            // For legacy transactions, EIP1559 fields should be None
+            price_params.max_fee_per_gas = None;
+            price_params.max_priority_fee_per_gas = None;
         }
+
+        Ok(())
     }
 
     fn cap_gas_price(price: u128, cap: u128) -> u128 {
         std::cmp::min(price, cap)
+    }
+
+    /// Applies price params handler and finalizes price parameters.
+    async fn finalize_price_params(
+        &self,
+        relayer: &RelayerRepoModel,
+        tx_data: &EvmTransactionData,
+        mut price_params: PriceParams,
+    ) -> Result<PriceParams, TransactionError> {
+        let is_eip1559 = tx_data.is_eip1559();
+
+        // Apply price params handler if available
+        if let Some(handler) = &self.price_params_handler {
+            price_params = handler.handle_price_params(tx_data, price_params).await?;
+
+            // Re-apply cap after handler in case it changed fee fields
+            self.apply_gas_price_cap_and_constraints(&mut price_params, relayer)?;
+        }
+
+        if price_params.total_cost == U256::ZERO {
+            price_params.total_cost = price_params.calculate_total_cost(
+                is_eip1559,
+                tx_data.gas_limit.unwrap_or(DEFAULT_GAS_LIMIT),
+                U256::from(tx_data.value),
+            );
+        }
+
+        Ok(price_params)
     }
 
     /// Returns the market price for the given speed. If `is_eip1559` is true, use `max_priority_fee_per_gas`,
@@ -733,7 +676,7 @@ mod tests {
     use crate::services::{
         evm_gas_price::{EvmGasPriceService, GasPrices, MockEvmGasPriceServiceTrait, SpeedPrices},
         gas::handlers::test_mock::MockPriceHandler,
-        MockEvmProviderTrait,
+        provider::MockEvmProviderTrait,
     };
     use futures::FutureExt;
 
