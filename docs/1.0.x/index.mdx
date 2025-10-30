@@ -1,0 +1,336 @@
+---
+title: OpenZeppelin Relayer
+---
+
+## Overview
+
+OpenZeppelin Relayer is a service that provides infrastructure to relay transactions to the EVM & Non-EVM networks. It is designed to be used as a backend for dApps that need to interact with these networks.
+
+## Features
+
+* ***Multi-Chain Support***: Interact with multiple blockchain networks, including Solana and EVM-based chains.
+* ***Transaction Relaying***: Submit transactions to supported blockchain networks efficiently.
+* ***Transaction Signing***: Securely sign transactions using configurable key management.
+* ***Transaction Fee Estimation***: Estimate transaction fees for better cost management.
+* ***Solana Gasless Transactions***: Support for gasless transactions on Solana, enabling users to interact without transaction fees.
+* ***Transaction Nonce Management***: Handle nonce management to ensure transaction order.
+* ***Transaction Status Monitoring***: Track the status of submitted transactions.
+* ***SDK Integration***: Easily interact with the relayer through our companion JavaScript/TypeScript SDK.
+* ***Extensible Architecture***: Easily add support for new blockchain networks.
+* ***Configurable Network Policies***: Define and enforce network-specific policies for transaction processing.
+* ***Metrics and Observability***: Monitor application performance using Prometheus and Grafana.
+* ***Docker Support***: Deploy the relayer using Docker for both development and production environments.
+* ***Plugins***: Extend the functionality of the relayer with custom logic using TypeScript functions.
+
+## Supported Networks
+
+OpenZeppelin Relayer supports multiple blockchain networks through a flexible JSON-based configuration system. Networks are defined in configuration files, allowing you to configure:
+
+* ***Any EVM-compatible network*** (Ethereum, Polygon, BSC, Arbitrum, Optimism, etc.)
+* ***Solana networks*** (mainnet-beta, devnet, testnet, custom RPC endpoints)
+* ***Stellar networks*** (Pubnet, Testnet, custom networks)
+* ***Create custom network configurations*** with specific RPC endpoints, chain IDs, and network parameters
+* ***Use inheritance*** to create network variants that inherit from base configurations
+
+### Network Types
+
+| Network Type | Description |
+| --- | --- |
+| `evm` | Ethereum Virtual Machine compatible networks. Supports any EVM chain by configuring chain ID, RPC URLs, and network-specific parameters. |
+| `solana` | Solana blockchain networks. Supports all Solana clusters and custom RPC endpoints. |
+| `stellar` | Stellar blockchain networks (Partial support). Supports Stellar Public Network and Testnet. |
+
+Networks can be loaded from:
+
+* ***JSON arrays***: Direct network definitions in configuration files
+* ***Directory of files***: Multiple JSON files each containing network definitions
+
+For detailed network configuration options and examples, see the [Network Configuration](/relayer/1.0.x/network_configuration) page.
+
+<Callout>
+
+
+For information about our development plans and upcoming features, see [Project Roadmap](/relayer/1.0.x/roadmap).
+
+</Callout>
+
+<Callout>
+
+
+To get started immediately, see [Quickstart](/relayer/1.0.x/quickstart).
+
+</Callout>
+
+## Technical Overview
+
+```mermaid
+%%{init: {
+    'theme': 'base',
+    'themeVariables': {
+        'background': '#ffffff',
+        'mainBkg': '#ffffff',
+        'primaryBorderColor': '#cccccc'
+    }
+}}%%
+flowchart TB
+    subgraph "Clients"
+        client[API/SDK]
+    end
+
+    subgraph "OpenZeppelin Relayer"
+        subgraph "API Layer"
+            api[API Routes & Controllers]
+            middleware[Middleware]
+            plugins[Plugins]
+        end
+
+        subgraph "Domain Layer"
+            domain[Domain Logic]
+            relayer[Relayer Services]
+            policies[Policy Enforcement]
+        end
+
+        subgraph "Infrastructure"
+            repositories[Repositories]
+            jobs[Job Queue System]
+            signer[Signer Services]
+            provider[Network Providers]
+        end
+
+        subgraph "Services Layer"
+            transaction[Transaction Services]
+            vault[Vault Services]
+            webhook[Webhook Notifications]
+            monitoring[Monitoring & Metrics]
+        end
+
+        subgraph "Configuration"
+            config_files[Config Files]
+            env_vars[Environment Variables]
+        end
+    end
+
+    subgraph "External Systems"
+        blockchain[Blockchain Networks]
+        redis[Redis]
+        vault_ext[HashiCorp Vault]
+        metrics[Prometheus/Grafana]
+        notification[Notification Services]
+    end
+
+    %% Client connections
+    client -- "HTTP Requests" --> api
+
+    %% API Layer connections
+    api -- "Processes requests" --> middleware
+    middleware -- "Validates & routes" --> domain
+    middleware -- "Invokes" --> plugins
+
+    %% Domain Layer connections
+    domain -- "Uses" --> relayer
+    domain -- "Enforces" --> policies
+    relayer -- "Processes" --> transaction
+    plugins -- "Interacts with" --> relayer
+
+    %% Services Layer connections
+    transaction -- "Signs with" --> signer
+    transaction -- "Connects via" --> provider
+    transaction -- "Queues jobs" --> jobs
+    webhook -- "Notifies" --> notification
+    monitoring -- "Collects" --> metrics
+    signer -- "May use" --> vault
+
+    %% Infrastructure connections
+    repositories -- "Stores data" --> redis
+    jobs -- "Processes async" --> redis
+    vault -- "Secrets management" --> vault_ext
+    provider -- "Interacts with" --> blockchain
+
+    %% Configuration connections
+    config_files -- "Configures" --> domain
+    env_vars -- "Configures" --> domain
+
+    %% Styling
+    classDef apiClass fill:#f9f,stroke:#333,stroke-width:2px
+    classDef domainClass fill:#bbf,stroke:#333,stroke-width:2px
+    classDef infraClass fill:#bfb,stroke:#333,stroke-width:2px
+    classDef serviceClass fill:#fbf,stroke:#333,stroke-width:2px
+    classDef configClass fill:#fbb,stroke:#333,stroke-width:2px
+    classDef externalClass fill:#ddd,stroke:#333,stroke-width:1px
+
+    class api,middleware,plugins apiClass
+    class domain,relayer,policies domainClass
+    class repositories,jobs,signer,provider infraClass
+    class transaction,vault,webhook,monitoring serviceClass
+    class config_files,env_vars configClass
+    class blockchain,redis,vault_ext,metrics,notification externalClass
+```
+
+## Project Structure
+
+The project follows a standard Rust project layout:
+
+```
+openzeppelin-relayer/
+├── src/
+│   ├── api/              # Route and controllers logic
+│   ├── bootstrap/        # Service initialization logic
+│   ├── config/           # Configuration logic
+│   ├── constants/        # Constant values used in the system
+│   ├── domain/           # Domain logic
+│   ├── jobs/             # Asynchronous processing logic (queueing)
+│   ├── logging/          # Logs File rotation logic
+│   ├── metrics/          # Metrics logic
+│   ├── models/           # Data structures and types
+│   ├── repositories/     # Configuration storage
+│   ├── services/         # Services logic
+│   └── utils/            # Helper functions
+│
+├── config/               # Configuration files
+├── tests/                # Integration tests
+├── docs/                 # Documentation
+├── scripts/              # Utility scripts
+├── examples/             # Configuration examples
+├── helpers/              # Rust helper scripts
+├── plugins/              # Plugins directory
+└── ... other root files (Cargo.toml, README.md, etc.)
+```
+
+For detailed information about each directory and its contents, see [Project Structure Details](/relayer/1.0.x/structure).
+
+## Getting Started
+
+### Prerequisites
+
+* Rust 2021 edition, version `1.85` or later
+* Docker (optional, for containerized deployment)
+* Node.js, typescript and ts-node (optional, for plugins)
+
+
+
+**Ready-to-Use Example Configurations**
+
+For quick setup with various configurations, check the [examples directory](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples) in our GitHub repository:
+
+* `basic-example`: Simple setup with Redis
+* `basic-example-logging`: Configuration with file-based logging
+* `basic-example-metrics`: Setup with Prometheus and Grafana metrics
+* `vault-secret-signer`: Using HashiCorp Vault for key management
+* `vault-transit-signer`: Using Vault Transit for secure signing
+* `evm-gcp-kms-signer`: Using Google Cloud KMS for EVM secure signing
+* `evm-turnkey-signer`: Using Turnkey for EVM secure signing
+* `solana-turnkey-signer`:  Using Turnkey for Solana secure signing
+
+Each example includes a README with step-by-step instructions and Docker Compose configuration.
+
+
+### Install Locally
+
+1. Clone the repository:
+
+   ```bash
+   git clone https://github.com/openzeppelin/openzeppelin-relayer
+   cd openzeppelin-relayer
+   ```
+2. Verify you have sodium libs installed. If not, follow these instructions:
+
+   * Install a stable libsodium version from [here](https://download.libsodium.org/libsodium/releases/).
+   * Follow the steps in the [libsodium installation guide](https://doc.libsodium.org/installation).
+3. Install dependencies:
+
+   ```bash
+   cargo build
+   ```
+
+## Running the Relayer
+
+### Option 1: Run Locally
+
+```bash
+cargo run
+```
+
+<Callout>
+Before executing the command, ensure that the `.env` and `config.json` files are configured as detailed in the [Configuration References](#configuration_references) section.
+</Callout>
+
+### Option 2: Run with Docker
+
+The Relayer can be run as either a development or production container using the corresponding Dockerfile (`Dockerfile.development` or `Dockerfile.production`).
+
+#### Step 1: Configure Environment
+
+* Edit `.env` at the root of the repository to adjust environment variables
+* The appropriate .env file will be included during image build
+
+#### Step 2: Build the Image
+
+You can build using Docker Compose (v2).
+
+```bash
+# Default build
+docker compose build
+
+# Or, for a leaner image (and using Dockerfile.production)
+DOCKERFILE=Dockerfile.production docker compose build
+```
+
+#### Step 3: Run the Container
+
+Use Docker Compose to run the container:
+
+```bash
+docker compose up -d
+```
+
+For production runs, you can use:
+
+```bash
+DOCKERFILE=Dockerfile.production docker compose up -d
+```
+
+## Configuration
+
+OpenZeppelin Relayer requires proper configuration before starting. The configuration system uses two main files:
+
+* ***`config.json`***: Contains relayer definitions, signer configurations, and network policies
+* ***`.env`***: Contains environment variables like API keys and connection strings
+
+<Callout type='warn'>
+
+
+Both configuration files must be properly set up before starting the application. Changes to either file require restarting the container to take effect.
+
+For quick setup examples with pre-configured files, see the [examples directory](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples) in our GitHub repository.
+
+</Callout>
+
+For comprehensive configuration details, including:
+
+* Environment variables and their settings
+* Main configuration file structure
+* Signer configurations (local, vault, cloud KMS, etc.)
+* Notification setup
+* Relayer policies and network settings
+* Plugin configuration
+* Complete configuration examples
+
+See the dedicated [Configuration Guide](/relayer/1.0.x/configuration).
+
+## Important Considerations
+
+## Deployment Considerations
+
+<Callout>
+The OpenZeppelin Relayer is designed to function as a backend service and is not meant to be directly exposed to the public internet. To protect the service from unauthorized access, deploy it behind your own secure backend infrastructure—such as a reverse proxy or firewall—and restrict access to trusted internal components only. Direct exposure can increase the risk of exploitation and security breaches.
+</Callout>
+
+## Support
+
+For support or inquiries, contact us on [Telegram](https://t.me/openzeppelin_tg/2).
+
+## License
+This project is licensed under the GNU Affero General Public License v3.0 - see the LICENSE file for details.
+
+## Security
+For security concerns, please refer to our [Security Policy](https://github.com/OpenZeppelin/openzeppelin-relayer/blob/main/SECURITY.md).

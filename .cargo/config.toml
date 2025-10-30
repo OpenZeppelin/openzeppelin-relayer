@@ -1,2 +1,2 @@
 [alias]
-generate_openapi = "run --example generate_openapi -- ./docs/openapi.json"
+generate_openapi = "run --example generate_openapi -- ./openapi.json"

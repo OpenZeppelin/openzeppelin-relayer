@@ -21,8 +21,8 @@ SPEC_URL="https://raw.githubusercontent.com/${REPO_FULL}/${LOCAL_BRANCH}/docs/op
 
 # Check if the target directory exists
 if [ ! -d "$BUILD_DIR" ]; then
-  echo "Error: Build directory '$BUILD_DIR' not found."
-  exit 1
+  echo "Build directory '$BUILD_DIR' not found. Creating it..."
+  mkdir -p "$BUILD_DIR"
 fi
 
 # Copy the Rust docs to the target directory
