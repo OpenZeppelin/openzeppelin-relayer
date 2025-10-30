@@ -1,13 +1,13 @@
-# OpenZeppelin Relayer — LaunchTube Plugin Example
+# OpenZeppelin Relayer — Channels Plugin Example
 
-Run the LaunchTube plugin with OpenZeppelin Relayer to simplify Stellar Soroban transactions. LaunchTube handles fees, sequence numbers, simulation, and retries automatically.
+Run the Channels plugin with OpenZeppelin Relayer to enable parallel transaction submission on Stellar using channel accounts with fee bumping. The plugin handles fees, sequence numbers, simulation, and retries automatically.
 
 ## Quick Start
 
 ```bash
 # Clone and navigate to this example:
 git clone https://github.com/OpenZeppelin/openzeppelin-relayer
-cd openzeppelin-relayer/examples/launchtube-plugin-example
+cd openzeppelin-relayer/examples/channels-plugin-example
 
 # Then follow the Setup steps below
 ```
@@ -22,8 +22,8 @@ cd openzeppelin-relayer/examples/launchtube-plugin-example
 
 You only need to:
 
-1. Install and build the LaunchTube plugin
-2. Create the keys for LaunchTube accounts
+1. Install and build the Channels plugin
+2. Create the keys for channel accounts
 3. Set up environment variables
 4. Start Docker to get account addresses
 5. Fund accounts on testnet
@@ -32,11 +32,11 @@ All configurations are pre-set for testnet use.
 
 ### 1. Install Dependencies
 
-Install and build the LaunchTube plugin:
+Install and build the Channels plugin:
 
 ```bash
-# From this directory (examples/launchtube-plugin-example)
-cd launchtube
+# From this directory (examples/channels-plugin-example)
+cd channel
 pnpm install
 pnpm run build
 cd ..
@@ -44,14 +44,14 @@ cd ..
 
 ### 2. Create Keys and Configuration
 
-LaunchTube requires two types of keys:
+The Channels plugin requires two types of keys:
 
-- **Fund account**: Pays transaction fees
-- **Sequence accounts**: Manage sequence numbers (at least 2 recommended)
+- **Fund account**: Pays transaction fees and holds funds
+- **Channel accounts**: Manage sequence numbers for parallel transactions (at least 2 recommended)
 
-From this directory (`examples/launchtube-plugin-example`), run these commands:
+From this directory (`examples/channels-plugin-example`), run these commands:
 
-#### Create LaunchTube accounts
+#### Create Channel accounts
 
 ```bash
 # Replace each YOUR_PASSWORD with a unique strong password for each key
@@ -63,19 +63,19 @@ From this directory (`examples/launchtube-plugin-example`), run these commands:
 cargo run --example create_key -- \
   --password YOUR_PASSWORD \
   --output-dir config/keys \
-  --filename launchtube-fund.json
+  --filename channels-fund.json
 
-# Create first sequence account
+# Create first channel account
 cargo run --example create_key -- \
   --password YOUR_PASSWORD \
   --output-dir config/keys \
-  --filename launchtube-seq-001.json
+  --filename channel-001.json
 
-# Create second sequence account (recommended for better throughput)
+# Create second channel account (recommended for better throughput)
 cargo run --example create_key -- \
   --password YOUR_PASSWORD \
   --output-dir config/keys \
-  --filename launchtube-seq-002.json
+  --filename channel-002.json
 ```
 
 #### Generate API credentials
@@ -95,72 +95,38 @@ Create `.env` in this directory:
 ```env
 REDIS_URL=redis://redis:6379
 KEYSTORE_PASSPHRASE_FUND=YOUR_PASSWORD
-KEYSTORE_PASSPHRASE_SEQ_001=YOUR_PASSWORD
-KEYSTORE_PASSPHRASE_SEQ_002=YOUR_PASSWORD
+KEYSTORE_PASSPHRASE_CHANNEL_001=YOUR_PASSWORD
+KEYSTORE_PASSPHRASE_CHANNEL_002=YOUR_PASSWORD
 WEBHOOK_SIGNING_KEY=<webhook_key_from_above>
 API_KEY=<api_key_from_above>
-# LaunchTube Configuration
+# Channels Configuration
 STELLAR_NETWORK=testnet
-LAUNCHTUBE_ADMIN_SECRET=<admin_secret_for_launchtube_mgmt_api>
+PLUGIN_ADMIN_SECRET=<admin_secret_for_channels_mgmt_api>
 SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
-FUND_RELAYER_ID=launchtube-fund
+FUND_RELAYER_ID=channels-fund
 LOCK_TTL_SECONDS=30
 LOG_LEVEL=info
 ```
 
-### 2b. Provision LaunchTube Sequence Accounts
-
-After generating the credentials above, you can use the bundled TypeScript
-script to create the required relayers, signers, and Stellar accounts while also
-updating the LaunchTube plugin configuration:
-
-```bash
-cd launchtube
-pnpm install
-pnpm exec tsx ./scripts/create-sequence-accounts.ts \
-  --total 3 \
-  --base-url http://localhost:8080 \
-  --api-key <RELAYER_API_KEY> \
-  --funding-relayer launchtube-fund \
-  --plugin-id launchtube-plugin \
-  --plugin-admin-secret <LAUNCHTUBE_ADMIN_SECRET> \
-  --network testnet
-
-# Rerun with --fix to audit or heal any partially created state
-pnpm exec tsx ./scripts/create-sequence-accounts.ts \
-  --total 3 \
-  --base-url http://localhost:8080 \
-  --api-key <RELAYER_API_KEY> \
-  --funding-relayer launchtube-fund \
-  --plugin-id launchtube-plugin \
-  --plugin-admin-secret <LAUNCHTUBE_ADMIN_SECRET> \
-  --network testnet \
-  --fix
-```
-
-The script waits for each funding transaction to confirm, prints a summary of
-the relayer/signer state, and updates the LaunchTube management API with the
-sequence account list so the plugin is immediately ready for use.
-
 ### 3. Verify Configuration
 
-The LaunchTube plugin and relayer configurations are already set up for testnet. The configurations include:
+The Channels plugin and relayer configurations are already set up for testnet. The configurations include:
 
 **`config/config.json`** (pre-configured):
 
-- Three relayers defined: `launchtube-fund`, `launchtube-seq-001`, `launchtube-seq-002`
+- Three relayers defined: `channels-fund`, `channel-001`, `channel-002`
 - The Fund relayer has `concurrent_transactions: true` enabled in policies to allow parallel processing
 - Corresponding signers pointing to the key files you'll create
-- Plugin registered as `launchtube-plugin`
+- Plugin registered as `channels`
 
-**LaunchTube Configuration** (via environment variables):
+**Channels Configuration** (via environment variables):
 
-LaunchTube is configured through environment variables in your `.env` file:
+Channels is configured through environment variables in your `.env` file:
 
 - `STELLAR_NETWORK=testnet` - Sets the Stellar network
 - `SOROBAN_RPC_URL=https://soroban-testnet.stellar.org` - RPC endpoint
-- `FUND_RELAYER_ID=launchtube-fund` - ID of the fund relayer
-- `LAUNCHTUBE_ADMIN_SECRET` - Admin secret for LaunchTube operations
+- `FUND_RELAYER_ID=channels-fund` - ID of the fund relayer
+- `PLUGIN_ADMIN_SECRET` - Admin secret for Channels operations
 - `LOCK_TTL_SECONDS=30` - Lock timeout for sequence management
 
 ### 4. (Optional) Configure Webhooks
@@ -192,9 +158,9 @@ docker compose up
 The relayer will start and display the public addresses for your accounts in the logs:
 
 ```
-relayer-1  | Syncing sequence for relayer: launchtube-fund (GCP7KWGZCDDVBFKANDJTA74H2HSORV34SMSQIPGZ3PK7V6OHKCFGRTF6)
-relayer-1  | Syncing sequence for relayer: launchtube-seq-001 (GCWFXU6HZNHLTXMHWZRPXYBZFOODJYRDZXFOPMUQN4S2JJGEZA2ZHA4B)
-relayer-1  | Syncing sequence for relayer: launchtube-seq-002 (GA7IXWK3VKF25JOXJZZ7XMFB3A3IPM5A66MW5DJ6FPOIWME4F66UK4HL)
+relayer-1  | Syncing sequence for relayer: channels-fund (GCP7KWGZCDDVBFKANDJTA74H2HSORV34SMSQIPGZ3PK7V6OHKCFGRTF6)
+relayer-1  | Syncing sequence for relayer: channel-001 (GCWFXU6HZNHLTXMHWZRPXYBZFOODJYRDZXFOPMUQN4S2JJGEZA2ZHA4B)
+relayer-1  | Syncing sequence for relayer: channel-002 (GA7IXWK3VKF25JOXJZZ7XMFB3A3IPM5A66MW5DJ6FPOIWME4F66UK4HL)
 ```
 
 ### 6. Fund Your Accounts on Testnet
@@ -203,9 +169,9 @@ In a new terminal, copy the addresses from the logs above and fund them:
 
 ```bash
 # Replace with your actual addresses from the logs
-curl "https://friendbot.stellar.org?addr=YOUR_FUND_ADDRESS"     # fund account
-curl "https://friendbot.stellar.org?addr=YOUR_SEQ_001_ADDRESS"  # seq-001
-curl "https://friendbot.stellar.org?addr=YOUR_SEQ_002_ADDRESS"  # seq-002
+curl "https://friendbot.stellar.org?addr=YOUR_FUND_ADDRESS"        # fund account
+curl "https://friendbot.stellar.org?addr=YOUR_CHANNEL_001_ADDRESS"  # channel-001
+curl "https://friendbot.stellar.org?addr=YOUR_CHANNEL_002_ADDRESS"  # channel-002
 ```
 
 After funding, restart the service for it to recognize the funded accounts:
@@ -215,22 +181,22 @@ After funding, restart the service for it to recognize the funded accounts:
 docker compose up
 ```
 
-### 7. Initialize Sequence Accounts
+### 7. Initialize Channel Accounts
 
-**Critical Step**: Before LaunchTube can process transactions, you must configure the sequence accounts using the Management API:
+**Critical Step**: Before Channels can process transactions, you must configure the channel accounts using the Management API:
 
 ```bash
 # Replace YOUR_API_KEY with your actual API key from the .env file
-# Replace YOUR_ADMIN_SECRET with your LAUNCHTUBE_ADMIN_SECRET from the .env file
-curl -X POST http://localhost:8080/api/v1/plugins/launchtube-plugin/call \
+# Replace YOUR_ADMIN_SECRET with your PLUGIN_ADMIN_SECRET from the .env file
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "params": {
       "management": {
-        "action": "setSequenceAccounts",
+        "action": "setChannelAccounts",
         "adminSecret": "YOUR_ADMIN_SECRET",
-        "relayerIds": ["launchtube-seq-001", "launchtube-seq-002"]
+        "relayerIds": ["channel-0001", "channel-0002", "channel-0003"]
       }
     }
   }'
@@ -244,7 +210,7 @@ curl -X POST http://localhost:8080/api/v1/plugins/launchtube-plugin/call \
   "data": {
     "result": {
       "ok": true,
-      "appliedRelayerIds": ["launchtube-seq-001", "launchtube-seq-002"]
+      "appliedRelayerIds": ["channel-0001", "channel-0002", "channel-0003"]
     }
   },
   "error": null
@@ -262,41 +228,38 @@ curl -X GET http://localhost:8080/api/v1/plugins \
 
 ### Submit Transactions
 
-#### Option 1: Complete Transaction XDR
+#### Option 1: Signed Transaction XDR (no channel)
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/plugins/launchtube-plugin/call \
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "params": {
-      "xdr": "AAAAAgAAAAA...",
-      "sim": false
+      "xdr": "AAAAAgAAAAA..."
     }
   }'
 ```
 
-#### Option 2: Soroban Function + Auth
+#### Option 2: Soroban Function + Auth (uses channel accounts)
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/plugins/launchtube-plugin/call \
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "params": {
       "func": "AAAABAAAAAEAAAAGc3ltYm9s...",
-      "auth": ["AAAACAAAAAEAAAA..."],
-      "sim": true
+      "auth": ["AAAACAAAAAEAAAA..."]
     }
   }'
 ```
 
 **Parameters:**
 
-- `xdr`: Complete transaction envelope XDR
+- `xdr`: Complete signed transaction envelope XDR (not fee-bump)
 - `func`: Soroban host function XDR
 - `auth`: Array of authorization entry XDRs
-- `sim`: Simulate before submission (true/false)
 
 > Use either `xdr` OR `func`+`auth`, not both
 
@@ -308,7 +271,7 @@ curl -X POST http://localhost:8080/api/v1/plugins/launchtube-plugin/call \
   "data": {
     "result": {
       "transactionId": "tx_123456",
-      "status": "submitted",
+      "status": "confirmed",
       "hash": "1234567890abcdef..."
     }
   },
@@ -318,23 +281,23 @@ curl -X POST http://localhost:8080/api/v1/plugins/launchtube-plugin/call \
 
 ## Local Plugin Development (Swap Built Output Only)
 
-If you're actively developing `@openzeppelin/relayer-plugin-launchtube`, you can replace only the installed package's built output (`dist/`) with your local build — no code or package.json changes required.
+If you're actively developing `@openzeppelin/relayer-plugin-channels`, you can replace only the installed package's built output (`dist/`) with your local build — no code or package.json changes required.
 
 ### One-time setup
 
 1. Set an environment variable pointing to your local plugin directory:
 
 ```bash
-export LAUNCHTUBE_PLUGIN_DIR=/path/to/your/relayer-plugin-launchtube
+export CHANNELS_PLUGIN_DIR=/path/to/your/relayer-plugin-channels
 ```
 
-Replace `/path/to/your/relayer-plugin-launchtube` with the actual path to your local plugin repository.
+Replace `/path/to/your/relayer-plugin-channels` with the actual path to your local plugin repository.
 
 2. Build the plugin so `dist/` exists (or run a watch build):
 
 ```bash
-pnpm -C $LAUNCHTUBE_PLUGIN_DIR install
-pnpm -C $LAUNCHTUBE_PLUGIN_DIR build
+pnpm -C $CHANNELS_PLUGIN_DIR install
+pnpm -C $CHANNELS_PLUGIN_DIR build
 ```
 
 ### Start with the dev override
@@ -342,55 +305,53 @@ pnpm -C $LAUNCHTUBE_PLUGIN_DIR build
 `docker-compose.plugin-dev.yaml` mounts your local plugin's `dist/` over the installed package's `dist/` in the container.
 
 ```bash
-export LAUNCHTUBE_PLUGIN_LOCAL_DIST=$LAUNCHTUBE_PLUGIN_DIR/dist
+export CHANNELS_PLUGIN_LOCAL_DIST=$CHANNELS_PLUGIN_DIR/dist
 docker compose -f docker-compose.yaml -f docker-compose.plugin-dev.yaml up -d --build
 ```
 
 Under the hood:
 
-- Your local `dist/` is mounted at `/app/plugins/launchtube/node_modules/@openzeppelin/relayer-plugin-launchtube/dist` inside the container.
+- Your local `dist/` is mounted at `/app/plugins/channel/node_modules/@openzeppelin/relayer-plugin-channels/dist` inside the container.
 - Dependencies remain intact from the installed npm package; only the runtime JS is swapped.
 
 ### Iterating on code
 
 1. Edit code in your plugin repo.
-2. Rebuild the plugin outputs (e.g., `pnpm -C $LAUNCHTUBE_PLUGIN_DIR build`).
+2. Rebuild the plugin outputs (e.g., `pnpm -C $CHANNELS_PLUGIN_DIR build`).
 3. Restart the relayer to reload the module: `docker compose restart relayer`.
-
-````
 
 ### Management API
 
-LaunchTube provides a management API to dynamically configure sequence accounts. This requires the `LAUNCHTUBE_ADMIN_SECRET` from your `.env` file.
+Channels provides a management API to dynamically configure channel accounts. This requires the `PLUGIN_ADMIN_SECRET` from your `.env` file.
 
-#### List Current Sequence Accounts
+#### List Current Channel Accounts
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/plugins/launchtube-plugin/call \
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "params": {
       "management": {
-        "action": "listSequenceAccounts",
+        "action": "listChannelAccounts",
         "adminSecret": "YOUR_ADMIN_SECRET"
       }
     }
   }'
-````
+```
 
-#### Add or Update Sequence Accounts
+#### Add or Update Channel Accounts
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/plugins/launchtube-plugin/call \
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "params": {
       "management": {
-        "action": "setSequenceAccounts",
+        "action": "setChannelAccounts",
         "adminSecret": "YOUR_ADMIN_SECRET",
-        "relayerIds": ["launchtube-seq-001", "launchtube-seq-002", "launchtube-seq-003"]
+        "relayerIds": ["channel-0001", "channel-0002", "channel-0003"]
       }
     }
   }'
@@ -398,15 +359,15 @@ curl -X POST http://localhost:8080/api/v1/plugins/launchtube-plugin/call \
 
 **Important Notes:**
 
-- You must configure at least one sequence account before LaunchTube can process transactions
+- You must configure at least one channel account before Channels can process `func`+`auth` transactions
 - The management API will prevent removing accounts that are currently locked (in use)
 - All relayer IDs must exist in your OpenZeppelin Relayer configuration
 
 ### Generating XDR for the Relayer
 
-Use [@stellar/stellar-sdk](https://stellar.github.io/js-stellar-sdk/TransactionBuilder.html) to export either a full transaction envelope XDR, or Soroban `func` + `auth` XDRs.
+Use [@stellar/stellar-sdk](https://stellar.github.io/js-stellar-sdk/TransactionBuilder.html) to export either a signed transaction envelope XDR, or Soroban `func` + `auth` XDRs.
 
-#### Full transaction envelope XDR
+#### Signed transaction envelope XDR
 
 ```ts
 import { Networks, TransactionBuilder, rpc } from '@stellar/stellar-sdk';
@@ -420,13 +381,11 @@ const tx = new TransactionBuilder(account, {
   .setTimeout(30)
   .build();
 
-// Optional: pre-simulate to set resources/fees before signing
-const sim = await rpcServer.simulateTransaction(tx);
-const prepared = rpc.assembleTransaction(tx, sim).build();
-prepared.sign(keypair);
+// Sign with your account
+tx.sign(keypair);
 
 // Export base64 envelope XDR
-const envelopeXdr = prepared.toXDR();
+const envelopeXdr = tx.toXDR();
 ```
 
 #### Soroban `func` + `auth` XDR
@@ -447,32 +406,32 @@ const authXdrs = (op.auth ?? []).map(a => a.toXDR("base64"));
 ## How It Works
 
 1. **Request Validation**: Validates input parameters and extracts Soroban data
-2. **Sequence Account Pool**: Acquires an available sequence account
+2. **Channel Account Pool** (for func+auth): Acquires an available channel account
 3. **Auth Checking**: Validates authorization entries
-4. **Simulation** (if enabled): Simulates transaction and rebuilds with proper resources
+4. **Simulation** (for func+auth): Simulates transaction and rebuilds with proper resources
 5. **Fee Bumping**: Fund account wraps transaction with fee bump
 6. **Submission**: Sends to Stellar network
 
 ### Concurrent Transaction Processing
 
-This example uses multiple Stellar accounts (fund account + sequence accounts) with `concurrent_transactions: true` enabled in the fund account relayer policy. This configuration:
+This example uses multiple Stellar accounts (fund account + channel accounts) with `concurrent_transactions: true` enabled in the fund account relayer policy. This configuration:
 
-- **Allows parallel processing**: Fund account leverages the sequence accounts sequence number, so transactions can be processed concurrently without blocking each other
+- **Allows parallel processing**: Fund account leverages the channel accounts' sequence numbers, so transactions can be processed concurrently without blocking each other
 - **Improves throughput**: Multiple transactions can be in-flight simultaneously
 
 ## Troubleshooting
 
 ### Common issues
 
-- **Plugin not found**: Verify the plugin `id` and `path` in `examples/launchtube-plugin-example/config/config.json`.
-- **Missing LaunchTube config**: Ensure required environment variables are set in `.env` and that sequence accounts are configured via the Management API.
+- **Plugin not found**: Verify the plugin `id` and `path` in `examples/channels-plugin-example/config/config.json`.
+- **Missing Channels config**: Ensure required environment variables are set in `.env` and that channel accounts are configured via the Management API.
 - **API authentication**: Ensure the `Authorization` header is present and the `API_KEY` is set in `.env`.
 - **Webhook not received**: Ensure the `notifications[0].url` is set to a reachable URL.
 
 ### View logs
 
 ```bash
-docker compose -f examples/launchtube-plugin-example/docker-compose.yaml logs -f relayer
+docker compose -f examples/channels-plugin-example/docker-compose.yaml logs -f relayer
 ```
 
 ## Docker notes
@@ -483,13 +442,13 @@ This compose file mounts:
 volumes:
   - ./config:/app/config/
   - ../../config/networks:/app/config/networks
-  - ./launchtube:/app/plugins/launchtube
+  - ./channel:/app/plugins/channel
 ```
 
-The container image already includes the relayer and plugin runtime. You only need to mount your config and the LaunchTube plugin wrapper.
+The container image already includes the relayer and plugin runtime. You only need to mount your config and the Channels plugin wrapper.
 
 ## Learn more
 
-- LaunchTube plugin GitHub: `https://github.com/OpenZeppelin/relayer-plugin-launchtube`
-- LaunchTube on npm: `https://www.npmjs.com/package/@openzeppelin/relayer-plugin-launchtube`
+- Channels plugin GitHub: `https://github.com/OpenZeppelin/relayer-plugin-channels`
+- Channels on npm: `https://www.npmjs.com/package/@openzeppelin/relayer-plugin-channels`
 - OpenZeppelin Relayer docs: `https://docs.openzeppelin.com/relayer`
