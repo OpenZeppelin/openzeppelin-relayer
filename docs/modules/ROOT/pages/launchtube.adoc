@@ -13,6 +13,84 @@ The plugin features:
 - **Retry Logic**: Built-in error handling and retry mechanisms
 - **Management API**: Dynamic configuration of sequence accounts
 
+== Using the SDK Client
+
+The recommended way to interact with Launchtube is through the OpenZeppelin Relayer SDK, which provides a type-safe, unified interface for transaction submission and management operations.
+
+=== Installation
+
+[source,bash]
+----
+npm install @openzeppelin/relayer-sdk
+# or
+pnpm add @openzeppelin/relayer-sdk
+----
+
+=== Client Setup
+
+The SDK supports two connection modes with identical APIs:
+
+[source,typescript]
+----
+import { LaunchtubeClient, LaunchtubeRelayerClient } from '@openzeppelin/relayer-sdk';
+
+// Direct HTTP connection to Launchtube service
+const directClient = new LaunchtubeClient({
+  baseUrl: 'https://launchtube.example.com',    // Launchtube service URL
+  apiKey: process.env.LAUNCHTUBE_API_KEY,       // Service API key
+  adminSecret: process.env.LAUNCHTUBE_ADMIN,    // Optional: for management
+  timeout: 30000,                                // Optional: request timeout
+});
+
+// Connection via OpenZeppelin Relayer plugin
+const relayerClient = new LaunchtubeRelayerClient({
+  apiKey: process.env.RELAYER_API_KEY,          // Relayer API key
+  pluginId: 'launchtube-plugin',                // Plugin identifier
+  baseUrl: 'http://localhost:8080', // Optional: Relayer URL
+  adminSecret: process.env.LAUNCHTUBE_ADMIN,    // Optional: for management
+});
+----
+
+=== Submitting Transactions
+
+[source,typescript]
+----
+// Submit complete transaction XDR
+const result = await client.sendTransaction({
+  xdr: 'AAAAAgAAAABQEp+s8xGPrF...',  // Signed transaction envelope
+  sim: false,                         // Skip simulation
+});
+
+// Submit Soroban function + authorization entries
+const result = await client.sendTransaction({
+  func: 'AAAABAAAAAEAAAAGc3ltYm9s...',           // Host function XDR
+  auth: ['AAAACAAAAAEAAAA...', 'AAAACAAAAAEAAAB...'], // Auth entries
+  sim: true,                                          // Simulate first
+});
+
+console.log('Transaction:', result.transactionId, result.hash, result.status);
+----
+
+=== Managing Sequence Accounts
+
+[source,typescript]
+----
+// List configured sequence accounts
+const accounts = await client.listSequenceAccounts();
+console.log('Sequence accounts:', accounts.relayerIds);
+
+// Update sequence accounts (requires adminSecret)
+const result = await client.setSequenceAccounts(['seq-001', 'seq-002', 'seq-003']);
+console.log('Update successful:', result.ok, result.appliedRelayerIds);
+----
+
+=== Example Scripts
+
+Complete working examples are available in the SDK repository:
+
+- https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/blob/main/examples/clients/launchtube-direct-example.ts[launchtube-direct-example.ts] - Direct HTTP connection
+- https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/blob/main/examples/clients/launchtube-relayer-example.ts[launchtube-relayer-example.ts] - OpenZeppelin Relayer connection
+
 == Prerequisites
 
 - Node.js >= 18
