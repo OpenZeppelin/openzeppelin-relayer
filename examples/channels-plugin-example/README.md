@@ -27,7 +27,6 @@ You only need to:
 3. Set up environment variables
 4. Start Docker to get account addresses
 5. Fund accounts on testnet
-6. Restart the service
 
 All configurations are pre-set for testnet use.
 
@@ -286,12 +285,19 @@ If you're actively developing `@openzeppelin/relayer-plugin-channels`, you can r
 
 ### One-time setup
 
-- Ensure your local plugin path exists, e.g. `/Users/dylan/github/relayer-plugin-channels`.
-- Build the plugin so `dist/` exists (or run a watch build):
+1. Set an environment variable pointing to your local plugin directory:
 
 ```bash
-pnpm -C /Users/dylan/github/relayer-plugin-channels install
-pnpm -C /Users/dylan/github/relayer-plugin-channels build   # or a dev/watch script
+export CHANNELS_PLUGIN_DIR=/path/to/your/relayer-plugin-channels
+```
+
+Replace `/path/to/your/relayer-plugin-channels` with the actual path to your local plugin repository.
+
+2. Build the plugin so `dist/` exists (or run a watch build):
+
+```bash
+pnpm -C $CHANNELS_PLUGIN_DIR install
+pnpm -C $CHANNELS_PLUGIN_DIR build
 ```
 
 ### Start with the dev override
@@ -299,7 +305,7 @@ pnpm -C /Users/dylan/github/relayer-plugin-channels build   # or a dev/watch scr
 `docker-compose.plugin-dev.yaml` mounts your local plugin's `dist/` over the installed package's `dist/` in the container.
 
 ```bash
-export CHANNELS_PLUGIN_LOCAL_DIST=/Users/dylan/github/relayer-plugin-channels/dist
+export CHANNELS_PLUGIN_LOCAL_DIST=$CHANNELS_PLUGIN_DIR/dist
 docker compose -f docker-compose.yaml -f docker-compose.plugin-dev.yaml up -d --build
 ```
 
@@ -311,7 +317,7 @@ Under the hood:
 ### Iterating on code
 
 1. Edit code in your plugin repo.
-2. Rebuild the plugin outputs (e.g., `pnpm build`).
+2. Rebuild the plugin outputs (e.g., `pnpm -C $CHANNELS_PLUGIN_DIR build`).
 3. Restart the relayer to reload the module: `docker compose restart relayer`.
 
 ### Management API
