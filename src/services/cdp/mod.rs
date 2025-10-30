@@ -77,7 +77,7 @@ pub trait CdpServiceTrait: Send + Sync {
     async fn sign_solana_transaction(&self, message: String) -> Result<Vec<u8>, CdpError>;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CdpService {
     pub config: CdpSignerConfig,
     pub client: Client,

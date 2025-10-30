@@ -13,18 +13,17 @@ use crate::{
     constants::{DEFAULT_SOLANA_MAX_TX_DATA_SIZE, DEFAULT_SOLANA_MIN_BALANCE},
     domain::{SolanaTokenProgram, TokenInstruction as SolanaTokenInstruction},
     models::RelayerSolanaPolicy,
-    services::provider::SolanaProviderTrait,
+    services::provider::{SolanaProviderError, SolanaProviderTrait},
 };
+use serde::Serialize;
 use solana_client::rpc_response::RpcSimulateTransactionResult;
-use solana_sdk::{
-    commitment_config::CommitmentConfig, pubkey::Pubkey, system_instruction::SystemInstruction,
-    transaction::Transaction,
-};
-use solana_system_interface::program;
+use solana_commitment_config::CommitmentConfig;
+use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
+use solana_system_interface::{instruction::SystemInstruction, program};
 use thiserror::Error;
 use tracing::info;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Serialize)]
 #[allow(dead_code)]
 pub enum SolanaTransactionValidationError {
     #[error("Failed to decode transaction: {0}")]
@@ -33,8 +32,6 @@ pub enum SolanaTransactionValidationError {
     DeserializeError(String),
     #[error("Validation error: {0}")]
     SigningError(String),
-    #[error("Simulation error: {0}")]
-    SimulationError(String),
     #[error("Policy violation: {0}")]
     PolicyViolation(String),
     #[error("Blockhash {0} is expired")]
@@ -47,6 +44,65 @@ pub enum SolanaTransactionValidationError {
     InsufficientFunds(String),
     #[error("Insufficient balance: {0}")]
     InsufficientBalance(String),
+    #[error("Underlying Solana provider error: {0}")]
+    UnderlyingSolanaProvider(#[from] SolanaProviderError),
+}
+
+impl SolanaTransactionValidationError {
+    /// Determines if this validation error is transient (retriable) or permanent.
+    ///
+    /// Transient errors are typically RPC/network issues that may succeed on retry:
+    /// - RPC connection errors
+    /// - Network timeouts
+    /// - Node behind errors
+    ///
+    /// Permanent errors are validation failures that won't change on retry:
+    /// - Policy violations
+    /// - Invalid transaction structure
+    /// - Insufficient funds (actual balance issue, not RPC error)
+    pub fn is_transient(&self) -> bool {
+        match self {
+            // Policy violations are always permanent
+            Self::PolicyViolation(_) => false,
+
+            // Fee payer mismatch is permanent
+            Self::FeePayer(_) => false,
+
+            // Decode/deserialize errors are permanent (invalid transaction)
+            Self::DecodeError(_) | Self::DeserializeError(_) => false,
+
+            // Expired blockhash is permanent (cannot be fixed by retry)
+            Self::ExpiredBlockhash(_) => false,
+
+            // Signing errors are permanent
+            Self::SigningError(_) => false,
+
+            Self::UnderlyingSolanaProvider(err) => err.is_transient(),
+
+            // Generic validation errors - check message for transient patterns
+            Self::ValidationError(msg) => {
+                // Check for known transient error patterns in the message
+                msg.contains("RPC")
+                    || msg.contains("timeout")
+                    || msg.contains("timed out")
+                    || msg.contains("connection")
+                    || msg.contains("network")
+                    || msg.contains("Failed to check")
+                    || msg.contains("Failed to get")
+                    || msg.contains("node behind")
+                    || msg.contains("rate limit")
+            }
+
+            // Balance errors - check if it's an RPC error or actual insufficient balance
+            Self::InsufficientBalance(msg) | Self::InsufficientFunds(msg) => {
+                // If the message indicates an RPC failure, it's transient
+                msg.contains("Failed to get balance")
+                    || msg.contains("RPC")
+                    || msg.contains("timeout")
+                    || msg.contains("network")
+            }
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -110,6 +166,14 @@ impl SolanaTransactionValidator {
     }
 
     /// Validates that the transaction's blockhash is still valid.
+    ///
+    /// Checks if the provided blockhash is still valid on-chain. If the blockhash has expired,
+    /// the transaction will fail when submitted.
+    ///
+    /// **Note**: For single-signer transactions, expired blockhashes can be refreshed during
+    /// resubmission. However, validation still occurs to provide early feedback.
+    /// For multi-signer transactions, expired blockhashes cannot be refreshed without
+    /// invalidating existing signatures, so validation is critical.
     pub async fn validate_blockhash<T: SolanaProviderTrait>(
         tx: &Transaction,
         provider: &T,
@@ -119,13 +183,7 @@ impl SolanaTransactionValidator {
         // Check if blockhash is still valid
         let is_valid = provider
             .is_blockhash_valid(&blockhash, CommitmentConfig::confirmed())
-            .await
-            .map_err(|e| {
-                SolanaTransactionValidationError::ValidationError(format!(
-                    "Failed to check blockhash validity: {}",
-                    e
-                ))
-            })?;
+            .await?;
 
         if !is_valid {
             return Err(SolanaTransactionValidationError::ExpiredBlockhash(format!(
@@ -339,11 +397,7 @@ impl SolanaTransactionValidator {
         policy: &RelayerSolanaPolicy,
         provider: &impl SolanaProviderTrait,
     ) -> Result<(), SolanaTransactionValidationError> {
-        let balance = provider
-            .get_balance(relayer_address)
-            .await
-            .map_err(|e| SolanaTransactionValidationError::ValidationError(e.to_string()))?;
-
+        let balance = provider.get_balance(relayer_address).await?;
         // Ensure minimum balance policy is maintained
         let min_balance = policy.min_balance.unwrap_or(DEFAULT_SOLANA_MIN_BALANCE);
         let required_balance = fee + min_balance;
@@ -563,10 +617,9 @@ impl SolanaTransactionValidator {
     ) -> Result<RpcSimulateTransactionResult, SolanaTransactionValidationError> {
         let new_tx = Transaction::new_unsigned(tx.message.clone());
 
-        provider
-            .simulate_transaction(&new_tx)
-            .await
-            .map_err(|e| SolanaTransactionValidationError::SimulationError(e.to_string()))
+        let result = provider.simulate_transaction(&new_tx).await?;
+
+        Ok(result)
     }
 }
 
@@ -586,7 +639,7 @@ mod tests {
         signature::{Keypair, Signer},
     };
     use solana_system_interface::{instruction, program};
-    use spl_token::{instruction as token_instruction, state::Account};
+    use spl_token_interface::{instruction as token_instruction, state::Account};
 
     fn setup_token_transfer_test(
         transfer_amount: Option<u64>,
@@ -606,7 +659,7 @@ mod tests {
 
         // Create token transfer instruction
         let transfer_ix = token_instruction::transfer(
-            &spl_token::id(),
+            &spl_token_interface::id(),
             &source,
             &destination,
             &owner.pubkey(),
@@ -649,7 +702,7 @@ mod tests {
             mint,
             owner: owner.pubkey(),
             amount: 999,
-            state: spl_token::state::AccountState::Initialized,
+            state: spl_token_interface::state::AccountState::Initialized,
             ..Default::default()
         };
         let mut account_data = vec![0; Account::LEN];
@@ -663,7 +716,7 @@ mod tests {
                     Ok(solana_sdk::account::Account {
                         lamports: 1000000,
                         data: local_account_data,
-                        owner: spl_token::id(),
+                        owner: spl_token_interface::id(),
                         executable: false,
                         rent_epoch: 0,
                     })
@@ -685,6 +738,23 @@ mod tests {
         let recipient = Pubkey::new_unique();
         let instruction = instruction::transfer(fee_payer, &recipient, 1000);
         let message = Message::new(&[instruction], Some(fee_payer));
+        Transaction::new_unsigned(message)
+    }
+
+    fn create_multi_signer_test_transaction(
+        fee_payer: &Pubkey,
+        additional_signer: &Pubkey,
+    ) -> Transaction {
+        let recipient = Pubkey::new_unique();
+        let instruction = instruction::transfer(fee_payer, &recipient, 1000);
+        // Create message with 2 required signatures
+        let mut message = Message::new(&[instruction], Some(fee_payer));
+        // Add second signer to account keys
+        if !message.account_keys.contains(additional_signer) {
+            message.account_keys.push(*additional_signer);
+        }
+        // Set num_required_signatures to 2
+        message.header.num_required_signatures = 2;
         Transaction::new_unsigned(message)
     }
 
@@ -715,7 +785,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_blockhash_valid() {
-        let transaction = create_test_transaction(&Keypair::new().pubkey());
+        // Use multi-signer transaction so blockhash validation actually runs
+        let fee_payer = Keypair::new().pubkey();
+        let additional_signer = Keypair::new().pubkey();
+        let transaction = create_multi_signer_test_transaction(&fee_payer, &additional_signer);
         let mut mock_provider = MockSolanaProviderTrait::new();
 
         mock_provider
@@ -734,7 +807,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_blockhash_expired() {
-        let transaction = create_test_transaction(&Keypair::new().pubkey());
+        // Use multi-signer transaction so blockhash validation actually runs
+        let fee_payer = Keypair::new().pubkey();
+        let additional_signer = Keypair::new().pubkey();
+        let transaction = create_multi_signer_test_transaction(&fee_payer, &additional_signer);
         let mut mock_provider = MockSolanaProviderTrait::new();
 
         mock_provider
@@ -752,7 +828,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_blockhash_provider_error() {
-        let transaction = create_test_transaction(&Keypair::new().pubkey());
+        // Use multi-signer transaction so blockhash validation actually runs
+        let fee_payer = Keypair::new().pubkey();
+        let additional_signer = Keypair::new().pubkey();
+        let transaction = create_multi_signer_test_transaction(&fee_payer, &additional_signer);
         let mut mock_provider = MockSolanaProviderTrait::new();
 
         mock_provider.expect_is_blockhash_valid().returning(|_, _| {
@@ -764,8 +843,27 @@ mod tests {
 
         assert!(matches!(
             result.unwrap_err(),
-            SolanaTransactionValidationError::ValidationError(_)
+            SolanaTransactionValidationError::UnderlyingSolanaProvider(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn test_validate_blockhash_validates_single_signer() {
+        // Single-signer transactions are now validated (no longer skipped)
+        // This provides early feedback even though blockhash can be refreshed during resubmit
+        let transaction = create_test_transaction(&Keypair::new().pubkey());
+        let mut mock_provider = MockSolanaProviderTrait::new();
+
+        // Expect provider call for blockhash validation
+        mock_provider
+            .expect_is_blockhash_valid()
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+
+        let result =
+            SolanaTransactionValidator::validate_blockhash(&transaction, &mock_provider).await;
+
+        // Should succeed after validation
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -1116,6 +1214,12 @@ mod tests {
                     inner_instructions: None,
                     replacement_blockhash: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 };
                 Box::pin(async { Ok(simulation_result) })
             });
@@ -1147,7 +1251,7 @@ mod tests {
 
         assert!(matches!(
             result.unwrap_err(),
-            SolanaTransactionValidationError::SimulationError(_)
+            SolanaTransactionValidationError::UnderlyingSolanaProvider(_)
         ));
     }
 

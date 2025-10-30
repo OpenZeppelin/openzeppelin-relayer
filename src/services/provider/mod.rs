@@ -43,6 +43,50 @@ pub enum ProviderError {
     Other(String),
 }
 
+impl ProviderError {
+    /// Determines if this error is transient (can retry) or permanent (should fail).
+    ///
+    /// **Transient (can retry):**
+    /// - `SolanaRpcError`: Delegates to SolanaProviderError::is_transient()
+    /// - `Timeout`: Connection timeouts can resolve
+    /// - `RateLimited`: Rate limits are temporary
+    /// - `BadGateway`: Gateway issues are temporary
+    /// - `RequestError` with 5xx: Server errors are temporary
+    /// - `Other`: Unknown errors default to transient for safety
+    ///
+    /// **Permanent (fail immediately):**
+    /// - `InvalidAddress`: Address format issues won't resolve
+    /// - `NetworkConfiguration`: Configuration errors are permanent
+    /// - `RequestError` with 4xx: Client errors are permanent
+    pub fn is_transient(&self) -> bool {
+        match self {
+            // Delegate to underlying error's is_transient()
+            ProviderError::SolanaRpcError(err) => err.is_transient(),
+
+            // Transient errors - can retry
+            ProviderError::Timeout => true,
+            ProviderError::RateLimited => true,
+            ProviderError::BadGateway => true,
+            ProviderError::Other(_) => true, // Conservative: default to transient
+
+            // Permanent errors
+            ProviderError::InvalidAddress(_) => false,
+            ProviderError::NetworkConfiguration(_) => false,
+
+            // HTTP status code based classification
+            ProviderError::RequestError { status_code, .. } => {
+                // 5xx errors are server-side and typically transient
+                // 4xx errors are client-side and typically permanent
+                *status_code >= 500
+            }
+
+            // RPC error codes - default to transient for safety
+            // Specific codes could be handled here if needed
+            ProviderError::RpcErrorCode { .. } => true,
+        }
+    }
+}
+
 impl From<hex::FromHexError> for ProviderError {
     fn from(err: hex::FromHexError) -> Self {
         ProviderError::InvalidAddress(err.to_string())

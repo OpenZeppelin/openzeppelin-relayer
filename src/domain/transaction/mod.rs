@@ -27,7 +27,7 @@ use crate::{
             price_params_handler::PriceParamsHandler,
         },
         provider::get_network_provider,
-        signer::{EvmSignerFactory, StellarSignerFactory},
+        signer::{EvmSignerFactory, SolanaSignerFactory, StellarSignerFactory},
     },
 };
 use async_trait::async_trait;
@@ -44,6 +44,8 @@ pub mod stellar;
 mod util;
 pub use util::*;
 
+// Explicit re-exports to avoid ambiguous glob re-exports
+pub use common::is_final_state;
 pub use common::*;
 pub use evm::{ensure_status, ensure_status_one_of, DefaultEvmTransaction, EvmRelayerTransaction};
 pub use solana::{DefaultSolanaTransaction, SolanaRelayerTransaction};
@@ -474,12 +476,16 @@ impl RelayerTransactionFactory {
                     relayer.custom_rpc_urls.clone(),
                 )?);
 
+                let signer_service =
+                    Arc::new(SolanaSignerFactory::create_solana_signer(&signer.into())?);
+
                 Ok(NetworkTransaction::Solana(SolanaRelayerTransaction::new(
                     relayer,
                     relayer_repository,
                     solana_provider,
                     transaction_repository,
                     job_producer,
+                    signer_service,
                 )?))
             }
             NetworkType::Stellar => {

@@ -17,6 +17,9 @@ pub use evm_transaction::*;
 mod stellar_transaction;
 pub use stellar_transaction::*;
 
+mod solana_transaction;
+pub use solana_transaction::*;
+
 mod public_endpoints;
 pub use public_endpoints::*;
 
