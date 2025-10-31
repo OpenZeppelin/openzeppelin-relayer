@@ -288,8 +288,8 @@ When invoking contract functions, arguments must be provided as ScVal values in 
 | Symbol | `"symbol": "transfer"` | Symbol (used for function names) |
 | Address | `"address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"` | Stellar account or contract address |
 | Bytes | `"bytes": "deadbeef"` | Hex-encoded byte array |
-| Vector | `"vec": ["u32": 1, "u32": 2, "u32": 3]` | Array of ScVal values |
-| Map | `"map": ["key": "symbol": "name", "val": "string": "MyToken"]` | Key-value pairs |
+| Vector | `"vec": [{"u32": 1, "u32": 2, "u32": 3]}` | Array of ScVal values |
+| Map | `"map": [{"key": {"symbol": "name", "val": "string": "MyToken"}]}` | Key-value pairs |
 
 Additional types like U128, I128, U256, and I256 are also supported using multi-part representations.
 

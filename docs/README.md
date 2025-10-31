@@ -1,11 +1,11 @@
 # Generate Documentation
 
-- To generate documentation locally, run the following command
+- To generate rust documentation locally, run the following command
 
   - In separate terminal from root of the repo run:
 
     ```sh
-    cargo make rust-antora
+    cargo make rust-docs
     ```
 
 - To update openapi documentation, run:
