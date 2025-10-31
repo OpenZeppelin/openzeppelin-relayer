@@ -372,7 +372,7 @@ where
 
         // Parse method and params from the Stellar request (single unified variant)
         let (method, params_json) = match stellar_request {
-            StellarRpcRequest::GenericRpcRequest { method, params } => (method, params),
+            StellarRpcRequest::RawRpcRequest { method, params } => (method, params),
         };
 
         match self
@@ -528,11 +528,11 @@ mod tests {
             InMemoryNetworkRepository, MockRelayerRepository, MockTransactionRepository,
         },
         services::{
-            provider::MockStellarProviderTrait, signer::MockStellarSignTrait,
+            provider::{MockStellarProviderTrait, ProviderError},
+            signer::MockStellarSignTrait,
             MockTransactionCounterServiceTrait,
         },
     };
-    use eyre::eyre;
     use mockall::predicate::*;
     use soroban_rs::xdr::{
         AccountEntry, AccountEntryExt, AccountId, DecoratedSignature, PublicKey, SequenceNumber,
@@ -660,7 +660,7 @@ mod tests {
         provider
             .expect_get_account()
             .with(eq(relayer_model.address.clone()))
-            .returning(|_| Box::pin(async { Err(eyre!("fail")) }));
+            .returning(|_| Box::pin(async { Err(ProviderError::Other("fail".to_string())) }));
         let counter = MockTransactionCounterServiceTrait::new();
         let relayer_repo = MockRelayerRepository::new();
         let tx_repo = MockTransactionRepository::new();
@@ -793,7 +793,9 @@ mod tests {
         provider_mock
             .expect_get_account()
             .with(eq(relayer_model.address.clone()))
-            .returning(|_| Box::pin(async { Err(eyre!("Stellar provider down")) }));
+            .returning(|_| {
+                Box::pin(async { Err(ProviderError::Other("Stellar provider down".to_string())) })
+            });
         let signer = MockStellarSignTrait::new();
 
         let stellar_relayer = StellarRelayer::new(
@@ -887,7 +889,9 @@ mod tests {
         provider
             .expect_get_account()
             .with(eq(relayer_model.address.clone()))
-            .returning(|_| Box::pin(async { Err(eyre!("provider failed")) }));
+            .returning(|_| {
+                Box::pin(async { Err(ProviderError::Other("provider failed".to_string())) })
+            });
 
         let relayer_repo = Arc::new(MockRelayerRepository::new());
         let tx_repo = Arc::new(MockTransactionRepository::new());
@@ -914,7 +918,7 @@ mod tests {
         assert!(result.is_err());
         match result.err().unwrap() {
             RelayerError::ProviderError(msg) => {
-                assert!(msg.contains("Failed to fetch account for balance: provider failed"));
+                assert!(msg.contains("Failed to fetch account for balance"));
             }
             _ => panic!("Unexpected error type"),
         }
@@ -1143,7 +1147,7 @@ mod tests {
         // Mock validation failure - sequence sync fails
         provider
             .expect_get_account()
-            .returning(|_| Box::pin(ready(Err(eyre!("RPC error")))));
+            .returning(|_| Box::pin(ready(Err(ProviderError::Other("RPC error".to_string())))));
 
         // Mock disable_relayer call
         let mut disabled_relayer = relayer_model.clone();
@@ -1318,9 +1322,11 @@ mod tests {
         let mut job_producer = MockJobProducerTrait::new();
 
         // Mock validation failure - sequence sync fails
-        provider
-            .expect_get_account()
-            .returning(|_| Box::pin(ready(Err(eyre!("Sequence sync failed")))));
+        provider.expect_get_account().returning(|_| {
+            Box::pin(ready(Err(ProviderError::Other(
+                "Sequence sync failed".to_string(),
+            ))))
+        });
 
         // Mock disable_relayer call
         let mut disabled_relayer = relayer_model.clone();
@@ -1378,9 +1384,11 @@ mod tests {
         let mut relayer_repo = MockRelayerRepository::new();
 
         // Mock validation failure - sequence sync fails
-        provider
-            .expect_get_account()
-            .returning(|_| Box::pin(ready(Err(eyre!("Sequence sync failed")))));
+        provider.expect_get_account().returning(|_| {
+            Box::pin(ready(Err(ProviderError::Other(
+                "Sequence sync failed".to_string(),
+            ))))
+        });
 
         // Mock disable_relayer call
         let mut disabled_relayer = relayer_model.clone();

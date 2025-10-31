@@ -679,7 +679,7 @@ impl SolanaProviderTrait for SolanaProvider {
         &self,
         method: &str,
         params: serde_json::Value,
-        id: Option<JsonRpcId>,
+        _id: Option<JsonRpcId>,
     ) -> Result<serde_json::Value, SolanaProviderError> {
         // let id_value = match id {
         //     Some(id) => serde_json::to_value(id)
@@ -708,7 +708,12 @@ impl SolanaProviderTrait for SolanaProvider {
             let params_for_call = params_owned.clone();
             async move {
                 client
-                    .send(RpcRequest::Custom { method: method_static }, params_for_call)
+                    .send(
+                        RpcRequest::Custom {
+                            method: method_static,
+                        },
+                        params_for_call,
+                    )
                     .await
                     .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
             }

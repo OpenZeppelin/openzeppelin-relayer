@@ -5,7 +5,7 @@ use utoipa::ToSchema;
 #[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq)]
 #[serde(untagged)]
 pub enum EvmRpcResult {
-    GenericRpcResult(String),
+    /// Raw JSON-RPC response value. Covers string, array or object results.
     RawRpcResult(serde_json::Value),
 }
 

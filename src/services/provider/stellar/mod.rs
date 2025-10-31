@@ -121,7 +121,10 @@ pub trait StellarProviderTrait: Send + Sync {
 
 impl StellarProvider {
     // Create new StellarProvider instance
-    pub fn new(rpc_configs: Vec<RpcConfig>, timeout_seconds: u64) -> Result<Self, ProviderError> {
+    pub fn new(
+        mut rpc_configs: Vec<RpcConfig>,
+        timeout_seconds: u64,
+    ) -> Result<Self, ProviderError> {
         if rpc_configs.is_empty() {
             return Err(ProviderError::NetworkConfiguration(
                 "No RPC configurations provided for StellarProvider".to_string(),
@@ -130,6 +133,14 @@ impl StellarProvider {
 
         RpcConfig::validate_list(&rpc_configs)
             .map_err(|e| ProviderError::NetworkConfiguration(e.to_string()))?;
+
+        rpc_configs.retain(|config| config.get_weight() > 0);
+
+        if rpc_configs.is_empty() {
+            return Err(ProviderError::NetworkConfiguration(
+                "No active RPC configurations provided (all weights are 0 or list was empty after filtering)".to_string(),
+            ));
+        }
 
         let selector = RpcSelector::new(rpc_configs).map_err(|e| {
             ProviderError::NetworkConfiguration(format!("Failed to create RPC selector: {}", e))
@@ -146,14 +157,12 @@ impl StellarProvider {
 
     /// Initialize a Stellar client for a given URL
     fn initialize_provider(&self, url: &str) -> Result<Client, ProviderError> {
-        let client = Client::new(url).map_err(|e| {
+        Client::new(url).map_err(|e| {
             ProviderError::NetworkConfiguration(format!(
                 "Failed to create Stellar RPC client: {} - URL: '{}'",
                 e, url
             ))
-        });
-
-        client
+        })
     }
 
     /// Initialize a reqwest client for raw HTTP JSON-RPC calls.
@@ -282,7 +291,7 @@ impl StellarProviderTrait for StellarProvider {
             let account_id = Arc::clone(&account_id);
             async move {
                 client
-                    .get_account(&*account_id)
+                    .get_account(&account_id)
                     .await
                     .map_err(|e| ProviderError::Other(format!("Failed to get account: {}", e)))
             }
@@ -383,7 +392,7 @@ impl StellarProviderTrait for StellarProvider {
             let tx_id = Arc::clone(&tx_id);
             async move {
                 client
-                    .get_transaction(&*tx_id)
+                    .get_transaction(&tx_id)
                     .await
                     .map_err(|e| ProviderError::Other(format!("Failed to get transaction: {}", e)))
             }
@@ -443,7 +452,7 @@ impl StellarProviderTrait for StellarProvider {
                 client
                     .get_events(
                         request.start.clone(),
-                        request.event_type.clone(),
+                        request.event_type,
                         &request.contract_ids,
                         &request.topics,
                         request.limit,
@@ -480,7 +489,7 @@ impl StellarProviderTrait for StellarProvider {
         if let Some(error) = response.get("error") {
             if let Some(code) = error.get("code").and_then(|c| c.as_i64()) {
                 return Err(ProviderError::RpcErrorCode {
-                    code: code as i64,
+                    code,
                     message: error
                         .get("message")
                         .and_then(|m| m.as_str())
@@ -506,6 +515,7 @@ mod tests {
         GetEventsRequest, StellarProvider, StellarProviderTrait,
     };
     use futures::FutureExt;
+    use lazy_static::lazy_static;
     use mockall::predicate as p;
     use soroban_rs::stellar_rpc_client::{
         EventStart, GetEventsResponse, GetLatestLedgerResponse, GetLedgerEntriesResponse,
@@ -519,6 +529,44 @@ mod tests {
     };
     use soroban_rs::{create_mock_set_options_tx_envelope, SorobanTransactionResponse};
     use std::str::FromStr;
+    use std::sync::Mutex;
+
+    lazy_static! {
+        static ref STELLAR_TEST_ENV_MUTEX: Mutex<()> = Mutex::new(());
+    }
+
+    struct StellarTestEnvGuard {
+        _mutex_guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl StellarTestEnvGuard {
+        fn new(mutex_guard: std::sync::MutexGuard<'static, ()>) -> Self {
+            std::env::set_var(
+                "API_KEY",
+                "test_api_key_for_evm_provider_new_this_is_long_enough_32_chars",
+            );
+            std::env::set_var("REDIS_URL", "redis://test-dummy-url-for-evm-provider");
+
+            Self {
+                _mutex_guard: mutex_guard,
+            }
+        }
+    }
+
+    impl Drop for StellarTestEnvGuard {
+        fn drop(&mut self) {
+            std::env::remove_var("API_KEY");
+            std::env::remove_var("REDIS_URL");
+        }
+    }
+
+    // Helper function to set up the test environment
+    fn setup_test_env() -> StellarTestEnvGuard {
+        let guard = STELLAR_TEST_ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        StellarTestEnvGuard::new(guard)
+    }
 
     fn dummy_hash() -> Hash {
         Hash([0u8; 32])
@@ -645,6 +693,8 @@ mod tests {
 
     #[test]
     fn test_new_provider() {
+        let _env_guard = setup_test_env();
+
         let provider =
             StellarProvider::new(vec![RpcConfig::new("http://localhost:8000".to_string())], 0);
         assert!(provider.is_ok());
@@ -661,6 +711,8 @@ mod tests {
 
     #[test]
     fn test_new_provider_selects_highest_weight() {
+        let _env_guard = setup_test_env();
+
         let configs = vec![
             RpcConfig::with_weight("http://rpc1.example.com".to_string(), 10).unwrap(),
             RpcConfig::with_weight("http://rpc2.example.com".to_string(), 100).unwrap(), // Highest weight
@@ -675,6 +727,8 @@ mod tests {
 
     #[test]
     fn test_new_provider_ignores_weight_zero() {
+        let _env_guard = setup_test_env();
+
         let configs = vec![
             RpcConfig::with_weight("http://rpc1.example.com".to_string(), 0).unwrap(), // Weight 0
             RpcConfig::with_weight("http://rpc2.example.com".to_string(), 100).unwrap(), // Should be selected
@@ -709,6 +763,8 @@ mod tests {
 
     #[test]
     fn test_new_provider_all_zero_weight_configs() {
+        let _env_guard = setup_test_env();
+
         let configs = vec![
             RpcConfig::with_weight("http://rpc1.example.com".to_string(), 0).unwrap(),
             RpcConfig::with_weight("http://rpc2.example.com".to_string(), 0).unwrap(),
@@ -925,6 +981,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_concrete_get_account_error() {
+            let _env_guard = setup_test_env();
             let provider = setup_provider();
             let result = provider.get_account("SOME_ACCOUNT_ID").await;
             assert!(result.is_err());
@@ -936,6 +993,8 @@ mod tests {
 
         #[tokio::test]
         async fn test_concrete_simulate_transaction_envelope_error() {
+            let _env_guard = setup_test_env();
+
             let provider = setup_provider();
             let envelope: TransactionEnvelope = dummy_transaction_envelope();
             let result = provider.simulate_transaction_envelope(&envelope).await;
@@ -948,6 +1007,8 @@ mod tests {
 
         #[tokio::test]
         async fn test_concrete_send_transaction_polling_error() {
+            let _env_guard = setup_test_env();
+
             let provider = setup_provider();
             let envelope: TransactionEnvelope = dummy_transaction_envelope();
             let result = provider.send_transaction_polling(&envelope).await;
@@ -960,6 +1021,8 @@ mod tests {
 
         #[tokio::test]
         async fn test_concrete_get_network_error() {
+            let _env_guard = setup_test_env();
+
             let provider = setup_provider();
             let result = provider.get_network().await;
             assert!(result.is_err());
@@ -971,6 +1034,8 @@ mod tests {
 
         #[tokio::test]
         async fn test_concrete_get_latest_ledger_error() {
+            let _env_guard = setup_test_env();
+
             let provider = setup_provider();
             let result = provider.get_latest_ledger().await;
             assert!(result.is_err());
@@ -982,6 +1047,8 @@ mod tests {
 
         #[tokio::test]
         async fn test_concrete_send_transaction_error() {
+            let _env_guard = setup_test_env();
+
             let provider = setup_provider();
             let envelope: TransactionEnvelope = dummy_transaction_envelope();
             let result = provider.send_transaction(&envelope).await;
@@ -994,6 +1061,8 @@ mod tests {
 
         #[tokio::test]
         async fn test_concrete_get_transaction_error() {
+            let _env_guard = setup_test_env();
+
             let provider = setup_provider();
             let hash: Hash = dummy_hash();
             let result = provider.get_transaction(&hash).await;
@@ -1006,6 +1075,8 @@ mod tests {
 
         #[tokio::test]
         async fn test_concrete_get_transactions_error() {
+            let _env_guard = setup_test_env();
+
             let provider = setup_provider();
             let req = GetTransactionsRequest {
                 start_ledger: None,
@@ -1021,6 +1092,8 @@ mod tests {
 
         #[tokio::test]
         async fn test_concrete_get_ledger_entries_error() {
+            let _env_guard = setup_test_env();
+
             let provider = setup_provider();
             let key: LedgerKey = dummy_ledger_key();
             let result = provider.get_ledger_entries(&[key]).await;
@@ -1033,6 +1106,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_concrete_get_events_error() {
+            let _env_guard = setup_test_env();
             let provider = setup_provider();
             let req = GetEventsRequest {
                 start: EventStart::Ledger(1),

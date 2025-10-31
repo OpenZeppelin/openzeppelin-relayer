@@ -1681,7 +1681,9 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             params: NetworkRpcRequest::Evm(EvmRpcRequest::RawRpcRequest {
                 method: "eth_getBalance".to_string(),
-                params: serde_json::Value::String(r#"["0x742d35Cc6634C0532925a3b844Bc454e4438f44e", "latest"]"#.to_string()),
+                params: serde_json::Value::String(
+                    r#"["0x742d35Cc6634C0532925a3b844Bc454e4438f44e", "latest"]"#.to_string(),
+                ),
             }),
             id: Some(JsonRpcId::Number(1)),
         };
@@ -2170,7 +2172,9 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             params: NetworkRpcRequest::Evm(EvmRpcRequest::RawRpcRequest {
                 method: "eth_getBalance".to_string(),
-                params: serde_json::Value::String(r#"["0x742d35Cc6634C0532925a3b844Bc454e4438f44e", "latest"]"#.to_string()),
+                params: serde_json::Value::String(
+                    r#"["0x742d35Cc6634C0532925a3b844Bc454e4438f44e", "latest"]"#.to_string(),
+                ),
             }),
             id: Some(JsonRpcId::Number(4)),
         };

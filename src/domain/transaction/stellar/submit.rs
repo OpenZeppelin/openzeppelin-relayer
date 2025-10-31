@@ -201,7 +201,7 @@ mod tests {
     use crate::domain::transaction::stellar::test_helpers::*;
 
     mod submit_transaction_tests {
-        use crate::models::RepositoryError;
+        use crate::{models::RepositoryError, services::provider::ProviderError};
 
         use super::*;
 
@@ -252,10 +252,9 @@ mod tests {
             let mut mocks = default_test_mocks();
 
             // Provider fails with non-bad-sequence error
-            mocks
-                .provider
-                .expect_send_transaction()
-                .returning(|_| Box::pin(async { Err(eyre::eyre!("Network error")) }));
+            mocks.provider.expect_send_transaction().returning(|_| {
+                Box::pin(async { Err(ProviderError::Other("Network error".to_string())) })
+            });
 
             // Mock finalize_transaction_state for failure handling
             mocks
@@ -447,10 +446,9 @@ mod tests {
             let mut mocks = default_test_mocks();
 
             // Provider fails with non-bad-sequence error
-            mocks
-                .provider
-                .expect_send_transaction()
-                .returning(|_| Box::pin(async { Err(eyre::eyre!("Network error")) }));
+            mocks.provider.expect_send_transaction().returning(|_| {
+                Box::pin(async { Err(ProviderError::Other("Network error".to_string())) })
+            });
 
             // No sync expected for non-bad-sequence errors
 
@@ -517,7 +515,11 @@ mod tests {
 
             // Mock provider to return bad sequence error
             mocks.provider.expect_send_transaction().returning(|_| {
-                Box::pin(async { Err(eyre::eyre!("transaction submission failed: TxBadSeq")) })
+                Box::pin(async {
+                    Err(ProviderError::Other(
+                        "transaction submission failed: TxBadSeq".to_string(),
+                    ))
+                })
             });
 
             // Mock get_account for sync_sequence_from_chain
