@@ -18,7 +18,7 @@ jobs:
         with:
           egress-policy: audit
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -43,7 +43,7 @@ jobs:
           fi
       - name: Install cargo hack
         if: steps.lock-file-commit.outputs.changes == 'true'
-        uses: taiki-e/install-action@bf2f998095ccb464eb8b85eeb95a460ccd744ec4  # v2.62.17
+        uses: taiki-e/install-action@a24ba45235ed716ff76646268742990dc9458860  # v2.62.42
         with:
           tool: cargo-hack
       - name: Check MSRV
