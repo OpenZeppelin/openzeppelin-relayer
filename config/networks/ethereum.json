@@ -57,7 +57,9 @@
         "https://1rpc.io/holesky",
         "https://ethereum-holesky-rpc.publicnode.com"
       ],
-      "tags": []
+      "tags": [
+        "deprecated"
+      ]
     }
   ]
 }
