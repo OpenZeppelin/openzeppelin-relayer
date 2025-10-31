@@ -1,3 +1,15 @@
 [[IgnoredVulns]]
+id = "RUSTSEC-2021-0141"
+reason = "The crate is unmaintained, but it works. If there is any new vulnerability, there will be another ID."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0375"
+reason = "The crate is unmaintained, but it works. If there is any new vulnerability, there will be another ID."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0388"
+reason = "The crate is unmaintained, but it works. If there is any new vulnerability, there will be another ID."
+
+[[IgnoredVulns]]
 id = "RUSTSEC-2024-0436"
 reason = "The crate is unmaintained, but it works. If there is any new vulnerability, there will be another ID."
