@@ -121,19 +121,39 @@ pub fn convert_to_internal_rpc_request(
             })
         }
         crate::models::NetworkType::Solana => {
-            let solana_request: crate::models::SolanaRpcRequest =
-                serde_json::from_value(request.clone()).map_err(|e| {
-                    crate::models::ApiError::BadRequest(format!(
-                        "Invalid Solana RPC request: {}",
-                        e
-                    ))
-                })?;
+            let params = request
+                .get("params")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
 
-            Ok(JsonRpcRequest {
-                jsonrpc,
-                params: NetworkRpcRequest::Solana(solana_request),
-                id,
-            })
+            // Decide whether to parse into a typed SolanaRpcRequest or treat as raw.
+            // If the method is unknown (Generic), map to RawRpcRequest preserving the real method name.
+            match crate::models::SolanaRpcMethod::from_string(method) {
+                Some(crate::models::SolanaRpcMethod::Generic(_)) | None => Ok(JsonRpcRequest {
+                    jsonrpc,
+                    params: NetworkRpcRequest::Solana(
+                        crate::models::SolanaRpcRequest::RawRpcRequest {
+                            method: method.to_string(),
+                            params,
+                        },
+                    ),
+                    id,
+                }),
+                // Known methods: construct a minimal JSON with method+params and deserialize into the typed enum
+                Some(_) => {
+                    let json = serde_json::json!({"method": method, "params": params});
+                    let solana_request: crate::models::SolanaRpcRequest =
+                        serde_json::from_value(json).map_err(|e| {
+                            ApiError::BadRequest(format!("Invalid Solana RPC request: {}", e))
+                        })?;
+
+                    Ok(JsonRpcRequest {
+                        jsonrpc,
+                        params: NetworkRpcRequest::Solana(solana_request),
+                        id,
+                    })
+                }
+            }
         }
         crate::models::NetworkType::Stellar => {
             let params = request
@@ -494,6 +514,32 @@ mod tests {
 
         let result_stellar = convert_to_internal_rpc_request(request, &NetworkType::Stellar);
         assert!(result_stellar.is_err());
+    }
+
+    #[test]
+    fn test_convert_solana_unknown_method_maps_to_raw_request() {
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getLatestBlockhash",
+            "params": [ { "commitment": "finalized" } ]
+        });
+
+        let result = convert_to_internal_rpc_request(request, &NetworkType::Solana).unwrap();
+
+        assert_eq!(result.jsonrpc, "2.0");
+        assert_eq!(result.id, Some(JsonRpcId::Number(1)));
+
+        match result.params {
+            NetworkRpcRequest::Solana(solana_request) => match solana_request {
+                crate::models::SolanaRpcRequest::RawRpcRequest { method, params } => {
+                    assert_eq!(method, "getLatestBlockhash");
+                    assert_eq!(params[0]["commitment"], "finalized");
+                }
+                _ => unreachable!("Expected RawRpcRequest variant for unknown method"),
+            },
+            _ => unreachable!("Expected Solana request"),
+        }
     }
 
     #[test]

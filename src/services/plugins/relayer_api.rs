@@ -41,7 +41,8 @@ pub enum PluginMethod {
     SignTransaction,
     #[serde(rename = "getRelayer")]
     GetRelayer,
-    RpcRequest,
+    #[serde(rename = "rpc")]
+    Rpc,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -190,7 +191,7 @@ impl RelayerApi {
             PluginMethod::GetRelayerStatus => self.handle_get_relayer_status(request, state).await,
             PluginMethod::SignTransaction => self.handle_sign_transaction(request, state).await,
             PluginMethod::GetRelayer => self.handle_get_relayer_info(request, state).await,
-            PluginMethod::RpcRequest => self.handle_rpc_request(request, state).await,
+            PluginMethod::Rpc => self.handle_rpc_request(request, state).await,
         }
     }
 
