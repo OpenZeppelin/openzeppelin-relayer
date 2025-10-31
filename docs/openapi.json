@@ -4679,21 +4679,7 @@
         "oneOf": [
           {
             "type": "object",
-            "required": [
-              "method",
-              "params"
-            ],
-            "properties": {
-              "method": {
-                "type": "string"
-              },
-              "params": {
-                "type": "string"
-              }
-            }
-          },
-          {
-            "type": "object",
+            "description": "Unified raw request variant where params may be a JSON string or structured JSON value.",
             "required": [
               "method",
               "params"
@@ -4710,9 +4696,8 @@
       "EvmRpcResult": {
         "oneOf": [
           {
-            "type": "string"
-          },
-          {}
+            "description": "Raw JSON-RPC response value. Covers string, array or object results."
+          }
         ]
       },
       "EvmTransactionDataSignature": {
@@ -6981,6 +6966,35 @@
               }
             },
             "example": "getFeaturesEnabled"
+          },
+          {
+            "type": "object",
+            "required": [
+              "params",
+              "method"
+            ],
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "rawRpcRequest"
+                ]
+              },
+              "params": {
+                "type": "object",
+                "required": [
+                  "method",
+                  "params"
+                ],
+                "properties": {
+                  "method": {
+                    "type": "string"
+                  },
+                  "params": {}
+                }
+              }
+            },
+            "example": "rawRpcRequest"
           }
         ]
       },
@@ -7132,6 +7146,20 @@
                 }
               }
             ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "method"
+            ],
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "rawRpcResult"
+                ]
+              }
+            }
           }
         ]
       },
@@ -7231,6 +7259,7 @@
         "oneOf": [
           {
             "type": "object",
+            "description": "Raw request where params can be any JSON value (string or structured).",
             "required": [
               "params",
               "method"
@@ -7239,11 +7268,22 @@
               "method": {
                 "type": "string",
                 "enum": [
-                  "GenericRpcRequest"
+                  "RawRpcRequest"
                 ]
               },
               "params": {
-                "type": "string"
+                "type": "object",
+                "description": "Raw request where params can be any JSON value (string or structured).",
+                "required": [
+                  "method",
+                  "params"
+                ],
+                "properties": {
+                  "method": {
+                    "type": "string"
+                  },
+                  "params": {}
+                }
               }
             }
           }
@@ -7252,7 +7292,7 @@
       "StellarRpcResult": {
         "oneOf": [
           {
-            "type": "string"
+            "description": "Raw JSON-RPC response value. Covers string or structured JSON values."
           }
         ]
       },
