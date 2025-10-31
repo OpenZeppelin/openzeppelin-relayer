@@ -832,6 +832,7 @@ where
 mod tests {
     use super::*;
     use crate::{
+        config::network::StringOrEnvValue,
         domain::SignTransactionRequestStellar,
         models::{
             ApiResponse, CreateRelayerPolicyRequest, CreateRelayerRequest, RelayerEvmPolicy,
@@ -896,7 +897,7 @@ mod tests {
                 common: NetworkConfigCommon {
                     network: "test".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["http://localhost:8899".to_string()]),
+                    rpc_urls: Some(vec![StringOrEnvValue::plain("http://localhost:8899")]),
                     explorer_urls: None,
                     average_blocktime_ms: Some(400),
                     is_testnet: Some(true),
@@ -919,7 +920,9 @@ mod tests {
                 common: NetworkConfigCommon {
                     network: "test".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["https://horizon-testnet.stellar.org".to_string()]),
+                    rpc_urls: Some(vec![StringOrEnvValue::plain(
+                        "https://horizon-testnet.stellar.org",
+                    )]),
                     explorer_urls: None,
                     average_blocktime_ms: Some(5000),
                     is_testnet: Some(true),

@@ -1,0 +1,54 @@
+{
+  "relayers": [
+    {
+      "id": "mainnet-relayer",
+      "name": "Mainnet ETH Relayer",
+      "network": "mainnet-private",
+      "paused": false,
+      "notification_id": "webhook-notification",
+      "signer_id": "local-signer",
+      "network_type": "evm",
+      "policies": {
+        "min_balance": 0
+      }
+    },
+    {
+      "id": "sepolia-relayer",
+      "name": "Sepolia Test Relayer",
+      "network": "sepolia-private",
+      "paused": false,
+      "notification_id": "webhook-notification",
+      "signer_id": "local-signer",
+      "network_type": "evm",
+      "policies": {
+        "min_balance": 0
+      }
+    }
+  ],
+  "signers": [
+    {
+      "id": "local-signer",
+      "type": "local",
+      "config": {
+        "path": "config/keys/local-signer.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE"
+        }
+      }
+    }
+  ],
+  "notifications": [
+    {
+      "id": "webhook-notification",
+      "type": "webhook",
+      "url": "",
+      "signing_key": {
+        "type": "env",
+        "value": "WEBHOOK_SIGNING_KEY"
+      }
+    }
+  ],
+  "networks": "./config/networks",
+  "plugins": []
+}

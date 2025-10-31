@@ -25,6 +25,7 @@ pub mod file_loading;
 pub mod inheritance;
 pub mod solana;
 pub mod stellar;
+pub mod string_or_env;
 #[cfg(test)]
 pub mod test_utils;
 
@@ -35,6 +36,7 @@ pub use file_loading::*;
 pub use inheritance::*;
 pub use solana::*;
 pub use stellar::*;
+pub use string_or_env::*;
 
 use super::ConfigFileNetworkType;
 use crate::config::ConfigFileError;
@@ -548,7 +550,7 @@ mod tests {
     fn test_validation_error_propagation() {
         let mut config = create_evm_network_wrapped("test-evm");
         if let NetworkFileConfig::Evm(ref mut evm_config) = config {
-            evm_config.common.rpc_urls = Some(vec!["invalid-url".to_string()]);
+            evm_config.common.rpc_urls = Some(vec![StringOrEnvValue::plain("invalid-url")]);
         }
 
         let result = config.validate();

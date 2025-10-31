@@ -77,10 +77,28 @@ impl TryFrom<NetworkRepoModel> for EvmNetwork {
                     ))
                 })?;
 
+                // Resolve URLs from environment variables if needed
+                let rpc_urls = common
+                    .resolve_rpc_urls()
+                    .map_err(|e| {
+                        RepositoryError::InvalidData(format!(
+                            "Failed to resolve RPC URLs for network '{}': {}",
+                            network_repo.name, e
+                        ))
+                    })?
+                    .unwrap_or_default();
+
+                let explorer_urls = common.resolve_explorer_urls().map_err(|e| {
+                    RepositoryError::InvalidData(format!(
+                        "Failed to resolve Explorer URLs for network '{}': {}",
+                        network_repo.name, e
+                    ))
+                })?;
+
                 Ok(EvmNetwork {
                     network: common.network.clone(),
-                    rpc_urls: common.rpc_urls.clone().unwrap_or_default(),
-                    explorer_urls: common.explorer_urls.clone(),
+                    rpc_urls,
+                    explorer_urls,
                     average_blocktime_ms,
                     is_testnet: common.is_testnet.unwrap_or(false),
                     tags: common.tags.clone().unwrap_or_default(),
@@ -169,6 +187,7 @@ impl EvmNetwork {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::network::StringOrEnvValue;
     use crate::config::{EvmNetworkConfig, NetworkConfigCommon};
     use crate::constants::{NO_MEMPOOL_TAG, OPTIMISM_TAG};
     use crate::models::{NetworkConfigData, NetworkRepoModel, NetworkType};
@@ -286,7 +305,7 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "test-network".to_string(),
                 from: None,
-                rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+                rpc_urls: Some(vec![StringOrEnvValue::plain("https://rpc.example.com")]),
                 explorer_urls: None,
                 average_blocktime_ms: Some(12000),
                 is_testnet: Some(false),
