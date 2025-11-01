@@ -102,7 +102,7 @@ jobs:
       - name: Get cache-hit output
         run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
       - name: Install cargo hack
-        uses: taiki-e/install-action@a24ba45235ed716ff76646268742990dc9458860  # v2.62.42
+        uses: taiki-e/install-action@47be02f2de8a32619316956f6117e150bdc6763f  # v2.62.44
         with:
           tool: cargo-hack
 
@@ -226,7 +226,7 @@ jobs:
       - name: Get cache-hit output
         run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
       - name: Install cargo hack and cargo-llvm-cov
-        uses: taiki-e/install-action@a24ba45235ed716ff76646268742990dc9458860  # v2.62.42
+        uses: taiki-e/install-action@47be02f2de8a32619316956f6117e150bdc6763f  # v2.62.44
         with:
           tool: cargo-hack,cargo-llvm-cov
       - name: Build
