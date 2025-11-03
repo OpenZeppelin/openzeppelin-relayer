@@ -7261,30 +7261,14 @@
             "type": "object",
             "description": "Raw request where params can be any JSON value (string or structured).",
             "required": [
-              "params",
-              "method"
+              "method",
+              "params"
             ],
             "properties": {
               "method": {
-                "type": "string",
-                "enum": [
-                  "RawRpcRequest"
-                ]
+                "type": "string"
               },
-              "params": {
-                "type": "object",
-                "description": "Raw request where params can be any JSON value (string or structured).",
-                "required": [
-                  "method",
-                  "params"
-                ],
-                "properties": {
-                  "method": {
-                    "type": "string"
-                  },
-                  "params": {}
-                }
-              }
+              "params": {}
             }
           }
         ]
