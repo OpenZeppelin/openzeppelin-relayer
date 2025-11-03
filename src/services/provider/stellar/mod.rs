@@ -1447,13 +1447,6 @@ mod stellar_rpc_tests {
         assert!(matches!(result, ProviderError::Timeout));
     }
 
-    // Commented out due to version mismatch between stellar_strkey versions
-    // #[test]
-    // fn test_categorize_stellar_error_with_context_invalid_address() {
-    //     // This test is commented because the stellar-rpc-client library uses a different
-    //     // version of stellar_strkey than what's available in tests, causing type mismatches
-    // }
-
     #[test]
     fn test_categorize_stellar_error_with_context_xdr_error() {
         use soroban_rs::xdr::Error as XdrError;
