@@ -1,3 +1,4 @@
+use crate::domain::map_provider_error;
 use crate::domain::relayer::evm::create_error_response;
 /// This module defines the `StellarRelayer` struct and its associated functionality for
 /// interacting with Stellar networks. The `StellarRelayer` is responsible for managing
@@ -358,11 +359,12 @@ where
         &self,
         request: JsonRpcRequest<NetworkRpcRequest>,
     ) -> Result<JsonRpcResponse<NetworkRpcResult>, RelayerError> {
-        let stellar_request = match request.params {
+        let JsonRpcRequest { id, params, .. } = request;
+        let stellar_request = match params {
             NetworkRpcRequest::Stellar(stellar_req) => stellar_req,
             _ => {
                 return Ok(create_error_response(
-                    request.id,
+                    id.clone(),
                     RpcErrorCodes::INVALID_PARAMS,
                     "Invalid params",
                     "Expected Stellar network request",
@@ -377,17 +379,16 @@ where
 
         match self
             .provider
-            .raw_request_dyn(&method, params_json, request.id.clone())
+            .raw_request_dyn(&method, params_json, id.clone())
             .await
         {
-            Ok(result_value) => Ok(create_success_response(request.id, result_value)),
+            Ok(result_value) => Ok(create_success_response(id.clone(), result_value)),
             Err(provider_error) => {
-                println!("stellar error {}", provider_error);
-                // let (error_code, error_message) = map_provider_error(&provider_error);
+                let (error_code, error_message) = map_provider_error(&provider_error);
                 Ok(create_error_response(
-                    request.id,
-                    1,
-                    "",
+                    id.clone(),
+                    error_code,
+                    error_message,
                     &provider_error.to_string(),
                 ))
             }

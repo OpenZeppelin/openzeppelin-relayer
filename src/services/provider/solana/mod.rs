@@ -35,7 +35,7 @@ use std::{str::FromStr, sync::Arc, time::Duration};
 use thiserror::Error;
 
 use crate::{
-    models::{JsonRpcId, RpcConfig, SolanaTransactionStatus},
+    models::{RpcConfig, SolanaTransactionStatus},
     services::provider::retry_rpc_call,
 };
 
@@ -147,7 +147,6 @@ pub trait SolanaProviderTrait: Send + Sync {
         &self,
         method: &str,
         params: serde_json::Value,
-        id: Option<JsonRpcId>,
     ) -> Result<serde_json::Value, SolanaProviderError>;
 }
 
@@ -679,29 +678,7 @@ impl SolanaProviderTrait for SolanaProvider {
         &self,
         method: &str,
         params: serde_json::Value,
-        _id: Option<JsonRpcId>,
     ) -> Result<serde_json::Value, SolanaProviderError> {
-        // let id_value = match id {
-        //     Some(id) => serde_json::to_value(id)
-        //         .map_err(|e| SolanaProviderError::RpcError(e.to_string()))?,
-        //     None => serde_json::json!(1),
-        // };
-
-        // let request = serde_json::json!({
-        //     "jsonrpc": "2.0",
-        //     "id": id_value,
-        //     "method": method,
-        //     "params": params,
-        // });
-
-        // self.retry_rpc_call("raw_request_dyn", |client| async move {
-        //     let res: std::result::Result<bool, SolanaProviderError> = client.send(RpcRequest::Custom{ method }, params).await
-        //         .map_err(|e| SolanaProviderError::RpcError(e.to_string());
-
-        //     res
-        // })
-        // .await
-        //            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
         let params_owned = params.clone();
         let method_static: &'static str = Box::leak(method.to_string().into_boxed_str());
         self.retry_rpc_call("raw_request_dyn", move |client| {

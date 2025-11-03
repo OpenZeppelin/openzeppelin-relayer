@@ -532,11 +532,16 @@ where
         &self,
         request: JsonRpcRequest<NetworkRpcRequest>,
     ) -> Result<JsonRpcResponse<NetworkRpcResult>, RelayerError> {
-        let solana_request = match request.params {
+        let JsonRpcRequest {
+            jsonrpc: _,
+            id,
+            params,
+        } = request;
+        let solana_request = match params {
             NetworkRpcRequest::Solana(sol_req) => sol_req,
             _ => {
                 return Ok(create_error_response(
-                    request.id,
+                    id.clone(),
                     RpcErrorCodes::INVALID_PARAMS,
                     "Invalid params",
                     "Expected Solana network request",
@@ -547,16 +552,13 @@ where
         match solana_request {
             SolanaRpcRequest::RawRpcRequest { method, params } => {
                 // Handle raw JSON-RPC requests by forwarding to provider
-                let response = self
-                    .provider
-                    .raw_request_dyn(&method, params, request.id.clone())
-                    .await?;
+                let response = self.provider.raw_request_dyn(&method, params).await?;
 
                 Ok(JsonRpcResponse {
                     jsonrpc: "2.0".to_string(),
                     result: Some(NetworkRpcResult::Solana(SolanaRpcResult::RawRpc(response))),
                     error: None,
-                    id: request.id,
+                    id: id.clone(),
                 })
             }
             _ => {
@@ -566,7 +568,7 @@ where
                     .handle_request(JsonRpcRequest {
                         jsonrpc: request.jsonrpc,
                         params: NetworkRpcRequest::Solana(solana_request),
-                        id: request.id,
+                        id: id.clone(),
                     })
                     .await;
 

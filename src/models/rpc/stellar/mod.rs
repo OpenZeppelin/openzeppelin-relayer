@@ -9,7 +9,7 @@ pub enum StellarRpcResult {
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq)]
-#[serde(tag = "method", content = "params")]
+#[serde(untagged)]
 pub enum StellarRpcRequest {
     /// Raw request where params can be any JSON value (string or structured).
     RawRpcRequest {

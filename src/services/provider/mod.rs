@@ -329,6 +329,10 @@ pub fn is_retriable_error(error: &ProviderError) -> bool {
             }
         }
 
+        ProviderError::RequestError { status_code, .. } if (500..=599).contains(status_code) => {
+            true
+        }
+
         // Any other errors: check message for network-related issues
         _ => {
             let err_msg = format!("{}", error);

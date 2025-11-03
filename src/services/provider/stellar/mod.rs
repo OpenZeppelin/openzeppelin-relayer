@@ -16,6 +16,7 @@ use soroban_rs::xdr::{AccountEntry, Hash, LedgerKey, TransactionEnvelope};
 #[cfg(test)]
 use soroban_rs::xdr::{AccountId, LedgerKeyAccount, PublicKey, Uint256};
 use soroban_rs::SorobanTransactionResponse;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(test)]
 use mockall::automock;
@@ -32,6 +33,19 @@ use crate::services::provider::RetryConfig;
 use reqwest::Client as ReqwestClient;
 use std::sync::Arc;
 use std::time::Duration;
+
+/// Generates a unique JSON-RPC request ID.
+///
+/// This function returns a monotonically increasing ID for JSON-RPC requests.
+/// It's thread-safe and guarantees unique IDs across concurrent requests.
+///
+/// # Returns
+///
+/// A unique u64 ID that can be used for JSON-RPC requests
+fn generate_unique_rpc_id() -> u64 {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+    NEXT_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 /// Categorizes a Stellar client error into an appropriate `ProviderError` variant.
 ///
@@ -691,7 +705,7 @@ impl StellarProviderTrait for StellarProvider {
         let id_value = match id {
             Some(id) => serde_json::to_value(id)
                 .map_err(|e| ProviderError::Other(format!("Failed to serialize id: {}", e)))?,
-            None => serde_json::json!(1),
+            None => serde_json::json!(generate_unique_rpc_id()),
         };
 
         let request = serde_json::json!({
