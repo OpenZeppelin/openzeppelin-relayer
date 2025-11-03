@@ -7156,7 +7156,7 @@
               "method": {
                 "type": "string",
                 "enum": [
-                  "rawRpcResult"
+                  "rawRpc"
                 ]
               }
             }

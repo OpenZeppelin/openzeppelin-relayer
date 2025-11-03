@@ -8,9 +8,9 @@ use async_trait::async_trait;
 use eyre::Result;
 use soroban_rs::stellar_rpc_client::Client;
 use soroban_rs::stellar_rpc_client::{
-    EventStart, EventType, GetEventsResponse, GetLatestLedgerResponse, GetLedgerEntriesResponse,
-    GetNetworkResponse, GetTransactionResponse, GetTransactionsRequest, GetTransactionsResponse,
-    SimulateTransactionResponse,
+    Error as StellarClientError, EventStart, EventType, GetEventsResponse, GetLatestLedgerResponse,
+    GetLedgerEntriesResponse, GetNetworkResponse, GetTransactionResponse, GetTransactionsRequest,
+    GetTransactionsResponse, SimulateTransactionResponse,
 };
 use soroban_rs::xdr::{AccountEntry, Hash, LedgerKey, TransactionEnvelope};
 #[cfg(test)]
@@ -32,6 +32,221 @@ use crate::services::provider::RetryConfig;
 use reqwest::Client as ReqwestClient;
 use std::sync::Arc;
 use std::time::Duration;
+
+/// Categorizes a Stellar client error into an appropriate `ProviderError` variant.
+///
+/// This function analyzes the given error and maps it to a specific `ProviderError` variant:
+/// - Handles StellarClientError variants directly (timeouts, JSON-RPC errors, etc.)
+/// - Extracts reqwest::Error from jsonrpsee Transport errors
+/// - Maps JSON-RPC error codes appropriately
+/// - Distinguishes between retriable network errors and non-retriable validation errors
+/// - Falls back to ProviderError::Other for unknown error types
+/// - Optionally prepends a context message to the error for better debugging
+///
+/// # Arguments
+///
+/// * `err` - The StellarClientError to categorize (takes ownership)
+/// * `context` - Optional context message to prepend (e.g., "Failed to get account")
+///
+/// # Returns
+///
+/// The appropriate `ProviderError` variant based on the error type
+fn categorize_stellar_error_with_context(
+    err: StellarClientError,
+    context: Option<&str>,
+) -> ProviderError {
+    let add_context = |msg: String| -> String {
+        match context {
+            Some(ctx) => format!("{}: {}", ctx, msg),
+            None => msg,
+        }
+    };
+    match err {
+        // === Timeout Errors (Retriable) ===
+        StellarClientError::TransactionSubmissionTimeout => ProviderError::Timeout,
+
+        // === Address/Encoding Errors (Non-retriable, Client-side) ===
+        StellarClientError::InvalidAddress(decode_err) => ProviderError::InvalidAddress(
+            add_context(format!("Invalid Stellar address: {}", decode_err)),
+        ),
+
+        // === XDR/Serialization Errors (Non-retriable, Client-side) ===
+        StellarClientError::Xdr(xdr_err) => {
+            ProviderError::Other(add_context(format!("XDR processing error: {}", xdr_err)))
+        }
+
+        // === JSON Parsing Errors (Non-retriable, may indicate RPC response issue) ===
+        StellarClientError::Serde(serde_err) => {
+            ProviderError::Other(add_context(format!("JSON parsing error: {}", serde_err)))
+        }
+
+        // === URL Configuration Errors (Non-retriable, Configuration issue) ===
+        StellarClientError::InvalidRpcUrl(uri_err) => ProviderError::NetworkConfiguration(
+            add_context(format!("Invalid RPC URL: {}", uri_err)),
+        ),
+        StellarClientError::InvalidRpcUrlFromUriParts(uri_err) => {
+            ProviderError::NetworkConfiguration(add_context(format!(
+                "Invalid RPC URL parts: {}",
+                uri_err
+            )))
+        }
+        StellarClientError::InvalidUrl(url) => {
+            ProviderError::NetworkConfiguration(add_context(format!("Invalid URL: {}", url)))
+        }
+
+        // === Network Passphrase Mismatch (Non-retriable, Configuration issue) ===
+        StellarClientError::InvalidNetworkPassphrase { expected, server } => {
+            ProviderError::NetworkConfiguration(add_context(format!(
+                "Network passphrase mismatch: expected {:?}, server returned {:?}",
+                expected, server
+            )))
+        }
+
+        // === JSON-RPC Errors (May be retriable depending on the specific error) ===
+        StellarClientError::JsonRpc(jsonrpsee_err) => {
+            match jsonrpsee_err {
+                // Handle Call errors with error codes
+                jsonrpsee_core::error::Error::Call(err_obj) => {
+                    let code = err_obj.code() as i64;
+                    let message = add_context(err_obj.message().to_string());
+                    ProviderError::RpcErrorCode { code, message }
+                }
+
+                // Handle request timeouts
+                jsonrpsee_core::error::Error::RequestTimeout => ProviderError::Timeout,
+
+                // Handle transport errors (network-level issues)
+                jsonrpsee_core::error::Error::Transport(transport_err) => {
+                    // Check source chain for reqwest errors
+                    let mut source = transport_err.source();
+                    while let Some(s) = source {
+                        if let Some(reqwest_err) = s.downcast_ref::<reqwest::Error>() {
+                            return ProviderError::from(reqwest_err);
+                        }
+                        source = s.source();
+                    }
+
+                    // Fallback: categorize by error message
+                    let err_str = transport_err.to_string();
+                    let err_lower = err_str.to_lowercase();
+
+                    if err_lower.contains("timeout") || err_lower.contains("timed out") {
+                        return ProviderError::Timeout;
+                    }
+
+                    if err_lower.contains("connection refused")
+                        || err_lower.contains("tcp connect error")
+                        || err_lower.contains("connection reset")
+                        || err_lower.contains("broken pipe")
+                        || err_lower.contains("network unreachable")
+                        || err_lower.contains("host unreachable")
+                    {
+                        return ProviderError::Other(add_context(format!(
+                            "Network error: {}",
+                            err_str
+                        )));
+                    }
+
+                    if err_lower.contains("dns") || err_lower.contains("name resolution") {
+                        return ProviderError::Other(add_context(format!(
+                            "DNS error: {}",
+                            err_str
+                        )));
+                    }
+
+                    if err_lower.contains("tls")
+                        || err_lower.contains("ssl")
+                        || err_lower.contains("certificate")
+                    {
+                        return ProviderError::Other(add_context(format!(
+                            "TLS error: {}",
+                            err_str
+                        )));
+                    }
+
+                    ProviderError::Other(add_context(format!("Transport error: {}", err_str)))
+                }
+
+                // Catch-all for other jsonrpsee errors
+                other => ProviderError::Other(add_context(format!("JSON-RPC error: {}", other))),
+            }
+        }
+
+        // === Response Parsing/Validation Errors (May indicate RPC node issue) ===
+        StellarClientError::InvalidResponse => {
+            // This could be a temporary RPC node issue or malformed response
+            ProviderError::Other(add_context(
+                "Invalid response from Stellar RPC server".to_string(),
+            ))
+        }
+        StellarClientError::MissingResult => {
+            ProviderError::Other(add_context("Missing result in RPC response".to_string()))
+        }
+        StellarClientError::MissingError => ProviderError::Other(add_context(
+            "Failed to read error from RPC response".to_string(),
+        )),
+
+        // === Transaction Errors (Non-retriable, Transaction-specific issues) ===
+        StellarClientError::TransactionFailed(msg) => {
+            ProviderError::Other(add_context(format!("Transaction failed: {}", msg)))
+        }
+        StellarClientError::TransactionSubmissionFailed(msg) => ProviderError::Other(add_context(
+            format!("Transaction submission failed: {}", msg),
+        )),
+        StellarClientError::TransactionSimulationFailed(msg) => ProviderError::Other(add_context(
+            format!("Transaction simulation failed: {}", msg),
+        )),
+        StellarClientError::UnexpectedTransactionStatus(status) => ProviderError::Other(
+            add_context(format!("Unexpected transaction status: {}", status)),
+        ),
+
+        // === Resource Not Found Errors (Non-retriable) ===
+        StellarClientError::NotFound(resource, id) => {
+            ProviderError::Other(add_context(format!("{} not found: {}", resource, id)))
+        }
+
+        // === Client-side Validation Errors (Non-retriable) ===
+        StellarClientError::InvalidCursor => {
+            ProviderError::Other(add_context("Invalid cursor".to_string()))
+        }
+        StellarClientError::UnexpectedSimulateTransactionResultSize { length } => {
+            ProviderError::Other(add_context(format!(
+                "Unexpected simulate transaction result size: {}",
+                length
+            )))
+        }
+        StellarClientError::UnexpectedOperationCount { count } => ProviderError::Other(
+            add_context(format!("Unexpected operation count: {}", count)),
+        ),
+        StellarClientError::UnsupportedOperationType => {
+            ProviderError::Other(add_context("Unsupported operation type".to_string()))
+        }
+        StellarClientError::UnexpectedContractCodeDataType(data) => ProviderError::Other(
+            add_context(format!("Unexpected contract code data type: {:?}", data)),
+        ),
+        StellarClientError::UnexpectedContractInstance(val) => ProviderError::Other(add_context(
+            format!("Unexpected contract instance: {:?}", val),
+        )),
+        StellarClientError::LargeFee(fee) => {
+            ProviderError::Other(add_context(format!("Fee too large: {}", fee)))
+        }
+        StellarClientError::CannotAuthorizeRawTransaction => {
+            ProviderError::Other(add_context("Cannot authorize raw transaction".to_string()))
+        }
+        StellarClientError::MissingOp => {
+            ProviderError::Other(add_context("Missing operation in transaction".to_string()))
+        }
+        StellarClientError::MissingSignerForAddress { address } => ProviderError::Other(
+            add_context(format!("Missing signer for address: {}", address)),
+        ),
+
+        // === Deprecated/Other Errors ===
+        #[allow(deprecated)]
+        StellarClientError::UnexpectedToken(entry) => {
+            ProviderError::Other(add_context(format!("Unexpected token: {:?}", entry)))
+        }
+    }
+}
 
 /// Normalize a URL for logging by removing query strings, fragments and redacting userinfo.
 ///
@@ -265,12 +480,10 @@ impl StellarProvider {
                         .timeout(self.timeout_seconds)
                         .send()
                         .await
-                        .map_err(|e| ProviderError::Other(e.to_string()))?;
+                        .map_err(ProviderError::from)?;
 
-                    let json_response: serde_json::Value = response
-                        .json()
-                        .await
-                        .map_err(|e| ProviderError::Other(e.to_string()))?;
+                    let json_response: serde_json::Value =
+                        response.json().await.map_err(ProviderError::from)?;
 
                     Ok(json_response)
                 }
@@ -290,10 +503,9 @@ impl StellarProviderTrait for StellarProvider {
         self.retry_rpc_call("get_account", move |client| {
             let account_id = Arc::clone(&account_id);
             async move {
-                client
-                    .get_account(&account_id)
-                    .await
-                    .map_err(|e| ProviderError::Other(format!("Failed to get account: {}", e)))
+                client.get_account(&account_id).await.map_err(|e| {
+                    categorize_stellar_error_with_context(e, Some("Failed to get account"))
+                })
             }
         })
         .await
@@ -312,7 +524,10 @@ impl StellarProviderTrait for StellarProvider {
                     .simulate_transaction_envelope(&tx_envelope, None)
                     .await
                     .map_err(|e| {
-                        ProviderError::Other(format!("Failed to simulate transaction: {}", e))
+                        categorize_stellar_error_with_context(
+                            e,
+                            Some("Failed to simulate transaction"),
+                        )
                     })
             }
         })
@@ -338,7 +553,10 @@ impl StellarProviderTrait for StellarProvider {
                     .await
                     .map(SorobanTransactionResponse::from)
                     .map_err(|e| {
-                        ProviderError::Other(format!("Failed to send transaction (polling): {}", e))
+                        categorize_stellar_error_with_context(
+                            e,
+                            Some("Failed to send transaction (polling)"),
+                        )
                     })
             }
         })
@@ -347,20 +565,18 @@ impl StellarProviderTrait for StellarProvider {
 
     async fn get_network(&self) -> Result<GetNetworkResponse, ProviderError> {
         self.retry_rpc_call("get_network", |client| async move {
-            client
-                .get_network()
-                .await
-                .map_err(|e| ProviderError::Other(format!("Failed to get network: {}", e)))
+            client.get_network().await.map_err(|e| {
+                categorize_stellar_error_with_context(e, Some("Failed to get network"))
+            })
         })
         .await
     }
 
     async fn get_latest_ledger(&self) -> Result<GetLatestLedgerResponse, ProviderError> {
         self.retry_rpc_call("get_latest_ledger", |client| async move {
-            client
-                .get_latest_ledger()
-                .await
-                .map_err(|e| ProviderError::Other(format!("Failed to get latest ledger: {}", e)))
+            client.get_latest_ledger().await.map_err(|e| {
+                categorize_stellar_error_with_context(e, Some("Failed to get latest ledger"))
+            })
         })
         .await
     }
@@ -374,10 +590,9 @@ impl StellarProviderTrait for StellarProvider {
         self.retry_rpc_call("send_transaction", move |client| {
             let tx_envelope = Arc::clone(&tx_envelope);
             async move {
-                client
-                    .send_transaction(&tx_envelope)
-                    .await
-                    .map_err(|e| ProviderError::Other(format!("Failed to send transaction: {}", e)))
+                client.send_transaction(&tx_envelope).await.map_err(|e| {
+                    categorize_stellar_error_with_context(e, Some("Failed to send transaction"))
+                })
             }
         })
         .await
@@ -391,10 +606,9 @@ impl StellarProviderTrait for StellarProvider {
         self.retry_rpc_call("get_transaction", move |client| {
             let tx_id = Arc::clone(&tx_id);
             async move {
-                client
-                    .get_transaction(&tx_id)
-                    .await
-                    .map_err(|e| ProviderError::Other(format!("Failed to get transaction: {}", e)))
+                client.get_transaction(&tx_id).await.map_err(|e| {
+                    categorize_stellar_error_with_context(e, Some("Failed to get transaction"))
+                })
             }
         })
         .await
@@ -412,7 +626,9 @@ impl StellarProviderTrait for StellarProvider {
                 client
                     .get_transactions((*request).clone())
                     .await
-                    .map_err(|e| ProviderError::Other(format!("Failed to get transactions: {}", e)))
+                    .map_err(|e| {
+                        categorize_stellar_error_with_context(e, Some("Failed to get transactions"))
+                    })
             }
         })
         .await
@@ -431,7 +647,7 @@ impl StellarProviderTrait for StellarProvider {
             let keys = Arc::clone(&keys);
             async move {
                 client.get_ledger_entries(&keys).await.map_err(|e| {
-                    ProviderError::Other(format!("Failed to get ledger entries: {}", e))
+                    categorize_stellar_error_with_context(e, Some("Failed to get ledger entries"))
                 })
             }
         })
@@ -458,7 +674,9 @@ impl StellarProviderTrait for StellarProvider {
                         request.limit,
                     )
                     .await
-                    .map_err(|e| ProviderError::Other(format!("Failed to get events: {}", e)))
+                    .map_err(|e| {
+                        categorize_stellar_error_with_context(e, Some("Failed to get events"))
+                    })
             }
         })
         .await
@@ -509,7 +727,7 @@ impl StellarProviderTrait for StellarProvider {
 }
 
 #[cfg(test)]
-mod tests {
+mod stellar_rpc_tests {
     use super::*;
     use crate::services::provider::stellar::{
         GetEventsRequest, StellarProvider, StellarProviderTrait,
@@ -546,6 +764,11 @@ mod tests {
                 "test_api_key_for_evm_provider_new_this_is_long_enough_32_chars",
             );
             std::env::set_var("REDIS_URL", "redis://test-dummy-url-for-evm-provider");
+            // Set minimal retry config to avoid excessive retries and TCP exhaustion in concurrent tests
+            std::env::set_var("PROVIDER_MAX_RETRIES", "1");
+            std::env::set_var("PROVIDER_MAX_FAILOVERS", "0");
+            std::env::set_var("PROVIDER_RETRY_BASE_DELAY_MS", "0");
+            std::env::set_var("PROVIDER_RETRY_MAX_DELAY_MS", "0");
 
             Self {
                 _mutex_guard: mutex_guard,
@@ -557,6 +780,10 @@ mod tests {
         fn drop(&mut self) {
             std::env::remove_var("API_KEY");
             std::env::remove_var("REDIS_URL");
+            std::env::remove_var("PROVIDER_MAX_RETRIES");
+            std::env::remove_var("PROVIDER_MAX_FAILOVERS");
+            std::env::remove_var("PROVIDER_RETRY_BASE_DELAY_MS");
+            std::env::remove_var("PROVIDER_RETRY_MAX_DELAY_MS");
         }
     }
 
@@ -972,7 +1199,7 @@ mod tests {
     mod concrete_tests {
         use super::*;
 
-        const NON_EXISTENT_URL: &str = "http://127.0.0.1:9999";
+        const NON_EXISTENT_URL: &str = "http://127.0.0.1:9998";
 
         fn setup_provider() -> StellarProvider {
             StellarProvider::new(vec![RpcConfig::new(NON_EXISTENT_URL.to_string())], 0)
@@ -985,10 +1212,13 @@ mod tests {
             let provider = setup_provider();
             let result = provider.get_account("SOME_ACCOUNT_ID").await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to get account"));
+            let err_str = result.unwrap_err().to_string();
+            // Should contain the "Failed to..." context message
+            assert!(
+                err_str.contains("Failed to get account"),
+                "Unexpected error message: {}",
+                err_str
+            );
         }
 
         #[tokio::test]
@@ -999,10 +1229,13 @@ mod tests {
             let envelope: TransactionEnvelope = dummy_transaction_envelope();
             let result = provider.simulate_transaction_envelope(&envelope).await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to simulate transaction"));
+            let err_str = result.unwrap_err().to_string();
+            // Should contain the "Failed to..." context message
+            assert!(
+                err_str.contains("Failed to simulate transaction"),
+                "Unexpected error message: {}",
+                err_str
+            );
         }
 
         #[tokio::test]
@@ -1013,10 +1246,13 @@ mod tests {
             let envelope: TransactionEnvelope = dummy_transaction_envelope();
             let result = provider.send_transaction_polling(&envelope).await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to send transaction (polling)"));
+            let err_str = result.unwrap_err().to_string();
+            // Should contain the "Failed to..." context message
+            assert!(
+                err_str.contains("Failed to send transaction (polling)"),
+                "Unexpected error message: {}",
+                err_str
+            );
         }
 
         #[tokio::test]
@@ -1026,10 +1262,13 @@ mod tests {
             let provider = setup_provider();
             let result = provider.get_network().await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to get network"));
+            let err_str = result.unwrap_err().to_string();
+            // Should contain the "Failed to..." context message
+            assert!(
+                err_str.contains("Failed to get network"),
+                "Unexpected error message: {}",
+                err_str
+            );
         }
 
         #[tokio::test]
@@ -1039,10 +1278,13 @@ mod tests {
             let provider = setup_provider();
             let result = provider.get_latest_ledger().await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to get latest ledger"));
+            let err_str = result.unwrap_err().to_string();
+            // Should contain the "Failed to..." context message
+            assert!(
+                err_str.contains("Failed to get latest ledger"),
+                "Unexpected error message: {}",
+                err_str
+            );
         }
 
         #[tokio::test]
@@ -1053,10 +1295,13 @@ mod tests {
             let envelope: TransactionEnvelope = dummy_transaction_envelope();
             let result = provider.send_transaction(&envelope).await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to send transaction"));
+            let err_str = result.unwrap_err().to_string();
+            // Should contain the "Failed to..." context message
+            assert!(
+                err_str.contains("Failed to send transaction"),
+                "Unexpected error message: {}",
+                err_str
+            );
         }
 
         #[tokio::test]
@@ -1067,10 +1312,13 @@ mod tests {
             let hash: Hash = dummy_hash();
             let result = provider.get_transaction(&hash).await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to get transaction"));
+            let err_str = result.unwrap_err().to_string();
+            // Should contain the "Failed to..." context message
+            assert!(
+                err_str.contains("Failed to get transaction"),
+                "Unexpected error message: {}",
+                err_str
+            );
         }
 
         #[tokio::test]
@@ -1084,10 +1332,13 @@ mod tests {
             };
             let result = provider.get_transactions(req).await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to get transactions"));
+            let err_str = result.unwrap_err().to_string();
+            // Should contain the "Failed to..." context message
+            assert!(
+                err_str.contains("Failed to get transactions"),
+                "Unexpected error message: {}",
+                err_str
+            );
         }
 
         #[tokio::test]
@@ -1098,10 +1349,13 @@ mod tests {
             let key: LedgerKey = dummy_ledger_key();
             let result = provider.get_ledger_entries(&[key]).await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to get ledger entries"));
+            let err_str = result.unwrap_err().to_string();
+            // Should contain the "Failed to..." context message
+            assert!(
+                err_str.contains("Failed to get ledger entries"),
+                "Unexpected error message: {}",
+                err_str
+            );
         }
 
         #[tokio::test]
@@ -1117,10 +1371,13 @@ mod tests {
             };
             let result = provider.get_events(req).await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to get events"));
+            let err_str = result.unwrap_err().to_string();
+            // Should contain the "Failed to..." context message
+            assert!(
+                err_str.contains("Failed to get events"),
+                "Unexpected error message: {}",
+                err_str
+            );
         }
     }
 }

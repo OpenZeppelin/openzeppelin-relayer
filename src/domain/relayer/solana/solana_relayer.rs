@@ -551,11 +551,10 @@ where
                     .provider
                     .raw_request_dyn(&method, params, request.id.clone())
                     .await?;
+
                 Ok(JsonRpcResponse {
                     jsonrpc: "2.0".to_string(),
-                    result: Some(NetworkRpcResult::Solana(SolanaRpcResult::RawRpcResult(
-                        response,
-                    ))),
+                    result: Some(NetworkRpcResult::Solana(SolanaRpcResult::RawRpc(response))),
                     error: None,
                     id: request.id,
                 })
@@ -589,8 +588,7 @@ where
                             }
                             SolanaRpcError::UnsupportedFeeToken(msg) => JsonRpcResponse::error(
                                 -32000,
-                                "UNSUPPORTED
-                                FEE_TOKEN",
+                                "UNSUPPORTED_FEE_TOKEN",
                                 &format!(
                                     "The provided fee_token is not supported by the relayer: {}",
                                     msg
@@ -611,7 +609,7 @@ where
 
                                 JsonRpcResponse::error(
                                     -32002,
-                                    "INSUFFICUNDS",
+                                    "INSUFFICIENT_FUNDS",
                                     &format!(
                                         "The sender does not have enough funds for the transfer: {}",
                                         msg

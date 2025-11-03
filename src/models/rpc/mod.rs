@@ -387,7 +387,7 @@ mod tests {
     fn test_convert_solana_invalid_request() {
         let request = json!({
             "jsonrpc": "2.0",
-            "method": "invalidMethod",
+            "method": "",
             "params": {},
             "id": 1
         });

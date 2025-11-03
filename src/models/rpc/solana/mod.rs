@@ -256,7 +256,7 @@ pub enum SolanaRpcResult {
     SignAndSendTransaction(SignAndSendTransactionResult),
     GetSupportedTokens(GetSupportedTokensResult),
     GetFeaturesEnabled(GetFeaturesEnabledResult),
-    RawRpcResult(serde_json::Value),
+    RawRpc(serde_json::Value),
 }
 
 #[cfg(test)]
