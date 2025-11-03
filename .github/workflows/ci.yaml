@@ -42,10 +42,10 @@ jobs:
         with:
           egress-policy: audit
       - name: Checkout Code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
       - name: Get changed files
         id: changed-files-yaml
-        uses: tj-actions/changed-files@ed68ef82c095e0d48ec87eccea555d944a631a4c  # v46.0.5
+        uses: tj-actions/changed-files@24d32ffd492484c1d75e0c0b894501ddb9d30d62  # v47.0.0
         with:
           files_yaml: |
             code:
@@ -93,7 +93,7 @@ jobs:
         with:
           egress-policy: audit
       - name: Checkout Code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
       - name: Prepare
         id: init
         uses: ./.github/actions/prepare
@@ -102,7 +102,7 @@ jobs:
       - name: Get cache-hit output
         run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
       - name: Install cargo hack
-        uses: taiki-e/install-action@bf2f998095ccb464eb8b85eeb95a460ccd744ec4  # v2.62.17
+        uses: taiki-e/install-action@a24ba45235ed716ff76646268742990dc9458860  # v2.62.42
         with:
           tool: cargo-hack
 
@@ -120,7 +120,7 @@ jobs:
         with:
           egress-policy: audit
       - name: Checkout Code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
       - name: Prepare
         id: init
         uses: ./.github/actions/prepare
@@ -143,7 +143,7 @@ jobs:
         with:
           egress-policy: audit
       - name: Checkout Code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
       - name: Prepare
         id: init
         uses: ./.github/actions/prepare
@@ -163,13 +163,13 @@ jobs:
           | sarif-fmt
         continue-on-error: true
       - name: upload sarif artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
         with:
           name: clippy-results.sarif
           path: clippy-results.sarif
           retention-days: 1
       - name: Upload
-        uses: github/codeql-action/upload-sarif@51f77329afa6477de8c49fc9c7046c15b9a4e79d  # v3.29.5
+        uses: github/codeql-action/upload-sarif@0499de31b99561a6d14a36a5f662c2a54f91beee  # v3.29.5
         with:
           sarif_file: clippy-results.sarif
           wait-for-processing: true
@@ -189,9 +189,9 @@ jobs:
         with:
           egress-policy: audit
       - name: Checkout Code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
       - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903  # v6.0.0
         with:
           node-version: '20'
       - name: Install pnpm and plugin dependencies
@@ -226,7 +226,7 @@ jobs:
       - name: Get cache-hit output
         run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
       - name: Install cargo hack and cargo-llvm-cov
-        uses: taiki-e/install-action@bf2f998095ccb464eb8b85eeb95a460ccd744ec4  # v2.62.17
+        uses: taiki-e/install-action@a24ba45235ed716ff76646268742990dc9458860  # v2.62.42
         with:
           tool: cargo-hack,cargo-llvm-cov
       - name: Build
@@ -298,7 +298,7 @@ jobs:
         with:
           egress-policy: audit
       - name: Checkout Code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435  # v3.11.1
       - name: Build local container
@@ -310,7 +310,7 @@ jobs:
           file: Dockerfile.development
           platforms: linux/amd64
       - name: Scan image
-        uses: anchore/scan-action@1638637db639e0ade3258b51db49a9a137574c3e  # v6.5.1
+        uses: anchore/scan-action@568b89d27fc18c60e56937bff480c91c772cd993  # v7.1.0
         with:
           image: openzeppelin-relayer-dev:${{ github.sha }}
           fail-build: true
