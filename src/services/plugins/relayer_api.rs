@@ -10,9 +10,9 @@ use crate::domain::{
 };
 use crate::jobs::JobProducerTrait;
 use crate::models::{
-    AppState, JsonRpcRequest, NetworkRepoModel, NetworkRpcRequest, NetworkTransactionRequest,
-    NotificationRepoModel, RelayerRepoModel, SignerRepoModel, ThinDataAppState,
-    TransactionRepoModel, TransactionResponse,
+    convert_to_internal_rpc_request, AppState, JsonRpcRequest, NetworkRepoModel, NetworkRpcRequest,
+    NetworkTransactionRequest, NotificationRepoModel, RelayerRepoModel, SignerRepoModel,
+    ThinDataAppState, TransactionRepoModel, TransactionResponse,
 };
 use crate::observability::request_id::set_request_id;
 use crate::repositories::{
@@ -119,6 +119,11 @@ where
         state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
     ) -> Result<Response, PluginError>;
     async fn handle_get_relayer_info(
+        &self,
+        request: Request,
+        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
+    ) -> Result<Response, PluginError>;
+    async fn handle_rpc_request(
         &self,
         request: Request,
         state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
@@ -444,8 +449,9 @@ impl RelayerApi {
             .await
             .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
+        // Use the network type from relayer_repo_model to parse the request with correct type context
         let network_rpc_request: JsonRpcRequest<NetworkRpcRequest> =
-            serde_json::from_value(request.payload)
+            convert_to_internal_rpc_request(request.payload, &relayer_repo_model.network_type)
                 .map_err(|e| PluginError::InvalidPayload(e.to_string()))?;
 
         let result = network_relayer.rpc(network_rpc_request).await;
@@ -537,6 +543,14 @@ where
         state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
     ) -> Result<Response, PluginError> {
         self.handle_get_relayer_info(request, state).await
+    }
+
+    async fn handle_rpc_request(
+        &self,
+        request: Request,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    ) -> Result<Response, PluginError> {
+        self.handle_rpc_request(request, state).await
     }
 }
 
