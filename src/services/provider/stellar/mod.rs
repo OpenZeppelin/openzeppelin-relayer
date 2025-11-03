@@ -511,7 +511,6 @@ impl StellarProvider {
 #[async_trait]
 impl StellarProviderTrait for StellarProvider {
     async fn get_account(&self, account_id: &str) -> Result<AccountEntry, ProviderError> {
-        // Use Arc to own the account id for the async closure without repeated allocations.
         let account_id = Arc::new(account_id.to_string());
 
         self.retry_rpc_call("get_account", move |client| {
@@ -552,11 +551,6 @@ impl StellarProviderTrait for StellarProvider {
         &self,
         tx_envelope: &TransactionEnvelope,
     ) -> Result<SorobanTransactionResponse, ProviderError> {
-        // We must clone here because the trait takes `&TransactionEnvelope`.
-        // To avoid this clone we'd need to change the trait to accept an owned
-        // `TransactionEnvelope`; keeping the current signature preserves the
-        // public API while using `Arc` to cheaply share ownership inside the
-        // retry closure/attempts.
         let tx_envelope = Arc::new(tx_envelope.clone());
 
         self.retry_rpc_call("send_transaction_polling", move |client| {
@@ -613,8 +607,6 @@ impl StellarProviderTrait for StellarProvider {
     }
 
     async fn get_transaction(&self, tx_id: &Hash) -> Result<GetTransactionResponse, ProviderError> {
-        // Wrap the transaction id in an Arc to avoid cloning the potentially-large id multiple times
-        // across retry attempts.
         let tx_id = Arc::new(tx_id.clone());
 
         self.retry_rpc_call("get_transaction", move |client| {
@@ -652,9 +644,6 @@ impl StellarProviderTrait for StellarProvider {
         &self,
         keys: &[LedgerKey],
     ) -> Result<GetLedgerEntriesResponse, ProviderError> {
-        // Use Arc to avoid cloning the keys multiple times when moving into async closure.
-        // We still need one allocation to own the data for the closure, but Arc avoids
-        // further per-attempt copies inside the retry loop.
         let keys = Arc::new(keys.to_vec());
 
         self.retry_rpc_call("get_ledger_entries", move |client| {
@@ -672,8 +661,6 @@ impl StellarProviderTrait for StellarProvider {
         &self,
         request: GetEventsRequest,
     ) -> Result<GetEventsResponse, ProviderError> {
-        // Wrap the request in an Arc so the async closure and retry loop can cheaply clone
-        // the reference without reconstructing the struct field-by-field.
         let request = Arc::new(request);
 
         self.retry_rpc_call("get_events", move |client| {
