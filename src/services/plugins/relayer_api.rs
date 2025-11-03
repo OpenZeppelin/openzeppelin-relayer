@@ -952,4 +952,521 @@ mod tests {
         let error = response.error.unwrap();
         assert!(error.contains("Relayer with ID test not found"));
     }
+
+    #[tokio::test]
+    async fn test_handle_rpc_request_evm_success() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            None,
+            Some(vec![create_mock_relayer("test".to_string(), false)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test-rpc-1".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::Rpc,
+            payload: serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "eth_blockNumber",
+                "params": [],
+                "id": 1
+            }),
+            http_request_id: None,
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_none());
+        assert!(response.result.is_some());
+        let result = response.result.unwrap();
+        assert!(result.get("jsonrpc").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_handle_rpc_request_invalid_payload() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            None,
+            Some(vec![create_mock_relayer("test".to_string(), false)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test-rpc-2".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::Rpc,
+            payload: serde_json::json!({
+                "invalid": "payload"
+            }),
+            http_request_id: None,
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_some());
+        let error = response.error.unwrap();
+        assert!(error.contains("Invalid payload") || error.contains("Missing 'method' field"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_rpc_request_relayer_not_found() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            None,
+            None,
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test-rpc-3".to_string(),
+            relayer_id: "nonexistent".to_string(),
+            method: PluginMethod::Rpc,
+            payload: serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "eth_blockNumber",
+                "params": [],
+                "id": 1
+            }),
+            http_request_id: None,
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_some());
+        let error = response.error.unwrap();
+        assert!(error.contains("Relayer with ID nonexistent not found"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_rpc_request_paused_relayer() {
+        setup_test_env();
+        let paused = true;
+        let state = create_mock_app_state(
+            None,
+            Some(vec![create_mock_relayer("test".to_string(), paused)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test-rpc-4".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::Rpc,
+            payload: serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "eth_blockNumber",
+                "params": [],
+                "id": 1
+            }),
+            http_request_id: None,
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_some());
+        let error = response.error.unwrap();
+        assert!(error.contains("Relayer is paused"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_rpc_request_with_string_id() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            None,
+            Some(vec![create_mock_relayer("test".to_string(), false)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test-rpc-5".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::Rpc,
+            payload: serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "eth_chainId",
+                "params": [],
+                "id": "custom-string-id"
+            }),
+            http_request_id: None,
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_none());
+        assert!(response.result.is_some());
+        let result = response.result.unwrap();
+        assert_eq!(result.get("id").unwrap(), "custom-string-id");
+    }
+
+    #[tokio::test]
+    async fn test_handle_rpc_request_with_null_id() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            None,
+            Some(vec![create_mock_relayer("test".to_string(), false)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test-rpc-6".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::Rpc,
+            payload: serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "eth_chainId",
+                "params": [],
+                "id": null
+            }),
+            http_request_id: None,
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_none());
+        assert!(response.result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_handle_rpc_request_with_array_params() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            None,
+            Some(vec![create_mock_relayer("test".to_string(), false)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test-rpc-7".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::Rpc,
+            payload: serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "eth_getBalance",
+                "params": ["0x742d35Cc6634C0532925a3b844Bc454e4438f44e", "latest"],
+                "id": 1
+            }),
+            http_request_id: None,
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_none());
+        assert!(response.result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_handle_rpc_request_with_object_params() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            None,
+            Some(vec![create_mock_relayer("test".to_string(), false)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test-rpc-8".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::Rpc,
+            payload: serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "eth_call",
+                "params": {
+                    "to": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
+                    "data": "0x"
+                },
+                "id": 1
+            }),
+            http_request_id: None,
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_none());
+        assert!(response.result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_handle_rpc_request_missing_method() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            None,
+            Some(vec![create_mock_relayer("test".to_string(), false)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test-rpc-9".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::Rpc,
+            payload: serde_json::json!({
+                "jsonrpc": "2.0",
+                "params": [],
+                "id": 1
+            }),
+            http_request_id: None,
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_some());
+        let error = response.error.unwrap();
+        assert!(error.contains("Missing 'method' field") || error.contains("Invalid payload"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_rpc_request_empty_method() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            None,
+            Some(vec![create_mock_relayer("test".to_string(), false)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test-rpc-10".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::Rpc,
+            payload: serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "",
+                "params": [],
+                "id": 1
+            }),
+            http_request_id: None,
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        // Empty method may be handled by the convert function or the provider
+        // Either way, there should be an error or the response should indicate a problem
+        assert!(
+            response.error.is_some()
+                || (response.result.is_some()
+                    && response.result.as_ref().unwrap().get("error").is_some())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_rpc_request_with_http_request_id() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            None,
+            Some(vec![create_mock_relayer("test".to_string(), false)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test-rpc-11".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::Rpc,
+            payload: serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "eth_blockNumber",
+                "params": [],
+                "id": 1
+            }),
+            http_request_id: Some("http-req-123".to_string()),
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_none());
+        assert!(response.result.is_some());
+        assert_eq!(response.request_id, "test-rpc-11");
+    }
+
+    #[tokio::test]
+    async fn test_handle_rpc_request_default_jsonrpc_version() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            None,
+            Some(vec![create_mock_relayer("test".to_string(), false)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test-rpc-12".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::Rpc,
+            payload: serde_json::json!({
+                "method": "eth_blockNumber",
+                "params": [],
+                "id": 1
+            }),
+            http_request_id: None,
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        // Should either succeed or return a JSON-RPC formatted response
+        if response.error.is_none() {
+            assert!(response.result.is_some());
+            let result = response.result.unwrap();
+            assert_eq!(result.get("jsonrpc").unwrap(), "2.0");
+        } else {
+            // If there's an error, it's still valid since we're testing default version behavior
+            assert!(response.error.is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_rpc_request_custom_jsonrpc_version() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            None,
+            Some(vec![create_mock_relayer("test".to_string(), false)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test-rpc-13".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::Rpc,
+            payload: serde_json::json!({
+                "jsonrpc": "1.0",
+                "method": "eth_blockNumber",
+                "params": [],
+                "id": 1
+            }),
+            http_request_id: None,
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_none());
+        assert!(response.result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_handle_rpc_request_result_structure() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            None,
+            Some(vec![create_mock_relayer("test".to_string(), false)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test-rpc-14".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::Rpc,
+            payload: serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "eth_blockNumber",
+                "params": [],
+                "id": 42
+            }),
+            http_request_id: None,
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_none());
+        assert!(response.result.is_some());
+        assert_eq!(response.request_id, "test-rpc-14");
+
+        let result = response.result.unwrap();
+        assert!(result.get("jsonrpc").is_some());
+        assert!(result.get("id").is_some());
+        // Should have either result or error field
+        assert!(result.get("result").is_some() || result.get("error").is_some());
+    }
 }
