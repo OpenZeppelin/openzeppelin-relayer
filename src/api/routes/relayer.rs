@@ -12,7 +12,7 @@ use serde::Deserialize;
 use utoipa::ToSchema;
 
 /// Lists all relayers with pagination support.
-#[require_permissions(["relayers:get:all"])]
+#[require_permissions(["relayers:read"])]
 #[get("/relayers")]
 async fn list_relayers(
     raw_request: HttpRequest,
@@ -23,7 +23,7 @@ async fn list_relayers(
 }
 
 /// Retrieves details of a specific relayer by ID.
-#[require_permissions(["relayers:get:{relayer_id}"])]
+#[require_permissions([("relayers:read", "relayer_id")])]
 #[get("/relayers/{relayer_id}")]
 async fn get_relayer(
     relayer_id: web::Path<String>,
@@ -34,7 +34,7 @@ async fn get_relayer(
 }
 
 /// Creates a new relayer.
-#[require_permissions(["relayers:create:all"])]
+#[require_permissions(["relayers:create"])]
 #[post("/relayers")]
 async fn create_relayer(
     request: web::Json<CreateRelayerRequest>,
@@ -45,7 +45,7 @@ async fn create_relayer(
 }
 
 /// Updates a relayer's information using JSON Merge Patch (RFC 7396).
-#[require_permissions(["relayers:update:{relayer_id}"])]
+#[require_permissions([("relayers:update", "relayer_id")])]
 #[patch("/relayers/{relayer_id}")]
 async fn update_relayer(
     relayer_id: web::Path<String>,
@@ -57,7 +57,7 @@ async fn update_relayer(
 }
 
 /// Deletes a relayer by ID.
-#[require_permissions(["relayers:delete:{relayer_id}"])]
+#[require_permissions([("relayers:delete", "relayer_id")])]
 #[delete("/relayers/{relayer_id}")]
 async fn delete_relayer(
     relayer_id: web::Path<String>,
@@ -68,7 +68,7 @@ async fn delete_relayer(
 }
 
 /// Fetches the current status of a specific relayer.
-#[require_permissions(["relayers:get:{relayer_id}"])]
+#[require_permissions([("relayers:read", "relayer_id")])]
 #[get("/relayers/{relayer_id}/status")]
 async fn get_relayer_status(
     relayer_id: web::Path<String>,
@@ -79,7 +79,7 @@ async fn get_relayer_status(
 }
 
 /// Retrieves the balance of a specific relayer.
-#[require_permissions(["relayers:get:{relayer_id}"])]
+#[require_permissions([("relayers:read", "relayer_id")])]
 #[get("/relayers/{relayer_id}/balance")]
 async fn get_relayer_balance(
     relayer_id: web::Path<String>,
@@ -90,7 +90,7 @@ async fn get_relayer_balance(
 }
 
 /// Sends a transaction through the specified relayer.
-#[require_permissions(["transactions:execute:{relayer_id}"])]
+#[require_permissions([("transactions:execute", "relayer_id")])]
 #[post("/relayers/{relayer_id}/transactions")]
 async fn send_transaction(
     relayer_id: web::Path<String>,
@@ -108,7 +108,7 @@ pub struct TransactionPath {
 }
 
 /// Retrieves a specific transaction by its ID.
-#[require_permissions(["transactions:get:{relayer_id}"])]
+#[require_permissions([("transactions:read", "path.relayer_id")])]
 #[get("/relayers/{relayer_id}/transactions/{transaction_id}")]
 async fn get_transaction_by_id(
     path: web::Path<TransactionPath>,
@@ -119,20 +119,26 @@ async fn get_transaction_by_id(
     relayer::get_transaction_by_id(path.relayer_id, path.transaction_id, data).await
 }
 
+#[derive(Deserialize, ToSchema)]
+pub struct TransactionNoncePath {
+    relayer_id: String,
+    nonce: u64,
+}
+
 /// Retrieves a transaction by its nonce value.
-#[require_permissions(["transactions:get:{relayer_id}"])]
+#[require_permissions([("transactions:read", "path.relayer_id")])]
 #[get("/relayers/{relayer_id}/transactions/by-nonce/{nonce}")]
 async fn get_transaction_by_nonce(
-    params: web::Path<(String, u64)>,
+    path: web::Path<TransactionNoncePath>,
     raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
-    let params = params.into_inner();
-    relayer::get_transaction_by_nonce(params.0, params.1, data).await
+    let path = path.into_inner();
+    relayer::get_transaction_by_nonce(path.relayer_id, path.nonce, data).await
 }
 
 /// Lists all transactions for a specific relayer with pagination.
-#[require_permissions(["transactions:get:{relayer_id}"])]
+#[require_permissions([("transactions:read", "relayer_id")])]
 #[get("/relayers/{relayer_id}/transactions")]
 async fn list_transactions(
     relayer_id: web::Path<String>,
@@ -144,7 +150,7 @@ async fn list_transactions(
 }
 
 /// Deletes all pending transactions for a specific relayer.
-#[require_permissions(["transactions:delete:{relayer_id}"])]
+#[require_permissions([("transactions:delete", "relayer_id")])]
 #[delete("/relayers/{relayer_id}/transactions/pending")]
 async fn delete_pending_transactions(
     relayer_id: web::Path<String>,
@@ -155,7 +161,7 @@ async fn delete_pending_transactions(
 }
 
 /// Cancels a specific transaction by its ID.
-#[require_permissions(["transactions:delete:{relayer_id}"])]
+#[require_permissions([("transactions:delete", "path.relayer_id")])]
 #[delete("/relayers/{relayer_id}/transactions/{transaction_id}")]
 async fn cancel_transaction(
     path: web::Path<TransactionPath>,
@@ -167,7 +173,7 @@ async fn cancel_transaction(
 }
 
 /// Replaces a specific transaction with a new one.
-#[require_permissions(["transactions:execute:{relayer_id}"])]
+#[require_permissions([("transactions:execute", "path.relayer_id")])]
 #[put("/relayers/{relayer_id}/transactions/{transaction_id}")]
 async fn replace_transaction(
     path: web::Path<TransactionPath>,
@@ -180,7 +186,7 @@ async fn replace_transaction(
 }
 
 /// Signs data using the specified relayer.
-#[require_permissions(["signing:execute:{relayer_id}"])]
+#[require_permissions([("signing:execute", "relayer_id")])]
 #[post("/relayers/{relayer_id}/sign")]
 async fn sign(
     relayer_id: web::Path<String>,
@@ -192,7 +198,7 @@ async fn sign(
 }
 
 /// Signs typed data using the specified relayer.
-#[require_permissions(["signing:execute:{relayer_id}"])]
+#[require_permissions([("signing:execute", "relayer_id")])]
 #[post("/relayers/{relayer_id}/sign-typed-data")]
 async fn sign_typed_data(
     relayer_id: web::Path<String>,
@@ -204,7 +210,7 @@ async fn sign_typed_data(
 }
 
 /// Signs a transaction using the specified relayer (Stellar only).
-#[require_permissions(["signing:execute:{relayer_id}"])]
+#[require_permissions([("signing:execute", "relayer_id")])]
 #[post("/relayers/{relayer_id}/sign-transaction")]
 async fn sign_transaction(
     relayer_id: web::Path<String>,
@@ -216,7 +222,7 @@ async fn sign_transaction(
 }
 
 /// Performs a JSON-RPC call using the specified relayer.
-#[require_permissions(["relayers:execute:{relayer_id}"])]
+#[require_permissions([("relayers:execute", "relayer_id")])]
 #[post("/relayers/{relayer_id}/rpc")]
 async fn rpc(
     relayer_id: web::Path<String>,

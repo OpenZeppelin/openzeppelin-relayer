@@ -1,4 +1,4 @@
-use crate::models::{ApiError, ApiKeyRepoModel};
+use crate::models::{ApiError, ApiKeyRepoModel, PermissionGrant};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -6,7 +6,7 @@ pub struct ApiKeyListResponse {
     pub id: String,
     pub name: String,
     pub created_at: String,
-    pub permissions: Vec<String>,
+    pub permissions: Vec<PermissionGrant>,
 }
 
 impl TryFrom<ApiKeyRepoModel> for ApiKeyListResponse {
@@ -28,7 +28,7 @@ pub struct ApiKeyCreateResponse {
     pub value: String,
     pub name: String,
     pub created_at: String,
-    pub permissions: Vec<String>,
+    pub permissions: Vec<PermissionGrant>,
 }
 
 impl TryFrom<ApiKeyRepoModel> for ApiKeyCreateResponse {

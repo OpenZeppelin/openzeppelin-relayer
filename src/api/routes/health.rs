@@ -20,7 +20,7 @@ use relayer_macros::require_permissions;
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-#[require_permissions(["health:get:all"])]
+#[require_permissions(["health:read"])]
 #[get("/health")]
 async fn health(
     raw_request: HttpRequest,

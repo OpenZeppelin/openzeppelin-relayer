@@ -3,7 +3,7 @@
 //! The `InMemoryApiKeyRepository` struct is used to store and retrieve api keys
 //! permissions.
 use crate::{
-    models::{ApiKeyRepoModel, PaginationQuery},
+    models::{ApiKeyRepoModel, PaginationQuery, PermissionGrant},
     repositories::{ApiKeyRepositoryTrait, PaginatedResult, RepositoryError},
 };
 
@@ -104,7 +104,10 @@ impl ApiKeyRepositoryTrait for InMemoryApiKeyRepository {
         Ok(store.len())
     }
 
-    async fn list_permissions(&self, api_key_id: &str) -> Result<Vec<String>, RepositoryError> {
+    async fn list_permissions(
+        &self,
+        api_key_id: &str,
+    ) -> Result<Vec<PermissionGrant>, RepositoryError> {
         let store = self.store.lock().await;
         let api_key = store
             .get(api_key_id)

@@ -8,7 +8,7 @@ use actix_web::{delete, get, post, web, HttpRequest, Responder};
 use relayer_macros::require_permissions;
 
 /// List API keys
-#[require_permissions(["api_keys:get:all"])]
+#[require_permissions(["api_keys:read"])]
 #[get("/api-keys")]
 async fn list_api_keys(
     raw_request: HttpRequest,
@@ -19,7 +19,7 @@ async fn list_api_keys(
 }
 
 /// Get API key permissions
-#[require_permissions(["api_keys:get:{api_key_id}"])]
+#[require_permissions([("api_keys:read", "api_key_id")])]
 #[get("/api-keys/{api_key_id}/permissions")]
 async fn get_api_key_permissions(
     api_key_id: web::Path<String>,
@@ -30,7 +30,7 @@ async fn get_api_key_permissions(
 }
 
 /// Create a new API key
-#[require_permissions(["api_keys:create:all"])]
+#[require_permissions(["api_keys:create"])]
 #[post("/api-keys")]
 async fn create_api_key(
     req: web::Json<ApiKeyRequest>,
@@ -41,7 +41,7 @@ async fn create_api_key(
 }
 
 /// Delete API key
-#[require_permissions(["api_keys:delete:{api_key_id}"])]
+#[require_permissions([("api_keys:delete", "api_key_id")])]
 #[delete("/api-keys/{api_key_id}")]
 async fn delete_api_key(
     api_key_id: web::Path<String>,

@@ -29,7 +29,7 @@ pub use api_key_redis::*;
 use mockall::automock;
 
 use crate::{
-    models::{ApiKeyRepoModel, PaginationQuery, RepositoryError},
+    models::{ApiKeyRepoModel, PaginationQuery, PermissionGrant, RepositoryError},
     repositories::PaginatedResult,
 };
 
@@ -45,7 +45,10 @@ pub trait ApiKeyRepositoryTrait {
         query: PaginationQuery,
     ) -> Result<PaginatedResult<ApiKeyRepoModel>, RepositoryError>;
     async fn count(&self) -> Result<usize, RepositoryError>;
-    async fn list_permissions(&self, api_key_id: &str) -> Result<Vec<String>, RepositoryError>;
+    async fn list_permissions(
+        &self,
+        api_key_id: &str,
+    ) -> Result<Vec<PermissionGrant>, RepositoryError>;
     async fn delete_by_id(&self, api_key_id: &str) -> Result<(), RepositoryError>;
     async fn has_entries(&self) -> Result<bool, RepositoryError>;
     async fn drop_all_entries(&self) -> Result<(), RepositoryError>;
@@ -95,7 +98,10 @@ impl ApiKeyRepositoryTrait for ApiKeyRepositoryStorage {
         }
     }
 
-    async fn list_permissions(&self, api_key_id: &str) -> Result<Vec<String>, RepositoryError> {
+    async fn list_permissions(
+        &self,
+        api_key_id: &str,
+    ) -> Result<Vec<PermissionGrant>, RepositoryError> {
         match self {
             ApiKeyRepositoryStorage::InMemory(repo) => repo.list_permissions(api_key_id).await,
             ApiKeyRepositoryStorage::Redis(repo) => repo.list_permissions(api_key_id).await,
@@ -160,13 +166,13 @@ mod tests {
         id: &str,
         name: &str,
         value: &str,
-        permissions: &[&str],
+        permissions: Vec<PermissionGrant>,
     ) -> ApiKeyRepoModel {
         ApiKeyRepoModel {
             id: id.to_string(),
             name: name.to_string(),
             value: SecretString::new(value),
-            permissions: permissions.iter().map(|s| s.to_string()).collect(),
+            permissions,
             created_at: Utc::now().to_string(),
         }
     }
@@ -178,7 +184,7 @@ mod tests {
             "test-api-key",
             "test-name",
             "test-value",
-            &["relayer:all:execute"],
+            vec![PermissionGrant::global("relayers:execute")],
         );
 
         // Add the api key first
@@ -204,7 +210,7 @@ mod tests {
             "test-api-key",
             "test-name",
             "test-value",
-            &["relayer:all:execute"],
+            vec![PermissionGrant::global("relayers:execute")],
         );
 
         let result = storage.create(api_key).await;
@@ -218,7 +224,7 @@ mod tests {
             "test-api-key",
             "test-name",
             "test-value",
-            &["relayer:all:execute"],
+            vec![PermissionGrant::global("relayers:execute")],
         );
 
         // Add the api key first time
@@ -247,7 +253,7 @@ mod tests {
                 "api-key1",
                 "test-name1",
                 "test-value1",
-                &["relayer:all:execute"],
+                vec![PermissionGrant::global("relayers:execute")],
             ))
             .await
             .unwrap();
@@ -256,7 +262,7 @@ mod tests {
                 "api-key2",
                 "test-name2",
                 "test-value2",
-                &["relayer:all:execute"],
+                vec![PermissionGrant::global("relayers:execute")],
             ))
             .await
             .unwrap();
@@ -265,7 +271,7 @@ mod tests {
                 "api-key3",
                 "test-name3",
                 "test-value3",
-                &["relayer:all:execute"],
+                vec![PermissionGrant::global("relayers:execute")],
             ))
             .await
             .unwrap();
@@ -291,7 +297,7 @@ mod tests {
                 "api-key1",
                 "test-name1",
                 "test-value1",
-                &["relayer:all:execute"],
+                vec![PermissionGrant::global("relayers:execute")],
             ))
             .await
             .unwrap();
@@ -321,7 +327,7 @@ mod tests {
                 "api-key1",
                 "test-name1",
                 "test-value1",
-                &["relayer:all:execute"],
+                vec![PermissionGrant::global("relayers:execute")],
             ))
             .await
             .unwrap();
@@ -330,7 +336,7 @@ mod tests {
                 "api-key2",
                 "test-name2",
                 "test-value2",
-                &["relayer:all:execute"],
+                vec![PermissionGrant::global("relayers:execute")],
             ))
             .await
             .unwrap();
@@ -371,7 +377,7 @@ mod tests {
                 "api-key1",
                 "test-name1",
                 "test-value1",
-                &["relayer:all:execute"],
+                vec![PermissionGrant::global("relayers:execute")],
             ))
             .await
             .unwrap();
@@ -380,7 +386,7 @@ mod tests {
                 "api-key2",
                 "test-name2",
                 "test-value2",
-                &["relayer:all:execute"],
+                vec![PermissionGrant::global("relayers:execute")],
             ))
             .await
             .unwrap();
@@ -389,7 +395,7 @@ mod tests {
                 "api-key3",
                 "test-name3",
                 "test-value3",
-                &["relayer:all:execute"],
+                vec![PermissionGrant::global("relayers:execute")],
             ))
             .await
             .unwrap();
@@ -419,13 +425,13 @@ mod tests {
             "api-key1",
             "test-name1",
             "test-value1",
-            &["relayer:all:execute"],
+            vec![PermissionGrant::global("relayers:execute")],
         );
         let api_key2 = create_test_api_key(
             "api-key2",
             "test-name2",
             "test-value2",
-            &["relayer:all:execute"],
+            vec![PermissionGrant::global("relayers:execute")],
         );
 
         storage.create(api_key1.clone()).await.unwrap();
@@ -462,7 +468,7 @@ mod tests {
             "test-api-key",
             "test-name",
             "unique-test-value",
-            &["relayer:all:execute"],
+            vec![PermissionGrant::global("relayers:execute")],
         );
 
         storage.create(api_key.clone()).await.unwrap();

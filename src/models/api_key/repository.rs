@@ -1,5 +1,5 @@
 use crate::{
-    models::{ApiError, ApiKeyRequest, SecretString},
+    models::{ApiError, ApiKeyRequest, PermissionGrant, SecretString},
     utils::{deserialize_secret_string, serialize_secret_string},
 };
 use chrono::Utc;
@@ -16,11 +16,11 @@ pub struct ApiKeyRepoModel {
     pub value: SecretString,
     pub name: String,
     pub created_at: String,
-    pub permissions: Vec<String>,
+    pub permissions: Vec<PermissionGrant>,
 }
 
 impl ApiKeyRepoModel {
-    pub fn new(name: String, value: SecretString, permissions: Vec<String>) -> Self {
+    pub fn new(name: String, value: SecretString, permissions: Vec<PermissionGrant>) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
             value,
@@ -54,13 +54,13 @@ mod tests {
         let api_key_repo_model = ApiKeyRepoModel::new(
             "test-name".to_string(),
             SecretString::new("test-value"),
-            vec!["relayer:all:execute".to_string()],
+            vec![PermissionGrant::global("relayers:execute")],
         );
         assert_eq!(api_key_repo_model.name, "test-name");
         assert_eq!(api_key_repo_model.value, SecretString::new("test-value"));
         assert_eq!(
             api_key_repo_model.permissions,
-            vec!["relayer:all:execute".to_string()]
+            vec![PermissionGrant::global("relayers:execute")]
         );
     }
 
@@ -68,13 +68,13 @@ mod tests {
     fn test_api_key_repo_model_try_from() {
         let api_key_request = ApiKeyRequest {
             name: "test-name".to_string(),
-            permissions: vec!["relayer:all:execute".to_string()],
+            permissions: vec![PermissionGrant::global("relayers:execute")],
         };
         let api_key_repo_model = ApiKeyRepoModel::try_from(api_key_request).unwrap();
         assert_eq!(api_key_repo_model.name, "test-name");
         assert_eq!(
             api_key_repo_model.permissions,
-            vec!["relayer:all:execute".to_string()]
+            vec![PermissionGrant::global("relayers:execute")]
         );
     }
 }

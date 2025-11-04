@@ -10,7 +10,7 @@ use actix_web::{delete, get, patch, post, web, HttpRequest, Responder};
 use relayer_macros::require_permissions;
 
 /// Lists all signers with pagination support.
-#[require_permissions(["signers:get:all"])]
+#[require_permissions(["signers:read"])]
 #[get("/signers")]
 async fn list_signers(
     raw_request: HttpRequest,
@@ -21,7 +21,7 @@ async fn list_signers(
 }
 
 /// Retrieves details of a specific signer by ID.
-#[require_permissions(["signers:get:{signer_id}"])]
+#[require_permissions([("signers:read", "signer_id")])]
 #[get("/signers/{signer_id}")]
 async fn get_signer(
     signer_id: web::Path<String>,
@@ -32,7 +32,7 @@ async fn get_signer(
 }
 
 /// Creates a new signer.
-#[require_permissions(["signers:create:all"])]
+#[require_permissions(["signers:create"])]
 #[post("/signers")]
 async fn create_signer(
     request: web::Json<SignerCreateRequest>,
@@ -43,7 +43,7 @@ async fn create_signer(
 }
 
 /// Updates an existing signer.
-#[require_permissions(["signers:update:{signer_id}"])]
+#[require_permissions([("signers:update", "signer_id")])]
 #[patch("/signers/{signer_id}")]
 async fn update_signer(
     signer_id: web::Path<String>,
@@ -55,7 +55,7 @@ async fn update_signer(
 }
 
 /// Deletes a signer by ID.
-#[require_permissions(["signers:delete:{signer_id}"])]
+#[require_permissions([("signers:delete", "signer_id")])]
 #[delete("/signers/{signer_id}")]
 async fn delete_signer(
     signer_id: web::Path<String>,

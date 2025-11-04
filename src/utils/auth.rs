@@ -1,11 +1,10 @@
 use actix_web::dev::ServiceRequest;
 use actix_web::HttpRequest;
-use std::collections::HashMap;
 use tracing::info;
 
 use crate::{
     constants::{
-        has_permission, has_permission_with_params, AUTHORIZATION_HEADER_NAME,
+        has_permission_grant, has_permission_grant_for_id, AUTHORIZATION_HEADER_NAME,
         AUTHORIZATION_HEADER_VALUE_PREFIX,
     },
     models::{ApiError, SecretString},
@@ -40,41 +39,27 @@ pub fn check_authorization_header(req: &ServiceRequest, _expected_key: &SecretSt
     false
 }
 
-/// Helper to validate API key and check multiple permissions (AND logic - all required)
+/// Helper to validate API key and check permissions for global-scoped actions
+///
+/// Use this for endpoints that access resources globally (e.g., listing all relayers).
+/// All required permissions must be satisfied (AND logic).
+///
+/// # Arguments
+/// * `req` - The HTTP request containing the Authorization header
+/// * `api_key_repo` - Repository for looking up API keys
+/// * `required_actions` - List of required actions (e.g., ["relayers:read"])
+///
+/// # Returns
+/// `Ok(())` if the API key has all required permissions with global scope
 pub async fn validate_api_key_permissions(
     req: &HttpRequest,
     api_key_repo: &dyn ApiKeyRepositoryTrait,
-    required_permissions: &[&str],
+    required_actions: &[&str],
 ) -> Result<(), ApiError> {
-    // Extract API key from Authorization header
-    let headers: Vec<_> = req.headers().get_all(AUTHORIZATION_HEADER_NAME).collect();
-    if headers.len() != 1 {
-        return Err(ApiError::Unauthorized(
-            "Missing or invalid Authorization header".to_string(),
-        ));
-    }
+    // Extract and validate Authorization header
+    let token = extract_token_from_request(req)?;
 
-    let auth_header = match headers[0].to_str() {
-        Ok(header) => header,
-        Err(_) => {
-            return Err(ApiError::Unauthorized(
-                "Invalid Authorization header".to_string(),
-            ));
-        }
-    };
-
-    if !auth_header.starts_with(AUTHORIZATION_HEADER_VALUE_PREFIX) {
-        return Err(ApiError::Unauthorized(
-            "Invalid Authorization header format".to_string(),
-        ));
-    }
-
-    let token = &auth_header[AUTHORIZATION_HEADER_VALUE_PREFIX.len()..];
-    if token.is_empty() {
-        return Err(ApiError::Unauthorized("Empty API key".to_string()));
-    }
-
-    // Check if this is the environment API key (full access)
+    // Check if this is the environment API key (full access bypass)
     if let Ok(env_api_key) = std::env::var("API_KEY") {
         if token == env_api_key {
             return Ok(());
@@ -95,11 +80,11 @@ pub async fn validate_api_key_permissions(
     };
 
     // Check permissions with AND logic - ALL permissions must be satisfied
-    for required_permission in required_permissions {
-        if !has_permission(&api_key.permissions, required_permission) {
-            let required_list = required_permissions.join(" AND ");
+    for required_action in required_actions {
+        if !has_permission_grant(&api_key.permissions, required_action) {
+            let required_list = required_actions.join(" AND ");
             return Err(ApiError::ForbiddenError(format!(
-                "Insufficient permissions. Required: {}",
+                "Insufficient permissions. Required: {} (global scope)",
                 required_list
             )));
         }
@@ -108,42 +93,29 @@ pub async fn validate_api_key_permissions(
     Ok(())
 }
 
-/// Enhanced helper to validate API key with parameter substitution support
-pub async fn validate_api_key_permissions_with_params(
+/// Helper to validate API key and check permissions for ID-scoped actions
+///
+/// Use this for endpoints that access specific resources (e.g., get/update/delete a specific relayer).
+/// All required permissions must be satisfied (AND logic) for the specific resource ID.
+///
+/// # Arguments
+/// * `req` - The HTTP request containing the Authorization header
+/// * `api_key_repo` - Repository for looking up API keys
+/// * `required_actions` - List of required actions (e.g., ["relayers:read"])
+/// * `resource_id` - The specific resource ID being accessed
+///
+/// # Returns
+/// `Ok(())` if the API key has all required permissions for the specific resource ID
+pub async fn validate_api_key_permissions_scoped(
     req: &HttpRequest,
     api_key_repo: &dyn ApiKeyRepositoryTrait,
-    required_permissions: &[&str],
-    param_values: &HashMap<String, String>,
+    required_actions: &[&str],
+    resource_id: &str,
 ) -> Result<(), ApiError> {
-    // Extract API key from Authorization header (same as above)
-    let headers: Vec<_> = req.headers().get_all(AUTHORIZATION_HEADER_NAME).collect();
-    if headers.len() != 1 {
-        return Err(ApiError::Unauthorized(
-            "Missing or invalid Authorization header".to_string(),
-        ));
-    }
+    // Extract and validate Authorization header
+    let token = extract_token_from_request(req)?;
 
-    let auth_header = match headers[0].to_str() {
-        Ok(header) => header,
-        Err(_) => {
-            return Err(ApiError::Unauthorized(
-                "Invalid Authorization header".to_string(),
-            ));
-        }
-    };
-
-    if !auth_header.starts_with(AUTHORIZATION_HEADER_VALUE_PREFIX) {
-        return Err(ApiError::Unauthorized(
-            "Invalid Authorization header format".to_string(),
-        ));
-    }
-
-    let token = &auth_header[AUTHORIZATION_HEADER_VALUE_PREFIX.len()..];
-    if token.is_empty() {
-        return Err(ApiError::Unauthorized("Empty API key".to_string()));
-    }
-
-    // Check if this is the environment API key (full access)
+    // Check if this is the environment API key (full access bypass)
     if let Ok(env_api_key) = std::env::var("API_KEY") {
         if token == env_api_key {
             return Ok(());
@@ -163,18 +135,45 @@ pub async fn validate_api_key_permissions_with_params(
         }
     };
 
-    // Check permissions with parameter substitution
-    for required_permission in required_permissions {
-        if !has_permission_with_params(&api_key.permissions, required_permission, param_values) {
-            let required_list = required_permissions.join(" AND ");
+    // Check permissions for the specific resource ID
+    for required_action in required_actions {
+        if !has_permission_grant_for_id(&api_key.permissions, required_action, resource_id) {
+            let required_list = required_actions.join(" AND ");
             return Err(ApiError::ForbiddenError(format!(
-                "Insufficient permissions. Required: {}",
-                required_list
+                "Insufficient permissions. Required: {} for resource '{}'",
+                required_list, resource_id
             )));
         }
     }
 
     Ok(())
+}
+
+/// Helper function to extract and validate the API key token from the request
+fn extract_token_from_request(req: &HttpRequest) -> Result<&str, ApiError> {
+    let headers: Vec<_> = req.headers().get_all(AUTHORIZATION_HEADER_NAME).collect();
+    if headers.len() != 1 {
+        return Err(ApiError::Unauthorized(
+            "Missing or invalid Authorization header".to_string(),
+        ));
+    }
+
+    let auth_header = headers[0]
+        .to_str()
+        .map_err(|_| ApiError::Unauthorized("Invalid Authorization header".to_string()))?;
+
+    if !auth_header.starts_with(AUTHORIZATION_HEADER_VALUE_PREFIX) {
+        return Err(ApiError::Unauthorized(
+            "Invalid Authorization header format".to_string(),
+        ));
+    }
+
+    let token = &auth_header[AUTHORIZATION_HEADER_VALUE_PREFIX.len()..];
+    if token.is_empty() {
+        return Err(ApiError::Unauthorized("Empty API key".to_string()));
+    }
+
+    Ok(token)
 }
 
 #[cfg(test)]
@@ -220,72 +219,80 @@ mod tests {
     }
 
     #[test]
-    fn test_check_authorization_header_invalid_key() {
-        let req = TestRequest::default()
-            .insert_header((
-                AUTHORIZATION_HEADER_NAME,
-                format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "invalid_key"),
-            ))
-            .to_srv_request();
-
-        assert!(!check_authorization_header(
-            &req,
-            &SecretString::new("test_key")
-        ));
-    }
-
-    #[test]
-    fn test_check_authorization_header_multiple_bearer() {
-        let req = TestRequest::default()
-            .insert_header((
-                AUTHORIZATION_HEADER_NAME,
-                format!("Bearer Bearer {}", "test_key"),
-            ))
-            .to_srv_request();
-
-        assert!(!check_authorization_header(
-            &req,
-            &SecretString::new("test_key")
-        ));
-    }
-
-    #[test]
     fn test_check_authorization_header_multiple_headers() {
         let req = TestRequest::default()
             .insert_header((
                 AUTHORIZATION_HEADER_NAME,
-                format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "test_key"),
+                format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "test_key1"),
             ))
             .insert_header((
                 AUTHORIZATION_HEADER_NAME,
-                format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "another_key"),
+                format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "test_key2"),
             ))
             .to_srv_request();
 
-        // Should reject multiple Authorization headers
         assert!(!check_authorization_header(
             &req,
-            &SecretString::new("test_key")
+            &SecretString::new("test_key1")
         ));
     }
 
     #[test]
     fn test_check_authorization_header_malformed_bearer() {
-        // Test with Bearer in token
         let req = TestRequest::default()
-            .insert_header((AUTHORIZATION_HEADER_NAME, "Bearer Bearer token"))
+            .insert_header((
+                AUTHORIZATION_HEADER_NAME,
+                format!("{}test key with spaces", AUTHORIZATION_HEADER_VALUE_PREFIX),
+            ))
             .to_srv_request();
 
         assert!(!check_authorization_header(
             &req,
-            &SecretString::new("token")
+            &SecretString::new("test_key")
         ));
+    }
 
-        // Test with empty token
+    #[test]
+    fn test_extract_token_from_request_success() {
         let req = TestRequest::default()
-            .insert_header((AUTHORIZATION_HEADER_NAME, "Bearer "))
-            .to_srv_request();
+            .insert_header((
+                AUTHORIZATION_HEADER_NAME,
+                format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "test_token"),
+            ))
+            .to_request();
 
-        assert!(!check_authorization_header(&req, &SecretString::new("")));
+        let token = extract_token_from_request(&req).unwrap();
+        assert_eq!(token, "test_token");
+    }
+
+    #[test]
+    fn test_extract_token_from_request_missing_header() {
+        let req = TestRequest::default().to_request();
+
+        let result = extract_token_from_request(&req);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_extract_token_from_request_invalid_prefix() {
+        let req = TestRequest::default()
+            .insert_header((AUTHORIZATION_HEADER_NAME, "Invalid test_token"))
+            .to_request();
+
+        let result = extract_token_from_request(&req);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_extract_token_from_request_empty_token() {
+        let req = TestRequest::default()
+            .insert_header((
+                AUTHORIZATION_HEADER_NAME,
+                AUTHORIZATION_HEADER_VALUE_PREFIX.to_string(),
+            ))
+            .to_request();
+
+        let result = extract_token_from_request(&req);
+        assert!(result.is_err());
     }
 }

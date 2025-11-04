@@ -1,6 +1,6 @@
 //! Redis-backed implementation of the ApiKeyRepository.
 
-use crate::models::{ApiKeyRepoModel, PaginationQuery, RepositoryError};
+use crate::models::{ApiKeyRepoModel, PaginationQuery, PermissionGrant, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{ApiKeyRepositoryTrait, BatchRetrievalResult, PaginatedResult};
 use async_trait::async_trait;
@@ -287,7 +287,10 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
         }
     }
 
-    async fn list_permissions(&self, api_key_id: &str) -> Result<Vec<String>, RepositoryError> {
+    async fn list_permissions(
+        &self,
+        api_key_id: &str,
+    ) -> Result<Vec<PermissionGrant>, RepositoryError> {
         let api_key = self.get_by_id(api_key_id).await?;
         match api_key {
             Some(api_key) => Ok(api_key.permissions),

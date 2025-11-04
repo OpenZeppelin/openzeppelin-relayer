@@ -37,7 +37,7 @@ use relayer_macros::require_permissions;
         (status = 401, description = "Unauthorized"),
     )
 )]
-#[require_permissions(["metrics:get:all"])]
+#[require_permissions(["metrics:read"])]
 #[get("/metrics")]
 async fn list_metrics(
     raw_request: HttpRequest,
@@ -80,7 +80,7 @@ async fn list_metrics(
         ("bearer_auth" = ["metrics:read"])
     )
 )]
-#[require_permissions(["metrics:get:{metric_name}"])]
+#[require_permissions(["metrics:read"])]
 #[get("/metrics/{metric_name}")]
 async fn metric_detail(
     path: web::Path<String>,
@@ -122,7 +122,7 @@ async fn metric_detail(
         (status = 401, description = "Unauthorized")
     )
 )]
-#[require_permissions(["metrics:debug:all"])]
+#[require_permissions(["metrics:debug"])]
 #[get("/debug/metrics/scrape")]
 async fn scrape_metrics(
     raw_request: HttpRequest,
