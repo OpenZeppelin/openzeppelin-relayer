@@ -160,6 +160,18 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
             )));
         }
 
+        // Check if value already exists
+        let value_exists: Option<String> = conn
+            .get(&value_index_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "create_api_key_value_check"))?;
+
+        if value_exists.is_some() {
+            return Err(RepositoryError::ConstraintViolation(
+                "API Key with this value already exists".to_string(),
+            ));
+        }
+
         // Use atomic pipeline for consistency
         let mut pipe = redis::pipe();
         pipe.atomic();
@@ -432,6 +444,7 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
 
 #[cfg(test)]
 mod tests {
+    use crate::models::PermissionGrant;
     use crate::models::SecretString;
     use uuid::Uuid;
 
@@ -443,7 +456,7 @@ mod tests {
             id: id.to_string(),
             value: SecretString::new(&Uuid::new_v4().to_string()),
             name: "test-name".to_string(),
-            permissions: vec!["relayer:all:execute".to_string()],
+            permissions: vec![PermissionGrant::global("relayers:execute")],
             created_at: Utc::now().to_string(),
         }
     }

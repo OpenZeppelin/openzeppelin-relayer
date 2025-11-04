@@ -141,7 +141,7 @@ pub fn has_permission_grant_for_id(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{PermissionGrant, PermissionScope};
+    use crate::models::PermissionGrant;
 
     #[test]
     fn test_action_matches_exact() {

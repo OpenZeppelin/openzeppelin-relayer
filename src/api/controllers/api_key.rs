@@ -4,6 +4,8 @@
 //! - Create api keys
 //! - List api keys
 //! - Delete api keys
+#[cfg(test)]
+use crate::models::PermissionGrant;
 use crate::{
     jobs::JobProducerTrait,
     models::{
@@ -188,7 +190,7 @@ mod tests {
             id: id.to_string(),
             value: SecretString::new("test-api-key-value"),
             name: "Test API Key".to_string(),
-            permissions: vec!["relayer:all:execute".to_string()],
+            permissions: vec![PermissionGrant::global("relayers:execute")],
             created_at: "2023-01-01T00:00:00Z".to_string(),
         }
     }
@@ -197,7 +199,7 @@ mod tests {
     fn create_test_api_key_create_request(name: &str) -> ApiKeyRequest {
         ApiKeyRequest {
             name: name.to_string(),
-            permissions: vec!["relayer:all:execute".to_string()],
+            permissions: vec![PermissionGrant::global("relayers:execute")],
         }
     }
 

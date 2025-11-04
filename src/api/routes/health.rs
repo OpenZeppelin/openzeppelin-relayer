@@ -1,9 +1,7 @@
 //! This module provides a health check endpoint for the API.
 //!
 //! The `/health` endpoint can be used to verify that the service is running and responsive.
-use crate::models::DefaultAppState;
-use actix_web::{get, web, HttpRequest, HttpResponse};
-use relayer_macros::require_permissions;
+use actix_web::{get, web, HttpResponse};
 
 /// Health routes implementation
 ///
@@ -20,12 +18,8 @@ use relayer_macros::require_permissions;
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-#[require_permissions(["health:read"])]
 #[get("/health")]
-async fn health(
-    raw_request: HttpRequest,
-    data: web::ThinData<DefaultAppState>,
-) -> Result<HttpResponse, actix_web::Error> {
+async fn health() -> Result<HttpResponse, actix_web::Error> {
     Ok(HttpResponse::Ok().body("OK"))
 }
 

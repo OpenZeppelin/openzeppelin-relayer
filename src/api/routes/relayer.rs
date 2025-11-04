@@ -261,6 +261,7 @@ pub fn init(cfg: &mut web::ServiceConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::PermissionGrant;
     use crate::{
         config::{EvmNetworkConfig, NetworkConfigCommon},
         jobs::MockJobProducerTrait,
@@ -390,7 +391,7 @@ mod tests {
             id: "test-api-key".to_string(),
             name: "Test API Key".to_string(),
             value: SecretString::new("test-value"),
-            permissions: vec!["test-permission".to_string()],
+            permissions: vec![PermissionGrant::global("*:*")],
             created_at: chrono::Utc::now().to_rfc3339(),
         };
         api_key_repo.create(test_api_key).await.unwrap();

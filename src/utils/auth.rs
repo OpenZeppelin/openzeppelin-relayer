@@ -221,11 +221,11 @@ mod tests {
     #[test]
     fn test_check_authorization_header_multiple_headers() {
         let req = TestRequest::default()
-            .insert_header((
+            .append_header((
                 AUTHORIZATION_HEADER_NAME,
                 format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "test_key1"),
             ))
-            .insert_header((
+            .append_header((
                 AUTHORIZATION_HEADER_NAME,
                 format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "test_key2"),
             ))
@@ -254,45 +254,62 @@ mod tests {
 
     #[test]
     fn test_extract_token_from_request_success() {
-        let req = TestRequest::default()
+        let srv_req = TestRequest::default()
             .insert_header((
                 AUTHORIZATION_HEADER_NAME,
                 format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "test_token"),
             ))
-            .to_request();
+            .to_srv_request();
+        let req = srv_req.request();
 
-        let token = extract_token_from_request(&req).unwrap();
+        let token = extract_token_from_request(req).unwrap();
         assert_eq!(token, "test_token");
     }
 
     #[test]
     fn test_extract_token_from_request_missing_header() {
-        let req = TestRequest::default().to_request();
+        let srv_req = TestRequest::default().to_srv_request();
+        let req = srv_req.request();
 
-        let result = extract_token_from_request(&req);
-        assert!(result.is_err());
+        let result = extract_token_from_request(req);
+        assert!(matches!(result, Err(ApiError::Unauthorized(_))));
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Unauthorized: Missing or invalid Authorization header"
+        );
     }
 
     #[test]
     fn test_extract_token_from_request_invalid_prefix() {
-        let req = TestRequest::default()
+        let srv_req = TestRequest::default()
             .insert_header((AUTHORIZATION_HEADER_NAME, "Invalid test_token"))
-            .to_request();
+            .to_srv_request();
+        let req = srv_req.request();
 
-        let result = extract_token_from_request(&req);
-        assert!(result.is_err());
+        let result = extract_token_from_request(req);
+        assert!(matches!(result, Err(ApiError::Unauthorized(_))));
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Unauthorized: Invalid Authorization header format"
+        );
     }
 
     #[test]
     fn test_extract_token_from_request_empty_token() {
-        let req = TestRequest::default()
+        let srv_req = TestRequest::default()
             .insert_header((
                 AUTHORIZATION_HEADER_NAME,
                 AUTHORIZATION_HEADER_VALUE_PREFIX.to_string(),
             ))
-            .to_request();
+            .to_srv_request();
+        let req = srv_req.request();
 
-        let result = extract_token_from_request(&req);
-        assert!(result.is_err());
+        let result = extract_token_from_request(req);
+        // Empty token after prefix should fail validation
+        assert!(matches!(result, Err(ApiError::Unauthorized(_))));
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Unauthorized: Empty API key"
+        );
     }
 }

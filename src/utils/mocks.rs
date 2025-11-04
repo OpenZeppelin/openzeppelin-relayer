@@ -15,7 +15,7 @@ pub mod mockutils {
         models::{
             ApiKeyRepoModel, AppState, EvmTransactionData, EvmTransactionRequest,
             LocalSignerConfigStorage, NetworkConfigData, NetworkRepoModel, NetworkTransactionData,
-            NetworkType, NotificationRepoModel, PluginModel, RelayerEvmPolicy,
+            NetworkType, NotificationRepoModel, PermissionGrant, PluginModel, RelayerEvmPolicy,
             RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy, SecretString,
             SignerConfigStorage, SignerRepoModel, SolanaTransactionData, TransactionRepoModel,
             TransactionStatus,
@@ -296,7 +296,7 @@ pub mod mockutils {
             id: "test-api-key".to_string(),
             name: "test-name".to_string(),
             value: SecretString::new("test-value"),
-            permissions: vec!["relayer:all:execute".to_string()],
+            permissions: vec![PermissionGrant::global("*:*")],
             created_at: Utc::now().to_string(),
         }
     }
