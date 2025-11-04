@@ -7,16 +7,16 @@ use crate::{
     jobs::{self, Queue},
     models::{AppState, DefaultAppState},
     repositories::{
-        NetworkRepositoryStorage, NotificationRepositoryStorage, PluginRepositoryStorage,
-        RelayerRepositoryStorage, RelayerStateRepositoryStorage, SignerRepositoryStorage,
-        TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
+        ApiKeyRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage,
+        PluginRepositoryStorage, RelayerRepositoryStorage, RelayerStateRepositoryStorage,
+        SignerRepositoryStorage, TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
     },
     utils::initialize_redis_connection,
 };
 use actix_web::web;
 use color_eyre::Result;
-use log::warn;
 use std::sync::Arc;
+use tracing::warn;
 
 pub struct RepositoryCollection {
     pub relayer: Arc<RelayerRepositoryStorage>,
@@ -27,6 +27,7 @@ pub struct RepositoryCollection {
     pub transaction_counter: Arc<TransactionCounterRepositoryStorage>,
     pub sync_state: Arc<RelayerStateRepositoryStorage>,
     pub plugin: Arc<PluginRepositoryStorage>,
+    pub api_key: Arc<ApiKeyRepositoryStorage>,
 }
 
 /// Initializes repositories based on the server configuration
@@ -47,6 +48,7 @@ pub async fn initialize_repositories(config: &ServerConfig) -> eyre::Result<Repo
             transaction_counter: Arc::new(TransactionCounterRepositoryStorage::new_in_memory()),
             sync_state: Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
             plugin: Arc::new(PluginRepositoryStorage::new_in_memory()),
+            api_key: Arc::new(ApiKeyRepositoryStorage::new_in_memory()),
         },
         RepositoryStorageType::Redis => {
             warn!("⚠️ Redis repository storage support is experimental. Use with caution.");
@@ -88,6 +90,10 @@ pub async fn initialize_repositories(config: &ServerConfig) -> eyre::Result<Repo
                     config.redis_key_prefix.clone(),
                 )?),
                 plugin: Arc::new(PluginRepositoryStorage::new_redis(
+                    connection_manager.clone(),
+                    config.redis_key_prefix.clone(),
+                )?),
+                api_key: Arc::new(ApiKeyRepositoryStorage::new_redis(
                     connection_manager,
                     config.redis_key_prefix.clone(),
                 )?),
@@ -127,6 +133,7 @@ pub async fn initialize_app_state(
         sync_state_store: repositories.sync_state,
         job_producer,
         plugin_repository: repositories.plugin,
+        api_key_repository: repositories.api_key,
     });
 
     Ok(app_state)
@@ -137,9 +144,10 @@ mod tests {
     use super::*;
     use crate::{
         config::RepositoryStorageType,
-        repositories::Repository,
+        repositories::{ApiKeyRepositoryTrait, Repository},
         utils::mocks::mockutils::{
-            create_mock_network, create_mock_relayer, create_mock_signer, create_test_server_config,
+            create_mock_api_key, create_mock_network, create_mock_relayer, create_mock_signer,
+            create_test_server_config,
         },
     };
     use std::sync::Arc;
@@ -161,6 +169,7 @@ mod tests {
         assert!(Arc::strong_count(&repositories.transaction_counter) >= 1);
         assert!(Arc::strong_count(&repositories.sync_state) >= 1);
         assert!(Arc::strong_count(&repositories.plugin) >= 1);
+        assert!(Arc::strong_count(&repositories.api_key) >= 1);
     }
 
     #[tokio::test]
@@ -172,11 +181,13 @@ mod tests {
         let relayer = create_mock_relayer("test-relayer".to_string(), false);
         let signer = create_mock_signer();
         let network = create_mock_network();
+        let api_key = create_mock_api_key();
 
         // Test creating and retrieving items
         repositories.relayer.create(relayer.clone()).await.unwrap();
         repositories.signer.create(signer.clone()).await.unwrap();
         repositories.network.create(network.clone()).await.unwrap();
+        repositories.api_key.create(api_key.clone()).await.unwrap();
 
         let retrieved_relayer = repositories
             .relayer
@@ -193,10 +204,16 @@ mod tests {
             .get_by_id("test".to_string())
             .await
             .unwrap();
+        let retrieved_api_key = repositories
+            .api_key
+            .get_by_id("test-api-key")
+            .await
+            .unwrap();
 
         assert_eq!(retrieved_relayer.id, "test-relayer");
         assert_eq!(retrieved_signer.id, "test");
         assert_eq!(retrieved_network.id, "test");
+        assert_eq!(retrieved_api_key.unwrap().id, "test-api-key");
     }
 
     #[tokio::test]

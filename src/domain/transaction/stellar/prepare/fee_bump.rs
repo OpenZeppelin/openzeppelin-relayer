@@ -9,7 +9,7 @@ use crate::{
         NetworkTransactionData, StellarTransactionData, StellarValidationError, TransactionError,
         TransactionInput,
     },
-    services::{Signer, StellarProviderTrait},
+    services::{provider::StellarProviderTrait, signer::Signer},
 };
 
 use super::common::{calculate_fee_bump_required_fee, create_signing_data};

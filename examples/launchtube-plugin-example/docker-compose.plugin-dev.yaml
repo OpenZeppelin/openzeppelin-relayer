@@ -1,0 +1,5 @@
+---
+services:
+  relayer:
+    volumes:
+      - ${LAUNCHTUBE_PLUGIN_LOCAL_DIST}:/app/plugins/launchtube/node_modules/@openzeppelin/relayer-plugin-launchtube/dist

@@ -5,51 +5,60 @@
 use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Context, Data, TaskId, Worker, *};
 use apalis_redis::RedisContext;
-use eyre::Result;
-use log::info;
+use tracing::instrument;
 
 use crate::{
-    constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
+    constants::WORKER_TRANSACTION_REQUEST_RETRIES,
     domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
     jobs::{handle_result, Job, TransactionRequest},
     models::DefaultAppState,
+    observability::request_id::set_request_id,
 };
 
+#[instrument(
+    level = "debug",
+    skip(job, state, _worker, _ctx),
+    fields(
+        request_id = ?job.request_id,
+        job_id = %job.message_id,
+        job_type = %job.job_type.to_string(),
+        attempt = %attempt.current(),
+        tx_id = %job.data.transaction_id,
+        relayer_id = %job.data.relayer_id,
+        task_id = %task_id.to_string(),
+    )
+)]
 pub async fn transaction_request_handler(
     job: Job<TransactionRequest>,
     state: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
-    worker: Worker<Context>,
+    _worker: Worker<Context>,
     task_id: TaskId,
-    ctx: RedisContext,
+    _ctx: RedisContext,
 ) -> Result<(), Error> {
-    info!("Handling transaction request: {:?}", job.data);
-    info!("Attempt: {:?}", attempt);
-    info!("Worker: {:?}", worker);
-    info!("Task ID: {:?}", task_id);
-    info!("Context: {:?}", ctx);
+    if let Some(request_id) = job.request_id.clone() {
+        set_request_id(request_id);
+    }
 
-    let result = handle_request(job.data, state).await;
+    let result = handle_request(job.data, state.clone()).await;
 
     handle_result(
         result,
         attempt,
         "Transaction Request",
-        WORKER_DEFAULT_MAXIMUM_RETRIES,
+        WORKER_TRANSACTION_REQUEST_RETRIES,
     )
 }
 
 async fn handle_request(
     request: TransactionRequest,
     state: Data<ThinData<DefaultAppState>>,
-) -> Result<()> {
+) -> eyre::Result<()> {
     let relayer_transaction = get_relayer_transaction(request.relayer_id, &state).await?;
 
-    let transaction = get_transaction_by_id(request.transaction_id, &state).await?;
+    let transaction = get_transaction_by_id(request.transaction_id.clone(), &state).await?;
 
     relayer_transaction.prepare_transaction(transaction).await?;
-
-    info!("Transaction request handled successfully");
 
     Ok(())
 }

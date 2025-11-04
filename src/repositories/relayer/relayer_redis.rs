@@ -1,15 +1,17 @@
 //! Redis-backed implementation of the RelayerRepository.
 
 use crate::models::UpdateRelayerRequest;
-use crate::models::{PaginationQuery, RelayerNetworkPolicy, RelayerRepoModel, RepositoryError};
+use crate::models::{
+    DisabledReason, PaginationQuery, RelayerNetworkPolicy, RelayerRepoModel, RepositoryError,
+};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{BatchRetrievalResult, PaginatedResult, RelayerRepository, Repository};
 use async_trait::async_trait;
-use log::{debug, error, warn};
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
+use tracing::{debug, error, warn};
 
 const RELAYER_PREFIX: &str = "relayer";
 const RELAYER_LIST_KEY: &str = "relayer_list";
@@ -55,7 +57,7 @@ impl RedisRelayerRepository {
         ids: &[String],
     ) -> Result<BatchRetrievalResult<RelayerRepoModel>, RepositoryError> {
         if ids.is_empty() {
-            debug!("No relayer IDs provided for batch fetch");
+            debug!("no relayer IDs provided for batch fetch");
             return Ok(BatchRetrievalResult {
                 results: vec![],
                 failed_ids: vec![],
@@ -65,7 +67,7 @@ impl RedisRelayerRepository {
         let mut conn = self.client.as_ref().clone();
         let keys: Vec<String> = ids.iter().map(|id| self.relayer_key(id)).collect();
 
-        debug!("Batch fetching {} relayer data", keys.len());
+        debug!(count = %keys.len(), "batch fetching relayer data");
 
         let values: Vec<Option<String>> = conn
             .mget(&keys)
@@ -82,27 +84,23 @@ impl RedisRelayerRepository {
                         Ok(relayer) => relayers.push(relayer),
                         Err(e) => {
                             failed_count += 1;
-                            error!("Failed to deserialize relayer {}: {}", ids[i], e);
+                            error!(relayer_id = %ids[i], error = %e, "failed to deserialize relayer");
                             failed_ids.push(ids[i].clone());
                             // Continue processing other relayers
                         }
                     }
                 }
                 None => {
-                    warn!("Relayer {} not found in batch fetch", ids[i]);
+                    warn!(relayer_id = %ids[i], "relayer not found in batch fetch");
                 }
             }
         }
 
         if failed_count > 0 {
-            warn!(
-                "Failed to deserialize {} out of {} relayers in batch",
-                failed_count,
-                ids.len()
-            );
+            warn!(failed_count = %failed_count, total_count = %ids.len(), "failed to deserialize relayers in batch");
         }
 
-        debug!("Successfully fetched {} relayers", relayers.len());
+        debug!(count = %relayers.len(), "successfully fetched relayers");
         Ok(BatchRetrievalResult {
             results: relayers,
             failed_ids,
@@ -162,7 +160,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
             .await
             .map_err(|e| self.map_redis_error(e, "create_relayer_pipeline"))?;
 
-        debug!("Created relayer {}", entity.id);
+        debug!(relayer_id = %entity.id, "created relayer");
         Ok(entity)
     }
 
@@ -176,7 +174,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
         let mut conn = self.client.as_ref().clone();
         let relayer_key = self.relayer_key(&id);
 
-        debug!("Fetching relayer {}", id);
+        debug!(relayer_id = %id, "fetching relayer");
 
         let json: Option<String> = conn
             .get(&relayer_key)
@@ -185,11 +183,11 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
 
         match json {
             Some(json) => {
-                debug!("Found relayer {}", id);
+                debug!(relayer_id = %id, "found relayer");
                 self.deserialize_entity(&json, &id, "relayer")
             }
             None => {
-                debug!("Relayer {} not found", id);
+                debug!(relayer_id = %id, "relayer not found");
                 Err(RepositoryError::NotFound(format!(
                     "Relayer with ID {} not found",
                     id
@@ -202,14 +200,14 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
         let mut conn = self.client.as_ref().clone();
         let relayer_list_key = self.relayer_list_key();
 
-        debug!("Listing all relayers");
+        debug!("listing all relayers");
 
         let relayer_ids: Vec<String> = conn
             .smembers(&relayer_list_key)
             .await
             .map_err(|e| self.map_redis_error(e, "list_all_relayers"))?;
 
-        debug!("Found {} relayers in index", relayer_ids.len());
+        debug!(count = %relayer_ids.len(), "found relayers in index");
 
         let relayers = self.get_relayers_by_ids(&relayer_ids).await?;
         Ok(relayers.results)
@@ -318,7 +316,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
             .await
             .map_err(|e| self.map_redis_error(e, "update_relayer_pipeline"))?;
 
-        debug!("Updated relayer {}", id);
+        debug!(relayer_id = %id, "updated relayer");
         Ok(updated_entity)
     }
 
@@ -355,7 +353,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
             .await
             .map_err(|e| self.map_redis_error(e, "delete_relayer_pipeline"))?;
 
-        debug!("Deleted relayer {}", id);
+        debug!(relayer_id = %id, "deleted relayer");
         Ok(())
     }
 
@@ -375,14 +373,14 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
         let mut conn = self.client.as_ref().clone();
         let relayer_list_key = self.relayer_list_key();
 
-        debug!("Checking if relayer entries exist");
+        debug!("checking if relayer entries exist");
 
         let exists: bool = conn
             .exists(&relayer_list_key)
             .await
             .map_err(|e| self.map_redis_error(e, "has_entries_check"))?;
 
-        debug!("Relayer entries exist: {}", exists);
+        debug!(exists = %exists, "relayer entries exist");
         Ok(exists)
     }
 
@@ -390,7 +388,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
         let mut conn = self.client.as_ref().clone();
         let relayer_list_key = self.relayer_list_key();
 
-        debug!("Dropping all relayer entries");
+        debug!("dropping all relayer entries");
 
         // Get all relayer IDs first
         let relayer_ids: Vec<String> = conn
@@ -399,7 +397,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
             .map_err(|e| self.map_redis_error(e, "drop_all_entries_get_ids"))?;
 
         if relayer_ids.is_empty() {
-            debug!("No relayer entries to drop");
+            debug!("no relayer entries to drop");
             return Ok(());
         }
 
@@ -420,7 +418,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
             .await
             .map_err(|e| self.map_redis_error(e, "drop_all_entries_pipeline"))?;
 
-        debug!("Dropped {} relayer entries", relayer_ids.len());
+        debug!(count = %relayer_ids.len(), "dropped relayer entries");
         Ok(())
     }
 }
@@ -434,7 +432,7 @@ impl RelayerRepository for RedisRelayerRepository {
             .filter(|relayer| !relayer.paused)
             .collect();
 
-        debug!("Found {} active relayers", active_relayers.len());
+        debug!(count = %active_relayers.len(), "found active relayers");
         Ok(active_relayers)
     }
 
@@ -448,11 +446,7 @@ impl RelayerRepository for RedisRelayerRepository {
             .filter(|relayer| relayer.signer_id == signer_id)
             .collect();
 
-        debug!(
-            "Found {} relayers using signer '{}'",
-            relayers_with_signer.len(),
-            signer_id
-        );
+        debug!(count = %relayers_with_signer.len(), signer_id = %signer_id, "found relayers using signer");
         Ok(relayers_with_signer)
     }
 
@@ -471,11 +465,7 @@ impl RelayerRepository for RedisRelayerRepository {
             })
             .collect();
 
-        debug!(
-            "Found {} relayers using notification '{}'",
-            relayers_with_notification.len(),
-            notification_id
-        );
+        debug!(count = %relayers_with_notification.len(), notification_id = %notification_id, "found relayers using notification");
         Ok(relayers_with_notification)
     }
 
@@ -503,8 +493,9 @@ impl RelayerRepository for RedisRelayerRepository {
         // First get the current relayer
         let mut relayer = self.get_by_id(relayer_id.clone()).await?;
 
-        // Update the system_disabled flag
+        // Update the system_disabled flag and clear reason
         relayer.system_disabled = false;
+        relayer.disabled_reason = None;
 
         // Update the relayer
         self.update(relayer_id, relayer).await
@@ -513,12 +504,14 @@ impl RelayerRepository for RedisRelayerRepository {
     async fn disable_relayer(
         &self,
         relayer_id: String,
+        reason: DisabledReason,
     ) -> Result<RelayerRepoModel, RepositoryError> {
         // First get the current relayer
         let mut relayer = self.get_by_id(relayer_id.clone()).await?;
 
-        // Update the system_disabled flag
+        // Update the system_disabled flag and set reason
         relayer.system_disabled = true;
+        relayer.disabled_reason = Some(reason);
 
         // Update the relayer
         self.update(relayer_id, relayer).await
@@ -559,6 +552,7 @@ mod tests {
             address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
             notification_id: None,
             system_disabled: false,
+            disabled_reason: None,
             custom_rpc_urls: None,
         }
     }
@@ -831,7 +825,13 @@ mod tests {
         repo.create(relayer.clone()).await.unwrap();
 
         // Test disable
-        let disabled = repo.disable_relayer(relayer.id.clone()).await.unwrap();
+        let disabled = repo
+            .disable_relayer(
+                relayer.id.clone(),
+                DisabledReason::BalanceCheckFailed("test reason".to_string()),
+            )
+            .await
+            .unwrap();
         assert!(disabled.system_disabled);
 
         // Test enable

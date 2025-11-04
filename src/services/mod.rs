@@ -3,10 +3,7 @@
 //! Implements external service integrations and providers for blockchain networks.
 
 pub mod provider;
-pub use provider::*;
-
-mod signer;
-pub use signer::*;
+pub mod signer;
 
 mod notification;
 pub use notification::*;
@@ -25,6 +22,9 @@ pub use vault::*;
 
 mod turnkey;
 pub use turnkey::*;
+
+mod cdp;
+pub use cdp::*;
 
 mod google_cloud_kms;
 pub use google_cloud_kms::*;

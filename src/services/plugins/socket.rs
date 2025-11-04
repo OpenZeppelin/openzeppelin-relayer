@@ -54,13 +54,14 @@ use crate::models::{
     TransactionRepoModel,
 };
 use crate::repositories::{
-    NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository, SyncStateTrait,
-    TransactionCounterTrait, TransactionRepository,
+    ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
+    SyncStateTrait, TransactionCounterTrait, TransactionRepository,
 };
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::oneshot;
+use tracing::debug;
 
 use super::{
     relayer_api::{RelayerApiTrait, Request},
@@ -107,14 +108,14 @@ impl SocketService {
     ///
     /// A vector of traces.
     #[allow(clippy::type_complexity)]
-    pub async fn listen<RA, J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+    pub async fn listen<RA, J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
         self,
         shutdown_rx: oneshot::Receiver<()>,
-        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>>,
+        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>>,
         relayer_api: Arc<RA>,
     ) -> Result<Vec<serde_json::Value>, PluginError>
     where
-        RA: RelayerApiTrait<J, RR, TR, NR, NFR, SR, TCR, RSR, PR> + 'static + Send + Sync,
+        RA: RelayerApiTrait<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR> + 'static + Send + Sync,
         J: JobProducerTrait + Send + Sync + 'static,
         RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
         TR: TransactionRepository
@@ -128,6 +129,7 @@ impl SocketService {
         TCR: TransactionCounterTrait + Send + Sync + 'static,
         RSR: SyncStateTrait + Send + Sync + 'static,
         PR: PluginRepositoryTrait + Send + Sync + 'static,
+        AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {
         let mut shutdown = shutdown_rx;
 
@@ -138,7 +140,7 @@ impl SocketService {
             let relayer_api = Arc::clone(&relayer_api);
             tokio::select! {
                 Ok((stream, _)) = self.listener.accept() => {
-                    let result = tokio::spawn(Self::handle_connection::<RA, J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(stream, state, relayer_api))
+                    let result = tokio::spawn(Self::handle_connection::<RA, J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(stream, state, relayer_api))
                         .await
                         .map_err(|e| PluginError::SocketError(e.to_string()))?;
 
@@ -148,7 +150,7 @@ impl SocketService {
                     }
                 }
                 _ = &mut shutdown => {
-                    println!("Shutdown signal received. Closing listener.");
+                    debug!("Shutdown signal received. Closing listener.");
                     break;
                 }
             }
@@ -169,13 +171,13 @@ impl SocketService {
     ///
     /// A vector of traces.
     #[allow(clippy::type_complexity)]
-    async fn handle_connection<RA, J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+    async fn handle_connection<RA, J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
         stream: UnixStream,
-        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>>,
+        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>>,
         relayer_api: Arc<RA>,
     ) -> Result<Vec<serde_json::Value>, PluginError>
     where
-        RA: RelayerApiTrait<J, RR, TR, NR, NFR, SR, TCR, RSR, PR> + 'static + Send + Sync,
+        RA: RelayerApiTrait<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR> + 'static + Send + Sync,
         J: JobProducerTrait + 'static,
         RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
         TR: TransactionRepository
@@ -189,6 +191,7 @@ impl SocketService {
         TCR: TransactionCounterTrait + Send + Sync + 'static,
         RSR: SyncStateTrait + Send + Sync + 'static,
         PR: PluginRepositoryTrait + Send + Sync + 'static,
+        AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {
         let (r, mut w) = stream.into_split();
         let mut reader = BufReader::new(r).lines();
@@ -241,7 +244,7 @@ mod tests {
 
         let service = SocketService::new(socket_path.to_str().unwrap()).unwrap();
 
-        let state = create_mock_app_state(None, None, None, None, None).await;
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
         let listen_handle = tokio::spawn(async move {
@@ -280,7 +283,7 @@ mod tests {
 
         let service = SocketService::new(socket_path.to_str().unwrap()).unwrap();
 
-        let state = create_mock_app_state(None, None, None, None, None).await;
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
         let listen_handle = tokio::spawn(async move {
@@ -304,6 +307,7 @@ mod tests {
             relayer_id: "test".to_string(),
             method: PluginMethod::SendTransaction,
             payload: serde_json::json!(create_mock_evm_transaction_request()),
+            http_request_id: None,
         };
 
         let request_json = serde_json::to_string(&request).unwrap() + "\n";

@@ -31,6 +31,7 @@ import {
   ApiResponseRelayerResponseData,
   ApiResponseRelayerStatusData,
   NetworkTransactionRequest,
+  pluginError,
   SignTransactionRequest,
   SignTransactionResponse,
   TransactionResponse,
@@ -38,6 +39,8 @@ import {
 } from '@openzeppelin/relayer-sdk';
 
 import { LogInterceptor } from './logger';
+import { DefaultPluginKVStore } from './kv';
+import type { PluginKVStore } from './kv';
 import net from 'node:net';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -182,6 +185,22 @@ export interface PluginAPI {
   transactionWait(transaction: SendTransactionResult, options?: TransactionWaitOptions): Promise<TransactionResponse>;
 }
 
+/**
+ * Plugin context with KV always available for modern plugins
+ */
+export interface PluginContext {
+  api: PluginAPI;
+  params: any;
+  kv: PluginKVStore;
+}
+
+/**
+ * Handler can accept two styles for backward compatibility
+ */
+export type PluginHandler =
+  | ((api: PluginAPI, params: any) => Promise<any>) // Legacy 2-param - NO KV access
+  | ((context: PluginContext) => Promise<any>); // Modern context - HAS KV access
+
 type Plugin<T, R> = (plugin: PluginAPI, pluginParams: T) => Promise<R>;
 
 // Global variable to capture legacy plugin function
@@ -252,9 +271,15 @@ export async function runPlugin<T, R>(main: Plugin<T, R>): Promise<void> {
  * Helper function that loads and executes a user plugin script
  * @param userScriptPath - Path to the user's plugin script
  * @param api - Plugin API instance
+ * @param kv - KV store instance for plugins
  * @param params - Plugin parameters
  */
-export async function loadAndExecutePlugin<T, R>(userScriptPath: string, api: PluginAPI, params: T): Promise<R> {
+export async function loadAndExecutePlugin<T, R>(
+  userScriptPath: string,
+  api: PluginAPI,
+  kv: PluginKVStore,
+  params: T
+): Promise<R> {
   try {
     // IMPORTANT: Path normalization required because executor is in plugins/lib/
     // but user scripts are in plugins/ (and config paths are relative to plugins/)
@@ -288,9 +313,16 @@ export async function loadAndExecutePlugin<T, R>(userScriptPath: string, api: Pl
     const handler = userModule.handler;
 
     if (handler && typeof handler === 'function') {
-      // Modern pattern: call the exported handler
-      const result = await handler(api, params);
-      return result;
+      // Detect handler signature by parameter count
+      if (handler.length === 1) {
+        // Modern context handler - ONLY these get KV access
+        const context: PluginContext = { api, params, kv };
+        return await handler(context);
+      } else {
+        // Legacy handler - NO KV access, just (api, params)
+        // This keeps PluginAPI interface unchanged
+        return await handler(api, params);
+      }
     }
 
     // Try legacy pattern: check if runPlugin was called during module loading
@@ -309,7 +341,11 @@ export async function loadAndExecutePlugin<T, R>(userScriptPath: string, api: Pl
     // when it was required. We just return an empty result.
     return undefined as any;
   } catch (error) {
-    throw new Error(`Failed to execute user plugin ${userScriptPath}: ${(error as Error).message}`);
+    // Preserve the error with its statusCode if present
+    if (error instanceof Error) {
+      throw error;
+    }
+    throw new Error(`Failed to execute user plugin ${userScriptPath}: ${String(error)}`);
   }
 }
 
@@ -325,10 +361,12 @@ export class DefaultPluginAPI implements PluginAPI {
   pending: Map<string, { resolve: (value: any) => void; reject: (reason: any) => void }>;
   private _connectionPromise: Promise<void> | null = null;
   private _connected: boolean = false;
+  private _httpRequestId?: string;
 
-  constructor(socketPath: string) {
+  constructor(socketPath: string, httpRequestId?: string) {
     this.socket = net.createConnection(socketPath);
     this.pending = new Map();
+    this._httpRequestId = httpRequestId;
 
     this._connectionPromise = new Promise((resolve, reject) => {
       this.socket.on('connect', () => {
@@ -388,37 +426,53 @@ export class DefaultPluginAPI implements PluginAPI {
     options?: TransactionWaitOptions
   ): Promise<TransactionResponse> {
     const waitOptions: TransactionWaitOptions = {
-      interval: options?.interval || 5000,
-      timeout: options?.timeout || 60000,
+      interval: options?.interval ?? 5000,
+      timeout: options?.timeout ?? 60000,
     };
 
     const relayer = this.useRelayer(transaction.relayer_id);
-    let transactionResult: TransactionResponse = await relayer.getTransaction({ transactionId: transaction.id });
+    let shouldContinue = true;
 
-    // timeout to avoid infinite waiting
-    const timeout = setTimeout(() => {
-      throw new Error(`Transaction ${transaction.id} timed out after ${waitOptions.timeout}ms`);
-    }, waitOptions.timeout);
+    const poll = async (): Promise<TransactionResponse> => {
+      let tx: TransactionResponse = await relayer.getTransaction({ transactionId: transaction.id });
+      while (
+        shouldContinue &&
+        tx.status !== TransactionStatus.MINED &&
+        tx.status !== TransactionStatus.CONFIRMED &&
+        tx.status !== TransactionStatus.CANCELED &&
+        tx.status !== TransactionStatus.EXPIRED &&
+        tx.status !== TransactionStatus.FAILED
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, waitOptions.interval));
+        if (!shouldContinue) break;
+        tx = await relayer.getTransaction({ transactionId: transaction.id });
+      }
+      return tx;
+    };
 
-    // poll for transaction status until mined/confirmed, failed, cancelled or expired.
-    while (
-      transactionResult.status !== TransactionStatus.MINED &&
-      transactionResult.status !== TransactionStatus.CONFIRMED &&
-      transactionResult.status !== TransactionStatus.CANCELED &&
-      transactionResult.status !== TransactionStatus.EXPIRED &&
-      transactionResult.status !== TransactionStatus.FAILED
-    ) {
-      transactionResult = await relayer.getTransaction({ transactionId: transaction.id });
-      await new Promise((resolve) => setTimeout(resolve, waitOptions.interval));
-    }
+    let timeoutId: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        shouldContinue = false;
+        reject(pluginError(`Transaction ${transaction.id} timed out after ${waitOptions.timeout}ms`, { status: 504 }));
+      }, waitOptions.timeout);
+    });
 
-    clearTimeout(timeout);
-    return transactionResult;
+    return Promise.race([poll(), timeoutPromise]).finally(() => {
+      shouldContinue = false;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    });
   }
 
   async _send<T>(relayerId: string, method: string, payload: any): Promise<T> {
     const requestId = uuidv4();
-    const message = JSON.stringify({ requestId, relayerId, method, payload }) + '\n';
+    const msg: any = { requestId, relayerId, method, payload };
+    if (this._httpRequestId) {
+      msg.httpRequestId = this._httpRequestId;
+    }
+    const message = JSON.stringify(msg) + '\n';
 
     if (!this._connected) {
       await this._connectionPromise;
@@ -455,25 +509,35 @@ export class DefaultPluginAPI implements PluginAPI {
  * It receives validated parameters from the wrapper script and focuses purely on plugin execution logic.
  *
  * @param socketPath - Unix socket path for communication with relayer
+ * @param pluginId - Plugin ID for namespacing KV storage
  * @param pluginParams - Parsed plugin parameters object
  * @param userScriptPath - Path to the user's plugin file to execute
  */
 export async function runUserPlugin<T = any, R = any>(
   socketPath: string,
+  pluginId: string,
   pluginParams: T,
-  userScriptPath: string
+  userScriptPath: string,
+  httpRequestId?: string
 ): Promise<R> {
+  const plugin = new DefaultPluginAPI(socketPath, httpRequestId);
+  const kv = new DefaultPluginKVStore(pluginId);
+
   try {
-    // Create plugin API instance
-    const plugin = new DefaultPluginAPI(socketPath);
-
-    // Use helper function to load and execute the plugin
-    const result: R = await loadAndExecutePlugin<T, R>(userScriptPath, plugin, pluginParams);
-
-    plugin.close();
+    const result: R = await loadAndExecutePlugin<T, R>(userScriptPath, plugin, kv, pluginParams);
     return result;
   } catch (error) {
-    console.error(error);
-    process.exit(1);
+    // If plugin threw an error, write normalized error to stderr
+    const anyErr = error as any;
+    const errorInfo = {
+      code: typeof anyErr?.code === 'string' ? anyErr.code : 'PLUGIN_ERROR',
+      message: error instanceof Error ? error.message : String(error),
+      status: typeof anyErr?.status === 'number' ? anyErr.status : 500,
+      details: anyErr?.details,
+    };
+    process.stderr.write(JSON.stringify(errorInfo) + '\n');
+    process.exit(1); // Non-zero exit code indicates error
+  } finally {
+    plugin.close();
   }
 }

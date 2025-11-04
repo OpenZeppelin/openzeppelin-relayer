@@ -1,6 +1,8 @@
+//! This module contains services related to gas price fetching and calculation.
+pub mod cache;
 pub mod evm_gas_price;
-pub use evm_gas_price::*;
-pub mod network_extra_fee;
-pub use network_extra_fee::*;
+pub mod fetchers;
+pub mod handlers;
+pub mod price_params_handler;
 
-pub mod optimism_extra_fee;
+pub use cache::*;

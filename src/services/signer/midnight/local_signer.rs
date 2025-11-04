@@ -11,7 +11,7 @@ use crate::{
         Address, MidnightAddress, NetworkTransactionData, Signer as SignerDomainModel, SignerError,
         SignerRepoModel,
     },
-    services::Signer,
+    services::signer::Signer,
 };
 use async_trait::async_trait;
 use ed25519_dalek::Signer as Ed25519Signer;

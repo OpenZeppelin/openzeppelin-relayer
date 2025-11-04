@@ -219,6 +219,7 @@ mod tests {
             address: "0x".to_string(),
             notification_id: None,
             custom_rpc_urls: Some(vec![RpcConfig::new("https://test-rpc-url".to_string())]),
+            ..Default::default()
         }
     }
 

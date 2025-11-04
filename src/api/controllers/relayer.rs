@@ -26,10 +26,10 @@ use crate::{
         TransactionRepoModel, TransactionResponse, TransactionStatus, UpdateRelayerRequestRaw,
     },
     repositories::{
-        NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository, SyncStateTrait,
-        TransactionCounterTrait, TransactionRepository,
+        ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
+        Repository, SyncStateTrait, TransactionCounterTrait, TransactionRepository,
     },
-    services::{Signer, SignerFactory},
+    services::signer::{Signer, SignerFactory},
 };
 use actix_web::{web, HttpResponse};
 use eyre::Result;
@@ -44,9 +44,9 @@ use eyre::Result;
 /// # Returns
 ///
 /// A paginated list of relayers.
-pub async fn list_relayers<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+pub async fn list_relayers<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     query: PaginationQuery,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -58,6 +58,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     let relayers = state.relayer_repository.list_paginated(query).await?;
 
@@ -84,9 +85,9 @@ where
 /// # Returns
 ///
 /// The details of the specified relayer.
-pub async fn get_relayer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+pub async fn get_relayer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -98,6 +99,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     let relayer = get_relayer_by_id(relayer_id, &state).await?;
 
@@ -126,9 +128,9 @@ where
 /// - **Network Validation**: Confirms the specified network exists for the given network type
 ///
 /// All validations must pass before the relayer is created, ensuring referential integrity and security constraints.
-pub async fn create_relayer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+pub async fn create_relayer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     request: CreateRelayerRequest,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -140,6 +142,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     // Convert request to domain relayer (validates automatically)
     let relayer = RelayerDomainModel::try_from(request)?;
@@ -223,10 +226,10 @@ where
 /// # Returns
 ///
 /// The updated relayer information.
-pub async fn update_relayer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+pub async fn update_relayer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
     patch: serde_json::Value,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -238,6 +241,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
 
@@ -295,9 +299,9 @@ where
 ///
 /// This endpoint ensures that relayers cannot be deleted if they have any pending
 /// or active transactions. This prevents data loss and maintains system integrity.
-pub async fn delete_relayer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+pub async fn delete_relayer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -309,6 +313,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     // Check if the relayer exists
     let _relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
@@ -350,9 +355,9 @@ where
 /// # Returns
 ///
 /// The status of the specified relayer.
-pub async fn get_relayer_status<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+pub async fn get_relayer_status<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -364,6 +369,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     let relayer = get_network_relayer(relayer_id, &state).await?;
 
@@ -382,9 +388,9 @@ where
 /// # Returns
 ///
 /// The balance of the specified relayer.
-pub async fn get_relayer_balance<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+pub async fn get_relayer_balance<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -396,6 +402,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     let relayer = get_network_relayer(relayer_id, &state).await?;
 
@@ -448,10 +455,10 @@ pub async fn send_transaction(
 /// # Returns
 ///
 /// The details of the specified transaction.
-pub async fn get_transaction_by_id<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+pub async fn get_transaction_by_id<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
     transaction_id: String,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -463,6 +470,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     if relayer_id.is_empty() || transaction_id.is_empty() {
         return Ok(HttpResponse::Ok().json(ApiResponse::<()>::error(
@@ -490,10 +498,10 @@ where
 /// # Returns
 ///
 /// The details of the specified transaction.
-pub async fn get_transaction_by_nonce<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+pub async fn get_transaction_by_nonce<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
     nonce: u64,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -505,6 +513,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
 
@@ -537,10 +546,10 @@ where
 /// # Returns
 ///
 /// A paginated list of transactions
-pub async fn list_transactions<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+pub async fn list_transactions<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
     query: PaginationQuery,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -552,6 +561,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     get_relayer_by_id(relayer_id.clone(), &state).await?;
 
@@ -583,9 +593,9 @@ where
 /// # Returns
 ///
 /// A success response with details about cancelled and failed transactions.
-pub async fn delete_pending_transactions<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+pub async fn delete_pending_transactions<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -597,6 +607,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     let relayer = get_relayer_by_id(relayer_id, &state).await?;
     relayer.validate_active_state()?;
@@ -690,10 +701,10 @@ pub async fn replace_transaction(
 /// # Returns
 ///
 /// The signed data response.
-pub async fn sign_data<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+pub async fn sign_data<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
     request: SignDataRequest,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -705,6 +716,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
     relayer.validate_active_state()?;
@@ -730,10 +742,10 @@ where
 /// # Returns
 ///
 /// The signed typed data response.
-pub async fn sign_typed_data<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+pub async fn sign_typed_data<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
     request: SignTypedDataRequest,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -745,6 +757,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
     relayer.validate_active_state()?;
@@ -766,10 +779,10 @@ where
 /// # Returns
 ///
 /// The result of the JSON-RPC call.
-pub async fn relayer_rpc<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+pub async fn relayer_rpc<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
     request: serde_json::Value,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -781,6 +794,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
     relayer.validate_active_state()?;
@@ -803,10 +817,10 @@ where
 /// # Returns
 ///
 /// The signed transaction response.
-pub async fn sign_transaction<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+pub async fn sign_transaction<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
     request: SignTransactionRequest,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -818,6 +832,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
     relayer.validate_active_state()?;
@@ -939,8 +954,15 @@ mod tests {
         setup_test_env();
         let network = create_mock_network();
         let signer = create_mock_signer();
-        let app_state =
-            create_mock_app_state(None, Some(vec![signer]), Some(vec![network]), None, None).await;
+        let app_state = create_mock_app_state(
+            None,
+            None,
+            Some(vec![signer]),
+            Some(vec![network]),
+            None,
+            None,
+        )
+        .await;
 
         let request = create_test_relayer_create_request(
             Some("test-relayer".to_string()),
@@ -973,8 +995,15 @@ mod tests {
         setup_test_env();
         let network = create_mock_network();
         let signer = create_mock_signer();
-        let app_state =
-            create_mock_app_state(None, Some(vec![signer]), Some(vec![network]), None, None).await;
+        let app_state = create_mock_app_state(
+            None,
+            None,
+            Some(vec![signer]),
+            Some(vec![network]),
+            None,
+            None,
+        )
+        .await;
 
         let mut request = create_test_relayer_create_request(
             Some("test-relayer-policies".to_string()),
@@ -1022,8 +1051,15 @@ mod tests {
         setup_test_env();
         let network = create_mock_network();
         let signer = create_mock_signer();
-        let app_state =
-            create_mock_app_state(None, Some(vec![signer]), Some(vec![network]), None, None).await;
+        let app_state = create_mock_app_state(
+            None,
+            None,
+            Some(vec![signer]),
+            Some(vec![network]),
+            None,
+            None,
+        )
+        .await;
 
         let mut request = create_test_relayer_create_request(
             Some("test-relayer-partial".to_string()),
@@ -1067,8 +1103,15 @@ mod tests {
         setup_test_env();
         let network = create_mock_solana_network();
         let signer = create_mock_signer();
-        let app_state =
-            create_mock_app_state(None, Some(vec![signer]), Some(vec![network]), None, None).await;
+        let app_state = create_mock_app_state(
+            None,
+            None,
+            Some(vec![signer]),
+            Some(vec![network]),
+            None,
+            None,
+        )
+        .await;
 
         let mut request = create_test_relayer_create_request(
             Some("test-solana-relayer".to_string()),
@@ -1134,8 +1177,15 @@ mod tests {
         setup_test_env();
         let network = create_mock_stellar_network();
         let signer = create_mock_signer();
-        let app_state =
-            create_mock_app_state(None, Some(vec![signer]), Some(vec![network]), None, None).await;
+        let app_state = create_mock_app_state(
+            None,
+            None,
+            Some(vec![signer]),
+            Some(vec![network]),
+            None,
+            None,
+        )
+        .await;
 
         let mut request = create_test_relayer_create_request(
             Some("test-stellar-relayer".to_string()),
@@ -1179,8 +1229,15 @@ mod tests {
         setup_test_env();
         let network = create_mock_network();
         let signer = create_mock_signer();
-        let app_state =
-            create_mock_app_state(None, Some(vec![signer]), Some(vec![network]), None, None).await;
+        let app_state = create_mock_app_state(
+            None,
+            None,
+            Some(vec![signer]),
+            Some(vec![network]),
+            None,
+            None,
+        )
+        .await;
 
         let mut request = create_test_relayer_create_request(
             Some("test-mismatch-relayer".to_string()),
@@ -1214,8 +1271,15 @@ mod tests {
         let network = create_mock_network();
         let signer = create_mock_signer();
         let notification = create_mock_notification("test-notification".to_string());
-        let app_state =
-            create_mock_app_state(None, Some(vec![signer]), Some(vec![network]), None, None).await;
+        let app_state = create_mock_app_state(
+            None,
+            None,
+            Some(vec![signer]),
+            Some(vec![network]),
+            None,
+            None,
+        )
+        .await;
 
         // Add notification manually since create_mock_app_state doesn't handle notifications
         app_state
@@ -1249,7 +1313,8 @@ mod tests {
     #[actix_web::test]
     async fn test_create_relayer_nonexistent_signer() {
         let network = create_mock_network();
-        let app_state = create_mock_app_state(None, None, Some(vec![network]), None, None).await;
+        let app_state =
+            create_mock_app_state(None, None, None, Some(vec![network]), None, None).await;
 
         let request = create_test_relayer_create_request(
             Some("test-relayer".to_string()),
@@ -1272,7 +1337,8 @@ mod tests {
     #[actix_web::test]
     async fn test_create_relayer_nonexistent_network() {
         let signer = create_mock_signer();
-        let app_state = create_mock_app_state(None, Some(vec![signer]), None, None, None).await;
+        let app_state =
+            create_mock_app_state(None, None, Some(vec![signer]), None, None, None).await;
 
         let request = create_test_relayer_create_request(
             Some("test-relayer".to_string()),
@@ -1301,6 +1367,7 @@ mod tests {
         existing_relayer.signer_id = "test".to_string(); // Match the mock signer id
         existing_relayer.network = "test".to_string(); // Match the mock network name
         let app_state = create_mock_app_state(
+            None,
             Some(vec![existing_relayer]),
             Some(vec![signer]),
             Some(vec![network]),
@@ -1334,8 +1401,15 @@ mod tests {
     async fn test_create_relayer_nonexistent_notification() {
         let network = create_mock_network();
         let signer = create_mock_signer();
-        let app_state =
-            create_mock_app_state(None, Some(vec![signer]), Some(vec![network]), None, None).await;
+        let app_state = create_mock_app_state(
+            None,
+            None,
+            Some(vec![signer]),
+            Some(vec![network]),
+            None,
+            None,
+        )
+        .await;
 
         let request = create_test_relayer_create_request(
             Some("test-relayer".to_string()),
@@ -1362,7 +1436,8 @@ mod tests {
         let relayer1 = create_mock_relayer("relayer-1".to_string(), false);
         let relayer2 = create_mock_relayer("relayer-2".to_string(), false);
         let app_state =
-            create_mock_app_state(Some(vec![relayer1, relayer2]), None, None, None, None).await;
+            create_mock_app_state(None, Some(vec![relayer1, relayer2]), None, None, None, None)
+                .await;
 
         let query = PaginationQuery {
             page: 1,
@@ -1386,7 +1461,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_list_relayers_empty() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         let query = PaginationQuery {
             page: 1,
@@ -1413,7 +1488,8 @@ mod tests {
     #[actix_web::test]
     async fn test_get_relayer_success() {
         let relayer = create_mock_relayer("test-relayer".to_string(), false);
-        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+        let app_state =
+            create_mock_app_state(None, Some(vec![relayer]), None, None, None, None).await;
 
         let result = get_relayer(
             "test-relayer".to_string(),
@@ -1436,7 +1512,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_get_relayer_not_found() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         let result = get_relayer(
             "nonexistent".to_string(),
@@ -1457,7 +1533,8 @@ mod tests {
     #[actix_web::test]
     async fn test_update_relayer_success() {
         let relayer = create_mock_relayer("test-relayer".to_string(), false);
-        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+        let app_state =
+            create_mock_app_state(None, Some(vec![relayer]), None, None, None, None).await;
 
         let patch = serde_json::json!({
             "name": "Updated Relayer Name",
@@ -1488,7 +1565,8 @@ mod tests {
     async fn test_update_relayer_system_disabled() {
         let mut relayer = create_mock_relayer("disabled-relayer".to_string(), false);
         relayer.system_disabled = true;
-        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+        let app_state =
+            create_mock_app_state(None, Some(vec![relayer]), None, None, None, None).await;
 
         let patch = serde_json::json!({
             "name": "Updated Name"
@@ -1512,7 +1590,8 @@ mod tests {
     #[actix_web::test]
     async fn test_update_relayer_invalid_patch() {
         let relayer = create_mock_relayer("test-relayer".to_string(), false);
-        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+        let app_state =
+            create_mock_app_state(None, Some(vec![relayer]), None, None, None, None).await;
 
         let patch = serde_json::json!({
             "invalid_field": "value"
@@ -1535,7 +1614,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_update_relayer_nonexistent() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         let patch = serde_json::json!({
             "name": "Updated Name"
@@ -1559,7 +1638,8 @@ mod tests {
     #[actix_web::test]
     async fn test_update_relayer_set_evm_policies() {
         let relayer = create_mock_relayer("test-relayer".to_string(), false);
-        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+        let app_state =
+            create_mock_app_state(None, Some(vec![relayer]), None, None, None, None).await;
 
         let patch = serde_json::json!({
             "policies": {
@@ -1597,7 +1677,8 @@ mod tests {
     #[actix_web::test]
     async fn test_update_relayer_partial_policy_update() {
         let relayer = create_mock_relayer("test-relayer".to_string(), false);
-        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+        let app_state =
+            create_mock_app_state(None, Some(vec![relayer]), None, None, None, None).await;
 
         // First update with some policies
         let patch1 = serde_json::json!({
@@ -1619,7 +1700,8 @@ mod tests {
 
         // Create fresh app state for second update test
         let relayer2 = create_mock_relayer("test-relayer".to_string(), false);
-        let app_state2 = create_mock_app_state(Some(vec![relayer2]), None, None, None, None).await;
+        let app_state2 =
+            create_mock_app_state(None, Some(vec![relayer2]), None, None, None, None).await;
 
         // Second update with only gas_price_cap change
         let patch2 = serde_json::json!({
@@ -1653,7 +1735,8 @@ mod tests {
     async fn test_update_relayer_unset_notification() {
         let mut relayer = create_mock_relayer("test-relayer".to_string(), false);
         relayer.notification_id = Some("test-notification".to_string());
-        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+        let app_state =
+            create_mock_app_state(None, Some(vec![relayer]), None, None, None, None).await;
 
         let patch = serde_json::json!({
             "notification_id": null
@@ -1685,7 +1768,8 @@ mod tests {
             url: "https://custom-rpc.example.com".to_string(),
             weight: 50,
         }]);
-        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+        let app_state =
+            create_mock_app_state(None, Some(vec![relayer]), None, None, None, None).await;
 
         let patch = serde_json::json!({
             "custom_rpc_urls": null
@@ -1713,7 +1797,8 @@ mod tests {
     #[actix_web::test]
     async fn test_update_relayer_set_custom_rpc_urls() {
         let relayer = create_mock_relayer("test-relayer".to_string(), false);
-        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+        let app_state =
+            create_mock_app_state(None, Some(vec![relayer]), None, None, None, None).await;
 
         let patch = serde_json::json!({
             "custom_rpc_urls": [
@@ -1757,7 +1842,8 @@ mod tests {
     #[actix_web::test]
     async fn test_update_relayer_clear_policies() {
         let relayer = create_mock_relayer("test-relayer".to_string(), false);
-        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+        let app_state =
+            create_mock_app_state(None, Some(vec![relayer]), None, None, None, None).await;
 
         let patch = serde_json::json!({
             "policies": null
@@ -1785,7 +1871,8 @@ mod tests {
     #[actix_web::test]
     async fn test_update_relayer_invalid_policy_structure() {
         let relayer = create_mock_relayer("test-relayer".to_string(), false);
-        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+        let app_state =
+            create_mock_app_state(None, Some(vec![relayer]), None, None, None, None).await;
 
         let patch = serde_json::json!({
             "policies": {
@@ -1811,7 +1898,8 @@ mod tests {
     #[actix_web::test]
     async fn test_update_relayer_invalid_evm_policy_values() {
         let relayer = create_mock_relayer("test-relayer".to_string(), false);
-        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+        let app_state =
+            create_mock_app_state(None, Some(vec![relayer]), None, None, None, None).await;
 
         let patch = serde_json::json!({
             "policies": {
@@ -1839,7 +1927,8 @@ mod tests {
     async fn test_update_relayer_multiple_fields_at_once() {
         let mut relayer = create_mock_relayer("test-relayer".to_string(), false);
         relayer.notification_id = Some("old-notification".to_string());
-        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+        let app_state =
+            create_mock_app_state(None, Some(vec![relayer]), None, None, None, None).await;
 
         let patch = serde_json::json!({
             "name": "Multi-Update Relayer",
@@ -1900,7 +1989,7 @@ mod tests {
         solana_relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy::default());
 
         let app_state =
-            create_mock_app_state(Some(vec![solana_relayer]), None, None, None, None).await;
+            create_mock_app_state(None, Some(vec![solana_relayer]), None, None, None, None).await;
 
         let patch = serde_json::json!({
             "policies": {
@@ -1953,7 +2042,8 @@ mod tests {
     #[actix_web::test]
     async fn test_delete_relayer_success() {
         let relayer = create_mock_relayer("test-relayer".to_string(), false);
-        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+        let app_state =
+            create_mock_app_state(None, Some(vec![relayer]), None, None, None, None).await;
 
         let result = delete_relayer(
             "test-relayer".to_string(),
@@ -1980,6 +2070,7 @@ mod tests {
         transaction.id = "test-tx".to_string();
         transaction.relayer_id = "relayer-with-tx".to_string();
         let app_state = create_mock_app_state(
+            None,
             Some(vec![relayer]),
             None,
             None,
@@ -2006,7 +2097,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_delete_relayer_nonexistent() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         let result = delete_relayer(
             "nonexistent-relayer".to_string(),
@@ -2031,6 +2122,7 @@ mod tests {
         let mut relayer = create_mock_relayer("test-relayer".to_string(), false);
         relayer.network_type = NetworkType::Stellar;
         let app_state = create_mock_app_state(
+            None,
             Some(vec![relayer]),
             Some(vec![signer]),
             Some(vec![network]),
@@ -2058,7 +2150,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_sign_transaction_relayer_not_found() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         let request = SignTransactionRequest::Stellar(SignTransactionRequestStellar {
             unsigned_xdr: "test-unsigned-xdr".to_string(),
@@ -2083,7 +2175,8 @@ mod tests {
     async fn test_sign_transaction_relayer_disabled() {
         let mut relayer = create_mock_relayer("disabled-relayer".to_string(), false);
         relayer.paused = true;
-        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+        let app_state =
+            create_mock_app_state(None, Some(vec![relayer]), None, None, None, None).await;
 
         let request = SignTransactionRequest::Stellar(SignTransactionRequestStellar {
             unsigned_xdr: "test-unsigned-xdr".to_string(),
@@ -2108,7 +2201,8 @@ mod tests {
     async fn test_sign_transaction_system_disabled() {
         let mut relayer = create_mock_relayer("system-disabled-relayer".to_string(), false);
         relayer.system_disabled = true;
-        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+        let app_state =
+            create_mock_app_state(None, Some(vec![relayer]), None, None, None, None).await;
 
         let request = SignTransactionRequest::Stellar(SignTransactionRequestStellar {
             unsigned_xdr: "test-unsigned-xdr".to_string(),

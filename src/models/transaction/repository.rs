@@ -550,14 +550,10 @@ pub struct StellarTransactionData {
     pub memo: Option<MemoSpec>,
     pub valid_until: Option<String>,
     pub network_passphrase: String,
-    #[serde(skip_serializing, skip_deserializing)]
     pub signatures: Vec<DecoratedSignature>,
     pub hash: Option<String>,
-    #[serde(skip_serializing, skip_deserializing)]
     pub simulation_transaction_data: Option<String>,
-    #[serde(skip)]
     pub transaction_input: TransactionInput,
-    #[serde(skip_serializing, skip_deserializing)]
     pub signed_envelope_xdr: Option<String>,
 }
 
@@ -775,7 +771,7 @@ impl StellarTransactionData {
         sim_response: soroban_rs::stellar_rpc_client::SimulateTransactionResponse,
         operations_count: u64,
     ) -> Result<Self, SignerError> {
-        use log::info;
+        use tracing::info;
 
         // Update fee based on simulation (using soroban-helpers formula)
         let inclusion_fee = operations_count * STELLAR_DEFAULT_TRANSACTION_FEE as u64;
@@ -1719,6 +1715,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
 
         let network_model = NetworkRepoModel {
@@ -1739,6 +1736,7 @@ mod tests {
                 required_confirmations: Some(12),
                 features: None,
                 symbol: Some("ETH".to_string()),
+                gas_price_cache: None,
             }),
         };
 
@@ -1795,6 +1793,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
 
         let network_model = NetworkRepoModel {
@@ -1870,6 +1869,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
 
         let network_model = NetworkRepoModel {
@@ -2172,9 +2172,95 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
 
         (network_model, relayer_model)
+    }
+
+    #[test]
+    fn test_stellar_transaction_data_serialization_roundtrip() {
+        use crate::models::transaction::stellar::asset::AssetSpec;
+        use crate::models::transaction::stellar::operation::OperationSpec;
+        use soroban_rs::xdr::{BytesM, Signature, SignatureHint};
+
+        // Create a dummy signature
+        let hint = SignatureHint([1, 2, 3, 4]);
+        let sig_bytes: Vec<u8> = vec![5u8; 64];
+        let sig_bytes_m: BytesM<64> = sig_bytes.try_into().unwrap();
+        let dummy_signature = DecoratedSignature {
+            hint,
+            signature: Signature(sig_bytes_m),
+        };
+
+        // Create a StellarTransactionData with operations, signatures, and other fields
+        let original_data = StellarTransactionData {
+            source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            fee: Some(100),
+            sequence_number: Some(12345),
+            memo: None,
+            valid_until: None,
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            signatures: vec![dummy_signature.clone()],
+            hash: Some("test-hash".to_string()),
+            simulation_transaction_data: Some("simulation-data".to_string()),
+            transaction_input: TransactionInput::Operations(vec![OperationSpec::Payment {
+                destination: "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".to_string(),
+                amount: 1000,
+                asset: AssetSpec::Native,
+            }]),
+            signed_envelope_xdr: Some("signed-xdr-data".to_string()),
+        };
+
+        // Serialize to JSON
+        let json = serde_json::to_string(&original_data).expect("Failed to serialize");
+
+        // Deserialize from JSON
+        let deserialized_data: StellarTransactionData =
+            serde_json::from_str(&json).expect("Failed to deserialize");
+
+        // Verify that transaction_input is preserved
+        match (
+            &original_data.transaction_input,
+            &deserialized_data.transaction_input,
+        ) {
+            (TransactionInput::Operations(orig_ops), TransactionInput::Operations(deser_ops)) => {
+                assert_eq!(orig_ops.len(), deser_ops.len());
+                assert_eq!(orig_ops, deser_ops);
+            }
+            _ => panic!("Transaction input type mismatch"),
+        }
+
+        // Verify signatures are preserved
+        assert_eq!(
+            original_data.signatures.len(),
+            deserialized_data.signatures.len()
+        );
+        assert_eq!(original_data.signatures, deserialized_data.signatures);
+
+        // Verify other fields are preserved
+        assert_eq!(
+            original_data.source_account,
+            deserialized_data.source_account
+        );
+        assert_eq!(original_data.fee, deserialized_data.fee);
+        assert_eq!(
+            original_data.sequence_number,
+            deserialized_data.sequence_number
+        );
+        assert_eq!(
+            original_data.network_passphrase,
+            deserialized_data.network_passphrase
+        );
+        assert_eq!(original_data.hash, deserialized_data.hash);
+        assert_eq!(
+            original_data.simulation_transaction_data,
+            deserialized_data.simulation_transaction_data
+        );
+        assert_eq!(
+            original_data.signed_envelope_xdr,
+            deserialized_data.signed_envelope_xdr
+        );
     }
 
     #[test]

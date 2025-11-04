@@ -43,6 +43,8 @@ pub enum ProviderError {
     BadGateway,
     #[error("Request error (HTTP {status_code}): {error}")]
     RequestError { error: String, status_code: u16 },
+    #[error("JSON-RPC error (code {code}): {message}")]
+    RpcErrorCode { code: i64, message: String },
     #[error("Other provider error: {0}")]
     Other(String),
 }
@@ -151,18 +153,18 @@ where
                 // Fallback for other transport error types
                 ProviderError::Other(format!("Transport error: {}", transport_err))
             }
-            RpcError::ErrorResp(json_rpc_err) => ProviderError::Other(format!(
-                "JSON-RPC error ({}): {}",
-                json_rpc_err.code, json_rpc_err.message
-            )),
+            RpcError::ErrorResp(json_rpc_err) => ProviderError::RpcErrorCode {
+                code: json_rpc_err.code,
+                message: json_rpc_err.message.to_string(),
+            },
             _ => ProviderError::Other(format!("Other RPC error: {}", err)),
         }
     }
 }
 
 // Implement From for RpcSelectorError
-impl From<super::rpc_selector::RpcSelectorError> for ProviderError {
-    fn from(err: super::rpc_selector::RpcSelectorError) -> Self {
+impl From<rpc_selector::RpcSelectorError> for ProviderError {
+    fn from(err: rpc_selector::RpcSelectorError) -> Self {
         ProviderError::NetworkConfiguration(format!("RPC selector error: {}", err))
     }
 }
@@ -333,8 +335,6 @@ mod tests {
     use std::env;
     use std::sync::Mutex;
     use std::time::Duration;
-    use wiremock::matchers::any;
-    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // Use a mutex to ensure tests don't run in parallel when modifying env vars
     lazy_static! {
@@ -365,6 +365,7 @@ mod tests {
             required_confirmations: 1,
             features: vec![],
             symbol: "ETH".to_string(),
+            gas_price_cache: None,
         }
     }
 
@@ -435,16 +436,17 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_categorize_reqwest_error_rate_limited() {
-        let mock_server = MockServer::start().await;
+        let mut mock_server = mockito::Server::new_async().await;
 
-        Mock::given(any())
-            .respond_with(ResponseTemplate::new(429))
-            .mount(&mock_server)
+        let _mock = mock_server
+            .mock("GET", mockito::Matcher::Any)
+            .with_status(429)
+            .create_async()
             .await;
 
         let client = reqwest::Client::new();
         let response = client
-            .get(mock_server.uri())
+            .get(mock_server.url())
             .send()
             .await
             .expect("Failed to get response");
@@ -462,16 +464,17 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_categorize_reqwest_error_bad_gateway() {
-        let mock_server = MockServer::start().await;
+        let mut mock_server = mockito::Server::new_async().await;
 
-        Mock::given(any())
-            .respond_with(ResponseTemplate::new(502))
-            .mount(&mock_server)
+        let _mock = mock_server
+            .mock("GET", mockito::Matcher::Any)
+            .with_status(502)
+            .create_async()
             .await;
 
         let client = reqwest::Client::new();
         let response = client
-            .get(mock_server.uri())
+            .get(mock_server.url())
             .send()
             .await
             .expect("Failed to get response");
@@ -701,6 +704,17 @@ mod tests {
             }
             _ => panic!("Unexpected error type"),
         }
+    }
+
+    #[test]
+    fn test_provider_error_rpc_error_code_variant() {
+        let error = ProviderError::RpcErrorCode {
+            code: -32000,
+            message: "insufficient funds".to_string(),
+        };
+        let error_string = format!("{}", error);
+        assert!(error_string.contains("-32000"));
+        assert!(error_string.contains("insufficient funds"));
     }
 
     #[test]

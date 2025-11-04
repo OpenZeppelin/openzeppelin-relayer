@@ -9,7 +9,6 @@
 //! for development and testing. For production environments, consider using
 //! more secure options like the TurnkeySigner or VaultTransitSigner.
 use async_trait::async_trait;
-use log::info;
 use solana_sdk::{
     instruction::Instruction,
     message::Message,
@@ -17,6 +16,7 @@ use solana_sdk::{
     signer::{SeedDerivable, Signer as SolanaSigner},
     transaction::Transaction,
 };
+use tracing::info;
 
 use crate::{
     domain::{
@@ -27,7 +27,7 @@ use crate::{
         Address, NetworkTransactionData, Signer as SignerDomainModel, SignerError,
         TransactionRepoModel,
     },
-    services::Signer,
+    services::signer::Signer,
 };
 
 use super::SolanaSignTrait;
@@ -93,7 +93,7 @@ mod tests {
             LocalSignerConfig, Signer as SignerDomainModel, SignerConfig, SignerType,
             SolanaTransactionData,
         },
-        services::Signer,
+        services::signer::Signer,
     };
 
     use super::*;

@@ -1,5 +1,5 @@
 # Base image
-FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/rust:latest-dev@sha256:faf49718aaa95c798ed1dfdf3e4edee2cdbc3790c8994705ca6ef35972128459 AS base
+FROM cgr.dev/chainguard/rust:latest-dev@sha256:faf49718aaa95c798ed1dfdf3e4edee2cdbc3790c8994705ca6ef35972128459 AS base
 
 USER root
 RUN apk update && apk --no-cache add \
@@ -15,11 +15,12 @@ WORKDIR /usr/app
 COPY . .
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/app/target \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/usr/app/target \
     cargo install --root /usr/app --path . --debug --locked
 
 # Setting up build directories
-FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/wolfi-base
+FROM cgr.dev/chainguard/wolfi-base
 
 WORKDIR /app
 

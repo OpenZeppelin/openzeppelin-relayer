@@ -1,3 +1,8 @@
+use crate::config::GasPriceCacheConfig;
+use crate::constants::{
+    ARBITRUM_BASED_TAG, LACKS_MEMPOOL_TAGS, OPTIMISM_BASED_TAG, OPTIMISM_TAG, POLYGON_ZKEVM_TAG,
+    ROLLUP_TAG,
+};
 use crate::models::{NetworkConfigData, NetworkRepoModel, RepositoryError};
 use std::time::Duration;
 
@@ -24,6 +29,8 @@ pub struct EvmNetwork {
     pub features: Vec<String>,
     /// The symbol of the network's native currency (e.g., "ETH", "MATIC").
     pub symbol: String,
+    /// Gas price cache configuration
+    pub gas_price_cache: Option<GasPriceCacheConfig>,
 }
 
 impl TryFrom<NetworkRepoModel> for EvmNetwork {
@@ -81,6 +88,7 @@ impl TryFrom<NetworkRepoModel> for EvmNetwork {
                     required_confirmations,
                     features: evm_config.features.clone().unwrap_or_default(),
                     symbol,
+                    gas_price_cache: evm_config.gas_price_cache.clone(),
                 })
             }
             _ => Err(RepositoryError::InvalidData(format!(
@@ -93,19 +101,35 @@ impl TryFrom<NetworkRepoModel> for EvmNetwork {
 
 impl EvmNetwork {
     pub fn is_optimism(&self) -> bool {
-        self.tags.contains(&"optimism".to_string())
+        self.tags
+            .iter()
+            .any(|t| t == OPTIMISM_BASED_TAG || t == OPTIMISM_TAG)
     }
 
     pub fn is_rollup(&self) -> bool {
-        self.tags.contains(&"rollup".to_string())
+        self.tags.iter().any(|t| t == ROLLUP_TAG)
     }
 
+    ///  Returns whether this network lacks mempool-like behavior (no public/pending pool).
+    ///
+    /// Returns true if any tag in `constants::LACKS_MEMPOOL_TAGS` is present.
+    /// Currently includes:
+    /// - "no-mempool"
+    /// - "arbitrum-based"
+    /// - "optimism-based"
+    /// - "optimism" (deprecated; kept for compatibility)
     pub fn lacks_mempool(&self) -> bool {
-        self.tags.contains(&"no-mempool".to_string())
+        self.tags
+            .iter()
+            .any(|t| LACKS_MEMPOOL_TAGS.contains(&t.as_str()))
     }
 
     pub fn is_arbitrum(&self) -> bool {
-        self.tags.contains(&"arbitrum-based".to_string())
+        self.tags.iter().any(|t| t == ARBITRUM_BASED_TAG)
+    }
+
+    pub fn is_polygon_zkevm(&self) -> bool {
+        self.tags.iter().any(|t| t == POLYGON_ZKEVM_TAG)
     }
 
     pub fn is_testnet(&self) -> bool {
@@ -146,6 +170,7 @@ impl EvmNetwork {
 mod tests {
     use super::*;
     use crate::config::{EvmNetworkConfig, NetworkConfigCommon};
+    use crate::constants::{NO_MEMPOOL_TAG, OPTIMISM_TAG};
     use crate::models::{NetworkConfigData, NetworkRepoModel, NetworkType};
 
     fn create_test_evm_network_with_tags(tags: Vec<&str>) -> EvmNetwork {
@@ -160,24 +185,37 @@ mod tests {
             required_confirmations: 1,
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
+            gas_price_cache: None,
         }
     }
 
     #[test]
     fn test_is_optimism_with_optimism_tag() {
-        let network = create_test_evm_network_with_tags(vec!["optimism", "rollup"]);
+        let network = create_test_evm_network_with_tags(vec![OPTIMISM_BASED_TAG, ROLLUP_TAG]);
         assert!(network.is_optimism());
     }
 
     #[test]
     fn test_is_optimism_without_optimism_tag() {
-        let network = create_test_evm_network_with_tags(vec!["rollup", "mainnet"]);
+        let network = create_test_evm_network_with_tags(vec![ROLLUP_TAG, "mainnet"]);
         assert!(!network.is_optimism());
     }
 
     #[test]
+    fn test_is_optimism_with_deprecated_optimism_tag() {
+        let network = create_test_evm_network_with_tags(vec![OPTIMISM_TAG, ROLLUP_TAG]);
+        assert!(network.is_optimism());
+    }
+
+    #[test]
+    fn test_lacks_mempool_with_deprecated_optimism_tag() {
+        let network = create_test_evm_network_with_tags(vec![OPTIMISM_TAG, ROLLUP_TAG]);
+        assert!(network.lacks_mempool());
+    }
+
+    #[test]
     fn test_is_rollup_with_rollup_tag() {
-        let network = create_test_evm_network_with_tags(vec!["rollup", "no-mempool"]);
+        let network = create_test_evm_network_with_tags(vec![ROLLUP_TAG, NO_MEMPOOL_TAG]);
         assert!(network.is_rollup());
     }
 
@@ -189,30 +227,41 @@ mod tests {
 
     #[test]
     fn test_lacks_mempool_with_no_mempool_tag() {
-        let network = create_test_evm_network_with_tags(vec!["rollup", "no-mempool"]);
+        let network = create_test_evm_network_with_tags(vec![ROLLUP_TAG, NO_MEMPOOL_TAG]);
         assert!(network.lacks_mempool());
     }
 
     #[test]
     fn test_lacks_mempool_without_no_mempool_tag() {
-        let network = create_test_evm_network_with_tags(vec!["rollup", "optimism"]);
+        let network = create_test_evm_network_with_tags(vec![ROLLUP_TAG]);
         assert!(!network.lacks_mempool());
     }
 
     #[test]
     fn test_arbitrum_like_network() {
-        let network = create_test_evm_network_with_tags(vec!["rollup", "no-mempool"]);
+        let network = create_test_evm_network_with_tags(vec![ROLLUP_TAG, ARBITRUM_BASED_TAG]);
         assert!(network.is_rollup());
+        assert!(network.is_arbitrum());
         assert!(network.lacks_mempool());
         assert!(!network.is_optimism());
     }
 
     #[test]
     fn test_optimism_like_network() {
-        let network = create_test_evm_network_with_tags(vec!["rollup", "optimism"]);
+        let network = create_test_evm_network_with_tags(vec![ROLLUP_TAG, OPTIMISM_BASED_TAG]);
         assert!(network.is_rollup());
         assert!(network.is_optimism());
+        assert!(network.lacks_mempool());
+    }
+
+    #[test]
+    fn test_polygon_zkevm_network() {
+        let network = create_test_evm_network_with_tags(vec![ROLLUP_TAG, POLYGON_ZKEVM_TAG]);
+        assert!(network.is_rollup());
+        assert!(network.is_polygon_zkevm());
         assert!(!network.lacks_mempool());
+        assert!(!network.is_optimism());
+        assert!(!network.is_arbitrum());
     }
 
     #[test]
@@ -241,12 +290,13 @@ mod tests {
                 explorer_urls: None,
                 average_blocktime_ms: Some(12000),
                 is_testnet: Some(false),
-                tags: Some(vec!["rollup".to_string(), "optimism".to_string()]),
+                tags: Some(vec![ROLLUP_TAG.to_string(), OPTIMISM_BASED_TAG.to_string()]),
             },
             chain_id: Some(10),
             required_confirmations: Some(1),
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
+            gas_price_cache: None,
         };
 
         let repo_model = NetworkRepoModel {
@@ -259,6 +309,6 @@ mod tests {
         let network = EvmNetwork::try_from(repo_model).unwrap();
         assert!(network.is_optimism());
         assert!(network.is_rollup());
-        assert!(!network.lacks_mempool());
+        assert!(network.lacks_mempool());
     }
 }

@@ -6,12 +6,12 @@ pub use methods::*;
 mod handler;
 pub use handler::*;
 
-use log::error;
 use thiserror::Error;
+use tracing::error;
 
 use crate::{
     models::{SignerError, SolanaEncodingError},
-    services::SolanaProviderError,
+    services::provider::SolanaProviderError,
 };
 
 use super::TokenError;

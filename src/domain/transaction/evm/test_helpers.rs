@@ -14,7 +14,7 @@ pub mod test_utils {
             MockNetworkRepository, MockRelayerRepository, MockTransactionCounterTrait,
             MockTransactionRepository,
         },
-        services::{MockEvmProviderTrait, MockSigner},
+        services::{provider::MockEvmProviderTrait, signer::MockSigner},
     };
     use chrono::Utc;
     use std::sync::Arc;
@@ -98,6 +98,7 @@ pub mod test_utils {
             address: "0x".to_string(),
             notification_id: None,
             custom_rpc_urls: None,
+            ..Default::default()
         }
     }
 

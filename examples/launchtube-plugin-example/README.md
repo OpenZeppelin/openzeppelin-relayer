@@ -27,7 +27,6 @@ You only need to:
 3. Set up environment variables
 4. Start Docker to get account addresses
 5. Fund accounts on testnet
-6. Restart the service
 
 All configurations are pre-set for testnet use.
 
@@ -100,23 +99,52 @@ KEYSTORE_PASSPHRASE_SEQ_001=YOUR_PASSWORD
 KEYSTORE_PASSPHRASE_SEQ_002=YOUR_PASSWORD
 WEBHOOK_SIGNING_KEY=<webhook_key_from_above>
 API_KEY=<api_key_from_above>
+# LaunchTube Configuration
+STELLAR_NETWORK=testnet
+LAUNCHTUBE_ADMIN_SECRET=<admin_secret_for_launchtube_mgmt_api>
+SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
+FUND_RELAYER_ID=launchtube-fund
+LOCK_TTL_SECONDS=30
+LOG_LEVEL=info
 ```
+
+### 2b. Provision LaunchTube Sequence Accounts
+
+After generating the credentials above, you can use the bundled TypeScript
+script to create the required relayers, signers, and Stellar accounts while also
+updating the LaunchTube plugin configuration:
+
+```bash
+cd launchtube
+pnpm install
+pnpm exec tsx ./scripts/create-sequence-accounts.ts \
+  --total 3 \
+  --base-url http://localhost:8080 \
+  --api-key <RELAYER_API_KEY> \
+  --funding-relayer launchtube-fund \
+  --plugin-id launchtube-plugin \
+  --plugin-admin-secret <LAUNCHTUBE_ADMIN_SECRET> \
+  --network testnet
+
+# Rerun with --fix to audit or heal any partially created state
+pnpm exec tsx ./scripts/create-sequence-accounts.ts \
+  --total 3 \
+  --base-url http://localhost:8080 \
+  --api-key <RELAYER_API_KEY> \
+  --funding-relayer launchtube-fund \
+  --plugin-id launchtube-plugin \
+  --plugin-admin-secret <LAUNCHTUBE_ADMIN_SECRET> \
+  --network testnet \
+  --fix
+```
+
+The script waits for each funding transaction to confirm, prints a summary of
+the relayer/signer state, and updates the LaunchTube management API with the
+sequence account list so the plugin is immediately ready for use.
 
 ### 3. Verify Configuration
 
 The LaunchTube plugin and relayer configurations are already set up for testnet. The configurations include:
-
-**`launchtube/config.json`** (pre-configured):
-
-```json
-{
-  "fundRelayerId": "launchtube-fund",
-  "sequenceRelayerIds": ["launchtube-seq-001", "launchtube-seq-002"],
-  "maxFee": 1000000,
-  "network": "testnet",
-  "rpcUrl": "https://soroban-testnet.stellar.org"
-}
-```
 
 **`config/config.json`** (pre-configured):
 
@@ -125,17 +153,31 @@ The LaunchTube plugin and relayer configurations are already set up for testnet.
 - Corresponding signers pointing to the key files you'll create
 - Plugin registered as `launchtube-plugin`
 
-> **Note**: If you need mainnet, update `network` in both config files and use mainnet RPC URL
+**LaunchTube Configuration** (via environment variables):
+
+LaunchTube is configured through environment variables in your `.env` file:
+
+- `STELLAR_NETWORK=testnet` - Sets the Stellar network
+- `SOROBAN_RPC_URL=https://soroban-testnet.stellar.org` - RPC endpoint
+- `FUND_RELAYER_ID=launchtube-fund` - ID of the fund relayer
+- `LAUNCHTUBE_ADMIN_SECRET` - Admin secret for LaunchTube operations
+- `LOCK_TTL_SECONDS=30` - Lock timeout for sequence management
 
 ### 4. (Optional) Configure Webhooks
 
-For transaction notifications, edit `config/config.json`:
+For transaction notifications, edit `config/config.json` to add a webhook notification:
 
 ```json
 {
   "notifications": [
     {
-      "url": "https://webhook.site/your-unique-id" // Get a test URL from webhook.site
+      "id": "webhook-notification",
+      "type": "webhook",
+      "url": "https://webhook.site/your-unique-id",
+      "signing_key": {
+        "type": "env",
+        "value": "WEBHOOK_SIGNING_KEY"
+      }
     }
   ]
 }
@@ -173,7 +215,41 @@ After funding, restart the service for it to recognize the funded accounts:
 docker compose up
 ```
 
-The relayer is now ready at `http://localhost:8080/api/v1` 🚀
+### 7. Initialize Sequence Accounts
+
+**Critical Step**: Before LaunchTube can process transactions, you must configure the sequence accounts using the Management API:
+
+```bash
+# Replace YOUR_API_KEY with your actual API key from the .env file
+# Replace YOUR_ADMIN_SECRET with your LAUNCHTUBE_ADMIN_SECRET from the .env file
+curl -X POST http://localhost:8080/api/v1/plugins/launchtube-plugin/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "setSequenceAccounts",
+        "adminSecret": "YOUR_ADMIN_SECRET",
+        "relayerIds": ["launchtube-seq-001", "launchtube-seq-002"]
+      }
+    }
+  }'
+```
+
+**Expected Response (HTTP 200):**
+
+```json
+{
+  "success": true,
+  "data": {
+    "result": {
+      "ok": true,
+      "appliedRelayerIds": ["launchtube-seq-001", "launchtube-seq-002"]
+    }
+  },
+  "error": null
+}
+```
 
 ## Usage
 
@@ -224,15 +300,107 @@ curl -X POST http://localhost:8080/api/v1/plugins/launchtube-plugin/call \
 
 > Use either `xdr` OR `func`+`auth`, not both
 
-**Response:**
+**Response (HTTP 200):**
 
 ```json
 {
-  "transactionId": "tx_123456",
-  "status": "submitted",
-  "hash": "1234567890abcdef..."
+  "success": true,
+  "data": {
+    "result": {
+      "transactionId": "tx_123456",
+      "status": "submitted",
+      "hash": "1234567890abcdef..."
+    }
+  },
+  "error": null
 }
 ```
+
+## Local Plugin Development (Swap Built Output Only)
+
+If you're actively developing `@openzeppelin/relayer-plugin-launchtube`, you can replace only the installed package's built output (`dist/`) with your local build — no code or package.json changes required.
+
+### One-time setup
+
+1. Set an environment variable pointing to your local plugin directory:
+
+```bash
+export LAUNCHTUBE_PLUGIN_DIR=/path/to/your/relayer-plugin-launchtube
+```
+
+Replace `/path/to/your/relayer-plugin-launchtube` with the actual path to your local plugin repository.
+
+2. Build the plugin so `dist/` exists (or run a watch build):
+
+```bash
+pnpm -C $LAUNCHTUBE_PLUGIN_DIR install
+pnpm -C $LAUNCHTUBE_PLUGIN_DIR build
+```
+
+### Start with the dev override
+
+`docker-compose.plugin-dev.yaml` mounts your local plugin's `dist/` over the installed package's `dist/` in the container.
+
+```bash
+export LAUNCHTUBE_PLUGIN_LOCAL_DIST=$LAUNCHTUBE_PLUGIN_DIR/dist
+docker compose -f docker-compose.yaml -f docker-compose.plugin-dev.yaml up -d --build
+```
+
+Under the hood:
+
+- Your local `dist/` is mounted at `/app/plugins/launchtube/node_modules/@openzeppelin/relayer-plugin-launchtube/dist` inside the container.
+- Dependencies remain intact from the installed npm package; only the runtime JS is swapped.
+
+### Iterating on code
+
+1. Edit code in your plugin repo.
+2. Rebuild the plugin outputs (e.g., `pnpm -C $LAUNCHTUBE_PLUGIN_DIR build`).
+3. Restart the relayer to reload the module: `docker compose restart relayer`.
+
+````
+
+### Management API
+
+LaunchTube provides a management API to dynamically configure sequence accounts. This requires the `LAUNCHTUBE_ADMIN_SECRET` from your `.env` file.
+
+#### List Current Sequence Accounts
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/launchtube-plugin/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "listSequenceAccounts",
+        "adminSecret": "YOUR_ADMIN_SECRET"
+      }
+    }
+  }'
+````
+
+#### Add or Update Sequence Accounts
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/launchtube-plugin/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "setSequenceAccounts",
+        "adminSecret": "YOUR_ADMIN_SECRET",
+        "relayerIds": ["launchtube-seq-001", "launchtube-seq-002", "launchtube-seq-003"]
+      }
+    }
+  }'
+```
+
+**Important Notes:**
+
+- You must configure at least one sequence account before LaunchTube can process transactions
+- The management API will prevent removing accounts that are currently locked (in use)
+- All relayer IDs must exist in your OpenZeppelin Relayer configuration
 
 ### Generating XDR for the Relayer
 
@@ -297,7 +465,7 @@ This example uses multiple Stellar accounts (fund account + sequence accounts) w
 ### Common issues
 
 - **Plugin not found**: Verify the plugin `id` and `path` in `examples/launchtube-plugin-example/config/config.json`.
-- **Missing LaunchTube config**: Ensure `examples/launchtube-plugin-example/launchtube/config.json` exists and is correctly filled.
+- **Missing LaunchTube config**: Ensure required environment variables are set in `.env` and that sequence accounts are configured via the Management API.
 - **API authentication**: Ensure the `Authorization` header is present and the `API_KEY` is set in `.env`.
 - **Webhook not received**: Ensure the `notifications[0].url` is set to a reachable URL.
 

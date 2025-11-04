@@ -10,8 +10,8 @@ use crate::{
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
         produce_transaction_update_notification_payload, MidnightNetwork, MidnightOfferRequest,
-        NetworkTransactionData, NetworkTransactionRequest, RelayerRepoModel, TransactionError,
-        TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
+        NetworkTransactionData, NetworkTransactionRequest, NetworkType, RelayerRepoModel,
+        TransactionError, TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{
         RelayerRepositoryStorage, Repository, TransactionCounterRepositoryStorage,
@@ -19,10 +19,12 @@ use crate::{
     },
     services::{
         midnight::handler::{QuickSyncStrategy, SyncManager},
-        remote_prover::RemoteProofServer,
+        provider::{
+            remote_prover::RemoteProofServer, MidnightProvider, MidnightProviderTrait,
+            TransactionSubmissionResult,
+        },
+        signer::{MidnightSigner, MidnightSignerTrait},
         sync::midnight::indexer::ApplyStage,
-        MidnightProvider, MidnightProviderTrait, MidnightSigner, MidnightSignerTrait,
-        TransactionSubmissionResult,
     },
 };
 use async_trait::async_trait;
@@ -378,7 +380,11 @@ where
         let delay = delay_seconds.map(|seconds| Utc::now().timestamp() + seconds);
         self.job_producer()
             .produce_check_transaction_status_job(
-                TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
+                TransactionStatusCheck::new(
+                    tx.id.clone(),
+                    tx.relayer_id.clone(),
+                    NetworkType::Midnight,
+                ),
                 delay,
             )
             .await
@@ -563,6 +569,7 @@ where
         let job = crate::jobs::TransactionStatusCheck::new(
             updated_tx.id.clone(),
             updated_tx.relayer_id.clone(),
+            NetworkType::Midnight,
         );
         self.job_producer()
             .produce_check_transaction_status_job(job, None)
@@ -935,6 +942,7 @@ mod tests {
             }),
             network_type: NetworkType::Midnight,
             custom_rpc_urls: None,
+            disabled_reason: None,
         }
     }
 

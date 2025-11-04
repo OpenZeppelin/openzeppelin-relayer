@@ -23,12 +23,12 @@
 //! * `valid_until_block_height` - The block height until which the transaction remains valid.use
 //!   std::str::FromStr;
 use futures::try_join;
-use log::info;
 use solana_sdk::{
     commitment_config::CommitmentConfig, hash::Hash, pubkey::Pubkey, signature::Signature,
     transaction::Transaction,
 };
 use std::str::FromStr;
+use tracing::info;
 
 use super::{utils::FeeQuote, *};
 use crate::{
@@ -37,7 +37,7 @@ use crate::{
         SolanaFeePaymentStrategy, TransactionRepoModel,
     },
     repositories::{Repository, TransactionRepository},
-    services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
+    services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
 };
 
 impl<P, S, J, JP, TR> SolanaRpcMethodsImpl<P, S, J, JP, TR>
@@ -91,7 +91,7 @@ where
         )
         .await
         .map_err(|e| {
-            error!("Insufficient funds: {}", e);
+            error!(error = %e, "insufficient funds");
             SolanaRpcError::InsufficientFunds(e.to_string())
         })?;
 

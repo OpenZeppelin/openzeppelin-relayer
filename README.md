@@ -61,8 +61,12 @@ The repository includes several ready-to-use examples to help you get started wi
 | [`evm-turnkey-signer`](./examples/evm-turnkey-signer/)                               | Using Turnkey Signer for EVM secure signing             |
 | [`solana-turnkey-signer`](./examples/solana-turnkey-signer/)                         | Using Turnkey Signer for Solana secure signing          |
 | [`solana-google-cloud-kms-signer`](./examples/solana-google-cloud-kms-signer/)       | Using Google Cloud KMS Signer for Solana secure signing |
+| [`stellar-gcp-kms-signer`](./examples/stellar-gcp-kms-signer/)                       | Using Google Cloud KMS Signer for Stellar secure signing |
+| [`evm-cdp-signer`](./examples/evm-cdp-signer/)                                       | Using CDP Signer for EVM secure signing                 |
 | [`network-configuration-config-file`](./examples/network-configuration-config-file/) | Using Custom network configuration via config file      |
 | [`network-configuration-json-file`](./examples/network-configuration-json-file/)     | Using Custom network configuration via json file        |
+
+
 
 Each example includes:
 
@@ -250,6 +254,12 @@ Run the following commands to install pre-commit hooks:
 - Install stable libsodium version from [here](https://download.libsodium.org/libsodium/releases/).
 - Follow steps to install libsodium from the [libsodium installation guide](https://doc.libsodium.org/installation).
 
+
+  > Note (Debian/Ubuntu): If you're compiling libsodium from source, install build-essential first.
+  ```bash
+  sudo apt-get update && sudo apt-get install -y build-essential
+  ```
+
 ### Install Node.js
 
 - Install Node.js from [here](https://nodejs.org/).
@@ -268,6 +278,32 @@ cargo test
 cargo test properties
 cargo test integration
 ```
+
+
+> :warning: Debian/Ubuntu: If you encounter OpenSSL build errors, install the required packages:
+
+```bash
+sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+```
+
+#### Run tests against Redis
+
+1. You can start a Redis instance using the following command:
+
+```bash
+docker run -d \
+  --name redis \
+  -p 6379:6379 \
+  redis:latest
+```
+
+2. Then remove the `#[ignore = "Requires active Redis instance"]` attribute from the tests you want to run.
+
+3. Run the tests using single thread to avoid race conditions within suites:
+
+```bash
+cargo test your_test_regex -- --test-threads=1
+
 
 ### Config files
 
@@ -474,26 +510,18 @@ docker compose logs -f
 
 ## Documentation
 
-- Pre-requisites:
+- All the documentation is under `docs/` directory.
 
-  - You need `antora` `site-generator` and `mermaid` extension to generate the documentation.
+- You can directly make changes to the specific files and raise a PR on this repo as well as on [docs](https://github.com/OpenZeppelin/docs) repo for the content that is modified.
 
-  - You can directly install these dependencies by running `cd docs && npm i --include dev`. If you want to install them manually, you can follow the steps mentioned below.
-  - Install `antora` locally, you can follow the steps mentioned [here](https://docs.antora.org/antora/latest/install/install-antora/#install-dir), if you already have you can skip this step.
-    > Note: If you want to install globally, you can run:
-    >
-    > `npm install -g @antora/cli@3.1 @antora/site-generator@3.1 @sntke/antora-mermaid-extension`
-  - Verify the installation by running `antora --version` or by running `npx antora --version` if you installed it locally.
-
-- To generate documentation locally, run the following command:
+- To generate technical rust documentation locally, run the following command
 
   ```sh
-  cargo make rust-antora
+  cargo make rust-docs
   ```
 
-- Site will be generated in `docs/build/site/openzeppelin_relayer/<version>/` directory.
+- Rust docs will be generated in `docs/build/site/openzeppelin_relayer/` directory.
 
-- To view the documentation, open the `docs/build/site/openzeppelin_relayer/<version>/index.html` in your browser.
 
 ## Observability
 

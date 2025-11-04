@@ -2,15 +2,15 @@
 //! It includes XDR parsing, validation, sequence updating, and fee updating.
 
 use eyre::Result;
-use log::info;
 use soroban_rs::xdr::{Limits, ReadXdr, TransactionEnvelope, WriteXdr};
+use tracing::info;
 
 use crate::{
     constants::STELLAR_DEFAULT_TRANSACTION_FEE,
     domain::{extract_operations, extract_source_account},
     models::{StellarTransactionData, StellarValidationError, TransactionError, TransactionInput},
     repositories::TransactionCounterTrait,
-    services::{Signer, StellarProviderTrait},
+    services::{provider::StellarProviderTrait, signer::Signer},
 };
 
 use super::common::{
@@ -249,7 +249,7 @@ mod tests {
 
         async fn get_events(
             &self,
-            _request: crate::services::GetEventsRequest,
+            _request: crate::services::provider::GetEventsRequest,
         ) -> Result<soroban_rs::stellar_rpc_client::GetEventsResponse, eyre::Error> {
             unimplemented!()
         }

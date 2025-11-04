@@ -35,7 +35,7 @@ use thiserror::Error;
 
 use crate::{
     models::{RpcConfig, SolanaTransactionStatus},
-    services::retry_rpc_call,
+    services::provider::retry_rpc_call,
 };
 
 use super::ProviderError;
@@ -294,7 +294,7 @@ impl SolanaProvider {
             _ => false,
         };
 
-        log::debug!(
+        tracing::debug!(
             "Starting RPC operation '{}' with timeout: {}s",
             operation_name,
             self.timeout_seconds.as_secs()

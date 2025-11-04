@@ -9,7 +9,7 @@
 //! # Returns
 //!
 //! On success, returns a vector of [`GetSupportedTokensItem`] structures.
-use log::info;
+use tracing::info;
 
 use crate::{
     constants::DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE,
@@ -19,7 +19,7 @@ use crate::{
         TransactionRepoModel,
     },
     repositories::{Repository, TransactionRepository},
-    services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
+    services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
 };
 
 use super::*;

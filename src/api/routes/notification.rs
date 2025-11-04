@@ -75,7 +75,7 @@ mod tests {
     #[actix_web::test]
     async fn test_notification_routes_are_registered() {
         // Arrange - Create app with notification routes
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(app_state))

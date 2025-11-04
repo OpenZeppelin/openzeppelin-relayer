@@ -28,17 +28,7 @@
       "signer_id": "launchtube-seq-002-signer"
     }
   ],
-  "notifications": [
-    {
-      "id": "notification-example",
-      "type": "webhook",
-      "url": "",
-      "signing_key": {
-        "type": "env",
-        "value": "WEBHOOK_SIGNING_KEY"
-      }
-    }
-  ],
+  "notifications": [],
   "signers": [
     {
       "id": "launchtube-fund-signer",
@@ -79,7 +69,9 @@
     {
       "id": "launchtube-plugin",
       "path": "launchtube/index.ts",
-      "timeout": 30
+      "timeout": 30,
+      "emit_logs": true,
+      "emit_traces": true
     }
   ]
 }

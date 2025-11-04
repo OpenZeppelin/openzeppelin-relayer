@@ -32,6 +32,9 @@ pub use relayer_state::*;
 mod plugin;
 pub use plugin::*;
 
+pub mod api_key;
+pub use api_key::*;
+
 // Redis base utilities for shared functionality
 pub mod redis_base;
 

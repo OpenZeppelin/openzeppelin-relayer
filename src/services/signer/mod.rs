@@ -32,7 +32,7 @@ use mockall::automock;
 use serde::Serialize;
 use thiserror::Error;
 
-mod evm;
+pub(crate) mod evm;
 pub use evm::*;
 
 mod solana;

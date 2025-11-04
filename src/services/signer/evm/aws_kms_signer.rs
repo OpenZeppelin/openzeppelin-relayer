@@ -1,6 +1,6 @@
 use alloy::{
     consensus::{SignableTransaction, TxEip1559, TxLegacy},
-    primitives::{eip191_hash_message, utils::eip191_message, PrimitiveSignature},
+    primitives::{utils::eip191_message, Signature},
 };
 use async_trait::async_trait;
 
@@ -13,7 +13,13 @@ use crate::{
         Address, EvmTransactionDataSignature, EvmTransactionDataTrait, NetworkTransactionData,
         SignerError,
     },
-    services::{AwsKmsClient, AwsKmsEvmService, AwsKmsService, DataSignerTrait, Signer},
+    services::{
+        signer::{
+            evm::{construct_eip712_message_hash, validate_and_format_signature},
+            DataSignerTrait, Signer,
+        },
+        AwsKmsClient, AwsKmsEvmService, AwsKmsService,
+    },
 };
 
 pub type DefaultAwsKmsService = AwsKmsService<AwsKmsClient>;
@@ -53,16 +59,10 @@ impl<T: AwsKmsEvmService> Signer for AwsKmsSigner<T> {
         let evm_data = transaction.get_evm_transaction_data()?;
 
         if evm_data.is_eip1559() {
-            // Handle EIP-1559 transaction
             let unsigned_tx = TxEip1559::try_from(transaction)?;
-
-            // Prepare transaction for signing
             let payload = unsigned_tx.encoded_for_signing();
-
-            // Sign payload
             let signed_bytes = self.aws_kms_service.sign_payload_evm(&payload).await?;
 
-            // Ensure we have the right signature length
             if signed_bytes.len() != 65 {
                 return Err(SignerError::SigningError(format!(
                     "Invalid signature length from AWS KMS: expected 65 bytes, got {}",
@@ -70,14 +70,10 @@ impl<T: AwsKmsEvmService> Signer for AwsKmsSigner<T> {
                 )));
             }
 
-            // Construct primitive signature
-            let signature = PrimitiveSignature::from_raw(&signed_bytes)
+            let signature = Signature::from_raw(&signed_bytes)
                 .map_err(|e| SignerError::ConversionError(e.to_string()))?;
 
-            // Extract signature array bytes
             let mut signature_bytes = signature.as_bytes();
-
-            // Construct a signed transaction
             let signed_tx = unsigned_tx.into_signed(signature);
 
             // Adjust v value for EIP-1559 (27/28 -> 0/1)
@@ -87,7 +83,6 @@ impl<T: AwsKmsEvmService> Signer for AwsKmsSigner<T> {
                 signature_bytes[64] = 1;
             }
 
-            // RLP encode the signed transaction
             let mut raw = Vec::with_capacity(signed_tx.eip2718_encoded_length());
             signed_tx.eip2718_encode(&mut raw);
 
@@ -97,15 +92,10 @@ impl<T: AwsKmsEvmService> Signer for AwsKmsSigner<T> {
                 raw,
             }))
         } else {
-            // Handle legacy transaction
             let unsigned_tx = TxLegacy::try_from(transaction)?;
-
-            // Prepare transaction for signing
             let payload = unsigned_tx.encoded_for_signing();
-
             let signed_bytes = self.aws_kms_service.sign_payload_evm(&payload).await?;
 
-            // Ensure we have the right signature length
             if signed_bytes.len() != 65 {
                 return Err(SignerError::SigningError(format!(
                     "Invalid signature length from AWS KMS: expected 65 bytes, got {}",
@@ -113,11 +103,10 @@ impl<T: AwsKmsEvmService> Signer for AwsKmsSigner<T> {
                 )));
             }
 
-            let signature = PrimitiveSignature::from_raw(&signed_bytes)
+            let signature = Signature::from_raw(&signed_bytes)
                 .map_err(|e| SignerError::ConversionError(e.to_string()))?;
 
             let signature_bytes = signature.as_bytes();
-
             let signed_tx = unsigned_tx.into_signed(signature);
 
             let mut raw = Vec::with_capacity(signed_tx.rlp_encoded_length());
@@ -142,35 +131,17 @@ impl<T: AwsKmsEvmService> DataSignerTrait for AwsKmsSigner<T> {
             .sign_payload_evm(&eip191_message)
             .await?;
 
-        // Ensure we have the right signature length
-        if signature_bytes.len() != 65 {
-            return Err(SignerError::SigningError(format!(
-                "Invalid signature length from AWS KMS: expected 65 bytes, got {}",
-                signature_bytes.len()
-            )));
-        }
-
-        let r = hex::encode(&signature_bytes[0..32]);
-        let s = hex::encode(&signature_bytes[32..64]);
-        let v = signature_bytes[64];
-
-        Ok(SignDataResponse::Evm(SignDataResponseEvm {
-            r,
-            s,
-            v,
-            sig: hex::encode(&signature_bytes),
-        }))
+        validate_and_format_signature(&signature_bytes, "AWS KMS")
     }
 
     async fn sign_typed_data(
         &self,
-        _typed_data: SignTypedDataRequest,
+        request: SignTypedDataRequest,
     ) -> Result<SignDataResponse, SignerError> {
-        // EIP-712 typed data signing requires specific handling
-        // This is a placeholder that you'll need to implement based on your needs
-        Err(SignerError::NotImplemented(
-            "EIP-712 typed data signing not yet implemented for AWS KMS".into(),
-        ))
+        let message_hash = construct_eip712_message_hash(&request)?;
+        let signature_bytes = self.aws_kms_service.sign_hash_evm(&message_hash).await?;
+
+        validate_and_format_signature(&signature_bytes, "AWS KMS")
     }
 }
 

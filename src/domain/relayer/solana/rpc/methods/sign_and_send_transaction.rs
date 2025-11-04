@@ -21,8 +21,8 @@ use std::str::FromStr;
 
 use chrono::Utc;
 use futures::try_join;
-use log::info;
 use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
+use tracing::{debug, error};
 
 use crate::{
     models::{
@@ -33,7 +33,7 @@ use crate::{
         TransactionUpdateRequest,
     },
     repositories::{Repository, TransactionRepository},
-    services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
+    services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
 };
 
 use super::*;
@@ -50,7 +50,7 @@ where
         &self,
         params: SignAndSendTransactionRequestParams,
     ) -> Result<SignAndSendTransactionResult, SolanaRpcError> {
-        info!("Processing sign and send transaction request");
+        debug!("Processing sign and send transaction request");
         let transaction_request = Transaction::try_from(params.transaction.clone())?;
 
         validate_sign_and_send_transaction(&transaction_request, &self.relayer, &*self.provider)
@@ -61,7 +61,7 @@ where
             .estimate_fee_with_margin(&transaction_request, policy.fee_margin_percentage)
             .await
             .map_err(|e| {
-                error!("Failed to estimate total fee: {}", e);
+                error!(error = %e, "failed to estimate total fee");
                 SolanaRpcError::Estimation(e.to_string())
             })?;
 
@@ -86,7 +86,7 @@ where
         )
         .await
         .map_err(|e| {
-            error!("Insufficient funds: {}", e);
+            error!(error = %e, "insufficient funds");
             SolanaRpcError::InsufficientFunds(e.to_string())
         })?;
 
@@ -99,7 +99,7 @@ where
         let transaction =
             TransactionRepoModel::try_from((&network_transaction, &self.relayer, &self.network))
                 .map_err(|e| {
-                    error!("Failed to create transaction repo model: {}", e);
+                    error!(error = %e, "failed to create transaction repo model");
                     SolanaRpcError::Internal(e.to_string())
                 })?;
 
@@ -108,18 +108,44 @@ where
             .create(transaction.clone())
             .await
             .map_err(|e| {
-                error!("Failed to create transaction repo model: {}", e);
+                error!(error = %e, "failed to create transaction repo model");
                 SolanaRpcError::Internal(e.to_string())
             })?;
 
-        let send_signature = self
-            .provider
-            .send_transaction(&signed_transaction)
-            .await
-            .map_err(|e| {
-                error!("Failed to send transaction: {}", e);
-                SolanaRpcError::Send(e.to_string())
-            })?;
+        let send_signature = match self.provider.send_transaction(&signed_transaction).await {
+            Ok(signature) => signature,
+            Err(e) => {
+                error!(
+                    tx_id = %tx_repo_model.id,
+                    error = %e,
+                    "failed to send transaction - marking as failed"
+                );
+
+                // Mark transaction as failed in the database
+                // Most RPC errors at this point are simulation failures or invalid transaction body
+                let failure_reason = format!("Transaction send failed: {}", e);
+                let update = TransactionUpdateRequest {
+                    status: Some(TransactionStatus::Failed),
+                    status_reason: Some(failure_reason),
+                    ..Default::default()
+                };
+
+                // Attempt to mark as failed, but don't fail the error return if update fails
+                if let Err(update_err) = self
+                    .transaction_repository
+                    .partial_update(tx_repo_model.id.clone(), update)
+                    .await
+                {
+                    error!(
+                        tx_id = %tx_repo_model.id,
+                        error = %update_err,
+                        "failed to update transaction status to Failed"
+                    );
+                }
+
+                return Err(SolanaRpcError::Send(e.to_string()));
+            }
+        };
 
         let update = TransactionUpdateRequest {
             status: Some(TransactionStatus::Submitted),
@@ -136,7 +162,7 @@ where
             .partial_update(tx_repo_model.id.clone(), update)
             .await
             .map_err(|e| {
-                error!("Failed to update transaction status: {}", e);
+                error!(error = %e, "failed to update transaction status");
                 SolanaRpcError::Internal(e.to_string())
             })?;
 
@@ -162,14 +188,14 @@ where
                 .await;
 
             if let Err(e) = webhook_result {
-                error!("Failed to produce notification job: {}", e);
+                error!(error = %e, "failed to produce notification job");
             }
         }
 
         self.schedule_status_check_job(&tx_repo_model, Some(5))
             .await?;
 
-        info!(
+        debug!(
             "Transaction signed and sent successfully with signature: {}",
             result.signature
         );

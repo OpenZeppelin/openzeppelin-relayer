@@ -15,8 +15,8 @@ use crate::{
         SignerResponse, SignerUpdateRequest, ThinDataAppState, TransactionRepoModel,
     },
     repositories::{
-        NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository, SyncStateTrait,
-        TransactionCounterTrait, TransactionRepository,
+        ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
+        Repository, SyncStateTrait, TransactionCounterTrait, TransactionRepository,
     },
 };
 use actix_web::HttpResponse;
@@ -32,9 +32,9 @@ use eyre::Result;
 /// # Returns
 ///
 /// A paginated list of signers.
-pub async fn list_signers<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+pub async fn list_signers<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     query: PaginationQuery,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -46,6 +46,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     let signers = state.signer_repository.list_paginated(query).await?;
 
@@ -71,9 +72,9 @@ where
 /// # Returns
 ///
 /// The signer details or an error if not found.
-pub async fn get_signer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+pub async fn get_signer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     signer_id: String,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -85,6 +86,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     let signer = state.signer_repository.get_by_id(signer_id).await?;
 
@@ -109,9 +111,9 @@ where
 /// (keys, credentials, etc.) should be provided through configuration files or
 /// other secure channels. This is a security measure to prevent sensitive data
 /// from being transmitted through API requests.
-pub async fn create_signer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+pub async fn create_signer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     request: SignerCreateRequest,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -123,6 +125,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     // Convert request to domain model (validates automatically and includes placeholder config)
     let signer = Signer::try_from(request)?;
@@ -152,10 +155,10 @@ where
 ///
 /// Signer updates are not supported for security reasons. To modify a signer,
 /// delete the existing one and create a new signer with the desired configuration.
-pub async fn update_signer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+pub async fn update_signer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     _signer_id: String,
     _request: SignerUpdateRequest,
-    _state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+    _state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -167,6 +170,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     Err(ApiError::BadRequest(
         "Signer updates are not allowed for security reasons. Please delete the existing signer and create a new one with the desired configuration.".to_string()
@@ -189,9 +193,9 @@ where
 /// This endpoint ensures that signers cannot be deleted if they are still being
 /// used by any relayers. This prevents breaking existing relayer configurations
 /// and maintains system integrity.
-pub async fn delete_signer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+pub async fn delete_signer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     signer_id: String,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -203,6 +207,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     // First check if the signer exists
     let _signer = state.signer_repository.get_by_id(signer_id.clone()).await?;
@@ -313,7 +318,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_list_signers_empty() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
         let query = PaginationQuery {
             page: 1,
             per_page: 10,
@@ -337,7 +342,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_list_signers_with_data() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         // Create test signers
         let signer1 = create_test_signer_model("test-1", SignerType::Local);
@@ -374,7 +379,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_get_signer_success() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         // Create a test signer
         let signer = create_test_signer_model("test-signer", SignerType::Local);
@@ -407,7 +412,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_get_signer_not_found() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         let result = get_signer(
             "non-existent".to_string(),
@@ -422,7 +427,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_signer_test_type_success() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         let request = create_test_signer_create_request(
             Some("new-test-signer".to_string()),
@@ -449,14 +454,14 @@ mod tests {
     #[actix_web::test]
     async fn test_create_signer_with_valid_configs() {
         // Test Local signer with valid key
-        let app_state1 = create_mock_app_state(None, None, None, None, None).await;
+        let app_state1 = create_mock_app_state(None, None, None, None, None, None).await;
         let request =
             create_test_signer_create_request(Some("local-test".to_string()), SignerType::Local);
         let result = create_signer(request, actix_web::web::ThinData(app_state1)).await;
         assert!(result.is_ok(), "Local signer with valid key should succeed");
 
         // Test AWS KMS signer with valid config
-        let app_state2 = create_mock_app_state(None, None, None, None, None).await;
+        let app_state2 = create_mock_app_state(None, None, None, None, None, None).await;
         let request =
             create_test_signer_create_request(Some("aws-test".to_string()), SignerType::AwsKms);
         let result = create_signer(request, actix_web::web::ThinData(app_state2)).await;
@@ -468,7 +473,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_signer_local_with_valid_key() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         let request = SignerCreateRequest {
             id: Some("local-signer-test".to_string()),
@@ -497,7 +502,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_signer_aws_kms_comprehensive() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         let request = SignerCreateRequest {
             id: Some("aws-kms-signer".to_string()),
@@ -529,7 +534,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_signer_vault() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         let request = SignerCreateRequest {
             id: Some("vault-signer".to_string()),
@@ -563,7 +568,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_signer_vault_transit() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         use crate::models::{
             SignerConfigRequest, SignerTypeRequest, VaultTransitSignerRequestConfig,
@@ -601,7 +606,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_signer_turnkey() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         let request = SignerCreateRequest {
             id: Some("turnkey-signer".to_string()),
@@ -634,14 +639,14 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_signer_google_cloud_kms() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         let request = SignerCreateRequest {
             id: Some("gcp-kms-signer".to_string()),
             signer_type: SignerTypeRequest::GoogleCloudKms,
             config: SignerConfigRequest::GoogleCloudKms(GoogleCloudKmsSignerRequestConfig {
                 service_account: GoogleCloudKmsSignerServiceAccountRequestConfig {
-                    private_key: "-----BEGIN PRIVATE KEY-----\nSDFGSDFGSDGSDFGSDFGSDFGSDFGSDFGSAFAS...\n-----END PRIVATE KEY-----\n".to_string(), // noboost
+                    private_key: "-----BEGIN EXAMPLE PRIVATE KEY-----\nSDFGSDFGSDGSDFGSDFGSDFGSDFGSDFGSAFAS...\n-----END EXAMPLE PRIVATE KEY-----\n".to_string(), // noboost
                     private_key_id: "gcp-private-key-id-12345".to_string(),
                     project_id: "my-gcp-project".to_string(),
                     client_email: "service-account@my-gcp-project.iam.gserviceaccount.com".to_string(),
@@ -680,7 +685,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_signer_auto_generated_id() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         let request = SignerCreateRequest {
             id: None, // Let the system generate an ID
@@ -710,7 +715,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_signer_invalid_local_key() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         let request = SignerCreateRequest {
             id: Some("invalid-key-signer".to_string()),
@@ -732,7 +737,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_signer_invalid_vault_address() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         let request = SignerCreateRequest {
             id: Some("invalid-vault-signer".to_string()),
@@ -759,7 +764,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_signer_empty_aws_kms_key_id() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         let request = SignerCreateRequest {
             id: Some("empty-key-id-signer".to_string()),
@@ -782,7 +787,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_update_signer_not_allowed() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         // Create a test signer
         let signer = create_test_signer_model("test-signer", SignerType::Local);
@@ -809,7 +814,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_update_signer_always_fails() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         let update_request = create_test_signer_update_request();
 
@@ -831,7 +836,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_delete_signer_success() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         // Create a test signer
         let signer = create_test_signer_model("test-signer", SignerType::Local);
@@ -858,7 +863,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_delete_signer_blocked_by_connected_relayers() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         // Create a test signer
         let signer = create_test_signer_model("connected-signer", SignerType::Local);
@@ -879,6 +884,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
         app_state.relayer_repository.create(relayer).await.unwrap();
 
@@ -903,7 +909,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_delete_signer_not_found() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         let result = delete_signer(
             "non-existent".to_string(),
@@ -918,7 +924,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_delete_signer_after_relayer_removed() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         // Create a test signer
         let signer = create_test_signer_model("cleanup-signer", SignerType::Local);
@@ -939,6 +945,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
         app_state.relayer_repository.create(relayer).await.unwrap();
 
@@ -951,7 +958,7 @@ mod tests {
         assert!(result.is_err());
 
         // Create new app state for second test (since app_state was consumed)
-        let app_state2 = create_mock_app_state(None, None, None, None, None).await;
+        let app_state2 = create_mock_app_state(None, None, None, None, None, None).await;
 
         // Re-create the signer in the new state
         let signer2 = create_test_signer_model("cleanup-signer", SignerType::Local);
@@ -986,7 +993,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_delete_signer_with_multiple_relayers() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         // Create a test signer
         let signer = create_test_signer_model("multi-relayer-signer", SignerType::AwsKms);
@@ -1008,6 +1015,7 @@ mod tests {
                 notification_id: None,
                 system_disabled: false,
                 custom_rpc_urls: None,
+                ..Default::default()
             },
             crate::models::RelayerRepoModel {
                 id: "relayer-2".to_string(),
@@ -1023,6 +1031,7 @@ mod tests {
                 notification_id: None,
                 system_disabled: false,
                 custom_rpc_urls: None,
+                ..Default::default()
             },
             crate::models::RelayerRepoModel {
                 id: "relayer-3".to_string(),
@@ -1038,6 +1047,7 @@ mod tests {
                 notification_id: None,
                 system_disabled: true, // Even disabled relayers should block deletion
                 custom_rpc_urls: None,
+                ..Default::default()
             },
         ];
 
@@ -1069,7 +1079,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_delete_signer_with_some_relayers_using_different_signer() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
 
         // Create two test signers
         let signer1 = create_test_signer_model("signer-to-delete", SignerType::Local);
@@ -1092,6 +1102,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
 
         let relayer2 = crate::models::RelayerRepoModel {
@@ -1108,6 +1119,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
 
         app_state.relayer_repository.create(relayer1).await.unwrap();
@@ -1131,7 +1143,7 @@ mod tests {
         }
 
         // Try to delete the second signer - should succeed (no relayers using it in our test)
-        let app_state2 = create_mock_app_state(None, None, None, None, None).await;
+        let app_state2 = create_mock_app_state(None, None, None, None, None, None).await;
         let signer2_recreated = create_test_signer_model("other-signer", SignerType::AwsKms);
         app_state2
             .signer_repository

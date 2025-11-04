@@ -9,9 +9,10 @@ pub mod operations;
 pub mod unsigned_xdr;
 
 use eyre::Result;
-use log::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::{lane_gate, StellarRelayerTransaction};
+use crate::domain::transaction::common::is_final_state;
 use crate::models::RelayerRepoModel;
 use crate::{
     jobs::JobProducerTrait,
@@ -20,7 +21,7 @@ use crate::{
         TransactionUpdateRequest,
     },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
-    services::{Signer, StellarProviderTrait},
+    services::{provider::StellarProviderTrait, signer::Signer},
 };
 
 use common::{sign_and_finalize_transaction, update_and_notify_transaction};
@@ -39,17 +40,35 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        if !self.concurrent_transactions_enabled() && !lane_gate::claim(&self.relayer().id, &tx.id)
-        {
-            info!(
-                "Relayer {} already has a transaction in flight – {} must wait.",
-                self.relayer().id,
-                tx.id
+        debug!(status = ?tx.status, "preparing stellar transaction");
+
+        // Defensive check: if transaction is in a final state or unexpected state, don't retry
+        if is_final_state(&tx.status) {
+            warn!(
+                tx_id = %tx.id,
+                status = ?tx.status,
+                "transaction already in final state, skipping preparation"
             );
             return Ok(tx);
         }
 
-        info!("Preparing transaction: {:?}", tx.id);
+        if tx.status != TransactionStatus::Pending {
+            debug!(
+                tx_id = %tx.id,
+                status = ?tx.status,
+                expected_status = ?TransactionStatus::Pending,
+                "transaction in unexpected state for preparation, skipping"
+            );
+            return Ok(tx);
+        }
+
+        if !self.concurrent_transactions_enabled() && !lane_gate::claim(&self.relayer().id, &tx.id)
+        {
+            info!("relayer already has a transaction in flight, must wait");
+            return Ok(tx);
+        }
+
+        debug!("preparing transaction {}", tx.id);
 
         // Call core preparation logic with error handling
         match self.prepare_core(tx.clone()).await {
@@ -71,7 +90,7 @@ where
         // Simple dispatch to appropriate processing function based on input type
         match &stellar_data.transaction_input {
             TransactionInput::Operations(_) => {
-                info!("Preparing operations-based transaction {}", tx.id);
+                debug!("preparing operations-based transaction {}", tx.id);
                 let stellar_data_with_sim = operations::process_operations(
                     self.transaction_counter_service(),
                     &self.relayer().id,
@@ -86,7 +105,7 @@ where
                     .await
             }
             TransactionInput::UnsignedXdr(_) => {
-                info!("Preparing unsigned XDR transaction {}", tx.id);
+                debug!("preparing unsigned xdr transaction {}", tx.id);
                 let stellar_data_with_sim = unsigned_xdr::process_unsigned_xdr(
                     self.transaction_counter_service(),
                     &self.relayer().id,
@@ -100,7 +119,7 @@ where
                     .await
             }
             TransactionInput::SignedXdr { .. } => {
-                info!("Preparing fee-bump transaction {}", tx.id);
+                debug!("preparing fee-bump transaction {}", tx.id);
                 let stellar_data_with_fee_bump = fee_bump::process_fee_bump(
                     &self.relayer().address,
                     stellar_data,
@@ -147,30 +166,21 @@ where
     ) -> Result<TransactionRepoModel, TransactionError> {
         let error_reason = format!("Preparation failed: {}", error);
         let tx_id = tx.id.clone(); // Clone the ID before moving tx
-        warn!("Transaction {} preparation failed: {}", tx_id, error_reason);
+        warn!(reason = %error_reason, "transaction preparation failed");
 
         // Step 1: Sync sequence from chain to recover from any potential sequence drift
         if let Ok(stellar_data) = tx.network_data.get_stellar_transaction_data() {
-            info!(
-                "Syncing sequence from chain after failed transaction {} preparation",
-                tx_id
-            );
+            info!("syncing sequence from chain after failed transaction preparation");
             // Always sync from chain on preparation failure to ensure correct sequence state
             match self
                 .sync_sequence_from_chain(&stellar_data.source_account)
                 .await
             {
                 Ok(()) => {
-                    info!(
-                        "Successfully synced sequence from chain for transaction {}",
-                        tx_id
-                    );
+                    info!("successfully synced sequence from chain");
                 }
                 Err(sync_error) => {
-                    warn!(
-                        "Failed to sync sequence from chain for transaction {}: {}",
-                        tx_id, sync_error
-                    );
+                    warn!(error = %sync_error, "failed to sync sequence from chain");
                 }
             }
         }
@@ -187,10 +197,7 @@ where
         {
             Ok(updated_tx) => updated_tx,
             Err(finalize_error) => {
-                warn!(
-                    "Failed to mark transaction {} as failed: {}. Proceeding with lane cleanup.",
-                    tx_id, finalize_error
-                );
+                warn!(error = %finalize_error, "failed to mark transaction as failed, proceeding with lane cleanup");
                 // Continue with cleanup even if we can't update the transaction
                 tx
             }
@@ -200,20 +207,14 @@ where
         if !self.concurrent_transactions_enabled() {
             // In sequential mode, attempt to hand off to next transaction or release lane
             if let Err(enqueue_error) = self.enqueue_next_pending_transaction(&tx_id).await {
-                warn!(
-                    "Failed to enqueue next pending transaction after {} failure: {}. Releasing lane directly.",
-                    tx_id, enqueue_error
-                );
+                warn!(error = %enqueue_error, "failed to enqueue next pending transaction after failure, releasing lane directly");
                 // Fallback: release lane directly if we can't hand it over
                 lane_gate::free(&self.relayer().id, &tx_id);
             }
         }
 
         // Step 4: Log failure for monitoring (prepare_fail_total metric would go here)
-        info!(
-            "Transaction {} preparation failure handled. Lane cleaned up. Error: {}",
-            tx_id, error_reason
-        );
+        info!(error = %error_reason, "transaction preparation failure handled, lane cleaned up");
 
         // Step 5: Return original error to maintain API compatibility
         Err(error)

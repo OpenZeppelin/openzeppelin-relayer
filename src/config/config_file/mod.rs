@@ -40,8 +40,8 @@ pub use plugin::*;
 
 pub mod network;
 pub use network::{
-    EvmNetworkConfig, MidnightNetworkConfig, NetworkConfigCommon, NetworkFileConfig,
-    NetworksFileConfig, SolanaNetworkConfig, StellarNetworkConfig,
+    EvmNetworkConfig, GasPriceCacheConfig, MidnightNetworkConfig, NetworkConfigCommon,
+    NetworkFileConfig, NetworksFileConfig, SolanaNetworkConfig, StellarNetworkConfig,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
@@ -235,12 +235,15 @@ mod tests {
                 required_confirmations: Some(1),
                 features: None,
                 symbol: Some("ETH".to_string()),
+                gas_price_cache: None,
             })])
             .expect("Failed to create NetworksFileConfig for test"),
             plugins: Some(vec![PluginFileConfig {
                 id: "test-1".to_string(),
                 path: "/app/plugins/test-plugin.ts".to_string(),
                 timeout: None,
+                emit_logs: false,
+                emit_traces: false,
             }]),
         }
     }
@@ -271,6 +274,7 @@ mod tests {
                 required_confirmations: Some(1),
                 features: None,
                 symbol: Some("ETH".to_string()),
+                gas_price_cache: None,
             })])
             .unwrap(),
             plugins: Some(vec![]),
@@ -298,6 +302,7 @@ mod tests {
                 required_confirmations: Some(1),
                 features: None,
                 symbol: Some("ETH".to_string()),
+                gas_price_cache: None,
             })])
             .unwrap(),
             plugins: Some(vec![]),
@@ -694,8 +699,12 @@ mod tests {
                 2,
                 "Incorrect number of networks loaded"
             );
-            let has_evm = config.networks.iter().any(|n| matches!(n, NetworkFileConfig::Evm(evm) if evm.common.network == "custom-evm-file"));
-            let has_solana = config.networks.iter().any(|n| matches!(n, NetworkFileConfig::Solana(sol) if sol.common.network == "custom-solana-file"));
+            let has_evm = config.networks.iter().any(
+				|n| matches!(n, NetworkFileConfig::Evm(evm) if evm.common.network == "custom-evm-file"),
+			);
+            let has_solana = config.networks.iter().any(
+				|n| matches!(n, NetworkFileConfig::Solana(sol) if sol.common.network == "custom-solana-file"),
+			);
             assert!(has_evm, "EVM network from file not found or incorrect");
             assert!(
                 has_solana,
@@ -863,6 +872,7 @@ mod tests {
             required_confirmations: Some(1),
             features: None,
             symbol: Some("ETH".to_string()),
+            gas_price_cache: None,
         })];
 
         let config = NetworksFileConfig::new(networks).unwrap();
@@ -1142,6 +1152,8 @@ mod tests {
                 id: "id".to_string(),
                 path: "/app/plugins/test-plugin.js".to_string(),
                 timeout: None,
+                emit_logs: false,
+                emit_traces: false,
             }]),
         };
         let result = config.validate_plugins();
@@ -1209,6 +1221,7 @@ mod tests {
                 required_confirmations: Some(1),
                 features: None,
                 symbol: Some("ETH".to_string()),
+                gas_price_cache: None,
             })])
             .unwrap(),
             plugins: Some(vec![]),
@@ -1243,6 +1256,7 @@ mod tests {
                 required_confirmations: Some(1),
                 features: None,
                 symbol: Some("ETH".to_string()),
+                gas_price_cache: None,
             })])
             .unwrap(),
             plugins: Some(vec![]),

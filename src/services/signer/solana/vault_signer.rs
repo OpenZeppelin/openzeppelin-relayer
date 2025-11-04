@@ -15,7 +15,7 @@ use tokio::sync::{Mutex, RwLock};
 use zeroize::Zeroizing;
 
 use crate::models::{LocalSignerConfig, SignerConfig};
-use crate::services::SolanaSignTrait;
+use crate::services::signer::SolanaSignTrait;
 use crate::{
     domain::{SignDataRequest, SignDataResponse, SignTransactionResponse, SignTypedDataRequest},
     models::{
@@ -23,9 +23,8 @@ use crate::{
         VaultSignerConfig,
     },
     services::{
-        signer::solana::local_signer::LocalSigner,
+        signer::{solana::local_signer::LocalSigner, Signer},
         vault::{VaultService, VaultServiceTrait},
-        Signer,
     },
 };
 

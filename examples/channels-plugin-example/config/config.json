@@ -1,0 +1,77 @@
+{
+  "relayers": [
+    {
+      "id": "channels-fund",
+      "name": "Channels Fund Account",
+      "network": "testnet",
+      "paused": false,
+      "network_type": "stellar",
+      "signer_id": "channels-fund-signer",
+      "policies": {
+        "concurrent_transactions": true
+      }
+    },
+    {
+      "id": "channel-001",
+      "name": "Channel Account 001",
+      "network": "testnet",
+      "paused": false,
+      "network_type": "stellar",
+      "signer_id": "channel-001-signer"
+    },
+    {
+      "id": "channel-002",
+      "name": "Channel Account 002",
+      "network": "testnet",
+      "paused": false,
+      "network_type": "stellar",
+      "signer_id": "channel-002-signer"
+    }
+  ],
+  "notifications": [],
+  "signers": [
+    {
+      "id": "channels-fund-signer",
+      "type": "local",
+      "config": {
+        "path": "config/keys/channels-fund.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE_FUND"
+        }
+      }
+    },
+    {
+      "id": "channel-001-signer",
+      "type": "local",
+      "config": {
+        "path": "config/keys/channel-001.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE_CHANNEL_001"
+        }
+      }
+    },
+    {
+      "id": "channel-002-signer",
+      "type": "local",
+      "config": {
+        "path": "config/keys/channel-002.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE_CHANNEL_002"
+        }
+      }
+    }
+  ],
+  "networks": "./config/networks",
+  "plugins": [
+    {
+      "id": "channels",
+      "path": "channel/index.ts",
+      "timeout": 30,
+      "emit_logs": true,
+      "emit_traces": true
+    }
+  ]
+}

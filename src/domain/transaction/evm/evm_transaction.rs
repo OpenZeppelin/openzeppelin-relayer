@@ -7,17 +7,17 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use eyre::Result;
-use log::{debug, error, info, warn};
 use std::sync::Arc;
+use tracing::{debug, error, info, warn};
 
 use crate::{
     constants::{DEFAULT_EVM_GAS_LIMIT_ESTIMATION, GAS_LIMIT_BUFFER_MULTIPLIER},
     domain::{
         transaction::{
-            evm::{is_pending_transaction, PriceCalculator, PriceCalculatorTrait},
+            evm::{ensure_status, ensure_status_one_of, PriceCalculator, PriceCalculatorTrait},
             Transaction,
         },
-        EvmTransactionValidator,
+        EvmTransactionValidationError, EvmTransactionValidator,
     },
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
@@ -31,8 +31,12 @@ use crate::{
         Repository, TransactionCounterRepositoryStorage, TransactionCounterTrait,
         TransactionRepository, TransactionRepositoryStorage,
     },
-    services::{EvmGasPriceService, EvmProvider, EvmProviderTrait, EvmSigner, Signer},
-    utils::get_evm_default_gas_limit_for_tx,
+    services::{
+        gas::evm_gas_price::EvmGasPriceService,
+        provider::{EvmProvider, EvmProviderTrait},
+        signer::{EvmSigner, Signer},
+    },
+    utils::{calculate_scheduled_timestamp, get_evm_default_gas_limit_for_tx},
 };
 
 use super::PriceParams;
@@ -136,16 +140,29 @@ where
         &self.transaction_repository
     }
 
+    /// Checks if a provider error indicates the transaction was already submitted to the blockchain.
+    /// This handles cases where the transaction was submitted by another instance or in a previous retry.
+    fn is_already_submitted_error(error: &impl std::fmt::Display) -> bool {
+        let error_msg = error.to_string().to_lowercase();
+        error_msg.contains("already known")
+            || error_msg.contains("nonce too low")
+            || error_msg.contains("replacement transaction underpriced")
+    }
+
     /// Helper method to schedule a transaction status check job.
     pub(super) async fn schedule_status_check(
         &self,
         tx: &TransactionRepoModel,
         delay_seconds: Option<i64>,
     ) -> Result<(), TransactionError> {
-        let delay = delay_seconds.map(|seconds| Utc::now().timestamp() + seconds);
+        let delay = delay_seconds.map(calculate_scheduled_timestamp);
         self.job_producer()
             .produce_check_transaction_status_job(
-                TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
+                TransactionStatusCheck::new(
+                    tx.id.clone(),
+                    tx.relayer_id.clone(),
+                    crate::models::NetworkType::Evm,
+                ),
                 delay,
             )
             .await
@@ -184,6 +201,38 @@ where
             })
     }
 
+    /// Helper method to produce a resend transaction job.
+    pub(super) async fn send_transaction_resend_job(
+        &self,
+        tx: &TransactionRepoModel,
+    ) -> Result<(), TransactionError> {
+        let job = TransactionSend::resend(tx.id.clone(), tx.relayer_id.clone());
+
+        self.job_producer()
+            .produce_submit_transaction_job(job, None)
+            .await
+            .map_err(|e| {
+                TransactionError::UnexpectedError(format!("Failed to produce resend job: {}", e))
+            })
+    }
+
+    /// Helper method to produce a transaction request (prepare) job.
+    pub(super) async fn send_transaction_request_job(
+        &self,
+        tx: &TransactionRepoModel,
+    ) -> Result<(), TransactionError> {
+        use crate::jobs::TransactionRequest;
+
+        let job = TransactionRequest::new(tx.id.clone(), tx.relayer_id.clone());
+
+        self.job_producer()
+            .produce_transaction_request_job(job, None)
+            .await
+            .map_err(|e| {
+                TransactionError::UnexpectedError(format!("Failed to produce request job: {}", e))
+            })
+    }
+
     /// Updates a transaction's status.
     pub(super) async fn update_transaction_status(
         &self,
@@ -207,26 +256,32 @@ where
             .partial_update(tx.id.clone(), update_request)
             .await?;
 
-        self.send_transaction_update_notification(&updated_tx)
-            .await?;
+        if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
+            error!(
+                tx_id = %updated_tx.id,
+                status = ?updated_tx.status,
+                "sending transaction update notification failed: {:?}",
+                e
+            );
+        }
         Ok(updated_tx)
     }
 
     /// Sends a transaction update notification if a notification ID is configured.
+    ///
+    /// This is a best-effort operation that logs errors but does not propagate them,
+    /// as notification failures should not affect the transaction lifecycle.
     pub(super) async fn send_transaction_update_notification(
         &self,
         tx: &TransactionRepoModel,
-    ) -> Result<(), TransactionError> {
+    ) -> Result<(), eyre::Report> {
         if let Some(notification_id) = &self.relayer().notification_id {
             self.job_producer()
                 .produce_send_notification_job(
                     produce_transaction_update_notification_payload(notification_id, tx),
                     None,
                 )
-                .await
-                .map_err(|e| {
-                    TransactionError::UnexpectedError(format!("Failed to send notification: {}", e))
-                })?;
+                .await?;
         }
         Ok(())
     }
@@ -239,7 +294,9 @@ where
     ///
     /// # Returns
     ///
-    /// A `Result` indicating success or a `TransactionError` if insufficient balance.
+    /// A `Result` indicating success or a `TransactionError`.
+    /// - Returns `InsufficientBalance` only when balance is truly insufficient (permanent failure)
+    /// - Returns `UnexpectedError` for RPC/network issues (retryable)
     async fn ensure_sufficient_balance(
         &self,
         total_cost: crate::models::U256,
@@ -251,8 +308,19 @@ where
             &self.provider,
         )
         .await
-        .map_err(|validation_error| {
-            TransactionError::InsufficientBalance(validation_error.to_string())
+        .map_err(|validation_error| match validation_error {
+            // Only convert actual insufficient balance to permanent failure
+            EvmTransactionValidationError::InsufficientBalance(msg) => {
+                TransactionError::InsufficientBalance(msg)
+            }
+            // Provider errors are retryable (RPC down, timeout, etc.)
+            EvmTransactionValidationError::ProviderError(msg) => {
+                TransactionError::UnexpectedError(format!("Failed to check balance: {}", msg))
+            }
+            // Validation errors are also retryable
+            EvmTransactionValidationError::ValidationError(msg) => {
+                TransactionError::UnexpectedError(format!("Balance validation error: {}", msg))
+            }
         })
     }
 
@@ -272,17 +340,14 @@ where
             .gas_limit_estimation
             .unwrap_or(DEFAULT_EVM_GAS_LIMIT_ESTIMATION)
         {
-            warn!(
-                "Gas limit estimation is disabled for relayer: {:?}",
-                self.relayer().id
-            );
+            warn!("gas limit estimation is disabled for relayer");
             return Err(TransactionError::UnexpectedError(
                 "Gas limit estimation is disabled".to_string(),
             ));
         }
 
         let estimated_gas = self.provider.estimate_gas(evm_data).await.map_err(|e| {
-            warn!("Failed to estimate gas: {:?} for tx: {:?}", e, evm_data);
+            warn!(error = ?e, tx_data = ?evm_data, "failed to estimate gas");
             TransactionError::UnexpectedError(format!("Failed to estimate gas: {}", e))
         })?;
 
@@ -316,7 +381,20 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("Preparing transaction: {:?}", tx.id);
+        debug!("preparing transaction {}", tx.id);
+
+        // If transaction is not in Pending status, return Ok to avoid wasteful retries
+        // (e.g., if it's already Sent, Failed, or in another state)
+        if let Err(e) = ensure_status(&tx, TransactionStatus::Pending, Some("prepare_transaction"))
+        {
+            warn!(
+                tx_id = %tx.id,
+                status = ?tx.status,
+                error = %e,
+                "transaction not in Pending status, skipping preparation"
+            );
+            return Ok(tx);
+        }
 
         let mut evm_data = tx.network_data.get_evm_transaction_data()?;
         let relayer = self.relayer();
@@ -330,16 +408,10 @@ where
                     evm_data.gas_limit = Some(estimated_gas_limit);
                 }
                 Err(estimation_error) => {
-                    error!(
-                        "Failed to estimate gas limit for tx: {} : {:?}",
-                        tx.id, estimation_error
-                    );
+                    error!(error = ?estimation_error, "failed to estimate gas limit");
 
                     let default_gas_limit = get_evm_default_gas_limit_for_tx(&evm_data);
-                    info!(
-                        "Fallback to default gas limit: {} for tx: {}",
-                        default_gas_limit, tx.id
-                    );
+                    debug!(gas_limit = %default_gas_limit, "fallback to default gas limit");
                     evm_data.gas_limit = Some(default_gas_limit);
                 }
             }
@@ -351,19 +423,96 @@ where
             .get_transaction_price_params(&evm_data, relayer)
             .await?;
 
-        debug!("Gas price: {:?}", price_params.gas_price);
-        // increment the nonce
-        let nonce = self
-            .transaction_counter_service
-            .get_and_increment(&self.relayer.id, &self.relayer.address)
+        debug!(gas_price = ?price_params.gas_price, "gas price");
+
+        // Validate the relayer has sufficient balance before consuming nonce and signing
+        if let Err(balance_error) = self
+            .ensure_sufficient_balance(price_params.total_cost)
             .await
-            .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
+        {
+            // Only mark as Failed for actual insufficient balance, not RPC errors
+            match &balance_error {
+                TransactionError::InsufficientBalance(_) => {
+                    warn!(error = %balance_error, "insufficient balance for transaction");
 
-        let updated_evm_data = evm_data
-            .with_price_params(price_params.clone())
-            .with_nonce(nonce);
+                    let update = TransactionUpdateRequest {
+                        status: Some(TransactionStatus::Failed),
+                        status_reason: Some(balance_error.to_string()),
+                        ..Default::default()
+                    };
 
-        // sign the transaction
+                    let updated_tx = self
+                        .transaction_repository
+                        .partial_update(tx.id.clone(), update)
+                        .await?;
+
+                    if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
+                        error!(
+                            tx_id = %updated_tx.id,
+                            status = ?TransactionStatus::Failed,
+                            "sending transaction update notification failed for insufficient balance: {:?}",
+                            e
+                        );
+                    }
+
+                    // Return Ok since transaction is in final Failed state - no retry needed
+                    return Ok(updated_tx);
+                }
+                // For RPC/provider errors, propagate without marking as Failed
+                // This allows the handler to retry
+                _ => {
+                    debug!(error = %balance_error, "failed to check balance, will retry");
+                    return Err(balance_error);
+                }
+            }
+        }
+
+        // Check if transaction already has a nonce (recovery from failed signing attempt)
+        let tx_with_nonce = if let Some(existing_nonce) = evm_data.nonce {
+            debug!(
+                nonce = existing_nonce,
+                "transaction already has nonce assigned, reusing for retry"
+            );
+            // Retry flow: When reusing an existing nonce from a failed attempt, we intentionally
+            // do NOT persist the fresh price_params (computed earlier) to the DB here. The DB may
+            // temporarily hold stale price_params from the failed attempt. However, fresh price_params
+            // are applied just before signing, ensuring the transaction uses
+            // current gas prices.
+            tx
+        } else {
+            // Balance validation passed, proceed to increment nonce
+            let new_nonce = self
+                .transaction_counter_service
+                .get_and_increment(&self.relayer.id, &self.relayer.address)
+                .await
+                .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
+
+            debug!(nonce = new_nonce, "assigned new nonce to transaction");
+
+            let updated_evm_data = evm_data
+                .with_price_params(price_params.clone())
+                .with_nonce(new_nonce);
+
+            // Save transaction with nonce BEFORE signing
+            // This ensures we can recover if signing fails (timeout, KMS error, etc.)
+            let presign_update = TransactionUpdateRequest {
+                network_data: Some(NetworkTransactionData::Evm(updated_evm_data.clone())),
+                priced_at: Some(Utc::now().to_rfc3339()),
+                ..Default::default()
+            };
+
+            self.transaction_repository
+                .partial_update(tx.id.clone(), presign_update)
+                .await?
+        };
+
+        // Apply price params for signing (recalculated on every attempt)
+        let updated_evm_data = tx_with_nonce
+            .network_data
+            .get_evm_transaction_data()?
+            .with_price_params(price_params.clone());
+
+        // Now sign the transaction - if this fails, we still have the tx with nonce saved
         let sig_result = self
             .signer
             .sign_transaction(NetworkTransactionData::Evm(updated_evm_data.clone()))
@@ -372,52 +521,23 @@ where
         let updated_evm_data =
             updated_evm_data.with_signed_transaction_data(sig_result.into_evm()?);
 
-        // Validate the relayer has sufficient balance
-        match self
-            .ensure_sufficient_balance(price_params.total_cost)
-            .await
-        {
-            Ok(()) => {}
-            Err(balance_error) => {
-                info!(
-                    "Insufficient balance for transaction {}: {}",
-                    tx.id, balance_error
-                );
-
-                let update = TransactionUpdateRequest {
-                    status: Some(TransactionStatus::Failed),
-                    status_reason: Some(balance_error.to_string()),
-                    ..Default::default()
-                };
-
-                let updated_tx = self
-                    .transaction_repository
-                    .partial_update(tx.id.clone(), update)
-                    .await?;
-
-                let _ = self.send_transaction_update_notification(&updated_tx).await;
-                return Err(balance_error);
-            }
-        }
-
-        // Balance validation passed, continue with normal flow
         // Track the transaction hash
-        let mut hashes = tx.hashes.clone();
+        let mut hashes = tx_with_nonce.hashes.clone();
         if let Some(hash) = updated_evm_data.hash.clone() {
             hashes.push(hash);
         }
 
-        let update = TransactionUpdateRequest {
+        // Update with signed data and mark as Sent
+        let postsign_update = TransactionUpdateRequest {
             status: Some(TransactionStatus::Sent),
             network_data: Some(NetworkTransactionData::Evm(updated_evm_data)),
-            priced_at: Some(Utc::now().to_rfc3339()),
             hashes: Some(hashes),
             ..Default::default()
         };
 
         let updated_tx = self
             .transaction_repository
-            .partial_update(tx.id.clone(), update)
+            .partial_update(tx_with_nonce.id.clone(), postsign_update)
             .await?;
 
         // after preparing the transaction, we need to submit it to the job queue
@@ -428,8 +548,14 @@ where
             )
             .await?;
 
-        self.send_transaction_update_notification(&updated_tx)
-            .await?;
+        if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
+            error!(
+                tx_id = %updated_tx.id,
+                status = ?TransactionStatus::Sent,
+                "sending transaction update notification failed after prepare: {:?}",
+                e
+            );
+        }
 
         Ok(updated_tx)
     }
@@ -447,36 +573,87 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("submitting transaction for tx: {:?}", tx.id);
+        debug!("submitting transaction {}", tx.id);
+
+        // If transaction is not in correct status, return Ok to avoid wasteful retries
+        // (e.g., if it's already in a final state like Failed, Confirmed, etc.)
+        if let Err(e) = ensure_status_one_of(
+            &tx,
+            &[TransactionStatus::Sent, TransactionStatus::Submitted],
+            Some("submit_transaction"),
+        ) {
+            warn!(
+                tx_id = %tx.id,
+                status = ?tx.status,
+                error = %e,
+                "transaction not in expected status for submission, skipping"
+            );
+            return Ok(tx);
+        }
 
         let evm_tx_data = tx.network_data.get_evm_transaction_data()?;
         let raw_tx = evm_tx_data.raw.as_ref().ok_or_else(|| {
             TransactionError::InvalidType("Raw transaction data is missing".to_string())
         })?;
 
-        self.provider.send_raw_transaction(raw_tx).await?;
+        // Send transaction to blockchain - this is the critical operation
+        // If this fails, retry is safe due to nonce idempotency
+        match self.provider.send_raw_transaction(raw_tx).await {
+            Ok(_) => {
+                // Transaction submitted successfully
+            }
+            Err(e) => {
+                // SAFETY CHECK: If transaction is in Sent status and we get "already known" or
+                // "nonce too low" errors, it means the transaction was already submitted
+                // (possibly by another instance or in a previous retry)
+                if tx.status == TransactionStatus::Sent && Self::is_already_submitted_error(&e) {
+                    warn!(
+                        tx_id = %tx.id,
+                        error = %e,
+                        "transaction appears to be already submitted based on RPC error - treating as success"
+                    );
+                    // Continue to update status to Submitted
+                } else {
+                    // Real error - propagate it
+                    return Err(e.into());
+                }
+            }
+        }
 
+        // Transaction is now on-chain - update database
+        // If this fails, transaction is still valid, just not tracked correctly
         let update = TransactionUpdateRequest {
             status: Some(TransactionStatus::Submitted),
             sent_at: Some(Utc::now().to_rfc3339()),
             ..Default::default()
         };
 
-        let updated_tx = self
+        let updated_tx = match self
             .transaction_repository
             .partial_update(tx.id.clone(), update)
-            .await?;
+            .await
+        {
+            Ok(tx) => tx,
+            Err(e) => {
+                error!(
+                    error = %e,
+                    tx_id = %tx.id,
+                    "CRITICAL: transaction sent to blockchain but failed to update database - transaction may not be tracked correctly"
+                );
+                // Transaction is on-chain - don't propagate error to avoid wasteful retries
+                // Return the original transaction data
+                tx
+            }
+        };
 
-        // Schedule status check
-        self.job_producer
-            .produce_check_transaction_status_job(
-                TransactionStatusCheck::new(updated_tx.id.clone(), updated_tx.relayer_id.clone()),
-                None,
-            )
-            .await?;
-
-        self.send_transaction_update_notification(&updated_tx)
-            .await?;
+        if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
+            error!(
+                tx_id = %updated_tx.id,
+                status = ?TransactionStatus::Submitted,
+                "sending transaction update notification failed after submit: {:?}",
+                e
+            );
+        }
 
         Ok(updated_tx)
     }
@@ -509,7 +686,22 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("Resubmitting transaction: {:?}", tx.id);
+        debug!("resubmitting transaction {}", tx.id);
+
+        // If transaction is not in correct status, return Ok to avoid wasteful retries
+        if let Err(e) = ensure_status_one_of(
+            &tx,
+            &[TransactionStatus::Sent, TransactionStatus::Submitted],
+            Some("resubmit_transaction"),
+        ) {
+            warn!(
+                tx_id = %tx.id,
+                status = ?tx.status,
+                error = %e,
+                "transaction not in expected status for resubmission, skipping"
+            );
+            return Ok(tx);
+        }
 
         // Calculate bumped gas price
         let bumped_price_params = self
@@ -521,12 +713,13 @@ where
             .await?;
 
         if !bumped_price_params.is_min_bumped.is_some_and(|b| b) {
-            warn!(
-                "Bumped gas price does not meet minimum requirement, skipping resubmission: {:?}",
-                bumped_price_params
-            );
+            warn!(price_params = ?bumped_price_params, "bumped gas price does not meet minimum requirement, skipping resubmission");
             return Ok(tx);
         }
+
+        // Validate the relayer has sufficient balance
+        self.ensure_sufficient_balance(bumped_price_params.total_cost)
+            .await?;
 
         // Get transaction data
         let evm_data = tx.network_data.get_evm_transaction_data()?;
@@ -542,34 +735,75 @@ where
 
         let final_evm_data = updated_evm_data.with_signed_transaction_data(sig_result.into_evm()?);
 
-        // Validate the relayer has sufficient balance
-        self.ensure_sufficient_balance(bumped_price_params.total_cost)
-            .await?;
-
         let raw_tx = final_evm_data.raw.as_ref().ok_or_else(|| {
             TransactionError::InvalidType("Raw transaction data is missing".to_string())
         })?;
 
-        self.provider.send_raw_transaction(raw_tx).await?;
+        // Send resubmitted transaction to blockchain - this is the critical operation
+        let was_already_submitted = match self.provider.send_raw_transaction(raw_tx).await {
+            Ok(_) => {
+                // Transaction resubmitted successfully with new pricing
+                false
+            }
+            Err(e) => {
+                // SAFETY CHECK: If we get "already known" or "nonce too low" errors,
+                // it means a transaction with this nonce was already submitted
+                let is_already_submitted = Self::is_already_submitted_error(&e);
 
-        // Track attempt count and hash history
-        let mut hashes = tx.hashes.clone();
-        if let Some(hash) = final_evm_data.hash.clone() {
-            hashes.push(hash);
-        }
-
-        // Update the transaction in the repository
-        let update = TransactionUpdateRequest {
-            network_data: Some(NetworkTransactionData::Evm(final_evm_data)),
-            hashes: Some(hashes),
-            priced_at: Some(Utc::now().to_rfc3339()),
-            ..Default::default()
+                if is_already_submitted {
+                    warn!(
+                        tx_id = %tx.id,
+                        error = %e,
+                        "resubmission indicates transaction already in mempool/mined - keeping original hash"
+                    );
+                    // Don't update with new hash - the original transaction is what's on-chain
+                    true
+                } else {
+                    // Real error - propagate it
+                    return Err(e.into());
+                }
+            }
         };
 
-        let updated_tx = self
+        // If transaction was already submitted, just update status without changing hash
+        let update = if was_already_submitted {
+            // Keep original hash and data - just ensure status is Submitted
+            TransactionUpdateRequest {
+                status: Some(TransactionStatus::Submitted),
+                ..Default::default()
+            }
+        } else {
+            // Transaction resubmitted successfully - update with new hash and pricing
+            let mut hashes = tx.hashes.clone();
+            if let Some(hash) = final_evm_data.hash.clone() {
+                hashes.push(hash);
+            }
+
+            TransactionUpdateRequest {
+                network_data: Some(NetworkTransactionData::Evm(final_evm_data)),
+                hashes: Some(hashes),
+                priced_at: Some(Utc::now().to_rfc3339()),
+                sent_at: Some(Utc::now().to_rfc3339()),
+                ..Default::default()
+            }
+        };
+
+        let updated_tx = match self
             .transaction_repository
             .partial_update(tx.id.clone(), update)
-            .await?;
+            .await
+        {
+            Ok(tx) => tx,
+            Err(e) => {
+                error!(
+                    error = %e,
+                    tx_id = %tx.id,
+                    "CRITICAL: resubmitted transaction sent to blockchain but failed to update database"
+                );
+                // Transaction is on-chain - return original tx data to avoid wasteful retries
+                tx
+            }
+        };
 
         Ok(updated_tx)
     }
@@ -587,19 +821,23 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("Cancelling transaction: {:?}", tx.id);
-        info!("Transaction status: {:?}", tx.status);
-        // Check if the transaction can be cancelled
-        if !is_pending_transaction(&tx.status) {
-            return Err(TransactionError::ValidationError(format!(
-                "Cannot cancel transaction with status: {:?}",
-                tx.status
-            )));
-        }
+        info!("cancelling transaction {}", tx.id);
+        debug!(status = ?tx.status, "transaction status");
+
+        // Validate state: can only cancel transactions that are still pending
+        ensure_status_one_of(
+            &tx,
+            &[
+                TransactionStatus::Pending,
+                TransactionStatus::Sent,
+                TransactionStatus::Submitted,
+            ],
+            Some("cancel_transaction"),
+        )?;
 
         // If the transaction is in Pending state, we can just update its status
         if tx.status == TransactionStatus::Pending {
-            info!("Transaction is in Pending state, updating status to Canceled");
+            debug!("transaction is in pending state, updating status to canceled");
             return self
                 .update_transaction_status(tx, TransactionStatus::Canceled)
                 .await;
@@ -615,13 +853,16 @@ where
         self.send_transaction_resubmit_job(&updated_tx).await?;
 
         // Send notification for the updated transaction
-        self.send_transaction_update_notification(&updated_tx)
-            .await?;
+        if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
+            error!(
+                tx_id = %updated_tx.id,
+                status = ?updated_tx.status,
+                "sending transaction update notification failed after cancel: {:?}",
+                e
+            );
+        }
 
-        info!(
-            "Original transaction updated with cancellation data: {:?}",
-            updated_tx.id
-        );
+        debug!("original transaction updated with cancellation data");
         Ok(updated_tx)
     }
 
@@ -640,15 +881,18 @@ where
         old_tx: TransactionRepoModel,
         new_tx_request: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("Replacing transaction: {:?}", old_tx.id);
+        debug!("replacing transaction");
 
-        // Check if the transaction can be replaced
-        if !is_pending_transaction(&old_tx.status) {
-            return Err(TransactionError::ValidationError(format!(
-                "Cannot replace transaction with status: {:?}",
-                old_tx.status
-            )));
-        }
+        // Validate state: can only replace transactions that are still pending
+        ensure_status_one_of(
+            &old_tx,
+            &[
+                TransactionStatus::Pending,
+                TransactionStatus::Sent,
+                TransactionStatus::Submitted,
+            ],
+            Some("replace_transaction"),
+        )?;
 
         // Extract EVM data from both old transaction and new request
         let old_evm_data = old_tx.network_data.get_evm_transaction_data()?;
@@ -698,7 +942,7 @@ where
         )
         .await?;
 
-        info!("Replacement price params: {:?}", price_params);
+        debug!(price_params = ?price_params, "replacement price params");
 
         // Apply the calculated price parameters to the updated EVM data
         let evm_data_with_price_params = updated_evm_data.with_price_params(price_params.clone());
@@ -729,8 +973,14 @@ where
         self.send_transaction_resubmit_job(&updated_tx).await?;
 
         // Send notification
-        self.send_transaction_update_notification(&updated_tx)
-            .await?;
+        if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
+            error!(
+                tx_id = %updated_tx.id,
+                status = ?updated_tx.status,
+                "sending transaction update notification failed after replace: {:?}",
+                e
+            );
+        }
 
         Ok(updated_tx)
     }
@@ -800,7 +1050,7 @@ mod tests {
             MockNetworkRepository, MockRelayerRepository, MockTransactionCounterTrait,
             MockTransactionRepository,
         },
-        services::{MockEvmProviderTrait, MockSigner},
+        services::{provider::MockEvmProviderTrait, signer::MockSigner},
     };
     use chrono::Utc;
     use futures::future::ready;
@@ -850,6 +1100,7 @@ mod tests {
             policies: RelayerNetworkPolicy::Evm(evm_policy),
             network_type: NetworkType::Evm,
             custom_rpc_urls: None,
+            ..Default::default()
         }
     }
 
@@ -1049,6 +1300,7 @@ mod tests {
             .returning(move |_, update| {
                 let mut updated_tx = test_tx_clone.clone();
                 updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                updated_tx.status_reason = update.status_reason.clone();
                 Ok(updated_tx)
             });
 
@@ -1071,10 +1323,27 @@ mod tests {
         };
 
         let result = evm_transaction.prepare_transaction(test_tx.clone()).await;
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+
+        let updated_tx = result.unwrap();
+        assert_eq!(
+            updated_tx.status,
+            TransactionStatus::Failed,
+            "Transaction should be marked as Failed"
+        );
         assert!(
-            matches!(result, Err(TransactionError::InsufficientBalance(_))),
-            "Expected InsufficientBalance error, got: {:?}",
-            result
+            updated_tx.status_reason.is_some(),
+            "Status reason should be set"
+        );
+        assert!(
+            updated_tx
+                .status_reason
+                .as_ref()
+                .unwrap()
+                .to_lowercase()
+                .contains("insufficient balance"),
+            "Status reason should contain insufficient balance error, got: {:?}",
+            updated_tx.status_reason
         );
     }
 
@@ -1168,7 +1437,7 @@ mod tests {
                         max_fee_per_gas: None,
                         max_priority_fee_per_gas: None,
                         is_min_bumped: Some(true),
-                        extra_fee: Some(0),
+                        extra_fee: Some(U256::ZERO),
                         total_cost: U256::ZERO,
                     })
                 });
@@ -1238,6 +1507,7 @@ mod tests {
                         required_confirmations: Some(12),
                         features: Some(vec!["eip1559".to_string()]),
                         symbol: Some("ETH".to_string()),
+                        gas_price_cache: None,
                     };
                     Ok(Some(NetworkRepoModel {
                         id: "evm:mainnet".to_string(),
@@ -1312,7 +1582,7 @@ mod tests {
             let result = evm_transaction.cancel_transaction(test_tx.clone()).await;
             assert!(result.is_err());
             if let Err(TransactionError::ValidationError(msg)) = result {
-                assert!(msg.contains("Cannot cancel transaction with status"));
+                assert!(msg.contains("Invalid transaction state for cancel_transaction"));
             } else {
                 panic!("Expected ValidationError");
             }
@@ -1347,7 +1617,7 @@ mod tests {
                         max_fee_per_gas: None,
                         max_priority_fee_per_gas: None,
                         is_min_bumped: Some(true),
-                        extra_fee: Some(0),
+                        extra_fee: Some(U256::ZERO),
                         total_cost: U256::from(2001000000000000000u64), // 2 ETH + gas costs
                     })
                 });
@@ -1418,6 +1688,7 @@ mod tests {
                         required_confirmations: Some(12),
                         features: Some(vec!["eip1559".to_string()]),
                         symbol: Some("ETH".to_string()),
+                        gas_price_cache: None,
                     };
                     Ok(Some(NetworkRepoModel {
                         id: "evm:mainnet".to_string(),
@@ -1529,7 +1800,7 @@ mod tests {
                 .await;
             assert!(result.is_err());
             if let Err(TransactionError::ValidationError(msg)) = result {
-                assert!(msg.contains("Cannot replace transaction with status"));
+                assert!(msg.contains("Invalid transaction state for replace_transaction"));
             } else {
                 panic!("Expected ValidationError");
             }
@@ -1755,7 +2026,7 @@ mod tests {
         // Mock provider to return an error
         mock_provider.expect_estimate_gas().times(1).returning(|_| {
             Box::pin(async {
-                Err(crate::services::ProviderError::Other(
+                Err(crate::services::provider::ProviderError::Other(
                     "RPC error".to_string(),
                 ))
             })
@@ -1874,21 +2145,36 @@ mod tests {
             .returning(|_, _| Box::pin(ready(Ok(()))));
 
         // Mock transaction repository partial_update calls
+        // Note: prepare_transaction calls partial_update twice:
+        // 1. Presign update (saves nonce before signing)
+        // 2. Postsign update (saves signed data and marks as Sent)
         let expected_gas_limit = EXPECTED_GAS_WITH_BUFFER;
 
         let test_tx_clone = test_tx.clone();
         mock_transaction
             .expect_partial_update()
-            .times(1)
-            .returning(move |_, _update| {
+            .times(2)
+            .returning(move |_, update| {
                 let mut updated_tx = test_tx_clone.clone();
-                updated_tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
-                    gas_limit: Some(expected_gas_limit),
-                    ..test_tx_clone
-                        .network_data
-                        .get_evm_transaction_data()
-                        .unwrap()
-                });
+
+                // Apply the updates from the request
+                if let Some(status) = &update.status {
+                    updated_tx.status = status.clone();
+                }
+                if let Some(network_data) = &update.network_data {
+                    updated_tx.network_data = network_data.clone();
+                } else {
+                    // If network_data is not being updated, ensure gas_limit is set
+                    if let NetworkTransactionData::Evm(ref mut evm_data) = updated_tx.network_data {
+                        if evm_data.gas_limit.is_none() {
+                            evm_data.gas_limit = Some(expected_gas_limit);
+                        }
+                    }
+                }
+                if let Some(hashes) = &update.hashes {
+                    updated_tx.hashes = hashes.clone();
+                }
+
                 Ok(updated_tx)
             });
 
@@ -1917,6 +2203,542 @@ mod tests {
             assert_eq!(evm_data.gas_limit, Some(EXPECTED_GAS_WITH_BUFFER));
         } else {
             panic!("Expected EVM network data");
+        }
+    }
+
+    #[test]
+    fn test_is_already_submitted_error_detection() {
+        // Test "already known" variants
+        assert!(DefaultEvmTransaction::is_already_submitted_error(
+            &"already known"
+        ));
+        assert!(DefaultEvmTransaction::is_already_submitted_error(
+            &"Transaction already known"
+        ));
+        assert!(DefaultEvmTransaction::is_already_submitted_error(
+            &"Error: already known"
+        ));
+
+        // Test "nonce too low" variants
+        assert!(DefaultEvmTransaction::is_already_submitted_error(
+            &"nonce too low"
+        ));
+        assert!(DefaultEvmTransaction::is_already_submitted_error(
+            &"Nonce Too Low"
+        ));
+        assert!(DefaultEvmTransaction::is_already_submitted_error(
+            &"Error: nonce too low"
+        ));
+
+        // Test "replacement transaction underpriced" variants
+        assert!(DefaultEvmTransaction::is_already_submitted_error(
+            &"replacement transaction underpriced"
+        ));
+        assert!(DefaultEvmTransaction::is_already_submitted_error(
+            &"Replacement Transaction Underpriced"
+        ));
+
+        // Test non-matching errors
+        assert!(!DefaultEvmTransaction::is_already_submitted_error(
+            &"insufficient funds"
+        ));
+        assert!(!DefaultEvmTransaction::is_already_submitted_error(
+            &"execution reverted"
+        ));
+        assert!(!DefaultEvmTransaction::is_already_submitted_error(
+            &"gas too low"
+        ));
+        assert!(!DefaultEvmTransaction::is_already_submitted_error(
+            &"timeout"
+        ));
+    }
+
+    /// Test submit_transaction with "already known" error in Sent status
+    /// This should treat the error as success and update to Submitted
+    #[tokio::test]
+    async fn test_submit_transaction_already_known_error_from_sent() {
+        let mut mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mock_price_calculator = MockPriceCalculator::new();
+        let counter_service = MockTransactionCounterTrait::new();
+        let mock_network = MockNetworkRepository::new();
+
+        let relayer = create_test_relayer();
+        let mut test_tx = create_test_transaction();
+        test_tx.status = TransactionStatus::Sent;
+        test_tx.sent_at = Some(Utc::now().to_rfc3339());
+        test_tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+            nonce: Some(42),
+            hash: Some("0xhash".to_string()),
+            raw: Some(vec![1, 2, 3]),
+            ..test_tx.network_data.get_evm_transaction_data().unwrap()
+        });
+
+        // Provider returns "already known" error
+        mock_provider
+            .expect_send_raw_transaction()
+            .times(1)
+            .returning(|_| {
+                Box::pin(async {
+                    Err(crate::services::provider::ProviderError::Other(
+                        "already known: transaction already in mempool".to_string(),
+                    ))
+                })
+            });
+
+        // Should still update to Submitted status
+        let test_tx_clone = test_tx.clone();
+        mock_transaction
+            .expect_partial_update()
+            .times(1)
+            .withf(|_, update| update.status == Some(TransactionStatus::Submitted))
+            .returning(move |_, update| {
+                let mut updated_tx = test_tx_clone.clone();
+                updated_tx.status = update.status.unwrap();
+                updated_tx.sent_at = update.sent_at.clone();
+                Ok(updated_tx)
+            });
+
+        mock_job_producer
+            .expect_produce_send_notification_job()
+            .times(1)
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(mock_network),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.submit_transaction(test_tx).await;
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.status, TransactionStatus::Submitted);
+    }
+
+    /// Test submit_transaction with real error (not "already known") should fail
+    #[tokio::test]
+    async fn test_submit_transaction_real_error_fails() {
+        let mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mock_signer = MockSigner::new();
+        let mock_job_producer = MockJobProducerTrait::new();
+        let mock_price_calculator = MockPriceCalculator::new();
+        let counter_service = MockTransactionCounterTrait::new();
+        let mock_network = MockNetworkRepository::new();
+
+        let relayer = create_test_relayer();
+        let mut test_tx = create_test_transaction();
+        test_tx.status = TransactionStatus::Sent;
+        test_tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+            raw: Some(vec![1, 2, 3]),
+            ..test_tx.network_data.get_evm_transaction_data().unwrap()
+        });
+
+        // Provider returns a real error
+        mock_provider
+            .expect_send_raw_transaction()
+            .times(1)
+            .returning(|_| {
+                Box::pin(async {
+                    Err(crate::services::provider::ProviderError::Other(
+                        "insufficient funds for gas * price + value".to_string(),
+                    ))
+                })
+            });
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(mock_network),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.submit_transaction(test_tx).await;
+        assert!(result.is_err());
+    }
+
+    /// Test resubmit_transaction when transaction is already submitted
+    /// Should NOT update hash, only status
+    #[tokio::test]
+    async fn test_resubmit_transaction_already_submitted_preserves_hash() {
+        let mut mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mut mock_signer = MockSigner::new();
+        let mock_job_producer = MockJobProducerTrait::new();
+        let mut mock_price_calculator = MockPriceCalculator::new();
+        let counter_service = MockTransactionCounterTrait::new();
+        let mock_network = MockNetworkRepository::new();
+
+        let relayer = create_test_relayer();
+        let mut test_tx = create_test_transaction();
+        test_tx.status = TransactionStatus::Submitted;
+        test_tx.sent_at = Some(Utc::now().to_rfc3339());
+        let original_hash = "0xoriginal_hash".to_string();
+        test_tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+            nonce: Some(42),
+            hash: Some(original_hash.clone()),
+            raw: Some(vec![1, 2, 3]),
+            ..test_tx.network_data.get_evm_transaction_data().unwrap()
+        });
+        test_tx.hashes = vec![original_hash.clone()];
+
+        // Price calculator returns bumped price
+        mock_price_calculator
+            .expect_calculate_bumped_gas_price()
+            .times(1)
+            .returning(|_, _| {
+                Ok(PriceParams {
+                    gas_price: Some(25000000000), // 25% bump
+                    max_fee_per_gas: None,
+                    max_priority_fee_per_gas: None,
+                    is_min_bumped: Some(true),
+                    extra_fee: None,
+                    total_cost: U256::from(525000000000000u64),
+                })
+            });
+
+        // Balance check passes
+        mock_provider
+            .expect_get_balance()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(U256::from(1000000000000000000u64)) }));
+
+        // Signer creates new transaction with new hash
+        mock_signer
+            .expect_sign_transaction()
+            .times(1)
+            .returning(|_| {
+                Box::pin(ready(Ok(
+                    crate::domain::relayer::SignTransactionResponse::Evm(
+                        crate::domain::relayer::SignTransactionResponseEvm {
+                            hash: "0xnew_hash_that_should_not_be_saved".to_string(),
+                            signature: crate::models::EvmTransactionDataSignature {
+                                r: "r".to_string(),
+                                s: "s".to_string(),
+                                v: 1,
+                                sig: "0xsignature".to_string(),
+                            },
+                            raw: vec![4, 5, 6],
+                        },
+                    ),
+                )))
+            });
+
+        // Provider returns "already known" - transaction is already in mempool
+        mock_provider
+            .expect_send_raw_transaction()
+            .times(1)
+            .returning(|_| {
+                Box::pin(async {
+                    Err(crate::services::provider::ProviderError::Other(
+                        "already known: transaction with same nonce already in mempool".to_string(),
+                    ))
+                })
+            });
+
+        // Verify that partial_update is called with NO network_data (preserving original hash)
+        let test_tx_clone = test_tx.clone();
+        mock_transaction
+            .expect_partial_update()
+            .times(1)
+            .withf(|_, update| {
+                // Should only update status, NOT network_data or hashes
+                update.status == Some(TransactionStatus::Submitted)
+                    && update.network_data.is_none()
+                    && update.hashes.is_none()
+            })
+            .returning(move |_, _| {
+                let mut updated_tx = test_tx_clone.clone();
+                updated_tx.status = TransactionStatus::Submitted;
+                // Hash should remain unchanged!
+                Ok(updated_tx)
+            });
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(mock_network),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.resubmit_transaction(test_tx.clone()).await;
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+
+        // Verify hash was NOT changed
+        if let NetworkTransactionData::Evm(evm_data) = &updated_tx.network_data {
+            assert_eq!(evm_data.hash, Some(original_hash));
+        } else {
+            panic!("Expected EVM network data");
+        }
+    }
+
+    /// Test submit_transaction with database update failure
+    /// Transaction is on-chain, but DB update fails - should return Ok with original tx
+    #[tokio::test]
+    async fn test_submit_transaction_db_failure_after_blockchain_success() {
+        let mut mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mock_price_calculator = MockPriceCalculator::new();
+        let counter_service = MockTransactionCounterTrait::new();
+        let mock_network = MockNetworkRepository::new();
+
+        let relayer = create_test_relayer();
+        let mut test_tx = create_test_transaction();
+        test_tx.status = TransactionStatus::Sent;
+        test_tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+            raw: Some(vec![1, 2, 3]),
+            ..test_tx.network_data.get_evm_transaction_data().unwrap()
+        });
+
+        // Provider succeeds
+        mock_provider
+            .expect_send_raw_transaction()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok("0xsubmitted_hash".to_string()) }));
+
+        // But database update fails
+        mock_transaction
+            .expect_partial_update()
+            .times(1)
+            .returning(|_, _| {
+                Err(crate::models::RepositoryError::UnexpectedError(
+                    "Redis timeout".to_string(),
+                ))
+            });
+
+        // Notification will still be sent (with original tx data)
+        mock_job_producer
+            .expect_produce_send_notification_job()
+            .times(1)
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(mock_network),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.submit_transaction(test_tx.clone()).await;
+        // Should return Ok (transaction is on-chain, don't retry)
+        assert!(result.is_ok());
+        let returned_tx = result.unwrap();
+        // Should return original tx since DB update failed
+        assert_eq!(returned_tx.id, test_tx.id);
+        assert_eq!(returned_tx.status, TransactionStatus::Sent); // Original status
+    }
+
+    /// Test send_transaction_resend_job success
+    #[tokio::test]
+    async fn test_send_transaction_resend_job_success() {
+        let mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mock_provider = MockEvmProviderTrait::new();
+        let mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mock_price_calculator = MockPriceCalculator::new();
+        let counter_service = MockTransactionCounterTrait::new();
+        let mock_network = MockNetworkRepository::new();
+
+        let relayer = create_test_relayer();
+        let test_tx = create_test_transaction();
+
+        // Expect produce_submit_transaction_job to be called with resend job
+        mock_job_producer
+            .expect_produce_submit_transaction_job()
+            .times(1)
+            .withf(|job, delay| {
+                // Verify it's a resend job with correct IDs
+                job.transaction_id == "test-tx-id"
+                    && job.relayer_id == "test-relayer-id"
+                    && matches!(job.command, crate::jobs::TransactionCommand::Resend)
+                    && delay.is_none()
+            })
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(mock_network),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.send_transaction_resend_job(&test_tx).await;
+        assert!(result.is_ok());
+    }
+
+    /// Test send_transaction_resend_job failure
+    #[tokio::test]
+    async fn test_send_transaction_resend_job_failure() {
+        let mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mock_provider = MockEvmProviderTrait::new();
+        let mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mock_price_calculator = MockPriceCalculator::new();
+        let counter_service = MockTransactionCounterTrait::new();
+        let mock_network = MockNetworkRepository::new();
+
+        let relayer = create_test_relayer();
+        let test_tx = create_test_transaction();
+
+        // Job producer returns an error
+        mock_job_producer
+            .expect_produce_submit_transaction_job()
+            .times(1)
+            .returning(|_, _| {
+                Box::pin(ready(Err(crate::jobs::JobProducerError::QueueError(
+                    "Job queue is full".to_string(),
+                ))))
+            });
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(mock_network),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.send_transaction_resend_job(&test_tx).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            TransactionError::UnexpectedError(msg) => {
+                assert!(msg.contains("Failed to produce resend job"));
+            }
+            _ => panic!("Expected UnexpectedError"),
+        }
+    }
+
+    /// Test send_transaction_request_job success
+    #[tokio::test]
+    async fn test_send_transaction_request_job_success() {
+        let mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mock_provider = MockEvmProviderTrait::new();
+        let mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mock_price_calculator = MockPriceCalculator::new();
+        let counter_service = MockTransactionCounterTrait::new();
+        let mock_network = MockNetworkRepository::new();
+
+        let relayer = create_test_relayer();
+        let test_tx = create_test_transaction();
+
+        // Expect produce_transaction_request_job to be called
+        mock_job_producer
+            .expect_produce_transaction_request_job()
+            .times(1)
+            .withf(|job, delay| {
+                // Verify correct transaction ID and relayer ID
+                job.transaction_id == "test-tx-id"
+                    && job.relayer_id == "test-relayer-id"
+                    && delay.is_none()
+            })
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(mock_network),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.send_transaction_request_job(&test_tx).await;
+        assert!(result.is_ok());
+    }
+
+    /// Test send_transaction_request_job failure
+    #[tokio::test]
+    async fn test_send_transaction_request_job_failure() {
+        let mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mock_provider = MockEvmProviderTrait::new();
+        let mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mock_price_calculator = MockPriceCalculator::new();
+        let counter_service = MockTransactionCounterTrait::new();
+        let mock_network = MockNetworkRepository::new();
+
+        let relayer = create_test_relayer();
+        let test_tx = create_test_transaction();
+
+        // Job producer returns an error
+        mock_job_producer
+            .expect_produce_transaction_request_job()
+            .times(1)
+            .returning(|_, _| {
+                Box::pin(ready(Err(crate::jobs::JobProducerError::QueueError(
+                    "Redis connection failed".to_string(),
+                ))))
+            });
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(mock_network),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.send_transaction_request_job(&test_tx).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            TransactionError::UnexpectedError(msg) => {
+                assert!(msg.contains("Failed to produce request job"));
+            }
+            _ => panic!("Expected UnexpectedError"),
         }
     }
 }

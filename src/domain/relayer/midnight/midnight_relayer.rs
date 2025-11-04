@@ -23,23 +23,25 @@
 use crate::{
     constants::MIDNIGHT_SMALLEST_UNIT_NAME,
     domain::{
-        stellar::next_sequence_u64, BalanceResponse, SignDataRequest, SignDataResponse,
-        SignTransactionExternalResponse, SignTransactionRequest, SignTypedDataRequest,
+        stellar::{i64_from_u64, next_sequence_u64},
+        BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
+        SignTransactionRequest, SignTypedDataRequest,
     },
     jobs::{JobProducerTrait, TransactionRequest},
     models::{
-        produce_relayer_disabled_payload, DeletePendingTransactionsResponse, JsonRpcRequest,
-        JsonRpcResponse, MidnightNetwork, NetworkRpcRequest, NetworkRpcResult,
-        NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus, RepositoryError,
-        TransactionRepoModel, TransactionStatus,
+        produce_relayer_disabled_payload, DeletePendingTransactionsResponse, DisabledReason,
+        HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, MidnightNetwork, NetworkRpcRequest,
+        NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus,
+        RepositoryError, TransactionRepoModel, TransactionStatus,
     },
     repositories::{
         NetworkRepository, RelayerRepository, RelayerStateRepositoryStorage, Repository,
         TransactionRepository,
     },
     services::{
+        provider::{MidnightProvider, MidnightProviderTrait},
+        signer::{MidnightSigner, MidnightSignerTrait},
         sync::midnight::handler::{QuickSyncStrategy, SyncManager, SyncManagerTrait},
-        MidnightProvider, MidnightProviderTrait, MidnightSigner, MidnightSignerTrait,
         TransactionCounterService, TransactionCounterServiceTrait,
     },
 };
@@ -48,6 +50,7 @@ use eyre::Result;
 use log::{info, warn};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tracing::debug;
 
 use crate::domain::relayer::{Relayer, RelayerError};
 
@@ -224,7 +227,7 @@ where
             .await
             .map_err(|e| RelayerError::ProviderError(format!("Failed to fetch account: {}", e)))?;
 
-        let next = next_sequence_u64(nonce as i64)?;
+        let next = next_sequence_u64(i64_from_u64(nonce)?)?;
 
         info!(
             "Setting next nonce {} for relayer {}",
@@ -243,7 +246,10 @@ where
 
         let updated = self
             .relayer_repository
-            .disable_relayer(self.relayer.id.clone())
+            .disable_relayer(
+                self.relayer.id.clone(),
+                DisabledReason::NonceSyncFailed(reason.clone()),
+            )
             .await?;
 
         if let Some(nid) = &self.relayer.notification_id {
@@ -327,6 +333,36 @@ where
         })
     }
 
+    /// Initializes the relayer by performing necessary checks and synchronizations.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success or a `RelayerError` if any initialization step fails.
+    async fn check_health(&self) -> Result<(), Vec<HealthCheckFailure>> {
+        debug!(
+            "running health checks for Midnight relayer {}",
+            self.relayer.id
+        );
+
+        let nonce_sync_result = self.sync_nonce().await;
+
+        // Collect all failures
+        let failures: Vec<HealthCheckFailure> = vec![nonce_sync_result
+            .err()
+            .map(|e| HealthCheckFailure::NonceSyncFailed(e.to_string()))]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        if failures.is_empty() {
+            info!("all health checks passed");
+            Ok(())
+        } else {
+            warn!("health checks failed: {:?}", failures);
+            Err(failures)
+        }
+    }
+
     async fn get_status(&self) -> Result<RelayerStatus, RelayerError> {
         let relayer_model = &self.relayer;
 
@@ -348,7 +384,8 @@ where
             .find_by_status(&relayer_model.id, &pending_statuses[..])
             .await
             .map_err(RelayerError::from)?;
-        let pending_transactions_count = pending_transactions.len() as u64;
+        let pending_transactions_count = u64::try_from(pending_transactions.len())
+            .map_err(|_| RelayerError::ProviderError("Transaction count overflow".into()))?;
 
         let confirmed_statuses = [TransactionStatus::Confirmed];
         let confirmed_transactions = self
@@ -541,6 +578,7 @@ mod tests {
                 notification_id: Some("notification-id".to_string()),
                 system_disabled: false,
                 custom_rpc_urls: None,
+                disabled_reason: None,
             };
 
             TestCtx {
@@ -691,9 +729,10 @@ mod tests {
         let mut relayer_repo = MockRelayerRepository::new();
         let mut updated_model = relayer_model.clone();
         updated_model.system_disabled = true;
+        let reasons = vec!["reason1".to_string(), "reason2".to_string()];
         relayer_repo
             .expect_disable_relayer()
-            .with(eq(relayer_model.id.clone()))
+            .with(eq(relayer_model.id.clone()), eq(reasons))
             .returning(move |_| Ok::<RelayerRepoModel, RepositoryError>(updated_model.clone()));
         let mut job_producer = MockJobProducerTrait::new();
         job_producer

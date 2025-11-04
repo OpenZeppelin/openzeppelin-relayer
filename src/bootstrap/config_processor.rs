@@ -6,24 +6,23 @@ use crate::{
     config::{Config, RepositoryStorageType, ServerConfig},
     jobs::JobProducerTrait,
     models::{
-        NetworkRepoModel, NotificationRepoModel, PluginModel, Relayer, RelayerRepoModel,
-        Signer as SignerDomainModel, SignerFileConfig, SignerRepoModel, ThinDataAppState,
-        TransactionRepoModel,
+        ApiKeyRepoModel, NetworkRepoModel, NotificationRepoModel, PluginModel, Relayer,
+        RelayerRepoModel, Signer as SignerDomainModel, SignerFileConfig, SignerRepoModel,
+        ThinDataAppState, TransactionRepoModel,
     },
     repositories::{
-        NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository, SyncStateTrait,
-        TransactionCounterTrait, TransactionRepository,
+        ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
+        Repository, SyncStateTrait, TransactionCounterTrait, TransactionRepository,
     },
-    services::{Signer as SignerService, SignerFactory},
+    services::signer::{Signer as SignerService, SignerFactory},
 };
 use color_eyre::{eyre::WrapErr, Report, Result};
 use futures::future::try_join_all;
-use log::info;
+use tracing::info;
 
-/// Process all plugins from the config file and store them in the repository.
-async fn process_plugins<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
-    config_file: &Config,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+async fn process_api_key<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
+    server_config: &ServerConfig,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -35,6 +34,40 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    let api_key_model = ApiKeyRepoModel::new(
+        "default".to_string(),
+        server_config.api_key.clone(),
+        vec!["*".to_string()],
+        vec!["*".to_string()],
+    );
+
+    app_state
+        .api_key_repository
+        .create(api_key_model)
+        .await
+        .wrap_err("Failed to create api key repository entry")?;
+
+    Ok(())
+}
+
+/// Process all plugins from the config file and store them in the repository.
+async fn process_plugins<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
+    config_file: &Config,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
+) -> Result<()>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     if let Some(plugins) = &config_file.plugins {
         let plugin_futures = plugins.iter().map(|plugin| async {
@@ -76,9 +109,9 @@ async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
 /// 2. Store the resulting repository model
 ///
 /// This function processes signers in parallel using futures.
-async fn process_signers<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+async fn process_signers<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     config_file: &Config,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -90,6 +123,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     let signer_futures = config_file.signers.iter().map(|signer| async {
         let signer_repo_model = process_signer(signer).await?;
@@ -115,9 +149,9 @@ where
 /// 2. Store the resulting model in the repository
 ///
 /// This function processes notifications in parallel using futures.
-async fn process_notifications<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+async fn process_notifications<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     config_file: &Config,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -129,6 +163,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     let notification_futures = config_file.notifications.iter().map(|notification| async {
         let notification_repo_model = NotificationRepoModel::try_from(notification.clone())
@@ -155,9 +190,9 @@ where
 /// 2. Store the resulting model in the repository
 ///
 /// This function processes networks in parallel using futures.
-async fn process_networks<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+async fn process_networks<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     config_file: &Config,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -169,6 +204,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     let network_futures = config_file.networks.iter().map(|network| async move {
         let network_repo_model = NetworkRepoModel::try_from(network.clone())?;
@@ -197,9 +233,9 @@ where
 /// 5. Store the resulting model in the repository
 ///
 /// This function processes relayers in parallel using futures.
-async fn process_relayers<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+async fn process_relayers<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     config_file: &Config,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -211,6 +247,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     let signers = app_state.signer_repository.list_all().await?;
 
@@ -254,8 +291,8 @@ where
 ///
 /// This function checks if any of the main repository list keys exist in Redis.
 /// If they exist, it means Redis already contains data from a previous configuration load.
-async fn is_redis_populated<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+async fn is_redis_populated<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<bool>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -267,6 +304,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     if app_state.relayer_repository.has_entries().await? {
         return Ok(true);
@@ -302,10 +340,10 @@ where
 /// 2. Process notifications
 /// 3. Process networks
 /// 4. Process relayers
-pub async fn process_config_file<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
+pub async fn process_config_file<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     config_file: Config,
     server_config: Arc<ServerConfig>,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -317,6 +355,7 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     let should_process_config_file = match server_config.repository_storage_type {
         RepositoryStorageType::InMemory => true,
@@ -338,6 +377,7 @@ where
         app_state.notification_repository.drop_all_entries().await?;
         app_state.network_repository.drop_all_entries().await?;
         app_state.plugin_repository.drop_all_entries().await?;
+        app_state.api_key_repository.drop_all_entries().await?;
     }
 
     if should_process_config_file {
@@ -347,6 +387,7 @@ where
         process_notifications(&config_file, app_state).await?;
         process_networks(&config_file, app_state).await?;
         process_relayers(&config_file, app_state).await?;
+        process_api_key(&server_config, app_state).await?;
     }
     Ok(())
 }
@@ -362,16 +403,17 @@ mod tests {
             relayer::RelayerFileConfig, AppState, AwsKmsSignerFileConfig,
             GoogleCloudKmsKeyFileConfig, GoogleCloudKmsServiceAccountFileConfig,
             GoogleCloudKmsSignerFileConfig, LocalSignerFileConfig, NetworkType, NotificationConfig,
-            NotificationType, PlainOrEnvValue, SecretString, SignerConfigStorage, SignerFileConfig,
-            SignerFileConfigEnum, VaultSignerFileConfig, VaultTransitSignerFileConfig,
+            NotificationType, PaginationQuery, PlainOrEnvValue, SecretString, SignerConfigStorage,
+            SignerFileConfig, SignerFileConfigEnum, VaultSignerFileConfig,
+            VaultTransitSignerFileConfig,
         },
         repositories::{
-            InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
-            InMemoryRelayerStateRepository, InMemorySignerRepository, InMemoryTransactionCounter,
-            InMemoryTransactionRepository, NetworkRepositoryStorage, NotificationRepositoryStorage,
-            PluginRepositoryStorage, RelayerRepositoryStorage, RelayerStateRepositoryStorage,
-            SignerRepositoryStorage, TransactionCounterRepositoryStorage,
-            TransactionRepositoryStorage,
+            ApiKeyRepositoryStorage, InMemoryApiKeyRepository, InMemoryNetworkRepository,
+            InMemoryNotificationRepository, InMemoryPluginRepository, InMemorySignerRepository,
+            InMemoryTransactionCounter, InMemoryTransactionRepository, NetworkRepositoryStorage,
+            NotificationRepositoryStorage, PluginRepositoryStorage, RelayerRepositoryStorage,
+            RelayerStateRepositoryStorage, SignerRepositoryStorage,
+            TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
         },
         utils::mocks::mockutils::{
             create_mock_network, create_mock_notification, create_mock_relayer, create_mock_signer,
@@ -379,10 +421,9 @@ mod tests {
         },
     };
     use actix_web::web::ThinData;
+    use mockito;
     use serde_json::json;
     use std::{sync::Arc, time::Duration};
-    use wiremock::matchers::{body_json, header, method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn create_test_app_state() -> AppState<
         MockJobProducerTrait,
@@ -394,6 +435,7 @@ mod tests {
         TransactionCounterRepositoryStorage,
         RelayerStateRepositoryStorage,
         PluginRepositoryStorage,
+        ApiKeyRepositoryStorage,
     > {
         // Create a mock job producer
         let mut mock_job_producer = MockJobProducerTrait::new();
@@ -427,6 +469,7 @@ mod tests {
             sync_state_store: Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
             job_producer: Arc::new(mock_job_producer),
             plugin_repository: Arc::new(PluginRepositoryStorage::new_in_memory()),
+            api_key_repository: Arc::new(ApiKeyRepositoryStorage::new_in_memory()),
         }
     }
 
@@ -539,82 +582,97 @@ mod tests {
 
     // utility function to setup a mock AppRole login response
     async fn setup_mock_approle_login(
-        mock_server: &MockServer,
+        mock_server: &mut mockito::ServerGuard,
         role_id: &str,
         secret_id: &str,
         token: &str,
-    ) {
-        Mock::given(method("POST"))
-            .and(path("/v1/auth/approle/login"))
-            .and(body_json(json!({
+    ) -> mockito::Mock {
+        mock_server
+            .mock("POST", "/v1/auth/approle/login")
+            .match_body(mockito::Matcher::Json(json!({
                 "role_id": role_id,
                 "secret_id": secret_id
             })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "request_id": "test-request-id",
-                "lease_id": "",
-                "renewable": false,
-                "lease_duration": 0,
-                "data": null,
-                "wrap_info": null,
-                "warnings": null,
-                "auth": {
-                    "client_token": token,
-                    "accessor": "test-accessor",
-                    "policies": ["default"],
-                    "token_policies": ["default"],
-                    "metadata": {
-                        "role_name": "test-role"
-                    },
-                    "lease_duration": 3600,
-                    "renewable": true,
-                    "entity_id": "test-entity-id",
-                    "token_type": "service",
-                    "orphan": true
-                }
-            })))
-            .mount(mock_server)
-            .await;
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::to_string(&json!({
+                    "request_id": "test-request-id",
+                    "lease_id": "",
+                    "renewable": false,
+                    "lease_duration": 0,
+                    "data": null,
+                    "wrap_info": null,
+                    "warnings": null,
+                    "auth": {
+                        "client_token": token,
+                        "accessor": "test-accessor",
+                        "policies": ["default"],
+                        "token_policies": ["default"],
+                        "metadata": {
+                            "role_name": "test-role"
+                        },
+                        "lease_duration": 3600,
+                        "renewable": true,
+                        "entity_id": "test-entity-id",
+                        "token_type": "service",
+                        "orphan": true
+                    }
+                }))
+                .unwrap(),
+            )
+            .create_async()
+            .await
     }
 
     #[tokio::test]
     async fn test_process_signer_vault() -> Result<()> {
-        let mock_server = MockServer::start().await;
+        let mut mock_server = mockito::Server::new_async().await;
 
-        setup_mock_approle_login(&mock_server, "test-role-id", "test-secret-id", "test-token")
-            .await;
+        let _login_mock = setup_mock_approle_login(
+            &mut mock_server,
+            "test-role-id",
+            "test-secret-id",
+            "test-token",
+        )
+        .await;
 
-        Mock::given(method("GET"))
-            .and(path("/v1/secret/data/test-key"))
-            .and(header("X-Vault-Token", "test-token"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "request_id": "test-request-id",
-                "lease_id": "",
-                "renewable": false,
-                "lease_duration": 0,
-                "data": {
-                    "data": {
-                        "value": "C5ACE14AB163556747F02C1110911537578FBE335FB74D18FBF82990AD70C3B9"
-                    },
-                    "metadata": {
-                        "created_time": "2024-01-01T00:00:00Z",
-                        "deletion_time": "",
-                        "destroyed": false,
-                        "version": 1
-                    }
-                },
-                "wrap_info": null,
-                "warnings": null,
-                "auth": null
-            })))
-            .mount(&mock_server)
-            .await;
+        let _secret_mock = mock_server
+			.mock("GET", "/v1/secret/data/test-key")
+			.match_header("X-Vault-Token", "test-token")
+			.with_status(200)
+			.with_header("content-type", "application/json")
+			.with_body(
+				serde_json::to_string(&json!({
+					"request_id": "test-request-id",
+					"lease_id": "",
+					"renewable": false,
+					"lease_duration": 0,
+					"data": {
+						"data": {
+							"value": "C5ACE14AB163556747F02C1110911537578FBE335FB74D18FBF82990AD70C3B9"
+						},
+						"metadata": {
+							"created_time": "2024-01-01T00:00:00Z",
+							"deletion_time": "",
+							"destroyed": false,
+							"version": 1
+						}
+					},
+					"wrap_info": null,
+					"warnings": null,
+					"auth": null
+				}))
+				.unwrap(),
+			)
+			.create_async()
+			.await;
 
         let signer = SignerFileConfig {
             id: "vault-signer".to_string(),
             config: SignerFileConfigEnum::Vault(VaultSignerFileConfig {
                 key_name: "test-key".to_string(),
-                address: mock_server.uri(),
+                address: mock_server.url(),
                 namespace: Some("test-namespace".to_string()),
                 role_id: PlainOrEnvValue::Plain {
                     value: SecretString::new("test-role-id"),
@@ -1025,11 +1083,15 @@ mod tests {
                 id: "test-plugin-1".to_string(),
                 path: "/app/plugins/test.ts".to_string(),
                 timeout: None,
+                emit_logs: false,
+                emit_traces: false,
             },
             PluginFileConfig {
                 id: "test-plugin-2".to_string(),
                 path: "/app/plugins/test2.ts".to_string(),
                 timeout: Some(12),
+                emit_logs: false,
+                emit_traces: false,
             },
         ];
 
@@ -1081,6 +1143,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_process_api_key() -> Result<()> {
+        let server_config = Arc::new(crate::utils::mocks::mockutils::create_test_server_config(
+            RepositoryStorageType::InMemory,
+        ));
+        let app_state = ThinData(create_test_app_state());
+
+        process_api_key(&server_config, &app_state).await?;
+
+        let pagination_query = PaginationQuery {
+            page: 1,
+            per_page: 10,
+        };
+
+        let stored_api_keys = app_state
+            .api_key_repository
+            .list_paginated(pagination_query)
+            .await?;
+        assert_eq!(stored_api_keys.items.len(), 1);
+        assert_eq!(stored_api_keys.items[0].name, "default");
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_process_config_file() -> Result<()> {
         // Create test signers, relayers, and notifications
         let signers = vec![SignerFileConfig {
@@ -1116,6 +1202,8 @@ mod tests {
             id: "test-plugin-1".to_string(),
             path: "/app/plugins/test.ts".to_string(),
             timeout: None,
+            emit_logs: false,
+            emit_traces: false,
         }];
 
         // Create config
@@ -1138,6 +1226,7 @@ mod tests {
         let transaction_counter = Arc::new(InMemoryTransactionCounter::default());
         let sync_state_store = Arc::new(InMemoryRelayerStateRepository::default());
         let plugin_repo = Arc::new(InMemoryPluginRepository::default());
+        let api_key_repo = Arc::new(InMemoryApiKeyRepository::default());
 
         // Create a mock job producer
         let mut mock_job_producer = MockJobProducerTrait::new();
@@ -1166,6 +1255,7 @@ mod tests {
             sync_state_store: sync_state_store.clone(),
             job_producer: job_producer.clone(),
             plugin_repository: plugin_repo.clone(),
+            api_key_repository: api_key_repo.clone(),
         });
 
         // Process the entire config file

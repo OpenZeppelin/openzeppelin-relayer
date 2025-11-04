@@ -8,15 +8,15 @@
 //! for consistent interaction regardless of which token program (SPL Token or Token-2022)
 //! is being used.
 use ::spl_token::state::Account as SplTokenAccount;
-use log::error;
 use solana_sdk::{
     account::Account as SolanaAccount, instruction::Instruction, program_pack::Pack, pubkey::Pubkey,
 };
 use spl_associated_token_account::get_associated_token_address_with_program_id;
+use tracing::error;
 
 use spl_associated_token_account::instruction::create_associated_token_account;
 
-use crate::services::SolanaProviderTrait;
+use crate::services::provider::SolanaProviderTrait;
 
 /// Represents a Solana token account with its key properties.
 ///
@@ -376,7 +376,7 @@ mod tests {
 
     use crate::{
         domain::{SolanaTokenProgram, TokenError, TokenInstruction},
-        services::MockSolanaProviderTrait,
+        services::provider::MockSolanaProviderTrait,
     };
 
     #[tokio::test]

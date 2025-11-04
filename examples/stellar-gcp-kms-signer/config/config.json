@@ -1,0 +1,49 @@
+{
+  "relayers": [
+    {
+      "id": "stellar-example",
+      "name": "Stellar Example",
+      "network": "testnet",
+      "paused": false,
+      "signer_id": "gcp-kms-signer-stellar",
+      "network_type": "stellar",
+      "policies": {
+        "min_balance": 0
+      }
+    }
+  ],
+  "notifications": [],
+
+  "signers": [
+    {
+      "id": "gcp-kms-signer-stellar",
+      "type": "google_cloud_kms",
+      "config": {
+        "service_account": {
+          "project_id": "macro-boulevard-473712-h8",
+          "private_key_id": {
+            "type": "env",
+            "value": "GCP_PRIVATE_KEY_ID"
+          },
+          "private_key": {
+            "type": "env",
+            "value": "GCP_PRIVATE_KEY"
+          },
+          "client_email": {
+            "type": "env",
+            "value": "GCP_CLIENT_EMAIL"
+          },
+          "client_id": "108076383744345715915"
+        },
+        "key": {
+          "location": "global",
+          "key_ring_id": "relayer",
+          "key_id": "relayer",
+          "key_version": 1
+        }
+      }
+    }
+  ],
+  "networks": "./config/networks",
+  "plugins": []
+}

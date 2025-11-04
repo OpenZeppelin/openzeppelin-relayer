@@ -1,20 +1,12 @@
-# Antora Documentation
+# Generate Documentation
 
-## Generate Documentation
-
-- To generate documentation locally, run the following command
-
-  ```sh
-  yarn docs:watch
-  ```
+- To generate rust documentation locally, run the following command
 
   - In separate terminal from root of the repo run:
 
     ```sh
-    cargo make rust-antora
+    cargo make rust-docs
     ```
-
-- You can view the site `localhost:8080` or other port if it's in use.
 
 - To update openapi documentation, run:
 

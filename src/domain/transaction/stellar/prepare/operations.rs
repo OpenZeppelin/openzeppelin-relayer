@@ -1,7 +1,7 @@
 //! Operations-based transaction preparation logic.
 
 use eyre::Result;
-use log::info;
+use tracing::info;
 
 use super::common::{get_next_sequence, sign_stellar_transaction, simulate_if_needed};
 use crate::{
@@ -9,7 +9,7 @@ use crate::{
     domain::extract_operations,
     models::{StellarTransactionData, TransactionError, TransactionRepoModel},
     repositories::TransactionCounterTrait,
-    services::{Signer, StellarProviderTrait},
+    services::{provider::StellarProviderTrait, signer::Signer},
 };
 
 /// Process operations-based transaction.
@@ -102,7 +102,7 @@ mod tests {
             RepositoryError, TransactionInput, TransactionStatus,
         },
         repositories::MockTransactionCounterTrait,
-        services::{MockSigner, MockStellarProviderTrait},
+        services::{provider::MockStellarProviderTrait, signer::MockSigner},
     };
     use soroban_rs::stellar_rpc_client::SimulateTransactionResponse;
     use soroban_rs::xdr::{self};

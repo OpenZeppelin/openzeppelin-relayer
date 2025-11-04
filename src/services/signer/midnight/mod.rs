@@ -10,8 +10,7 @@ use crate::{
     models::{
         Address, NetworkTransactionData, Signer as SignerDomainModel, SignerConfig, SignerRepoModel,
     },
-    services::signer::{SignerError, SignerFactoryError},
-    services::Signer,
+    services::signer::{Signer, SignerError, SignerFactoryError},
 };
 use midnight_node_ledger_helpers::NetworkId;
 
@@ -80,6 +79,7 @@ impl MidnightSignerFactory {
                     "Google Cloud KMS".into(),
                 ))
             }
+            SignerConfig::Cdp(_) => return Err(SignerFactoryError::UnsupportedType("CDP".into())),
         };
         Ok(signer)
     }

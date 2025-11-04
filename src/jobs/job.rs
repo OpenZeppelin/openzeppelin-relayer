@@ -4,7 +4,7 @@
 //! - Transaction processing
 //! - Status monitoring
 //! - Notifications
-use crate::models::WebhookNotification;
+use crate::models::{NetworkType, WebhookNotification};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -19,6 +19,8 @@ pub struct Job<T> {
     pub timestamp: String,
     pub job_type: JobType,
     pub data: T,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
 }
 
 impl<T> Job<T> {
@@ -29,7 +31,12 @@ impl<T> Job<T> {
             timestamp: Utc::now().timestamp().to_string(),
             job_type,
             data,
+            request_id: None,
         }
+    }
+    pub fn with_request_id(mut self, id: Option<String>) -> Self {
+        self.request_id = id;
+        self
     }
 }
 
@@ -42,6 +49,7 @@ pub enum JobType {
     TransactionStatusCheck,
     NotificationSend,
     SolanaTokenSwapRequest,
+    RelayerHealthCheck,
 }
 
 // Example message data for transaction request
@@ -138,14 +146,23 @@ impl TransactionSend {
 pub struct TransactionStatusCheck {
     pub transaction_id: String,
     pub relayer_id: String,
+    /// Network type for this transaction status check.
+    /// Optional for backward compatibility with older queued messages.
+    #[serde(default)]
+    pub network_type: Option<NetworkType>,
     pub metadata: Option<HashMap<String, String>>,
 }
 
 impl TransactionStatusCheck {
-    pub fn new(transaction_id: impl Into<String>, relayer_id: impl Into<String>) -> Self {
+    pub fn new(
+        transaction_id: impl Into<String>,
+        relayer_id: impl Into<String>,
+        network_type: NetworkType,
+    ) -> Self {
         Self {
             transaction_id: transaction_id.into(),
             relayer_id: relayer_id.into(),
+            network_type: Some(network_type),
             metadata: None,
         }
     }
@@ -179,6 +196,28 @@ pub struct SolanaTokenSwapRequest {
 impl SolanaTokenSwapRequest {
     pub fn new(relayer_id: String) -> Self {
         Self { relayer_id }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct RelayerHealthCheck {
+    pub relayer_id: String,
+    pub retry_count: u32,
+}
+
+impl RelayerHealthCheck {
+    pub fn new(relayer_id: String) -> Self {
+        Self {
+            relayer_id,
+            retry_count: 0,
+        }
+    }
+
+    pub fn with_retry_count(relayer_id: String, retry_count: u32) -> Self {
+        Self {
+            relayer_id,
+            retry_count,
+        }
     }
 }
 
@@ -254,19 +293,42 @@ mod tests {
 
     #[test]
     fn test_transaction_status_check() {
-        let tx_status = TransactionStatusCheck::new("tx123", "relayer-1");
+        let tx_status = TransactionStatusCheck::new("tx123", "relayer-1", NetworkType::Evm);
         assert_eq!(tx_status.transaction_id, "tx123");
         assert_eq!(tx_status.relayer_id, "relayer-1");
+        assert_eq!(tx_status.network_type, Some(NetworkType::Evm));
         assert!(tx_status.metadata.is_none());
 
         let mut metadata = HashMap::new();
         metadata.insert("retries".to_string(), "3".to_string());
 
         let tx_status_with_metadata =
-            TransactionStatusCheck::new("tx123", "relayer-1").with_metadata(metadata.clone());
+            TransactionStatusCheck::new("tx123", "relayer-1", NetworkType::Stellar)
+                .with_metadata(metadata.clone());
 
         assert!(tx_status_with_metadata.metadata.is_some());
         assert_eq!(tx_status_with_metadata.metadata.unwrap(), metadata);
+    }
+
+    #[test]
+    fn test_transaction_status_check_backward_compatibility() {
+        // Simulate an old message without network_type field
+        let old_json = r#"{
+            "transaction_id": "tx456",
+            "relayer_id": "relayer-2",
+            "metadata": null
+        }"#;
+
+        // Should deserialize successfully with network_type defaulting to None
+        let deserialized: TransactionStatusCheck = serde_json::from_str(old_json).unwrap();
+        assert_eq!(deserialized.transaction_id, "tx456");
+        assert_eq!(deserialized.relayer_id, "relayer-2");
+        assert_eq!(deserialized.network_type, None);
+        assert!(deserialized.metadata.is_none());
+
+        // New messages should include network_type
+        let new_status = TransactionStatusCheck::new("tx789", "relayer-3", NetworkType::Solana);
+        assert_eq!(new_status.network_type, Some(NetworkType::Solana));
     }
 
     #[test]
@@ -369,5 +431,92 @@ mod tests {
                 panic!("Deserialization error: {}", e);
             }
         }
+    }
+
+    #[test]
+    fn test_relayer_health_check_new() {
+        let health_check = RelayerHealthCheck::new("relayer-1".to_string());
+
+        assert_eq!(health_check.relayer_id, "relayer-1");
+        assert_eq!(health_check.retry_count, 0);
+    }
+
+    #[test]
+    fn test_relayer_health_check_with_retry_count() {
+        let health_check = RelayerHealthCheck::with_retry_count("relayer-1".to_string(), 5);
+
+        assert_eq!(health_check.relayer_id, "relayer-1");
+        assert_eq!(health_check.retry_count, 5);
+    }
+
+    #[test]
+    fn test_relayer_health_check_correct_field_values() {
+        // Test with zero retry count
+        let health_check_zero = RelayerHealthCheck::new("relayer-test-123".to_string());
+        assert_eq!(health_check_zero.relayer_id, "relayer-test-123");
+        assert_eq!(health_check_zero.retry_count, 0);
+
+        // Test with specific retry count
+        let health_check_custom =
+            RelayerHealthCheck::with_retry_count("relayer-abc".to_string(), 10);
+        assert_eq!(health_check_custom.relayer_id, "relayer-abc");
+        assert_eq!(health_check_custom.retry_count, 10);
+
+        // Test with large retry count
+        let health_check_large =
+            RelayerHealthCheck::with_retry_count("relayer-xyz".to_string(), 999);
+        assert_eq!(health_check_large.relayer_id, "relayer-xyz");
+        assert_eq!(health_check_large.retry_count, 999);
+    }
+
+    #[test]
+    fn test_relayer_health_check_job_serialization() {
+        let health_check = RelayerHealthCheck::new("relayer-1".to_string());
+        let job = Job::new(JobType::RelayerHealthCheck, health_check);
+
+        let serialized = serde_json::to_string(&job).unwrap();
+        let deserialized: Job<RelayerHealthCheck> = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.job_type.to_string(), "RelayerHealthCheck");
+        assert_eq!(deserialized.data.relayer_id, "relayer-1");
+        assert_eq!(deserialized.data.retry_count, 0);
+    }
+
+    #[test]
+    fn test_relayer_health_check_job_serialization_with_retry_count() {
+        let health_check = RelayerHealthCheck::with_retry_count("relayer-2".to_string(), 3);
+        let job = Job::new(JobType::RelayerHealthCheck, health_check.clone());
+
+        let serialized = serde_json::to_string(&job).unwrap();
+        let deserialized: Job<RelayerHealthCheck> = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.job_type.to_string(), "RelayerHealthCheck");
+        assert_eq!(deserialized.data.relayer_id, health_check.relayer_id);
+        assert_eq!(deserialized.data.retry_count, health_check.retry_count);
+        assert_eq!(deserialized.data, health_check);
+    }
+
+    #[test]
+    fn test_relayer_health_check_equality_after_deserialization() {
+        let original_health_check =
+            RelayerHealthCheck::with_retry_count("relayer-test".to_string(), 7);
+        let job = Job::new(JobType::RelayerHealthCheck, original_health_check.clone());
+
+        let serialized = serde_json::to_string(&job).unwrap();
+        let deserialized: Job<RelayerHealthCheck> = serde_json::from_str(&serialized).unwrap();
+
+        // Assert job type string
+        assert_eq!(deserialized.job_type.to_string(), "RelayerHealthCheck");
+
+        // Assert data equality
+        assert_eq!(deserialized.data, original_health_check);
+        assert_eq!(
+            deserialized.data.relayer_id,
+            original_health_check.relayer_id
+        );
+        assert_eq!(
+            deserialized.data.retry_count,
+            original_health_check.retry_count
+        );
     }
 }

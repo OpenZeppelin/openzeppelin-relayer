@@ -7,17 +7,27 @@
 use std::time::Duration;
 
 use alloy::{
+    network::AnyNetwork,
     primitives::{Bytes, TxKind, Uint},
-    providers::{Provider, ProviderBuilder, RootProvider},
+    providers::{
+        fillers::{BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller},
+        Identity, Provider, ProviderBuilder, RootProvider,
+    },
     rpc::{
         client::ClientBuilder,
-        types::{
-            Block as BlockResponse, BlockNumberOrTag, BlockTransactionsKind, FeeHistory,
-            TransactionInput, TransactionReceipt, TransactionRequest,
-        },
+        types::{BlockNumberOrTag, FeeHistory, TransactionInput, TransactionRequest},
     },
-    transports::http::{Client, Http},
+    transports::http::Http,
 };
+
+type EvmProviderType = FillProvider<
+    JoinFill<
+        Identity,
+        JoinFill<GasFiller, JoinFill<BlobGasFiller, JoinFill<NonceFiller, ChainIdFiller>>>,
+    >,
+    RootProvider<AnyNetwork>,
+    AnyNetwork,
+>;
 use async_trait::async_trait;
 use eyre::Result;
 use reqwest::ClientBuilder as ReqwestClientBuilder;
@@ -25,7 +35,9 @@ use serde_json;
 
 use super::rpc_selector::RpcSelector;
 use super::{retry_rpc_call, RetryConfig};
-use crate::models::{EvmTransactionData, RpcConfig, TransactionError, U256};
+use crate::models::{
+    BlockResponse, EvmTransactionData, RpcConfig, TransactionError, TransactionReceipt, U256,
+};
 
 #[cfg(test)]
 use mockall::automock;
@@ -192,28 +204,60 @@ impl EvmProvider {
     // Errors that are retriable
     fn is_retriable_error(error: &ProviderError) -> bool {
         match error {
-            // Only retry these specific error types
+            // HTTP-level errors that are retriable
             ProviderError::Timeout | ProviderError::RateLimited | ProviderError::BadGateway => true,
 
-            // Any other errors are not automatically retriable
+            // JSON-RPC error codes (EIP-1474)
+            ProviderError::RpcErrorCode { code, .. } => {
+                match code {
+                    // -32002: Resource unavailable (temporary state)
+                    -32002 => true,
+                    // -32005: Limit exceeded / rate limited
+                    -32005 => true,
+                    // -32603: Internal error (may be temporary)
+                    -32603 => true,
+                    // -32000: Invalid input
+                    -32000 => false,
+                    // -32001: Resource not found
+                    -32001 => false,
+                    // -32003: Transaction rejected
+                    -32003 => false,
+                    // -32004: Method not supported
+                    -32004 => false,
+
+                    // Standard JSON-RPC 2.0 errors (not retriable)
+                    // -32700: Parse error
+                    // -32600: Invalid request
+                    // -32601: Method not found
+                    // -32602: Invalid params
+                    -32700..=-32600 => false,
+
+                    // All other error codes: not retriable by default
+                    _ => false,
+                }
+            }
+
+            // Any other errors: check message for network-related issues
             _ => {
-                // Optionally inspect error message for network-related issues
                 let err_msg = format!("{}", error);
-                err_msg.to_lowercase().contains("timeout")
-                    || err_msg.to_lowercase().contains("connection")
-                    || err_msg.to_lowercase().contains("reset")
+                let msg_lower = err_msg.to_lowercase();
+                msg_lower.contains("timeout")
+                    || msg_lower.contains("connection")
+                    || msg_lower.contains("reset")
             }
         }
     }
 
     /// Initialize a provider for a given URL
-    fn initialize_provider(&self, url: &str) -> Result<RootProvider<Http<Client>>, ProviderError> {
+    fn initialize_provider(&self, url: &str) -> Result<EvmProviderType, ProviderError> {
         let rpc_url = url.parse().map_err(|e| {
             ProviderError::NetworkConfiguration(format!("Invalid URL format: {}", e))
         })?;
 
-        let client = ReqwestClientBuilder::default()
+        // Using use_rustls_tls() forces the use of rustls instead of native-tls to support TLS 1.3
+        let client = ReqwestClientBuilder::new()
             .timeout(Duration::from_secs(self.timeout_seconds))
+            .use_rustls_tls()
             .build()
             .map_err(|e| ProviderError::Other(format!("Failed to build HTTP client: {}", e)))?;
 
@@ -223,7 +267,9 @@ impl EvmProvider {
         let is_local = transport.guess_local();
         let client = ClientBuilder::default().transport(transport, is_local);
 
-        let provider = ProviderBuilder::new().on_client(client);
+        let provider = ProviderBuilder::new()
+            .network::<AnyNetwork>()
+            .connect_client(client);
 
         Ok(provider)
     }
@@ -237,12 +283,12 @@ impl EvmProvider {
         operation: F,
     ) -> Result<T, ProviderError>
     where
-        F: Fn(RootProvider<Http<Client>>) -> Fut,
+        F: Fn(EvmProviderType) -> Fut,
         Fut: std::future::Future<Output = Result<T, ProviderError>>,
     {
         // Classify which errors should be retried
 
-        log::debug!(
+        tracing::debug!(
             "Starting RPC operation '{}' with timeout: {}s",
             operation_name,
             self.timeout_seconds
@@ -308,7 +354,7 @@ impl EvmProviderTrait for EvmProvider {
             let tx_req = transaction_request.clone();
             async move {
                 provider
-                    .estimate_gas(&tx_req)
+                    .estimate_gas(tx_req.into())
                     .await
                     .map_err(ProviderError::from)
             }
@@ -329,7 +375,7 @@ impl EvmProviderTrait for EvmProvider {
                 let tx_req = tx.clone();
                 async move {
                     provider
-                        .send_transaction(tx_req)
+                        .send_transaction(tx_req.into())
                         .await
                         .map_err(ProviderError::from)
                 }
@@ -400,7 +446,7 @@ impl EvmProviderTrait for EvmProvider {
         let block_result = self
             .retry_rpc_call("get_block_by_number", |provider| async move {
                 provider
-                    .get_block_by_number(BlockNumberOrTag::Latest, BlockTransactionsKind::Hashes)
+                    .get_block_by_number(BlockNumberOrTag::Latest)
                     .await
                     .map_err(ProviderError::from)
             })
@@ -418,7 +464,7 @@ impl EvmProviderTrait for EvmProvider {
     ) -> Result<Option<TransactionReceipt>, ProviderError> {
         let parsed_tx_hash = tx_hash
             .parse::<alloy::primitives::TxHash>()
-            .map_err(|e| ProviderError::InvalidAddress(e.to_string()))?;
+            .map_err(|e| ProviderError::Other(format!("Invalid transaction hash: {}", e)))?;
 
         self.retry_rpc_call("get_transaction_receipt", move |provider| async move {
             provider
@@ -432,7 +478,12 @@ impl EvmProviderTrait for EvmProvider {
     async fn call_contract(&self, tx: &TransactionRequest) -> Result<Bytes, ProviderError> {
         self.retry_rpc_call("call_contract", move |provider| {
             let tx_req = tx.clone();
-            async move { provider.call(&tx_req).await.map_err(ProviderError::from) }
+            async move {
+                provider
+                    .call(tx_req.into())
+                    .await
+                    .map_err(ProviderError::from)
+            }
         })
         .await
     }
@@ -443,7 +494,6 @@ impl EvmProviderTrait for EvmProvider {
         params: serde_json::Value,
     ) -> Result<serde_json::Value, ProviderError> {
         self.retry_rpc_call("raw_request_dyn", move |provider| {
-            let method_clone = method.to_string();
             let params_clone = params.clone();
             async move {
                 // Convert params to RawValue and use Cow for method
@@ -452,7 +502,7 @@ impl EvmProviderTrait for EvmProvider {
                 })?;
 
                 let result = provider
-                    .raw_request_dyn(std::borrow::Cow::Owned(method_clone), &params_raw)
+                    .raw_request_dyn(std::borrow::Cow::Owned(method.to_string()), &params_raw)
                     .await
                     .map_err(ProviderError::from)?;
 
@@ -1110,6 +1160,103 @@ mod tests {
         let fee_history = fee_history.unwrap();
         assert_eq!(fee_history.oldest_block, 100);
         assert_eq!(fee_history.gas_used_ratio, vec![0.5]);
+    }
+
+    #[test]
+    fn test_is_retriable_error_json_rpc_retriable_codes() {
+        // Retriable JSON-RPC error codes per EIP-1474
+        let retriable_codes = vec![
+            (-32002, "Resource unavailable"),
+            (-32005, "Limit exceeded"),
+            (-32603, "Internal error"),
+        ];
+
+        for (code, message) in retriable_codes {
+            let error = ProviderError::RpcErrorCode {
+                code,
+                message: message.to_string(),
+            };
+            assert!(
+                EvmProvider::is_retriable_error(&error),
+                "Error code {} should be retriable",
+                code
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_json_rpc_non_retriable_codes() {
+        // Non-retriable JSON-RPC error codes per EIP-1474
+        let non_retriable_codes = vec![
+            (-32000, "insufficient funds"),
+            (-32000, "execution reverted"),
+            (-32000, "already known"),
+            (-32000, "nonce too low"),
+            (-32000, "invalid sender"),
+            (-32001, "Resource not found"),
+            (-32003, "Transaction rejected"),
+            (-32004, "Method not supported"),
+            (-32700, "Parse error"),
+            (-32600, "Invalid request"),
+            (-32601, "Method not found"),
+            (-32602, "Invalid params"),
+        ];
+
+        for (code, message) in non_retriable_codes {
+            let error = ProviderError::RpcErrorCode {
+                code,
+                message: message.to_string(),
+            };
+            assert!(
+                !EvmProvider::is_retriable_error(&error),
+                "Error code {} with message '{}' should NOT be retriable",
+                code,
+                message
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_json_rpc_32000_specific_cases() {
+        // Test specific -32000 error messages that users commonly encounter
+        // -32000 is a catch-all for client errors and should NOT be retriable
+        let test_cases = vec![
+            (
+                "tx already exists in cache",
+                false,
+                "Transaction already in mempool",
+            ),
+            ("already known", false, "Duplicate transaction submission"),
+            (
+                "insufficient funds for gas * price + value",
+                false,
+                "User needs more funds",
+            ),
+            ("execution reverted", false, "Smart contract rejected"),
+            ("nonce too low", false, "Transaction already processed"),
+            ("invalid sender", false, "Configuration issue"),
+            ("gas required exceeds allowance", false, "Gas limit too low"),
+            (
+                "replacement transaction underpriced",
+                false,
+                "Need higher gas price",
+            ),
+        ];
+
+        for (message, should_retry, description) in test_cases {
+            let error = ProviderError::RpcErrorCode {
+                code: -32000,
+                message: message.to_string(),
+            };
+            assert_eq!(
+                EvmProvider::is_retriable_error(&error),
+                should_retry,
+                "{}: -32000 with '{}' should{} be retriable",
+                description,
+                message,
+                if should_retry { "" } else { " NOT" }
+            );
+        }
     }
 
     #[tokio::test]

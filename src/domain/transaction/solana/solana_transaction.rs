@@ -5,8 +5,8 @@
 
 use async_trait::async_trait;
 use eyre::Result;
-use log::info;
 use std::sync::Arc;
+use tracing::info;
 
 use crate::{
     domain::transaction::Transaction,
@@ -16,7 +16,7 @@ use crate::{
         RelayerRepository, RelayerRepositoryStorage, Repository, TransactionRepository,
         TransactionRepositoryStorage,
     },
-    services::{SolanaProvider, SolanaProviderTrait},
+    services::provider::{SolanaProvider, SolanaProviderTrait},
 };
 
 #[allow(dead_code)]
@@ -159,7 +159,7 @@ mod tests {
     use crate::{
         jobs::MockJobProducerTrait,
         repositories::{MockRelayerRepository, MockTransactionRepository},
-        services::MockSolanaProviderTrait,
+        services::provider::MockSolanaProviderTrait,
         utils::mocks::mockutils::{create_mock_solana_relayer, create_mock_solana_transaction},
     };
 

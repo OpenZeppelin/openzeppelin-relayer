@@ -1,0 +1,114 @@
+---
+title: Relayer API Reference
+---
+
+## Relayers
+
+### [List Relayers](/relayer/api/listRelayers)
+Lists all relayers with pagination support
+
+### [Create Relayer](/relayer/api/createRelayer)
+Creates a new relayer
+
+### [Get Relayer](/relayer/api/getRelayer)
+Retrieves details of a specific relayer by ID
+
+### [Delete Relayer](/relayer/api/deleteRelayer)
+Deletes a relayer by ID
+
+### [Update Relayer](/relayer/api/updateRelayer)
+Updates a relayer's information
+
+### [Get Relayer Balance](/relayer/api/getRelayerBalance)
+Retrieves the balance of a specific relayer
+
+### [RPC](/relayer/api/rpc)
+Performs a JSON-RPC call using the specified relayer
+
+### [Sign](/relayer/api/sign)
+Signs data using the specified relayer
+
+### [Sign Transaction](/relayer/api/signTransaction)
+Signs a transaction using the specified relayer (Stellar only)
+
+### [Sign Typed Data](/relayer/api/signTypedData)
+Signs typed data using the specified relayer
+
+### [Get Relayer Status](/relayer/api/getRelayerStatus)
+Fetches the current status of a specific relayer
+
+### [Send Transaction](/relayer/api/sendTransaction)
+Sends a transaction through the specified relayer
+
+### [List Transactions](/relayer/api/listTransactions)
+Lists all transactions for a specific relayer with pagination
+
+### [Get Transaction by Nonce](/relayer/api/getTransactionByNonce)
+Retrieves a transaction by its nonce value
+
+### [Delete Pending Transactions](/relayer/api/deletePendingTransactions)
+Deletes all pending transactions for a specific relayer
+
+### [Get Transaction by ID](/relayer/api/getTransactionById)
+Retrieves a specific transaction by its ID
+
+### [Replace Transaction](/relayer/api/replaceTransaction)
+Replaces a specific transaction with a new one
+
+### [Cancel Transaction](/relayer/api/cancelTransaction)
+Cancels a specific transaction by its ID
+
+## Plugins
+
+### [Call Plugin](/relayer/api/callPlugin)
+Calls a plugin method
+
+## Notifications
+
+### [List Notifications](/relayer/api/listNotifications)
+Lists all notifications with pagination support
+
+### [Create Notification](/relayer/api/createNotification)
+Creates a new notification
+
+### [Get Notification](/relayer/api/getNotification)
+Retrieves details of a specific notification by ID
+
+### [Delete Notification](/relayer/api/deleteNotification)
+Deletes a notification by ID
+
+### [Update Notification](/relayer/api/updateNotification)
+Updates an existing notification
+
+## Signers
+
+### [List Signers](/relayer/api/listSigners)
+Lists all signers with pagination support
+
+### [Create Signer](/relayer/api/createSigner)
+Creates a new signer
+
+### [Get Signer](/relayer/api/getSigner)
+Retrieves details of a specific signer by ID
+
+### [Delete Signer](/relayer/api/deleteSigner)
+Deletes a signer by ID
+
+### [Update Signer](/relayer/api/updateSigner)
+Updates an existing signer
+
+## Metrics
+
+### [Scrape Metrics](/relayer/api/scrape_metrics)
+Triggers an update of system metrics and returns the result in plain text format
+
+### [List Metrics](/relayer/api/list_metrics)
+Returns a list of all available metric names in JSON format
+
+### [Metric Detail](/relayer/api/metric_detail)
+Returns the details of a specific metric in plain text format
+
+## Health
+
+### [Health](/relayer/api/health)
+Health routes implementation
