@@ -64,8 +64,8 @@ impl FieldEncryption {
 
     /// Creates a new FieldEncryption instance with a provided key (for testing)
     pub fn new_with_key(key: &[u8; 32]) -> Result<Self, EncryptionError> {
-        let key = Key::<Aes256Gcm>::from_slice(key);
-        let cipher = Aes256Gcm::new(key);
+        let key_buf = Key::<Aes256Gcm>::from_iter(key.iter().copied());
+        let cipher = Aes256Gcm::new(&key_buf);
         Ok(Self { cipher })
     }
 
@@ -85,7 +85,9 @@ impl FieldEncryption {
                 return Err(EncryptionError::InvalidKeyLength(key_bytes.len()));
             }
 
-            Ok(*Key::<Aes256Gcm>::from_slice(&key_bytes))
+            let key_array = <&[u8; 32]>::try_from(key_bytes.as_slice())
+                .map_err(|_| EncryptionError::InvalidKeyLength(key_bytes.len()))?;
+            Ok(Key::<Aes256Gcm>::from_iter(key_array.iter().copied()))
         })
     }
 
@@ -94,12 +96,12 @@ impl FieldEncryption {
         // Generate random 12-byte nonce for GCM
         let mut nonce_bytes = [0u8; 12];
         OsRng.fill_bytes(&mut nonce_bytes);
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        let nonce = Nonce::from_iter(nonce_bytes.iter().copied());
 
         // Encrypt the data
         let ciphertext = self
             .cipher
-            .encrypt(nonce, plaintext)
+            .encrypt(&nonce, plaintext)
             .map_err(|e| EncryptionError::EncryptionFailed(e.to_string()))?;
 
         Ok(EncryptedData {
@@ -125,19 +127,18 @@ impl FieldEncryption {
         let ciphertext_bytes = base64_decode(&encrypted_data.ciphertext)
             .map_err(|e| EncryptionError::InvalidFormat(format!("Invalid ciphertext: {}", e)))?;
 
-        if nonce_bytes.len() != 12 {
-            return Err(EncryptionError::InvalidFormat(format!(
+        let nonce_array = <&[u8; 12]>::try_from(nonce_bytes.as_slice()).map_err(|_| {
+            EncryptionError::InvalidFormat(format!(
                 "Invalid nonce length: expected 12, got {}",
                 nonce_bytes.len()
-            )));
-        }
-
-        let nonce = Nonce::from_slice(&nonce_bytes);
+            ))
+        })?;
+        let nonce = Nonce::from_iter(nonce_array.iter().copied());
 
         // Decrypt the data
         let plaintext = self
             .cipher
-            .decrypt(nonce, ciphertext_bytes.as_ref())
+            .decrypt(&nonce, ciphertext_bytes.as_ref())
             .map_err(|e| EncryptionError::DecryptionFailed(e.to_string()))?;
 
         Ok(plaintext)

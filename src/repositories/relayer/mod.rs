@@ -27,7 +27,9 @@ pub use relayer_redis::*;
 
 use crate::{
     models::UpdateRelayerRequest,
-    models::{PaginationQuery, RelayerNetworkPolicy, RelayerRepoModel, RepositoryError},
+    models::{
+        DisabledReason, PaginationQuery, RelayerNetworkPolicy, RelayerRepoModel, RepositoryError,
+    },
     repositories::{PaginatedResult, Repository},
 };
 use async_trait::async_trait;
@@ -55,6 +57,7 @@ pub trait RelayerRepository: Repository<RelayerRepoModel, String> + Send + Sync 
     async fn disable_relayer(
         &self,
         relayer_id: String,
+        reason: DisabledReason,
     ) -> Result<RelayerRepoModel, RepositoryError>;
     async fn update_policy(
         &self,
@@ -222,10 +225,13 @@ impl RelayerRepository for RelayerRepositoryStorage {
     async fn disable_relayer(
         &self,
         relayer_id: String,
+        reason: DisabledReason,
     ) -> Result<RelayerRepoModel, RepositoryError> {
         match self {
-            RelayerRepositoryStorage::InMemory(repo) => repo.disable_relayer(relayer_id).await,
-            RelayerRepositoryStorage::Redis(repo) => repo.disable_relayer(relayer_id).await,
+            RelayerRepositoryStorage::InMemory(repo) => {
+                repo.disable_relayer(relayer_id, reason).await
+            }
+            RelayerRepositoryStorage::Redis(repo) => repo.disable_relayer(relayer_id, reason).await,
         }
     }
 
@@ -266,6 +272,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         }
     }
 
@@ -332,11 +339,24 @@ mod tests {
         assert!(updated.paused);
 
         // Test enable/disable
-        let disabled = impl_repo.disable_relayer(relayer.id.clone()).await.unwrap();
+        let disabled = impl_repo
+            .disable_relayer(
+                relayer.id.clone(),
+                DisabledReason::BalanceCheckFailed("Test disable reason".to_string()),
+            )
+            .await
+            .unwrap();
         assert!(disabled.system_disabled);
+        assert_eq!(
+            disabled.disabled_reason,
+            Some(DisabledReason::BalanceCheckFailed(
+                "Test disable reason".to_string()
+            ))
+        );
 
         let enabled = impl_repo.enable_relayer(relayer.id.clone()).await.unwrap();
         assert!(!enabled.system_disabled);
+        assert_eq!(enabled.disabled_reason, None);
 
         // Test update_policy
         let new_policy = RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
@@ -465,7 +485,7 @@ mockall::mock! {
         async fn list_by_notification_id(&self, notification_id: &str) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
         async fn partial_update(&self, id: String, update: UpdateRelayerRequest) -> Result<RelayerRepoModel, RepositoryError>;
         async fn enable_relayer(&self, relayer_id: String) -> Result<RelayerRepoModel, RepositoryError>;
-        async fn disable_relayer(&self, relayer_id: String) -> Result<RelayerRepoModel, RepositoryError>;
+        async fn disable_relayer(&self, relayer_id: String, reason: DisabledReason) -> Result<RelayerRepoModel, RepositoryError>;
         async fn update_policy(&self, id: String, policy: RelayerNetworkPolicy) -> Result<RelayerRepoModel, RepositoryError>;
     }
 }

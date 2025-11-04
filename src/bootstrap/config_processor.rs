@@ -15,7 +15,7 @@ use crate::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
         Repository, TransactionCounterTrait, TransactionRepository,
     },
-    services::{Signer as SignerService, SignerFactory},
+    services::signer::{Signer as SignerService, SignerFactory},
 };
 use color_eyre::{eyre::WrapErr, Report, Result};
 use futures::future::try_join_all;
@@ -1069,11 +1069,15 @@ mod tests {
                 id: "test-plugin-1".to_string(),
                 path: "/app/plugins/test.ts".to_string(),
                 timeout: None,
+                emit_logs: false,
+                emit_traces: false,
             },
             PluginFileConfig {
                 id: "test-plugin-2".to_string(),
                 path: "/app/plugins/test2.ts".to_string(),
                 timeout: Some(12),
+                emit_logs: false,
+                emit_traces: false,
             },
         ];
 
@@ -1184,6 +1188,8 @@ mod tests {
             id: "test-plugin-1".to_string(),
             path: "/app/plugins/test.ts".to_string(),
             timeout: None,
+            emit_logs: false,
+            emit_traces: false,
         }];
 
         // Create config

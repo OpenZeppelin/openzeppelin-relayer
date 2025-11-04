@@ -1,7 +1,9 @@
 //! Redis-backed implementation of the RelayerRepository.
 
 use crate::models::UpdateRelayerRequest;
-use crate::models::{PaginationQuery, RelayerNetworkPolicy, RelayerRepoModel, RepositoryError};
+use crate::models::{
+    DisabledReason, PaginationQuery, RelayerNetworkPolicy, RelayerRepoModel, RepositoryError,
+};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{BatchRetrievalResult, PaginatedResult, RelayerRepository, Repository};
 use async_trait::async_trait;
@@ -491,8 +493,9 @@ impl RelayerRepository for RedisRelayerRepository {
         // First get the current relayer
         let mut relayer = self.get_by_id(relayer_id.clone()).await?;
 
-        // Update the system_disabled flag
+        // Update the system_disabled flag and clear reason
         relayer.system_disabled = false;
+        relayer.disabled_reason = None;
 
         // Update the relayer
         self.update(relayer_id, relayer).await
@@ -501,12 +504,14 @@ impl RelayerRepository for RedisRelayerRepository {
     async fn disable_relayer(
         &self,
         relayer_id: String,
+        reason: DisabledReason,
     ) -> Result<RelayerRepoModel, RepositoryError> {
         // First get the current relayer
         let mut relayer = self.get_by_id(relayer_id.clone()).await?;
 
-        // Update the system_disabled flag
+        // Update the system_disabled flag and set reason
         relayer.system_disabled = true;
+        relayer.disabled_reason = Some(reason);
 
         // Update the relayer
         self.update(relayer_id, relayer).await
@@ -547,6 +552,7 @@ mod tests {
             address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
             notification_id: None,
             system_disabled: false,
+            disabled_reason: None,
             custom_rpc_urls: None,
         }
     }
@@ -819,7 +825,13 @@ mod tests {
         repo.create(relayer.clone()).await.unwrap();
 
         // Test disable
-        let disabled = repo.disable_relayer(relayer.id.clone()).await.unwrap();
+        let disabled = repo
+            .disable_relayer(
+                relayer.id.clone(),
+                DisabledReason::BalanceCheckFailed("test reason".to_string()),
+            )
+            .await
+            .unwrap();
         assert!(disabled.system_disabled);
 
         // Test enable

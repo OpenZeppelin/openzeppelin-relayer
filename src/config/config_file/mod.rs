@@ -241,6 +241,8 @@ mod tests {
                 id: "test-1".to_string(),
                 path: "/app/plugins/test-plugin.ts".to_string(),
                 timeout: None,
+                emit_logs: false,
+                emit_traces: false,
             }]),
         }
     }
@@ -1145,6 +1147,8 @@ mod tests {
                 id: "id".to_string(),
                 path: "/app/plugins/test-plugin.js".to_string(),
                 timeout: None,
+                emit_logs: false,
+                emit_traces: false,
             }]),
         };
         let result = config.validate_plugins();

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
-    constants::{FINAL_TRANSACTION_STATUSES, WORKER_DEFAULT_MAXIMUM_RETRIES},
+    constants::{FINAL_TRANSACTION_STATUSES, WORKER_TRANSACTION_CLEANUP_RETRIES},
     jobs::handle_result,
     models::{DefaultAppState, RelayerRepoModel, TransactionRepoModel},
     repositories::{Repository, TransactionRepository},
@@ -41,7 +41,7 @@ const MAX_CONCURRENT_TRANSACTIONS_PER_RELAYER: usize = 50;
 /// # Returns
 /// * `Result<(), Error>` - Success or failure of cleanup processing
 #[instrument(
-    level = "info",
+    level = "debug",
     skip(job, data),
     fields(
         job_type = "transaction_cleanup",
@@ -60,7 +60,7 @@ pub async fn transaction_cleanup_handler(
         result,
         attempt,
         "TransactionCleanup",
-        WORKER_DEFAULT_MAXIMUM_RETRIES,
+        WORKER_TRANSACTION_CLEANUP_RETRIES,
     )
 }
 
@@ -791,6 +791,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
         let now = Utc::now();
 
@@ -834,6 +835,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
         let now = Utc::now();
 

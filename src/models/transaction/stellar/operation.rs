@@ -301,8 +301,9 @@ mod tests {
     use super::*;
     use crate::models::transaction::stellar::host_function::ContractSource;
     use soroban_rs::xdr::{
-        AccountId, ContractExecutable, ContractIdPreimage, ContractIdPreimageFromAddress,
-        CreateContractArgs, CreateContractArgsV2, Hash, PublicKey as XdrPublicKey, ScAddress,
+        AccountId, ContractExecutable, ContractId, ContractIdPreimage,
+        ContractIdPreimageFromAddress, CreateContractArgs, CreateContractArgsV2, Hash,
+        PublicKey as XdrPublicKey, ScAddress,
     };
 
     const TEST_PK: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
@@ -425,7 +426,7 @@ mod tests {
         #[test]
         fn test_invoke_contract() {
             let host_function = HostFunction::InvokeContract(soroban_rs::xdr::InvokeContractArgs {
-                contract_address: ScAddress::Contract(Hash([0u8; 32])),
+                contract_address: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
                 function_name: soroban_rs::xdr::ScSymbol::try_from(b"test".to_vec()).unwrap(),
                 args: VecM::default(),
             });
@@ -509,7 +510,7 @@ mod tests {
         #[test]
         fn test_none_default_invoke_contract() {
             let host_function = HostFunction::InvokeContract(soroban_rs::xdr::InvokeContractArgs {
-                contract_address: ScAddress::Contract(Hash([0u8; 32])),
+                contract_address: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
                 function_name: soroban_rs::xdr::ScSymbol::try_from(b"test".to_vec()).unwrap(),
                 args: VecM::default(),
             });

@@ -9,9 +9,10 @@ pub mod operations;
 pub mod unsigned_xdr;
 
 use eyre::Result;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::{lane_gate, StellarRelayerTransaction};
+use crate::domain::transaction::common::is_final_state;
 use crate::models::RelayerRepoModel;
 use crate::{
     jobs::JobProducerTrait,
@@ -20,7 +21,7 @@ use crate::{
         TransactionUpdateRequest,
     },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
-    services::{Signer, StellarProviderTrait},
+    services::{provider::StellarProviderTrait, signer::Signer},
 };
 
 use common::{sign_and_finalize_transaction, update_and_notify_transaction};
@@ -39,13 +40,35 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
+        debug!(status = ?tx.status, "preparing stellar transaction");
+
+        // Defensive check: if transaction is in a final state or unexpected state, don't retry
+        if is_final_state(&tx.status) {
+            warn!(
+                tx_id = %tx.id,
+                status = ?tx.status,
+                "transaction already in final state, skipping preparation"
+            );
+            return Ok(tx);
+        }
+
+        if tx.status != TransactionStatus::Pending {
+            debug!(
+                tx_id = %tx.id,
+                status = ?tx.status,
+                expected_status = ?TransactionStatus::Pending,
+                "transaction in unexpected state for preparation, skipping"
+            );
+            return Ok(tx);
+        }
+
         if !self.concurrent_transactions_enabled() && !lane_gate::claim(&self.relayer().id, &tx.id)
         {
             info!("relayer already has a transaction in flight, must wait");
             return Ok(tx);
         }
 
-        info!("preparing transaction");
+        debug!("preparing transaction {}", tx.id);
 
         // Call core preparation logic with error handling
         match self.prepare_core(tx.clone()).await {
@@ -67,7 +90,7 @@ where
         // Simple dispatch to appropriate processing function based on input type
         match &stellar_data.transaction_input {
             TransactionInput::Operations(_) => {
-                info!("preparing operations-based transaction");
+                debug!("preparing operations-based transaction {}", tx.id);
                 let stellar_data_with_sim = operations::process_operations(
                     self.transaction_counter_service(),
                     &self.relayer().id,
@@ -82,7 +105,7 @@ where
                     .await
             }
             TransactionInput::UnsignedXdr(_) => {
-                info!("preparing unsigned xdr transaction");
+                debug!("preparing unsigned xdr transaction {}", tx.id);
                 let stellar_data_with_sim = unsigned_xdr::process_unsigned_xdr(
                     self.transaction_counter_service(),
                     &self.relayer().id,
@@ -96,7 +119,7 @@ where
                     .await
             }
             TransactionInput::SignedXdr { .. } => {
-                info!("preparing fee-bump transaction");
+                debug!("preparing fee-bump transaction {}", tx.id);
                 let stellar_data_with_fee_bump = fee_bump::process_fee_bump(
                     &self.relayer().address,
                     stellar_data,

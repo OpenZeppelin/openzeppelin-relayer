@@ -340,6 +340,7 @@ mod tests {
             policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default()),
             notification_id: None,
             custom_rpc_urls: None,
+            ..Default::default()
         };
         relayer_repo.create(test_relayer).await.unwrap();
 

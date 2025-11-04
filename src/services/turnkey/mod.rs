@@ -19,7 +19,7 @@
 //!   ├── Transaction Signing
 //!   └── Raw Payload Signing
 //! ```
-use std::str::FromStr;
+use std::{convert::TryInto, str::FromStr};
 
 use alloy::primitives::keccak256;
 use async_trait::async_trait;
@@ -31,6 +31,7 @@ use p256::{
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use solana_sdk::{pubkey::Pubkey, signature::Signature, transaction::Transaction};
+use stellar_strkey;
 use thiserror::Error;
 use tracing::{debug, info};
 
@@ -183,11 +184,17 @@ pub trait TurnkeyServiceTrait: Send + Sync {
     /// Returns the EVM address derived from the configured public key
     fn address_evm(&self) -> Result<Address, TurnkeyError>;
 
+    /// Returns the Stellar address derived from the configured public key
+    fn address_stellar(&self) -> Result<Address, TurnkeyError>;
+
     /// Signs a message using the Solana signing scheme
     async fn sign_solana(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError>;
 
     /// Signs a message using the EVM signing scheme
     async fn sign_evm(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError>;
+
+    /// Signs a message using the Stellar signing scheme (Ed25519)
+    async fn sign_stellar(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError>;
 
     /// Signs an EVM transaction using the Turnkey API
     async fn sign_evm_transaction(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError>;
@@ -264,6 +271,24 @@ impl TurnkeyService {
         Ok(Address::Evm(array))
     }
 
+    /// Converts the public key to a Stellar address
+    pub fn address_stellar(&self) -> Result<Address, TurnkeyError> {
+        if self.public_key.is_empty() {
+            return Err(TurnkeyError::ConfigError("Public key is empty".to_string()));
+        }
+
+        // For Stellar, we expect Ed25519 public key in hex format
+        let raw_pubkey = hex::decode(&self.public_key)
+            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid public key hex: {}", e)))?;
+
+        // Stellar uses StrKey encoding with 'G' prefix for account addresses
+        let stellar_address = stellar_strkey::ed25519::PublicKey::from_payload(&raw_pubkey)
+            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid Ed25519 public key: {}", e)))?
+            .to_string();
+
+        Ok(Address::Stellar(stellar_address))
+    }
+
     /// Creates a digital stamp for API authentication
     fn stamp(&self, message: &str) -> TurnkeyResult<String> {
         let private_api_key_bytes =
@@ -271,9 +296,16 @@ impl TurnkeyService {
                 TurnkeyError::ConfigError(format!("Failed to decode private key: {}", e))
             })?;
 
-        let signing_key: SigningKey =
-            SigningKey::from_bytes(FieldBytes::from_slice(&private_api_key_bytes))
-                .map_err(|e| TurnkeyError::SigningError(format!("Turnkey stamp error: {}", e)))?;
+        let key_bytes: &[u8; 32] = private_api_key_bytes.as_slice().try_into().map_err(|_| {
+            TurnkeyError::ConfigError(format!(
+                "Invalid private key length: expected 32 bytes, got {}",
+                private_api_key_bytes.len()
+            ))
+        })?;
+
+        let field_bytes = FieldBytes::from_iter(key_bytes.iter().copied());
+        let signing_key: SigningKey = SigningKey::from_bytes(&field_bytes)
+            .map_err(|e| TurnkeyError::SigningError(format!("Turnkey stamp error: {}", e)))?;
 
         let signature: P256Signature = signing_key.sign(message.as_bytes());
 
@@ -379,8 +411,17 @@ impl TurnkeyService {
         Ok(result)
     }
 
+    /// Signs raw bytes using the Turnkey API (for Stellar)
+    async fn sign_bytes_stellar(&self, bytes: &[u8]) -> TurnkeyResult<Vec<u8>> {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(bytes);
+
+        self.sign_raw_payload(&hash, "HASH_FUNCTION_NOT_APPLICABLE", false)
+            .await
+    }
+
     /// Signs an EVM transaction using the Turnkey API
-    async fn sign_evm_transaction(&self, bytes: &[u8]) -> TurnkeyResult<Vec<u8>> {
+    async fn sign_evm_transaction_impl(&self, bytes: &[u8]) -> TurnkeyResult<Vec<u8>> {
         let encoded_bytes = hex::encode(bytes);
 
         // Create the request body
@@ -480,11 +521,46 @@ impl TurnkeyService {
 #[async_trait]
 impl TurnkeyServiceTrait for TurnkeyService {
     fn address_solana(&self) -> Result<Address, TurnkeyError> {
-        self.address_solana()
+        if self.public_key.is_empty() {
+            return Err(TurnkeyError::ConfigError("Public key is empty".to_string()));
+        }
+
+        let raw_pubkey = hex::decode(&self.public_key)
+            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid public key hex: {}", e)))?;
+
+        let pubkey_bs58 = bs58::encode(&raw_pubkey).into_string();
+
+        Ok(Address::Solana(pubkey_bs58))
     }
 
     fn address_evm(&self) -> Result<Address, TurnkeyError> {
-        self.address_evm()
+        let public_key = hex::decode(&self.public_key)
+            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid public key hex: {}", e)))?;
+
+        // Remove the first byte (0x04 prefix)
+        let pub_key_no_prefix = &public_key[1..];
+
+        let hash = keccak256(pub_key_no_prefix);
+
+        // Ethereum addresses are the last 20 bytes of the Keccak-256 hash.
+        // Since the hash is 32 bytes, the address is bytes 12..32.
+        let address_bytes = &hash[12..];
+
+        if address_bytes.len() != 20 {
+            return Err(TurnkeyError::ConfigError(format!(
+                "EVM address should be 20 bytes, got {} bytes",
+                address_bytes.len()
+            )));
+        }
+
+        let mut array = [0u8; 20];
+        array.copy_from_slice(address_bytes);
+
+        Ok(Address::Evm(array))
+    }
+
+    fn address_stellar(&self) -> Result<Address, TurnkeyError> {
+        self.address_stellar()
     }
 
     async fn sign_solana(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError> {
@@ -497,9 +573,13 @@ impl TurnkeyServiceTrait for TurnkeyService {
         Ok(signature_bytes)
     }
 
-    async fn sign_evm_transaction(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError> {
-        let signature_bytes = self.sign_evm_transaction(message).await?;
+    async fn sign_stellar(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError> {
+        let signature_bytes = self.sign_bytes_stellar(message).await?;
         Ok(signature_bytes)
+    }
+
+    async fn sign_evm_transaction(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError> {
+        self.sign_evm_transaction_impl(message).await
     }
 
     async fn sign_solana_transaction(

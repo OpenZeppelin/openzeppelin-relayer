@@ -37,7 +37,7 @@ use crate::{
         TransferTransactionResult,
     },
     repositories::{Repository, TransactionRepository},
-    services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
+    services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
 };
 
 use super::*;
@@ -678,9 +678,11 @@ mod tests {
                             rent_epoch: 0,
                         })
                     } else {
-                        Err(crate::services::SolanaProviderError::InvalidAddress(
-                            format!("Invalid token address {}", pubkey),
-                        ))
+                        Err(
+                            crate::services::provider::SolanaProviderError::InvalidAddress(
+                                format!("Invalid token address {}", pubkey),
+                            ),
+                        )
                     }
                 })
             });
@@ -792,6 +794,7 @@ mod tests {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+            ..Default::default()
         };
         // Create token account with low balance
         let token_account = spl_token::state::Account {

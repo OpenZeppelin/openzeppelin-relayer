@@ -5,7 +5,7 @@ use soroban_rs::{
     stellar_rpc_client::SimulateTransactionResponse,
     xdr::{Limits, TransactionEnvelope, WriteXdr},
 };
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::{
     constants::STELLAR_DEFAULT_TRANSACTION_FEE,
@@ -22,7 +22,8 @@ use crate::{
     models::{TransactionRepoModel, TransactionStatus, TransactionUpdateRequest},
     repositories::TransactionCounterTrait,
     repositories::TransactionRepository,
-    services::{Signer, StellarProviderTrait},
+    services::{provider::StellarProviderTrait, signer::Signer},
+    utils::calculate_scheduled_timestamp,
 };
 
 /// Common helper functions for transaction preparation
@@ -267,8 +268,9 @@ where
     J: JobProducerTrait + Send + Sync,
 {
     let job = TransactionSend::submit(tx.id.clone(), tx.relayer_id.clone());
+    let scheduled_on = delay_seconds.map(calculate_scheduled_timestamp);
     job_producer
-        .produce_submit_transaction_job(job, delay_seconds)
+        .produce_submit_transaction_job(job, scheduled_on)
         .await?;
     Ok(())
 }
@@ -302,9 +304,12 @@ where
     if let Some(notification_id) = notification_id {
         let notification =
             produce_transaction_update_notification_payload(notification_id, &saved_tx);
-        job_producer
+        if let Err(e) = job_producer
             .produce_send_notification_job(notification, None)
-            .await?;
+            .await
+        {
+            error!(error = %e, "failed to produce notification job");
+        }
     }
 
     Ok(saved_tx)
@@ -550,7 +555,10 @@ mod send_submit_transaction_job_tests {
             .job_producer
             .expect_produce_submit_transaction_job()
             .withf(|job, delay| {
-                job.transaction_id == "tx-1" && job.relayer_id == "relayer-1" && delay == &Some(30)
+                job.transaction_id == "tx-1"
+                    && job.relayer_id == "relayer-1"
+                    && delay.is_some()
+                    && delay.unwrap() > chrono::Utc::now().timestamp()
             })
             .times(1)
             .returning(|_, _| Box::pin(async { Ok(()) }));

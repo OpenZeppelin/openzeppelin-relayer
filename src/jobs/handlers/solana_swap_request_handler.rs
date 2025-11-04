@@ -9,7 +9,7 @@ use eyre::Result;
 use tracing::{debug, info, instrument};
 
 use crate::{
-    constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
+    constants::WORKER_SOLANA_TOKEN_SWAP_REQUEST_RETRIES,
     domain::{create_solana_relayer, get_relayer_by_id, SolanaRelayerDexTrait},
     jobs::{handle_result, Job, SolanaTokenSwapRequest},
     models::DefaultAppState,
@@ -26,7 +26,7 @@ use crate::{
 /// # Returns
 /// * `Result<(), Error>` - Success or failure of notification processing
 #[instrument(
-    level = "info",
+    level = "debug",
     skip(job, context),
     fields(
         request_id = ?job.request_id,
@@ -34,8 +34,7 @@ use crate::{
         job_type = %job.job_type.to_string(),
         attempt = %attempt.current(),
         relayer_id = %job.data.relayer_id,
-    ),
-    err
+    )
 )]
 pub async fn solana_token_swap_request_handler(
     job: Job<SolanaTokenSwapRequest>,
@@ -46,7 +45,7 @@ pub async fn solana_token_swap_request_handler(
         set_request_id(request_id);
     }
 
-    debug!("handling solana token swap request");
+    debug!(relayer_id = %job.data.relayer_id, "handling solana token swap request");
 
     let result = handle_request(job.data, context).await;
 
@@ -54,7 +53,7 @@ pub async fn solana_token_swap_request_handler(
         result,
         attempt,
         "SolanaTokenSwapRequest",
-        WORKER_DEFAULT_MAXIMUM_RETRIES,
+        WORKER_SOLANA_TOKEN_SWAP_REQUEST_RETRIES,
     )
 }
 
@@ -94,7 +93,7 @@ pub async fn solana_token_swap_cron_handler(
         result,
         attempt,
         "SolanaTokenSwapRequest",
-        WORKER_DEFAULT_MAXIMUM_RETRIES,
+        WORKER_SOLANA_TOKEN_SWAP_REQUEST_RETRIES,
     )
 }
 
@@ -102,7 +101,7 @@ async fn handle_request(
     request: SolanaTokenSwapRequest,
     context: Data<ThinData<DefaultAppState>>,
 ) -> Result<()> {
-    debug!("processing solana token swap");
+    debug!(relayer_id = %request.relayer_id, "processing solana token swap");
 
     let relayer_model = get_relayer_by_id(request.relayer_id.clone(), &context).await?;
     let signer_model = context

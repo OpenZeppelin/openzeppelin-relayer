@@ -1,6 +1,7 @@
 use crate::config::GasPriceCacheConfig;
 use crate::constants::{
-    ARBITRUM_BASED_TAG, LACKS_MEMPOOL_TAGS, OPTIMISM_BASED_TAG, OPTIMISM_TAG, ROLLUP_TAG,
+    ARBITRUM_BASED_TAG, LACKS_MEMPOOL_TAGS, OPTIMISM_BASED_TAG, OPTIMISM_TAG, POLYGON_ZKEVM_TAG,
+    ROLLUP_TAG,
 };
 use crate::models::{NetworkConfigData, NetworkRepoModel, RepositoryError};
 use std::time::Duration;
@@ -127,6 +128,10 @@ impl EvmNetwork {
         self.tags.iter().any(|t| t == ARBITRUM_BASED_TAG)
     }
 
+    pub fn is_polygon_zkevm(&self) -> bool {
+        self.tags.iter().any(|t| t == POLYGON_ZKEVM_TAG)
+    }
+
     pub fn is_testnet(&self) -> bool {
         self.is_testnet
     }
@@ -247,6 +252,16 @@ mod tests {
         assert!(network.is_rollup());
         assert!(network.is_optimism());
         assert!(network.lacks_mempool());
+    }
+
+    #[test]
+    fn test_polygon_zkevm_network() {
+        let network = create_test_evm_network_with_tags(vec![ROLLUP_TAG, POLYGON_ZKEVM_TAG]);
+        assert!(network.is_rollup());
+        assert!(network.is_polygon_zkevm());
+        assert!(!network.lacks_mempool());
+        assert!(!network.is_optimism());
+        assert!(!network.is_arbitrum());
     }
 
     #[test]

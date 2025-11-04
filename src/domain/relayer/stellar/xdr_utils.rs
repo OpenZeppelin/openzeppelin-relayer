@@ -597,7 +597,9 @@ mod tests {
         // Create a Soroban InvokeHostFunction operation
         let invoke_op = InvokeHostFunctionOp {
             host_function: HostFunction::InvokeContract(InvokeContractArgs {
-                contract_address: soroban_rs::xdr::ScAddress::Contract([0u8; 32].into()),
+                contract_address: soroban_rs::xdr::ScAddress::Contract(
+                    soroban_rs::xdr::ContractId(soroban_rs::xdr::Hash([0u8; 32])),
+                ),
                 function_name: "test".try_into().unwrap(),
                 args: vec![].try_into().unwrap(),
             }),
@@ -668,7 +670,9 @@ mod tests {
             source_account: None,
             body: OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
                 host_function: HostFunction::InvokeContract(InvokeContractArgs {
-                    contract_address: soroban_rs::xdr::ScAddress::Contract([0u8; 32].into()),
+                    contract_address: soroban_rs::xdr::ScAddress::Contract(
+                        soroban_rs::xdr::ContractId(soroban_rs::xdr::Hash([0u8; 32])),
+                    ),
                     function_name: "test".try_into().unwrap(),
                     args: vec![].try_into().unwrap(),
                 }),
@@ -1037,7 +1041,9 @@ mod tests {
             source_account: None,
             body: OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
                 host_function: HostFunction::InvokeContract(soroban_rs::xdr::InvokeContractArgs {
-                    contract_address: soroban_rs::xdr::ScAddress::Contract([0u8; 32].into()),
+                    contract_address: soroban_rs::xdr::ScAddress::Contract(
+                        soroban_rs::xdr::ContractId(soroban_rs::xdr::Hash([0u8; 32])),
+                    ),
                     function_name: ScSymbol("test".try_into().unwrap()),
                     args: vec![ScVal::U32(42)].try_into().unwrap(),
                 }),

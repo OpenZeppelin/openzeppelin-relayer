@@ -61,6 +61,7 @@ The repository includes several ready-to-use examples to help you get started wi
 | [`evm-turnkey-signer`](./examples/evm-turnkey-signer/)                               | Using Turnkey Signer for EVM secure signing             |
 | [`solana-turnkey-signer`](./examples/solana-turnkey-signer/)                         | Using Turnkey Signer for Solana secure signing          |
 | [`solana-google-cloud-kms-signer`](./examples/solana-google-cloud-kms-signer/)       | Using Google Cloud KMS Signer for Solana secure signing |
+| [`stellar-gcp-kms-signer`](./examples/stellar-gcp-kms-signer/)                       | Using Google Cloud KMS Signer for Stellar secure signing |
 | [`evm-cdp-signer`](./examples/evm-cdp-signer/)                                       | Using CDP Signer for EVM secure signing                 |
 | [`network-configuration-config-file`](./examples/network-configuration-config-file/) | Using Custom network configuration via config file      |
 | [`network-configuration-json-file`](./examples/network-configuration-json-file/)     | Using Custom network configuration via json file        |
@@ -509,26 +510,18 @@ docker compose logs -f
 
 ## Documentation
 
-- Pre-requisites:
+- All the documentation is under `docs/` directory.
 
-  - You need `antora` `site-generator` and `mermaid` extension to generate the documentation.
+- You can directly make changes to the specific files and raise a PR on this repo as well as on [docs](https://github.com/OpenZeppelin/docs) repo for the content that is modified.
 
-  - You can directly install these dependencies by running `cd docs && npm i --include dev`. If you want to install them manually, you can follow the steps mentioned below.
-  - Install `antora` locally, you can follow the steps mentioned [here](https://docs.antora.org/antora/latest/install/install-antora/#install-dir), if you already have you can skip this step.
-    > Note: If you want to install globally, you can run:
-    >
-    > `npm install -g @antora/cli@3.1 @antora/site-generator@3.1 @sntke/antora-mermaid-extension`
-  - Verify the installation by running `antora --version` or by running `npx antora --version` if you installed it locally.
-
-- To generate documentation locally, run the following command:
+- To generate technical rust documentation locally, run the following command
 
   ```sh
-  cargo make rust-antora
+  cargo make rust-docs
   ```
 
-- Site will be generated in `docs/build/site/openzeppelin_relayer/<version>/` directory.
+- Rust docs will be generated in `docs/build/site/openzeppelin_relayer/` directory.
 
-- To view the documentation, open the `docs/build/site/openzeppelin_relayer/<version>/index.html` in your browser.
 
 ## Observability
 

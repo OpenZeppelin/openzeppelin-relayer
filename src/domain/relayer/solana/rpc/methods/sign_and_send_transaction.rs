@@ -22,7 +22,7 @@ use std::str::FromStr;
 use chrono::Utc;
 use futures::try_join;
 use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
-use tracing::info;
+use tracing::{debug, error};
 
 use crate::{
     models::{
@@ -33,7 +33,7 @@ use crate::{
         TransactionUpdateRequest,
     },
     repositories::{Repository, TransactionRepository},
-    services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
+    services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
 };
 
 use super::*;
@@ -50,7 +50,7 @@ where
         &self,
         params: SignAndSendTransactionRequestParams,
     ) -> Result<SignAndSendTransactionResult, SolanaRpcError> {
-        info!("Processing sign and send transaction request");
+        debug!("Processing sign and send transaction request");
         let transaction_request = Transaction::try_from(params.transaction.clone())?;
 
         validate_sign_and_send_transaction(&transaction_request, &self.relayer, &*self.provider)
@@ -112,14 +112,40 @@ where
                 SolanaRpcError::Internal(e.to_string())
             })?;
 
-        let send_signature = self
-            .provider
-            .send_transaction(&signed_transaction)
-            .await
-            .map_err(|e| {
-                error!(error = %e, "failed to send transaction");
-                SolanaRpcError::Send(e.to_string())
-            })?;
+        let send_signature = match self.provider.send_transaction(&signed_transaction).await {
+            Ok(signature) => signature,
+            Err(e) => {
+                error!(
+                    tx_id = %tx_repo_model.id,
+                    error = %e,
+                    "failed to send transaction - marking as failed"
+                );
+
+                // Mark transaction as failed in the database
+                // Most RPC errors at this point are simulation failures or invalid transaction body
+                let failure_reason = format!("Transaction send failed: {}", e);
+                let update = TransactionUpdateRequest {
+                    status: Some(TransactionStatus::Failed),
+                    status_reason: Some(failure_reason),
+                    ..Default::default()
+                };
+
+                // Attempt to mark as failed, but don't fail the error return if update fails
+                if let Err(update_err) = self
+                    .transaction_repository
+                    .partial_update(tx_repo_model.id.clone(), update)
+                    .await
+                {
+                    error!(
+                        tx_id = %tx_repo_model.id,
+                        error = %update_err,
+                        "failed to update transaction status to Failed"
+                    );
+                }
+
+                return Err(SolanaRpcError::Send(e.to_string()));
+            }
+        };
 
         let update = TransactionUpdateRequest {
             status: Some(TransactionStatus::Submitted),
@@ -169,7 +195,7 @@ where
         self.schedule_status_check_job(&tx_repo_model, Some(5))
             .await?;
 
-        info!(
+        debug!(
             "Transaction signed and sent successfully with signature: {}",
             result.signature
         );

@@ -48,12 +48,8 @@ mod tests {
 
     async fn mock_plugin_call() -> impl Responder {
         HttpResponse::Ok().json(PluginCallResponse {
-            success: true,
-            message: "Plugin called successfully".to_string(),
-            return_value: String::from(""),
-            logs: vec![],
-            error: String::from(""),
-            traces: Vec::new(),
+            result: serde_json::Value::Null,
+            metadata: None,
         })
     }
 
@@ -63,11 +59,15 @@ mod tests {
                 id: "test-plugin".to_string(),
                 path: "test-path".to_string(),
                 timeout: Duration::from_secs(69),
+                emit_logs: false,
+                emit_traces: false,
             },
             PluginModel {
                 id: "test-plugin2".to_string(),
                 path: "test-path2".to_string(),
                 timeout: Duration::from_secs(69),
+                emit_logs: false,
+                emit_traces: false,
             },
         ])
     }
@@ -97,7 +97,7 @@ mod tests {
 
         let body = test::read_body(resp).await;
         let plugin_call_response: PluginCallResponse = serde_json::from_slice(&body).unwrap();
-        assert!(plugin_call_response.success);
+        assert!(plugin_call_response.result.is_null());
     }
 
     #[actix_web::test]
