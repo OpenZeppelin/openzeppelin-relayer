@@ -205,7 +205,29 @@ impl EvmProvider {
     fn is_retriable_error(error: &ProviderError) -> bool {
         match error {
             // HTTP-level errors that are retriable
-            ProviderError::Timeout | ProviderError::RateLimited | ProviderError::BadGateway => true,
+            ProviderError::Timeout
+            | ProviderError::RateLimited
+            | ProviderError::BadGateway
+            | ProviderError::TransportError(_) => true,
+
+            ProviderError::RequestError { status_code, .. } => {
+                match *status_code {
+                    // Non-retriable 5xx: persistent server-side issues
+                    501 | 505 => false, // Not Implemented, HTTP Version Not Supported
+
+                    // Retriable 5xx: temporary server-side issues
+                    500 | 502..=504 | 506..=599 => true,
+
+                    // Retriable 4xx: timeout or rate-limit related
+                    408 | 425 | 429 => true,
+
+                    // Non-retriable 4xx: client errors
+                    400..=499 => false,
+
+                    // Other status codes: not retriable
+                    _ => false,
+                }
+            }
 
             // JSON-RPC error codes (EIP-1474)
             ProviderError::RpcErrorCode { code, .. } => {
@@ -847,6 +869,7 @@ mod tests {
             ProviderError::Timeout,
             ProviderError::RateLimited,
             ProviderError::BadGateway,
+            ProviderError::TransportError("test".to_string()),
         ];
 
         for error in retriable_errors {
@@ -917,6 +940,200 @@ mod tests {
                 !EvmProvider::is_retriable_error(&error),
                 "Error with message '{}' should NOT be retriable",
                 message
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_request_error_retriable_5xx() {
+        // Test retriable 5xx status codes
+        let retriable_5xx = vec![
+            (500, "Internal Server Error"),
+            (502, "Bad Gateway"),
+            (503, "Service Unavailable"),
+            (504, "Gateway Timeout"),
+            (506, "Variant Also Negotiates"),
+            (507, "Insufficient Storage"),
+            (508, "Loop Detected"),
+            (510, "Not Extended"),
+            (511, "Network Authentication Required"),
+            (599, "Network Connect Timeout Error"),
+        ];
+
+        for (status_code, description) in retriable_5xx {
+            let error = ProviderError::RequestError {
+                error: description.to_string(),
+                status_code,
+            };
+            assert!(
+                EvmProvider::is_retriable_error(&error),
+                "Status code {} ({}) should be retriable",
+                status_code,
+                description
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_request_error_non_retriable_5xx() {
+        // Test non-retriable 5xx status codes (persistent server issues)
+        let non_retriable_5xx = vec![
+            (501, "Not Implemented"),
+            (505, "HTTP Version Not Supported"),
+        ];
+
+        for (status_code, description) in non_retriable_5xx {
+            let error = ProviderError::RequestError {
+                error: description.to_string(),
+                status_code,
+            };
+            assert!(
+                !EvmProvider::is_retriable_error(&error),
+                "Status code {} ({}) should NOT be retriable",
+                status_code,
+                description
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_request_error_retriable_4xx() {
+        // Test retriable 4xx status codes (timeout/rate-limit related)
+        let retriable_4xx = vec![
+            (408, "Request Timeout"),
+            (425, "Too Early"),
+            (429, "Too Many Requests"),
+        ];
+
+        for (status_code, description) in retriable_4xx {
+            let error = ProviderError::RequestError {
+                error: description.to_string(),
+                status_code,
+            };
+            assert!(
+                EvmProvider::is_retriable_error(&error),
+                "Status code {} ({}) should be retriable",
+                status_code,
+                description
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_request_error_non_retriable_4xx() {
+        // Test non-retriable 4xx status codes (client errors)
+        let non_retriable_4xx = vec![
+            (400, "Bad Request"),
+            (401, "Unauthorized"),
+            (403, "Forbidden"),
+            (404, "Not Found"),
+            (405, "Method Not Allowed"),
+            (406, "Not Acceptable"),
+            (407, "Proxy Authentication Required"),
+            (409, "Conflict"),
+            (410, "Gone"),
+            (411, "Length Required"),
+            (412, "Precondition Failed"),
+            (413, "Payload Too Large"),
+            (414, "URI Too Long"),
+            (415, "Unsupported Media Type"),
+            (416, "Range Not Satisfiable"),
+            (417, "Expectation Failed"),
+            (418, "I'm a teapot"),
+            (421, "Misdirected Request"),
+            (422, "Unprocessable Entity"),
+            (423, "Locked"),
+            (424, "Failed Dependency"),
+            (426, "Upgrade Required"),
+            (428, "Precondition Required"),
+            (431, "Request Header Fields Too Large"),
+            (451, "Unavailable For Legal Reasons"),
+            (499, "Client Closed Request"),
+        ];
+
+        for (status_code, description) in non_retriable_4xx {
+            let error = ProviderError::RequestError {
+                error: description.to_string(),
+                status_code,
+            };
+            assert!(
+                !EvmProvider::is_retriable_error(&error),
+                "Status code {} ({}) should NOT be retriable",
+                status_code,
+                description
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_request_error_other_status_codes() {
+        // Test other status codes (1xx, 2xx, 3xx) - should not be retriable
+        let other_status_codes = vec![
+            (100, "Continue"),
+            (101, "Switching Protocols"),
+            (200, "OK"),
+            (201, "Created"),
+            (204, "No Content"),
+            (300, "Multiple Choices"),
+            (301, "Moved Permanently"),
+            (302, "Found"),
+            (304, "Not Modified"),
+            (600, "Custom status"),
+            (999, "Unknown status"),
+        ];
+
+        for (status_code, description) in other_status_codes {
+            let error = ProviderError::RequestError {
+                error: description.to_string(),
+                status_code,
+            };
+            assert!(
+                !EvmProvider::is_retriable_error(&error),
+                "Status code {} ({}) should NOT be retriable",
+                status_code,
+                description
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_request_error_boundary_cases() {
+        // Test boundary cases for our ranges
+        let test_cases = vec![
+            // Just before retriable 4xx range
+            (407, false, "Proxy Authentication Required"),
+            (408, true, "Request Timeout - first retriable 4xx"),
+            (409, false, "Conflict"),
+            // Around 425
+            (424, false, "Failed Dependency"),
+            (425, true, "Too Early"),
+            (426, false, "Upgrade Required"),
+            // Around 429
+            (428, false, "Precondition Required"),
+            (429, true, "Too Many Requests"),
+            (430, false, "Would be non-retriable if it existed"),
+            // 5xx boundaries
+            (499, false, "Last 4xx"),
+            (500, true, "First 5xx - retriable"),
+            (501, false, "Not Implemented - exception"),
+            (502, true, "Bad Gateway - retriable"),
+            (505, false, "HTTP Version Not Supported - exception"),
+            (506, true, "First after 505 exception"),
+            (599, true, "Last defined 5xx"),
+        ];
+
+        for (status_code, should_be_retriable, description) in test_cases {
+            let error = ProviderError::RequestError {
+                error: description.to_string(),
+                status_code,
+            };
+            assert_eq!(
+                EvmProvider::is_retriable_error(&error),
+                should_be_retriable,
+                "Status code {} ({}) should{} be retriable",
+                status_code,
+                description,
+                if should_be_retriable { "" } else { " NOT" }
             );
         }
     }

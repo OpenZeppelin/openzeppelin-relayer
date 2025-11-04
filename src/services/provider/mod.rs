@@ -39,6 +39,8 @@ pub enum ProviderError {
     RequestError { error: String, status_code: u16 },
     #[error("JSON-RPC error (code {code}): {message}")]
     RpcErrorCode { code: i64, message: String },
+    #[error("Transport error: {0}")]
+    TransportError(String),
     #[error("Other provider error: {0}")]
     Other(String),
 }
@@ -144,8 +146,7 @@ where
                     return categorize_reqwest_error(reqwest_err);
                 }
 
-                // Fallback for other transport error types
-                ProviderError::Other(format!("Transport error: {}", transport_err))
+                ProviderError::TransportError(transport_err.to_string())
             }
             RpcError::ErrorResp(json_rpc_err) => ProviderError::RpcErrorCode {
                 code: json_rpc_err.code,
