@@ -40,90 +40,90 @@ fn fix_u64_format(value: &mut serde_json::Value) {
                     if let Ok(num) = s.parse::<u64>() {
                         map.insert("timepoint".to_string(), serde_json::json!(num));
                     }
-                } else if let Some(serde_json::Value::String(s)) = map.get("duration") {
-                    if let Ok(num) = s.parse::<u64>() {
-                        map.insert("duration".to_string(), serde_json::json!(num));
-                    }
+                } else if let Some(serde_json::Value::String(s)) = map.get("duration")
+                    && let Ok(num) = s.parse::<u64>()
+                {
+                    map.insert("duration".to_string(), serde_json::json!(num));
                 }
             }
 
             // Handle UInt128Parts (hi: u64, lo: u64)
             if map.contains_key("hi") && map.contains_key("lo") && map.len() == 2 {
-                if let Some(serde_json::Value::String(s)) = map.get("hi") {
-                    if let Ok(num) = s.parse::<u64>() {
-                        map.insert("hi".to_string(), serde_json::json!(num));
-                    }
+                if let Some(serde_json::Value::String(s)) = map.get("hi")
+                    && let Ok(num) = s.parse::<u64>()
+                {
+                    map.insert("hi".to_string(), serde_json::json!(num));
                 }
-                if let Some(serde_json::Value::String(s)) = map.get("lo") {
-                    if let Ok(num) = s.parse::<u64>() {
-                        map.insert("lo".to_string(), serde_json::json!(num));
-                    }
+                if let Some(serde_json::Value::String(s)) = map.get("lo")
+                    && let Ok(num) = s.parse::<u64>()
+                {
+                    map.insert("lo".to_string(), serde_json::json!(num));
                 }
             }
 
             // Handle u128 wrapper object
-            if map.contains_key("u128") {
-                if let Some(serde_json::Value::Object(inner)) = map.get_mut("u128") {
-                    // Convert UInt128Parts (hi: u64, lo: u64)
-                    if let Some(serde_json::Value::String(s)) = inner.get("hi") {
-                        if let Ok(num) = s.parse::<u64>() {
-                            inner.insert("hi".to_string(), serde_json::json!(num));
-                        }
-                    }
-                    if let Some(serde_json::Value::String(s)) = inner.get("lo") {
-                        if let Ok(num) = s.parse::<u64>() {
-                            inner.insert("lo".to_string(), serde_json::json!(num));
-                        }
-                    }
+            if map.contains_key("u128")
+                && let Some(serde_json::Value::Object(inner)) = map.get_mut("u128")
+            {
+                // Convert UInt128Parts (hi: u64, lo: u64)
+                if let Some(serde_json::Value::String(s)) = inner.get("hi")
+                    && let Ok(num) = s.parse::<u64>()
+                {
+                    inner.insert("hi".to_string(), serde_json::json!(num));
+                }
+                if let Some(serde_json::Value::String(s)) = inner.get("lo")
+                    && let Ok(num) = s.parse::<u64>()
+                {
+                    inner.insert("lo".to_string(), serde_json::json!(num));
                 }
             }
 
             // Handle i128 wrapper object
-            if map.contains_key("i128") {
-                if let Some(serde_json::Value::Object(inner)) = map.get_mut("i128") {
-                    // Convert Int128Parts (hi: i64, lo: u64)
-                    if let Some(serde_json::Value::String(s)) = inner.get("hi") {
-                        if let Ok(num) = s.parse::<i64>() {
-                            inner.insert("hi".to_string(), serde_json::json!(num));
-                        }
-                    }
-                    if let Some(serde_json::Value::String(s)) = inner.get("lo") {
-                        if let Ok(num) = s.parse::<u64>() {
-                            inner.insert("lo".to_string(), serde_json::json!(num));
-                        }
-                    }
+            if map.contains_key("i128")
+                && let Some(serde_json::Value::Object(inner)) = map.get_mut("i128")
+            {
+                // Convert Int128Parts (hi: i64, lo: u64)
+                if let Some(serde_json::Value::String(s)) = inner.get("hi")
+                    && let Ok(num) = s.parse::<i64>()
+                {
+                    inner.insert("hi".to_string(), serde_json::json!(num));
+                }
+                if let Some(serde_json::Value::String(s)) = inner.get("lo")
+                    && let Ok(num) = s.parse::<u64>()
+                {
+                    inner.insert("lo".to_string(), serde_json::json!(num));
                 }
             }
 
             // Handle u256 wrapper object
-            if map.contains_key("u256") {
-                if let Some(serde_json::Value::Object(inner)) = map.get_mut("u256") {
-                    // Convert UInt256Parts (all u64)
-                    for key in ["hi_hi", "hi_lo", "lo_hi", "lo_lo"] {
-                        if let Some(serde_json::Value::String(s)) = inner.get(key) {
-                            if let Ok(num) = s.parse::<u64>() {
-                                inner.insert(key.to_string(), serde_json::json!(num));
-                            }
-                        }
+            if map.contains_key("u256")
+                && let Some(serde_json::Value::Object(inner)) = map.get_mut("u256")
+            {
+                // Convert UInt256Parts (all u64)
+                for key in ["hi_hi", "hi_lo", "lo_hi", "lo_lo"] {
+                    if let Some(serde_json::Value::String(s)) = inner.get(key)
+                        && let Ok(num) = s.parse::<u64>()
+                    {
+                        inner.insert(key.to_string(), serde_json::json!(num));
                     }
                 }
             }
 
             // Handle i256 wrapper object
-            if map.contains_key("i256") {
-                if let Some(serde_json::Value::Object(inner)) = map.get_mut("i256") {
-                    // Convert Int256Parts (hi_hi: i64, others: u64)
-                    if let Some(serde_json::Value::String(s)) = inner.get("hi_hi") {
-                        if let Ok(num) = s.parse::<i64>() {
-                            inner.insert("hi_hi".to_string(), serde_json::json!(num));
-                        }
-                    }
-                    for key in ["hi_lo", "lo_hi", "lo_lo"] {
-                        if let Some(serde_json::Value::String(s)) = inner.get(key) {
-                            if let Ok(num) = s.parse::<u64>() {
-                                inner.insert(key.to_string(), serde_json::json!(num));
-                            }
-                        }
+            if map.contains_key("i256")
+                && let Some(serde_json::Value::Object(inner)) = map.get_mut("i256")
+            {
+                // Convert Int256Parts (hi_hi: i64, others: u64)
+                if let Some(serde_json::Value::String(s)) = inner.get("hi_hi")
+                    && let Ok(num) = s.parse::<i64>()
+                {
+                    inner.insert("hi_hi".to_string(), serde_json::json!(num));
+                }
+                for key in ["hi_lo", "lo_hi", "lo_lo"] {
+                    if let Some(serde_json::Value::String(s)) = inner.get(key)
+                        && let Ok(num) = s.parse::<u64>()
+                    {
+                        inner.insert(key.to_string(), serde_json::json!(num));
                     }
                 }
             }
@@ -136,10 +136,10 @@ fn fix_u64_format(value: &mut serde_json::Value) {
                 && map.len() == 4
             {
                 for key in ["hi_hi", "hi_lo", "lo_hi", "lo_lo"] {
-                    if let Some(serde_json::Value::String(s)) = map.get(key) {
-                        if let Ok(num) = s.parse::<u64>() {
-                            map.insert(key.to_string(), serde_json::json!(num));
-                        }
+                    if let Some(serde_json::Value::String(s)) = map.get(key)
+                        && let Ok(num) = s.parse::<u64>()
+                    {
+                        map.insert(key.to_string(), serde_json::json!(num));
                     }
                 }
             }
@@ -338,37 +338,34 @@ fn convert_create_contract(
     let wasm_hash = parse_wasm_hash(&wasm_hash)?;
 
     // Handle constructor args if provided
-    if let Some(args) = constructor_args {
-        if !args.is_empty() {
-            // Convert JSON args to ScVals using serde
-            // HACK: stellar-xdr expects u64 as number but it should be string
-            // Convert {"u64":"1000"} to {"u64":1000} before deserialization
-            let scval_args: Vec<ScVal> = args
-                .iter()
-                .map(|json| {
-                    let mut modified_json = json.clone();
-                    fix_u64_format(&mut modified_json);
-                    serde_json::from_value(modified_json)
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| {
-                    SignerError::ConversionError(format!("Failed to deserialize ScVal: {}", e))
-                })?;
-            let constructor_args_vec = VecM::try_from(scval_args).map_err(|e| {
-                SignerError::ConversionError(format!(
-                    "Failed to convert constructor arguments: {}",
-                    e
-                ))
+    if let Some(args) = constructor_args
+        && !args.is_empty()
+    {
+        // Convert JSON args to ScVals using serde
+        // HACK: stellar-xdr expects u64 as number but it should be string
+        // Convert {"u64":"1000"} to {"u64":1000} before deserialization
+        let scval_args: Vec<ScVal> = args
+            .iter()
+            .map(|json| {
+                let mut modified_json = json.clone();
+                fix_u64_format(&mut modified_json);
+                serde_json::from_value(modified_json)
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| {
+                SignerError::ConversionError(format!("Failed to deserialize ScVal: {}", e))
             })?;
+        let constructor_args_vec = VecM::try_from(scval_args).map_err(|e| {
+            SignerError::ConversionError(format!("Failed to convert constructor arguments: {}", e))
+        })?;
 
-            let create_args_v2 = CreateContractArgsV2 {
-                contract_id_preimage: preimage,
-                executable: ContractExecutable::Wasm(wasm_hash),
-                constructor_args: constructor_args_vec,
-            };
+        let create_args_v2 = CreateContractArgsV2 {
+            contract_id_preimage: preimage,
+            executable: ContractExecutable::Wasm(wasm_hash),
+            constructor_args: constructor_args_vec,
+        };
 
-            return Ok(HostFunction::CreateContractV2(create_args_v2));
-        }
+        return Ok(HostFunction::CreateContractV2(create_args_v2));
     }
 
     // No constructor args, use v1

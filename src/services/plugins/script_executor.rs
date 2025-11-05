@@ -85,33 +85,33 @@ impl ScriptExecutor {
         // Check if the script failed (non-zero exit code)
         if !output.status.success() {
             // Try to parse error info from stderr
-            if let Some(error_line) = stderr.lines().find(|l| !l.trim().is_empty()) {
-                if let Ok(error_info) = serde_json::from_str::<serde_json::Value>(error_line) {
-                    let message = error_info["message"]
-                        .as_str()
-                        .unwrap_or(&stderr)
-                        .to_string();
-                    let status = error_info
-                        .get("status")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(500) as u16;
-                    let code = error_info
-                        .get("code")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    let details = error_info
-                        .get("details")
-                        .cloned()
-                        .or_else(|| error_info.get("data").cloned());
-                    return Err(PluginError::HandlerError(super::PluginHandlerPayload {
-                        message,
-                        status,
-                        code,
-                        details,
-                        logs: Some(logs),
-                        traces: None,
-                    }));
-                }
+            if let Some(error_line) = stderr.lines().find(|l| !l.trim().is_empty())
+                && let Ok(error_info) = serde_json::from_str::<serde_json::Value>(error_line)
+            {
+                let message = error_info["message"]
+                    .as_str()
+                    .unwrap_or(&stderr)
+                    .to_string();
+                let status = error_info
+                    .get("status")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(500) as u16;
+                let code = error_info
+                    .get("code")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let details = error_info
+                    .get("details")
+                    .cloned()
+                    .or_else(|| error_info.get("data").cloned());
+                return Err(PluginError::HandlerError(super::PluginHandlerPayload {
+                    message,
+                    status,
+                    code,
+                    details,
+                    logs: Some(logs),
+                    traces: None,
+                }));
             }
             // Fallback to stderr as error message
             return Err(PluginError::HandlerError(super::PluginHandlerPayload {
@@ -132,6 +132,7 @@ impl ScriptExecutor {
         })
     }
 
+    #[allow(clippy::result_large_err)]
     fn parse_logs(logs: Vec<String>) -> Result<(Vec<LogEntry>, String), PluginError> {
         let mut result = Vec::new();
         let mut return_value = String::new();

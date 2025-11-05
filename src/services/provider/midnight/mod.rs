@@ -49,6 +49,7 @@ pub struct MidnightProvider {
     /// Configuration for retry behavior
     retry_config: RetryConfig,
     /// Network ID for transaction serialization
+    #[allow(dead_code)]
     network_id: NetworkId,
 }
 
@@ -297,7 +298,6 @@ impl MidnightProviderTrait for MidnightProvider {
         &self,
         tx: Transaction<Signature, ProofMarker, PedersenRandomness, DefaultDB>,
     ) -> Result<String, ProviderError> {
-        let network_id = self.network_id;
         self.retry_rpc_call("send_transaction", move |api| {
             let tx_clone = tx.clone();
             async move {

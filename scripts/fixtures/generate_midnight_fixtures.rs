@@ -71,7 +71,7 @@ fn get_context_fixture_path(seed: &WalletSeed, height: u64) -> PathBuf {
 fn serialize_context(
     context: &Arc<LedgerContext<DefaultDB>>,
     seed: &WalletSeed,
-    network: NetworkId,
+    _network: NetworkId,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     // Serialize the wallet state for the current seed
     let wallet_state = {

@@ -141,22 +141,22 @@ pub fn validate_explicit_price_bump(
         .unwrap_or(DEFAULT_EVM_GAS_PRICE_CAP);
 
     // Check if gas prices exceed gas price cap
-    if let Some(gas_price) = new_evm_data.gas_price {
-        if gas_price > gas_price_cap {
-            return Err(TransactionError::ValidationError(format!(
-                "Gas price {} exceeds gas price cap {}",
-                gas_price, gas_price_cap
-            )));
-        }
+    if let Some(gas_price) = new_evm_data.gas_price
+        && gas_price > gas_price_cap
+    {
+        return Err(TransactionError::ValidationError(format!(
+            "Gas price {} exceeds gas price cap {}",
+            gas_price, gas_price_cap
+        )));
     }
 
-    if let Some(max_fee) = new_evm_data.max_fee_per_gas {
-        if max_fee > gas_price_cap {
-            return Err(TransactionError::ValidationError(format!(
-                "Max fee per gas {} exceeds gas price cap {}",
-                max_fee, gas_price_cap
-            )));
-        }
+    if let Some(max_fee) = new_evm_data.max_fee_per_gas
+        && max_fee > gas_price_cap
+    {
+        return Err(TransactionError::ValidationError(format!(
+            "Max fee per gas {} exceeds gas price cap {}",
+            max_fee, gas_price_cap
+        )));
     }
 
     // both max_fee_per_gas and max_priority_fee_per_gas must be provided together
@@ -175,12 +175,11 @@ pub fn validate_explicit_price_bump(
     if let (Some(max_fee), Some(max_priority)) = (
         price_params.max_fee_per_gas,
         price_params.max_priority_fee_per_gas,
-    ) {
-        if max_priority > max_fee {
-            return Err(TransactionError::ValidationError(
-                "Max priority fee cannot exceed max fee per gas".to_string(),
-            ));
-        }
+    ) && max_priority > max_fee
+    {
+        return Err(TransactionError::ValidationError(
+            "Max priority fee cannot exceed max fee per gas".to_string(),
+        ));
     }
 
     // Calculate total cost

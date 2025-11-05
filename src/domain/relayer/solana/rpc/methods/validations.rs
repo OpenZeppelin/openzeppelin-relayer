@@ -186,13 +186,13 @@ impl SolanaTransactionValidator {
         account: &str,
         policy: &RelayerSolanaPolicy,
     ) -> Result<(), SolanaTransactionValidationError> {
-        if let Some(allowed_accounts) = &policy.allowed_accounts {
-            if !allowed_accounts.contains(&account.to_string()) {
-                return Err(SolanaTransactionValidationError::PolicyViolation(format!(
-                    "Account {} not allowed",
-                    account
-                )));
-            }
+        if let Some(allowed_accounts) = &policy.allowed_accounts
+            && !allowed_accounts.contains(&account.to_string())
+        {
+            return Err(SolanaTransactionValidationError::PolicyViolation(format!(
+                "Account {} not allowed",
+                account
+            )));
         }
 
         Ok(())
@@ -222,13 +222,13 @@ impl SolanaTransactionValidator {
         account: &str,
         policy: &RelayerSolanaPolicy,
     ) -> Result<(), SolanaTransactionValidationError> {
-        if let Some(disallowed_accounts) = &policy.disallowed_accounts {
-            if disallowed_accounts.contains(&account.to_string()) {
-                return Err(SolanaTransactionValidationError::PolicyViolation(format!(
-                    "Account {} not allowed",
-                    account
-                )));
-            }
+        if let Some(disallowed_accounts) = &policy.disallowed_accounts
+            && disallowed_accounts.contains(&account.to_string())
+        {
+            return Err(SolanaTransactionValidationError::PolicyViolation(format!(
+                "Account {} not allowed",
+                account
+            )));
         }
 
         Ok(())
@@ -288,27 +288,25 @@ impl SolanaTransactionValidator {
 
             // Check if the instruction comes from the System Program (native SOL transfers)
             #[allow(clippy::collapsible_match)]
-            if program_id == program::id() {
-                if let Ok(system_ix) = bincode::deserialize::<SystemInstruction>(&ix.data) {
-                    if let SystemInstruction::Transfer { .. } = system_ix {
-                        // In a system transfer instruction, the first account is the source and the
-                        // second is the destination.
-                        let source_index = ix.accounts.first().ok_or_else(|| {
-                            SolanaTransactionValidationError::ValidationError(format!(
-                                "Missing source account in instruction {}",
-                                ix_index
-                            ))
-                        })?;
-                        let source_pubkey = &tx.message.account_keys[*source_index as usize];
+            if program_id == program::id()
+                && let Ok(system_ix) = bincode::deserialize::<SystemInstruction>(&ix.data)
+                && let SystemInstruction::Transfer { .. } = system_ix
+            {
+                // In a system transfer instruction, the first account is the source and the
+                // second is the destination.
+                let source_index = ix.accounts.first().ok_or_else(|| {
+                    SolanaTransactionValidationError::ValidationError(format!(
+                        "Missing source account in instruction {}",
+                        ix_index
+                    ))
+                })?;
+                let source_pubkey = &tx.message.account_keys[*source_index as usize];
 
-                        // Only validate transfers where the source is the relayer fee account.
-                        if source_pubkey == relayer_account {
-                            return Err(SolanaTransactionValidationError::PolicyViolation(
-                                "Lamports transfers are not allowed from the relayer account"
-                                    .to_string(),
-                            ));
-                        }
-                    }
+                // Only validate transfers where the source is the relayer fee account.
+                if source_pubkey == relayer_account {
+                    return Err(SolanaTransactionValidationError::PolicyViolation(
+                        "Lamports transfers are not allowed from the relayer account".to_string(),
+                    ));
                 }
             }
         }
@@ -320,13 +318,13 @@ impl SolanaTransactionValidator {
         amount: u64,
         policy: &RelayerSolanaPolicy,
     ) -> Result<(), SolanaTransactionValidationError> {
-        if let Some(max_amount) = policy.max_allowed_fee_lamports {
-            if amount > max_amount {
-                return Err(SolanaTransactionValidationError::PolicyViolation(format!(
-                    "Fee amount {} exceeds max allowed fee amount {}",
-                    amount, max_amount
-                )));
-            }
+        if let Some(max_amount) = policy.max_allowed_fee_lamports
+            && amount > max_amount
+        {
+            return Err(SolanaTransactionValidationError::PolicyViolation(format!(
+                "Fee amount {} exceeds max allowed fee amount {}",
+                amount, max_amount
+            )));
         }
 
         Ok(())
@@ -486,34 +484,30 @@ impl SolanaTransactionValidator {
                             Some(config),
                             SolanaTokenInstruction::TransferChecked { decimals, .. },
                         ) = (token_config, &token_ix)
+                            && Some(*decimals) != config.decimals
                         {
-                            if Some(*decimals) != config.decimals {
-                                return Err(SolanaTransactionValidationError::ValidationError(
-                                    format!(
-                                        "Invalid decimals: expected {:?}, got {}",
-                                        config.decimals, decimals
-                                    ),
-                                ));
-                            }
+                            return Err(SolanaTransactionValidationError::ValidationError(
+                                format!(
+                                    "Invalid decimals: expected {:?}, got {}",
+                                    config.decimals, decimals
+                                ),
+                            ));
                         }
 
                         // if relayer is destination, check max fee
                         if destination_pubkey == relayer_account {
                             // Check max fee if configured
-                            if let Some(config) = token_config {
-                                if let Some(max_fee) = config.max_allowed_fee {
-                                    if amount > max_fee {
-                                        return Err(
-                                            SolanaTransactionValidationError::PolicyViolation(
-                                                format!(
-                                                    "Transfer amount {} exceeds max fee \
+                            if let Some(config) = token_config
+                                && let Some(max_fee) = config.max_allowed_fee
+                                && amount > max_fee
+                            {
+                                return Err(SolanaTransactionValidationError::PolicyViolation(
+                                    format!(
+                                        "Transfer amount {} exceeds max fee \
                                                     allowed {} for token {}",
-                                                    amount, max_fee, token_account.mint
-                                                ),
-                                            ),
-                                        );
-                                    }
-                                }
+                                        amount, max_fee, token_account.mint
+                                    ),
+                                ));
                             }
                         }
                     }

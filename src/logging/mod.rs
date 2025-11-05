@@ -67,10 +67,10 @@ pub fn space_based_rolling(
 /// Sets up logging by reading configuration from environment variables.
 pub fn setup_logging() {
     // Set RUST_LOG from LOG_LEVEL if RUST_LOG is not already set
-    if std::env::var_os("RUST_LOG").is_none() {
-        if let Ok(level) = env::var("LOG_LEVEL") {
-            unsafe { std::env::set_var("RUST_LOG", level) };
-        }
+    if std::env::var_os("RUST_LOG").is_none()
+        && let Ok(level) = env::var("LOG_LEVEL")
+    {
+        unsafe { std::env::set_var("RUST_LOG", level) };
     }
 
     // Configure filter, format, and mode from environment

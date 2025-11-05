@@ -116,13 +116,13 @@ impl RedisNetworkRepository {
             let old_chain_id = self.extract_chain_id(old);
             let new_chain_id = self.extract_chain_id(network);
 
-            if old_chain_id != new_chain_id {
-                if let Some(old_chain_id) = old_chain_id {
-                    let old_chain_id_key =
-                        self.network_chain_id_index_key(&old.network_type, old_chain_id);
-                    pipe.del(&old_chain_id_key);
-                    debug!(network_id = %network.id, old_chain_id = %old_chain_id, new_chain_id = ?new_chain_id, "removing old chain ID index for network");
-                }
+            if old_chain_id != new_chain_id
+                && let Some(old_chain_id) = old_chain_id
+            {
+                let old_chain_id_key =
+                    self.network_chain_id_index_key(&old.network_type, old_chain_id);
+                pipe.del(&old_chain_id_key);
+                debug!(network_id = %network.id, old_chain_id = %old_chain_id, new_chain_id = ?new_chain_id, "removing old chain ID index for network");
             }
         }
 

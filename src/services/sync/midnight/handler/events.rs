@@ -214,20 +214,19 @@ pub fn convert_indexer_event(event: IndexerEvent) -> Vec<SyncEvent> {
                     end,
                     update,
                 } = update_item
+                    && !update.is_empty()
                 {
-                    if !update.is_empty() {
-                        let update_info = CollapsedUpdateInfo {
-                            blockchain_index: index,
-                            protocol_version: *protocol_version,
-                            start: *start,
-                            end: *end,
-                            update_data: update.clone(),
-                        };
-                        sync_events.push(SyncEvent::MerkleUpdateReceived {
-                            blockchain_index: index,
-                            update_info,
-                        });
-                    }
+                    let update_info = CollapsedUpdateInfo {
+                        blockchain_index: index,
+                        protocol_version: *protocol_version,
+                        start: *start,
+                        end: *end,
+                        update_data: update.clone(),
+                    };
+                    sync_events.push(SyncEvent::MerkleUpdateReceived {
+                        blockchain_index: index,
+                        update_info,
+                    });
                 }
             }
 

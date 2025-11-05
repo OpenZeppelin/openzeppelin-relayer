@@ -115,14 +115,14 @@ where
             // FALLBACK: Try to find transaction by checking all historical hashes
             // Only do this for transactions that have multiple resubmission attempts
             // and have been stuck in Submitted for a while
-            if tx.hashes.len() > 1 && self.should_try_hash_recovery(tx)? {
-                if let Some(recovered_tx) = self
+            if tx.hashes.len() > 1
+                && self.should_try_hash_recovery(tx)?
+                && let Some(recovered_tx) = self
                     .try_recover_with_historical_hashes(tx, &evm_data)
                     .await?
-                {
-                    // Return the status from the recovered (updated) transaction
-                    return Ok(recovered_tx.status);
-                }
+            {
+                // Return the status from the recovered (updated) transaction
+                return Ok(recovered_tx.status);
             }
 
             Ok(TransactionStatus::Submitted)

@@ -42,6 +42,7 @@ pub struct SyncManager<S: SyncStrategy, SS: SyncStateTrait = RelayerStateReposit
 
 impl<S: SyncStrategy + Sync + Send, SS: SyncStateTrait + Send + Sync> SyncManager<S, SS> {
     /// Serialize the current ledger context to bytes
+    #[allow(clippy::result_large_err)]
     fn serialize_context(&self) -> Result<Vec<u8>, SyncError> {
         // Serialize the wallet state for the current seed
         let wallet_state = {
@@ -55,8 +56,7 @@ impl<S: SyncStrategy + Sync + Send, SS: SyncStateTrait + Send + Sync> SyncManage
                 .get(&self.seed)
                 .map(|wallet| {
                     // We only serialize the wallet state, not the secret keys
-                    let mut state_bytes = Vec::new();
-                    state_bytes = serialize(&wallet.shielded.state).map_err(|e| {
+                    let state_bytes = serialize(&wallet.shielded.state).map_err(|e| {
                         SyncError::SyncError(format!("Failed to serialize wallet state: {:?}", e))
                     })?;
                     Ok::<Vec<u8>, SyncError>(state_bytes)
@@ -71,11 +71,9 @@ impl<S: SyncStrategy + Sync + Send, SS: SyncStateTrait + Send + Sync> SyncManage
                     SyncError::SyncError(format!("Failed to lock ledger state: {}", e))
                 })?;
 
-            let mut bytes = Vec::new();
-            bytes = serialize(&*ledger_state_guard).map_err(|e| {
+            serialize(&*ledger_state_guard).map_err(|e| {
                 SyncError::SyncError(format!("Failed to serialize ledger state: {:?}", e))
-            })?;
-            bytes
+            })?
         };
 
         // Combine wallet state and ledger state into a single serialized context
@@ -84,6 +82,7 @@ impl<S: SyncStrategy + Sync + Send, SS: SyncStateTrait + Send + Sync> SyncManage
     }
 
     /// Restore the ledger context from serialized bytes
+    #[allow(clippy::result_large_err)]
     pub fn restore_context(&self, serialized_context: &[u8]) -> Result<(), SyncError> {
         // Deserialize the combined context
         match bincode::deserialize::<(Option<Vec<u8>>, Vec<u8>)>(serialized_context) {
@@ -110,11 +109,11 @@ impl<S: SyncStrategy + Sync + Send, SS: SyncStateTrait + Send + Sync> SyncManage
                     let mut reader = &state_bytes[..];
                     match deserialize::<WalletState<DefaultDB>, _>(&mut reader) {
                         Ok(wallet_state) => {
-                            if let Ok(mut wallets_guard) = self.context.wallets.lock() {
-                                if let Some(wallet) = wallets_guard.get_mut(&self.seed) {
-                                    wallet.shielded.state = wallet_state;
-                                    debug!("Successfully restored wallet state");
-                                }
+                            if let Ok(mut wallets_guard) = self.context.wallets.lock()
+                                && let Some(wallet) = wallets_guard.get_mut(&self.seed)
+                            {
+                                wallet.shielded.state = wallet_state;
+                                debug!("Successfully restored wallet state");
                             }
                         }
                         Err(e) => {

@@ -706,12 +706,12 @@ impl Relayer {
         }
 
         // Validate fee margin percentage
-        if let Some(fee_margin) = policy.fee_margin_percentage {
-            if fee_margin < 0.0 {
-                return Err(RelayerValidationError::InvalidPolicy(
-                    "Negative fee margin percentage values are not accepted".into(),
-                ));
-            }
+        if let Some(fee_margin) = policy.fee_margin_percentage
+            && fee_margin < 0.0
+        {
+            return Err(RelayerValidationError::InvalidPolicy(
+                "Negative fee margin percentage values are not accepted".into(),
+            ));
         }
 
         // Check for conflicting allowed/disallowed accounts
@@ -758,12 +758,12 @@ impl Relayer {
         policy: &RelayerSolanaPolicy,
     ) -> Result<(), RelayerValidationError> {
         // Swap config only supported for user fee payment strategy
-        if let Some(fee_payment_strategy) = &policy.fee_payment_strategy {
-            if *fee_payment_strategy == SolanaFeePaymentStrategy::Relayer {
-                return Err(RelayerValidationError::InvalidPolicy(
-                    "Swap config only supported for user fee payment strategy".into(),
-                ));
-            }
+        if let Some(fee_payment_strategy) = &policy.fee_payment_strategy
+            && *fee_payment_strategy == SolanaFeePaymentStrategy::Relayer
+        {
+            return Err(RelayerValidationError::InvalidPolicy(
+                "Swap config only supported for user fee payment strategy".into(),
+            ));
         }
 
         // Validate strategy-specific restrictions
@@ -805,12 +805,12 @@ impl Relayer {
                 ));
             }
 
-            if let Some(max_lamports) = jupiter_options.priority_fee_max_lamports {
-                if max_lamports == 0 {
-                    return Err(RelayerValidationError::InvalidPolicy(
-                        "Max lamports must be greater than 0".into(),
-                    ));
-                }
+            if let Some(max_lamports) = jupiter_options.priority_fee_max_lamports
+                && max_lamports == 0
+            {
+                return Err(RelayerValidationError::InvalidPolicy(
+                    "Max lamports must be greater than 0".into(),
+                ));
             }
 
             if let Some(priority_level) = &jupiter_options.priority_level {

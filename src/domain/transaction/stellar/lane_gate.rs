@@ -39,10 +39,10 @@ pub fn claim(relayer_id: &str, tx_id: &str) -> bool {
 ///
 /// This operation is atomic and lock-free per relayer.
 pub fn pass_to(relayer_id: &str, current_tx_id: &str, next_tx_id: &str) {
-    if let Entry::Occupied(mut entry) = BUSY.entry(relayer_id.to_owned()) {
-        if entry.get() == current_tx_id {
-            entry.insert(next_tx_id.to_owned());
-        }
+    if let Entry::Occupied(mut entry) = BUSY.entry(relayer_id.to_owned())
+        && entry.get() == current_tx_id
+    {
+        entry.insert(next_tx_id.to_owned());
     }
 }
 
@@ -50,10 +50,10 @@ pub fn pass_to(relayer_id: &str, current_tx_id: &str, next_tx_id: &str) {
 ///
 /// This operation is atomic and lock-free per relayer.
 pub fn free(relayer_id: &str, tx_id: &str) {
-    if let Entry::Occupied(entry) = BUSY.entry(relayer_id.to_owned()) {
-        if entry.get() == tx_id {
-            entry.remove();
-        }
+    if let Entry::Occupied(entry) = BUSY.entry(relayer_id.to_owned())
+        && entry.get() == tx_id
+    {
+        entry.remove();
     }
 }
 

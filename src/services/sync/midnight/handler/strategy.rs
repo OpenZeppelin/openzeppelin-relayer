@@ -64,6 +64,7 @@ pub struct QuickSyncStrategy {
 
 impl QuickSyncStrategy {
     /// Ensure that the config is Some and that the viewing key is also Some
+    #[allow(clippy::result_large_err)]
     fn ensure_config(&self) -> Result<&SyncConfig, SyncError> {
         self.config.as_ref().ok_or(SyncError::SessionError(
             "No config provided for quick sync".to_string(),

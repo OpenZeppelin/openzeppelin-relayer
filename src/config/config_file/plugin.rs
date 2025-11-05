@@ -45,10 +45,10 @@ impl PluginsFileConfig {
             }
 
             // validate timeout
-            if let Some(timeout) = plugin.timeout {
-                if timeout == 0 {
-                    return Err(ConfigFileError::InvalidTimeout(timeout));
-                }
+            if let Some(timeout) = plugin.timeout
+                && timeout == 0
+            {
+                return Err(ConfigFileError::InvalidTimeout(timeout));
             }
 
             if !plugin.path.ends_with(PLUGIN_FILE_TYPE) {

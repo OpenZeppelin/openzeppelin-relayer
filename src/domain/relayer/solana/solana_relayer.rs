@@ -296,10 +296,10 @@ where
         }
 
         // Check if we have enough tokens to meet minimum swap requirement
-        if let Some(min) = min_amount {
-            if amount < min {
-                return Ok(0); // Not enough tokens to swap
-            }
+        if let Some(min) = min_amount
+            && amount < min
+        {
+            return Ok(0); // Not enough tokens to swap
         }
 
         Ok(amount)

@@ -278,24 +278,23 @@ where
 
             // Check if the instruction comes from the System Program (native SOL transfers)
             #[allow(clippy::collapsible_match)]
-            if program_id == program::id() {
-                if let Ok(system_ix) = bincode::deserialize::<SystemInstruction>(&ix.data) {
-                    if let SystemInstruction::Transfer { lamports } = system_ix {
-                        // In a system transfer instruction, the first account is the source and the
-                        // second is the destination.
-                        let source_index = ix.accounts.first().ok_or_else(|| {
-                            SolanaRpcError::Internal(format!(
-                                "Missing source account in instruction {}",
-                                ix_index
-                            ))
-                        })?;
-                        let source_pubkey = &tx.message.account_keys[*source_index as usize];
+            if program_id == program::id()
+                && let Ok(system_ix) = bincode::deserialize::<SystemInstruction>(&ix.data)
+                && let SystemInstruction::Transfer { lamports } = system_ix
+            {
+                // In a system transfer instruction, the first account is the source and the
+                // second is the destination.
+                let source_index = ix.accounts.first().ok_or_else(|| {
+                    SolanaRpcError::Internal(format!(
+                        "Missing source account in instruction {}",
+                        ix_index
+                    ))
+                })?;
+                let source_pubkey = &tx.message.account_keys[*source_index as usize];
 
-                        // Only validate transfers where the source is the relayer fee account.
-                        if source_pubkey == &relayer_pubkey {
-                            total_lamports_outflow += lamports;
-                        }
-                    }
+                // Only validate transfers where the source is the relayer fee account.
+                if source_pubkey == &relayer_pubkey {
+                    total_lamports_outflow += lamports;
                 }
             }
         }
@@ -733,11 +732,11 @@ where
             .await?;
 
         // Check if either SOL payment or token payment is sufficient
-        if let Some(sol_amount) = sol_payment {
-            if sol_amount >= estimated_fee {
-                // SOL payment is sufficient
-                return Ok(());
-            }
+        if let Some(sol_amount) = sol_payment
+            && sol_amount >= estimated_fee
+        {
+            // SOL payment is sufficient
+            return Ok(());
         }
 
         // Check if any token payment is sufficient
@@ -771,18 +770,17 @@ where
             let program_id = transaction.message.account_keys[ix.program_id_index as usize];
 
             // Check if it's system program
-            if program_id == program::id() {
-                if let Ok(SystemInstruction::Transfer { lamports }) =
+            if program_id == program::id()
+                && let Ok(SystemInstruction::Transfer { lamports }) =
                     bincode::deserialize::<SystemInstruction>(&ix.data)
-                {
-                    // Check destination account
-                    if ix.accounts.len() >= 2 {
-                        let dest_idx = ix.accounts[1] as usize;
-                        if dest_idx < transaction.message.account_keys.len() {
-                            let dest = transaction.message.account_keys[dest_idx];
-                            if dest == *relayer_pubkey {
-                                return Some(lamports);
-                            }
+            {
+                // Check destination account
+                if ix.accounts.len() >= 2 {
+                    let dest_idx = ix.accounts[1] as usize;
+                    if dest_idx < transaction.message.account_keys.len() {
+                        let dest = transaction.message.account_keys[dest_idx];
+                        if dest == *relayer_pubkey {
+                            return Some(lamports);
                         }
                     }
                 }

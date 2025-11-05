@@ -13,9 +13,10 @@ use midnight_transient_crypto::merkle_tree::MerkleTreeCollapsedUpdate;
 /// Parse raw transaction hex into a Transaction type.
 ///
 /// This method decodes and deserializes the transaction data for further processing.
+#[allow(clippy::result_large_err)]
 pub fn parse_transaction(
     raw_hex: &str,
-    network: NetworkId,
+    _network: NetworkId,
 ) -> Result<Transaction<Signature, ProofMarker, PureGeneratorPedersen, DefaultDB>, SyncError> {
     let tx_bytes = hex::decode(raw_hex)
         .map_err(|e| SyncError::ParseError(format!("Failed to decode hex: {}", e)))?;
@@ -31,13 +32,14 @@ pub fn parse_transaction(
 /// Process a transaction data object into a parsed transaction.
 ///
 /// Returns None if the transaction data does not contain raw data.
+#[allow(clippy::result_large_err)]
 pub fn process_transaction(
     transaction_data: &TransactionData,
-    network: NetworkId,
+    _network: NetworkId,
 ) -> Result<Option<Transaction<Signature, ProofMarker, PureGeneratorPedersen, DefaultDB>>, SyncError>
 {
     if let Some(raw_hex) = &transaction_data.raw {
-        let parsed_tx = parse_transaction(raw_hex, network)?;
+        let parsed_tx = parse_transaction(raw_hex, _network)?;
         Ok(Some(parsed_tx))
     } else {
         Ok(None)
@@ -47,9 +49,10 @@ pub fn process_transaction(
 /// Parse raw collapsed update hex into a MerkleTreeCollapsedUpdate type.
 ///
 /// This method decodes and deserializes the update data for further processing.
+#[allow(clippy::result_large_err)]
 pub fn parse_collapsed_update(
     update_info: &CollapsedUpdateInfo,
-    network: NetworkId,
+    _network: NetworkId,
 ) -> Result<MerkleTreeCollapsedUpdate, SyncError> {
     let update_bytes = hex::decode(&update_info.update_data)
         .map_err(|e| SyncError::MerkleTreeUpdateError(format!("Failed to decode hex: {}", e)))?;
@@ -68,6 +71,7 @@ pub fn parse_collapsed_update(
 /// Derive viewing key from wallet for the specified network.
 ///
 /// Used internally to generate the viewing key for relevant transaction sync.
+#[allow(clippy::result_large_err)]
 pub fn derive_viewing_key(
     wallet: &Wallet<DefaultDB>,
     network: NetworkId,

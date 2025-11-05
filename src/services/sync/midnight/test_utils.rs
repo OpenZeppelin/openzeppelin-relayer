@@ -61,7 +61,7 @@ pub fn create_test_transaction_data() -> Vec<u8> {
 pub fn save_wallet_state_fixture(
     seed: &WalletSeed,
     wallet_state: &WalletState<DefaultDB>,
-    network: NetworkId,
+    _network: NetworkId,
 ) -> Result<(), std::io::Error> {
     let fixture_path = get_wallet_fixture_path(seed);
 
@@ -87,7 +87,7 @@ pub fn save_wallet_state_fixture(
 /// Loads a wallet state from a test fixture file
 pub fn load_wallet_state_fixture(
     seed: &WalletSeed,
-    network: NetworkId,
+    _network: NetworkId,
 ) -> Result<WalletState<DefaultDB>, std::io::Error> {
     let fixture_path = get_wallet_fixture_path(seed);
 

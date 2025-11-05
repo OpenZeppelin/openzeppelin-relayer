@@ -30,7 +30,7 @@ impl InMemoryRelayerRepository {
             store: Mutex::new(HashMap::new()),
         }
     }
-    async fn acquire_lock<T>(lock: &Mutex<T>) -> Result<MutexGuard<T>, RepositoryError> {
+    async fn acquire_lock<T>(lock: &Mutex<T>) -> Result<MutexGuard<'_, T>, RepositoryError> {
         Ok(lock.lock().await)
     }
 }

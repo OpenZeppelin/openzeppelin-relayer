@@ -67,12 +67,12 @@ impl MidnightNetworkConfig {
         }
 
         // Validate commitment_tree_ttl is reasonable if provided
-        if let Some(ttl) = self.commitment_tree_ttl {
-            if ttl == 0 {
-                return Err(ConfigFileError::InvalidFormat(
-                    "commitment_tree_ttl must be greater than 0".to_string(),
-                ));
-            }
+        if let Some(ttl) = self.commitment_tree_ttl
+            && ttl == 0
+        {
+            return Err(ConfigFileError::InvalidFormat(
+                "commitment_tree_ttl must be greater than 0".to_string(),
+            ));
         }
 
         Ok(())

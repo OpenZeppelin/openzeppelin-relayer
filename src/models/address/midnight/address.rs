@@ -187,7 +187,7 @@ mod tests {
         assert_eq!(address.network, Some("test".to_string()));
         assert_eq!(
             address.encode(),
-            "mn_shield-addr_test1quc5snkchyepu6rpn5sn85cmnjfk2kzynwtf3lapt9t8q0qlw97sxqypw479uxdvf48386urhyndrty9vmpkjlydmdcur78rr3lw345kg5r4fgc2"
+            "mn_shield-addr_test1j9qa8ekx5n5xlfa77ev8jjgmdu0akarkd8wkuugxxss258yqkgfvmkv8nh7z53lkrct9mc5pkxwppamklqrg9xnsc53f092jpg9t4ycgc96m5"
         );
         let decoded_address = MidnightAddress::decode(&address.encode()).unwrap();
         assert_eq!(decoded_address.type_, "shield-addr".to_string());
@@ -211,7 +211,7 @@ mod tests {
         assert_eq!(address.network, Some("test".to_string()));
         assert_eq!(
             address.encode(),
-            "mn_shield-addr_test1quc5snkchyepu6rpn5sn85cmnjfk2kzynwtf3lapt9t8q0qlw97sxqypw479uxdvf48386urhyndrty9vmpkjlydmdcur78rr3lw345kg5r4fgc2"
+            "mn_shield-addr_test1j9qa8ekx5n5xlfa77ev8jjgmdu0akarkd8wkuugxxss258yqkgfvmkv8nh7z53lkrct9mc5pkxwppamklqrg9xnsc53f092jpg9t4ycgc96m5"
         );
     }
 

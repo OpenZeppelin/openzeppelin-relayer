@@ -118,13 +118,13 @@ impl Config {
         let notification_ids: HashSet<_> = self.notifications.iter().map(|s| &s.id).collect();
 
         for relayer in &self.relayers {
-            if let Some(notification_id) = &relayer.notification_id {
-                if !notification_ids.contains(notification_id) {
-                    return Err(ConfigFileError::InvalidReference(format!(
-                        "Relayer '{}' references non-existent notification '{}'",
-                        relayer.id, notification_id
-                    )));
-                }
+            if let Some(notification_id) = &relayer.notification_id
+                && !notification_ids.contains(notification_id)
+            {
+                return Err(ConfigFileError::InvalidReference(format!(
+                    "Relayer '{}' references non-existent notification '{}'",
+                    relayer.id, notification_id
+                )));
             }
         }
 

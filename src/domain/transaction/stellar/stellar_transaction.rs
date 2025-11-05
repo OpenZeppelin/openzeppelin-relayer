@@ -146,17 +146,16 @@ where
     /// This is a best-effort operation that logs errors but does not propagate them,
     /// as notification failures should not affect the transaction lifecycle.
     pub(super) async fn send_transaction_update_notification(&self, tx: &TransactionRepoModel) {
-        if let Some(notification_id) = &self.relayer().notification_id {
-            if let Err(e) = self
+        if let Some(notification_id) = &self.relayer().notification_id
+            && let Err(e) = self
                 .job_producer()
                 .produce_send_notification_job(
                     produce_transaction_update_notification_payload(notification_id, tx),
                     None,
                 )
                 .await
-            {
-                error!(error = %e, "failed to produce notification job");
-            }
+        {
+            error!(error = %e, "failed to produce notification job");
         }
     }
 

@@ -154,20 +154,20 @@ impl VaultService {
         // Try to read from cache first
         {
             let cache = TOKEN_CACHE.read().await;
-            if let Some(cached) = cache.get(&cache_key) {
-                if Instant::now() < cached.expiry {
-                    return Ok(Arc::clone(&cached.client));
-                }
+            if let Some(cached) = cache.get(&cache_key)
+                && Instant::now() < cached.expiry
+            {
+                return Ok(Arc::clone(&cached.client));
             }
         }
 
         // Cache miss or expired token, need to acquire write lock and refresh
         let mut cache = TOKEN_CACHE.write().await;
         // Double-check after acquiring write lock
-        if let Some(cached) = cache.get(&cache_key) {
-            if Instant::now() < cached.expiry {
-                return Ok(Arc::clone(&cached.client));
-            }
+        if let Some(cached) = cache.get(&cache_key)
+            && Instant::now() < cached.expiry
+        {
+            return Ok(Arc::clone(&cached.client));
         }
 
         // Create and authenticate a new client

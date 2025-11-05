@@ -40,7 +40,7 @@ impl InMemoryNetworkRepository {
         }
     }
 
-    async fn acquire_lock<T>(lock: &Mutex<T>) -> Result<MutexGuard<T>, RepositoryError> {
+    async fn acquire_lock<T>(lock: &Mutex<T>) -> Result<MutexGuard<'_, T>, RepositoryError> {
         Ok(lock.lock().await)
     }
 
@@ -155,12 +155,11 @@ impl NetworkRepository for InMemoryNetworkRepository {
 
         let store = Self::acquire_lock(&self.store).await?;
         for (_, network) in store.iter() {
-            if network.network_type == network_type {
-                if let crate::models::NetworkConfigData::Evm(evm_config) = &network.config {
-                    if evm_config.chain_id == Some(chain_id) {
-                        return Ok(Some(network.clone()));
-                    }
-                }
+            if network.network_type == network_type
+                && let crate::models::NetworkConfigData::Evm(evm_config) = &network.config
+                && evm_config.chain_id == Some(chain_id)
+            {
+                return Ok(Some(network.clone()));
             }
         }
         Ok(None)

@@ -15,6 +15,7 @@ use midnight_node_ledger_helpers::{
 /// Remote proof server client for generating zero-knowledge proofs
 pub struct RemoteProofServer {
     url: String,
+    #[allow(dead_code)]
     network_id: NetworkId,
 }
 

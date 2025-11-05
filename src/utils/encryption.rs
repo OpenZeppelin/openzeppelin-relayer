@@ -235,16 +235,16 @@ pub fn decrypt_sensitive_field(data: &str) -> Result<String, EncryptionError> {
         .map_err(|e| EncryptionError::InvalidFormat(format!("Invalid UTF-8: {}", e)))?;
 
     // Try to parse as encrypted data first (if encryption is configured)
-    if FieldEncryption::is_configured() {
-        if let Ok(encryption) = get_encryption() {
-            // Check if this looks like encrypted data by trying to parse as EncryptedData
-            if let Ok(encrypted_data) = serde_json::from_str::<EncryptedData>(&json_str) {
-                // This is encrypted data, decrypt it
-                let plaintext_bytes = encryption.decrypt(&encrypted_data)?;
-                return String::from_utf8(plaintext_bytes).map_err(|e| {
-                    EncryptionError::DecryptionFailed(format!("Invalid UTF-8 in plaintext: {}", e))
-                });
-            }
+    if FieldEncryption::is_configured()
+        && let Ok(encryption) = get_encryption()
+    {
+        // Check if this looks like encrypted data by trying to parse as EncryptedData
+        if let Ok(encrypted_data) = serde_json::from_str::<EncryptedData>(&json_str) {
+            // This is encrypted data, decrypt it
+            let plaintext_bytes = encryption.decrypt(&encrypted_data)?;
+            return String::from_utf8(plaintext_bytes).map_err(|e| {
+                EncryptionError::DecryptionFailed(format!("Invalid UTF-8 in plaintext: {}", e))
+            });
         }
     }
 
