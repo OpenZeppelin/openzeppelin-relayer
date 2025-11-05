@@ -296,6 +296,7 @@ impl TurnkeyService {
                 TurnkeyError::ConfigError(format!("Failed to decode private key: {}", e))
             })?;
 
+        #[allow(deprecated)] // TODO: Update to use new signing key
         let signing_key: SigningKey =
             SigningKey::from_bytes(FieldBytes::from_slice(&private_api_key_bytes))
                 .map_err(|e| TurnkeyError::SigningError(format!("Turnkey stamp error: {}", e)))?;

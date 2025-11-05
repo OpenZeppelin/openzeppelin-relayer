@@ -409,11 +409,12 @@ mod tests {
         },
         repositories::{
             ApiKeyRepositoryStorage, InMemoryApiKeyRepository, InMemoryNetworkRepository,
-            InMemoryNotificationRepository, InMemoryPluginRepository, InMemorySignerRepository,
-            InMemoryTransactionCounter, InMemoryTransactionRepository, NetworkRepositoryStorage,
-            NotificationRepositoryStorage, PluginRepositoryStorage, RelayerRepositoryStorage,
-            RelayerStateRepositoryStorage, SignerRepositoryStorage,
-            TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
+            InMemoryNotificationRepository, InMemoryPluginRepository,
+            InMemoryRelayerStateRepository, InMemorySignerRepository, InMemoryTransactionCounter,
+            InMemoryTransactionRepository, NetworkRepositoryStorage, NotificationRepositoryStorage,
+            PluginRepositoryStorage, RelayerRepositoryStorage, RelayerStateRepositoryStorage,
+            SignerRepositoryStorage, TransactionCounterRepositoryStorage,
+            TransactionRepositoryStorage,
         },
         utils::mocks::mockutils::{
             create_mock_network, create_mock_notification, create_mock_relayer, create_mock_signer,

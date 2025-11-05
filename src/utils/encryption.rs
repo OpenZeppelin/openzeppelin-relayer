@@ -64,6 +64,7 @@ impl FieldEncryption {
 
     /// Creates a new FieldEncryption instance with a provided key (for testing)
     pub fn new_with_key(key: &[u8; 32]) -> Result<Self, EncryptionError> {
+        #[allow(deprecated)] // TODO: Update to use new key
         let key = Key::<Aes256Gcm>::from_slice(key);
         let cipher = Aes256Gcm::new(key);
         Ok(Self { cipher })
@@ -85,6 +86,7 @@ impl FieldEncryption {
                 return Err(EncryptionError::InvalidKeyLength(key_bytes.len()));
             }
 
+            #[allow(deprecated)] // TODO: Update to use new key
             Ok(*Key::<Aes256Gcm>::from_slice(&key_bytes))
         })
     }
@@ -94,6 +96,7 @@ impl FieldEncryption {
         // Generate random 12-byte nonce for GCM
         let mut nonce_bytes = [0u8; 12];
         OsRng.fill_bytes(&mut nonce_bytes);
+        #[allow(deprecated)] // TODO: Update to use new nonce
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         // Encrypt the data
@@ -132,6 +135,7 @@ impl FieldEncryption {
             )));
         }
 
+        #[allow(deprecated)] // TODO: Update to use new nonce
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         // Decrypt the data

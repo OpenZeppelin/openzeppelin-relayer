@@ -831,7 +831,7 @@ mod tests {
         services::{
             midnight::{handler::SyncManager, indexer::MidnightIndexerClient},
             provider::MockMidnightProviderTrait,
-            MidnightSignerTrait, Signer,
+            signer::{MidnightSignerTrait, Signer},
         },
     };
     use chrono::Utc;

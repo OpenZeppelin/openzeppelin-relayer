@@ -230,8 +230,8 @@ mod tests {
         repositories::{
             ApiKeyRepositoryStorage, ApiKeyRepositoryTrait, NetworkRepositoryStorage,
             NotificationRepositoryStorage, PluginRepositoryStorage, RelayerRepositoryStorage,
-            Repository, SignerRepositoryStorage, TransactionCounterRepositoryStorage,
-            TransactionRepositoryStorage,
+            RelayerStateRepositoryStorage, Repository, SignerRepositoryStorage,
+            TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
         },
     };
     use actix_web::{http::StatusCode, test, App};

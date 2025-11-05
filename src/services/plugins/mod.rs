@@ -708,7 +708,7 @@ mod tests {
         let mut plugin_runner = MockPluginRunnerTrait::default();
 
         plugin_runner
-            .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
+            .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, RelayerStateRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
             .returning(move |_, _, _, _, _, _, _| {
                 Err(PluginError::HandlerError(PluginHandlerPayload {
                     status: 400,
@@ -762,7 +762,7 @@ mod tests {
         let mut plugin_runner = MockPluginRunnerTrait::default();
 
         plugin_runner
-            .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
+            .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, RelayerStateRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
             .returning(|_, _, _, _, _, _, _| {
                 Err(PluginError::PluginExecutionError("Fatal error".to_string()))
             });
@@ -801,7 +801,7 @@ mod tests {
         let mut plugin_runner = MockPluginRunnerTrait::default();
 
         plugin_runner
-            .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
+            .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, RelayerStateRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
             .returning(|_, _, _, _, _, _, _| {
                 Ok(ScriptResult {
                     logs: vec![LogEntry {
@@ -853,7 +853,7 @@ mod tests {
         let mut plugin_runner = MockPluginRunnerTrait::default();
 
         plugin_runner
-            .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
+            .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, RelayerStateRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
             .returning(|_, _, _, _, _, _, _| {
                 Ok(ScriptResult {
                     logs: vec![],

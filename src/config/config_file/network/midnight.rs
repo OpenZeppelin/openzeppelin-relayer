@@ -189,7 +189,9 @@ mod tests {
 
     #[test]
     fn test_valid_network_ids() {
-        for network_id in &["mainnet", "testnet", "devnet"] {
+        // TODO: Add mainnet and other supported networks once announced
+        #[allow(clippy::single_element_loop)]
+        for network_id in &["testnet"] {
             let mut config = create_valid_config();
             config.common.network = network_id.to_string();
             assert!(config.validate().is_ok());
