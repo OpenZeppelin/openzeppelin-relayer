@@ -10,8 +10,8 @@ use tracing::{debug, info, instrument};
 
 use crate::{
     constants::WORKER_SOLANA_TOKEN_SWAP_REQUEST_RETRIES,
-    domain::{create_solana_relayer, get_relayer_by_id, SolanaRelayerDexTrait},
-    jobs::{handle_result, Job, SolanaTokenSwapRequest},
+    domain::{SolanaRelayerDexTrait, create_solana_relayer, get_relayer_by_id},
+    jobs::{Job, SolanaTokenSwapRequest, handle_result},
     models::DefaultAppState,
     observability::request_id::set_request_id,
     repositories::Repository,

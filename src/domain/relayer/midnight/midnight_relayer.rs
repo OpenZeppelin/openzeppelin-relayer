@@ -23,26 +23,26 @@
 use crate::{
     constants::MIDNIGHT_SMALLEST_UNIT_NAME,
     domain::{
-        stellar::{i64_from_u64, next_sequence_u64},
         BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
         SignTransactionRequest, SignTypedDataRequest,
+        stellar::{i64_from_u64, next_sequence_u64},
     },
     jobs::{JobProducerTrait, TransactionRequest},
     models::{
-        produce_relayer_disabled_payload, DeletePendingTransactionsResponse, DisabledReason,
-        HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, MidnightNetwork, NetworkRpcRequest,
-        NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus,
-        RepositoryError, TransactionRepoModel, TransactionStatus,
+        DeletePendingTransactionsResponse, DisabledReason, HealthCheckFailure, JsonRpcRequest,
+        JsonRpcResponse, MidnightNetwork, NetworkRpcRequest, NetworkRpcResult,
+        NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus, RepositoryError,
+        TransactionRepoModel, TransactionStatus, produce_relayer_disabled_payload,
     },
     repositories::{
         NetworkRepository, RelayerRepository, RelayerStateRepositoryStorage, Repository,
         TransactionRepository,
     },
     services::{
+        TransactionCounterService, TransactionCounterServiceTrait,
         provider::{MidnightProvider, MidnightProviderTrait},
         signer::{MidnightSigner, MidnightSignerTrait},
         sync::midnight::handler::{QuickSyncStrategy, SyncManager, SyncManagerTrait},
-        TransactionCounterService, TransactionCounterServiceTrait,
     },
 };
 use async_trait::async_trait;
@@ -347,9 +347,11 @@ where
         let nonce_sync_result = self.sync_nonce().await;
 
         // Collect all failures
-        let failures: Vec<HealthCheckFailure> = vec![nonce_sync_result
-            .err()
-            .map(|e| HealthCheckFailure::NonceSyncFailed(e.to_string()))]
+        let failures: Vec<HealthCheckFailure> = vec![
+            nonce_sync_result
+                .err()
+                .map(|e| HealthCheckFailure::NonceSyncFailed(e.to_string())),
+        ]
         .into_iter()
         .flatten()
         .collect();
@@ -503,7 +505,7 @@ where
 mod tests {
     use super::*;
     use crate::{
-        config::{network::IndexerUrls, MidnightNetworkConfig, NetworkConfigCommon},
+        config::{MidnightNetworkConfig, NetworkConfigCommon, network::IndexerUrls},
         constants::MIDNIGHT_SMALLEST_UNIT_NAME,
         jobs::MockJobProducerTrait,
         models::{
@@ -516,8 +518,9 @@ mod tests {
             MockTransactionRepository,
         },
         services::{
-            MidnightSignerFactory, MockMidnightProviderTrait, MockTransactionCounterServiceTrait,
-            ProviderError,
+            MockTransactionCounterServiceTrait,
+            provider::{MockMidnightProviderTrait, ProviderError},
+            signer::{MidnightSigner, MidnightSignerFactory, MidnightSignerTrait},
         },
     };
     use midnight_node_ledger_helpers::{DefaultDB, LedgerContext, NetworkId, WalletSeed};
@@ -548,10 +551,12 @@ mod tests {
     impl Default for TestCtx {
         fn default() -> Self {
             // Set required environment variable for Midnight tests
-            std::env::set_var(
-                "MIDNIGHT_LEDGER_TEST_STATIC_DIR",
-                "/tmp/midnight-test-static",
-            );
+            unsafe {
+                std::env::set_var(
+                    "MIDNIGHT_LEDGER_TEST_STATIC_DIR",
+                    "/tmp/midnight-test-static",
+                );
+            }
 
             let network_repository = Arc::new(InMemoryNetworkRepository::new());
             let signer_repository = Arc::new(InMemorySignerRepository::new());
@@ -629,7 +634,10 @@ mod tests {
             // Note: This requires MIDNIGHT_LEDGER_TEST_STATIC_DIR=/path/to/midnightntwrk/midnight-node/static/contracts
             // to be set in the environment when running tests
             let wallet_seed = WalletSeed::from([1u8; 32]);
-            let context = Arc::new(LedgerContext::new_from_wallet_seeds(&[wallet_seed]));
+            let context = Arc::new(LedgerContext::new_from_wallet_seeds(
+                NetworkId::TestNet,
+                &[wallet_seed],
+            ));
             sync_manager.expect_get_context().return_const(context);
             sync_manager
         }
@@ -729,11 +737,17 @@ mod tests {
         let mut relayer_repo = MockRelayerRepository::new();
         let mut updated_model = relayer_model.clone();
         updated_model.system_disabled = true;
-        let reasons = vec!["reason1".to_string(), "reason2".to_string()];
+        let reasons = vec![
+            DisabledReason::NonceSyncFailed("reason1".to_string()),
+            DisabledReason::NonceSyncFailed("reason2".to_string()),
+        ];
         relayer_repo
             .expect_disable_relayer()
-            .with(eq(relayer_model.id.clone()), eq(reasons))
-            .returning(move |_| Ok::<RelayerRepoModel, RepositoryError>(updated_model.clone()));
+            .with(
+                eq(relayer_model.id.clone()),
+                eq(DisabledReason::Multiple(reasons.clone())),
+            )
+            .returning(move |_, _| Ok::<RelayerRepoModel, RepositoryError>(updated_model.clone()));
         let mut job_producer = MockJobProducerTrait::new();
         job_producer
             .expect_produce_send_notification_job()

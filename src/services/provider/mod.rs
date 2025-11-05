@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::num::ParseIntError;
 
-use crate::config::network::IndexerUrls;
 use crate::config::ServerConfig;
+use crate::config::network::IndexerUrls;
 use crate::domain::to_midnight_network_id;
 use crate::models::{EvmNetwork, MidnightNetwork, RpcConfig, SolanaNetwork, StellarNetwork};
 use serde::Serialize;
@@ -96,7 +96,7 @@ fn categorize_reqwest_error(err: &reqwest::Error) -> ProviderError {
                 return ProviderError::RequestError {
                     error: err.to_string(),
                     status_code: status.as_u16(),
-                }
+                };
             }
         }
     }
@@ -342,15 +342,19 @@ mod tests {
     }
 
     fn setup_test_env() {
-        env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D"); // noboost
-        env::set_var("REDIS_URL", "redis://localhost:6379");
-        env::set_var("RPC_TIMEOUT_MS", "5000");
+        unsafe {
+            env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D"); // noboost
+            env::set_var("REDIS_URL", "redis://localhost:6379");
+            env::set_var("RPC_TIMEOUT_MS", "5000");
+        }
     }
 
     fn cleanup_test_env() {
-        env::remove_var("API_KEY");
-        env::remove_var("REDIS_URL");
-        env::remove_var("RPC_TIMEOUT_MS");
+        unsafe {
+            env::remove_var("API_KEY");
+            env::remove_var("REDIS_URL");
+            env::remove_var("RPC_TIMEOUT_MS");
+        }
     }
 
     fn create_test_evm_network() -> EvmNetwork {
@@ -630,7 +634,7 @@ mod tests {
 
         cleanup_test_env();
         assert!(result.is_ok()); // Should fall back to public URLs for testnet
-                                 // StellarProvider::new will use the first public URL: https://soroban-testnet.stellar.org
+        // StellarProvider::new will use the first public URL: https://soroban-testnet.stellar.org
     }
 
     #[test]
@@ -662,7 +666,7 @@ mod tests {
 
         cleanup_test_env();
         assert!(result.is_ok()); // Should fall back to public URLs for mainnet
-                                 // StellarProvider::new will use the first public URL: https://horizon.stellar.org
+        // StellarProvider::new will use the first public URL: https://horizon.stellar.org
     }
 
     #[test]

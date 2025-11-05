@@ -6,7 +6,7 @@ use crate::{
     domain::{SignDataRequest, SignTransactionRequest, SignTypedDataRequest},
     models::{CreateRelayerRequest, DefaultAppState, PaginationQuery},
 };
-use actix_web::{delete, get, patch, post, put, web, Responder};
+use actix_web::{Responder, delete, get, patch, post, put, web};
 use serde::Deserialize;
 use utoipa::ToSchema;
 
@@ -230,11 +230,11 @@ mod tests {
         repositories::{
             ApiKeyRepositoryStorage, ApiKeyRepositoryTrait, NetworkRepositoryStorage,
             NotificationRepositoryStorage, PluginRepositoryStorage, RelayerRepositoryStorage,
-            Repository, SignerRepositoryStorage, TransactionCounterRepositoryStorage,
-            TransactionRepositoryStorage,
+            RelayerStateRepositoryStorage, Repository, SignerRepositoryStorage,
+            TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
         },
     };
-    use actix_web::{http::StatusCode, test, App};
+    use actix_web::{App, http::StatusCode, test};
     use std::sync::Arc;
 
     // Simple mock for AppState

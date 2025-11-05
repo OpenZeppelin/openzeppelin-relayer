@@ -510,10 +510,12 @@ mod tests {
         if let Some(policy_request) = &request.policies {
             let result = policy_request.to_domain_policy(request.network_type);
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Policy type does not match relayer network type"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Policy type does not match relayer network type")
+            );
         } else {
             panic!("Expected policies to be present");
         }
@@ -540,10 +542,12 @@ mod tests {
         if let Some(policy_request) = &request.policies {
             let result = policy_request.to_domain_policy(request.network_type);
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Policy type does not match relayer network type"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Policy type does not match relayer network type")
+            );
         } else {
             panic!("Expected policies to be present");
         }

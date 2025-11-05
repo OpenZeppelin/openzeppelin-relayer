@@ -9,13 +9,13 @@
 use chrono::Utc;
 use std::{
     env,
-    fs::{create_dir_all, metadata, File, OpenOptions},
+    fs::{File, OpenOptions, create_dir_all, metadata},
     path::Path,
 };
 use tracing::info;
 use tracing_appender::non_blocking;
 use tracing_error::ErrorLayer;
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 use crate::constants::{
     DEFAULT_LOG_DIR, DEFAULT_LOG_FORMAT, DEFAULT_LOG_LEVEL, DEFAULT_LOG_MODE,
@@ -69,7 +69,7 @@ pub fn setup_logging() {
     // Set RUST_LOG from LOG_LEVEL if RUST_LOG is not already set
     if std::env::var_os("RUST_LOG").is_none() {
         if let Ok(level) = env::var("LOG_LEVEL") {
-            std::env::set_var("RUST_LOG", level);
+            unsafe { std::env::set_var("RUST_LOG", level) };
         }
     }
 
@@ -292,17 +292,18 @@ mod tests {
         // First test stdout configuration
         {
             // Set environment variables for testing
-            env::set_var("LOG_MODE", "stdout");
-            env::set_var("LOG_LEVEL", "debug");
+            unsafe { env::set_var("LOG_MODE", "stdout") };
+            unsafe { env::set_var("LOG_LEVEL", "debug") };
 
             // Initialize logger only once across all tests
             INIT_LOGGER.call_once(|| {
                 setup_logging();
             });
-
             // Clean up
-            env::remove_var("LOG_MODE");
-            env::remove_var("LOG_LEVEL");
+            unsafe {
+                env::remove_var("LOG_MODE");
+                env::remove_var("LOG_LEVEL");
+            }
         }
 
         // Now test file configuration without reinitializing the logger
@@ -317,10 +318,10 @@ mod tests {
                 .to_string();
 
             // Set environment variables for testing
-            env::set_var("LOG_MODE", "file");
-            env::set_var("LOG_LEVEL", "info");
-            env::set_var("LOG_DATA_DIR", &log_path);
-            env::set_var("LOG_MAX_SIZE", "1024"); // 1KB for testing
+            unsafe { env::set_var("LOG_MODE", "file") };
+            unsafe { env::set_var("LOG_LEVEL", "info") };
+            unsafe { env::set_var("LOG_DATA_DIR", &log_path) };
+            unsafe { env::set_var("LOG_MAX_SIZE", "1024") }; // 1KB for testing
 
             // We don't call setup_logging() again, but we can test the directory creation logic
             if let Some(parent) = Path::new(&format!("{}/relayer.log", log_path)).parent() {
@@ -331,10 +332,10 @@ mod tests {
             assert!(Path::new(&log_path).exists());
 
             // Clean up
-            env::remove_var("LOG_MODE");
-            env::remove_var("LOG_LEVEL");
-            env::remove_var("LOG_DATA_DIR");
-            env::remove_var("LOG_MAX_SIZE");
+            unsafe { env::remove_var("LOG_MODE") };
+            unsafe { env::remove_var("LOG_LEVEL") };
+            unsafe { env::remove_var("LOG_DATA_DIR") };
+            unsafe { env::remove_var("LOG_MAX_SIZE") };
         }
     }
 }

@@ -15,7 +15,7 @@
 //! The fixtures will be saved to tests/fixtures/midnight/
 
 use midnight_node_ledger_helpers::{
-    mn_ledger_serialize::serialize, DefaultDB, LedgerContext, NetworkId, WalletSeed,
+    DefaultDB, LedgerContext, NetworkId, WalletSeed, mn_ledger_serialize::tagged_serialize,
 };
 use openzeppelin_relayer::{
     config::network::IndexerUrls,
@@ -44,7 +44,7 @@ impl FixtureConfig {
             "WALLET_SEED environment variable is required. Example: WALLET_SEED=0e0cc7db98c60a39a6b0888795ba3f1bb1d61298cce264d4beca1529650e9041"
         })?;
 
-        let wallet_seed = WalletSeed::from(seed_hex.as_str());
+        let wallet_seed = WalletSeed::try_from_hex_str(seed_hex.as_str()).unwrap();
 
         let start_height = env::var("START_HEIGHT")
             .ok()
@@ -63,7 +63,7 @@ impl FixtureConfig {
 
 /// Gets the fixture file path for a context
 fn get_context_fixture_path(seed: &WalletSeed, height: u64) -> PathBuf {
-    let seed_hex = hex::encode(seed.0);
+    let seed_hex = hex::encode(seed.as_bytes());
     PathBuf::from("tests/fixtures/midnight").join(format!("context_{}_{}.bin", seed_hex, height))
 }
 
@@ -84,7 +84,7 @@ fn serialize_context(
             .get(seed)
             .map(|wallet| {
                 let mut state_bytes = Vec::new();
-                serialize(&wallet.state, &mut state_bytes, network)
+                tagged_serialize(&wallet.shielded.state, &mut state_bytes)
                     .map_err(|e| format!("Failed to serialize wallet state: {:?}", e))?;
                 Ok::<Vec<u8>, Box<dyn std::error::Error>>(state_bytes)
             })
@@ -99,7 +99,7 @@ fn serialize_context(
             .map_err(|e| format!("Failed to lock ledger state: {}", e))?;
 
         let mut bytes = Vec::new();
-        serialize(&*ledger_state_guard, &mut bytes, network)
+        tagged_serialize(&*ledger_state_guard, &mut bytes)
             .map_err(|e| format!("Failed to serialize ledger state: {:?}", e))?;
         bytes
     };
@@ -134,15 +134,15 @@ async fn generate_context_fixture(
     let wallets_guard = context.wallets.lock().unwrap();
     if let Some(wallet) = wallets_guard.get(&config.wallet_seed) {
         println!("\n📊 Wallet state in context:");
-        println!("   First free: {}", wallet.state.first_free);
+        println!("   First free: {}", wallet.shielded.state.first_free);
 
         let mut coin_count = 0;
-        for _ in wallet.state.coins.iter() {
+        for _ in wallet.shielded.state.coins.iter() {
             coin_count += 1;
         }
         println!("   Coins: {}", coin_count);
 
-        if wallet.state.first_free == 0 && coin_count == 0 {
+        if wallet.shielded.state.first_free == 0 && coin_count == 0 {
             println!("\n⚠️  WARNING: Wallet appears to be empty!");
             println!("   Make sure the wallet has received tDUST tokens on testnet.");
         }
@@ -177,7 +177,9 @@ fn setup_progress_monitoring(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
     if env::var("RUST_LOG").is_err() {
-        env::set_var("RUST_LOG", "info");
+        unsafe {
+            env::set_var("RUST_LOG", "info");
+        }
     }
 
     println!("🌙 Midnight Unified Test Fixture Generator");
@@ -187,7 +189,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = FixtureConfig::from_env()?;
 
     println!("📋 Configuration:");
-    println!("   Wallet seed: {}", hex::encode(config.wallet_seed.0));
+    println!(
+        "   Wallet seed: {}",
+        hex::encode(config.wallet_seed.as_bytes())
+    );
     println!("   Start height: {}", config.start_height);
     println!("   Save interval: {:?}", config.save_interval);
     println!("   Network: Midnight Testnet");
@@ -260,8 +265,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("\n📖 Usage in tests:");
-    println!("   let context_bytes = fs::read(\"tests/fixtures/midnight/context_<seed>_<height>.bin\")?;");
-    println!("   let context = create_context_from_serialized(&context_bytes, &[seed], NetworkId::TestNet)?;");
+    println!(
+        "   let context_bytes = fs::read(\"tests/fixtures/midnight/context_<seed>_<height>.bin\")?;"
+    );
+    println!(
+        "   let context = create_context_from_serialized(&context_bytes, &[seed], NetworkId::TestNet)?;"
+    );
 
     Ok(())
 }

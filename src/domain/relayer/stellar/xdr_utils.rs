@@ -6,7 +6,7 @@
 //! formats (V0, V1).
 
 use crate::models::StellarValidationError;
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 use soroban_rs::xdr::{
     DecoratedSignature, FeeBumpTransaction, FeeBumpTransactionEnvelope, FeeBumpTransactionInnerTx,
     Limits, MuxedAccount, Operation, OperationBody, ReadXdr, TransactionEnvelope,
@@ -217,13 +217,13 @@ pub fn attach_signatures_to_envelope(
         .map_err(|_| eyre!("Too many signatures (max 20)"))?;
 
     match envelope {
-        TransactionEnvelope::TxV0(ref mut v0_env) => {
+        TransactionEnvelope::TxV0(v0_env) => {
             v0_env.signatures = signatures_vec;
         }
-        TransactionEnvelope::Tx(ref mut v1_env) => {
+        TransactionEnvelope::Tx(v1_env) => {
             v1_env.signatures = signatures_vec;
         }
-        TransactionEnvelope::TxFeeBump(ref mut fb_env) => {
+        TransactionEnvelope::TxFeeBump(fb_env) => {
             fb_env.signatures = signatures_vec;
         }
     }
@@ -263,10 +263,10 @@ fn convert_v0_to_v1_envelope(
 /// Update the sequence number in an XDR envelope
 pub fn update_xdr_sequence(envelope: &mut TransactionEnvelope, sequence: i64) -> Result<()> {
     match envelope {
-        TransactionEnvelope::TxV0(ref mut e) => {
+        TransactionEnvelope::TxV0(e) => {
             e.tx.seq_num = soroban_rs::xdr::SequenceNumber(sequence);
         }
-        TransactionEnvelope::Tx(ref mut e) => {
+        TransactionEnvelope::Tx(e) => {
             e.tx.seq_num = soroban_rs::xdr::SequenceNumber(sequence);
         }
         TransactionEnvelope::TxFeeBump(_) => {
@@ -279,10 +279,10 @@ pub fn update_xdr_sequence(envelope: &mut TransactionEnvelope, sequence: i64) ->
 /// Update the fee in an XDR envelope
 pub fn update_xdr_fee(envelope: &mut TransactionEnvelope, fee: u32) -> Result<()> {
     match envelope {
-        TransactionEnvelope::TxV0(ref mut e) => {
+        TransactionEnvelope::TxV0(e) => {
             e.tx.fee = fee;
         }
-        TransactionEnvelope::Tx(ref mut e) => {
+        TransactionEnvelope::Tx(e) => {
             e.tx.fee = fee;
         }
         TransactionEnvelope::TxFeeBump(_) => {

@@ -74,10 +74,12 @@ mod tests {
     fn test_empty_operations_rejected() {
         let result = validate_operations(&[]);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("at least one operation"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("at least one operation")
+        );
     }
 
     #[test]
@@ -92,10 +94,12 @@ mod tests {
         ];
         let result = validate_operations(&ops);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("maximum allowed is 100"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("maximum allowed is 100")
+        );
     }
 
     #[test]
@@ -139,10 +143,12 @@ mod tests {
         ];
         let result = validate_operations(&ops);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Soroban operations must be exclusive"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Soroban operations must be exclusive")
+        );
     }
 
     #[test]

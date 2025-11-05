@@ -103,7 +103,9 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        env::set_var("TEST_ENV_VAR", "env-secret-value");
+        unsafe {
+            env::set_var("TEST_ENV_VAR", "env-secret-value");
+        }
 
         let env_value = PlainOrEnvValue::Env {
             value: "TEST_ENV_VAR".to_string(),
@@ -114,7 +116,9 @@ mod tests {
             assert_eq!(s, "env-secret-value");
         });
 
-        env::remove_var("TEST_ENV_VAR");
+        unsafe {
+            env::remove_var("TEST_ENV_VAR");
+        }
     }
 
     #[test]
@@ -123,7 +127,9 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        env::remove_var("NONEXISTENT_VAR");
+        unsafe {
+            env::remove_var("NONEXISTENT_VAR");
+        }
 
         let env_value = PlainOrEnvValue::Env {
             value: "NONEXISTENT_VAR".to_string(),
@@ -164,7 +170,9 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        env::remove_var("NONEXISTENT_VAR");
+        unsafe {
+            env::remove_var("NONEXISTENT_VAR");
+        }
 
         let env_value = PlainOrEnvValue::Env {
             value: "NONEXISTENT_VAR".to_string(),
@@ -179,7 +187,9 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        env::set_var("EMPTY_ENV_VAR", "");
+        unsafe {
+            env::set_var("EMPTY_ENV_VAR", "");
+        }
 
         let env_value = PlainOrEnvValue::Env {
             value: "EMPTY_ENV_VAR".to_string(),
@@ -187,7 +197,9 @@ mod tests {
 
         assert!(env_value.is_empty());
 
-        env::remove_var("EMPTY_ENV_VAR");
+        unsafe {
+            env::remove_var("EMPTY_ENV_VAR");
+        }
     }
 
     #[test]
@@ -196,7 +208,9 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        env::set_var("TEST_ENV_VAR", "some-value");
+        unsafe {
+            env::set_var("TEST_ENV_VAR", "some-value");
+        }
 
         let env_value = PlainOrEnvValue::Env {
             value: "TEST_ENV_VAR".to_string(),
@@ -204,7 +218,9 @@ mod tests {
 
         assert!(!env_value.is_empty());
 
-        env::remove_var("TEST_ENV_VAR");
+        unsafe {
+            env::remove_var("TEST_ENV_VAR");
+        }
     }
 
     #[test]
@@ -237,7 +253,9 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        env::remove_var("NONEXISTENT_VAR");
+        unsafe {
+            env::remove_var("NONEXISTENT_VAR");
+        }
 
         let test_struct = TestStruct {
             value: PlainOrEnvValue::Env {
@@ -255,7 +273,9 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        env::set_var("EMPTY_ENV_VAR", "");
+        unsafe {
+            env::set_var("EMPTY_ENV_VAR", "");
+        }
 
         let test_struct = TestStruct {
             value: PlainOrEnvValue::Env {
@@ -266,7 +286,9 @@ mod tests {
         let result = test_struct.validate();
         assert!(result.is_err());
 
-        env::remove_var("EMPTY_ENV_VAR");
+        unsafe {
+            env::remove_var("EMPTY_ENV_VAR");
+        }
     }
 
     #[test]
@@ -275,7 +297,9 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        env::set_var("TEST_ENV_VAR", "some-value");
+        unsafe {
+            env::set_var("TEST_ENV_VAR", "some-value");
+        }
 
         let test_struct = TestStruct {
             value: PlainOrEnvValue::Env {
@@ -286,7 +310,9 @@ mod tests {
         let result = test_struct.validate();
         assert!(result.is_ok());
 
-        env::remove_var("TEST_ENV_VAR");
+        unsafe {
+            env::remove_var("TEST_ENV_VAR");
+        }
     }
 
     #[test]

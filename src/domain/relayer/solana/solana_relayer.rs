@@ -16,21 +16,21 @@ use crate::{
         SOLANA_SMALLEST_UNIT_NAME, WRAPPED_SOL_MINT,
     },
     domain::{
-        relayer::RelayerError, BalanceResponse, DexStrategy, SolanaRelayerDexTrait,
-        SolanaRelayerTrait, SolanaRpcHandlerType, SwapParams,
+        BalanceResponse, DexStrategy, SolanaRelayerDexTrait, SolanaRelayerTrait,
+        SolanaRpcHandlerType, SwapParams, relayer::RelayerError,
     },
     jobs::{JobProducerTrait, RelayerHealthCheck, SolanaTokenSwapRequest},
     models::{
-        produce_relayer_disabled_payload, produce_solana_dex_webhook_payload, DisabledReason,
-        HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest,
-        NetworkRpcResult, NetworkType, RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy,
-        SolanaAllowedTokensPolicy, SolanaDexPayload, SolanaNetwork, TransactionRepoModel,
+        DisabledReason, HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel,
+        NetworkRpcRequest, NetworkRpcResult, NetworkType, RelayerNetworkPolicy, RelayerRepoModel,
+        RelayerSolanaPolicy, SolanaAllowedTokensPolicy, SolanaDexPayload, SolanaNetwork,
+        TransactionRepoModel, produce_relayer_disabled_payload, produce_solana_dex_webhook_payload,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
+        JupiterService, JupiterServiceTrait,
         provider::{SolanaProvider, SolanaProviderTrait},
         signer::{SolanaSignTrait, SolanaSigner},
-        JupiterService, JupiterServiceTrait,
     },
 };
 
@@ -779,7 +779,7 @@ mod tests {
     use super::*;
     use crate::{
         config::{NetworkConfigCommon, SolanaNetworkConfig},
-        domain::{create_network_dex_generic, SolanaRpcHandler, SolanaRpcMethodsImpl},
+        domain::{SolanaRpcHandler, SolanaRpcMethodsImpl, create_network_dex_generic},
         jobs::MockJobProducerTrait,
         models::{
             EncodedSerializedTransaction, FeeEstimateRequestParams,
@@ -789,10 +789,10 @@ mod tests {
         },
         repositories::{MockNetworkRepository, MockRelayerRepository, MockTransactionRepository},
         services::{
-            provider::{MockSolanaProviderTrait, SolanaProviderError},
-            signer::MockSolanaSignTrait,
             MockJupiterServiceTrait, QuoteResponse, RoutePlan, SwapEvents, SwapInfo, SwapResponse,
             UltraExecuteResponse, UltraOrderResponse,
+            provider::{MockSolanaProviderTrait, SolanaProviderError},
+            signer::MockSolanaSignTrait,
         },
         utils::mocks::mockutils::create_mock_solana_network,
     };
@@ -1563,10 +1563,12 @@ mod tests {
         let solana_relayer = ctx.into_relayer().await;
 
         // should do nothing and succeed
-        assert!(solana_relayer
-            .check_balance_and_trigger_token_swap_if_needed()
-            .await
-            .is_ok());
+        assert!(
+            solana_relayer
+                .check_balance_and_trigger_token_swap_if_needed()
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -1586,10 +1588,12 @@ mod tests {
         ctx.relayer_model = model;
         let solana_relayer = ctx.into_relayer().await;
 
-        assert!(solana_relayer
-            .check_balance_and_trigger_token_swap_if_needed()
-            .await
-            .is_ok());
+        assert!(
+            solana_relayer
+                .check_balance_and_trigger_token_swap_if_needed()
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -1627,10 +1631,12 @@ mod tests {
         ctx.relayer_model = model;
 
         let solana_relayer = ctx.into_relayer().await;
-        assert!(solana_relayer
-            .check_balance_and_trigger_token_swap_if_needed()
-            .await
-            .is_ok());
+        assert!(
+            solana_relayer
+                .check_balance_and_trigger_token_swap_if_needed()
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -1667,10 +1673,12 @@ mod tests {
         };
 
         let solana_relayer = ctx.into_relayer().await;
-        assert!(solana_relayer
-            .check_balance_and_trigger_token_swap_if_needed()
-            .await
-            .is_ok());
+        assert!(
+            solana_relayer
+                .check_balance_and_trigger_token_swap_if_needed()
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]

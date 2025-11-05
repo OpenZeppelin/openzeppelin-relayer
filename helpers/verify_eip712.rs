@@ -29,9 +29,9 @@
 //! `signTypedData` endpoint response. Use these values to verify that the signature was created
 //! by the expected signer address.
 
-use alloy::primitives::{keccak256, Address, Signature};
+use alloy::primitives::{Address, Signature, keccak256};
 use clap::Parser;
-use color_eyre::eyre::{eyre, Result, WrapErr};
+use color_eyre::eyre::{Result, WrapErr, eyre};
 use std::str::FromStr;
 
 #[derive(Parser, Debug)]

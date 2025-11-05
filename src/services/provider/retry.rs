@@ -341,17 +341,12 @@ where
     let error_message = match &last_error {
         Some(e) => format!(
             "RPC call '{}' failed after {} total attempts across {} providers: {}",
-            operation_name,
-            total_attempts,
-            failover_count,
-            e
+            operation_name, total_attempts, failover_count, e
         ),
         None => format!(
             "RPC call '{}' failed after {} total attempts across {} providers with no error details",
-            operation_name,
-            total_attempts,
-            failover_count
-        )
+            operation_name, total_attempts, failover_count
+        ),
     };
 
     // If we're here, all retries with all attempted providers failed
@@ -492,9 +487,9 @@ mod tests {
     use lazy_static::lazy_static;
     use std::cmp::Ordering;
     use std::env;
-    use std::sync::atomic::{AtomicU8, Ordering as AtomicOrdering};
     use std::sync::Arc;
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU8, Ordering as AtomicOrdering};
 
     // Use a mutex to ensure tests don't run in parallel when modifying env vars
     lazy_static! {
@@ -535,7 +530,9 @@ mod tests {
             let old_value = env::var(key).ok();
             self.keys.push(key.to_string());
             self.old_values.push(old_value);
-            env::set_var(key, value);
+            unsafe {
+                env::set_var(key, value);
+            }
         }
     }
 
@@ -543,8 +540,8 @@ mod tests {
         fn drop(&mut self) {
             for i in 0..self.keys.len() {
                 match &self.old_values[i] {
-                    Some(value) => env::set_var(&self.keys[i], value),
-                    None => env::remove_var(&self.keys[i]),
+                    Some(value) => unsafe { env::set_var(&self.keys[i], value) },
+                    None => unsafe { env::remove_var(&self.keys[i]) },
                 }
             }
         }
@@ -1093,8 +1090,10 @@ mod tests {
 
         // At least one provider should be marked as failed after retries are exhausted
         let final_available_count = selector.available_provider_count();
-        assert!(final_available_count < initial_available_count,
-            "At least one provider should be marked as failed after retriable errors exhaust retries");
+        assert!(
+            final_available_count < initial_available_count,
+            "At least one provider should be marked as failed after retriable errors exhaust retries"
+        );
     }
 
     #[tokio::test]
@@ -1463,8 +1462,10 @@ mod tests {
 
         // Provider should be marked as failed because should_mark_provider_failed returned true
         let final_available_count = selector.available_provider_count();
-        assert_eq!(final_available_count, 1,
-            "Provider should be marked as failed when should_mark_provider_failed returns true for non-retriable error");
+        assert_eq!(
+            final_available_count, 1,
+            "Provider should be marked as failed when should_mark_provider_failed returns true for non-retriable error"
+        );
     }
 
     #[tokio::test]
@@ -1508,8 +1509,10 @@ mod tests {
 
         // Provider should NOT be marked as failed because should_mark_provider_failed returned false
         let final_available_count = selector.available_provider_count();
-        assert_eq!(final_available_count, initial_available_count,
-            "Provider should NOT be marked as failed when should_mark_provider_failed returns false for non-retriable error");
+        assert_eq!(
+            final_available_count, initial_available_count,
+            "Provider should NOT be marked as failed when should_mark_provider_failed returns false for non-retriable error"
+        );
     }
 
     #[tokio::test]
@@ -1553,8 +1556,10 @@ mod tests {
         // Provider should be marked as failed despite should_mark_provider_failed returning false,
         // because retriable errors that exhaust retries always mark the provider as failed
         let final_available_count = selector.available_provider_count();
-        assert!(final_available_count < initial_available_count,
-            "Provider should be marked as failed when retriable errors exhaust retries, regardless of should_mark_provider_failed");
+        assert!(
+            final_available_count < initial_available_count,
+            "Provider should be marked as failed when retriable errors exhaust retries, regardless of should_mark_provider_failed"
+        );
     }
 
     #[tokio::test]
@@ -1659,8 +1664,10 @@ mod tests {
 
         // Last provider should NEVER be marked as failed, even if should_mark_provider_failed returns true
         let final_available_count = selector.available_provider_count();
-        assert_eq!(final_available_count, initial_available_count,
-            "Last provider should never be marked as failed, regardless of should_mark_provider_failed");
+        assert_eq!(
+            final_available_count, initial_available_count,
+            "Last provider should never be marked as failed, regardless of should_mark_provider_failed"
+        );
         assert_eq!(
             final_available_count, 1,
             "Should still have 1 provider available"

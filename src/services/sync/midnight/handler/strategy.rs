@@ -1,12 +1,12 @@
 use crate::services::midnight::{
-    handler::{convert_indexer_event, EventDispatcher, ProgressTracker, SyncEvent},
-    indexer::{MidnightIndexerClient, ViewingKeyFormat},
     SyncError,
+    handler::{EventDispatcher, ProgressTracker, SyncEvent, convert_indexer_event},
+    indexer::{MidnightIndexerClient, ViewingKeyFormat},
 };
 
 use futures_util::StreamExt;
 use log::{debug, info};
-use tokio::time::{sleep_until, Duration, Instant};
+use tokio::time::{Duration, Instant, sleep_until};
 
 /// Configuration for sync strategies.
 ///

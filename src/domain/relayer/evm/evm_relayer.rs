@@ -29,23 +29,22 @@ use std::sync::Arc;
 use crate::{
     constants::{EVM_SMALLEST_UNIT_NAME, EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS},
     domain::{
-        relayer::{Relayer, RelayerError},
         BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
         SignTransactionRequest, SignTypedDataRequest,
+        relayer::{Relayer, RelayerError},
     },
     jobs::{JobProducerTrait, RelayerHealthCheck, TransactionRequest, TransactionStatusCheck},
     models::{
-        produce_relayer_disabled_payload, DeletePendingTransactionsResponse, DisabledReason,
-        EvmNetwork, HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel,
-        NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest, NetworkType,
-        RelayerRepoModel, RelayerStatus, RepositoryError, RpcErrorCodes, TransactionRepoModel,
-        TransactionStatus,
+        DeletePendingTransactionsResponse, DisabledReason, EvmNetwork, HealthCheckFailure,
+        JsonRpcRequest, JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest, NetworkRpcResult,
+        NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus, RepositoryError,
+        RpcErrorCodes, TransactionRepoModel, TransactionStatus, produce_relayer_disabled_payload,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
+        TransactionCounterService, TransactionCounterServiceTrait,
         provider::{EvmProvider, EvmProviderTrait},
         signer::{DataSignerTrait, EvmSigner},
-        TransactionCounterService, TransactionCounterServiceTrait,
     },
     utils::calculate_scheduled_timestamp,
 };
@@ -54,7 +53,7 @@ use eyre::Result;
 use tracing::{debug, info, warn};
 
 use super::{
-    create_error_response, create_success_response, map_provider_error, EvmTransactionValidator,
+    EvmTransactionValidator, create_error_response, create_success_response, map_provider_error,
 };
 
 #[allow(dead_code)]
@@ -480,7 +479,7 @@ where
                     RpcErrorCodes::INVALID_PARAMS,
                     "Invalid params",
                     "Expected EVM network request",
-                ))
+                ));
             }
         };
 
@@ -637,8 +636,8 @@ mod tests {
         },
         repositories::{MockNetworkRepository, MockRelayerRepository, MockTransactionRepository},
         services::{
-            provider::{MockEvmProviderTrait, ProviderError},
             MockTransactionCounterServiceTrait,
+            provider::{MockEvmProviderTrait, ProviderError},
         },
     };
     use mockall::predicate::*;
@@ -678,7 +677,7 @@ mod tests {
                 network: "mainnet".to_string(),
                 from: None,
                 rpc_urls: Some(vec![
-                    "https://mainnet.infura.io/v3/YOUR_INFURA_API_KEY".to_string()
+                    "https://mainnet.infura.io/v3/YOUR_INFURA_API_KEY".to_string(),
                 ]),
                 explorer_urls: None,
                 average_blocktime_ms: Some(12000),
@@ -1451,9 +1450,11 @@ mod tests {
 
         let expected_ids = vec!["tx1", "tx2", "tx3"];
         for id in expected_ids {
-            assert!(result
-                .queued_for_cancellation_transaction_ids
-                .contains(&id.to_string()));
+            assert!(
+                result
+                    .queued_for_cancellation_transaction_ids
+                    .contains(&id.to_string())
+            );
         }
     }
 
@@ -1646,9 +1647,11 @@ mod tests {
 
         let expected_failed_ids = vec!["tx1", "tx2"];
         for id in expected_failed_ids {
-            assert!(result
-                .failed_to_queue_transaction_ids
-                .contains(&id.to_string()));
+            assert!(
+                result
+                    .failed_to_queue_transaction_ids
+                    .contains(&id.to_string())
+            );
         }
     }
 

@@ -11,12 +11,12 @@
 
 use crate::{
     config::ConfigFileError,
+    models::PlainOrEnvValue,
     models::signer::{
         AwsKmsSignerConfig, CdpSignerConfig, GoogleCloudKmsSignerConfig,
         GoogleCloudKmsSignerKeyConfig, GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig,
         Signer, SignerConfig, TurnkeySignerConfig, VaultSignerConfig, VaultTransitSignerConfig,
     },
-    models::PlainOrEnvValue,
 };
 use secrets::SecretVec;
 use serde::{Deserialize, Serialize};

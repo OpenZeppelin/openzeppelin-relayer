@@ -4,7 +4,7 @@ use crate::{
     utils::calculate_intrinsic_gas,
 };
 use serde::{Deserialize, Serialize};
-use utoipa::{schema, ToSchema};
+use utoipa::{ToSchema, schema};
 
 #[derive(Deserialize, Serialize, Default, ToSchema)]
 pub struct EvmTransactionRequest {

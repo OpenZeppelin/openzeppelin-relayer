@@ -37,7 +37,7 @@ use crate::{
         SolanaFeePaymentStrategy, TransactionRepoModel,
     },
     repositories::{Repository, TransactionRepository},
-    services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
+    services::{JupiterServiceTrait, provider::SolanaProviderTrait, signer::SolanaSignTrait},
 };
 
 impl<P, S, J, JP, TR> SolanaRpcMethodsImpl<P, S, J, JP, TR>

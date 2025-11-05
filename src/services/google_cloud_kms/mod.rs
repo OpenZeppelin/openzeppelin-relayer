@@ -20,7 +20,7 @@
 
 use alloy::primitives::keccak256;
 use async_trait::async_trait;
-use google_cloud_auth::credentials::{service_account::Builder as GcpCredBuilder, Credentials};
+use google_cloud_auth::credentials::{Credentials, service_account::Builder as GcpCredBuilder};
 #[cfg_attr(test, allow(unused_imports))]
 use http::{Extensions, HeaderMap};
 use reqwest::Client;

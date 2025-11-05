@@ -9,7 +9,7 @@
 //! Serves as the entry point for notification data from external clients, ensuring
 //! all input is properly validated before reaching the core business logic.
 
-use crate::models::{notification::Notification, ApiError, NotificationType, SecretString};
+use crate::models::{ApiError, NotificationType, SecretString, notification::Notification};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 

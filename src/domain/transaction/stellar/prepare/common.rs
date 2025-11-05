@@ -10,14 +10,14 @@ use tracing::{error, info, warn};
 use crate::{
     constants::STELLAR_DEFAULT_TRANSACTION_FEE,
     domain::{
+        SignTransactionResponse,
         stellar::i64_from_u64,
         xdr_utils::{update_xdr_fee, update_xdr_sequence, xdr_needs_simulation},
-        SignTransactionResponse,
     },
     jobs::{JobProducerTrait, TransactionSend},
     models::{
-        produce_transaction_update_notification_payload, NetworkTransactionData,
-        StellarTransactionData, TransactionError, TransactionInput,
+        NetworkTransactionData, StellarTransactionData, TransactionError, TransactionInput,
+        produce_transaction_update_notification_payload,
     },
     models::{TransactionRepoModel, TransactionStatus, TransactionUpdateRequest},
     repositories::TransactionCounterTrait,
@@ -183,7 +183,7 @@ pub async fn ensure_minimum_fee(
         _ => {
             return Err(TransactionError::ValidationError(
                 "Unexpected envelope type for fee validation".to_string(),
-            ))
+            ));
         }
     };
 
@@ -218,7 +218,9 @@ where
 {
     // Check if the inner transaction needs simulation (Soroban operations)
     if xdr_needs_simulation(inner_envelope).unwrap_or(false) {
-        info!("Inner transaction contains Soroban operations, simulating to determine resource fee...");
+        info!(
+            "Inner transaction contains Soroban operations, simulating to determine resource fee..."
+        );
 
         match simulate_if_needed(inner_envelope, provider).await? {
             Some(sim_resp) => {
@@ -234,12 +236,10 @@ where
 
                 // Ensure max_fee covers the required amount
                 if (max_fee as u64) < required_fee {
-                    return Err(TransactionError::ValidationError(
-                        format!(
-                            "max_fee ({}) is insufficient. Required fee: {} (inclusion: {} + resource: {})",
-                            max_fee, required_fee, inclusion_fee, resource_fee
-                        )
-                    ));
+                    return Err(TransactionError::ValidationError(format!(
+                        "max_fee ({}) is insufficient. Required fee: {} (inclusion: {} + resource: {})",
+                        max_fee, required_fee, inclusion_fee, resource_fee
+                    )));
                 }
 
                 // Use max_fee but ensure it's at least the required amount
@@ -475,7 +475,7 @@ mod tests {
         };
 
         match &mut envelope {
-            TransactionEnvelope::Tx(ref mut e) => {
+            TransactionEnvelope::Tx(e) => {
                 e.tx.fee = 50; // Below minimum
                 e.tx.operations = vec![payment_op].try_into().unwrap();
             }
@@ -499,7 +499,7 @@ mod tests {
         let mut envelope = create_test_envelope();
 
         match &mut envelope {
-            TransactionEnvelope::Tx(ref mut e) => {
+            TransactionEnvelope::Tx(e) => {
                 e.tx.fee = 200; // Above minimum
             }
             _ => panic!("Unexpected envelope type"),

@@ -8,7 +8,7 @@ use crate::{
         DefaultAppState, NotificationCreateRequest, NotificationUpdateRequest, PaginationQuery,
     },
 };
-use actix_web::{delete, get, patch, post, web, Responder};
+use actix_web::{Responder, delete, get, patch, post, web};
 
 /// Lists all notifications with pagination support.
 #[get("/notifications")]
@@ -70,7 +70,7 @@ pub fn init(cfg: &mut web::ServiceConfig) {
 mod tests {
     use super::*;
     use crate::utils::mocks::mockutils::create_mock_app_state;
-    use actix_web::{http::StatusCode, test, web, App};
+    use actix_web::{App, http::StatusCode, test, web};
 
     #[actix_web::test]
     async fn test_notification_routes_are_registered() {

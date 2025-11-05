@@ -5,12 +5,12 @@
 /// services and repositories to perform these operations asynchronously.
 use crate::{
     constants::DEFAULT_STELLAR_CONCURRENT_TRANSACTIONS,
-    domain::transaction::{stellar::fetch_next_sequence_from_chain, Transaction},
+    domain::transaction::{Transaction, stellar::fetch_next_sequence_from_chain},
     jobs::{JobProducer, JobProducerTrait, TransactionRequest},
     models::{
-        produce_transaction_update_notification_payload, NetworkTransactionRequest,
-        RelayerNetworkPolicy, RelayerRepoModel, TransactionError, TransactionRepoModel,
-        TransactionStatus, TransactionUpdateRequest,
+        NetworkTransactionRequest, RelayerNetworkPolicy, RelayerRepoModel, TransactionError,
+        TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
+        produce_transaction_update_notification_payload,
     },
     repositories::{
         RelayerRepositoryStorage, Repository, TransactionCounterRepositoryStorage,

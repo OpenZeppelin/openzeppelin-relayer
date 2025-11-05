@@ -13,18 +13,18 @@ use tracing::{debug, error, info, warn};
 use crate::{
     constants::{DEFAULT_EVM_GAS_LIMIT_ESTIMATION, GAS_LIMIT_BUFFER_MULTIPLIER},
     domain::{
-        transaction::{
-            evm::{ensure_status, ensure_status_one_of, PriceCalculator, PriceCalculatorTrait},
-            Transaction,
-        },
         EvmTransactionValidationError, EvmTransactionValidator,
+        transaction::{
+            Transaction,
+            evm::{PriceCalculator, PriceCalculatorTrait, ensure_status, ensure_status_one_of},
+        },
     },
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
-        produce_transaction_update_notification_payload, EvmNetwork, EvmTransactionData,
-        NetworkRepoModel, NetworkTransactionData, NetworkTransactionRequest, NetworkType,
-        RelayerEvmPolicy, RelayerRepoModel, TransactionError, TransactionRepoModel,
-        TransactionStatus, TransactionUpdateRequest,
+        EvmNetwork, EvmTransactionData, NetworkRepoModel, NetworkTransactionData,
+        NetworkTransactionRequest, NetworkType, RelayerEvmPolicy, RelayerRepoModel,
+        TransactionError, TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
+        produce_transaction_update_notification_payload,
     },
     repositories::{
         NetworkRepository, NetworkRepositoryStorage, RelayerRepository, RelayerRepositoryStorage,
@@ -901,7 +901,7 @@ where
             _ => {
                 return Err(TransactionError::InvalidType(
                     "New transaction request must be EVM type".to_string(),
-                ))
+                ));
             }
         };
 
@@ -1043,8 +1043,8 @@ mod tests {
         domain::evm::price_calculator::PriceParams,
         jobs::MockJobProducerTrait,
         models::{
-            evm::Speed, EvmTransactionData, EvmTransactionRequest, NetworkType,
-            RelayerNetworkPolicy, U256,
+            EvmTransactionData, EvmTransactionRequest, NetworkType, RelayerNetworkPolicy, U256,
+            evm::Speed,
         },
         repositories::{
             MockNetworkRepository, MockRelayerRepository, MockTransactionCounterTrait,

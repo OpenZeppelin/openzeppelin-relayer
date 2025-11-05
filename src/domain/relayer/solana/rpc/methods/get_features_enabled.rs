@@ -17,7 +17,7 @@ use crate::{
     jobs::JobProducerTrait,
     models::{GetFeaturesEnabledRequestParams, GetFeaturesEnabledResult, TransactionRepoModel},
     repositories::{Repository, TransactionRepository},
-    services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
+    services::{JupiterServiceTrait, provider::SolanaProviderTrait, signer::SolanaSignTrait},
 };
 
 use super::*;

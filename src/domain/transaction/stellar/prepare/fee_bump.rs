@@ -77,7 +77,7 @@ fn extract_inner_transaction(
         _ => {
             return Err(TransactionError::ValidationError(
                 "Fee-bump requires SignedXdr input".to_string(),
-            ))
+            ));
         }
     };
 
@@ -330,8 +330,8 @@ mod tests {
 #[cfg(test)]
 mod signed_xdr_tests {
     use super::*;
-    use crate::domain::transaction::stellar::test_helpers::*;
     use crate::domain::SignTransactionResponse;
+    use crate::domain::transaction::stellar::test_helpers::*;
     use crate::models::{NetworkTransactionData, RepositoryError, TransactionStatus};
     use soroban_rs::xdr::{
         Memo, MuxedAccount, Transaction, TransactionEnvelope, TransactionExt,

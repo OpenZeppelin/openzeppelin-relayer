@@ -13,10 +13,11 @@ use crate::domain::transaction::common::is_final_state;
 use crate::{
     jobs::JobProducerTrait,
     models::{
-        produce_transaction_update_notification_payload, RelayerRepoModel, SolanaTransactionStatus,
-        TransactionError, TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
+        RelayerRepoModel, SolanaTransactionStatus, TransactionError, TransactionRepoModel,
+        TransactionStatus, TransactionUpdateRequest,
+        produce_transaction_update_notification_payload,
     },
-    repositories::{transaction::TransactionRepository, RelayerRepository, Repository},
+    repositories::{RelayerRepository, Repository, transaction::TransactionRepository},
     services::provider::SolanaProviderTrait,
 };
 
@@ -274,8 +275,7 @@ mod tests {
         let tx_repo = Arc::new(MockTransactionRepository::new());
         let job_producer = MockJobProducerTrait::new();
 
-        let signature_str =
-            "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
+        let signature_str = "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
         let tx = create_tx_with_signature(TransactionStatus::Pending, Some(signature_str));
 
         provider
@@ -308,8 +308,7 @@ mod tests {
         let mut tx_repo = MockTransactionRepository::new();
         let job_producer = MockJobProducerTrait::new();
 
-        let signature_str =
-            "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
+        let signature_str = "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
         let tx = create_tx_with_signature(TransactionStatus::Submitted, Some(signature_str));
 
         provider
@@ -357,8 +356,7 @@ mod tests {
         let mut tx_repo = MockTransactionRepository::new();
         let job_producer = MockJobProducerTrait::new();
 
-        let signature_str =
-            "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
+        let signature_str = "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
         let tx = create_tx_with_signature(TransactionStatus::Mined, Some(signature_str));
 
         provider
@@ -445,8 +443,7 @@ mod tests {
         let mut tx_repo = MockTransactionRepository::new();
         let job_producer = MockJobProducerTrait::new();
 
-        let signature_str =
-            "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
+        let signature_str = "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
         let tx = create_tx_with_signature(TransactionStatus::Submitted, Some(signature_str));
 
         provider

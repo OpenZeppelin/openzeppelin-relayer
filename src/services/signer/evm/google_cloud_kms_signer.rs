@@ -8,7 +8,7 @@
 
 use alloy::{
     consensus::{SignableTransaction, TxEip1559, TxLegacy},
-    primitives::{utils::eip191_message, Signature},
+    primitives::{Signature, utils::eip191_message},
 };
 use async_trait::async_trait;
 
@@ -22,11 +22,11 @@ use crate::{
         SignerError,
     },
     services::{
-        signer::{
-            evm::{construct_eip712_message_hash, validate_and_format_signature},
-            DataSignerTrait, Signer,
-        },
         GoogleCloudKmsEvmService, GoogleCloudKmsService,
+        signer::{
+            DataSignerTrait, Signer,
+            evm::{construct_eip712_message_hash, validate_and_format_signature},
+        },
     },
     utils::base64_encode,
 };
@@ -213,7 +213,7 @@ mod tests {
     #[tokio::test]
     async fn test_sign_data() {
         use alloy::primitives::utils::eip191_message;
-        use k256::ecdsa::{signature::DigestSigner, SigningKey};
+        use k256::ecdsa::{SigningKey, signature::DigestSigner};
         use k256::pkcs8::EncodePublicKey;
         use sha3::{Digest, Keccak256};
 

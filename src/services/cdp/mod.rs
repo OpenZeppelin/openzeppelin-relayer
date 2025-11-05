@@ -19,14 +19,14 @@
 //!   └── Raw Payload Signing
 //! ```
 use async_trait::async_trait;
-use base64::{engine::general_purpose, Engine as _};
+use base64::{Engine as _, engine::general_purpose};
 use reqwest_middleware::ClientBuilder;
 use std::{str, time::Duration};
 use thiserror::Error;
 
 use crate::models::{Address, CdpSignerConfig};
 
-use cdp_sdk::{auth::WalletAuth, types, Client, CDP_BASE_URL};
+use cdp_sdk::{CDP_BASE_URL, Client, auth::WalletAuth, types};
 
 #[derive(Error, Debug, serde::Serialize)]
 pub enum CdpError {

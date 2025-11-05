@@ -10,9 +10,9 @@
 use std::{env, sync::Arc};
 
 use apalis_redis::{Config, ConnectionManager, RedisStorage};
-use color_eyre::{eyre, Result};
+use color_eyre::{Result, eyre};
 use serde::{Deserialize, Serialize};
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 use tracing::error;
 
 use crate::config::ServerConfig;

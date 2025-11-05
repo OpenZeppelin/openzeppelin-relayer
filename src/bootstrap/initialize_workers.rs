@@ -15,10 +15,10 @@ use crate::{
         WORKER_TRANSACTION_SUBMIT_RETRIES,
     },
     jobs::{
-        notification_handler, relayer_health_check_handler, solana_token_swap_cron_handler,
-        solana_token_swap_request_handler, transaction_cleanup_handler,
-        transaction_request_handler, transaction_status_handler, transaction_submission_handler,
-        JobProducerTrait,
+        JobProducerTrait, notification_handler, relayer_health_check_handler,
+        solana_token_swap_cron_handler, solana_token_swap_request_handler,
+        transaction_cleanup_handler, transaction_request_handler, transaction_status_handler,
+        transaction_submission_handler,
     },
     models::{
         NetworkRepoModel, NotificationRepoModel, RelayerRepoModel, SignerRepoModel,
@@ -31,9 +31,9 @@ use crate::{
 };
 use apalis::prelude::*;
 
-use apalis::layers::retry::backoff::MakeBackoff;
-use apalis::layers::retry::{backoff::ExponentialBackoffMaker, RetryPolicy};
 use apalis::layers::ErrorHandlingLayer;
+use apalis::layers::retry::backoff::MakeBackoff;
+use apalis::layers::retry::{RetryPolicy, backoff::ExponentialBackoffMaker};
 
 /// Re-exports from [`tower::util`]
 pub use tower::util::rng::HasherRng;

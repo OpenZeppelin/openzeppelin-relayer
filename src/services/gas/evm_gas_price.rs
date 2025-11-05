@@ -3,7 +3,7 @@
 //! transaction speed and fetching gas prices using JSON-RPC.
 use crate::{
     constants::HISTORICAL_BLOCKS,
-    models::{evm::Speed, EvmNetwork, EvmTransactionData, TransactionError},
+    models::{EvmNetwork, EvmTransactionData, TransactionError, evm::Speed},
     services::{
         gas::{cache::GasPriceCache, fetchers::GasPriceFetcherFactory},
         provider::EvmProviderTrait,

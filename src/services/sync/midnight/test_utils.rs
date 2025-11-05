@@ -5,8 +5,8 @@
 //! utilities, we support loading serialized wallet states from test fixtures.
 
 use midnight_node_ledger_helpers::{
-    mn_ledger_serialize::{deserialize, serialize},
     DefaultDB, LedgerContext, LedgerState, NetworkId, WalletSeed, WalletState,
+    mn_ledger_serialize::{tagged_deserialize, tagged_serialize},
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,19 +24,23 @@ pub fn create_funded_test_context(
     _initial_balance: u128,
 ) -> Arc<LedgerContext<DefaultDB>> {
     // Set required environment variable
-    std::env::set_var(
-        "MIDNIGHT_LEDGER_TEST_STATIC_DIR",
-        "/tmp/midnight-test-static",
-    );
-
-    let context = Arc::new(LedgerContext::new_from_wallet_seeds(wallet_seeds));
+    unsafe {
+        std::env::set_var(
+            "MIDNIGHT_LEDGER_TEST_STATIC_DIR",
+            "/tmp/midnight-test-static",
+        );
+    }
+    let context = Arc::new(LedgerContext::new_from_wallet_seeds(
+        NetworkId::TestNet,
+        wallet_seeds,
+    ));
 
     // Try to load wallet states from fixtures
     for seed in wallet_seeds {
         if let Ok(wallet_state) = load_wallet_state_fixture(seed, NetworkId::TestNet) {
             if let Ok(mut wallets_guard) = context.wallets.lock() {
                 if let Some(wallet) = wallets_guard.get_mut(seed) {
-                    wallet.update_state(wallet_state);
+                    wallet.shielded.state = wallet_state;
                     log::debug!("Loaded wallet state from fixture for seed: {:?}", seed);
                 }
             }
@@ -68,7 +72,7 @@ pub fn save_wallet_state_fixture(
 
     // Serialize wallet state
     let mut state_bytes = Vec::new();
-    serialize(wallet_state, &mut state_bytes, network).map_err(|e| {
+    tagged_serialize(wallet_state, &mut state_bytes).map_err(|e| {
         std::io::Error::new(
             std::io::ErrorKind::Other,
             format!("Failed to serialize wallet state: {:?}", e),
@@ -92,7 +96,7 @@ pub fn load_wallet_state_fixture(
 
     // Deserialize wallet state
     let mut reader = &state_bytes[..];
-    deserialize::<WalletState<DefaultDB>, _>(&mut reader, network).map_err(|e| {
+    tagged_deserialize::<WalletState<DefaultDB>>(&mut reader).map_err(|e| {
         std::io::Error::new(
             std::io::ErrorKind::Other,
             format!("Failed to deserialize wallet state: {:?}", e),
@@ -102,7 +106,7 @@ pub fn load_wallet_state_fixture(
 
 /// Gets the fixture file path for a wallet seed
 fn get_wallet_fixture_path(seed: &WalletSeed) -> PathBuf {
-    let seed_hex = hex::encode(seed.0);
+    let seed_hex = hex::encode(seed.as_bytes());
     Path::new(TEST_FIXTURE_DIR).join(format!("wallet_{}.bin", seed_hex))
 }
 
@@ -116,20 +120,21 @@ pub fn create_context_from_serialized(
     network: NetworkId,
 ) -> Result<Arc<LedgerContext<DefaultDB>>, String> {
     // Set required environment variable
-    std::env::set_var(
-        "MIDNIGHT_LEDGER_TEST_STATIC_DIR",
-        "/tmp/midnight-test-static",
-    );
+    unsafe {
+        std::env::set_var(
+            "MIDNIGHT_LEDGER_TEST_STATIC_DIR",
+            "/tmp/midnight-test-static",
+        );
+    }
 
-    let context = Arc::new(LedgerContext::new_from_wallet_seeds(wallet_seeds));
+    let context = Arc::new(LedgerContext::new_from_wallet_seeds(network, wallet_seeds));
 
     // Deserialize the combined context (wallet states + ledger state)
     match bincode::deserialize::<(Option<Vec<u8>>, Vec<u8>)>(serialized_context) {
         Ok((wallet_state_bytes, ledger_state_bytes)) => {
             // Restore ledger state
             let mut reader = &ledger_state_bytes[..];
-            if let Ok(ledger_state) = deserialize::<LedgerState<DefaultDB>, _>(&mut reader, network)
-            {
+            if let Ok(ledger_state) = tagged_deserialize::<LedgerState<DefaultDB>>(&mut reader) {
                 if let Ok(mut ledger_state_guard) = context.ledger_state.lock() {
                     *ledger_state_guard = ledger_state;
                 }
@@ -138,14 +143,13 @@ pub fn create_context_from_serialized(
             // Restore wallet state if available
             if let Some(state_bytes) = wallet_state_bytes {
                 let mut reader = &state_bytes[..];
-                if let Ok(wallet_state) =
-                    deserialize::<WalletState<DefaultDB>, _>(&mut reader, network)
+                if let Ok(wallet_state) = tagged_deserialize::<WalletState<DefaultDB>>(&mut reader)
                 {
                     if let Ok(mut wallets_guard) = context.wallets.lock() {
                         // Apply to the first wallet seed
                         if let Some(seed) = wallet_seeds.first() {
                             if let Some(wallet) = wallets_guard.get_mut(seed) {
-                                wallet.update_state(wallet_state);
+                                wallet.shielded.state = wallet_state;
                             }
                         }
                     }
@@ -192,18 +196,22 @@ impl MockWalletStateBuilder {
     /// but without actual coins. For tests requiring real UTXOs,
     /// use fixture-based approaches instead.
     pub fn build(self, wallet_seeds: &[WalletSeed]) -> Arc<LedgerContext<DefaultDB>> {
-        std::env::set_var(
-            "MIDNIGHT_LEDGER_TEST_STATIC_DIR",
-            "/tmp/midnight-test-static",
-        );
-
-        let context = Arc::new(LedgerContext::new_from_wallet_seeds(wallet_seeds));
+        unsafe {
+            std::env::set_var(
+                "MIDNIGHT_LEDGER_TEST_STATIC_DIR",
+                "/tmp/midnight-test-static",
+            );
+        }
+        let context = Arc::new(LedgerContext::new_from_wallet_seeds(
+            NetworkId::TestNet,
+            wallet_seeds,
+        ));
 
         // Apply mock state to all wallets
         if let Ok(mut wallets_guard) = context.wallets.lock() {
             for seed in wallet_seeds {
                 if let Some(wallet) = wallets_guard.get_mut(seed) {
-                    wallet.state.first_free = self.first_free;
+                    wallet.shielded.state.first_free = self.first_free;
                 }
             }
         }
@@ -224,36 +232,36 @@ mod tests {
 
     #[test]
     fn test_create_funded_test_context() {
-        let seed = WalletSeed::from([1u8; 32]);
+        let seed = WalletSeed::Medium([1u8; 32]);
         let context = create_funded_test_context(&[seed], 1_000_000_000);
 
         // Verify wallet is initialized
         let wallets_guard = context.wallets.lock().unwrap();
         let wallet = wallets_guard.get(&seed).unwrap();
         // With empty fixtures, first_free will be 0, but the wallet should exist
-        assert_eq!(wallet.state.first_free, 0);
+        assert_eq!(wallet.shielded.state.first_free, 0);
     }
 
     #[test]
     fn test_create_funded_test_context_multiple_wallets() {
-        let seed1 = WalletSeed::from([1u8; 32]);
-        let seed2 = WalletSeed::from([2u8; 32]);
+        let seed1 = WalletSeed::Medium([1u8; 32]);
+        let seed2 = WalletSeed::Medium([2u8; 32]);
         let context = create_funded_test_context(&[seed1, seed2], 500_000_000);
 
         let wallets_guard = context.wallets.lock().unwrap();
 
         let wallet1 = wallets_guard.get(&seed1).unwrap();
         // With fixtures, first_free depends on the actual wallet state
-        assert_eq!(wallet1.state.first_free, 0);
+        assert_eq!(wallet1.shielded.state.first_free, 0);
 
         let wallet2 = wallets_guard.get(&seed2).unwrap();
         // Without fixture for seed2, it will have default value of 0
-        assert_eq!(wallet2.state.first_free, 0);
+        assert_eq!(wallet2.shielded.state.first_free, 0);
     }
 
     #[test]
     fn test_wallet_fixture_path() {
-        let seed = WalletSeed::from([1u8; 32]);
+        let seed = WalletSeed::Medium([1u8; 32]);
         let path = get_wallet_fixture_path(&seed);
 
         let expected = format!(
@@ -265,7 +273,7 @@ mod tests {
 
     #[test]
     fn test_create_context_from_serialized_empty() {
-        let seed = WalletSeed::from([1u8; 32]);
+        let seed = WalletSeed::Medium([1u8; 32]);
         let empty_context = bincode::serialize(&(None::<Vec<u8>>, vec![0u8; 0]))
             .expect("Failed to serialize empty context");
 
@@ -275,7 +283,7 @@ mod tests {
 
     #[test]
     fn test_mock_wallet_state_builder() {
-        let seed = WalletSeed::from([1u8; 32]);
+        let seed = WalletSeed::Medium([1u8; 32]);
 
         let context = MockWalletStateBuilder::new()
             .with_first_free(42)
@@ -283,13 +291,13 @@ mod tests {
 
         let wallets_guard = context.wallets.lock().unwrap();
         let wallet = wallets_guard.get(&seed).unwrap();
-        assert_eq!(wallet.state.first_free, 42);
+        assert_eq!(wallet.shielded.state.first_free, 42);
     }
 
     #[test]
     fn test_mock_wallet_state_builder_multiple_wallets() {
-        let seed1 = WalletSeed::from([1u8; 32]);
-        let seed2 = WalletSeed::from([2u8; 32]);
+        let seed1 = WalletSeed::Medium([1u8; 32]);
+        let seed2 = WalletSeed::Medium([2u8; 32]);
 
         let context = MockWalletStateBuilder::new()
             .with_first_free(100)
@@ -298,9 +306,9 @@ mod tests {
         let wallets_guard = context.wallets.lock().unwrap();
 
         let wallet1 = wallets_guard.get(&seed1).unwrap();
-        assert_eq!(wallet1.state.first_free, 100);
+        assert_eq!(wallet1.shielded.state.first_free, 100);
 
         let wallet2 = wallets_guard.get(&seed2).unwrap();
-        assert_eq!(wallet2.state.first_free, 100);
+        assert_eq!(wallet2.shielded.state.first_free, 100);
     }
 }

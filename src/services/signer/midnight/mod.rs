@@ -63,21 +63,21 @@ impl MidnightSignerFactory {
         let signer = match m.config {
             SignerConfig::Local(_) => MidnightSigner::Local(LocalSigner::new(m, network_id)?),
             SignerConfig::AwsKms(_) => {
-                return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()))
+                return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()));
             }
             SignerConfig::Vault(_) => {
-                return Err(SignerFactoryError::UnsupportedType("Vault".into()))
+                return Err(SignerFactoryError::UnsupportedType("Vault".into()));
             }
             SignerConfig::VaultTransit(_) => {
-                return Err(SignerFactoryError::UnsupportedType("Vault Transit".into()))
+                return Err(SignerFactoryError::UnsupportedType("Vault Transit".into()));
             }
             SignerConfig::Turnkey(_) => {
-                return Err(SignerFactoryError::UnsupportedType("Turnkey".into()))
+                return Err(SignerFactoryError::UnsupportedType("Turnkey".into()));
             }
             SignerConfig::GoogleCloudKms(_) => {
                 return Err(SignerFactoryError::UnsupportedType(
                     "Google Cloud KMS".into(),
-                ))
+                ));
             }
             SignerConfig::Cdp(_) => return Err(SignerFactoryError::UnsupportedType("CDP".into())),
         };

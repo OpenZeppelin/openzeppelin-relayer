@@ -172,7 +172,7 @@ pub struct RelayerFileConfig {
     pub custom_rpc_urls: Option<Vec<RpcConfig>>,
 }
 
-use serde::{de, Deserializer};
+use serde::{Deserializer, de};
 use serde_json::Value;
 
 impl<'de> Deserialize<'de> for RelayerFileConfig {
@@ -750,10 +750,12 @@ mod tests {
 
         let result = serde_json::from_str::<RelayerFileConfig>(json_input);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("missing field `id`"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("missing field `id`")
+        );
     }
 
     #[test]

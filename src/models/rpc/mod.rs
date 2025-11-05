@@ -92,7 +92,7 @@ pub fn convert_to_internal_rpc_request(
             _ => {
                 return Err(crate::models::ApiError::BadRequest(
                     "Invalid 'id' field: must be a string, integer, or null".to_string(),
-                ))
+                ));
             }
         },
         None => Some(JsonRpcId::Number(1)), // Default ID when none provided

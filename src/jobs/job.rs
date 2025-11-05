@@ -227,8 +227,8 @@ mod tests {
     use std::str::FromStr;
 
     use crate::models::{
-        evm::Speed, EvmTransactionDataSignature, EvmTransactionResponse, TransactionResponse,
-        TransactionStatus, WebhookNotification, WebhookPayload, U256,
+        EvmTransactionDataSignature, EvmTransactionResponse, TransactionResponse,
+        TransactionStatus, U256, WebhookNotification, WebhookPayload, evm::Speed,
     };
 
     use super::*;

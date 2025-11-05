@@ -61,8 +61,8 @@ pub fn free(relayer_id: &str, tx_id: &str) {
 mod tests {
     use super::*;
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc, Barrier,
+        atomic::{AtomicUsize, Ordering},
     };
     use std::thread;
     use std::time::Duration;

@@ -3,7 +3,7 @@
 /// it as a base64 string.
 /// Can be used for testing transaction encoding and decoding.
 /// Run with  cargo run --example test_tx
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use eyre::Result;
 use solana_client::rpc_client::RpcClient;
 use solana_sdk::{hash::Hash, message::Message, pubkey::Pubkey, transaction::Transaction};

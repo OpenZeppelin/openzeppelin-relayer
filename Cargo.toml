@@ -1,8 +1,8 @@
 [package]
 name = "openzeppelin-relayer"
 version = "1.1.0"
-edition = "2021"
-rust-version = "1.86"                #MSRV
+edition = "2024"
+rust-version = "1.90"                #MSRV
 default-run = "openzeppelin-relayer"
 
 [profile.release]
@@ -15,14 +15,6 @@ debug = true
 opt-level = 0
 overflow-checks = true
 panic = "unwind"
-
-[patch."https://github.com/input-output-hk/midnight-ledger-prototype"]
-mn-ledger-storage = { git = "https://github.com/midnightntwrk/midnight-ledger-prototype", package = "midnight-storage", tag = "ledger-4.0.0" }
-coin-structure = { git = "https://github.com/midnightntwrk/midnight-ledger-prototype", package = "midnight-coin-structure", tag = "ledger-4.0.0" }
-onchain-runtime = { git = "https://github.com/midnightntwrk/midnight-ledger-prototype", package = "midnight-onchain-runtime", tag = "ledger-4.0.0" }
-midnight-serialize = { git = "https://github.com/midnightntwrk/midnight-ledger-prototype", tag = "ledger-4.0.0" }
-base-crypto = { git = "https://github.com/midnightntwrk/midnight-ledger-prototype", package = "midnight-base-crypto", tag = "ledger-4.0.0" }
-transient-crypto = { git = "https://github.com/midnightntwrk/midnight-ledger-prototype", package = "midnight-transient-crypto", tag = "ledger-4.0.0" }
 
 [dependencies]
 actix-governor = "0.8"
@@ -67,9 +59,15 @@ k256 = { version = "0.13", features = ["ecdsa-core"] }
 lazy_static = "1.5"
 libsodium-sys = "0.2.7"
 log = "0.4"
-midnight-ledger-prototype = { git = "https://github.com/midnightntwrk/midnight-ledger-prototype", package = "midnight-ledger", tag = "ledger-4.0.0" }
-midnight-node-ledger-helpers = { git = "https://github.com/midnightntwrk/midnight-node", package = "midnight-node-ledger-helpers", tag = "node-0.12.0" }
-midnight-node-res = { git = "https://github.com/midnightntwrk/midnight-node", package = "midnight-node-res", tag = "node-0.12.0" }
+midnight-ledger = { git = "https://github.com/midnightntwrk/midnight-ledger", package = "midnight-ledger", tag = "ledger-6.1.0-alpha.3" }
+midnight-node-ledger-helpers = { git = "https://github.com/midnightntwrk/midnight-node", package = "midnight-node-ledger-helpers", tag = "node-0.17.0-rc.4", features = [
+    "test-utils",
+] }
+midnight-node-res = { git = "https://github.com/midnightntwrk/midnight-node", package = "midnight-node-res", tag = "node-0.17.0-rc.4" }
+midnight-node-metadata = { git = "https://github.com/midnightntwrk/midnight-node", package = "midnight-node-metadata", tag = "node-0.17.0-rc.4" }
+midnight-transient-crypto = { git = "https://github.com/midnightntwrk/midnight-ledger", package = "midnight-transient-crypto", tag = "ledger-6.1.0-alpha.3" }
+midnight-coin-structure = { git = "https://github.com/midnightntwrk/midnight-ledger", package = "midnight-coin-structure", tag = "ledger-6.1.0-alpha.3" }
+midnight-storage = { git = "https://github.com/midnightntwrk/midnight-ledger", package = "midnight-storage", tag = "ledger-6.1.0-alpha.3" }
 mpl-token-metadata = { version = "5.1" }
 num_enum = { version = "0.7", default-features = false }
 once_cell = "1.17"
@@ -107,7 +105,7 @@ stellar-strkey = "0.0.13"
 strum = { version = "0.27", default-features = false, features = ["derive"] }
 strum_macros = "0.27"
 subtle = "2.6"
-subxt = { version = "0.37.0", features = ["substrate-compat"] }
+subxt = "0.44.0"
 sysinfo = "0.36"
 thiserror = "2"
 tokio = { version = "1.43", features = ["sync", "io-util", "time"] }

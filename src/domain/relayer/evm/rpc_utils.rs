@@ -118,7 +118,7 @@ pub fn map_provider_error(error: &ProviderError) -> (i32, &'static str) {
 mod tests {
     use super::*;
     use crate::models::{OpenZeppelinErrorCodes, RpcErrorCodes};
-    use crate::services::provider::{rpc_selector::RpcSelectorError, SolanaProviderError};
+    use crate::services::provider::{SolanaProviderError, rpc_selector::RpcSelectorError};
     use serde_json::json;
 
     #[test]

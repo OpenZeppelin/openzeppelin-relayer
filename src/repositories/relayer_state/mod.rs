@@ -61,7 +61,7 @@ pub trait SyncStateTrait: Send + Sync {
 
     /// Get the serialized ledger context for a relayer
     async fn get_ledger_context(&self, relayer_id: &str)
-        -> Result<Option<Vec<u8>>, SyncStateError>;
+    -> Result<Option<Vec<u8>>, SyncStateError>;
 
     /// Set the last synced blockchain index for a relayer
     async fn set_last_synced_index(
@@ -87,7 +87,7 @@ pub trait SyncStateTrait: Send + Sync {
 
     /// Update the last synced blockchain index only if the new index is greater
     async fn update_if_greater(&self, relayer_id: &str, index: u64)
-        -> Result<bool, SyncStateError>;
+    -> Result<bool, SyncStateError>;
 
     /// Reset the sync state for a relayer
     async fn reset(&self, relayer_id: &str) -> Result<(), SyncStateError>;

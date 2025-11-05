@@ -10,17 +10,19 @@
 //! testable components.
 
 use crate::services::midnight::{
+    SyncError,
     indexer::{
         CollapsedUpdateInfo, IndexerError, TransactionData, WalletSyncEvent as IndexerEvent,
         ZswapChainStateUpdate,
     },
     utils::{parse_collapsed_update, process_transaction},
-    SyncError,
 };
 
 use log::error;
-use midnight_ledger_prototype::transient_crypto::merkle_tree::MerkleTreeCollapsedUpdate;
-use midnight_node_ledger_helpers::{DefaultDB, NetworkId, Proof, Transaction};
+use midnight_node_ledger_helpers::{
+    DefaultDB, NetworkId, ProofMarker, PureGeneratorPedersen, Signature, Transaction,
+};
+use midnight_transient_crypto::merkle_tree::MerkleTreeCollapsedUpdate;
 use std::sync::{Arc, Mutex};
 
 use crate::services::midnight::indexer::ApplyStage;
@@ -36,7 +38,7 @@ use crate::services::midnight::indexer::ApplyStage;
 pub enum ChronologicalUpdate {
     Transaction {
         index: u64,
-        tx: Box<Transaction<Proof, DefaultDB>>,
+        tx: Box<Transaction<Signature, ProofMarker, PureGeneratorPedersen, DefaultDB>>,
         apply_stage: Option<ApplyStage>,
     },
     MerkleUpdate {

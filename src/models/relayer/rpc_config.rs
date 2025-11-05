@@ -4,7 +4,7 @@
 //! including URLs and weights for load balancing.
 
 use crate::constants::DEFAULT_RPC_WEIGHT;
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use utoipa::ToSchema;

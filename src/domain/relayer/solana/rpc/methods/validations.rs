@@ -349,10 +349,12 @@ impl SolanaTransactionValidator {
         let required_balance = fee + min_balance;
 
         if balance < required_balance {
-            return Err(SolanaTransactionValidationError::InsufficientBalance(format!(
-                "Insufficient relayer balance. Required: {}, Available: {}, Fee: {}, Min balance: {}",
-                required_balance, balance, fee, min_balance
-            )));
+            return Err(SolanaTransactionValidationError::InsufficientBalance(
+                format!(
+                    "Insufficient relayer balance. Required: {}, Available: {}, Fee: {}, Min balance: {}",
+                    required_balance, balance, fee, min_balance
+                ),
+            ));
         }
 
         Ok(())
@@ -545,12 +547,10 @@ impl SolanaTransactionValidator {
             let balance = *account_balances.get(&account).unwrap();
 
             if balance < total_transfer {
-                return Err(SolanaTransactionValidationError::ValidationError(
-                    format!(
-                        "Insufficient balance for cumulative transfers: account {} has balance {} but requires {} across all instructions",
-                        account, balance, total_transfer
-                    ),
-                ));
+                return Err(SolanaTransactionValidationError::ValidationError(format!(
+                    "Insufficient balance for cumulative transfers: account {} has balance {} but requires {} across all instructions",
+                    account, balance, total_transfer
+                )));
             }
         }
         Ok(())
@@ -573,7 +573,7 @@ impl SolanaTransactionValidator {
 #[cfg(test)]
 mod tests {
     use crate::{
-        models::{relayer::SolanaAllowedTokensSwapConfig, SolanaAllowedTokensPolicy},
+        models::{SolanaAllowedTokensPolicy, relayer::SolanaAllowedTokensSwapConfig},
         services::provider::{MockSolanaProviderTrait, SolanaProviderError},
     };
 

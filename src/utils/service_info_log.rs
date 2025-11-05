@@ -41,5 +41,7 @@ pub fn log_service_info() {
     );
 
     // log docs url
-    info!("ℹ️ Visit the Relayer documentation for more information https://docs.openzeppelin.com/relayer/");
+    info!(
+        "ℹ️ Visit the Relayer documentation for more information https://docs.openzeppelin.com/relayer/"
+    );
 }

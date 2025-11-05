@@ -4,7 +4,7 @@ use crate::{
     api::controllers::api_key,
     models::{ApiKeyRequest, DefaultAppState, PaginationQuery},
 };
-use actix_web::{delete, get, post, web, Responder};
+use actix_web::{Responder, delete, get, post, web};
 
 /// List API keys
 #[get("/api-keys")]
@@ -53,7 +53,7 @@ pub fn init(cfg: &mut web::ServiceConfig) {
 mod tests {
     use super::*;
     use crate::utils::mocks::mockutils::create_mock_app_state;
-    use actix_web::{http::StatusCode, test, web, App};
+    use actix_web::{App, http::StatusCode, test, web};
 
     #[actix_web::test]
     async fn test_api_key_routes_are_registered() {

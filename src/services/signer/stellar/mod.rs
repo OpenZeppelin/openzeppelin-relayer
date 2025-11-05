@@ -19,8 +19,8 @@ use crate::{
         SignerRepoModel, SignerType, TransactionRepoModel, VaultSignerConfig,
     },
     services::{
-        signer::{SignXdrTransactionResponseStellar, Signer, SignerError, SignerFactoryError},
         GoogleCloudKmsService, TurnkeyService, VaultConfig, VaultService,
+        signer::{SignXdrTransactionResponseStellar, Signer, SignerError, SignerFactoryError},
     },
 };
 
@@ -154,10 +154,10 @@ impl StellarSignerFactory {
                 StellarSigner::Turnkey(TurnkeySigner::new(service))
             }
             SignerConfig::AwsKms(_) => {
-                return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()))
+                return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()));
             }
             SignerConfig::VaultTransit(_) => {
-                return Err(SignerFactoryError::UnsupportedType("Vault Transit".into()))
+                return Err(SignerFactoryError::UnsupportedType("Vault Transit".into()));
             }
             SignerConfig::Cdp(_) => return Err(SignerFactoryError::UnsupportedType("CDP".into())),
         };

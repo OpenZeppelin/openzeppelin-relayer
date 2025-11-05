@@ -1,7 +1,7 @@
 use crate::{
     domain::evm::PriceParams,
     models::{EvmTransactionData, TransactionError, U256},
-    services::provider::{evm::EvmProviderTrait, ProviderError},
+    services::provider::{ProviderError, evm::EvmProviderTrait},
     utils::{EthereumJsonRpcError, StandardJsonRpcError},
 };
 use serde_json;
@@ -94,7 +94,7 @@ impl<P: EvmProviderTrait> PolygonZKEvmPriceHandler<P> {
                 return Err(TransactionError::UnexpectedError(format!(
                     "Failed to estimate zkEVM fee: {}",
                     e
-                )))
+                )));
             }
         };
 

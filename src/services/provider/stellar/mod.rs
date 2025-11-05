@@ -5,7 +5,8 @@
 //! blockchain state and events.
 
 use async_trait::async_trait;
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
+use soroban_rs::SorobanTransactionResponse;
 use soroban_rs::stellar_rpc_client::Client;
 use soroban_rs::stellar_rpc_client::{
     EventStart, EventType, GetEventsResponse, GetLatestLedgerResponse, GetLedgerEntriesResponse,
@@ -15,7 +16,6 @@ use soroban_rs::stellar_rpc_client::{
 use soroban_rs::xdr::{AccountEntry, Hash, LedgerKey, TransactionEnvelope};
 #[cfg(test)]
 use soroban_rs::xdr::{AccountId, LedgerKeyAccount, PublicKey, Uint256};
-use soroban_rs::SorobanTransactionResponse;
 
 #[cfg(test)]
 use mockall::automock;
@@ -223,7 +223,7 @@ mod tests {
         TransactionEnvelope, TransactionResult, TransactionResultExt, TransactionResultResult,
         VecM,
     };
-    use soroban_rs::{create_mock_set_options_tx_envelope, SorobanTransactionResponse};
+    use soroban_rs::{SorobanTransactionResponse, create_mock_set_options_tx_envelope};
     use std::str::FromStr;
 
     fn dummy_hash() -> Hash {
@@ -634,10 +634,12 @@ mod tests {
             let provider = setup_provider();
             let result = provider.get_account("SOME_ACCOUNT_ID").await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to get account"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Failed to get account")
+            );
         }
 
         #[tokio::test]
@@ -646,10 +648,12 @@ mod tests {
             let envelope: TransactionEnvelope = dummy_transaction_envelope();
             let result = provider.simulate_transaction_envelope(&envelope).await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to simulate transaction"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Failed to simulate transaction")
+            );
         }
 
         #[tokio::test]
@@ -658,10 +662,12 @@ mod tests {
             let envelope: TransactionEnvelope = dummy_transaction_envelope();
             let result = provider.send_transaction_polling(&envelope).await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to send transaction (polling)"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Failed to send transaction (polling)")
+            );
         }
 
         #[tokio::test]
@@ -669,10 +675,12 @@ mod tests {
             let provider = setup_provider();
             let result = provider.get_network().await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to get network"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Failed to get network")
+            );
         }
 
         #[tokio::test]
@@ -680,10 +688,12 @@ mod tests {
             let provider = setup_provider();
             let result = provider.get_latest_ledger().await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to get latest ledger"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Failed to get latest ledger")
+            );
         }
 
         #[tokio::test]
@@ -692,10 +702,12 @@ mod tests {
             let envelope: TransactionEnvelope = dummy_transaction_envelope();
             let result = provider.send_transaction(&envelope).await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to send transaction"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Failed to send transaction")
+            );
         }
 
         #[tokio::test]
@@ -704,10 +716,12 @@ mod tests {
             let hash: Hash = dummy_hash();
             let result = provider.get_transaction(&hash).await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to get transaction"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Failed to get transaction")
+            );
         }
 
         #[tokio::test]
@@ -719,10 +733,12 @@ mod tests {
             };
             let result = provider.get_transactions(req).await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to get transactions"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Failed to get transactions")
+            );
         }
 
         #[tokio::test]
@@ -731,10 +747,12 @@ mod tests {
             let key: LedgerKey = dummy_ledger_key();
             let result = provider.get_ledger_entries(&[key]).await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to get ledger entries"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Failed to get ledger entries")
+            );
         }
 
         #[tokio::test]
@@ -749,10 +767,12 @@ mod tests {
             };
             let result = provider.get_events(req).await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to get events"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Failed to get events")
+            );
         }
     }
 }

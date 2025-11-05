@@ -170,8 +170,8 @@ impl NetworkRepository for InMemoryNetworkRepository {
 #[cfg(test)]
 mod tests {
     use crate::config::{
-        network::IndexerUrls, EvmNetworkConfig, MidnightNetworkConfig, NetworkConfigCommon,
-        SolanaNetworkConfig, StellarNetworkConfig,
+        EvmNetworkConfig, MidnightNetworkConfig, NetworkConfigCommon, SolanaNetworkConfig,
+        StellarNetworkConfig, network::IndexerUrls,
     };
 
     use super::*;

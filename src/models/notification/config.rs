@@ -11,8 +11,8 @@
 use crate::{
     config::ConfigFileError,
     models::{
-        notification::Notification, NotificationType, NotificationValidationError, PlainOrEnvValue,
-        SecretString,
+        NotificationType, NotificationValidationError, PlainOrEnvValue, SecretString,
+        notification::Notification,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -338,7 +338,9 @@ mod tests {
         let _lock = ENV_MUTEX.lock().unwrap();
 
         // Set environment variable
-        std::env::set_var("TEST_SIGNING_KEY", "a".repeat(32));
+        unsafe {
+            std::env::set_var("TEST_SIGNING_KEY", "a".repeat(32));
+        }
 
         let config = json!({
             "id": "notification-test",
@@ -355,6 +357,8 @@ mod tests {
         assert!(notification.get_signing_key().unwrap().is_some());
 
         // Clean up
-        std::env::remove_var("TEST_SIGNING_KEY");
+        unsafe {
+            std::env::remove_var("TEST_SIGNING_KEY");
+        }
     }
 }

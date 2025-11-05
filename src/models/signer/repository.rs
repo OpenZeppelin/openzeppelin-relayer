@@ -12,13 +12,13 @@
 
 use crate::{
     models::{
+        SecretString,
         signer::{
             AwsKmsSignerConfig, CdpSignerConfig, GoogleCloudKmsSignerConfig,
             GoogleCloudKmsSignerKeyConfig, GoogleCloudKmsSignerServiceAccountConfig,
             LocalSignerConfig, Signer, SignerConfig, SignerValidationError, TurnkeySignerConfig,
             VaultSignerConfig, VaultTransitSignerConfig,
         },
-        SecretString,
     },
     utils::{
         deserialize_secret_string, deserialize_secret_vec, serialize_secret_string,

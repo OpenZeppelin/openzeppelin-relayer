@@ -3,7 +3,7 @@
 //! This module contains functions for initializing relayers, ensuring they are
 //! properly configured and ready for operation.
 use crate::{
-    domain::{get_network_relayer, Relayer},
+    domain::{Relayer, get_network_relayer},
     jobs::JobProducerTrait,
     models::{
         NetworkRepoModel, NotificationRepoModel, RelayerRepoModel, SignerRepoModel,
@@ -14,7 +14,7 @@ use crate::{
         Repository, SyncStateTrait, TransactionCounterTrait, TransactionRepository,
     },
 };
-use color_eyre::{eyre::WrapErr, Result};
+use color_eyre::{Result, eyre::WrapErr};
 use futures::future::try_join_all;
 use tracing::debug;
 
@@ -253,9 +253,10 @@ mod tests {
             "Should fail when initialize_relayer returns error"
         );
         let err = result.unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Failed to initialize relayer: test-relayer"));
+        assert!(
+            err.to_string()
+                .contains("Failed to initialize relayer: test-relayer")
+        );
     }
 
     #[tokio::test]

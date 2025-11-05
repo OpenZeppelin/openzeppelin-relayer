@@ -48,10 +48,12 @@ fn test_invalid_log_max_size() {
     let temp_log_dir = temp_dir.path().to_str().unwrap();
 
     // Set LOG_MAX_SIZE to an invalid value.
-    env::set_var("LOG_MODE", "file");
-    env::set_var("LOG_LEVEL", "debug");
-    env::set_var("LOG_DATA_DIR", format!("{}/", temp_log_dir));
-    env::set_var("LOG_MAX_SIZE", "invalid_value");
+    unsafe {
+        env::set_var("LOG_MODE", "file");
+        env::set_var("LOG_LEVEL", "debug");
+        env::set_var("LOG_DATA_DIR", format!("{}/", temp_log_dir));
+        env::set_var("LOG_MAX_SIZE", "invalid_value");
+    }
 
     // Initialize separate from lazy static.
     setup_logging();
@@ -70,10 +72,12 @@ fn test_setup_logging_file_mode_creates_log_file() {
     let temp_log_dir = temp_dir.path().to_str().unwrap();
 
     // Unset env var to ensure default values are used and not to interfere with the test.
-    env::remove_var("LOG_MAX_SIZE");
-    env::set_var("LOG_MODE", "file");
-    env::set_var("LOG_LEVEL", "debug");
-    env::set_var("LOG_DATA_DIR", format!("{}/", temp_log_dir));
+    unsafe {
+        env::remove_var("LOG_MAX_SIZE");
+        env::set_var("LOG_MODE", "file");
+        env::set_var("LOG_LEVEL", "debug");
+        env::set_var("LOG_DATA_DIR", format!("{}/", temp_log_dir));
+    }
 
     // Clean up any previous logs and create the log directory.
     let _ = remove_dir_all(temp_log_dir);
@@ -115,9 +119,11 @@ fn test_log_file_rolls_when_existing() {
     let temp_log_dir = temp_dir.path();
 
     // Setup environment variables for file logging.
-    env::set_var("LOG_MODE", "file");
-    env::set_var("LOG_LEVEL", "debug");
-    env::set_var("LOG_DATA_DIR", temp_log_dir.to_str().unwrap());
+    unsafe {
+        env::set_var("LOG_MODE", "file");
+        env::set_var("LOG_LEVEL", "debug");
+        env::set_var("LOG_DATA_DIR", temp_log_dir.to_str().unwrap());
+    }
 
     // Clean up any previous logs in the temporary directory.
     let _ = fs::remove_dir_all(temp_log_dir);

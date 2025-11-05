@@ -4,7 +4,7 @@
 
 use crate::{
     constants::{DEFAULT_EVM_GAS_PRICE_CAP, DEFAULT_GAS_LIMIT},
-    domain::transaction::evm::price_calculator::{calculate_min_bump, PriceCalculatorTrait},
+    domain::transaction::evm::price_calculator::{PriceCalculatorTrait, calculate_min_bump},
     models::{
         EvmTransactionData, EvmTransactionDataTrait, RelayerRepoModel, TransactionError, U256,
     },
@@ -368,8 +368,8 @@ mod tests {
     use crate::{
         domain::transaction::evm::price_calculator::PriceCalculatorTrait,
         models::{
-            evm::Speed, EvmTransactionData, RelayerEvmPolicy, RelayerNetworkPolicy,
-            RelayerRepoModel, TransactionError, U256,
+            EvmTransactionData, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel,
+            TransactionError, U256, evm::Speed,
         },
     };
     use async_trait::async_trait;

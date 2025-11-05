@@ -361,10 +361,12 @@ mod tests {
         .await;
 
         assert!(result.is_err());
-        assert!(result
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("Failed to parse log"));
+        assert!(
+            result
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("Failed to parse log")
+        );
     }
 }

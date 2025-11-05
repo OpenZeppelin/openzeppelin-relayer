@@ -23,22 +23,23 @@
 use crate::{
     constants::{STELLAR_SMALLEST_UNIT_NAME, STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS},
     domain::{
-        transaction::stellar::fetch_next_sequence_from_chain, BalanceResponse, SignDataRequest,
-        SignDataResponse, SignTransactionExternalResponse, SignTransactionExternalResponseStellar,
-        SignTransactionRequest, SignTypedDataRequest,
+        BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
+        SignTransactionExternalResponseStellar, SignTransactionRequest, SignTypedDataRequest,
+        transaction::stellar::fetch_next_sequence_from_chain,
     },
     jobs::{JobProducerTrait, RelayerHealthCheck, TransactionRequest, TransactionStatusCheck},
     models::{
-        produce_relayer_disabled_payload, DeletePendingTransactionsResponse, DisabledReason,
-        HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest,
-        NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus,
-        RepositoryError, StellarNetwork, StellarRpcResult, TransactionRepoModel, TransactionStatus,
+        DeletePendingTransactionsResponse, DisabledReason, HealthCheckFailure, JsonRpcRequest,
+        JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest, NetworkRpcResult,
+        NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus, RepositoryError,
+        StellarNetwork, StellarRpcResult, TransactionRepoModel, TransactionStatus,
+        produce_relayer_disabled_payload,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
+        TransactionCounterService, TransactionCounterServiceTrait,
         provider::{StellarProvider, StellarProviderTrait},
         signer::{StellarSignTrait, StellarSigner},
-        TransactionCounterService, TransactionCounterServiceTrait,
     },
     utils::calculate_scheduled_timestamp,
 };
@@ -460,7 +461,7 @@ where
             _ => {
                 return Err(RelayerError::NotSupported(
                     "Invalid request type for Stellar relayer".to_string(),
-                ))
+                ));
             }
         };
 
@@ -501,8 +502,8 @@ mod tests {
             InMemoryNetworkRepository, MockRelayerRepository, MockTransactionRepository,
         },
         services::{
-            provider::MockStellarProviderTrait, signer::MockStellarSignTrait,
-            MockTransactionCounterServiceTrait,
+            MockTransactionCounterServiceTrait, provider::MockStellarProviderTrait,
+            signer::MockStellarSignTrait,
         },
     };
     use eyre::eyre;

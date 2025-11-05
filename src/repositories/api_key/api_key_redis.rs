@@ -4,8 +4,8 @@ use crate::models::{ApiKeyRepoModel, PaginationQuery, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{ApiKeyRepositoryTrait, BatchRetrievalResult, PaginatedResult};
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
+use redis::aio::ConnectionManager;
 use std::fmt;
 use std::sync::Arc;
 use tracing::{debug, error, warn};
@@ -406,10 +406,12 @@ mod tests {
 
         let result = RedisApiKeyRepository::new(Arc::new(connection_manager), "".to_string());
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("key prefix cannot be empty"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("key prefix cannot be empty")
+        );
     }
 
     #[tokio::test]
@@ -478,10 +480,12 @@ mod tests {
 
         let result = repo.get_by_id("").await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("ID cannot be empty"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("ID cannot be empty")
+        );
     }
 
     #[tokio::test]

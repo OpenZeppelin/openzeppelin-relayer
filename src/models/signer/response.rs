@@ -305,8 +305,8 @@ mod tests {
 
     #[test]
     fn test_cdp_signer_response_conversion() {
-        use crate::models::signer::{CdpSignerConfig, SignerConfig};
         use crate::models::SecretString;
+        use crate::models::signer::{CdpSignerConfig, SignerConfig};
 
         let cdp_config = CdpSignerConfig {
             api_key_id: "test-api-key-id".to_string(),
@@ -346,7 +346,9 @@ mod tests {
         assert!(json.contains("\"id\":\"test-cdp-signer\""));
         assert!(json.contains("\"type\":\"cdp\""));
         assert!(json.contains("\"api_key_id\":\"test-api-key-id\""));
-        assert!(json.contains("\"account_address\":\"0x742d35Cc6634C0532925a3b844Bc454e4438f44f\""));
+        assert!(
+            json.contains("\"account_address\":\"0x742d35Cc6634C0532925a3b844Bc454e4438f44f\"")
+        );
 
         // Verify that secrets are not included
         assert!(!json.contains("api_key_secret"));

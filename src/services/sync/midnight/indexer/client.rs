@@ -14,7 +14,7 @@ use serde_json::json;
 use std::time::Duration;
 use tokio_tungstenite::{
     connect_async,
-    tungstenite::{client::IntoClientRequest, Message},
+    tungstenite::{Message, client::IntoClientRequest},
 };
 
 /// Midnight GraphQL indexer client

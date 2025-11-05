@@ -5,7 +5,7 @@
 
 use crate::{
     models::EvmNetwork,
-    services::provider::{evm::EvmProviderTrait, ProviderError},
+    services::provider::{ProviderError, evm::EvmProviderTrait},
 };
 
 /// Universal gas price fetcher using standard EVM RPC methods.

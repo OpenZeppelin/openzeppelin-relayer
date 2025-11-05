@@ -1,9 +1,9 @@
 use crate::{
     models::{
-        evm::Speed, EvmTransactionDataSignature, NetworkTransactionData, TransactionRepoModel,
-        TransactionStatus, U256,
+        EvmTransactionDataSignature, NetworkTransactionData, TransactionRepoModel,
+        TransactionStatus, U256, evm::Speed,
     },
-    utils::{deserialize_optional_u128, deserialize_optional_u64, serialize_optional_u128},
+    utils::{deserialize_optional_u64, deserialize_optional_u128, serialize_optional_u128},
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

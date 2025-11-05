@@ -7,8 +7,8 @@ use crate::{
     services::plugins,
 };
 use utoipa::{
-    openapi::security::{Http, HttpAuthScheme, SecurityScheme},
     Modify, OpenApi,
+    openapi::security::{Http, HttpAuthScheme, SecurityScheme},
 };
 
 const API_VERSION: &str = env!("CARGO_PKG_VERSION");

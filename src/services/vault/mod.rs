@@ -638,9 +638,10 @@ mod tests {
 
         if let Err(e) = result {
             assert!(matches!(e, VaultError::ClientError(_)));
-            assert!(e
-                .to_string()
-                .contains("The Vault server returned an error (status code 404)"));
+            assert!(
+                e.to_string()
+                    .contains("The Vault server returned an error (status code 404)")
+            );
         }
     }
 

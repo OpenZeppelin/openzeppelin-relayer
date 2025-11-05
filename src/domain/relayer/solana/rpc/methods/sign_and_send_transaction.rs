@@ -26,14 +26,14 @@ use tracing::{debug, error};
 
 use crate::{
     models::{
-        produce_solana_rpc_webhook_payload, EncodedSerializedTransaction, NetworkTransactionData,
-        NetworkTransactionRequest, SignAndSendTransactionRequestParams,
-        SignAndSendTransactionResult, SolanaFeePaymentStrategy, SolanaTransactionData,
-        SolanaTransactionRequest, SolanaWebhookRpcPayload, TransactionRepoModel, TransactionStatus,
-        TransactionUpdateRequest,
+        EncodedSerializedTransaction, NetworkTransactionData, NetworkTransactionRequest,
+        SignAndSendTransactionRequestParams, SignAndSendTransactionResult,
+        SolanaFeePaymentStrategy, SolanaTransactionData, SolanaTransactionRequest,
+        SolanaWebhookRpcPayload, TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
+        produce_solana_rpc_webhook_payload,
     },
     repositories::{Repository, TransactionRepository},
-    services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
+    services::{JupiterServiceTrait, provider::SolanaProviderTrait, signer::SolanaSignTrait},
 };
 
 use super::*;

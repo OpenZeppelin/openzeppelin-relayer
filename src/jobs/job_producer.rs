@@ -296,8 +296,8 @@ impl JobProducerTrait for JobProducer {
 mod tests {
     use super::*;
     use crate::models::{
-        EvmTransactionResponse, TransactionResponse, TransactionStatus, WebhookNotification,
-        WebhookPayload, U256,
+        EvmTransactionResponse, TransactionResponse, TransactionStatus, U256, WebhookNotification,
+        WebhookPayload,
     };
     use crate::utils::calculate_scheduled_timestamp;
 
@@ -337,6 +337,7 @@ mod tests {
         pub transaction_status_queue: TestRedisStorage<Job<TransactionStatusCheck>>,
         pub transaction_status_queue_evm: TestRedisStorage<Job<TransactionStatusCheck>>,
         pub transaction_status_queue_stellar: TestRedisStorage<Job<TransactionStatusCheck>>,
+        pub transaction_status_queue_midnight: TestRedisStorage<Job<TransactionStatusCheck>>,
         pub notification_queue: TestRedisStorage<Job<NotificationSend>>,
         pub solana_token_swap_request_queue: TestRedisStorage<Job<SolanaTokenSwapRequest>>,
         pub relayer_health_check_queue: TestRedisStorage<Job<RelayerHealthCheck>>,
@@ -350,6 +351,7 @@ mod tests {
                 transaction_status_queue: TestRedisStorage::new(),
                 transaction_status_queue_evm: TestRedisStorage::new(),
                 transaction_status_queue_stellar: TestRedisStorage::new(),
+                transaction_status_queue_midnight: TestRedisStorage::new(),
                 notification_queue: TestRedisStorage::new(),
                 solana_token_swap_request_queue: TestRedisStorage::new(),
                 relayer_health_check_queue: TestRedisStorage::new(),
@@ -453,6 +455,7 @@ mod tests {
                 Some(NetworkType::Evm) => &mut queue.transaction_status_queue_evm,
                 Some(NetworkType::Stellar) => &mut queue.transaction_status_queue_stellar,
                 Some(NetworkType::Solana) => &mut queue.transaction_status_queue, // Use default queue
+                Some(NetworkType::Midnight) => &mut queue.transaction_status_queue_midnight,
                 None => &mut queue.transaction_status_queue, // Legacy messages without network_type
             };
 

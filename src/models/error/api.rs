@@ -89,9 +89,11 @@ mod tests {
         // Test Report conversion
         let report = Report::msg("Something went wrong");
         let internal_eyre_error = ApiError::InternalEyreError(report);
-        assert!(internal_eyre_error
-            .to_string()
-            .starts_with("Internal Server Error:"));
+        assert!(
+            internal_eyre_error
+                .to_string()
+                .starts_with("Internal Server Error:")
+        );
     }
 
     #[test]

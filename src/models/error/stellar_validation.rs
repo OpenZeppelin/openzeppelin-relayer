@@ -23,7 +23,9 @@ pub enum StellarValidationError {
     MultipleSorobanOperations,
 
     /// Soroban operation mixed with non-Soroban operations
-    #[error("Soroban operations must be exclusive - no other operations allowed in the same transaction")]
+    #[error(
+        "Soroban operations must be exclusive - no other operations allowed in the same transaction"
+    )]
     SorobanNotExclusive,
 
     /// Soroban operation with non-None memo

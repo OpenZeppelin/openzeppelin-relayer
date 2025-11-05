@@ -1,11 +1,11 @@
 use crate::observability::request_id::set_request_id;
 use actix_web::{
-    dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
-    http::header::{HeaderName, HeaderValue},
     Error, HttpMessage,
+    dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready},
+    http::header::{HeaderName, HeaderValue},
 };
 use futures::future::LocalBoxFuture;
-use std::future::{ready, Ready};
+use std::future::{Ready, ready};
 use tracing_actix_web::RequestId as ActixRequestId;
 
 /// Middleware that adds request ID tracking to all HTTP requests
@@ -77,7 +77,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actix_web::{test, web, App, HttpResponse};
+    use actix_web::{App, HttpResponse, test, web};
     use uuid::Uuid;
 
     #[actix_rt::test]

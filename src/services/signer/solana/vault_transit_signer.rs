@@ -29,7 +29,7 @@ use crate::{
         Address, NetworkTransactionData, Signer as SignerDomainModel, SignerError,
         TransactionRepoModel,
     },
-    services::{signer::Signer, VaultConfig, VaultService, VaultServiceTrait},
+    services::{VaultConfig, VaultService, VaultServiceTrait, signer::Signer},
     utils::{base64_decode, base64_encode},
 };
 
@@ -143,7 +143,7 @@ mod tests {
             SecretString, Signer as SignerDomainModel, SignerConfig, SolanaTransactionData,
             VaultTransitSignerConfig,
         },
-        services::{vault::VaultError, MockVaultServiceTrait},
+        services::{MockVaultServiceTrait, vault::VaultError},
     };
     use mockall::predicate::*;
 

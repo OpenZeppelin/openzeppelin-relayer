@@ -26,7 +26,7 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::{engine::general_purpose, Engine as _};
+    use base64::{Engine as _, engine::general_purpose};
 
     #[test]
     fn test_encryption_key_generation() {

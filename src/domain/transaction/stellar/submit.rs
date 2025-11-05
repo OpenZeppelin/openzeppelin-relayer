@@ -5,7 +5,7 @@
 use chrono::Utc;
 use tracing::{info, warn};
 
-use super::{utils::is_bad_sequence_error, StellarRelayerTransaction};
+use super::{StellarRelayerTransaction, utils::is_bad_sequence_error};
 use crate::domain::transaction::common::is_final_state;
 use crate::{
     constants::STELLAR_BAD_SEQUENCE_RETRY_DELAY_SECONDS,

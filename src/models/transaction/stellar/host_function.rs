@@ -210,7 +210,7 @@ fn wasm_source_to_bytes(wasm: WasmSource) -> Result<Vec<u8>, SignerError> {
         WasmSource::Hex { hex } => hex::decode(&hex)
             .map_err(|e| SignerError::ConversionError(format!("Invalid hex in wasm: {}", e))),
         WasmSource::Base64 { base64 } => {
-            use base64::{engine::general_purpose, Engine as _};
+            use base64::{Engine as _, engine::general_purpose};
             general_purpose::STANDARD
                 .decode(&base64)
                 .map_err(|e| SignerError::ConversionError(format!("Invalid base64 in wasm: {}", e)))
@@ -486,10 +486,12 @@ mod tests {
             let salt = Some("abcd".to_string()); // Too short
             let result = parse_salt_bytes(salt);
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Salt must be 32 bytes"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Salt must be 32 bytes")
+            );
         }
     }
 
@@ -515,10 +517,12 @@ mod tests {
         fn test_wrong_length() {
             let result = parse_wasm_hash("abcd");
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Hash must be 32 bytes"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Hash must be 32 bytes")
+            );
         }
     }
 

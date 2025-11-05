@@ -4,8 +4,8 @@
 //! allowing the service to maintain state across restarts and scale horizontally.
 
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
+use redis::aio::ConnectionManager;
 use std::sync::Arc;
 
 use crate::models::RepositoryError;

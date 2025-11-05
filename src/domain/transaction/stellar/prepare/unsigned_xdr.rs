@@ -46,7 +46,7 @@ where
         _ => {
             return Err(TransactionError::UnexpectedError(
                 "Expected UnsignedXdr input".into(),
-            ))
+            ));
         }
     };
 
@@ -533,8 +533,8 @@ mod xdr_transaction_tests {
 
     use super::*;
     use crate::constants::STELLAR_DEFAULT_TRANSACTION_FEE;
-    use crate::domain::transaction::stellar::test_helpers::*;
     use crate::domain::SignTransactionResponse;
+    use crate::domain::transaction::stellar::test_helpers::*;
     use crate::models::{NetworkTransactionData, RepositoryError, TransactionStatus};
     use soroban_rs::xdr::{
         Memo, MuxedAccount, Transaction, TransactionEnvelope, TransactionExt,
@@ -883,11 +883,11 @@ mod xdr_transaction_tests {
         };
 
         match &mut envelope {
-            TransactionEnvelope::Tx(ref mut e) => {
+            TransactionEnvelope::Tx(e) => {
                 e.tx.fee = 1;
                 e.tx.operations = vec![payment_op].try_into().unwrap();
             }
-            TransactionEnvelope::TxV0(ref mut e) => {
+            TransactionEnvelope::TxV0(e) => {
                 e.tx.fee = 1;
                 e.tx.operations = vec![payment_op].try_into().unwrap();
             }

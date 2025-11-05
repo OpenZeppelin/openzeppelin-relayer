@@ -1,6 +1,6 @@
 use alloy::{
     consensus::{SignableTransaction, TxEip1559, TxLegacy},
-    primitives::{utils::eip191_message, Signature},
+    primitives::{Signature, utils::eip191_message},
 };
 use async_trait::async_trait;
 
@@ -14,11 +14,11 @@ use crate::{
         SignerError,
     },
     services::{
-        signer::{
-            evm::{construct_eip712_message_hash, validate_and_format_signature},
-            DataSignerTrait, Signer,
-        },
         AwsKmsClient, AwsKmsEvmService, AwsKmsService,
+        signer::{
+            DataSignerTrait, Signer,
+            evm::{construct_eip712_message_hash, validate_and_format_signature},
+        },
     },
 };
 
@@ -150,7 +150,7 @@ mod tests {
     use super::*;
     use crate::{
         models::{AwsKmsSignerConfig, EvmTransactionData, U256},
-        services::{tests::setup_mock_kms_client, MockAwsKmsClient},
+        services::{MockAwsKmsClient, tests::setup_mock_kms_client},
     };
 
     fn setup_mock_aws_signer() -> AwsKmsSigner<AwsKmsService<MockAwsKmsClient>> {

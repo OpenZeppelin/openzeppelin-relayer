@@ -24,8 +24,8 @@ use crate::{
     },
     services::{
         signer::{
-            evm::{local_signer::LocalSigner, DataSignerTrait},
             Signer,
+            evm::{DataSignerTrait, local_signer::LocalSigner},
         },
         vault::{VaultService, VaultServiceTrait},
     },

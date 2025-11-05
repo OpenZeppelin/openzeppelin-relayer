@@ -580,20 +580,26 @@ mod tests {
         assert_eq!(cleaned_count, 1);
 
         // Verify expired transaction was deleted
-        assert!(transaction_repo
-            .get_by_id("expired-tx".to_string())
-            .await
-            .is_err());
+        assert!(
+            transaction_repo
+                .get_by_id("expired-tx".to_string())
+                .await
+                .is_err()
+        );
 
         // Verify non-expired transactions still exist
-        assert!(transaction_repo
-            .get_by_id("future-tx".to_string())
-            .await
-            .is_ok());
-        assert!(transaction_repo
-            .get_by_id("no-delete-tx".to_string())
-            .await
-            .is_ok());
+        assert!(
+            transaction_repo
+                .get_by_id("future-tx".to_string())
+                .await
+                .is_ok()
+        );
+        assert!(
+            transaction_repo
+                .get_by_id("no-delete-tx".to_string())
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -612,20 +618,24 @@ mod tests {
         transaction_repo.create(transaction.clone()).await.unwrap();
 
         // Verify it exists
-        assert!(transaction_repo
-            .get_by_id("test-tx".to_string())
-            .await
-            .is_ok());
+        assert!(
+            transaction_repo
+                .get_by_id("test-tx".to_string())
+                .await
+                .is_ok()
+        );
 
         // Delete it
         let result = delete_expired_transaction(&transaction, &transaction_repo, relayer_id).await;
         assert!(result.is_ok());
 
         // Verify it was deleted
-        assert!(transaction_repo
-            .get_by_id("test-tx".to_string())
-            .await
-            .is_err());
+        assert!(
+            transaction_repo
+                .get_by_id("test-tx".to_string())
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -644,10 +654,12 @@ mod tests {
         transaction_repo.create(transaction.clone()).await.unwrap();
 
         // Verify it exists
-        assert!(transaction_repo
-            .get_by_id("test-tx".to_string())
-            .await
-            .is_ok());
+        assert!(
+            transaction_repo
+                .get_by_id("test-tx".to_string())
+                .await
+                .is_ok()
+        );
 
         // Try to delete it - should fail due to validation
         let result = delete_expired_transaction(&transaction, &transaction_repo, relayer_id).await;
@@ -658,10 +670,12 @@ mod tests {
         assert!(error_message.contains("Pending"));
 
         // Verify it still exists (wasn't deleted)
-        assert!(transaction_repo
-            .get_by_id("test-tx".to_string())
-            .await
-            .is_ok());
+        assert!(
+            transaction_repo
+                .get_by_id("test-tx".to_string())
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]

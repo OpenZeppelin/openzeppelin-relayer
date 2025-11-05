@@ -7,8 +7,9 @@ pub mod test_utils {
         domain::transaction::evm::{EvmRelayerTransaction, MockPriceCalculatorTrait},
         jobs::MockJobProducerTrait,
         models::{
-            evm::Speed, EvmTransactionData, NetworkTransactionData, NetworkType, RelayerEvmPolicy,
+            EvmTransactionData, NetworkTransactionData, NetworkType, RelayerEvmPolicy,
             RelayerNetworkPolicy, RelayerRepoModel, TransactionRepoModel, TransactionStatus, U256,
+            evm::Speed,
         },
         repositories::{
             MockNetworkRepository, MockRelayerRepository, MockTransactionCounterTrait,

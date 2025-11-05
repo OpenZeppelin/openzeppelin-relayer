@@ -880,9 +880,10 @@ mod tests {
         assert!(result.is_err());
         match result {
             Err(JupiterServiceError::HttpRequestError(err)) => {
-                assert!(err
-                    .to_string()
-                    .contains("HTTP status client error (400 Bad Request)"));
+                assert!(
+                    err.to_string()
+                        .contains("HTTP status client error (400 Bad Request)")
+                );
             }
             _ => panic!("Expected HttpRequestError but got different error type"),
         }

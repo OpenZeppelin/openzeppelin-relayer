@@ -2,51 +2,54 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 
-use midnight_ledger_prototype::{
-    coin_structure::coin::{Commitment, Nullifier, SecretKey},
-    structure::ContractCall,
-    transient_crypto::curve::Fr,
-};
-
+use midnight_coin_structure::coin::{Commitment, Nullifier, SecretKey};
+use midnight_ledger::structure::ContractCall;
 use midnight_node_ledger_helpers::{
-    CoinInfo, CoinPublicKey, ContractAction, ContractAddress, ContractCalls, ContractDeploy,
-    EncryptionPublicKey, HashOutput, Input, InputInfo, IntentInfo, NetworkId, Offer, OfferInfo,
-    Output, OutputInfo, ProofPreimage, Proofish, SecretKeys, TokenType, Transaction,
-    TransactionResult, Transcript, Transient, DB, NATIVE_TOKEN,
+    CoinInfo, CoinPublicKey, ContractAction, ContractAddress, ContractDeploy, DB,
+    EncryptionPublicKey, Fr, HashOutput, Input, InputInfo, IntentInfo, NetworkId, Offer, OfferInfo,
+    Output, OutputInfo, ProofKind, SecretKeys, ShieldedTokenType, SignatureKind, TokenType,
+    Transaction, TransactionResult, Transcript, Transient,
 };
+use midnight_storage::Storable;
 
 // Wrapper types for Midnight ZSwap types
 #[derive(Debug, Clone)]
-pub struct MidnightZSwapInput<P: Proofish<D>, D: DB> {
-    pub inner: Input<P::LatestProof>,
+pub struct MidnightZSwapInput<P: ProofKind<D>, D: DB> {
+    pub inner: Input<P::LatestProof, D>,
     _phantom: PhantomData<D>,
 }
 
 #[derive(Debug, Clone)]
-pub struct MidnightZSwapOutput<P: Proofish<D>, D: DB> {
-    pub inner: Output<P::LatestProof>,
+pub struct MidnightZSwapOutput<P: ProofKind<D>, D: DB> {
+    pub inner: Output<P::LatestProof, D>,
     _phantom: PhantomData<D>,
 }
 
 #[derive(Debug, Clone)]
-pub struct MidnightZSwapOffer<P: Proofish<D>, D: DB> {
-    pub inner: Offer<P::LatestProof>,
+pub struct MidnightZSwapOffer<P: ProofKind<D>, D: DB> {
+    pub inner: Offer<P::LatestProof, D>,
     _phantom: PhantomData<D>,
 }
 
-impl<P: Proofish<D>, D: DB> MidnightZSwapOffer<P, D> {
+impl<P: ProofKind<D>, D: DB> MidnightZSwapOffer<P, D> {
     pub fn new(
-        inputs: Vec<Input<P::LatestProof>>,
-        outputs: Vec<Output<P::LatestProof>>,
-        transient: Vec<Transient<P::LatestProof>>,
-        deltas: Vec<(TokenType, i128)>,
+        inputs: Vec<Input<P::LatestProof, D>>,
+        outputs: Vec<Output<P::LatestProof, D>>,
+        transient: Vec<Transient<P::LatestProof, D>>,
+        deltas: Vec<(ShieldedTokenType, i128)>,
     ) -> Self {
+        use midnight_node_ledger_helpers::{Array, Delta};
+        // Convert Vec<(ShieldedTokenType, i128)> to Vec<Delta>
+        let delta_vec: Vec<Delta> = deltas
+            .into_iter()
+            .map(|(token_type, value)| Delta { token_type, value })
+            .collect();
         Self {
-            inner: Offer::<P::LatestProof> {
-                inputs,
-                outputs,
-                transient,
-                deltas,
+            inner: Offer::<P::LatestProof, D> {
+                inputs: inputs.into(),
+                outputs: outputs.into(),
+                transient: transient.into(),
+                deltas: (&delta_vec).into(),
             },
             _phantom: PhantomData,
         }
@@ -54,113 +57,100 @@ impl<P: Proofish<D>, D: DB> MidnightZSwapOffer<P, D> {
 }
 
 #[derive(Debug, Clone)]
-pub struct MidnightTransaction<P: Proofish<D>, D: DB> {
-    pub inner: Transaction<P, D>,
+pub struct MidnightTransaction<P: ProofKind<D>, S: SignatureKind<D>, B: Storable<D>, D: DB> {
+    pub inner: Transaction<S, P, B, D>,
     _phantom: PhantomData<D>,
 }
 
-impl<D: DB> MidnightTransaction<ProofPreimage, D> {
-    pub fn new(
-        guaranteed_offer: MidnightZSwapOffer<ProofPreimage, D>,
-        fallible_offer: Option<MidnightZSwapOffer<ProofPreimage, D>>,
-        contract_calls: Option<ContractCalls<ProofPreimage, D>>,
-    ) -> Self {
-        Self {
-            inner: Transaction::new(
-                guaranteed_offer.inner,
-                fallible_offer.map(|o| o.inner),
-                contract_calls,
-            ),
-            _phantom: PhantomData,
-        }
-    }
-}
-
-pub struct MidnightZSwapIntent<D: DB> {
+pub struct MidnightZSwapIntent<D: DB + Clone> {
     pub inner: IntentInfo<D>,
 }
 
 #[derive(Debug, Clone)]
-pub struct MidnightZSwapTransient<P: Proofish<D>, D: DB> {
-    pub inner: Transient<P>,
+pub struct MidnightZSwapTransient<P: ProofKind<D>, D: DB> {
+    pub inner: Transient<P::LatestProof, D>,
     _phantom: PhantomData<D>,
 }
 
 // Implement Deref for easy access to inner fields
-impl<P: Proofish<D>, D: DB> std::ops::Deref for MidnightZSwapInput<P, D> {
-    type Target = Input<P::LatestProof>;
+impl<P: ProofKind<D>, D: DB> std::ops::Deref for MidnightZSwapInput<P, D> {
+    type Target = Input<P::LatestProof, D>;
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
-impl<P: Proofish<D>, D: DB> std::ops::Deref for MidnightZSwapOutput<P, D> {
-    type Target = Output<P::LatestProof>;
+impl<P: ProofKind<D>, D: DB> std::ops::Deref for MidnightZSwapOutput<P, D> {
+    type Target = Output<P::LatestProof, D>;
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
-impl<P: Proofish<D>, D: DB> std::ops::Deref for MidnightZSwapOffer<P, D> {
-    type Target = Offer<P::LatestProof>;
+impl<P: ProofKind<D>, D: DB> std::ops::Deref for MidnightZSwapOffer<P, D> {
+    type Target = Offer<P::LatestProof, D>;
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
-impl<D: DB> std::ops::Deref for MidnightZSwapIntent<D> {
+impl<D: DB + Clone> std::ops::Deref for MidnightZSwapIntent<D> {
     type Target = IntentInfo<D>;
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
-impl<P: Proofish<D>, D: DB> std::ops::Deref for MidnightZSwapTransient<P, D> {
-    type Target = Transient<P>;
+impl<P: ProofKind<D>, D: DB> std::ops::Deref for MidnightZSwapTransient<P, D> {
+    type Target = Transient<P::LatestProof, D>;
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
-impl<P: Proofish<D>, D: DB> std::ops::Deref for MidnightTransaction<P, D> {
-    type Target = Transaction<P, D>;
+impl<P: ProofKind<D>, S: SignatureKind<D>, B: Storable<D>, D: DB> std::ops::Deref
+    for MidnightTransaction<P, S, B, D>
+{
+    type Target = Transaction<S, P, B, D>;
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
 // Implement DerefMut for mutable access
-impl<P: Proofish<D>, D: DB> std::ops::DerefMut for MidnightZSwapInput<P, D> {
+impl<P: ProofKind<D>, D: DB> std::ops::DerefMut for MidnightZSwapInput<P, D> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
-impl<P: Proofish<D>, D: DB> std::ops::DerefMut for MidnightZSwapOutput<P, D> {
+impl<P: ProofKind<D>, D: DB> std::ops::DerefMut for MidnightZSwapOutput<P, D> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
-impl<P: Proofish<D>, D: DB> std::ops::DerefMut for MidnightZSwapOffer<P, D> {
+impl<P: ProofKind<D>, D: DB> std::ops::DerefMut for MidnightZSwapOffer<P, D> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
-impl<D: DB> std::ops::DerefMut for MidnightZSwapIntent<D> {
+impl<D: DB + Clone> std::ops::DerefMut for MidnightZSwapIntent<D> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
-impl<P: Proofish<D>, D: DB> std::ops::DerefMut for MidnightZSwapTransient<P, D> {
+impl<P: ProofKind<D>, D: DB> std::ops::DerefMut for MidnightZSwapTransient<P, D> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
-impl<P: Proofish<D>, D: DB> std::ops::DerefMut for MidnightTransaction<P, D> {
+impl<P: ProofKind<D>, S: SignatureKind<D>, B: Storable<D>, D: DB> std::ops::DerefMut
+    for MidnightTransaction<P, S, B, D>
+{
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
@@ -185,8 +175,8 @@ pub type MidnightOfferInfo<D> = OfferInfo<D>;
 // Segment ID type
 pub type SegmentId = u16;
 
-// Copied from midnight-ledger-prototype since it's not exported
-// <https://github.com/midnightntwrk/midnight-ledger-prototype/blob/b315c1d60d97c076e23fa3b6acf3329dde1aa4c4/onchain-runtime/src/context.rs#L197-L203>
+// Copied from midnight-ledger since it's not exported
+// <https://github.com/midnightntwrk/midnight-ledger/blob/ledger-6.1.0-alpha.3/onchain-runtime/src/context.rs#L343-L355>
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Effects {
     pub claimed_nullifiers: HashSet<Nullifier>,
@@ -233,7 +223,7 @@ pub struct MidnightProofResponse {
 
 // Constants
 pub const SEGMENT_GUARANTEED: SegmentId = 0;
-pub const DUST_TOKEN_TYPE: TokenType = NATIVE_TOKEN;
+pub const DUST_TOKEN_TYPE: TokenType = TokenType::Dust;
 
 pub fn to_midnight_network_id(network: &str) -> NetworkId {
     match network.to_lowercase().as_str() {

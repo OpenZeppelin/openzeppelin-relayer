@@ -10,8 +10,8 @@ use alloy::{
     network::AnyNetwork,
     primitives::{Bytes, TxKind, Uint},
     providers::{
-        fillers::{BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller},
         Identity, Provider, ProviderBuilder, RootProvider,
+        fillers::{BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller},
     },
     rpc::{
         client::ClientBuilder,
@@ -34,7 +34,7 @@ use reqwest::ClientBuilder as ReqwestClientBuilder;
 use serde_json;
 
 use super::rpc_selector::RpcSelector;
-use super::{retry_rpc_call, RetryConfig};
+use super::{RetryConfig, retry_rpc_call};
 use crate::models::{
     BlockResponse, EvmTransactionData, RpcConfig, TransactionError, TransactionReceipt, U256,
 };
@@ -593,12 +593,13 @@ mod tests {
 
     impl EvmTestEnvGuard {
         fn new(mutex_guard: std::sync::MutexGuard<'static, ()>) -> Self {
-            std::env::set_var(
-                "API_KEY",
-                "test_api_key_for_evm_provider_new_this_is_long_enough_32_chars",
-            );
-            std::env::set_var("REDIS_URL", "redis://test-dummy-url-for-evm-provider");
-
+            unsafe {
+                std::env::set_var(
+                    "API_KEY",
+                    "test_api_key_for_evm_provider_new_this_is_long_enough_32_chars",
+                );
+                std::env::set_var("REDIS_URL", "redis://test-dummy-url-for-evm-provider");
+            }
             Self {
                 _mutex_guard: mutex_guard,
             }
@@ -607,8 +608,10 @@ mod tests {
 
     impl Drop for EvmTestEnvGuard {
         fn drop(&mut self) {
-            std::env::remove_var("API_KEY");
-            std::env::remove_var("REDIS_URL");
+            unsafe {
+                std::env::remove_var("API_KEY");
+                std::env::remove_var("REDIS_URL");
+            }
         }
     }
 

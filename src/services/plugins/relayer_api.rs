@@ -6,7 +6,7 @@
 //! - `sendTransaction` - sends a transaction to the relayer.
 //!
 use crate::domain::{
-    get_network_relayer, get_relayer_by_id, get_transaction_by_id, Relayer, SignTransactionRequest,
+    Relayer, SignTransactionRequest, get_network_relayer, get_relayer_by_id, get_transaction_by_id,
 };
 use crate::jobs::JobProducerTrait;
 use crate::models::{
@@ -501,9 +501,11 @@ mod tests {
     use super::*;
 
     fn setup_test_env() {
-        env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D"); // noboost
-        env::set_var("REDIS_URL", "redis://localhost:6379");
-        env::set_var("RPC_TIMEOUT_MS", "5000");
+        unsafe {
+            env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D"); // noboost
+            env::set_var("REDIS_URL", "redis://localhost:6379");
+            env::set_var("RPC_TIMEOUT_MS", "5000");
+        }
     }
 
     #[tokio::test]

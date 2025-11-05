@@ -9,8 +9,8 @@ use crate::repositories::{
     BatchRetrievalResult, PaginatedResult, Repository, TransactionRepository,
 };
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
+use redis::aio::ConnectionManager;
 use std::fmt;
 use std::sync::Arc;
 use tracing::{debug, error, warn};
@@ -953,7 +953,7 @@ impl TransactionRepository for RedisTransactionRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{evm::Speed, EvmTransactionData, NetworkType};
+    use crate::models::{EvmTransactionData, NetworkType, evm::Speed};
     use alloy::primitives::U256;
     use lazy_static::lazy_static;
     use redis::Client;
@@ -1075,19 +1075,23 @@ mod tests {
     async fn test_key_generation() {
         let repo = setup_test_repo().await;
 
-        assert!(repo
-            .tx_key("relayer-1", "test-id")
-            .contains(":relayer:relayer-1:tx:test-id"));
-        assert!(repo
-            .tx_to_relayer_key("test-id")
-            .contains(":relayer:tx_to_relayer:test-id"));
+        assert!(
+            repo.tx_key("relayer-1", "test-id")
+                .contains(":relayer:relayer-1:tx:test-id")
+        );
+        assert!(
+            repo.tx_to_relayer_key("test-id")
+                .contains(":relayer:tx_to_relayer:test-id")
+        );
         assert!(repo.relayer_list_key().contains(":relayer_list"));
-        assert!(repo
-            .relayer_status_key("relayer-1", &TransactionStatus::Pending)
-            .contains(":relayer:relayer-1:status:Pending"));
-        assert!(repo
-            .relayer_nonce_key("relayer-1", 42)
-            .contains(":relayer:relayer-1:nonce:42"));
+        assert!(
+            repo.relayer_status_key("relayer-1", &TransactionStatus::Pending)
+                .contains(":relayer:relayer-1:status:Pending")
+        );
+        assert!(
+            repo.relayer_nonce_key("relayer-1", 42)
+                .contains(":relayer:relayer-1:nonce:42")
+        );
     }
 
     #[tokio::test]
@@ -1631,10 +1635,11 @@ mod tests {
         let _lock = ENV_MUTEX.lock().await;
 
         use chrono::{DateTime, Duration, Utc};
-        use std::env;
 
         // Use a unique test environment variable to avoid conflicts
-        env::set_var("TRANSACTION_EXPIRATION_HOURS", "6");
+        unsafe {
+            std::env::set_var("TRANSACTION_EXPIRATION_HOURS", "6");
+        }
 
         let repo = setup_test_repo().await;
 
@@ -1681,15 +1686,18 @@ mod tests {
             let tolerance = Duration::minutes(5);
 
             assert!(
-                duration_from_before >= expected_duration - tolerance &&
-                duration_from_before <= expected_duration + tolerance,
+                duration_from_before >= expected_duration - tolerance
+                    && duration_from_before <= expected_duration + tolerance,
                 "delete_at should be approximately 6 hours from now for status: {:?}. Duration: {:?}",
-                status, duration_from_before
+                status,
+                duration_from_before
             );
         }
 
         // Cleanup
-        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        unsafe {
+            std::env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        }
     }
 
     #[tokio::test]
@@ -1697,9 +1705,9 @@ mod tests {
     async fn test_update_status_does_not_set_delete_at_for_non_final_statuses() {
         let _lock = ENV_MUTEX.lock().await;
 
-        use std::env;
-
-        env::set_var("TRANSACTION_EXPIRATION_HOURS", "4");
+        unsafe {
+            std::env::set_var("TRANSACTION_EXPIRATION_HOURS", "4");
+        }
 
         let repo = setup_test_repo().await;
 
@@ -1733,7 +1741,9 @@ mod tests {
         }
 
         // Cleanup
-        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        unsafe {
+            std::env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        }
     }
 
     #[tokio::test]
@@ -1742,9 +1752,10 @@ mod tests {
         let _lock = ENV_MUTEX.lock().await;
 
         use chrono::{DateTime, Duration, Utc};
-        use std::env;
 
-        env::set_var("TRANSACTION_EXPIRATION_HOURS", "8");
+        unsafe {
+            std::env::set_var("TRANSACTION_EXPIRATION_HOURS", "8");
+        }
 
         let repo = setup_test_repo().await;
         let tx_id = format!("test-partial-final-{}", Uuid::new_v4());
@@ -1801,7 +1812,9 @@ mod tests {
         );
 
         // Cleanup
-        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        unsafe {
+            std::env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        }
     }
 
     #[tokio::test]
@@ -1809,9 +1822,9 @@ mod tests {
     async fn test_update_status_preserves_existing_delete_at() {
         let _lock = ENV_MUTEX.lock().await;
 
-        use std::env;
-
-        env::set_var("TRANSACTION_EXPIRATION_HOURS", "2");
+        unsafe {
+            std::env::set_var("TRANSACTION_EXPIRATION_HOURS", "2");
+        }
 
         let repo = setup_test_repo().await;
         let tx_id = format!("test-preserve-delete-at-{}", Uuid::new_v4());
@@ -1838,16 +1851,18 @@ mod tests {
         );
 
         // Cleanup
-        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        unsafe {
+            std::env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        }
     }
     #[tokio::test]
     #[ignore = "Requires active Redis instance"]
     async fn test_partial_update_without_status_change_preserves_delete_at() {
         let _lock = ENV_MUTEX.lock().await;
 
-        use std::env;
-
-        env::set_var("TRANSACTION_EXPIRATION_HOURS", "3");
+        unsafe {
+            std::env::set_var("TRANSACTION_EXPIRATION_HOURS", "3");
+        }
 
         let repo = setup_test_repo().await;
         let tx_id = format!("test-preserve-no-status-{}", Uuid::new_v4());
@@ -1891,6 +1906,8 @@ mod tests {
         );
 
         // Cleanup
-        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        unsafe {
+            std::env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        }
     }
 }

@@ -537,7 +537,9 @@ impl Signer {
 pub enum SignerValidationError {
     #[error("Signer ID cannot be empty")]
     EmptyId,
-    #[error("Signer ID must contain only letters, numbers, dashes and underscores and must be at most 36 characters long")]
+    #[error(
+        "Signer ID must contain only letters, numbers, dashes and underscores and must be at most 36 characters long"
+    )]
     InvalidIdFormat,
     #[error("Invalid signer configuration: {0}")]
     InvalidConfig(String),

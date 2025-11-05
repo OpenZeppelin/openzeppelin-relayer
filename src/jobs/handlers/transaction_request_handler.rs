@@ -9,8 +9,8 @@ use tracing::instrument;
 
 use crate::{
     constants::WORKER_TRANSACTION_REQUEST_RETRIES,
-    domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
-    jobs::{handle_result, Job, TransactionRequest},
+    domain::{Transaction, get_relayer_transaction, get_transaction_by_id},
+    jobs::{Job, TransactionRequest, handle_result},
     models::DefaultAppState,
     observability::request_id::set_request_id,
 };

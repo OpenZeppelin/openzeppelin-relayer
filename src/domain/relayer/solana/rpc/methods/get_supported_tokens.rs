@@ -19,7 +19,7 @@ use crate::{
         TransactionRepoModel,
     },
     repositories::{Repository, TransactionRepository},
-    services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
+    services::{JupiterServiceTrait, provider::SolanaProviderTrait, signer::SolanaSignTrait},
 };
 
 use super::*;
@@ -77,7 +77,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::{
-        domain::{setup_test_context, SolanaRpcMethodsImpl},
+        domain::{SolanaRpcMethodsImpl, setup_test_context},
         models::{
             GetSupportedTokensRequestParams, RelayerNetworkPolicy, RelayerSolanaPolicy,
             SolanaAllowedTokensPolicy, SolanaAllowedTokensSwapConfig,

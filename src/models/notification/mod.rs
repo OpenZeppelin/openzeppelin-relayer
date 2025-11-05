@@ -156,7 +156,9 @@ impl Notification {
 pub enum NotificationValidationError {
     #[error("Notification ID cannot be empty")]
     EmptyId,
-    #[error("Notification ID must contain only letters, numbers, dashes and underscores and must be at most 36 characters long")]
+    #[error(
+        "Notification ID must contain only letters, numbers, dashes and underscores and must be at most 36 characters long"
+    )]
     InvalidIdFormat,
     #[error("Notification URL cannot be empty")]
     EmptyUrl,

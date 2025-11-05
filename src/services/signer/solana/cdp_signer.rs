@@ -16,10 +16,10 @@
 use crate::{
     domain::SignTransactionResponse,
     models::{Address, CdpSignerConfig, NetworkTransactionData, SignerError},
-    services::{signer::Signer, CdpService, CdpServiceTrait},
+    services::{CdpService, CdpServiceTrait, signer::Signer},
 };
 use async_trait::async_trait;
-use base64::{engine::general_purpose, Engine as _};
+use base64::{Engine as _, engine::general_purpose};
 use solana_sdk::signature::Signature;
 use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
 use std::str::FromStr;
@@ -116,7 +116,7 @@ impl<T: CdpServiceTrait> SolanaSignTrait for CdpSigner<T> {
             _ => {
                 return Err(SignerError::SigningError(
                     "CDP address is not a Solana address".to_string(),
-                ))
+                ));
             }
         };
 
@@ -174,7 +174,7 @@ mod tests {
     use super::*;
     use crate::{
         models::{CdpSignerConfig, SecretString, SolanaTransactionData},
-        services::{signer::Signer as RelayerSigner, CdpError, MockCdpServiceTrait},
+        services::{CdpError, MockCdpServiceTrait, signer::Signer as RelayerSigner},
     };
     use mockall::predicate::*;
     use solana_sdk::signer::Signer;

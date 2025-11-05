@@ -48,7 +48,7 @@ use crate::{
     },
     domain::{SolanaTokenProgram, TokenInstruction},
     jobs::TransactionStatusCheck,
-    services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
+    services::{JupiterServiceTrait, provider::SolanaProviderTrait, signer::SolanaSignTrait},
 };
 
 #[derive(Debug)]
@@ -2035,22 +2035,30 @@ mod tests {
             _ => panic!("Expected TransferChecked instruction"),
         }
 
-        assert!(converted_ix
-            .accounts
-            .iter()
-            .any(|a| a.pubkey == source && a.is_writable));
-        assert!(converted_ix
-            .accounts
-            .iter()
-            .any(|a| a.pubkey == destination && a.is_writable));
-        assert!(converted_ix
-            .accounts
-            .iter()
-            .any(|a| a.pubkey == mint && !a.is_writable));
-        assert!(converted_ix
-            .accounts
-            .iter()
-            .any(|a| a.pubkey == owner.pubkey() && a.is_signer));
+        assert!(
+            converted_ix
+                .accounts
+                .iter()
+                .any(|a| a.pubkey == source && a.is_writable)
+        );
+        assert!(
+            converted_ix
+                .accounts
+                .iter()
+                .any(|a| a.pubkey == destination && a.is_writable)
+        );
+        assert!(
+            converted_ix
+                .accounts
+                .iter()
+                .any(|a| a.pubkey == mint && !a.is_writable)
+        );
+        assert!(
+            converted_ix
+                .accounts
+                .iter()
+                .any(|a| a.pubkey == owner.pubkey() && a.is_signer)
+        );
     }
 
     #[tokio::test]

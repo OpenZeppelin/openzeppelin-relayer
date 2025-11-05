@@ -25,8 +25,8 @@ use alloy::primitives::keccak256;
 use async_trait::async_trait;
 use chrono;
 use p256::{
-    ecdsa::{signature::Signer, Signature as P256Signature, SigningKey},
     FieldBytes,
+    ecdsa::{Signature as P256Signature, SigningKey, signature::Signer},
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};

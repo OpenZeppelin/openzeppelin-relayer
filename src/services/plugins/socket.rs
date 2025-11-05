@@ -64,8 +64,8 @@ use tokio::sync::oneshot;
 use tracing::debug;
 
 use super::{
-    relayer_api::{RelayerApiTrait, Request},
     PluginError,
+    relayer_api::{RelayerApiTrait, Request},
 };
 
 pub struct SocketService {

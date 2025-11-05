@@ -6,8 +6,11 @@
 //! Copied from <https://github.com/midnightntwrk/midnight-node/blob/node-0.12.0/util/toolkit/src/remote_prover.rs>
 
 use async_trait::async_trait;
-use backoff::{future::retry, ExponentialBackoff};
-use midnight_node_ledger_helpers::*;
+use backoff::{ExponentialBackoff, future::retry};
+use midnight_node_ledger_helpers::{
+    CostModel, DB, KeyLocation, NetworkId, PedersenRandomness, ProofMarker, ProofPreimageMarker,
+    ProofProvider, Resolver, ResolverTrait, Signature, StdRng, Transaction, deserialize,
+};
 
 /// Remote proof server client for generating zero-knowledge proofs
 pub struct RemoteProofServer {
@@ -24,38 +27,42 @@ impl RemoteProofServer {
     /// Serializes a transaction and its circuit keys for the proof server
     pub async fn serialize_request_body<D: DB>(
         &self,
-        tx: &Transaction<ProofPreimage, D>,
+        tx: &Transaction<Signature, ProofPreimageMarker, PedersenRandomness, D>,
         resolver: &Resolver,
     ) -> Vec<u8> {
         let circuits_used = tx
             .calls()
-            .map(|c| String::from_utf8_lossy(&c.entry_point).into_owned())
+            .map(|(_segment_id, call)| String::from_utf8_lossy(&call.entry_point).into_owned())
             .collect::<Vec<_>>();
         let mut keys = std::collections::HashMap::new();
         for k in circuits_used.into_iter() {
             let k = KeyLocation(std::borrow::Cow::Owned(k));
-            let data = resolver.resolve(&k).await.expect("failed to resolve key");
+            let data = resolver
+                .resolve_key(k.clone())
+                .await
+                .expect("failed to resolve key");
             if let Some(data) = data {
                 keys.insert(k, data);
             }
         }
         let mut bytes = Vec::new();
-        mn_ledger_serialize::serialize(tx, &mut bytes, self.network_id)
+        use midnight_node_ledger_helpers::mn_ledger_serialize;
+        mn_ledger_serialize::tagged_serialize(tx, &mut bytes)
             .expect("failed to serialize transaction");
-        mn_ledger_serialize::serialize(&keys, &mut bytes, self.network_id)
-            .expect("failed to serialize keys");
+        mn_ledger_serialize::tagged_serialize(&keys, &mut bytes).expect("failed to serialize keys");
         bytes
     }
 }
 
 #[async_trait]
-impl<D: DB> ProofProvider<D> for RemoteProofServer {
+impl<D: DB + Clone> ProofProvider<D> for RemoteProofServer {
     async fn prove(
         &self,
-        tx: Transaction<ProofPreimage, D>,
+        tx: Transaction<Signature, ProofPreimageMarker, PedersenRandomness, D>,
         _rng: StdRng,
         resolver: &Resolver,
-    ) -> Transaction<Proof, D> {
+        cost_model: &CostModel,
+    ) -> Transaction<Signature, ProofMarker, PedersenRandomness, D> {
         let url = reqwest::Url::parse(&self.url)
             .expect("failed to parse proof server URL")
             .join("prove-tx")
@@ -101,7 +108,6 @@ impl<D: DB> ProofProvider<D> for RemoteProofServer {
             panic!("Proof server returned empty response");
         }
 
-        deserialize(&response_bytes[..], self.network_id)
-            .expect("failed to deserialize transaction")
+        deserialize(&response_bytes[..]).expect("failed to deserialize transaction")
     }
 }

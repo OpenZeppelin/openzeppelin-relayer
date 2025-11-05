@@ -1,5 +1,5 @@
 use tracing::Span;
-use tracing_subscriber::{registry::LookupSpan, Registry};
+use tracing_subscriber::{Registry, registry::LookupSpan};
 
 #[derive(Clone, Debug)]
 pub struct RequestId(pub String);
