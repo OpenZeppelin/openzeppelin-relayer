@@ -61,7 +61,7 @@ impl<D: DB + Clone> ProofProvider<D> for RemoteProofServer {
         tx: Transaction<Signature, ProofPreimageMarker, PedersenRandomness, D>,
         _rng: StdRng,
         resolver: &Resolver,
-        cost_model: &CostModel,
+        _cost_model: &CostModel,
     ) -> Transaction<Signature, ProofMarker, PedersenRandomness, D> {
         let url = reqwest::Url::parse(&self.url)
             .expect("failed to parse proof server URL")

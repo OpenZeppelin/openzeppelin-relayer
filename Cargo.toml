@@ -131,7 +131,6 @@ proptest = "1.6.0"
 rand = "0.9.0"
 serial_test = "3.2"
 tempfile = "3.2"
-wiremock = "0.6"
 
 
 [[bin]]

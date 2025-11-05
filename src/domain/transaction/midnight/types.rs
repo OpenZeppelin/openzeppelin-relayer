@@ -38,7 +38,7 @@ impl<P: ProofKind<D>, D: DB> MidnightZSwapOffer<P, D> {
         transient: Vec<Transient<P::LatestProof, D>>,
         deltas: Vec<(ShieldedTokenType, i128)>,
     ) -> Self {
-        use midnight_node_ledger_helpers::{Array, Delta};
+        use midnight_node_ledger_helpers::Delta;
         // Convert Vec<(ShieldedTokenType, i128)> to Vec<Delta>
         let delta_vec: Vec<Delta> = deltas
             .into_iter()

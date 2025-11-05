@@ -10,9 +10,7 @@ use bech32::Bech32m;
 use rand::Rng;
 use thiserror::Error;
 
-use midnight_node_ledger_helpers::{
-    DB, DefaultDB, NetworkId, Serializable, Wallet, WalletKind, WalletSeed,
-};
+use midnight_node_ledger_helpers::{DB, DefaultDB, NetworkId, Serializable, Wallet, WalletSeed};
 
 /// Errors that can occur during address operations
 #[derive(Error, Debug)]

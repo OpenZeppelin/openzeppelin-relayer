@@ -10,8 +10,8 @@ use async_trait::async_trait;
 use eyre::Result;
 use hex;
 use midnight_node_ledger_helpers::{
-    DefaultDB, HashOutput, LedgerContext, NetworkId, PedersenRandomness, ProofMarker,
-    ShieldedTokenType, Signature, TokenType, Transaction, WalletSeed, serialize,
+    DefaultDB, LedgerContext, NetworkId, PedersenRandomness, ProofMarker, ShieldedTokenType,
+    Signature, Transaction, WalletSeed, serialize,
 };
 use midnight_node_metadata::midnight_metadata_latest as mn_meta;
 use serde::{Deserialize, Serialize};

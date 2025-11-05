@@ -520,7 +520,7 @@ mod tests {
         services::{
             MockTransactionCounterServiceTrait,
             provider::{MockMidnightProviderTrait, ProviderError},
-            signer::{MidnightSigner, MidnightSignerFactory, MidnightSignerTrait},
+            signer::MidnightSignerFactory,
         },
     };
     use midnight_node_ledger_helpers::{DefaultDB, LedgerContext, NetworkId, WalletSeed};
@@ -737,16 +737,10 @@ mod tests {
         let mut relayer_repo = MockRelayerRepository::new();
         let mut updated_model = relayer_model.clone();
         updated_model.system_disabled = true;
-        let reasons = vec![
-            DisabledReason::NonceSyncFailed("reason1".to_string()),
-            DisabledReason::NonceSyncFailed("reason2".to_string()),
-        ];
+        let expected_reason = DisabledReason::NonceSyncFailed("reason1, reason2".to_string());
         relayer_repo
             .expect_disable_relayer()
-            .with(
-                eq(relayer_model.id.clone()),
-                eq(DisabledReason::Multiple(reasons.clone())),
-            )
+            .with(eq(relayer_model.id.clone()), eq(expected_reason.clone()))
             .returning(move |_, _| Ok::<RelayerRepoModel, RepositoryError>(updated_model.clone()));
         let mut job_producer = MockJobProducerTrait::new();
         job_producer

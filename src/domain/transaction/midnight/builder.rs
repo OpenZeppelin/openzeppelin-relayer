@@ -14,7 +14,6 @@ use midnight_node_ledger_helpers::{
     IntentInfo,
     LedgerContext,
     OfferInfo,
-    PedersenRandomness,
     ProofMarker,
     ProofProvider,
     Signature,
