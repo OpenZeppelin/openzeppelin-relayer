@@ -422,15 +422,20 @@ mod tests {
         .await;
 
         // Test that routes are registered by checking they return 500 (not 404)
+        // Using the test API key "test-value" with full permissions (*:*)
 
         // Test GET /relayers
-        let req = test::TestRequest::get().uri("/relayers").to_request();
+        let req = test::TestRequest::get()
+            .uri("/relayers")
+            .insert_header(("Authorization", "Bearer test-value"))
+            .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
         // Test GET /relayers/{id}
         let req = test::TestRequest::get()
             .uri("/relayers/test-id")
+            .insert_header(("Authorization", "Bearer test-value"))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -438,6 +443,7 @@ mod tests {
         // Test PATCH /relayers/{id}
         let req = test::TestRequest::patch()
             .uri("/relayers/test-id")
+            .insert_header(("Authorization", "Bearer test-value"))
             .set_json(serde_json::json!({"paused": false}))
             .to_request();
         let resp = test::call_service(&app, req).await;
@@ -446,6 +452,7 @@ mod tests {
         // Test GET /relayers/{id}/status
         let req = test::TestRequest::get()
             .uri("/relayers/test-id/status")
+            .insert_header(("Authorization", "Bearer test-value"))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -453,6 +460,7 @@ mod tests {
         // Test GET /relayers/{id}/balance
         let req = test::TestRequest::get()
             .uri("/relayers/test-id/balance")
+            .insert_header(("Authorization", "Bearer test-value"))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -460,6 +468,7 @@ mod tests {
         // Test POST /relayers/{id}/transactions
         let req = test::TestRequest::post()
             .uri("/relayers/test-id/transactions")
+            .insert_header(("Authorization", "Bearer test-value"))
             .set_json(serde_json::json!({}))
             .to_request();
         let resp = test::call_service(&app, req).await;
@@ -468,6 +477,7 @@ mod tests {
         // Test GET /relayers/{id}/transactions/{tx_id}
         let req = test::TestRequest::get()
             .uri("/relayers/test-id/transactions/tx-123")
+            .insert_header(("Authorization", "Bearer test-value"))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -475,6 +485,7 @@ mod tests {
         // Test GET /relayers/{id}/transactions/by-nonce/{nonce}
         let req = test::TestRequest::get()
             .uri("/relayers/test-id/transactions/by-nonce/123")
+            .insert_header(("Authorization", "Bearer test-value"))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -482,6 +493,7 @@ mod tests {
         // Test GET /relayers/{id}/transactions
         let req = test::TestRequest::get()
             .uri("/relayers/test-id/transactions")
+            .insert_header(("Authorization", "Bearer test-value"))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -489,6 +501,7 @@ mod tests {
         // Test DELETE /relayers/{id}/transactions/pending
         let req = test::TestRequest::delete()
             .uri("/relayers/test-id/transactions/pending")
+            .insert_header(("Authorization", "Bearer test-value"))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -496,6 +509,7 @@ mod tests {
         // Test DELETE /relayers/{id}/transactions/{tx_id}
         let req = test::TestRequest::delete()
             .uri("/relayers/test-id/transactions/tx-123")
+            .insert_header(("Authorization", "Bearer test-value"))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -503,6 +517,7 @@ mod tests {
         // Test PUT /relayers/{id}/transactions/{tx_id}
         let req = test::TestRequest::put()
             .uri("/relayers/test-id/transactions/tx-123")
+            .insert_header(("Authorization", "Bearer test-value"))
             .set_json(serde_json::json!({}))
             .to_request();
         let resp = test::call_service(&app, req).await;
@@ -511,6 +526,7 @@ mod tests {
         // Test POST /relayers/{id}/sign
         let req = test::TestRequest::post()
             .uri("/relayers/test-id/sign")
+            .insert_header(("Authorization", "Bearer test-value"))
             .set_json(serde_json::json!({
                 "message": "0x1234567890abcdef"
             }))
@@ -521,6 +537,7 @@ mod tests {
         // Test POST /relayers/{id}/sign-typed-data
         let req = test::TestRequest::post()
             .uri("/relayers/test-id/sign-typed-data")
+            .insert_header(("Authorization", "Bearer test-value"))
             .set_json(serde_json::json!({
                 "domain_separator": "0x1234567890abcdef",
                 "hash_struct_message": "0x1234567890abcdef"
@@ -532,6 +549,7 @@ mod tests {
         // Test POST /relayers/{id}/rpc
         let req = test::TestRequest::post()
             .uri("/relayers/test-id/rpc")
+            .insert_header(("Authorization", "Bearer test-value"))
             .set_json(serde_json::json!({
                 "jsonrpc": "2.0",
                 "method": "eth_getBlockByNumber",

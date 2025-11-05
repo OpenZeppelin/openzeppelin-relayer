@@ -1,6 +1,5 @@
 use actix_web::dev::ServiceRequest;
 use actix_web::HttpRequest;
-use tracing::info;
 
 use crate::{
     constants::{
@@ -33,7 +32,6 @@ pub fn check_authorization_header(req: &ServiceRequest, _expected_key: &SecretSt
             return false;
         }
 
-        info!("Token: {}", token);
         return true;
     }
     false

@@ -198,9 +198,11 @@ pub fn require_permissions(args: TokenStream, input: TokenStream) -> TokenStream
         });
     }
 
-    // Combine all permission checks
+    // Combine all permission checks into a single block
     let combined_checks = quote! {
-        #(#permission_checks)*
+        {
+            #(#permission_checks)*
+        }
     };
 
     // Parse as a statement and prepend to function body

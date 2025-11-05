@@ -40,8 +40,8 @@ mod tests {
         HttpResponse::Ok().json("mock works!")
     }
 
-    // Mock endpoint with require_permissions macro using const
-    #[require_permissions(["relayers:get:all"])]
+    // Mock endpoint with require_permissions macro
+    #[require_permissions(["relayers:read"])]
     async fn mock_endpoint_with_macro(
         raw_request: HttpRequest,
         data: web::ThinData<DefaultAppState>,
