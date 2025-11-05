@@ -35,6 +35,12 @@ use crate::{
     security(
         ("bearer_auth" = [])
     ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["relayers:read"],
+            "scope": "global"
+        }))
+    ),
     params(
         ("page" = Option<usize>, Query, description = "Page number for pagination (starts at 1)"),
         ("per_page" = Option<usize>, Query, description = "Number of items per page (default: 10)")
@@ -98,6 +104,13 @@ fn doc_list_relayers() {}
     operation_id = "getRelayer",
     security(
         ("bearer_auth" = [])
+    ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["relayers:read"],
+            "scope": "scoped",
+            "scopeParameter": "relayer_id"
+        }))
     ),
     params(
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer")
@@ -172,6 +185,12 @@ fn doc_get_relayer() {}
     security(
         ("bearer_auth" = [])
     ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["relayers:create"],
+            "scope": "global"
+        }))
+    ),
     request_body = CreateRelayerRequest,
     responses(
         (
@@ -232,6 +251,13 @@ fn doc_create_relayer() {}
     operation_id = "updateRelayer",
     security(
         ("bearer_auth" = [])
+    ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["relayers:update"],
+            "scope": "scoped",
+            "scopeParameter": "relayer_id"
+        }))
     ),
     params(
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer")
@@ -303,6 +329,13 @@ fn doc_update_relayer() {}
     security(
         ("bearer_auth" = [])
     ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["relayers:delete"],
+            "scope": "scoped",
+            "scopeParameter": "relayer_id"
+        }))
+    ),
     params(
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer")
     ),
@@ -365,6 +398,13 @@ fn doc_delete_relayer() {}
     operation_id = "getRelayerStatus",
     security(
         ("bearer_auth" = [])
+    ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["relayers:read"],
+            "scope": "scoped",
+            "scopeParameter": "relayer_id"
+        }))
     ),
     params(
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer")
@@ -435,6 +475,13 @@ fn doc_get_relayer_status() {}
     security(
         ("bearer_auth" = [])
     ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["relayers:read"],
+            "scope": "scoped",
+            "scopeParameter": "relayer_id"
+        }))
+    ),
     params(
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer")
     ),
@@ -503,6 +550,13 @@ fn doc_get_relayer_balance() {}
     operation_id = "sendTransaction",
     security(
         ("bearer_auth" = [])
+    ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["transactions:execute"],
+            "scope": "scoped",
+            "scopeParameter": "relayer_id"
+        }))
     ),
     params(
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer")
@@ -574,6 +628,13 @@ fn doc_send_transaction() {}
     security(
         ("bearer_auth" = [])
     ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["transactions:read"],
+            "scope": "scoped",
+            "scopeParameter": "relayer_id"
+        }))
+    ),
     params(
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer"),
         ("transaction_id" = String, Path, description = "The unique identifier of the transaction")
@@ -644,6 +705,13 @@ fn doc_get_transaction_by_id() {}
     security(
         ("bearer_auth" = [])
     ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["transactions:read"],
+            "scope": "scoped",
+            "scopeParameter": "relayer_id"
+        }))
+    ),
     params(
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer"),
         ("nonce" = usize, Path, description = "The nonce of the transaction")
@@ -713,6 +781,13 @@ fn doc_get_transaction_by_nonce() {}
     operation_id = "listTransactions",
     security(
         ("bearer_auth" = [])
+    ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["transactions:read"],
+            "scope": "scoped",
+            "scopeParameter": "relayer_id"
+        }))
     ),
     params(
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer"),
@@ -785,6 +860,13 @@ fn doc_list_transactions() {}
     security(
         ("bearer_auth" = [])
     ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["transactions:delete"],
+            "scope": "scoped",
+            "scopeParameter": "relayer_id"
+        }))
+    ),
     params(
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer")
     ),
@@ -853,6 +935,13 @@ fn doc_delete_pending_transactions() {}
     operation_id = "cancelTransaction",
     security(
         ("bearer_auth" = [])
+    ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["transactions:delete"],
+            "scope": "scoped",
+            "scopeParameter": "relayer_id"
+        }))
     ),
     params(
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer"),
@@ -923,6 +1012,13 @@ fn doc_cancel_transaction() {}
     operation_id = "replaceTransaction",
     security(
         ("bearer_auth" = [])
+    ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["transactions:execute"],
+            "scope": "scoped",
+            "scopeParameter": "relayer_id"
+        }))
     ),
     params(
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer"),
@@ -995,6 +1091,13 @@ fn doc_replace_transaction() {}
     security(
         ("bearer_auth" = [])
     ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["signing:execute"],
+            "scope": "scoped",
+            "scopeParameter": "relayer_id"
+        }))
+    ),
     params(
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer"),
     ),
@@ -1064,6 +1167,13 @@ fn doc_sign() {}
     operation_id = "signTypedData",
     security(
         ("bearer_auth" = [])
+    ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["signing:execute"],
+            "scope": "scoped",
+            "scopeParameter": "relayer_id"
+        }))
     ),
     params(
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer"),
@@ -1135,6 +1245,13 @@ fn doc_sign_typed_data() {}
     security(
         ("bearer_auth" = [])
     ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["signing:execute"],
+            "scope": "scoped",
+            "scopeParameter": "relayer_id"
+        }))
+    ),
     params(
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer"),
     ),
@@ -1204,6 +1321,13 @@ fn doc_sign_transaction() {}
     operation_id = "rpc",
     security(
         ("bearer_auth" = [])
+    ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["relayers:execute"],
+            "scope": "scoped",
+            "scopeParameter": "relayer_id"
+        }))
     ),
     params(
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer"),

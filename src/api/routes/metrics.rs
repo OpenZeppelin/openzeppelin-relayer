@@ -32,6 +32,15 @@ use relayer_macros::require_permissions;
     get,
     path = "/metrics",
     tag = "Metrics",
+    security(
+        ("bearer_auth" = [])
+    ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["metrics:read"],
+            "scope": "global"
+        }))
+    ),
     responses(
         (status = 200, description = "Metric names list", body = Vec<String>),
         (status = 401, description = "Unauthorized"),
@@ -66,6 +75,15 @@ async fn list_metrics(
     get,
     path = "/metrics/{metric_name}",
     tag = "Metrics",
+    security(
+        ("bearer_auth" = [])
+    ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["metrics:read"],
+            "scope": "global"
+        }))
+    ),
     params(
         ("metric_name" = String, Path, description = "Name of the metric to retrieve, e.g. utopia_transactions_total")
     ),
@@ -75,9 +93,6 @@ async fn list_metrics(
         (status = 403, description = "Forbidden - insufficient permissions to access this metric"),
         (status = 404, description = "Metric not found"),
         (status = 429, description = "Too many requests - rate limit for metrics access exceeded")
-    ),
-    security(
-        ("bearer_auth" = ["metrics:read"])
     )
 )]
 #[require_permissions(["metrics:read"])]
@@ -117,6 +132,15 @@ async fn metric_detail(
     get,
     path = "/debug/metrics/scrape",
     tag = "Metrics",
+    security(
+        ("bearer_auth" = [])
+    ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["metrics:read"],
+            "scope": "global"
+        }))
+    ),
     responses(
         (status = 200, description = "Complete metrics in Prometheus exposition format", content_type = "text/plain",   body = String),
         (status = 401, description = "Unauthorized")

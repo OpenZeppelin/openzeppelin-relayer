@@ -13,6 +13,12 @@ use crate::models::{ApiResponse, SignerCreateRequest, SignerResponse, SignerUpda
   security(
       ("bearer_auth" = [])
   ),
+  extensions(
+      ("x-required-permissions" = json!({
+          "permissions": ["signers:read"],
+          "scope": "global"
+      }))
+  ),
   params(
       ("page" = Option<usize>, Query, description = "Page number for pagination (starts at 1)"),
       ("per_page" = Option<usize>, Query, description = "Number of items per page (default: 10)")
@@ -66,6 +72,13 @@ fn doc_list_signers() {}
   operation_id = "getSigner",
   security(
       ("bearer_auth" = [])
+  ),
+  extensions(
+      ("x-required-permissions" = json!({
+          "permissions": ["signers:read"],
+          "scope": "scoped",
+          "scopeParameter": "signer_id"
+      }))
   ),
   params(
       ("signer_id" = String, Path, description = "Signer ID")
@@ -130,6 +143,12 @@ fn doc_get_signer() {}
   security(
       ("bearer_auth" = [])
   ),
+  extensions(
+      ("x-required-permissions" = json!({
+          "permissions": ["signers:create"],
+          "scope": "global"
+      }))
+  ),
   request_body = SignerCreateRequest,
   responses(
       (
@@ -190,6 +209,13 @@ fn doc_create_signer() {}
   operation_id = "updateSigner",
   security(
       ("bearer_auth" = [])
+  ),
+  extensions(
+      ("x-required-permissions" = json!({
+          "permissions": ["signers:update"],
+          "scope": "scoped",
+          "scopeParameter": "signer_id"
+      }))
   ),
   params(
       ("signer_id" = String, Path, description = "Signer ID")
@@ -254,6 +280,13 @@ fn doc_update_signer() {}
   operation_id = "deleteSigner",
   security(
       ("bearer_auth" = [])
+  ),
+  extensions(
+      ("x-required-permissions" = json!({
+          "permissions": ["signers:delete"],
+          "scope": "scoped",
+          "scopeParameter": "signer_id"
+      }))
   ),
   params(
       ("signer_id" = String, Path, description = "Signer ID")

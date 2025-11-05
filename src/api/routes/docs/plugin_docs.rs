@@ -18,6 +18,13 @@ use crate::{
     security(
         ("bearer_auth" = [])
     ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["plugins:execute"],
+            "scope": "scoped",
+            "scopeParameter": "plugin_id"
+        }))
+    ),
     params(
         ("plugin_id" = String, Path, description = "The unique identifier of the plugin")
     ),
@@ -119,6 +126,12 @@ fn doc_call_plugin() {}
     operation_id = "listPlugins",
     security(
         ("bearer_auth" = [])
+    ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["plugins:read"],
+            "scope": "global"
+        }))
     ),
     params(
         ("page" = Option<usize>, Query, description = "Page number for pagination (starts at 1)"),

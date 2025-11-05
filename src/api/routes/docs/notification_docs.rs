@@ -15,6 +15,12 @@ use crate::models::{
     security(
         ("bearer_auth" = [])
     ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["notifications:read"],
+            "scope": "global"
+        }))
+    ),
     params(
         ("page" = Option<usize>, Query, description = "Page number for pagination (starts at 1)"),
         ("per_page" = Option<usize>, Query, description = "Number of items per page (default: 10)")
@@ -68,6 +74,13 @@ fn doc_list_notifications() {}
     operation_id = "getNotification",
     security(
         ("bearer_auth" = [])
+    ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["notifications:read"],
+            "scope": "scoped",
+            "scopeParameter": "notification_id"
+        }))
     ),
     params(
         ("notification_id" = String, Path, description = "Notification ID")
@@ -132,6 +145,12 @@ fn doc_get_notification() {}
     security(
         ("bearer_auth" = [])
     ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["notifications:create"],
+            "scope": "global"
+        }))
+    ),
     request_body = NotificationCreateRequest,
     responses(
         (
@@ -192,6 +211,13 @@ fn doc_create_notification() {}
     operation_id = "updateNotification",
     security(
         ("bearer_auth" = [])
+    ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["notifications:update"],
+            "scope": "scoped",
+            "scopeParameter": "notification_id"
+        }))
     ),
     params(
         ("notification_id" = String, Path, description = "Notification ID")
@@ -256,6 +282,13 @@ fn doc_update_notification() {}
     operation_id = "deleteNotification",
     security(
         ("bearer_auth" = [])
+    ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["notifications:delete"],
+            "scope": "scoped",
+            "scopeParameter": "notification_id"
+        }))
     ),
     params(
         ("notification_id" = String, Path, description = "Notification ID")
