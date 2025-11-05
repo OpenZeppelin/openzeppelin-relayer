@@ -523,6 +523,13 @@ curl -X POST http://localhost:8080/api/v1/api_keys \
   }'
 ```
 
+#### Security Warning: Plugin Permissions
+
+> **WARNING**: When granting plugin permissions, be aware that plugins have internal access to all relayers and relayer operations within the relayer service.
+>
+> If a plugin implements functionality that interacts with relayers (e.g., sending transactions, reading balances), granting plugin permissions effectively provides **indirect access to those relayer operations**.
+>
+
 See the [API Keys documentation](https://docs.openzeppelin.com/relayer/api-keys) for more details on managing API keys and permissions.
 
 ### Starting Redis manually (without docker compose)
