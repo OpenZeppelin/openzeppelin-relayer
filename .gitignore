@@ -43,6 +43,8 @@ node_modules
 **/local-signer.json
 **/config/keys/*.json
 
+# Exclude generated OpenAPI files from the docs directory
+!./openapi.json
+
 # Ignore AGENTS.md
 AGENTS.md
-!./openapi.json

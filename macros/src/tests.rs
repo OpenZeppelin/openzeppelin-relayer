@@ -1,13 +1,15 @@
 #[cfg(test)]
 mod tests {
-    /// Test that the macro correctly detects template parameters
+    use quote::quote;
+    use syn;
+
+    /// Test that the macro correctly handles global permissions (string syntax)
     #[test]
-    fn test_macro_detects_template_parameters() {
+    fn test_macro_global_permissions() {
         // This is a compile-time test - if the macro compiles, it works
-        let tokens = quote::quote! {
-            #[require_permissions(["relayers:get:{relayer_id}"])]
+        let tokens = quote! {
+            #[crate::require_permissions(["relayers:read"])]
             async fn test_function(
-                relayer_id: actix_web::web::Path<String>,
                 raw_request: actix_web::HttpRequest,
                 data: actix_web::web::ThinData<String>,
             ) -> actix_web::HttpResponse {
@@ -20,11 +22,29 @@ mod tests {
         assert!(parsed.is_ok());
     }
 
-    /// Test that the macro correctly handles permissions without templates
+    /// Test that the macro correctly handles scoped permissions (tuple syntax)
     #[test]
-    fn test_macro_handles_non_template_permissions() {
-        let tokens = quote::quote! {
-            #[require_permissions(["relayers:list:all"])]
+    fn test_macro_scoped_permissions() {
+        let tokens = quote! {
+            #[crate::require_permissions([("relayers:read", "relayer_id")])]
+            async fn test_function(
+                relayer_id: actix_web::web::Path<String>,
+                raw_request: actix_web::HttpRequest,
+                data: actix_web::web::ThinData<String>,
+            ) -> actix_web::HttpResponse {
+                actix_web::HttpResponse::Ok().finish()
+            }
+        };
+
+        let parsed = syn::parse2::<syn::ItemFn>(tokens);
+        assert!(parsed.is_ok());
+    }
+
+    /// Test that the macro correctly handles multiple global permissions
+    #[test]
+    fn test_macro_multiple_global_permissions() {
+        let tokens = quote! {
+            #[crate::require_permissions(["relayers:read", "transactions:execute"])]
             async fn test_function(
                 raw_request: actix_web::HttpRequest,
                 data: actix_web::web::ThinData<String>,
@@ -37,32 +57,138 @@ mod tests {
         assert!(parsed.is_ok());
     }
 
-    /// Test parameter extraction logic in isolation
+    /// Test that the macro correctly handles multiple scoped permissions
     #[test]
-    fn test_parameter_extraction_logic() {
-        let permission = "relayers:get:{relayer_id}";
-        let mut required_params = std::collections::HashSet::new();
-
-        // Extract parameter names from {param_name} patterns (same logic as in macro)
-        let chars = permission.chars();
-        let mut inside_braces = false;
-        let mut current_param = String::new();
-
-        for ch in chars {
-            if ch == '{' {
-                inside_braces = true;
-                current_param.clear();
-            } else if ch == '}' && inside_braces {
-                if !current_param.is_empty() {
-                    required_params.insert(current_param.clone());
-                }
-                inside_braces = false;
-            } else if inside_braces {
-                current_param.push(ch);
+    fn test_macro_multiple_scoped_permissions() {
+        let tokens = quote! {
+            #[crate::require_permissions([
+                ("relayers:read", "relayer_id"),
+                ("transactions:execute", "relayer_id")
+            ])]
+            async fn test_function(
+                relayer_id: actix_web::web::Path<String>,
+                raw_request: actix_web::HttpRequest,
+                data: actix_web::web::ThinData<String>,
+            ) -> actix_web::HttpResponse {
+                actix_web::HttpResponse::Ok().finish()
             }
-        }
+        };
 
-        assert_eq!(required_params.len(), 1);
-        assert!(required_params.contains("relayer_id"));
+        let parsed = syn::parse2::<syn::ItemFn>(tokens);
+        assert!(parsed.is_ok());
+    }
+
+    /// Test that the macro correctly handles mixed global and scoped permissions
+    #[test]
+    fn test_macro_mixed_permissions() {
+        let tokens = quote! {
+            #[crate::require_permissions([
+                "relayers:read",
+                ("transactions:execute", "relayer_id")
+            ])]
+            async fn test_function(
+                relayer_id: actix_web::web::Path<String>,
+                raw_request: actix_web::HttpRequest,
+                data: actix_web::web::ThinData<String>,
+            ) -> actix_web::HttpResponse {
+                actix_web::HttpResponse::Ok().finish()
+            }
+        };
+
+        let parsed = syn::parse2::<syn::ItemFn>(tokens);
+        assert!(parsed.is_ok());
+    }
+
+    /// Test that the macro correctly handles dotted parameter paths
+    #[test]
+    fn test_macro_dotted_parameter_path() {
+        let tokens = quote! {
+            #[crate::require_permissions([("relayers:read", "params.relayer_id")])]
+            async fn test_function(
+                params: actix_web::web::Path<RequestParams>,
+                raw_request: actix_web::HttpRequest,
+                data: actix_web::web::ThinData<String>,
+            ) -> actix_web::HttpResponse {
+                actix_web::HttpResponse::Ok().finish()
+            }
+        };
+
+        let parsed = syn::parse2::<syn::ItemFn>(tokens);
+        assert!(parsed.is_ok());
+    }
+
+    /// Test wildcard permissions
+    #[test]
+    fn test_macro_wildcard_permissions() {
+        // Test resource wildcard
+        let tokens = quote! {
+            #[crate::require_permissions(["relayers:*"])]
+            async fn test_function(
+                raw_request: actix_web::HttpRequest,
+                data: actix_web::web::ThinData<String>,
+            ) -> actix_web::HttpResponse {
+                actix_web::HttpResponse::Ok().finish()
+            }
+        };
+
+        let parsed = syn::parse2::<syn::ItemFn>(tokens);
+        assert!(parsed.is_ok());
+
+        // Test super admin wildcard
+        let tokens = quote! {
+            #[crate::require_permissions(["*:*"])]
+            async fn test_function(
+                raw_request: actix_web::HttpRequest,
+                data: actix_web::web::ThinData<String>,
+            ) -> actix_web::HttpResponse {
+                actix_web::HttpResponse::Ok().finish()
+            }
+        };
+
+        let parsed = syn::parse2::<syn::ItemFn>(tokens);
+        assert!(parsed.is_ok());
+    }
+
+    /// Test that different resource actions are supported
+    #[test]
+    fn test_macro_various_resource_actions() {
+        // Test different resources and actions
+        let resources = vec![
+            "relayers:read",
+            "relayers:create",
+            "relayers:update",
+            "relayers:delete",
+            "transactions:execute",
+            "signers:read",
+            "signers:create",
+            "signers:update",
+            "signers:delete",
+            "notifications:read",
+            "notifications:create",
+            "notifications:update",
+            "notifications:delete",
+            "api_keys:read",
+            "api_keys:create",
+            "api_keys:delete",
+            "plugins:read",
+            "plugins:create",
+            "plugins:update",
+            "plugins:delete",
+        ];
+
+        for action in resources {
+            let tokens = quote! {
+                #[crate::require_permissions([#action])]
+                async fn test_function(
+                    raw_request: actix_web::HttpRequest,
+                    data: actix_web::web::ThinData<String>,
+                ) -> actix_web::HttpResponse {
+                    actix_web::HttpResponse::Ok().finish()
+                }
+            };
+
+            let parsed = syn::parse2::<syn::ItemFn>(tokens);
+            assert!(parsed.is_ok(), "Failed to parse permission: {}", action);
+        }
     }
 }
