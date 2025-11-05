@@ -177,7 +177,10 @@ fn extract_token_from_request(req: &HttpRequest) -> Result<&str, ApiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{ApiKeyRepoModel, PermissionGrant};
+    use crate::repositories::ApiKeyRepositoryStorage;
     use actix_web::test::TestRequest;
+    use std::sync::Arc;
 
     #[test]
     fn test_check_authorization_header_success() {
@@ -309,5 +312,393 @@ mod tests {
             result.unwrap_err().to_string(),
             "Unauthorized: Empty API key"
         );
+    }
+
+    // Tests for validate_api_key_permissions
+    #[tokio::test]
+    async fn test_validate_api_key_permissions_success_global() {
+        let api_key_repo = Arc::new(ApiKeyRepositoryStorage::new_in_memory());
+
+        // Create API key with global read permission
+        let api_key = ApiKeyRepoModel {
+            id: "test-key-id".to_string(),
+            name: "Test Key".to_string(),
+            value: SecretString::new("test-token"),
+            permissions: vec![PermissionGrant::global("relayers:read")],
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        api_key_repo.create(api_key).await.unwrap();
+
+        let srv_req = TestRequest::default()
+            .insert_header((
+                AUTHORIZATION_HEADER_NAME,
+                format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "test-token"),
+            ))
+            .to_srv_request();
+        let req = srv_req.request();
+
+        // Should succeed
+        let result =
+            validate_api_key_permissions(req, api_key_repo.as_ref(), &["relayers:read"]).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_api_key_permissions_success_wildcard() {
+        let api_key_repo = Arc::new(ApiKeyRepositoryStorage::new_in_memory());
+
+        // Create API key with wildcard permission
+        let api_key = ApiKeyRepoModel {
+            id: "test-key-id".to_string(),
+            name: "Test Key".to_string(),
+            value: SecretString::new("test-token"),
+            permissions: vec![PermissionGrant::global("*:*")],
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        api_key_repo.create(api_key).await.unwrap();
+
+        let srv_req = TestRequest::default()
+            .insert_header((
+                AUTHORIZATION_HEADER_NAME,
+                format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "test-token"),
+            ))
+            .to_srv_request();
+        let req = srv_req.request();
+
+        // Should succeed for any permission
+        let result = validate_api_key_permissions(
+            req,
+            api_key_repo.as_ref(),
+            &["relayers:read", "transactions:execute"],
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_api_key_permissions_missing_permission() {
+        let api_key_repo = Arc::new(ApiKeyRepositoryStorage::new_in_memory());
+
+        // Create API key with only read permission
+        let api_key = ApiKeyRepoModel {
+            id: "test-key-id".to_string(),
+            name: "Test Key".to_string(),
+            value: SecretString::new("test-token"),
+            permissions: vec![PermissionGrant::global("relayers:read")],
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        api_key_repo.create(api_key).await.unwrap();
+
+        let srv_req = TestRequest::default()
+            .insert_header((
+                AUTHORIZATION_HEADER_NAME,
+                format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "test-token"),
+            ))
+            .to_srv_request();
+        let req = srv_req.request();
+
+        // Should fail for missing permission
+        let result =
+            validate_api_key_permissions(req, api_key_repo.as_ref(), &["relayers:delete"]).await;
+        assert!(matches!(result, Err(ApiError::ForbiddenError(_))));
+    }
+
+    #[tokio::test]
+    async fn test_validate_api_key_permissions_multiple_required_all_granted() {
+        let api_key_repo = Arc::new(ApiKeyRepositoryStorage::new_in_memory());
+
+        // Create API key with multiple permissions
+        let api_key = ApiKeyRepoModel {
+            id: "test-key-id".to_string(),
+            name: "Test Key".to_string(),
+            value: SecretString::new("test-token"),
+            permissions: vec![
+                PermissionGrant::global("relayers:read"),
+                PermissionGrant::global("transactions:execute"),
+            ],
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        api_key_repo.create(api_key).await.unwrap();
+
+        let srv_req = TestRequest::default()
+            .insert_header((
+                AUTHORIZATION_HEADER_NAME,
+                format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "test-token"),
+            ))
+            .to_srv_request();
+        let req = srv_req.request();
+
+        // Should succeed when all required permissions are granted
+        let result = validate_api_key_permissions(
+            req,
+            api_key_repo.as_ref(),
+            &["relayers:read", "transactions:execute"],
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_api_key_permissions_multiple_required_one_missing() {
+        let api_key_repo = Arc::new(ApiKeyRepositoryStorage::new_in_memory());
+
+        // Create API key with only read permission
+        let api_key = ApiKeyRepoModel {
+            id: "test-key-id".to_string(),
+            name: "Test Key".to_string(),
+            value: SecretString::new("test-token"),
+            permissions: vec![PermissionGrant::global("relayers:read")],
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        api_key_repo.create(api_key).await.unwrap();
+
+        let srv_req = TestRequest::default()
+            .insert_header((
+                AUTHORIZATION_HEADER_NAME,
+                format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "test-token"),
+            ))
+            .to_srv_request();
+        let req = srv_req.request();
+
+        // Should fail when one required permission is missing
+        let result = validate_api_key_permissions(
+            req,
+            api_key_repo.as_ref(),
+            &["relayers:read", "transactions:execute"],
+        )
+        .await;
+        assert!(matches!(result, Err(ApiError::ForbiddenError(_))));
+    }
+
+    #[tokio::test]
+    async fn test_validate_api_key_permissions_api_key_not_found() {
+        let api_key_repo = Arc::new(ApiKeyRepositoryStorage::new_in_memory());
+
+        let srv_req = TestRequest::default()
+            .insert_header((
+                AUTHORIZATION_HEADER_NAME,
+                format!(
+                    "{}{}",
+                    AUTHORIZATION_HEADER_VALUE_PREFIX, "nonexistent-token"
+                ),
+            ))
+            .to_srv_request();
+        let req = srv_req.request();
+
+        // Should fail when API key doesn't exist
+        let result =
+            validate_api_key_permissions(req, api_key_repo.as_ref(), &["relayers:read"]).await;
+        assert!(matches!(result, Err(ApiError::Unauthorized(_))));
+    }
+
+    // Tests for validate_api_key_permissions_scoped
+    #[tokio::test]
+    async fn test_validate_api_key_permissions_scoped_success() {
+        let api_key_repo = Arc::new(ApiKeyRepositoryStorage::new_in_memory());
+
+        // Create API key with scoped permission
+        let api_key = ApiKeyRepoModel {
+            id: "test-key-id".to_string(),
+            name: "Test Key".to_string(),
+            value: SecretString::new("test-token"),
+            permissions: vec![PermissionGrant::ids(
+                "relayers:read",
+                vec!["relayer-1".to_string(), "relayer-2".to_string()],
+            )],
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        api_key_repo.create(api_key).await.unwrap();
+
+        let srv_req = TestRequest::default()
+            .insert_header((
+                AUTHORIZATION_HEADER_NAME,
+                format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "test-token"),
+            ))
+            .to_srv_request();
+        let req = srv_req.request();
+
+        // Should succeed for relayer in scope
+        let result = validate_api_key_permissions_scoped(
+            req,
+            api_key_repo.as_ref(),
+            &["relayers:read"],
+            "relayer-1",
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_api_key_permissions_scoped_global_permission() {
+        let api_key_repo = Arc::new(ApiKeyRepositoryStorage::new_in_memory());
+
+        // Create API key with global permission
+        let api_key = ApiKeyRepoModel {
+            id: "test-key-id".to_string(),
+            name: "Test Key".to_string(),
+            value: SecretString::new("test-token"),
+            permissions: vec![PermissionGrant::global("relayers:read")],
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        api_key_repo.create(api_key).await.unwrap();
+
+        let srv_req = TestRequest::default()
+            .insert_header((
+                AUTHORIZATION_HEADER_NAME,
+                format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "test-token"),
+            ))
+            .to_srv_request();
+        let req = srv_req.request();
+
+        // Should succeed for any relayer ID with global permission
+        let result = validate_api_key_permissions_scoped(
+            req,
+            api_key_repo.as_ref(),
+            &["relayers:read"],
+            "any-relayer-id",
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_api_key_permissions_scoped_resource_not_in_scope() {
+        let api_key_repo = Arc::new(ApiKeyRepositoryStorage::new_in_memory());
+
+        // Create API key with scoped permission
+        let api_key = ApiKeyRepoModel {
+            id: "test-key-id".to_string(),
+            name: "Test Key".to_string(),
+            value: SecretString::new("test-token"),
+            permissions: vec![PermissionGrant::ids(
+                "relayers:read",
+                vec!["relayer-1".to_string()],
+            )],
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        api_key_repo.create(api_key).await.unwrap();
+
+        let srv_req = TestRequest::default()
+            .insert_header((
+                AUTHORIZATION_HEADER_NAME,
+                format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "test-token"),
+            ))
+            .to_srv_request();
+        let req = srv_req.request();
+
+        // Should fail for relayer not in scope
+        let result = validate_api_key_permissions_scoped(
+            req,
+            api_key_repo.as_ref(),
+            &["relayers:read"],
+            "relayer-999",
+        )
+        .await;
+        assert!(matches!(result, Err(ApiError::ForbiddenError(_))));
+    }
+
+    #[tokio::test]
+    async fn test_validate_api_key_permissions_scoped_wildcard() {
+        let api_key_repo = Arc::new(ApiKeyRepositoryStorage::new_in_memory());
+
+        // Create API key with wildcard permission
+        let api_key = ApiKeyRepoModel {
+            id: "test-key-id".to_string(),
+            name: "Test Key".to_string(),
+            value: SecretString::new("test-token"),
+            permissions: vec![PermissionGrant::global("*:*")],
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        api_key_repo.create(api_key).await.unwrap();
+
+        let srv_req = TestRequest::default()
+            .insert_header((
+                AUTHORIZATION_HEADER_NAME,
+                format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "test-token"),
+            ))
+            .to_srv_request();
+        let req = srv_req.request();
+
+        // Should succeed for any resource with wildcard
+        let result = validate_api_key_permissions_scoped(
+            req,
+            api_key_repo.as_ref(),
+            &["relayers:update"],
+            "any-relayer-id",
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_api_key_permissions_scoped_multiple_permissions() {
+        let api_key_repo = Arc::new(ApiKeyRepositoryStorage::new_in_memory());
+
+        // Create API key with multiple scoped permissions
+        let api_key = ApiKeyRepoModel {
+            id: "test-key-id".to_string(),
+            name: "Test Key".to_string(),
+            value: SecretString::new("test-token"),
+            permissions: vec![
+                PermissionGrant::ids("relayers:read", vec!["relayer-1".to_string()]),
+                PermissionGrant::ids("transactions:execute", vec!["relayer-1".to_string()]),
+            ],
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        api_key_repo.create(api_key).await.unwrap();
+
+        let srv_req = TestRequest::default()
+            .insert_header((
+                AUTHORIZATION_HEADER_NAME,
+                format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "test-token"),
+            ))
+            .to_srv_request();
+        let req = srv_req.request();
+
+        // Should succeed when all required permissions are granted for the resource
+        let result = validate_api_key_permissions_scoped(
+            req,
+            api_key_repo.as_ref(),
+            &["relayers:read", "transactions:execute"],
+            "relayer-1",
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_api_key_permissions_scoped_resource_wildcard() {
+        let api_key_repo = Arc::new(ApiKeyRepositoryStorage::new_in_memory());
+
+        // Create API key with resource-level wildcard
+        let api_key = ApiKeyRepoModel {
+            id: "test-key-id".to_string(),
+            name: "Test Key".to_string(),
+            value: SecretString::new("test-token"),
+            permissions: vec![PermissionGrant::ids(
+                "relayers:*",
+                vec!["relayer-1".to_string()],
+            )],
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        api_key_repo.create(api_key).await.unwrap();
+
+        let srv_req = TestRequest::default()
+            .insert_header((
+                AUTHORIZATION_HEADER_NAME,
+                format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "test-token"),
+            ))
+            .to_srv_request();
+        let req = srv_req.request();
+
+        // Should succeed for any relayers operation on relayer-1
+        let result = validate_api_key_permissions_scoped(
+            req,
+            api_key_repo.as_ref(),
+            &["relayers:delete"],
+            "relayer-1",
+        )
+        .await;
+        assert!(result.is_ok());
     }
 }
