@@ -392,6 +392,139 @@ cargo run --example generate_uuid
 
 Copy the generated UUID and update the `API_KEY` entry in the `.env` file.
 
+### API Key Permissions System
+
+The relayer uses a fine-grained permission system to control access to API resources. Each API key can have multiple permission grants that specify what actions can be performed and on what scope.
+
+#### Permission Structure
+
+Permissions consist of two parts:
+- **Action**: The operation being permitted (e.g., `relayers:read`, `transactions:execute`)
+- **Scope**: Either `global` (all resources) or a list of specific resource IDs
+
+#### Permission Format
+
+```json
+{
+  "action": "relayers:read",
+  "scope": "global"
+}
+```
+
+Or with specific resource IDs:
+
+```json
+{
+  "action": "relayers:update",
+  "scope": ["sepolia-example", "mainnet-example"]
+}
+```
+
+#### Action Format
+
+Actions follow the pattern `{resource}:{operation}`:
+- `relayers:read` - Read relayer information
+- `relayers:create` - Create new relayers
+- `relayers:update` - Update relayer configuration
+- `relayers:delete` - Delete relayers
+- `transactions:execute` - Execute transactions
+- `signers:read`, `signers:create`, `signers:update`, `signers:delete` - Signer operations
+- `notifications:read`, `notifications:create`, `notifications:update`, `notifications:delete` - Notification operations
+- `api_keys:read`, `api_keys:create`, `api_keys:delete` - API key management
+
+#### Wildcard Support
+
+The permission system supports wildcards for flexible access control:
+- `*:*` with global scope - Full system access (super admin)
+- `relayers:*` with global scope - All operations on all relayers
+- `relayers:*` with specific IDs - All operations on specific relayers
+
+#### Permission Hierarchy
+
+1. **Super Admin**: `*:*` with global scope grants unrestricted access
+2. **Resource-level Admin**: `relayers:*` with global scope grants all operations on relayers
+3. **Global Action**: `relayers:read` with global scope allows reading all relayers
+4. **Scoped Action**: `relayers:read` with specific IDs allows reading only those relayers
+
+#### Example Permissions
+
+**Full access:**
+```json
+{
+  "permissions": [
+    {
+      "action": "*:*",
+      "scope": "global"
+    }
+  ]
+}
+```
+
+**Read-only access to all relayers:**
+```json
+{
+  "permissions": [
+    {
+      "action": "relayers:read",
+      "scope": "global"
+    }
+  ]
+}
+```
+
+**Update specific relayers only:**
+```json
+{
+  "permissions": [
+    {
+      "action": "relayers:update",
+      "scope": ["sepolia-example", "mainnet-example"]
+    }
+  ]
+}
+```
+
+**Multiple permissions:**
+```json
+{
+  "permissions": [
+    {
+      "action": "relayers:read",
+      "scope": "global"
+    },
+    {
+      "action": "transactions:execute",
+      "scope": ["sepolia-example"]
+    },
+    {
+      "action": "signers:*",
+      "scope": "global"
+    }
+  ]
+}
+```
+
+#### Creating API Keys with Permissions
+
+API keys can be created via the REST API with specific permissions:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/api_keys \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{
+    "name": "My API Key",
+    "permissions": [
+      {
+        "action": "relayers:read",
+        "scope": "global"
+      }
+    ]
+  }'
+```
+
+See the [API Keys documentation](https://docs.openzeppelin.com/relayer/api-keys) for more details on managing API keys and permissions.
+
 ### Starting Redis manually (without docker compose)
 
 You can start Redis in one of two ways:
