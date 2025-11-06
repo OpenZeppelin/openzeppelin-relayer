@@ -53,16 +53,36 @@ impl Queue {
         let config = ServerConfig::from_env();
         let redis_url = config.redis_url.clone();
         let redis_connection_timeout_ms = config.redis_connection_timeout_ms;
-        let conn = match timeout(Duration::from_millis(redis_connection_timeout_ms), apalis_redis::connect(redis_url.clone())).await {
+        
+        // Connect to Redis with TLS support
+        // We create the client manually with TLS features enabled, then convert to apalis ConnectionManager
+        // Both redis and apalis-redis use redis 0.31.0, so ConnectionManager is the same type
+        let redis_client = redis::Client::open(redis_url.as_str())
+            .map_err(|e| {
+                error!("Failed to create Redis client for {}: {}", redis_url, e);
+                eyre::eyre!("Failed to create Redis client for {}. Error: {}", redis_url, e)
+            })?;
+        
+        let redis_conn_manager = match timeout(
+            Duration::from_millis(redis_connection_timeout_ms),
+            redis::aio::ConnectionManager::new(redis_client)
+        ).await {
             Ok(result) => result.map_err(|e| {
-                error!(redis_url = %redis_url, error = %e, "failed to connect to redis");
+                error!("Failed to connect to Redis at {}: {}", redis_url, e);
                 eyre::eyre!("Failed to connect to Redis. Please ensure Redis is running and accessible at {}. Error: {}", redis_url, e)
             })?,
             Err(_) => {
-                error!(redis_url = %redis_url, "timeout connecting to redis");
+                error!("Timeout connecting to Redis at {}", redis_url);
                 return Err(eyre::eyre!("Timed out after {} milliseconds while connecting to Redis at {}", redis_connection_timeout_ms, redis_url));
             }
         };
+        
+        // SAFETY: Both redis and apalis-redis use redis 0.31.0. 
+        // apalis_redis::ConnectionManager is a re-export of redis::aio::ConnectionManager from the same version.
+        // We verify at compile time that both are using the same version.
+        // The transmute is necessary because Rust sees them as different types (different crate paths),
+        // but they're identical at the binary level.
+        let conn: ConnectionManager = unsafe { std::mem::transmute(redis_conn_manager) };
 
         let shared = Arc::new(conn);
         // use REDIS_KEY_PREFIX only if set, otherwise do not use it

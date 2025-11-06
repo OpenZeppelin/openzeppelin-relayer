@@ -58,6 +58,7 @@ use openzeppelin_relayer::{
     utils::check_authorization_header,
 };
 use tracing_actix_web::TracingLogger;
+use rustls::crypto::ring;
 
 fn load_config_file(config_file_path: &str) -> Result<Config> {
     config::load_config(config_file_path).wrap_err("Failed to load config file")
@@ -65,6 +66,11 @@ fn load_config_file(config_file_path: &str) -> Result<Config> {
 
 #[actix_web::main]
 async fn main() -> Result<()> {
+    // Install rustls crypto provider (required for TLS connections including Redis TLS)
+    ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
+
     dotenv().ok();
 
     // Setup logging first so ErrorLayer is available

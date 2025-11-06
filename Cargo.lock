@@ -1189,7 +1189,7 @@ dependencies = [
  "chrono",
  "futures",
  "log",
- "redis",
+ "redis 0.32.7",
  "serde",
  "thiserror 2.0.17",
  "tokio",
@@ -5709,10 +5709,11 @@ dependencies = [
  "prometheus",
  "proptest",
  "rand 0.9.2",
- "redis",
+ "redis 0.31.0",
  "regex",
  "reqwest",
  "reqwest-middleware",
+ "rustls 0.23.34",
  "secrets",
  "serde",
  "serde_json",
@@ -6524,6 +6525,34 @@ name = "recvmsg"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3edd4d5d42c92f0a659926464d4cce56b562761267ecf0f469d85b7de384175"
+
+[[package]]
+name = "redis"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bc1ea653e0b2e097db3ebb5b7f678be339620b8041f66b30a308c1d45d36a7f"
+dependencies = [
+ "arc-swap",
+ "backon",
+ "bytes",
+ "cfg-if",
+ "combine",
+ "futures-channel",
+ "futures-util",
+ "itoa",
+ "num-bigint 0.4.6",
+ "percent-encoding",
+ "pin-project-lite",
+ "rustls 0.23.34",
+ "rustls-native-certs 0.8.2",
+ "ryu",
+ "sha1_smol",
+ "socket2 0.5.10",
+ "tokio",
+ "tokio-rustls 0.26.4",
+ "tokio-util",
+ "url",
+]
 
 [[package]]
 name = "redis"
