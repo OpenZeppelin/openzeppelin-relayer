@@ -12,7 +12,6 @@ mod sign_and_send_transaction;
 mod sign_transaction;
 mod transfer_transaction;
 mod utils;
-mod validations;
 
 #[cfg(test)]
 mod test_setup;
@@ -23,7 +22,11 @@ use std::sync::Arc;
 
 #[cfg(test)]
 pub use test_setup::*;
-pub use validations::*;
+
+// Re-export validation types from transaction domain module
+pub use crate::domain::transaction::solana::{
+    SolanaTransactionValidationError, SolanaTransactionValidator,
+};
 
 use crate::{
     jobs::{JobProducer, JobProducerTrait},

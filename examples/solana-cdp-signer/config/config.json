@@ -6,7 +6,10 @@
       "network": "devnet",
       "paused": false,
       "signer_id": "cdp-signer-solana",
-      "network_type": "solana"
+      "network_type": "solana",
+      "policies": {
+        "fee_payment_strategy": "relayer"
+      }
     }
   ],
   "notifications": [

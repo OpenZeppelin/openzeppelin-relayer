@@ -62,15 +62,17 @@ sha2 = { version = "0.10" }
 sha3 = { version = "0.10" }
 dashmap = { version = "6.1" }
 actix-governor = "0.8"
-solana-sdk = { version = "2.2" }
-solana-client = { version = "2.2" }
-spl-token = { version = "8" }
-spl-token-2022 = { version = "8" }
+solana-sdk = { version = "3" }
+solana-client = { version = "3" }
+solana-program = { version = "2" }
+solana-commitment-config = { version = "3" }
+spl-token-interface = { version = "2" }
+spl-token-2022-interface = { version = "2" }
 mpl-token-metadata = { version = "5.1" }
 sysinfo = "0.36"
 bincode = { version = "1.3" }
 bs58 = "0.5"
-spl-associated-token-account = "6.0.0"
+spl-associated-token-account-interface = "2"
 itertools = "0.14.0"
 validator = { version = "0.20", features = ["derive"] }
 vaultrs = { version = "0.7.4" }
@@ -90,7 +92,7 @@ http = { version = "1.3.1" }
 pem = { version = "3" }
 simple_asn1 = { version = "0.6" }
 k256 = { version = "0.13", features = ["ecdsa-core"]}
-solana-system-interface = { version = "1.0.0", features = ["bincode"] }
+solana-system-interface = { version = "2.0.0", features = ["bincode"] }
 cdp-sdk = "0.1.0"
 reqwest-middleware = { version = "0.4.2", default-features = false, features = ["json"] }
 

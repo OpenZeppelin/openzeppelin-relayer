@@ -45,6 +45,13 @@ pub enum ProviderError {
     Other(String),
 }
 
+impl ProviderError {
+    /// Determines if this error is transient (can retry) or permanent (should fail).
+    pub fn is_transient(&self) -> bool {
+        is_retriable_error(self)
+    }
+}
+
 impl From<hex::FromHexError> for ProviderError {
     fn from(err: hex::FromHexError) -> Self {
         ProviderError::InvalidAddress(err.to_string())
@@ -274,21 +281,36 @@ pub fn get_network_provider<N: NetworkConfiguration>(
     N::new_provider(rpc_urls, timeout_seconds)
 }
 
+/// Determines if an HTTP status code indicates the provider should be marked as failed.
+///
+/// This is a low-level function that can be reused across different error types.
+///
+/// Returns `true` for:
+/// - 5xx Server Errors (500-599) - RPC node is having issues
+/// - Specific 4xx Client Errors that indicate provider issues:
+///   - 401 (Unauthorized) - auth required but not provided
+///   - 403 (Forbidden) - node is blocking requests or auth issues
+///   - 404 (Not Found) - endpoint doesn't exist or misconfigured
+///   - 410 (Gone) - endpoint permanently removed
+pub fn should_mark_provider_failed_by_status_code(status_code: u16) -> bool {
+    match status_code {
+        // 5xx Server Errors - RPC node is having issues
+        500..=599 => true,
+
+        // 4xx Client Errors that indicate we can't use this provider
+        401 => true, // Unauthorized - auth required but not provided
+        403 => true, // Forbidden - node is blocking requests or auth issues
+        404 => true, // Not Found - endpoint doesn't exist or misconfigured
+        410 => true, // Gone - endpoint permanently removed
+
+        _ => false,
+    }
+}
+
 pub fn should_mark_provider_failed(error: &ProviderError) -> bool {
     match error {
         ProviderError::RequestError { status_code, .. } => {
-            match *status_code {
-                // 5xx Server Errors - RPC node is having issues
-                500..=599 => true,
-
-                // 4xx Client Errors that indicate we can't use this provider
-                401 => true, // Unauthorized - auth required but not provided
-                403 => true, // Forbidden - node is blocking requests or auth issues
-                404 => true, // Not Found - endpoint doesn't exist or misconfigured
-                410 => true, // Gone - endpoint permanently removed
-
-                _ => false,
-            }
+            should_mark_provider_failed_by_status_code(*status_code)
         }
         _ => false,
     }
@@ -351,6 +373,8 @@ pub fn is_retriable_error(error: &ProviderError) -> bool {
                 _ => false,
             }
         }
+
+        ProviderError::SolanaRpcError(err) => err.is_transient(),
 
         // Any other errors: check message for network-related issues
         _ => {
