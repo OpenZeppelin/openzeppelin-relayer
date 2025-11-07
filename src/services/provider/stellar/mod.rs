@@ -140,52 +140,15 @@ fn categorize_stellar_error_with_context(
                         source = s.source();
                     }
 
-                    // Fallback: categorize by error message
-                    let err_str = transport_err.to_string();
-                    let err_lower = err_str.to_lowercase();
-
-                    if err_lower.contains("timeout") || err_lower.contains("timed out") {
-                        return ProviderError::Timeout;
-                    }
-
-                    if err_lower.contains("connection refused")
-                        || err_lower.contains("tcp connect error")
-                        || err_lower.contains("connection reset")
-                        || err_lower.contains("broken pipe")
-                        || err_lower.contains("network unreachable")
-                        || err_lower.contains("host unreachable")
-                    {
-                        return ProviderError::Other(add_context(format!(
-                            "Network error: {}",
-                            err_str
-                        )));
-                    }
-
-                    if err_lower.contains("dns") || err_lower.contains("name resolution") {
-                        return ProviderError::Other(add_context(format!(
-                            "DNS error: {}",
-                            err_str
-                        )));
-                    }
-
-                    if err_lower.contains("tls")
-                        || err_lower.contains("ssl")
-                        || err_lower.contains("certificate")
-                    {
-                        return ProviderError::Other(add_context(format!(
-                            "TLS error: {}",
-                            err_str
-                        )));
-                    }
-
-                    ProviderError::Other(add_context(format!("Transport error: {}", err_str)))
+                    ProviderError::TransportError(add_context(format!(
+                        "Transport error: {}",
+                        transport_err
+                    )))
                 }
-
                 // Catch-all for other jsonrpsee errors
                 other => ProviderError::Other(add_context(format!("JSON-RPC error: {}", other))),
             }
         }
-
         // === Response Parsing/Validation Errors (May indicate RPC node issue) ===
         StellarClientError::InvalidResponse => {
             // This could be a temporary RPC node issue or malformed response
