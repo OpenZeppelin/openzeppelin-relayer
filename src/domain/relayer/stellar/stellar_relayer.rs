@@ -1,3 +1,5 @@
+use crate::domain::map_provider_error;
+use crate::domain::relayer::evm::create_error_response;
 /// This module defines the `StellarRelayer` struct and its associated functionality for
 /// interacting with Stellar networks. The `StellarRelayer` is responsible for managing
 /// transactions, synchronizing sequence numbers, and ensuring the relayer's state is
@@ -23,16 +25,17 @@
 use crate::{
     constants::{STELLAR_SMALLEST_UNIT_NAME, STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS},
     domain::{
-        transaction::stellar::fetch_next_sequence_from_chain, BalanceResponse, SignDataRequest,
-        SignDataResponse, SignTransactionExternalResponse, SignTransactionExternalResponseStellar,
-        SignTransactionRequest, SignTypedDataRequest,
+        create_success_response, transaction::stellar::fetch_next_sequence_from_chain,
+        BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
+        SignTransactionExternalResponseStellar, SignTransactionRequest, SignTypedDataRequest,
     },
     jobs::{JobProducerTrait, RelayerHealthCheck, TransactionRequest, TransactionStatusCheck},
     models::{
         produce_relayer_disabled_payload, DeletePendingTransactionsResponse, DisabledReason,
         HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest,
         NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus,
-        RepositoryError, StellarNetwork, StellarRpcResult, TransactionRepoModel, TransactionStatus,
+        RepositoryError, RpcErrorCodes, StellarNetwork, StellarRpcRequest, TransactionRepoModel,
+        TransactionStatus,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
@@ -354,17 +357,42 @@ where
 
     async fn rpc(
         &self,
-        _request: JsonRpcRequest<NetworkRpcRequest>,
+        request: JsonRpcRequest<NetworkRpcRequest>,
     ) -> Result<JsonRpcResponse<NetworkRpcResult>, RelayerError> {
-        println!("Stellar rpc...");
-        Ok(JsonRpcResponse {
-            id: None,
-            jsonrpc: "2.0".to_string(),
-            result: Some(NetworkRpcResult::Stellar(
-                StellarRpcResult::GenericRpcResult("".to_string()),
-            )),
-            error: None,
-        })
+        let JsonRpcRequest { id, params, .. } = request;
+        let stellar_request = match params {
+            NetworkRpcRequest::Stellar(stellar_req) => stellar_req,
+            _ => {
+                return Ok(create_error_response(
+                    id.clone(),
+                    RpcErrorCodes::INVALID_PARAMS,
+                    "Invalid params",
+                    "Expected Stellar network request",
+                ))
+            }
+        };
+
+        // Parse method and params from the Stellar request (single unified variant)
+        let (method, params_json) = match stellar_request {
+            StellarRpcRequest::RawRpcRequest { method, params } => (method, params),
+        };
+
+        match self
+            .provider
+            .raw_request_dyn(&method, params_json, id.clone())
+            .await
+        {
+            Ok(result_value) => Ok(create_success_response(id.clone(), result_value)),
+            Err(provider_error) => {
+                let (error_code, error_message) = map_provider_error(&provider_error);
+                Ok(create_error_response(
+                    id.clone(),
+                    error_code,
+                    error_message,
+                    &provider_error.to_string(),
+                ))
+            }
+        }
     }
 
     async fn validate_min_balance(&self) -> Result<(), RelayerError> {
@@ -501,11 +529,11 @@ mod tests {
             InMemoryNetworkRepository, MockRelayerRepository, MockTransactionRepository,
         },
         services::{
-            provider::MockStellarProviderTrait, signer::MockStellarSignTrait,
+            provider::{MockStellarProviderTrait, ProviderError},
+            signer::MockStellarSignTrait,
             MockTransactionCounterServiceTrait,
         },
     };
-    use eyre::eyre;
     use mockall::predicate::*;
     use soroban_rs::xdr::{
         AccountEntry, AccountEntryExt, AccountId, DecoratedSignature, PublicKey, SequenceNumber,
@@ -633,7 +661,7 @@ mod tests {
         provider
             .expect_get_account()
             .with(eq(relayer_model.address.clone()))
-            .returning(|_| Box::pin(async { Err(eyre!("fail")) }));
+            .returning(|_| Box::pin(async { Err(ProviderError::Other("fail".to_string())) }));
         let counter = MockTransactionCounterServiceTrait::new();
         let relayer_repo = MockRelayerRepository::new();
         let tx_repo = MockTransactionRepository::new();
@@ -766,7 +794,9 @@ mod tests {
         provider_mock
             .expect_get_account()
             .with(eq(relayer_model.address.clone()))
-            .returning(|_| Box::pin(async { Err(eyre!("Stellar provider down")) }));
+            .returning(|_| {
+                Box::pin(async { Err(ProviderError::Other("Stellar provider down".to_string())) })
+            });
         let signer = MockStellarSignTrait::new();
 
         let stellar_relayer = StellarRelayer::new(
@@ -860,7 +890,9 @@ mod tests {
         provider
             .expect_get_account()
             .with(eq(relayer_model.address.clone()))
-            .returning(|_| Box::pin(async { Err(eyre!("provider failed")) }));
+            .returning(|_| {
+                Box::pin(async { Err(ProviderError::Other("provider failed".to_string())) })
+            });
 
         let relayer_repo = Arc::new(MockRelayerRepository::new());
         let tx_repo = Arc::new(MockTransactionRepository::new());
@@ -887,7 +919,7 @@ mod tests {
         assert!(result.is_err());
         match result.err().unwrap() {
             RelayerError::ProviderError(msg) => {
-                assert!(msg.contains("Failed to fetch account for balance: provider failed"));
+                assert!(msg.contains("Failed to fetch account for balance"));
             }
             _ => panic!("Unexpected error type"),
         }
@@ -1116,7 +1148,7 @@ mod tests {
         // Mock validation failure - sequence sync fails
         provider
             .expect_get_account()
-            .returning(|_| Box::pin(ready(Err(eyre!("RPC error")))));
+            .returning(|_| Box::pin(ready(Err(ProviderError::Other("RPC error".to_string())))));
 
         // Mock disable_relayer call
         let mut disabled_relayer = relayer_model.clone();
@@ -1291,9 +1323,11 @@ mod tests {
         let mut job_producer = MockJobProducerTrait::new();
 
         // Mock validation failure - sequence sync fails
-        provider
-            .expect_get_account()
-            .returning(|_| Box::pin(ready(Err(eyre!("Sequence sync failed")))));
+        provider.expect_get_account().returning(|_| {
+            Box::pin(ready(Err(ProviderError::Other(
+                "Sequence sync failed".to_string(),
+            ))))
+        });
 
         // Mock disable_relayer call
         let mut disabled_relayer = relayer_model.clone();
@@ -1351,9 +1385,11 @@ mod tests {
         let mut relayer_repo = MockRelayerRepository::new();
 
         // Mock validation failure - sequence sync fails
-        provider
-            .expect_get_account()
-            .returning(|_| Box::pin(ready(Err(eyre!("Sequence sync failed")))));
+        provider.expect_get_account().returning(|_| {
+            Box::pin(ready(Err(ProviderError::Other(
+                "Sequence sync failed".to_string(),
+            ))))
+        });
 
         // Mock disable_relayer call
         let mut disabled_relayer = relayer_model.clone();

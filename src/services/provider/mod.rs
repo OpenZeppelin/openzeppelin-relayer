@@ -39,51 +39,16 @@ pub enum ProviderError {
     RequestError { error: String, status_code: u16 },
     #[error("JSON-RPC error (code {code}): {message}")]
     RpcErrorCode { code: i64, message: String },
+    #[error("Transport error: {0}")]
+    TransportError(String),
     #[error("Other provider error: {0}")]
     Other(String),
 }
 
 impl ProviderError {
     /// Determines if this error is transient (can retry) or permanent (should fail).
-    ///
-    /// **Transient (can retry):**
-    /// - `SolanaRpcError`: Delegates to SolanaProviderError::is_transient()
-    /// - `Timeout`: Connection timeouts can resolve
-    /// - `RateLimited`: Rate limits are temporary
-    /// - `BadGateway`: Gateway issues are temporary
-    /// - `RequestError` with 5xx: Server errors are temporary
-    /// - `Other`: Unknown errors default to transient for safety
-    ///
-    /// **Permanent (fail immediately):**
-    /// - `InvalidAddress`: Address format issues won't resolve
-    /// - `NetworkConfiguration`: Configuration errors are permanent
-    /// - `RequestError` with 4xx: Client errors are permanent
     pub fn is_transient(&self) -> bool {
-        match self {
-            // Delegate to underlying error's is_transient()
-            ProviderError::SolanaRpcError(err) => err.is_transient(),
-
-            // Transient errors - can retry
-            ProviderError::Timeout => true,
-            ProviderError::RateLimited => true,
-            ProviderError::BadGateway => true,
-            ProviderError::Other(_) => true, // Conservative: default to transient
-
-            // Permanent errors
-            ProviderError::InvalidAddress(_) => false,
-            ProviderError::NetworkConfiguration(_) => false,
-
-            // HTTP status code based classification
-            ProviderError::RequestError { status_code, .. } => {
-                // 5xx errors are server-side and typically transient
-                // 4xx errors are client-side and typically permanent
-                *status_code >= 500
-            }
-
-            // RPC error codes - default to transient for safety
-            // Specific codes could be handled here if needed
-            ProviderError::RpcErrorCode { .. } => true,
-        }
+        is_retriable_error(self)
     }
 }
 
@@ -188,8 +153,7 @@ where
                     return categorize_reqwest_error(reqwest_err);
                 }
 
-                // Fallback for other transport error types
-                ProviderError::Other(format!("Transport error: {}", transport_err))
+                ProviderError::TransportError(transport_err.to_string())
             }
             RpcError::ErrorResp(json_rpc_err) => ProviderError::RpcErrorCode {
                 code: json_rpc_err.code,
@@ -315,6 +279,97 @@ pub fn get_network_provider<N: NetworkConfiguration>(
     };
 
     N::new_provider(rpc_urls, timeout_seconds)
+}
+
+pub fn should_mark_provider_failed(error: &ProviderError) -> bool {
+    match error {
+        ProviderError::RequestError { status_code, .. } => {
+            match *status_code {
+                // 5xx Server Errors - RPC node is having issues
+                500..=599 => true,
+
+                // 4xx Client Errors that indicate we can't use this provider
+                401 => true, // Unauthorized - auth required but not provided
+                403 => true, // Forbidden - node is blocking requests or auth issues
+                404 => true, // Not Found - endpoint doesn't exist or misconfigured
+                410 => true, // Gone - endpoint permanently removed
+
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+// Errors that are retriable
+pub fn is_retriable_error(error: &ProviderError) -> bool {
+    match error {
+        // HTTP-level errors that are retriable
+        ProviderError::Timeout
+        | ProviderError::RateLimited
+        | ProviderError::BadGateway
+        | ProviderError::TransportError(_) => true,
+
+        ProviderError::RequestError { status_code, .. } => {
+            match *status_code {
+                // Non-retriable 5xx: persistent server-side issues
+                501 | 505 => false, // Not Implemented, HTTP Version Not Supported
+
+                // Retriable 5xx: temporary server-side issues
+                500 | 502..=504 | 506..=599 => true,
+
+                // Retriable 4xx: timeout or rate-limit related
+                408 | 425 | 429 => true,
+
+                // Non-retriable 4xx: client errors
+                400..=499 => false,
+
+                // Other status codes: not retriable
+                _ => false,
+            }
+        }
+
+        // JSON-RPC error codes (EIP-1474)
+        ProviderError::RpcErrorCode { code, .. } => {
+            match code {
+                // -32002: Resource unavailable (temporary state)
+                -32002 => true,
+                // -32005: Limit exceeded / rate limited
+                -32005 => true,
+                // -32603: Internal error (may be temporary)
+                -32603 => true,
+                // -32000: Invalid input
+                -32000 => false,
+                // -32001: Resource not found
+                -32001 => false,
+                // -32003: Transaction rejected
+                -32003 => false,
+                // -32004: Method not supported
+                -32004 => false,
+
+                // Standard JSON-RPC 2.0 errors (not retriable)
+                // -32700: Parse error
+                // -32600: Invalid request
+                // -32601: Method not found
+                // -32602: Invalid params
+                -32700..=-32600 => false,
+
+                // All other error codes: not retriable by default
+                _ => false,
+            }
+        }
+
+        ProviderError::SolanaRpcError(err) => err.is_transient(),
+
+        // Any other errors: check message for network-related issues
+        _ => {
+            let err_msg = format!("{}", error);
+            let msg_lower = err_msg.to_lowercase();
+            msg_lower.contains("timeout")
+                || msg_lower.contains("connection")
+                || msg_lower.contains("reset")
+        }
+    }
 }
 
 #[cfg(test)]
@@ -721,6 +776,421 @@ mod tests {
                 assert!(msg.contains("Invalid URL scheme"));
             }
             _ => panic!("Unexpected error type"),
+        }
+    }
+
+    #[test]
+    fn test_should_mark_provider_failed_server_errors() {
+        // 5xx errors should mark provider as failed
+        for status_code in 500..=599 {
+            let error = ProviderError::RequestError {
+                error: format!("Server error {}", status_code),
+                status_code,
+            };
+            assert!(
+                should_mark_provider_failed(&error),
+                "Status code {} should mark provider as failed",
+                status_code
+            );
+        }
+    }
+
+    #[test]
+    fn test_should_mark_provider_failed_auth_errors() {
+        // Authentication/authorization errors should mark provider as failed
+        let auth_errors = [401, 403];
+        for &status_code in &auth_errors {
+            let error = ProviderError::RequestError {
+                error: format!("Auth error {}", status_code),
+                status_code,
+            };
+            assert!(
+                should_mark_provider_failed(&error),
+                "Status code {} should mark provider as failed",
+                status_code
+            );
+        }
+    }
+
+    #[test]
+    fn test_should_mark_provider_failed_not_found_errors() {
+        // 404 and 410 should mark provider as failed (endpoint issues)
+        let not_found_errors = [404, 410];
+        for &status_code in &not_found_errors {
+            let error = ProviderError::RequestError {
+                error: format!("Not found error {}", status_code),
+                status_code,
+            };
+            assert!(
+                should_mark_provider_failed(&error),
+                "Status code {} should mark provider as failed",
+                status_code
+            );
+        }
+    }
+
+    #[test]
+    fn test_should_mark_provider_failed_client_errors_not_failed() {
+        // These 4xx errors should NOT mark provider as failed (client-side issues)
+        let client_errors = [400, 405, 413, 414, 415, 422, 429];
+        for &status_code in &client_errors {
+            let error = ProviderError::RequestError {
+                error: format!("Client error {}", status_code),
+                status_code,
+            };
+            assert!(
+                !should_mark_provider_failed(&error),
+                "Status code {} should NOT mark provider as failed",
+                status_code
+            );
+        }
+    }
+
+    #[test]
+    fn test_should_mark_provider_failed_other_error_types() {
+        // Test non-RequestError types - these should NOT mark provider as failed
+        let errors = [
+            ProviderError::Timeout,
+            ProviderError::RateLimited,
+            ProviderError::BadGateway,
+            ProviderError::InvalidAddress("test".to_string()),
+            ProviderError::NetworkConfiguration("test".to_string()),
+            ProviderError::Other("test".to_string()),
+        ];
+
+        for error in errors {
+            assert!(
+                !should_mark_provider_failed(&error),
+                "Error type {:?} should NOT mark provider as failed",
+                error
+            );
+        }
+    }
+
+    #[test]
+    fn test_should_mark_provider_failed_edge_cases() {
+        // Test some edge case status codes
+        let edge_cases = [
+            (200, false), // Success - shouldn't happen in error context but test anyway
+            (300, false), // Redirection
+            (418, false), // I'm a teapot - should not mark as failed
+            (451, false), // Unavailable for legal reasons - client issue
+            (499, false), // Client closed request - client issue
+        ];
+
+        for (status_code, should_fail) in edge_cases {
+            let error = ProviderError::RequestError {
+                error: format!("Edge case error {}", status_code),
+                status_code,
+            };
+            assert_eq!(
+                should_mark_provider_failed(&error),
+                should_fail,
+                "Status code {} should {} mark provider as failed",
+                status_code,
+                if should_fail { "" } else { "NOT" }
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_retriable_types() {
+        // These error types should be retriable
+        let retriable_errors = [
+            ProviderError::Timeout,
+            ProviderError::RateLimited,
+            ProviderError::BadGateway,
+            ProviderError::TransportError("test".to_string()),
+        ];
+
+        for error in retriable_errors {
+            assert!(
+                is_retriable_error(&error),
+                "Error type {:?} should be retriable",
+                error
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_non_retriable_types() {
+        // These error types should NOT be retriable
+        let non_retriable_errors = [
+            ProviderError::InvalidAddress("test".to_string()),
+            ProviderError::NetworkConfiguration("test".to_string()),
+            ProviderError::RequestError {
+                error: "Some error".to_string(),
+                status_code: 400,
+            },
+        ];
+
+        for error in non_retriable_errors {
+            assert!(
+                !is_retriable_error(&error),
+                "Error type {:?} should NOT be retriable",
+                error
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_message_based_detection() {
+        // Test errors that should be retriable based on message content
+        let retriable_messages = [
+            "Connection timeout occurred",
+            "Network connection reset",
+            "Connection refused",
+            "TIMEOUT error happened",
+            "Connection was reset by peer",
+        ];
+
+        for message in retriable_messages {
+            let error = ProviderError::Other(message.to_string());
+            assert!(
+                is_retriable_error(&error),
+                "Error with message '{}' should be retriable",
+                message
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_message_based_non_retriable() {
+        // Test errors that should NOT be retriable based on message content
+        let non_retriable_messages = [
+            "Invalid address format",
+            "Bad request parameters",
+            "Authentication failed",
+            "Method not found",
+            "Some other error",
+        ];
+
+        for message in non_retriable_messages {
+            let error = ProviderError::Other(message.to_string());
+            assert!(
+                !is_retriable_error(&error),
+                "Error with message '{}' should NOT be retriable",
+                message
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_case_insensitive() {
+        // Test that message-based detection is case insensitive
+        let case_variations = [
+            "TIMEOUT",
+            "Timeout",
+            "timeout",
+            "CONNECTION",
+            "Connection",
+            "connection",
+            "RESET",
+            "Reset",
+            "reset",
+        ];
+
+        for message in case_variations {
+            let error = ProviderError::Other(message.to_string());
+            assert!(
+                is_retriable_error(&error),
+                "Error with message '{}' should be retriable (case insensitive)",
+                message
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_request_error_retriable_5xx() {
+        // Test retriable 5xx status codes
+        let retriable_5xx = vec![
+            (500, "Internal Server Error"),
+            (502, "Bad Gateway"),
+            (503, "Service Unavailable"),
+            (504, "Gateway Timeout"),
+            (506, "Variant Also Negotiates"),
+            (507, "Insufficient Storage"),
+            (508, "Loop Detected"),
+            (510, "Not Extended"),
+            (511, "Network Authentication Required"),
+            (599, "Network Connect Timeout Error"),
+        ];
+
+        for (status_code, description) in retriable_5xx {
+            let error = ProviderError::RequestError {
+                error: description.to_string(),
+                status_code,
+            };
+            assert!(
+                is_retriable_error(&error),
+                "Status code {} ({}) should be retriable",
+                status_code,
+                description
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_request_error_non_retriable_5xx() {
+        // Test non-retriable 5xx status codes (persistent server issues)
+        let non_retriable_5xx = vec![
+            (501, "Not Implemented"),
+            (505, "HTTP Version Not Supported"),
+        ];
+
+        for (status_code, description) in non_retriable_5xx {
+            let error = ProviderError::RequestError {
+                error: description.to_string(),
+                status_code,
+            };
+            assert!(
+                !is_retriable_error(&error),
+                "Status code {} ({}) should NOT be retriable",
+                status_code,
+                description
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_request_error_retriable_4xx() {
+        // Test retriable 4xx status codes (timeout/rate-limit related)
+        let retriable_4xx = vec![
+            (408, "Request Timeout"),
+            (425, "Too Early"),
+            (429, "Too Many Requests"),
+        ];
+
+        for (status_code, description) in retriable_4xx {
+            let error = ProviderError::RequestError {
+                error: description.to_string(),
+                status_code,
+            };
+            assert!(
+                is_retriable_error(&error),
+                "Status code {} ({}) should be retriable",
+                status_code,
+                description
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_request_error_non_retriable_4xx() {
+        // Test non-retriable 4xx status codes (client errors)
+        let non_retriable_4xx = vec![
+            (400, "Bad Request"),
+            (401, "Unauthorized"),
+            (403, "Forbidden"),
+            (404, "Not Found"),
+            (405, "Method Not Allowed"),
+            (406, "Not Acceptable"),
+            (407, "Proxy Authentication Required"),
+            (409, "Conflict"),
+            (410, "Gone"),
+            (411, "Length Required"),
+            (412, "Precondition Failed"),
+            (413, "Payload Too Large"),
+            (414, "URI Too Long"),
+            (415, "Unsupported Media Type"),
+            (416, "Range Not Satisfiable"),
+            (417, "Expectation Failed"),
+            (418, "I'm a teapot"),
+            (421, "Misdirected Request"),
+            (422, "Unprocessable Entity"),
+            (423, "Locked"),
+            (424, "Failed Dependency"),
+            (426, "Upgrade Required"),
+            (428, "Precondition Required"),
+            (431, "Request Header Fields Too Large"),
+            (451, "Unavailable For Legal Reasons"),
+            (499, "Client Closed Request"),
+        ];
+
+        for (status_code, description) in non_retriable_4xx {
+            let error = ProviderError::RequestError {
+                error: description.to_string(),
+                status_code,
+            };
+            assert!(
+                !is_retriable_error(&error),
+                "Status code {} ({}) should NOT be retriable",
+                status_code,
+                description
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_request_error_other_status_codes() {
+        // Test other status codes (1xx, 2xx, 3xx) - should not be retriable
+        let other_status_codes = vec![
+            (100, "Continue"),
+            (101, "Switching Protocols"),
+            (200, "OK"),
+            (201, "Created"),
+            (204, "No Content"),
+            (300, "Multiple Choices"),
+            (301, "Moved Permanently"),
+            (302, "Found"),
+            (304, "Not Modified"),
+            (600, "Custom status"),
+            (999, "Unknown status"),
+        ];
+
+        for (status_code, description) in other_status_codes {
+            let error = ProviderError::RequestError {
+                error: description.to_string(),
+                status_code,
+            };
+            assert!(
+                !is_retriable_error(&error),
+                "Status code {} ({}) should NOT be retriable",
+                status_code,
+                description
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_request_error_boundary_cases() {
+        // Test boundary cases for our ranges
+        let test_cases = vec![
+            // Just before retriable 4xx range
+            (407, false, "Proxy Authentication Required"),
+            (408, true, "Request Timeout - first retriable 4xx"),
+            (409, false, "Conflict"),
+            // Around 425
+            (424, false, "Failed Dependency"),
+            (425, true, "Too Early"),
+            (426, false, "Upgrade Required"),
+            // Around 429
+            (428, false, "Precondition Required"),
+            (429, true, "Too Many Requests"),
+            (430, false, "Would be non-retriable if it existed"),
+            // 5xx boundaries
+            (499, false, "Last 4xx"),
+            (500, true, "First 5xx - retriable"),
+            (501, false, "Not Implemented - exception"),
+            (502, true, "Bad Gateway - retriable"),
+            (505, false, "HTTP Version Not Supported - exception"),
+            (506, true, "First after 505 exception"),
+            (599, true, "Last defined 5xx"),
+        ];
+
+        for (status_code, should_be_retriable, description) in test_cases {
+            let error = ProviderError::RequestError {
+                error: description.to_string(),
+                status_code,
+            };
+            assert_eq!(
+                is_retriable_error(&error),
+                should_be_retriable,
+                "Status code {} ({}) should{} be retriable",
+                status_code,
+                description,
+                if should_be_retriable { "" } else { " NOT" }
+            );
         }
     }
 }

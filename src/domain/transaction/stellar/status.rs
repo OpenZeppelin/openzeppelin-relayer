@@ -266,6 +266,8 @@ mod tests {
     }
 
     mod handle_transaction_status_tests {
+        use crate::services::provider::ProviderError;
+
         use super::*;
 
         #[tokio::test]
@@ -541,7 +543,9 @@ mod tests {
                 .expect_get_transaction()
                 .with(eq(expected_stellar_hash.clone()))
                 .times(1)
-                .returning(move |_| Box::pin(async { Err(eyre::eyre!("RPC boom")) }));
+                .returning(move |_| {
+                    Box::pin(async { Err(ProviderError::Other("RPC boom".to_string())) })
+                });
 
             // 2. Mock partial_update: should NOT be called
             mocks.tx_repo.expect_partial_update().never();
@@ -789,7 +793,9 @@ mod tests {
                 .expect_get_transaction()
                 .with(eq(expected_stellar_hash.clone()))
                 .times(1)
-                .returning(move |_| Box::pin(async { Err(eyre::eyre!("Network timeout")) }));
+                .returning(move |_| {
+                    Box::pin(async { Err(ProviderError::Other("Network timeout".to_string())) })
+                });
 
             // No partial update should occur
             mocks.tx_repo.expect_partial_update().never();
