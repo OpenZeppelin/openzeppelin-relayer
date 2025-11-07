@@ -84,7 +84,6 @@ where
             relayer,
             relayer_repository,
             provider,
-
             transaction_repository,
             job_producer,
             signer,

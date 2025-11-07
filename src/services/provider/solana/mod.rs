@@ -37,7 +37,7 @@ use thiserror::Error;
 
 use crate::{
     models::{RpcConfig, SolanaTransactionStatus},
-    services::provider::retry_rpc_call,
+    services::provider::{retry_rpc_call, should_mark_provider_failed_by_status_code},
 };
 
 use super::ProviderError;
@@ -69,6 +69,10 @@ pub enum SolanaProviderError {
     /// RPC protocol error (transient - RPC-level issues like node lag, sync pending)
     #[error("RPC error: {0}")]
     RpcError(String),
+
+    /// HTTP request error with status code (transient/permanent based on status code)
+    #[error("Request error (HTTP {status_code}): {error}")]
+    RequestError { error: String, status_code: u16 },
 
     /// Invalid address format (permanent)
     #[error("Invalid address: {0}")]
@@ -110,6 +114,7 @@ impl SolanaProviderError {
     /// - `RpcError`: RPC protocol issues, node lag, sync pending (-32004, -32005, -32014, -32016)
     /// - `BlockhashNotFound`: Can rebuild transaction with fresh blockhash (-32008)
     /// - `SelectorError`: Can retry with different RPC node
+    /// - `RequestError`: HTTP errors with retriable status codes (5xx, 408, 425, 429)
     ///
     /// **Permanent (fail immediately):**
     /// - `InsufficientFunds`: Not enough balance for transaction
@@ -117,6 +122,7 @@ impl SolanaProviderError {
     /// - `AlreadyProcessed`: Duplicate transaction already on-chain (-32009)
     /// - `InvalidAddress`: Invalid public key format
     /// - `NetworkConfiguration`: Missing data, unsupported operations (-32007, -32010)
+    /// - `RequestError`: HTTP errors with non-retriable status codes (4xx except 408, 425, 429)
     pub fn is_transient(&self) -> bool {
         match self {
             // Transient errors - safe to retry
@@ -124,6 +130,24 @@ impl SolanaProviderError {
             SolanaProviderError::RpcError(_) => true,
             SolanaProviderError::BlockhashNotFound(_) => true,
             SolanaProviderError::SelectorError(_) => true,
+
+            // RequestError - check status code to determine if retriable
+            SolanaProviderError::RequestError { status_code, .. } => match *status_code {
+                // Non-retriable 5xx: persistent server-side issues
+                501 | 505 => false, // Not Implemented, HTTP Version Not Supported
+
+                // Retriable 5xx: temporary server-side issues
+                500 | 502..=504 | 506..=599 => true,
+
+                // Retriable 4xx: timeout or rate-limit related
+                408 | 425 | 429 => true,
+
+                // Non-retriable 4xx: client errors
+                400..=499 => false,
+
+                // Other status codes: not retriable
+                _ => false,
+            },
 
             // Permanent errors - fail immediately
             SolanaProviderError::InsufficientFunds(_) => false,
@@ -141,8 +165,19 @@ impl SolanaProviderError {
     pub fn from_rpc_error(error: ClientError) -> Self {
         match error.kind() {
             // Network/IO errors - connection issues, timeouts (transient)
-            ClientErrorKind::Io(_) | ClientErrorKind::Reqwest(_) => {
-                SolanaProviderError::NetworkError(error.to_string())
+            ClientErrorKind::Io(_) => SolanaProviderError::NetworkError(error.to_string()),
+
+            // Reqwest errors - extract status code if available
+            ClientErrorKind::Reqwest(reqwest_err) => {
+                if let Some(status) = reqwest_err.status() {
+                    SolanaProviderError::RequestError {
+                        error: error.to_string(),
+                        status_code: status.as_u16(),
+                    }
+                } else {
+                    // No status code available (e.g., connection error, timeout)
+                    SolanaProviderError::NetworkError(error.to_string())
+                }
             }
 
             // RPC errors - classify based on error code and message
@@ -426,25 +461,19 @@ impl From<String> for SolanaProviderError {
     }
 }
 
-const RETRIABLE_ERROR_SUBSTRINGS: &[&str] = &[
-    "timeout",
-    "connection",
-    "reset",
-    "temporarily unavailable",
-    "rate limit",
-    "too many requests",
-    "503",
-    "502",
-    "504",
-    "blockhash not found",
-    "node is behind",
-    "unhealthy",
-];
-
-fn is_retriable_error(msg: &str) -> bool {
-    RETRIABLE_ERROR_SUBSTRINGS
-        .iter()
-        .any(|substr| msg.contains(substr))
+/// Determines if a Solana provider error should mark the provider as failed.
+///
+/// This function identifies errors that indicate the RPC provider itself is having issues
+/// and should be marked as failed to trigger failover to another provider.
+///
+/// Uses the shared `should_mark_provider_failed_by_status_code` function for HTTP status code logic.
+fn should_mark_solana_provider_failed(error: &SolanaProviderError) -> bool {
+    match error {
+        SolanaProviderError::RequestError { status_code, .. } => {
+            should_mark_provider_failed_by_status_code(*status_code)
+        }
+        _ => false,
+    }
 }
 
 #[derive(Error, Debug, PartialEq)]
@@ -555,10 +584,7 @@ impl SolanaProvider {
         F: Fn(Arc<RpcClient>) -> Fut,
         Fut: std::future::Future<Output = Result<T, SolanaProviderError>>,
     {
-        let is_retriable = |e: &SolanaProviderError| match e {
-            SolanaProviderError::RpcError(msg) => is_retriable_error(msg),
-            _ => false,
-        };
+        let is_retriable = |e: &SolanaProviderError| e.is_transient();
 
         tracing::debug!(
             "Starting RPC operation '{}' with timeout: {}s",
@@ -570,7 +596,7 @@ impl SolanaProvider {
             &self.selector,
             operation_name,
             is_retriable,
-            |_| false, // TODO: implement fn to mark provider failed based on error
+            should_mark_solana_provider_failed,
             |url| match self.initialize_provider(url) {
                 Ok(provider) => Ok(provider),
                 Err(e) => Err(e),
@@ -1304,26 +1330,6 @@ mod tests {
     }
 
     #[test]
-    fn test_is_retriable_error_true() {
-        for msg in RETRIABLE_ERROR_SUBSTRINGS {
-            assert!(is_retriable_error(msg), "Should be retriable: {}", msg);
-        }
-    }
-
-    #[test]
-    fn test_is_retriable_error_false() {
-        let non_retriable_cases = [
-            "account not found",
-            "invalid signature",
-            "insufficient funds",
-            "unknown error",
-        ];
-        for msg in non_retriable_cases {
-            assert!(!is_retriable_error(msg), "Should NOT be retriable: {}", msg);
-        }
-    }
-
-    #[test]
     fn test_matches_error_pattern() {
         // Test exact matches
         assert!(matches_error_pattern(
@@ -1690,5 +1696,101 @@ mod tests {
         let error_str = r#"{"code": -32000, "message": "Transaction was already processed"}"#;
         let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
         assert!(matches!(result, SolanaProviderError::AlreadyProcessed(_)));
+    }
+
+    #[test]
+    fn test_request_error_is_transient() {
+        // Test retriable 5xx errors
+        let error = SolanaProviderError::RequestError {
+            error: "Server error".to_string(),
+            status_code: 500,
+        };
+        assert!(error.is_transient());
+
+        let error = SolanaProviderError::RequestError {
+            error: "Bad gateway".to_string(),
+            status_code: 502,
+        };
+        assert!(error.is_transient());
+
+        let error = SolanaProviderError::RequestError {
+            error: "Service unavailable".to_string(),
+            status_code: 503,
+        };
+        assert!(error.is_transient());
+
+        let error = SolanaProviderError::RequestError {
+            error: "Gateway timeout".to_string(),
+            status_code: 504,
+        };
+        assert!(error.is_transient());
+
+        // Test retriable 4xx errors
+        let error = SolanaProviderError::RequestError {
+            error: "Request timeout".to_string(),
+            status_code: 408,
+        };
+        assert!(error.is_transient());
+
+        let error = SolanaProviderError::RequestError {
+            error: "Too early".to_string(),
+            status_code: 425,
+        };
+        assert!(error.is_transient());
+
+        let error = SolanaProviderError::RequestError {
+            error: "Too many requests".to_string(),
+            status_code: 429,
+        };
+        assert!(error.is_transient());
+
+        // Test non-retriable 5xx errors
+        let error = SolanaProviderError::RequestError {
+            error: "Not implemented".to_string(),
+            status_code: 501,
+        };
+        assert!(!error.is_transient());
+
+        let error = SolanaProviderError::RequestError {
+            error: "HTTP version not supported".to_string(),
+            status_code: 505,
+        };
+        assert!(!error.is_transient());
+
+        // Test non-retriable 4xx errors
+        let error = SolanaProviderError::RequestError {
+            error: "Bad request".to_string(),
+            status_code: 400,
+        };
+        assert!(!error.is_transient());
+
+        let error = SolanaProviderError::RequestError {
+            error: "Unauthorized".to_string(),
+            status_code: 401,
+        };
+        assert!(!error.is_transient());
+
+        let error = SolanaProviderError::RequestError {
+            error: "Forbidden".to_string(),
+            status_code: 403,
+        };
+        assert!(!error.is_transient());
+
+        let error = SolanaProviderError::RequestError {
+            error: "Not found".to_string(),
+            status_code: 404,
+        };
+        assert!(!error.is_transient());
+    }
+
+    #[test]
+    fn test_request_error_display() {
+        let error = SolanaProviderError::RequestError {
+            error: "Server error".to_string(),
+            status_code: 500,
+        };
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("HTTP 500"));
+        assert!(error_str.contains("Server error"));
     }
 }
