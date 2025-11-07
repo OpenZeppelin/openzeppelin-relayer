@@ -106,6 +106,11 @@ impl<T: SolanaRpcMethods> SolanaRpcHandler<T> {
                 let res = self.rpc_methods.get_features_enabled(params).await?;
                 SolanaRpcResult::GetFeaturesEnabled(res)
             }
+            _ => {
+                return Err(SolanaRpcError::Internal(
+                    "Unsupported Solana RPC Paymaster method".to_string(),
+                ))
+            }
         };
 
         Ok(JsonRpcResponse::result(

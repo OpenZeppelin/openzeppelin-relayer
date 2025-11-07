@@ -102,7 +102,10 @@ mod tests {
             RepositoryError, TransactionInput, TransactionStatus,
         },
         repositories::MockTransactionCounterTrait,
-        services::{provider::MockStellarProviderTrait, signer::MockSigner},
+        services::{
+            provider::{MockStellarProviderTrait, ProviderError},
+            signer::MockSigner,
+        },
     };
     use soroban_rs::stellar_rpc_client::SimulateTransactionResponse;
     use soroban_rs::xdr::{self};
@@ -402,7 +405,11 @@ mod tests {
         provider
             .expect_simulate_transaction_envelope()
             .returning(|_| {
-                Box::pin(async { Err(eyre::eyre!("Simulation failed: insufficient resources")) })
+                Box::pin(async {
+                    Err(ProviderError::Other(
+                        "Simulation failed: insufficient resources".to_string(),
+                    ))
+                })
             });
 
         let signer = MockSigner::new();
@@ -431,10 +438,14 @@ mod tests {
         .await;
 
         assert!(result.is_err());
+
         match result.unwrap_err() {
-            TransactionError::UnexpectedError(msg) => {
-                assert!(msg.contains("Simulation failed"));
-            }
+            TransactionError::UnderlyingProvider(provider_error) => match provider_error {
+                ProviderError::Other(msg) => {
+                    assert!(msg.contains("Simulation failed"));
+                }
+                _ => panic!("Expected UnexpectedError"),
+            },
             _ => panic!("Expected UnexpectedError"),
         }
     }

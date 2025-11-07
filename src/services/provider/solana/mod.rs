@@ -17,6 +17,7 @@ use reqwest::Url;
 use serde::Serialize;
 use solana_client::{
     nonblocking::rpc_client::RpcClient,
+    rpc_request::RpcRequest,
     rpc_response::{RpcPrioritizationFee, RpcSimulateTransactionResult},
 };
 use solana_sdk::{
@@ -140,6 +141,13 @@ pub trait SolanaProviderTrait: Send + Sync {
         &self,
         signature: &Signature,
     ) -> Result<SolanaTransactionStatus, SolanaProviderError>;
+
+    /// Send a raw JSON-RPC request to the Solana node
+    async fn raw_request_dyn(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, SolanaProviderError>;
 }
 
 #[derive(Debug)]
@@ -592,6 +600,31 @@ impl SolanaProviderTrait for SolanaProvider {
                 "Transaction confirmation status not available".to_string(),
             )),
         }
+    }
+
+    /// Send a raw JSON-RPC request to the Solana node
+    async fn raw_request_dyn(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, SolanaProviderError> {
+        let params_owned = params.clone();
+        let method_static: &'static str = Box::leak(method.to_string().into_boxed_str());
+        self.retry_rpc_call("raw_request_dyn", move |client| {
+            let params_for_call = params_owned.clone();
+            async move {
+                client
+                    .send(
+                        RpcRequest::Custom {
+                            method: method_static,
+                        },
+                        params_for_call,
+                    )
+                    .await
+                    .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+            }
+        })
+        .await
     }
 }
 

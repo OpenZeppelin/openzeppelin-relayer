@@ -4679,21 +4679,7 @@
         "oneOf": [
           {
             "type": "object",
-            "required": [
-              "method",
-              "params"
-            ],
-            "properties": {
-              "method": {
-                "type": "string"
-              },
-              "params": {
-                "type": "string"
-              }
-            }
-          },
-          {
-            "type": "object",
+            "description": "Unified raw request variant where params may be a JSON string or structured JSON value.",
             "required": [
               "method",
               "params"
@@ -4710,9 +4696,8 @@
       "EvmRpcResult": {
         "oneOf": [
           {
-            "type": "string"
-          },
-          {}
+            "description": "Raw JSON-RPC response value. Covers string, array or object results."
+          }
         ]
       },
       "EvmTransactionDataSignature": {
@@ -6013,14 +5998,7 @@
             "format": "float"
           },
           "fee_payment_strategy": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/SolanaFeePaymentStrategy"
-              }
-            ]
+            "$ref": "#/components/schemas/SolanaFeePaymentStrategy"
           },
           "max_allowed_fee_lamports": {
             "type": [
@@ -6055,14 +6033,7 @@
             "minimum": 0
           },
           "swap_config": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/RelayerSolanaSwapConfig"
-              }
-            ]
+            "$ref": "#/components/schemas/RelayerSolanaSwapConfig"
           }
         },
         "additionalProperties": false
@@ -6981,6 +6952,35 @@
               }
             },
             "example": "getFeaturesEnabled"
+          },
+          {
+            "type": "object",
+            "required": [
+              "params",
+              "method"
+            ],
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "rawRpcRequest"
+                ]
+              },
+              "params": {
+                "type": "object",
+                "required": [
+                  "method",
+                  "params"
+                ],
+                "properties": {
+                  "method": {
+                    "type": "string"
+                  },
+                  "params": {}
+                }
+              }
+            },
+            "example": "rawRpcRequest"
           }
         ]
       },
@@ -7132,6 +7132,20 @@
                 }
               }
             ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "method"
+            ],
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "rawRpc"
+                ]
+              }
+            }
           }
         ]
       },
@@ -7183,10 +7197,7 @@
             "$ref": "#/components/schemas/TransactionStatus"
           },
           "status_reason": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "transaction": {
             "type": "string"
@@ -7231,20 +7242,16 @@
         "oneOf": [
           {
             "type": "object",
+            "description": "Raw request where params can be any JSON value (string or structured).",
             "required": [
-              "params",
-              "method"
+              "method",
+              "params"
             ],
             "properties": {
               "method": {
-                "type": "string",
-                "enum": [
-                  "GenericRpcRequest"
-                ]
-              },
-              "params": {
                 "type": "string"
-              }
+              },
+              "params": {}
             }
           }
         ]
@@ -7252,7 +7259,7 @@
       "StellarRpcResult": {
         "oneOf": [
           {
-            "type": "string"
+            "description": "Raw JSON-RPC response value. Covers string or structured JSON values."
           }
         ]
       },
@@ -7502,24 +7509,14 @@
             ]
           },
           "notification_id": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "paused": {
             "type": "boolean"
           },
           "policies": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/CreateRelayerPolicyRequest",
-                "description": "Raw policy JSON - will be validated against relayer's network type during application"
-              }
-            ]
+            "$ref": "#/components/schemas/CreateRelayerPolicyRequest",
+            "description": "Raw policy JSON - will be validated against relayer's network type during application"
           }
         },
         "additionalProperties": false

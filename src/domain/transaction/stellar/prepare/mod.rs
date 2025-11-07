@@ -229,6 +229,7 @@ mod prepare_transaction_tests {
     use crate::{
         domain::SignTransactionResponse,
         models::{NetworkTransactionData, OperationSpec, RepositoryError, TransactionStatus},
+        services::provider::ProviderError,
     };
     use soroban_rs::xdr::{Limits, ReadXdr, TransactionEnvelope};
 
@@ -736,7 +737,11 @@ mod prepare_transaction_tests {
             .expect_simulate_transaction_envelope()
             .times(1)
             .returning(|_| {
-                Box::pin(async { Err(eyre::eyre!("Simulation failed: insufficient resources")) })
+                Box::pin(async {
+                    Err(ProviderError::Other(
+                        "Simulation failed: insufficient resources".to_string(),
+                    ))
+                })
             });
 
         // Mock transaction update for failure

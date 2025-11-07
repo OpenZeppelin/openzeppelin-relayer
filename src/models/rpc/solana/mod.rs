@@ -195,6 +195,7 @@ pub enum SolanaRpcMethod {
     SignAndSendTransaction,
     GetSupportedTokens,
     GetFeaturesEnabled,
+    Generic(String),
 }
 
 impl SolanaRpcMethod {
@@ -207,7 +208,7 @@ impl SolanaRpcMethod {
             "signAndSendTransaction" => Some(SolanaRpcMethod::SignAndSendTransaction),
             "getSupportedTokens" => Some(SolanaRpcMethod::GetSupportedTokens),
             "getFeaturesEnabled" => Some(SolanaRpcMethod::GetFeaturesEnabled),
-            _ => None,
+            _ => Some(SolanaRpcMethod::Generic(method.to_string())),
         }
     }
 }
@@ -237,6 +238,12 @@ pub enum SolanaRpcRequest {
     #[serde(rename = "getFeaturesEnabled")]
     #[schema(example = "getFeaturesEnabled")]
     GetFeaturesEnabled(GetFeaturesEnabledRequestParams),
+    #[serde(rename = "rawRpcRequest")]
+    #[schema(example = "rawRpcRequest")]
+    RawRpcRequest {
+        method: String,
+        params: serde_json::Value,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq)]
@@ -249,6 +256,7 @@ pub enum SolanaRpcResult {
     SignAndSendTransaction(SignAndSendTransactionResult),
     GetSupportedTokens(GetSupportedTokensResult),
     GetFeaturesEnabled(GetFeaturesEnabledResult),
+    RawRpc(serde_json::Value),
 }
 
 #[cfg(test)]
@@ -329,5 +337,65 @@ mod tests {
             result.unwrap_err(),
             SolanaEncodingError::Deserialize(_)
         ));
+    }
+
+    #[test]
+    fn test_deserialize_fee_estimate_request() {
+        let params = serde_json::json!({
+            "transaction": EncodedSerializedTransaction::new("dGVzdA==".to_string()),
+            "fee_token": "TOKEN".to_string()
+        });
+
+        let json = serde_json::json!({
+            "method": "feeEstimate",
+            "params": params
+        });
+
+        let deserialized: SolanaRpcRequest =
+            serde_json::from_value(json).expect("Should deserialize");
+
+        match deserialized {
+            SolanaRpcRequest::FeeEstimate(p) => {
+                assert_eq!(p.fee_token, "TOKEN");
+            }
+            _ => panic!("Expected FeeEstimate variant"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_raw_rpc_request_wrapper() {
+        // rawRpcRequest wraps an inner object with method and params fields
+        let inner = serde_json::json!({
+            "method": "customMethod",
+            "params": { "foo": "bar" }
+        });
+
+        let json = serde_json::json!({
+            "method": "rawRpcRequest",
+            "params": inner
+        });
+
+        let deserialized: SolanaRpcRequest =
+            serde_json::from_value(json).expect("Should deserialize raw wrapper");
+
+        match deserialized {
+            SolanaRpcRequest::RawRpcRequest { method, params } => {
+                assert_eq!(method, "customMethod");
+                assert_eq!(params["foo"], "bar");
+            }
+            _ => panic!("Expected RawRpcRequest variant"),
+        }
+    }
+
+    #[test]
+    fn test_solana_rpc_method_from_string_generic() {
+        let known = SolanaRpcMethod::from_string("feeEstimate");
+        assert!(matches!(known, Some(SolanaRpcMethod::FeeEstimate)));
+
+        let other = SolanaRpcMethod::from_string("someUnknownMethod");
+        match other {
+            Some(SolanaRpcMethod::Generic(s)) => assert_eq!(s, "someUnknownMethod"),
+            _ => panic!("Expected Generic variant"),
+        }
     }
 }

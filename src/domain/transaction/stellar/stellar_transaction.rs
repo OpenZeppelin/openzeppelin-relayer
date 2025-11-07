@@ -340,7 +340,10 @@ pub type DefaultStellarTransaction = StellarRelayerTransaction<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{NetworkTransactionData, RepositoryError};
+    use crate::{
+        models::{NetworkTransactionData, RepositoryError},
+        services::provider::ProviderError,
+    };
     use std::sync::Arc;
 
     use crate::domain::transaction::stellar::test_helpers::*;
@@ -595,11 +598,9 @@ mod tests {
         let mut mocks = default_test_mocks();
 
         // Mock provider to fail
-        mocks
-            .provider
-            .expect_get_account()
-            .times(1)
-            .returning(|_| Box::pin(async { Err(eyre::eyre!("Account not found")) }));
+        mocks.provider.expect_get_account().times(1).returning(|_| {
+            Box::pin(async { Err(ProviderError::Other("Account not found".to_string())) })
+        });
 
         let handler = make_stellar_tx_handler(relayer.clone(), mocks);
 

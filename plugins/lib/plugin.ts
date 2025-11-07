@@ -30,16 +30,18 @@
 import {
   ApiResponseRelayerResponseData,
   ApiResponseRelayerStatusData,
+  JsonRpcRequestNetworkRpcRequest,
+  JsonRpcResponseNetworkRpcResult,
   NetworkTransactionRequest,
-  pluginError,
   SignTransactionRequest,
   SignTransactionResponse,
   TransactionResponse,
   TransactionStatus,
+  pluginError
 } from '@openzeppelin/relayer-sdk';
 
-import { LogInterceptor } from './logger';
 import { DefaultPluginKVStore } from './kv';
+import { LogInterceptor } from './logger';
 import type { PluginKVStore } from './kv';
 import net from 'node:net';
 import { v4 as uuidv4 } from 'uuid';
@@ -162,6 +164,13 @@ export type Relayer = {
    * @returns The signed transaction XDR and signature.
    */
   signTransaction: (payload: SignTransactionRequest) => Promise<SignTransactionResponse>;
+
+  /**
+   * Performs an RPC call to the relayer.
+   * @param payload - The RPC request payload.
+   * @returns The RPC response.
+   */
+  rpc: (payload: JsonRpcRequestNetworkRpcRequest) => Promise<JsonRpcResponseNetworkRpcResult>;
 };
 
 /**
@@ -418,6 +427,7 @@ export class DefaultPluginAPI implements PluginAPI {
       signTransaction: (payload: SignTransactionRequest) =>
         this._send<SignTransactionResponse>(relayerId, 'signTransaction', payload),
       getRelayer: () => this._send<ApiResponseRelayerResponseData>(relayerId, 'getRelayer', {}),
+      rpc: (payload: JsonRpcRequestNetworkRpcRequest) => this._send<JsonRpcResponseNetworkRpcResult>(relayerId, 'rpc', payload),
     };
   }
 
