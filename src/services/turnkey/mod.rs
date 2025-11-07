@@ -296,9 +296,12 @@ impl TurnkeyService {
                 TurnkeyError::ConfigError(format!("Failed to decode private key: {}", e))
             })?;
 
-        let signing_key: SigningKey =
-            SigningKey::from_bytes(FieldBytes::from_slice(&private_api_key_bytes))
-                .map_err(|e| TurnkeyError::SigningError(format!("Turnkey stamp error: {}", e)))?;
+        let key_array: [u8; 32] = private_api_key_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| TurnkeyError::ConfigError("Invalid private key length".to_string()))?;
+        let signing_key: SigningKey = SigningKey::from_bytes(&FieldBytes::from(key_array))
+            .map_err(|e| TurnkeyError::SigningError(format!("Turnkey stamp error: {}", e)))?;
 
         let signature: P256Signature = signing_key.sign(message.as_bytes());
 

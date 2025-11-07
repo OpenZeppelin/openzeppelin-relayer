@@ -64,8 +64,8 @@ impl FieldEncryption {
 
     /// Creates a new FieldEncryption instance with a provided key (for testing)
     pub fn new_with_key(key: &[u8; 32]) -> Result<Self, EncryptionError> {
-        let key = Key::<Aes256Gcm>::from_slice(key);
-        let cipher = Aes256Gcm::new(key);
+        let key = Key::<Aes256Gcm>::from(*key);
+        let cipher = Aes256Gcm::new(&key);
         Ok(Self { cipher })
     }
 
@@ -85,7 +85,11 @@ impl FieldEncryption {
                 return Err(EncryptionError::InvalidKeyLength(key_bytes.len()));
             }
 
-            Ok(*Key::<Aes256Gcm>::from_slice(&key_bytes))
+            let key_array: [u8; 32] = key_bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| EncryptionError::InvalidKeyLength(key_bytes.len()))?;
+            Ok(Key::<Aes256Gcm>::from(key_array))
         })
     }
 
@@ -94,7 +98,7 @@ impl FieldEncryption {
         // Generate random 12-byte nonce for GCM
         let mut nonce_bytes = [0u8; 12];
         OsRng.fill_bytes(&mut nonce_bytes);
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        let nonce = &Nonce::from(nonce_bytes);
 
         // Encrypt the data
         let ciphertext = self
@@ -132,7 +136,11 @@ impl FieldEncryption {
             )));
         }
 
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        let nonce_array: [u8; 12] = nonce_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| EncryptionError::InvalidFormat("Invalid nonce length".to_string()))?;
+        let nonce = &Nonce::from(nonce_array);
 
         // Decrypt the data
         let plaintext = self
