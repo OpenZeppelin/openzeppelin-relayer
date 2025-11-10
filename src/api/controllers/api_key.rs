@@ -4,12 +4,14 @@
 //! - Create api keys
 //! - List api keys
 //! - Delete api keys
+#[cfg(test)]
+use crate::models::PermissionGrant;
 use crate::{
     jobs::JobProducerTrait,
     models::{
-        ApiError, ApiKeyRepoModel, ApiKeyRequest, ApiKeyResponse, ApiResponse, NetworkRepoModel,
-        NotificationRepoModel, PaginationMeta, PaginationQuery, RelayerRepoModel, SignerRepoModel,
-        ThinDataAppState, TransactionRepoModel,
+        ApiError, ApiKeyCreateResponse, ApiKeyListResponse, ApiKeyRepoModel, ApiKeyRequest,
+        ApiResponse, NetworkRepoModel, NotificationRepoModel, PaginationMeta, PaginationQuery,
+        RelayerRepoModel, SignerRepoModel, ThinDataAppState, TransactionRepoModel,
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
@@ -51,7 +53,9 @@ where
 
     let api_key = state.api_key_repository.create(api_key).await?;
 
-    Ok(HttpResponse::Created().json(ApiResponse::success(api_key)))
+    let response = ApiKeyCreateResponse::try_from(api_key)?;
+
+    Ok(HttpResponse::Created().json(ApiResponse::success(response)))
 }
 
 /// List api keys
@@ -86,10 +90,10 @@ where
     let api_key_items: Vec<ApiKeyRepoModel> = api_keys.items.into_iter().collect();
 
     // Subtract the "value" from the api key to avoid exposing it.
-    let api_key_items: Vec<ApiKeyResponse> = api_key_items
+    let api_key_items: Vec<ApiKeyListResponse> = api_key_items
         .into_iter()
-        .map(ApiKeyResponse::try_from)
-        .collect::<Result<Vec<ApiKeyResponse>, ApiError>>()?;
+        .map(ApiKeyListResponse::try_from)
+        .collect::<Result<Vec<ApiKeyListResponse>, ApiError>>()?;
 
     Ok(HttpResponse::Ok().json(ApiResponse::paginated(
         api_key_items,
@@ -139,8 +143,8 @@ where
 /// * `state` - The application state containing the api key repository.
 ///
 pub async fn delete_api_key<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
-    _api_key_id: String,
-    _state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    api_key_id: String,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -153,10 +157,22 @@ where
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
-    // state.api_key_repository.delete_by_id(&api_key_id).await?;
+    // Check if this is the admin API key from environment - prevent deletion
+    if let Ok(env_api_key) = std::env::var("API_KEY") {
+        // Get the API key to check its value
+        if let Ok(Some(api_key)) = state.api_key_repository.get_by_id(&api_key_id).await {
+            let api_key_value = api_key.value.as_str(|s| s.to_string());
+            if api_key_value == env_api_key {
+                return Err(ApiError::ForbiddenError(
+                    "Cannot delete the admin API key from environment variable".to_string(),
+                ));
+            }
+        }
+    }
 
-    // Ok(HttpResponse::Ok().json(ApiResponse::success(api_key_id)))
-    Ok(HttpResponse::Ok().json(ApiResponse::<String>::error("Not implemented".to_string())))
+    state.api_key_repository.delete_by_id(&api_key_id).await?;
+
+    Ok(HttpResponse::Ok().json(ApiResponse::success(api_key_id)))
 }
 
 #[cfg(test)]
@@ -174,8 +190,7 @@ mod tests {
             id: id.to_string(),
             value: SecretString::new("test-api-key-value"),
             name: "Test API Key".to_string(),
-            allowed_origins: vec!["*".to_string()],
-            permissions: vec!["relayer:all:execute".to_string()],
+            permissions: vec![PermissionGrant::global("relayers:execute")],
             created_at: "2023-01-01T00:00:00Z".to_string(),
         }
     }
@@ -184,8 +199,7 @@ mod tests {
     fn create_test_api_key_create_request(name: &str) -> ApiKeyRequest {
         ApiKeyRequest {
             name: name.to_string(),
-            permissions: vec!["relayer:all:execute".to_string()],
-            allowed_origins: Some(vec!["*".to_string()]),
+            permissions: vec![PermissionGrant::global("relayers:execute")],
         }
     }
 
@@ -247,19 +261,19 @@ mod tests {
         assert_eq!(response.status(), 200);
     }
 
-    // #[actix_web::test]
-    // async fn test_delete_api_key() {
-    //     let api_key = create_test_api_key_model("test-api-key-1");
-    //     let api_key_id = api_key.id.clone();
-    //     let app_state =
-    //         create_mock_app_state(Some(vec![api_key]), None, None, None, None, None).await;
+    #[actix_web::test]
+    async fn test_delete_api_key() {
+        let api_key = create_test_api_key_model("test-api-key-1");
+        let api_key_id = api_key.id.clone();
+        let app_state =
+            create_mock_app_state(Some(vec![api_key]), None, None, None, None, None).await;
 
-    //     let result = delete_api_key(api_key_id, ThinData(app_state)).await;
+        let result = delete_api_key(api_key_id, ThinData(app_state)).await;
 
-    //     assert!(result.is_ok());
-    //     let response = result.unwrap();
-    //     assert_eq!(response.status(), 200);
-    // }
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
+    }
 
     #[actix_web::test]
     async fn test_get_permissions_nonexistent_api_key() {

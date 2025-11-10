@@ -19,7 +19,7 @@
 //!   ├── Transaction Signing
 //!   └── Raw Payload Signing
 //! ```
-use std::str::FromStr;
+use std::{convert::TryInto, str::FromStr};
 
 use alloy::primitives::keccak256;
 use async_trait::async_trait;
@@ -296,9 +296,16 @@ impl TurnkeyService {
                 TurnkeyError::ConfigError(format!("Failed to decode private key: {}", e))
             })?;
 
-        let signing_key: SigningKey =
-            SigningKey::from_bytes(FieldBytes::from_slice(&private_api_key_bytes))
-                .map_err(|e| TurnkeyError::SigningError(format!("Turnkey stamp error: {}", e)))?;
+        let key_bytes: &[u8; 32] = private_api_key_bytes.as_slice().try_into().map_err(|_| {
+            TurnkeyError::ConfigError(format!(
+                "Invalid private key length: expected 32 bytes, got {}",
+                private_api_key_bytes.len()
+            ))
+        })?;
+
+        let field_bytes = FieldBytes::from_iter(key_bytes.iter().copied());
+        let signing_key: SigningKey = SigningKey::from_bytes(&field_bytes)
+            .map_err(|e| TurnkeyError::SigningError(format!("Turnkey stamp error: {}", e)))?;
 
         let signature: P256Signature = signing_key.sign(message.as_bytes());
 

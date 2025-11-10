@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "OpenZeppelin Relayer API",
-    "description": "OpenZeppelin Relayer API",
+    "description": "OpenZeppelin Relayer API\n\n## Authentication & Authorization\n\nAll API endpoints (except `/health`) require authentication using an API key provided via the `Authorization` header with Bearer token format:\n\n```\nAuthorization: Bearer YOUR_API_KEY\n```\n\n## Permission System\n\nEach API key has a set of **permission grants** that control what operations it can perform. Permissions follow the format `resource:action` and can be either **global** or **scoped to specific resource IDs**.\n\n### Permission Format\n\nPermissions consist of:\n- **Action**: A string in the format `resource:action` (e.g., `relayers:read`, `transactions:execute`)\n- **Scope**: Either `global` (applies to all resources) or a list of specific resource IDs\n\n### Permission Examples\n\n**Global permission** - Access to all relayers:\n```json\n{\n  \"action\": \"relayers:read\",\n  \"scope\": \"global\"\n}\n```\n\n**Scoped permission** - Access to specific relayers only:\n```json\n{\n  \"action\": \"relayers:read\",\n  \"scope\": [\"sepolia-example\", \"polygon-example\"]\n}\n```\n\n### Wildcard Support\n\nThe permission system supports wildcards for flexible access control:\n- `*:*` - Super admin (full system access to all resources and actions)\n- `relayers:*` - All actions on relayers resource\n- `transactions:*` - All actions on transactions resource\n\n### Permission Actions by Resource\n\n#### Relayers\n- `relayers:read` - View relayer details, status, and balance\n- `relayers:create` - Create new relayers\n- `relayers:update` - Modify relayer configuration\n- `relayers:delete` - Delete relayers\n- `relayers:execute` - Execute RPC calls\n\n#### Transactions\n- `transactions:read` - View transaction details and history\n- `transactions:execute` - Send and replace transactions\n- `transactions:delete` - Cancel transactions\n\n#### Signing\n- `signing:execute` - Sign data, typed data, and transactions\n\n#### Signers\n- `signers:read` - View signer details\n- `signers:create` - Create new signers\n- `signers:update` - Modify signer configuration\n- `signers:delete` - Delete signers\n\n#### Plugins\n- `plugins:read` - View plugin details\n- `plugins:execute` - Call plugin functions\n\n#### Notifications\n- `notifications:read` - View notification configurations\n- `notifications:create` - Create notification configurations\n- `notifications:update` - Modify notification configurations\n- `notifications:delete` - Delete notification configurations\n\n#### API Keys\n- `api-keys:read` - View API keys and their permissions\n- `api-keys:create` - Create new API keys\n- `api-keys:delete` - Delete API keys\n\n#### Metrics\n- `metrics:read` - Access Prometheus metrics endpoints\n\n### x-required-permissions Extension\n\nEach endpoint in this API documentation includes an `x-required-permissions` extension field that specifies:\n- `permissions`: Array of required permission actions\n- `scope`: Either \"global\" for permissions that apply to all resources, or \"scoped\" for permissions that require access to specific resource IDs\n- `scopeParameter` (for scoped permissions): The path parameter name containing the resource ID to check\n\n### Environment API Key\n\nThe API key provided via the `API_KEY` environment variable has full system access (`*:*` permissions) and bypasses all permission checks. This admin key cannot be deleted via the API.",
     "termsOfService": "https://www.openzeppelin.com/tos",
     "contact": {
       "name": "OpenZeppelin",
@@ -106,7 +106,13 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "notifications:read"
+          ],
+          "scope": "global"
+        }
       },
       "post": {
         "tags": [
@@ -200,7 +206,13 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "notifications:create"
+          ],
+          "scope": "global"
+        }
       }
     },
     "/api/v1/notifications/{notification_id}": {
@@ -297,7 +309,14 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "notifications:read"
+          ],
+          "scope": "scoped",
+          "scopeParameter": "notification_id"
+        }
       },
       "delete": {
         "tags": [
@@ -397,7 +416,14 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "notifications:delete"
+          ],
+          "scope": "scoped",
+          "scopeParameter": "notification_id"
+        }
       },
       "patch": {
         "tags": [
@@ -502,7 +528,14 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "notifications:update"
+          ],
+          "scope": "scoped",
+          "scopeParameter": "notification_id"
+        }
       }
     },
     "/api/v1/plugins/{plugin_id}/call": {
@@ -658,7 +691,14 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "plugins:execute"
+          ],
+          "scope": "scoped",
+          "scopeParameter": "plugin_id"
+        }
       }
     },
     "/api/v1/relayers": {
@@ -767,7 +807,13 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "relayers:read"
+          ],
+          "scope": "global"
+        }
       },
       "post": {
         "tags": [
@@ -861,7 +907,13 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "relayers:create"
+          ],
+          "scope": "global"
+        }
       }
     },
     "/api/v1/relayers/{relayer_id}": {
@@ -973,7 +1025,14 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "relayers:read"
+          ],
+          "scope": "scoped",
+          "scopeParameter": "relayer_id"
+        }
       },
       "delete": {
         "tags": [
@@ -1068,7 +1127,14 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "relayers:delete"
+          ],
+          "scope": "scoped",
+          "scopeParameter": "relayer_id"
+        }
       },
       "patch": {
         "tags": [
@@ -1188,7 +1254,14 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "relayers:update"
+          ],
+          "scope": "scoped",
+          "scopeParameter": "relayer_id"
+        }
       }
     },
     "/api/v1/relayers/{relayer_id}/balance": {
@@ -1300,7 +1373,14 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "relayers:read"
+          ],
+          "scope": "scoped",
+          "scopeParameter": "relayer_id"
+        }
       }
     },
     "/api/v1/relayers/{relayer_id}/rpc": {
@@ -1433,7 +1513,14 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "relayers:execute"
+          ],
+          "scope": "scoped",
+          "scopeParameter": "relayer_id"
+        }
       }
     },
     "/api/v1/relayers/{relayer_id}/sign": {
@@ -1555,7 +1642,14 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "signing:execute"
+          ],
+          "scope": "scoped",
+          "scopeParameter": "relayer_id"
+        }
       }
     },
     "/api/v1/relayers/{relayer_id}/sign-transaction": {
@@ -1677,7 +1771,14 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "signing:execute"
+          ],
+          "scope": "scoped",
+          "scopeParameter": "relayer_id"
+        }
       }
     },
     "/api/v1/relayers/{relayer_id}/sign-typed-data": {
@@ -1799,7 +1900,14 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "signing:execute"
+          ],
+          "scope": "scoped",
+          "scopeParameter": "relayer_id"
+        }
       }
     },
     "/api/v1/relayers/{relayer_id}/status": {
@@ -1911,7 +2019,14 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "relayers:read"
+          ],
+          "scope": "scoped",
+          "scopeParameter": "relayer_id"
+        }
       }
     },
     "/api/v1/relayers/{relayer_id}/transactions": {
@@ -2033,7 +2148,14 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "transactions:execute"
+          ],
+          "scope": "scoped",
+          "scopeParameter": "relayer_id"
+        }
       }
     },
     "/api/v1/relayers/{relayer_id}/transactions/": {
@@ -2165,7 +2287,14 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "transactions:read"
+          ],
+          "scope": "scoped",
+          "scopeParameter": "relayer_id"
+        }
       }
     },
     "/api/v1/relayers/{relayer_id}/transactions/by-nonce/{nonce}": {
@@ -2287,7 +2416,14 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "transactions:read"
+          ],
+          "scope": "scoped",
+          "scopeParameter": "relayer_id"
+        }
       }
     },
     "/api/v1/relayers/{relayer_id}/transactions/pending": {
@@ -2399,7 +2535,14 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "transactions:delete"
+          ],
+          "scope": "scoped",
+          "scopeParameter": "relayer_id"
+        }
       }
     },
     "/api/v1/relayers/{relayer_id}/transactions/{transaction_id}": {
@@ -2520,7 +2663,14 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "transactions:read"
+          ],
+          "scope": "scoped",
+          "scopeParameter": "relayer_id"
+        }
       },
       "put": {
         "tags": [
@@ -2649,7 +2799,14 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "transactions:execute"
+          ],
+          "scope": "scoped",
+          "scopeParameter": "relayer_id"
+        }
       },
       "delete": {
         "tags": [
@@ -2768,7 +2925,14 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "transactions:delete"
+          ],
+          "scope": "scoped",
+          "scopeParameter": "relayer_id"
+        }
       }
     },
     "/api/v1/signers": {
@@ -2862,7 +3026,13 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "signers:read"
+          ],
+          "scope": "global"
+        }
       },
       "post": {
         "tags": [
@@ -2956,7 +3126,13 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "signers:create"
+          ],
+          "scope": "global"
+        }
       }
     },
     "/api/v1/signers/{signer_id}": {
@@ -3053,7 +3229,14 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "signers:read"
+          ],
+          "scope": "scoped",
+          "scopeParameter": "signer_id"
+        }
       },
       "delete": {
         "tags": [
@@ -3153,7 +3336,14 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "signers:delete"
+          ],
+          "scope": "scoped",
+          "scopeParameter": "signer_id"
+        }
       },
       "patch": {
         "tags": [
@@ -3258,7 +3448,14 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "signers:update"
+          ],
+          "scope": "scoped",
+          "scopeParameter": "signer_id"
+        }
       }
     },
     "/debug/metrics/scrape": {
@@ -3283,6 +3480,17 @@
           "401": {
             "description": "Unauthorized"
           }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "metrics:read"
+          ],
+          "scope": "global"
         }
       }
     },
@@ -3311,6 +3519,17 @@
           "401": {
             "description": "Unauthorized"
           }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "metrics:read"
+          ],
+          "scope": "global"
         }
       }
     },
@@ -3359,11 +3578,15 @@
         },
         "security": [
           {
-            "bearer_auth": [
-              "metrics:read"
-            ]
+            "bearer_auth": []
           }
-        ]
+        ],
+        "x-required-permissions": {
+          "permissions": [
+            "metrics:read"
+          ],
+          "scope": "global"
+        }
       }
     },
     "/v1/health": {
@@ -7734,6 +7957,10 @@
     {
       "name": "Health",
       "description": "Health is responsible for showing the health of the relayers."
+    },
+    {
+      "name": "API Keys",
+      "description": "API Keys are used to authenticate and authorize requests to the OpenZeppelin Relayer API. Each API key has a set of permissions that control what operations it can perform."
     }
   ]
 }

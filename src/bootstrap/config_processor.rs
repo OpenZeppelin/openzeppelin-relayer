@@ -6,8 +6,8 @@ use crate::{
     config::{Config, RepositoryStorageType, ServerConfig},
     jobs::JobProducerTrait,
     models::{
-        ApiKeyRepoModel, NetworkRepoModel, NotificationRepoModel, PluginModel, Relayer,
-        RelayerRepoModel, Signer as SignerDomainModel, SignerFileConfig, SignerRepoModel,
+        ApiKeyRepoModel, NetworkRepoModel, NotificationRepoModel, PermissionGrant, PluginModel,
+        Relayer, RelayerRepoModel, Signer as SignerDomainModel, SignerFileConfig, SignerRepoModel,
         ThinDataAppState, TransactionRepoModel,
     },
     repositories::{
@@ -38,8 +38,7 @@ where
     let api_key_model = ApiKeyRepoModel::new(
         "default".to_string(),
         server_config.api_key.clone(),
-        vec!["*".to_string()],
-        vec!["*".to_string()],
+        vec![PermissionGrant::global("*:*")],
     );
 
     app_state

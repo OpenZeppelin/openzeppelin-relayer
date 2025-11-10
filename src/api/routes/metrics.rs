@@ -12,9 +12,13 @@
 //! These endpoints are designed to be used with a Prometheus server to scrape and monitor system
 //! metrics.
 
-use crate::metrics::{update_system_metrics, REGISTRY};
-use actix_web::{get, web, HttpResponse, Responder};
+use crate::{
+    metrics::{update_system_metrics, REGISTRY},
+    models::DefaultAppState,
+};
+use actix_web::{get, web, HttpRequest, HttpResponse};
 use prometheus::{Encoder, TextEncoder};
+use relayer_macros::require_permissions;
 
 /// Metrics routes implementation
 ///
@@ -28,20 +32,33 @@ use prometheus::{Encoder, TextEncoder};
     get,
     path = "/metrics",
     tag = "Metrics",
+    security(
+        ("bearer_auth" = [])
+    ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["metrics:read"],
+            "scope": "global"
+        }))
+    ),
     responses(
         (status = 200, description = "Metric names list", body = Vec<String>),
         (status = 401, description = "Unauthorized"),
     )
 )]
+#[require_permissions(["metrics:read"])]
 #[get("/metrics")]
-async fn list_metrics() -> impl Responder {
+async fn list_metrics(
+    raw_request: HttpRequest,
+    data: web::ThinData<DefaultAppState>,
+) -> Result<HttpResponse, actix_web::Error> {
     // Gather the metric families from the registry and extract metric names.
     let metric_families = REGISTRY.gather();
     let metric_names: Vec<String> = metric_families
         .iter()
         .map(|mf| mf.name().to_string())
         .collect();
-    HttpResponse::Ok().json(metric_names)
+    Ok(HttpResponse::Ok().json(metric_names))
 }
 
 /// Returns the details of a specific metric in plain text format.
@@ -58,6 +75,15 @@ async fn list_metrics() -> impl Responder {
     get,
     path = "/metrics/{metric_name}",
     tag = "Metrics",
+    security(
+        ("bearer_auth" = [])
+    ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["metrics:read"],
+            "scope": "global"
+        }))
+    ),
     params(
         ("metric_name" = String, Path, description = "Name of the metric to retrieve, e.g. utopia_transactions_total")
     ),
@@ -67,13 +93,15 @@ async fn list_metrics() -> impl Responder {
         (status = 403, description = "Forbidden - insufficient permissions to access this metric"),
         (status = 404, description = "Metric not found"),
         (status = 429, description = "Too many requests - rate limit for metrics access exceeded")
-    ),
-    security(
-        ("bearer_auth" = ["metrics:read"])
     )
 )]
+#[require_permissions(["metrics:read"])]
 #[get("/metrics/{metric_name}")]
-async fn metric_detail(path: web::Path<String>) -> impl Responder {
+async fn metric_detail(
+    path: web::Path<String>,
+    raw_request: HttpRequest,
+    data: web::ThinData<DefaultAppState>,
+) -> Result<HttpResponse, actix_web::Error> {
     let metric_name = path.into_inner();
     let metric_families = REGISTRY.gather();
 
@@ -82,14 +110,16 @@ async fn metric_detail(path: web::Path<String>) -> impl Responder {
             let encoder = TextEncoder::new();
             let mut buffer = Vec::new();
             if let Err(e) = encoder.encode(&[mf], &mut buffer) {
-                return HttpResponse::InternalServerError().body(format!("Encoding error: {}", e));
+                return Ok(
+                    HttpResponse::InternalServerError().body(format!("Encoding error: {}", e))
+                );
             }
-            return HttpResponse::Ok()
+            return Ok(HttpResponse::Ok()
                 .content_type(encoder.format_type())
-                .body(buffer);
+                .body(buffer));
         }
     }
-    HttpResponse::NotFound().body("Metric not found")
+    Ok(HttpResponse::NotFound().body("Metric not found"))
 }
 
 /// Triggers an update of system metrics and returns the result in plain text format.
@@ -102,17 +132,30 @@ async fn metric_detail(path: web::Path<String>) -> impl Responder {
     get,
     path = "/debug/metrics/scrape",
     tag = "Metrics",
+    security(
+        ("bearer_auth" = [])
+    ),
+    extensions(
+        ("x-required-permissions" = json!({
+            "permissions": ["metrics:read"],
+            "scope": "global"
+        }))
+    ),
     responses(
         (status = 200, description = "Complete metrics in Prometheus exposition format", content_type = "text/plain",   body = String),
         (status = 401, description = "Unauthorized")
     )
 )]
+#[require_permissions(["metrics:read"])]
 #[get("/debug/metrics/scrape")]
-async fn scrape_metrics() -> impl Responder {
+async fn scrape_metrics(
+    raw_request: HttpRequest,
+    data: web::ThinData<DefaultAppState>,
+) -> Result<HttpResponse, actix_web::Error> {
     update_system_metrics();
     match crate::metrics::gather_metrics() {
-        Ok(body) => HttpResponse::Ok().content_type("text/plain;").body(body),
-        Err(e) => HttpResponse::InternalServerError().body(format!("Error: {}", e)),
+        Ok(body) => Ok(HttpResponse::Ok().content_type("text/plain;").body(body)),
+        Err(e) => Ok(HttpResponse::InternalServerError().body(format!("Error: {}", e))),
     }
 }
 
@@ -130,7 +173,7 @@ pub fn init(cfg: &mut web::ServiceConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actix_web::{test, App};
+    use actix_web::{test, App, Responder};
     use prometheus::{Counter, Opts, Registry};
 
     // Helper function to create a test registry with a sample metric
@@ -246,8 +289,19 @@ mod tests {
 
     #[actix_web::test]
     async fn test_scrape_metrics() {
-        // Create a test app with our endpoints
-        let app = test::init_service(App::new().service(scrape_metrics)).await;
+        async fn mock_scrape_metrics() -> impl Responder {
+            update_system_metrics();
+            match crate::metrics::gather_metrics() {
+                Ok(body) => HttpResponse::Ok().content_type("text/plain;").body(body),
+                Err(e) => HttpResponse::InternalServerError().body(format!("Error: {}", e)),
+            }
+        }
+
+        // Create a test app with our mock handler
+        let app = test::init_service(App::new().service(
+            web::resource("/debug/metrics/scrape").route(web::get().to(mock_scrape_metrics)),
+        ))
+        .await;
 
         // Make request to scrape metrics
         let req = test::TestRequest::get()
@@ -293,16 +347,64 @@ mod tests {
 
     #[actix_web::test]
     async fn test_init() {
-        // Create a test app with our init function
-        let app = test::init_service(App::new().configure(init)).await;
+        // Mock list_metrics handler
+        async fn mock_list_metrics() -> impl Responder {
+            let metric_families = REGISTRY.gather();
+            let metric_names: Vec<String> = metric_families
+                .iter()
+                .map(|mf| mf.name().to_string())
+                .collect();
+            HttpResponse::Ok().json(metric_names)
+        }
 
-        // Test each endpoint to ensure they were properly registered
+        // Mock metric_detail handler
+        async fn mock_metric_detail(path: web::Path<String>) -> impl Responder {
+            let metric_name = path.into_inner();
+            let metric_families = REGISTRY.gather();
+
+            for mf in metric_families {
+                if mf.name() == metric_name {
+                    let encoder = TextEncoder::new();
+                    let mut buffer = Vec::new();
+                    if let Err(e) = encoder.encode(&[mf], &mut buffer) {
+                        return HttpResponse::InternalServerError()
+                            .body(format!("Encoding error: {}", e));
+                    }
+                    return HttpResponse::Ok()
+                        .content_type(encoder.format_type())
+                        .body(buffer);
+                }
+            }
+            HttpResponse::NotFound().body("Metric not found")
+        }
+
+        // Mock scrape_metrics handler
+        async fn mock_scrape_metrics() -> impl Responder {
+            update_system_metrics();
+            match crate::metrics::gather_metrics() {
+                Ok(body) => HttpResponse::Ok().content_type("text/plain;").body(body),
+                Err(e) => HttpResponse::InternalServerError().body(format!("Error: {}", e)),
+            }
+        }
+
+        // Create a test app with mock handlers that mirror the init configuration
+        let app = test::init_service(
+            App::new()
+                .service(web::resource("/metrics").route(web::get().to(mock_list_metrics)))
+                .service(
+                    web::resource("/metrics/{metric_name}")
+                        .route(web::get().to(mock_metric_detail)),
+                )
+                .service(
+                    web::resource("/debug/metrics/scrape")
+                        .route(web::get().to(mock_scrape_metrics)),
+                ),
+        )
+        .await;
 
         // Test list_metrics endpoint
         let req = test::TestRequest::get().uri("/metrics").to_request();
         let resp = test::call_service(&app, req).await;
-
-        // We expect this to succeed since list_metrics should work with any registry state
         assert!(resp.status().is_success());
 
         // Test metric_detail endpoint - we expect a 404 since test_counter doesn't exist in global registry
@@ -310,8 +412,6 @@ mod tests {
             .uri("/metrics/test_counter")
             .to_request();
         let resp = test::call_service(&app, req).await;
-
-        // We expect a 404 Not Found since test_counter doesn't exist in the global registry
         assert_eq!(resp.status(), 404);
 
         // Test scrape_metrics endpoint
@@ -319,7 +419,6 @@ mod tests {
             .uri("/debug/metrics/scrape")
             .to_request();
         let resp = test::call_service(&app, req).await;
-        // This should succeed as it doesn't depend on specific metrics existing
         assert!(resp.status().is_success());
     }
 

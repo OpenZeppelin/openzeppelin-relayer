@@ -3,7 +3,7 @@
 //! The `InMemoryApiKeyRepository` struct is used to store and retrieve api keys
 //! permissions.
 use crate::{
-    models::{ApiKeyRepoModel, PaginationQuery},
+    models::{ApiKeyRepoModel, PaginationQuery, PermissionGrant},
     repositories::{ApiKeyRepositoryTrait, PaginatedResult, RepositoryError},
 };
 
@@ -63,6 +63,17 @@ impl ApiKeyRepositoryTrait for InMemoryApiKeyRepository {
         Ok(store.get(id).cloned())
     }
 
+    async fn get_by_value(&self, value: &str) -> Result<Option<ApiKeyRepoModel>, RepositoryError> {
+        let store = Self::acquire_lock(&self.store).await?;
+        for api_key in store.values() {
+            let matches = api_key.value.as_str(|secret_value| secret_value == value);
+            if matches {
+                return Ok(Some(api_key.clone()));
+            }
+        }
+        Ok(None)
+    }
+
     async fn list_paginated(
         &self,
         query: PaginationQuery,
@@ -93,7 +104,10 @@ impl ApiKeyRepositoryTrait for InMemoryApiKeyRepository {
         Ok(store.len())
     }
 
-    async fn list_permissions(&self, api_key_id: &str) -> Result<Vec<String>, RepositoryError> {
+    async fn list_permissions(
+        &self,
+        api_key_id: &str,
+    ) -> Result<Vec<PermissionGrant>, RepositoryError> {
         let store = self.store.lock().await;
         let api_key = store
             .get(api_key_id)
@@ -140,8 +154,7 @@ mod tests {
             id: "test-api-key".to_string(),
             value: SecretString::new("test-value"),
             name: "test-name".to_string(),
-            allowed_origins: vec!["*".to_string()],
-            permissions: vec!["relayer:all:execute".to_string()],
+            permissions: vec![PermissionGrant::global("relayers:execute")],
             created_at: Utc::now().to_string(),
         };
         api_key_repository.create(api_key.clone()).await.unwrap();
@@ -167,8 +180,7 @@ mod tests {
             id: "test-api-key".to_string(),
             value: SecretString::new("test-value"),
             name: "test-name".to_string(),
-            allowed_origins: vec!["*".to_string()],
-            permissions: vec!["relayer:all:execute".to_string()],
+            permissions: vec![PermissionGrant::global("relayers:execute")],
             created_at: Utc::now().to_string(),
         };
         api_key_repository.create(api_key.clone()).await.unwrap();
@@ -186,8 +198,7 @@ mod tests {
             id: "test-api-key1".to_string(),
             value: SecretString::new("test-value1"),
             name: "test-name1".to_string(),
-            allowed_origins: vec!["*".to_string()],
-            permissions: vec!["relayer:all:execute".to_string()],
+            permissions: vec![PermissionGrant::global("relayers:execute")],
             created_at: Utc::now().to_string(),
         };
 
@@ -195,8 +206,7 @@ mod tests {
             id: "test-api-key2".to_string(),
             value: SecretString::new("test-value2"),
             name: "test-name2".to_string(),
-            allowed_origins: vec!["*".to_string()],
-            permissions: vec!["relayer:all:execute".to_string()],
+            permissions: vec![PermissionGrant::global("relayers:execute")],
             created_at: Utc::now().to_string(),
         };
 
@@ -223,8 +233,7 @@ mod tests {
                 id: "test-api-key".to_string(),
                 value: SecretString::new("test-value"),
                 name: "test-name".to_string(),
-                allowed_origins: vec!["*".to_string()],
-                permissions: vec!["relayer:all:execute".to_string()],
+                permissions: vec![PermissionGrant::global("relayers:execute")],
                 created_at: Utc::now().to_string(),
             })
             .await
@@ -243,8 +252,7 @@ mod tests {
                 id: "test-api-key".to_string(),
                 value: SecretString::new("test-value"),
                 name: "test-name".to_string(),
-                allowed_origins: vec!["*".to_string()],
-                permissions: vec!["relayer:all:execute".to_string()],
+                permissions: vec![PermissionGrant::global("relayers:execute")],
                 created_at: Utc::now().to_string(),
             })
             .await
@@ -266,10 +274,9 @@ mod tests {
                 id: "test-api-key".to_string(),
                 value: SecretString::new("test-value"),
                 name: "test-name".to_string(),
-                allowed_origins: vec!["*".to_string()],
                 permissions: vec![
-                    "relayer:all:execute".to_string(),
-                    "relayer:all:read".to_string(),
+                    PermissionGrant::global("relayers:execute"),
+                    PermissionGrant::global("relayers:read"),
                 ],
                 created_at: Utc::now().to_string(),
             })
@@ -280,7 +287,13 @@ mod tests {
             .list_permissions("test-api-key")
             .await
             .unwrap();
-        assert_eq!(permissions, vec!["relayer:all:execute", "relayer:all:read"]);
+        assert_eq!(
+            permissions,
+            vec![
+                PermissionGrant::global("relayers:execute"),
+                PermissionGrant::global("relayers:read")
+            ]
+        );
     }
 
     #[tokio::test]
@@ -291,8 +304,7 @@ mod tests {
                 id: "test-api-key".to_string(),
                 value: SecretString::new("test-value"),
                 name: "test-name".to_string(),
-                allowed_origins: vec!["*".to_string()],
-                permissions: vec!["relayer:all:execute".to_string()],
+                permissions: vec![PermissionGrant::global("relayers:execute")],
                 created_at: Utc::now().to_string(),
             })
             .await
@@ -301,5 +313,52 @@ mod tests {
         assert!(api_key_repository.has_entries().await.unwrap());
         api_key_repository.drop_all_entries().await.unwrap();
         assert!(!api_key_repository.has_entries().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_get_by_value_existing() {
+        let api_key_repository = Arc::new(InMemoryApiKeyRepository::new());
+        let api_key = ApiKeyRepoModel {
+            id: "test-api-key".to_string(),
+            value: SecretString::new("test-value-123"),
+            name: "test-name".to_string(),
+            permissions: vec![PermissionGrant::global("relayers:execute")],
+            created_at: Utc::now().to_string(),
+        };
+
+        api_key_repository.create(api_key.clone()).await.unwrap();
+
+        let result = api_key_repository
+            .get_by_value("test-value-123")
+            .await
+            .unwrap();
+        assert_eq!(result, Some(api_key));
+    }
+
+    #[tokio::test]
+    async fn test_get_by_value_non_existing() {
+        let api_key_repository = Arc::new(InMemoryApiKeyRepository::new());
+        let api_key = ApiKeyRepoModel {
+            id: "test-api-key".to_string(),
+            value: SecretString::new("test-value-123"),
+            name: "test-name".to_string(),
+            permissions: vec![PermissionGrant::global("relayers:execute")],
+            created_at: Utc::now().to_string(),
+        };
+
+        api_key_repository.create(api_key).await.unwrap();
+
+        let result = api_key_repository
+            .get_by_value("non-existing-value")
+            .await
+            .unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn test_get_by_value_empty_store() {
+        let api_key_repository = Arc::new(InMemoryApiKeyRepository::new());
+        let result = api_key_repository.get_by_value("any-value").await.unwrap();
+        assert_eq!(result, None);
     }
 }

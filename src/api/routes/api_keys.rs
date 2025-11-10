@@ -4,37 +4,48 @@ use crate::{
     api::controllers::api_key,
     models::{ApiKeyRequest, DefaultAppState, PaginationQuery},
 };
-use actix_web::{delete, get, post, web, Responder};
+use actix_web::{delete, get, post, web, HttpRequest, Responder};
+use relayer_macros::require_permissions;
 
 /// List API keys
+#[require_permissions(["api_keys:read"])]
 #[get("/api-keys")]
 async fn list_api_keys(
+    raw_request: HttpRequest,
     query: web::Query<PaginationQuery>,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     api_key::list_api_keys(query.into_inner(), data).await
 }
 
+/// Get API key permissions
+#[require_permissions([("api_keys:read", "api_key_id")])]
 #[get("/api-keys/{api_key_id}/permissions")]
 async fn get_api_key_permissions(
     api_key_id: web::Path<String>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     api_key::get_api_key_permissions(api_key_id.into_inner(), data).await
 }
 
 /// Create a new API key
+#[require_permissions(["api_keys:create"])]
 #[post("/api-keys")]
 async fn create_api_key(
     req: web::Json<ApiKeyRequest>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     api_key::create_api_key(req.into_inner(), data).await
 }
 
+/// Delete API key
+#[require_permissions([("api_keys:delete", "api_key_id")])]
 #[delete("/api-keys/{api_key_id}")]
 async fn delete_api_key(
     api_key_id: web::Path<String>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     api_key::delete_api_key(api_key_id.into_inner(), data).await

@@ -6,13 +6,16 @@ use crate::{
     domain::{SignDataRequest, SignTransactionRequest, SignTypedDataRequest},
     models::{CreateRelayerRequest, DefaultAppState, PaginationQuery},
 };
-use actix_web::{delete, get, patch, post, put, web, Responder};
+use actix_web::{delete, get, patch, post, put, web, HttpRequest, Responder};
+use relayer_macros::require_permissions;
 use serde::Deserialize;
 use utoipa::ToSchema;
 
 /// Lists all relayers with pagination support.
+#[require_permissions(["relayers:read"])]
 #[get("/relayers")]
 async fn list_relayers(
+    raw_request: HttpRequest,
     query: web::Query<PaginationQuery>,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
@@ -20,65 +23,79 @@ async fn list_relayers(
 }
 
 /// Retrieves details of a specific relayer by ID.
+#[require_permissions([("relayers:read", "relayer_id")])]
 #[get("/relayers/{relayer_id}")]
 async fn get_relayer(
     relayer_id: web::Path<String>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::get_relayer(relayer_id.into_inner(), data).await
 }
 
 /// Creates a new relayer.
+#[require_permissions(["relayers:create"])]
 #[post("/relayers")]
 async fn create_relayer(
     request: web::Json<CreateRelayerRequest>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::create_relayer(request.into_inner(), data).await
 }
 
 /// Updates a relayer's information using JSON Merge Patch (RFC 7396).
+#[require_permissions([("relayers:update", "relayer_id")])]
 #[patch("/relayers/{relayer_id}")]
 async fn update_relayer(
     relayer_id: web::Path<String>,
     patch: web::Json<serde_json::Value>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::update_relayer(relayer_id.into_inner(), patch.into_inner(), data).await
 }
 
 /// Deletes a relayer by ID.
+#[require_permissions([("relayers:delete", "relayer_id")])]
 #[delete("/relayers/{relayer_id}")]
 async fn delete_relayer(
     relayer_id: web::Path<String>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::delete_relayer(relayer_id.into_inner(), data).await
 }
 
 /// Fetches the current status of a specific relayer.
+#[require_permissions([("relayers:read", "relayer_id")])]
 #[get("/relayers/{relayer_id}/status")]
 async fn get_relayer_status(
     relayer_id: web::Path<String>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::get_relayer_status(relayer_id.into_inner(), data).await
 }
 
 /// Retrieves the balance of a specific relayer.
+#[require_permissions([("relayers:read", "relayer_id")])]
 #[get("/relayers/{relayer_id}/balance")]
 async fn get_relayer_balance(
     relayer_id: web::Path<String>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::get_relayer_balance(relayer_id.into_inner(), data).await
 }
 
 /// Sends a transaction through the specified relayer.
+#[require_permissions([("transactions:execute", "relayer_id")])]
 #[post("/relayers/{relayer_id}/transactions")]
 async fn send_transaction(
     relayer_id: web::Path<String>,
     req: web::Json<serde_json::Value>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::send_transaction(relayer_id.into_inner(), req.into_inner(), data).await
@@ -91,48 +108,64 @@ pub struct TransactionPath {
 }
 
 /// Retrieves a specific transaction by its ID.
+#[require_permissions([("transactions:read", "path.relayer_id")])]
 #[get("/relayers/{relayer_id}/transactions/{transaction_id}")]
 async fn get_transaction_by_id(
     path: web::Path<TransactionPath>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     let path = path.into_inner();
     relayer::get_transaction_by_id(path.relayer_id, path.transaction_id, data).await
 }
 
+#[derive(Deserialize, ToSchema)]
+pub struct TransactionNoncePath {
+    relayer_id: String,
+    nonce: u64,
+}
+
 /// Retrieves a transaction by its nonce value.
+#[require_permissions([("transactions:read", "path.relayer_id")])]
 #[get("/relayers/{relayer_id}/transactions/by-nonce/{nonce}")]
 async fn get_transaction_by_nonce(
-    params: web::Path<(String, u64)>,
+    path: web::Path<TransactionNoncePath>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
-    let params = params.into_inner();
-    relayer::get_transaction_by_nonce(params.0, params.1, data).await
+    let path = path.into_inner();
+    relayer::get_transaction_by_nonce(path.relayer_id, path.nonce, data).await
 }
 
 /// Lists all transactions for a specific relayer with pagination.
+#[require_permissions([("transactions:read", "relayer_id")])]
 #[get("/relayers/{relayer_id}/transactions")]
 async fn list_transactions(
     relayer_id: web::Path<String>,
     query: web::Query<PaginationQuery>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::list_transactions(relayer_id.into_inner(), query.into_inner(), data).await
 }
 
 /// Deletes all pending transactions for a specific relayer.
+#[require_permissions([("transactions:delete", "relayer_id")])]
 #[delete("/relayers/{relayer_id}/transactions/pending")]
 async fn delete_pending_transactions(
     relayer_id: web::Path<String>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::delete_pending_transactions(relayer_id.into_inner(), data).await
 }
 
 /// Cancels a specific transaction by its ID.
+#[require_permissions([("transactions:delete", "path.relayer_id")])]
 #[delete("/relayers/{relayer_id}/transactions/{transaction_id}")]
 async fn cancel_transaction(
     path: web::Path<TransactionPath>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     let path = path.into_inner();
@@ -140,10 +173,12 @@ async fn cancel_transaction(
 }
 
 /// Replaces a specific transaction with a new one.
+#[require_permissions([("transactions:execute", "path.relayer_id")])]
 #[put("/relayers/{relayer_id}/transactions/{transaction_id}")]
 async fn replace_transaction(
     path: web::Path<TransactionPath>,
     req: web::Json<serde_json::Value>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     let path = path.into_inner();
@@ -151,40 +186,48 @@ async fn replace_transaction(
 }
 
 /// Signs data using the specified relayer.
+#[require_permissions([("signing:execute", "relayer_id")])]
 #[post("/relayers/{relayer_id}/sign")]
 async fn sign(
     relayer_id: web::Path<String>,
     req: web::Json<SignDataRequest>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::sign_data(relayer_id.into_inner(), req.into_inner(), data).await
 }
 
 /// Signs typed data using the specified relayer.
+#[require_permissions([("signing:execute", "relayer_id")])]
 #[post("/relayers/{relayer_id}/sign-typed-data")]
 async fn sign_typed_data(
     relayer_id: web::Path<String>,
     req: web::Json<SignTypedDataRequest>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::sign_typed_data(relayer_id.into_inner(), req.into_inner(), data).await
 }
 
 /// Signs a transaction using the specified relayer (Stellar only).
+#[require_permissions([("signing:execute", "relayer_id")])]
 #[post("/relayers/{relayer_id}/sign-transaction")]
 async fn sign_transaction(
     relayer_id: web::Path<String>,
     req: web::Json<SignTransactionRequest>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::sign_transaction(relayer_id.into_inner(), req.into_inner(), data).await
 }
 
 /// Performs a JSON-RPC call using the specified relayer.
+#[require_permissions([("relayers:execute", "relayer_id")])]
 #[post("/relayers/{relayer_id}/rpc")]
 async fn rpc(
     relayer_id: web::Path<String>,
     req: web::Json<serde_json::Value>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::relayer_rpc(relayer_id.into_inner(), req.into_inner(), data).await
@@ -218,6 +261,7 @@ pub fn init(cfg: &mut web::ServiceConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::PermissionGrant;
     use crate::{
         config::{EvmNetworkConfig, NetworkConfigCommon},
         jobs::MockJobProducerTrait,
@@ -347,9 +391,8 @@ mod tests {
             id: "test-api-key".to_string(),
             name: "Test API Key".to_string(),
             value: SecretString::new("test-value"),
-            permissions: vec!["test-permission".to_string()],
+            permissions: vec![PermissionGrant::global("*:*")],
             created_at: chrono::Utc::now().to_rfc3339(),
-            allowed_origins: vec!["*".to_string()],
         };
         api_key_repo.create(test_api_key).await.unwrap();
 
@@ -379,15 +422,20 @@ mod tests {
         .await;
 
         // Test that routes are registered by checking they return 500 (not 404)
+        // Using the test API key "test-value" with full permissions (*:*)
 
         // Test GET /relayers
-        let req = test::TestRequest::get().uri("/relayers").to_request();
+        let req = test::TestRequest::get()
+            .uri("/relayers")
+            .insert_header(("Authorization", "Bearer test-value"))
+            .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
         // Test GET /relayers/{id}
         let req = test::TestRequest::get()
             .uri("/relayers/test-id")
+            .insert_header(("Authorization", "Bearer test-value"))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -395,6 +443,7 @@ mod tests {
         // Test PATCH /relayers/{id}
         let req = test::TestRequest::patch()
             .uri("/relayers/test-id")
+            .insert_header(("Authorization", "Bearer test-value"))
             .set_json(serde_json::json!({"paused": false}))
             .to_request();
         let resp = test::call_service(&app, req).await;
@@ -403,6 +452,7 @@ mod tests {
         // Test GET /relayers/{id}/status
         let req = test::TestRequest::get()
             .uri("/relayers/test-id/status")
+            .insert_header(("Authorization", "Bearer test-value"))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -410,6 +460,7 @@ mod tests {
         // Test GET /relayers/{id}/balance
         let req = test::TestRequest::get()
             .uri("/relayers/test-id/balance")
+            .insert_header(("Authorization", "Bearer test-value"))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -417,6 +468,7 @@ mod tests {
         // Test POST /relayers/{id}/transactions
         let req = test::TestRequest::post()
             .uri("/relayers/test-id/transactions")
+            .insert_header(("Authorization", "Bearer test-value"))
             .set_json(serde_json::json!({}))
             .to_request();
         let resp = test::call_service(&app, req).await;
@@ -425,6 +477,7 @@ mod tests {
         // Test GET /relayers/{id}/transactions/{tx_id}
         let req = test::TestRequest::get()
             .uri("/relayers/test-id/transactions/tx-123")
+            .insert_header(("Authorization", "Bearer test-value"))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -432,6 +485,7 @@ mod tests {
         // Test GET /relayers/{id}/transactions/by-nonce/{nonce}
         let req = test::TestRequest::get()
             .uri("/relayers/test-id/transactions/by-nonce/123")
+            .insert_header(("Authorization", "Bearer test-value"))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -439,6 +493,7 @@ mod tests {
         // Test GET /relayers/{id}/transactions
         let req = test::TestRequest::get()
             .uri("/relayers/test-id/transactions")
+            .insert_header(("Authorization", "Bearer test-value"))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -446,6 +501,7 @@ mod tests {
         // Test DELETE /relayers/{id}/transactions/pending
         let req = test::TestRequest::delete()
             .uri("/relayers/test-id/transactions/pending")
+            .insert_header(("Authorization", "Bearer test-value"))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -453,6 +509,7 @@ mod tests {
         // Test DELETE /relayers/{id}/transactions/{tx_id}
         let req = test::TestRequest::delete()
             .uri("/relayers/test-id/transactions/tx-123")
+            .insert_header(("Authorization", "Bearer test-value"))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -460,6 +517,7 @@ mod tests {
         // Test PUT /relayers/{id}/transactions/{tx_id}
         let req = test::TestRequest::put()
             .uri("/relayers/test-id/transactions/tx-123")
+            .insert_header(("Authorization", "Bearer test-value"))
             .set_json(serde_json::json!({}))
             .to_request();
         let resp = test::call_service(&app, req).await;
@@ -468,6 +526,7 @@ mod tests {
         // Test POST /relayers/{id}/sign
         let req = test::TestRequest::post()
             .uri("/relayers/test-id/sign")
+            .insert_header(("Authorization", "Bearer test-value"))
             .set_json(serde_json::json!({
                 "message": "0x1234567890abcdef"
             }))
@@ -478,6 +537,7 @@ mod tests {
         // Test POST /relayers/{id}/sign-typed-data
         let req = test::TestRequest::post()
             .uri("/relayers/test-id/sign-typed-data")
+            .insert_header(("Authorization", "Bearer test-value"))
             .set_json(serde_json::json!({
                 "domain_separator": "0x1234567890abcdef",
                 "hash_struct_message": "0x1234567890abcdef"
@@ -489,6 +549,7 @@ mod tests {
         // Test POST /relayers/{id}/rpc
         let req = test::TestRequest::post()
             .uri("/relayers/test-id/rpc")
+            .insert_header(("Authorization", "Bearer test-value"))
             .set_json(serde_json::json!({
                 "jsonrpc": "2.0",
                 "method": "eth_getBlockByNumber",

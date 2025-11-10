@@ -6,11 +6,14 @@ use crate::{
     api::controllers::signer,
     models::{DefaultAppState, PaginationQuery, SignerCreateRequest, SignerUpdateRequest},
 };
-use actix_web::{delete, get, patch, post, web, Responder};
+use actix_web::{delete, get, patch, post, web, HttpRequest, Responder};
+use relayer_macros::require_permissions;
 
 /// Lists all signers with pagination support.
+#[require_permissions(["signers:read"])]
 #[get("/signers")]
 async fn list_signers(
+    raw_request: HttpRequest,
     query: web::Query<PaginationQuery>,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
@@ -18,37 +21,45 @@ async fn list_signers(
 }
 
 /// Retrieves details of a specific signer by ID.
+#[require_permissions([("signers:read", "signer_id")])]
 #[get("/signers/{signer_id}")]
 async fn get_signer(
     signer_id: web::Path<String>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     signer::get_signer(signer_id.into_inner(), data).await
 }
 
 /// Creates a new signer.
+#[require_permissions(["signers:create"])]
 #[post("/signers")]
 async fn create_signer(
     request: web::Json<SignerCreateRequest>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     signer::create_signer(request.into_inner(), data).await
 }
 
 /// Updates an existing signer.
+#[require_permissions([("signers:update", "signer_id")])]
 #[patch("/signers/{signer_id}")]
 async fn update_signer(
     signer_id: web::Path<String>,
     request: web::Json<SignerUpdateRequest>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     signer::update_signer(signer_id.into_inner(), request.into_inner(), data).await
 }
 
 /// Deletes a signer by ID.
+#[require_permissions([("signers:delete", "signer_id")])]
 #[delete("/signers/{signer_id}")]
 async fn delete_signer(
     signer_id: web::Path<String>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     signer::delete_signer(signer_id.into_inner(), data).await

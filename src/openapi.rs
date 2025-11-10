@@ -45,7 +45,8 @@ impl Modify for SecurityAddon {
       (name = "Notifications", description = "Notifications are responsible for showing the notifications related to the relayers."),
       (name = "Signers", description = "Signers are responsible for signing the transactions related to the relayers."),
       (name = "Metrics", description = "Metrics are responsible for showing the metrics related to the relayers."),
-      (name = "Health", description = "Health is responsible for showing the health of the relayers.")
+      (name = "Health", description = "Health is responsible for showing the health status of the system."),
+      (name = "API Keys", description = "API Keys are used to authenticate and authorize requests. Each API key has a set of permissions that control what operations it can perform.")
     ),
     info(description = "OpenZeppelin Relayer API", version = "0.0.0", title = "OpenZeppelin Relayer API",  license(
         name = "AGPL-3.0 license",

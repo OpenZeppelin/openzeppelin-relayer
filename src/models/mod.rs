@@ -52,3 +52,6 @@ pub use plugin::*;
 
 mod api_key;
 pub use api_key::*;
+
+mod permission;
+pub use permission::*;
