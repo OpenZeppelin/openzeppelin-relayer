@@ -180,8 +180,10 @@ pub struct UpdateRelayerRequest {
     pub paused: Option<bool>,
     /// Raw policy JSON - will be validated against relayer's network type during application
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub policies: Option<CreateRelayerPolicyRequest>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub notification_id: Option<String>,
     pub custom_rpc_urls: Option<Vec<RpcConfig>>,
 }

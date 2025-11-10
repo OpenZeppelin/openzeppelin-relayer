@@ -18,6 +18,7 @@ use crate::{
                 midnight::{MidnightIntentRequest, MidnightOfferRequest},
                 stellar::StellarTransactionRequest,
             },
+            solana::SolanaInstructionSpec,
             stellar::{DecoratedSignature, MemoSpec, OperationSpec},
         },
         AddressError, EvmNetwork, NetworkRepoModel, NetworkTransactionRequest, NetworkType,
@@ -452,10 +453,23 @@ impl EvmTransactionDataTrait for EvmTransactionData {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SolanaTransactionData {
-    pub transaction: String,
+    /// Pre-built serialized transaction (base64) - mutually exclusive with instructions
+    pub transaction: Option<String>,
+    /// Instructions to build transaction from - mutually exclusive with transaction
+    pub instructions: Option<Vec<SolanaInstructionSpec>>,
+    /// Transaction signature after submission
     pub signature: Option<String>,
+}
+
+impl SolanaTransactionData {
+    /// Creates a new `SolanaTransactionData` with an updated signature.
+    /// Moves the data to avoid unnecessary cloning.
+    pub fn with_signature(mut self, signature: String) -> Self {
+        self.signature = Some(signature);
+        self
+    }
 }
 
 /// Represents different input types for Stellar transactions
@@ -871,11 +885,12 @@ impl
                 created_at: now,
                 sent_at: None,
                 confirmed_at: None,
-                valid_until: None,
+                valid_until: solana_request.valid_until.clone(),
                 delete_at: None,
                 network_type: NetworkType::Solana,
                 network_data: NetworkTransactionData::Solana(SolanaTransactionData {
-                    transaction: solana_request.transaction.clone().into_inner(),
+                    transaction: solana_request.transaction.clone().map(|t| t.into_inner()),
+                    instructions: solana_request.instructions.clone(),
                     signature: None,
                 }),
                 priced_at: None,
@@ -1448,8 +1463,8 @@ mod tests {
 
         // Should fail for non-EVM data
         let solana_data = NetworkTransactionData::Solana(SolanaTransactionData {
-            transaction: "transaction_123".to_string(),
-            signature: None,
+            transaction: Some("transaction_123".to_string()),
+            ..Default::default()
         });
         assert!(solana_data.get_evm_transaction_data().is_err());
     }
@@ -1457,8 +1472,8 @@ mod tests {
     #[test]
     fn test_network_tx_data_get_solana_transaction_data() {
         let solana_tx_data = SolanaTransactionData {
-            transaction: "transaction_123".to_string(),
-            signature: None,
+            transaction: Some("transaction_123".to_string()),
+            ..Default::default()
         };
         let network_data = NetworkTransactionData::Solana(solana_tx_data.clone());
 
@@ -1529,8 +1544,8 @@ mod tests {
 
         // Should fail for non-EVM data
         let solana_data = NetworkTransactionData::Solana(SolanaTransactionData {
-            transaction: "transaction_123".to_string(),
-            signature: None,
+            transaction: Some("transaction_123".to_string()),
+            ..Default::default()
         });
         assert!(TxLegacy::try_from(solana_data).is_err());
     }
@@ -1777,7 +1792,11 @@ mod tests {
 
         let solana_request = NetworkTransactionRequest::Solana(
             crate::models::transaction::request::solana::SolanaTransactionRequest {
-                transaction: EncodedSerializedTransaction::new("transaction_123".to_string()),
+                transaction: Some(EncodedSerializedTransaction::new(
+                    "transaction_123".to_string(),
+                )),
+                instructions: None,
+                valid_until: None,
             },
         );
 
@@ -1824,7 +1843,7 @@ mod tests {
         assert_eq!(transaction.valid_until, None);
 
         if let NetworkTransactionData::Solana(solana_data) = transaction.network_data {
-            assert_eq!(solana_data.transaction, "transaction_123".to_string());
+            assert_eq!(solana_data.transaction, Some("transaction_123".to_string()));
             assert_eq!(solana_data.signature, None);
         } else {
             panic!("Expected Solana transaction data");
@@ -1975,8 +1994,8 @@ mod tests {
 
         // Should fail for non-EVM data
         let solana_data = NetworkTransactionData::Solana(SolanaTransactionData {
-            transaction: "transaction_123".to_string(),
-            signature: None,
+            transaction: Some("transaction_123".to_string()),
+            ..Default::default()
         });
         assert!(TxEip1559::try_from(solana_data).is_err());
     }

@@ -383,6 +383,12 @@ impl SolanaAllowedTokensPolicy {
 }
 
 /// Solana fee payment strategy
+///
+/// Determines who pays transaction fees:
+/// - `User`: User must include fee payment to relayer in transaction (for custom RPC methods)
+/// - `Relayer`: Relayer pays all transaction fees (recommended for send transaction endpoint)
+///
+/// Default is `User`.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SolanaFeePaymentStrategy {
@@ -448,6 +454,7 @@ pub struct RelayerSolanaPolicy {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_tokens: Option<Vec<SolanaAllowedTokensPolicy>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub fee_payment_strategy: Option<SolanaFeePaymentStrategy>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fee_margin_percentage: Option<f32>,
@@ -458,6 +465,7 @@ pub struct RelayerSolanaPolicy {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_allowed_fee_lamports: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub swap_config: Option<RelayerSolanaSwapConfig>,
 }
 

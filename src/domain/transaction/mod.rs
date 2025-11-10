@@ -31,7 +31,8 @@ use crate::{
         midnight::handler::{QuickSyncStrategy, SyncManager},
         provider::{get_network_provider, MidnightProviderTrait},
         signer::{
-            EvmSignerFactory, MidnightSignerFactory, MidnightSignerTrait, StellarSignerFactory,
+            EvmSignerFactory, MidnightSignerFactory, MidnightSignerTrait, SolanaSignerFactory,
+            StellarSignerFactory,
         },
     },
 };
@@ -51,6 +52,8 @@ pub mod stellar;
 mod util;
 pub use util::*;
 
+// Explicit re-exports to avoid ambiguous glob re-exports
+pub use common::is_final_state;
 pub use common::*;
 pub use evm::{ensure_status, ensure_status_one_of, DefaultEvmTransaction, EvmRelayerTransaction};
 pub use midnight::{midnight_transaction::DefaultMidnightTransaction, to_midnight_network_id};
@@ -498,12 +501,16 @@ impl RelayerTransactionFactory {
                     None,
                 )?);
 
+                let signer_service =
+                    Arc::new(SolanaSignerFactory::create_solana_signer(&signer.into())?);
+
                 Ok(NetworkTransaction::Solana(SolanaRelayerTransaction::new(
                     relayer,
                     relayer_repository,
                     solana_provider,
                     transaction_repository,
                     job_producer,
+                    signer_service,
                 )?))
             }
             NetworkType::Stellar => {
