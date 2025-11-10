@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@openzeppelin/relayer-sdk':
-        specifier: ^1.6.0
-        version: 1.6.0
+        specifier: ^1.7.0
+        version: 1.7.0
       '@types/node':
         specifier: ^24.0.3
         version: 24.9.2
@@ -322,8 +322,8 @@ packages:
     resolution: {integrity: sha512-MVC8EAQp7MvEcm30KWENFjgR+Mkmf+D189XJTkFIlwohU5hcBbn1ZkKq7KVTi2Hme3PMGF390DaL52beVrIihQ==}
     engines: {node: '>= 16'}
 
-  '@openzeppelin/relayer-sdk@1.6.0':
-    resolution: {integrity: sha512-UjL4TLz4tvCY1ssE3wf47FU+/2vE/bJ5HoXyufUsidL5bRXwf6ziwWZWUa0YsPiGEQNdVtsuoUR9qqHjxYqlXg==}
+  '@openzeppelin/relayer-sdk@1.7.0':
+    resolution: {integrity: sha512-XaQDdfooj6LC9Xa2fhq0ElaF0q/+rn4D0KNKDiwUa+QdZk18LeIiKxyZKxXuA4RynXxosISe1oQW78XYC/nE6Q==}
     engines: {node: '>=22.14.0', npm: use pnpm, pnpm: '>=9', yarn: use pnpm}
 
   '@sinclair/typebox@0.27.8':
@@ -1802,7 +1802,7 @@ snapshots:
 
   '@noble/hashes@1.3.2': {}
 
-  '@openzeppelin/relayer-sdk@1.6.0':
+  '@openzeppelin/relayer-sdk@1.7.0':
     dependencies:
       axios: 1.13.1
     transitivePeerDependencies:
