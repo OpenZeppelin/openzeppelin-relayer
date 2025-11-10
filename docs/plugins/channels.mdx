@@ -14,39 +14,39 @@ The plugin features:
 * ***Transaction Simulation***: Automatically simulates and builds transactions with proper resources
 * ***Management API***: Dynamic configuration of channel accounts
 
-## Using the SDK Client
+## Using the Plugin Client
 
-The fastest way to interact with Channels is through the OpenZeppelin Relayer SDK, which provides a type-safe, unified interface for transaction submission and management operations.
+The fastest way to interact with Channels is through the plugin's TypeScript client, which provides a type-safe, unified interface for transaction submission and management operations.
 
 ### Installation
 
 ```bash
-npm install @openzeppelin/relayer-sdk
+npm install @openzeppelin/relayer-plugin-channels
 # or
-pnpm add @openzeppelin/relayer-sdk
+pnpm add @openzeppelin/relayer-plugin-channels
 ```
 
 ### Client Setup
 
-The SDK supports two connection modes with identical APIs:
+The client supports two connection modes that are automatically detected based on configuration:
 
 ```typescript
-import { ChannelsClient, ChannelsRelayerClient } from '@openzeppelin/relayer-sdk';
+import { ChannelsClient } from '@openzeppelin/relayer-plugin-channels';
 
 // Direct HTTP connection to Channels service
 const directClient = new ChannelsClient({
   baseUrl: 'https://channels.openzeppelin.com',        // Channels service URL
-  apiKey: process.env.CHANNELS_API_KEY,           // Service API key
-  adminSecret: process.env.CHANNELS_ADMIN,        // Optional: for management
-  timeout: 30000,                                  // Optional: request timeout
+  apiKey: process.env.CHANNELS_API_KEY,                // Service API key
+  adminSecret: process.env.CHANNELS_ADMIN,             // Optional: for management
+  timeout: 30000,                                      // Optional: request timeout
 });
 
 // Connection via OpenZeppelin Relayer plugin
-const relayerClient = new ChannelsRelayerClient({
-  pluginId: 'channels-plugin',                    // Plugin identifier
-  baseUrl: 'http://localhost:8080',               // Optional: Relayer URL
-  apiKey: process.env.RELAYER_API_KEY,            // Relayer API key
-  adminSecret: process.env.CHANNELS_ADMIN,        // Optional: for management
+const relayerClient = new ChannelsClient({
+  pluginId: 'channels-plugin',                         // Plugin identifier (triggers relayer mode)
+  baseUrl: 'http://localhost:8080',                    // Relayer URL
+  apiKey: process.env.RELAYER_API_KEY,                 // Relayer API key
+  adminSecret: process.env.CHANNELS_ADMIN,             // Optional: for management
 });
 ```
 
@@ -85,10 +85,7 @@ console.log('Update successful:', result.ok, result.appliedRelayerIds);
 
 ### Example Scripts
 
-Complete working examples are available in the SDK repository:
-
-* [channels-direct-example.ts](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/blob/main/examples/clients/channels-direct-example.ts) - Direct HTTP connection
-* [channels-relayer-example.ts](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/blob/main/examples/clients/channels-relayer-example.ts) - OpenZeppelin Relayer connection
+For complete working examples and additional client usage details, see the [Channels Plugin README](https://github.com/OpenZeppelin/relayer-plugin-channels#plugin-client).
 
 ## Prerequisites
 
