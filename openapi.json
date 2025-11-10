@@ -3834,12 +3834,7 @@
                 }
               },
               {
-                "type": "array",
-                "items": {
-                  "type": "integer",
-                  "format": "int32",
-                  "minimum": 0
-                }
+                "$ref": "#/components/schemas/SignTransactionResponseSolana"
               }
             ]
           },
@@ -6352,12 +6347,7 @@
             }
           },
           {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "format": "int32",
-              "minimum": 0
-            }
+            "$ref": "#/components/schemas/SignTransactionRequestSolana"
           }
         ]
       },
@@ -6372,6 +6362,17 @@
           }
         },
         "additionalProperties": false
+      },
+      "SignTransactionRequestSolana": {
+        "type": "object",
+        "required": [
+          "transaction"
+        ],
+        "properties": {
+          "transaction": {
+            "$ref": "#/components/schemas/EncodedSerializedTransaction"
+          }
+        }
       },
       "SignTransactionRequestStellar": {
         "type": "object",
@@ -6398,14 +6399,24 @@
             }
           },
           {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "format": "int32",
-              "minimum": 0
-            }
+            "$ref": "#/components/schemas/SignTransactionResponseSolana"
           }
         ]
+      },
+      "SignTransactionResponseSolana": {
+        "type": "object",
+        "required": [
+          "transaction",
+          "signature"
+        ],
+        "properties": {
+          "signature": {
+            "type": "string"
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/EncodedSerializedTransaction"
+          }
+        }
       },
       "SignTransactionResponseStellar": {
         "type": "object",
@@ -6690,6 +6701,29 @@
         "description": "Request model for updating an existing signer\nAt the moment, we don't allow updating signers",
         "additionalProperties": false
       },
+      "SolanaAccountMeta": {
+        "type": "object",
+        "description": "Account metadata for a Solana instruction",
+        "required": [
+          "pubkey",
+          "is_signer",
+          "is_writable"
+        ],
+        "properties": {
+          "is_signer": {
+            "type": "boolean",
+            "description": "Whether the account is a signer"
+          },
+          "is_writable": {
+            "type": "boolean",
+            "description": "Whether the account is writable"
+          },
+          "pubkey": {
+            "type": "string",
+            "description": "Account public key (base58-encoded)"
+          }
+        }
+      },
       "SolanaAllowedTokensPolicy": {
         "type": "object",
         "description": "Configuration for allowed token handling on Solana",
@@ -6751,11 +6785,37 @@
       },
       "SolanaFeePaymentStrategy": {
         "type": "string",
-        "description": "Solana fee payment strategy",
+        "description": "Solana fee payment strategy\n\nDetermines who pays transaction fees:\n- `User`: User must include fee payment to relayer in transaction (for custom RPC methods)\n- `Relayer`: Relayer pays all transaction fees (recommended for send transaction endpoint)\n\nDefault is `User`.",
         "enum": [
           "user",
           "relayer"
         ]
+      },
+      "SolanaInstructionSpec": {
+        "type": "object",
+        "description": "Specification for a Solana instruction",
+        "required": [
+          "program_id",
+          "accounts",
+          "data"
+        ],
+        "properties": {
+          "accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SolanaAccountMeta"
+            },
+            "description": "Account metadata for the instruction"
+          },
+          "data": {
+            "type": "string",
+            "description": "Instruction data (base64-encoded)"
+          },
+          "program_id": {
+            "type": "string",
+            "description": "Program ID (base58-encoded pubkey)"
+          }
+        }
       },
       "SolanaPolicyResponse": {
         "type": "object",
@@ -7160,12 +7220,34 @@
       },
       "SolanaTransactionRequest": {
         "type": "object",
-        "required": [
-          "transaction"
-        ],
         "properties": {
+          "instructions": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/SolanaInstructionSpec"
+            },
+            "description": "Instructions to build transaction from (mutually exclusive with transaction)"
+          },
           "transaction": {
-            "$ref": "#/components/schemas/EncodedSerializedTransaction"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/EncodedSerializedTransaction",
+                "description": "Pre-built base64-encoded transaction (mutually exclusive with instructions)"
+              }
+            ]
+          },
+          "valid_until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional RFC3339 timestamp when transaction should expire"
           }
         }
       },
@@ -7186,6 +7268,12 @@
           },
           "id": {
             "type": "string"
+          },
+          "instructions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SolanaInstructionSpec"
+            }
           },
           "sent_at": {
             "type": "string"

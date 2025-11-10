@@ -9,16 +9,18 @@ use tracing::{debug, error, info, warn};
 
 use super::EvmRelayerTransaction;
 use super::{
-    ensure_status, get_age_of_sent_at, get_age_since_status_change, has_enough_confirmations,
-    is_noop, is_pending_transaction, is_too_early_to_resubmit, is_transaction_valid, make_noop,
-    too_many_attempts, too_many_noop_attempts,
+    ensure_status, get_age_since_status_change, has_enough_confirmations, is_noop,
+    is_too_early_to_resubmit, is_transaction_valid, make_noop, too_many_attempts,
+    too_many_noop_attempts,
 };
 use crate::constants::{
     get_evm_min_age_for_hash_recovery, get_evm_pending_recovery_trigger_timeout,
     get_evm_prepare_timeout, get_evm_resend_timeout, ARBITRUM_TIME_TO_RESUBMIT,
     EVM_MIN_HASHES_FOR_RECOVERY, EVM_PREPARE_TIMEOUT_MINUTES,
 };
-use crate::domain::transaction::common::is_final_state;
+use crate::domain::transaction::common::{
+    get_age_of_sent_at, is_final_state, is_pending_transaction,
+};
 use crate::domain::transaction::util::get_age_since_created;
 use crate::models::{EvmNetwork, NetworkRepoModel, NetworkType};
 use crate::repositories::{NetworkRepository, RelayerRepository};

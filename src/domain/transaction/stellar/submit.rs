@@ -5,8 +5,7 @@
 use chrono::Utc;
 use tracing::{info, warn};
 
-use super::{utils::is_bad_sequence_error, StellarRelayerTransaction};
-use crate::domain::transaction::common::is_final_state;
+use super::{is_final_state, utils::is_bad_sequence_error, StellarRelayerTransaction};
 use crate::{
     constants::STELLAR_BAD_SEQUENCE_RETRY_DELAY_SECONDS,
     jobs::JobProducerTrait,

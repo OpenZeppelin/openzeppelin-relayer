@@ -379,6 +379,12 @@ impl SolanaAllowedTokensPolicy {
 }
 
 /// Solana fee payment strategy
+///
+/// Determines who pays transaction fees:
+/// - `User`: User must include fee payment to relayer in transaction (for custom RPC methods)
+/// - `Relayer`: Relayer pays all transaction fees (recommended for send transaction endpoint)
+///
+/// Default is `User`.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SolanaFeePaymentStrategy {
