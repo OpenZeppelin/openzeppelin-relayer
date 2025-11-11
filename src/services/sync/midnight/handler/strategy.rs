@@ -64,6 +64,7 @@ pub struct QuickSyncStrategy {
 
 impl QuickSyncStrategy {
     /// Ensure that the config is Some and that the viewing key is also Some
+    #[allow(clippy::result_large_err)]
     fn ensure_config(&self) -> Result<&SyncConfig, SyncError> {
         self.config.as_ref().ok_or(SyncError::SessionError(
             "No config provided for quick sync".to_string(),
@@ -82,9 +83,9 @@ impl QuickSyncStrategy {
             .indexer_client
             .connect_wallet(viewing_key)
             .await
-            .map_err(|e| SyncError::SessionError(format!("Failed to connect wallet: {}", e)))?;
+            .map_err(|e| SyncError::SessionError(format!("Failed to connect wallet: {e}")))?;
 
-        debug!("Established wallet session: {}", session_id);
+        debug!("Established wallet session: {session_id}");
         Ok(session_id)
     }
 }
@@ -109,7 +110,7 @@ impl SyncStrategy for QuickSyncStrategy {
         let config = self.ensure_config()?;
         let session_id = self.establish_session().await?;
 
-        debug!("Starting quick sync from index {}", start_index);
+        debug!("Starting quick sync from index {start_index}");
 
         let send_progress_events = config.send_progress_events.unwrap_or(true);
         let idle_timeout = config.idle_timeout.unwrap_or(Duration::from_secs(5));
@@ -132,7 +133,7 @@ impl SyncStrategy for QuickSyncStrategy {
 
                     match event_result {
                         Ok(indexer_event) => {
-                            debug!("Processing indexer event: {:#?}", indexer_event);
+                            debug!("Processing indexer event: {indexer_event:#?}");
 
                             // Convert and dispatch events
                             let sync_events = convert_indexer_event(indexer_event);
@@ -151,8 +152,7 @@ impl SyncStrategy for QuickSyncStrategy {
                                         ..
                                     } => {
                                         debug!(
-                                            "Progress update: start_index={}, highest_index={}, highest_relevant_wallet_index={}",
-                                            start_index, highest_index, highest_relevant_wallet_index
+                                            "Progress update: start_index={start_index}, highest_index={highest_index}, highest_relevant_wallet_index={highest_relevant_wallet_index}"
                                         );
                                         if progress_tracker.is_sync_complete(*highest_index, *highest_relevant_wallet_index) {
                                             debug!("Sync completed based on progress update");

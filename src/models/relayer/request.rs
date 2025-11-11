@@ -166,7 +166,7 @@ pub fn deserialize_policy_for_network_type(
         RelayerNetworkType::Midnight => {
             let midnight_policy: RelayerMidnightPolicy =
                 serde_json::from_value(policies_value.clone())
-                    .map_err(|e| ApiError::BadRequest(format!("Invalid Midnight policy: {}", e)))?;
+                    .map_err(|e| ApiError::BadRequest(format!("Invalid Midnight policy: {e}")))?;
             Ok(RelayerNetworkPolicy::Midnight(midnight_policy))
         }
     }

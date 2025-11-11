@@ -574,7 +574,7 @@ impl RelayerTransactionFactory {
                     &network,
                     relayer.custom_rpc_urls.clone(),
                     Some(&HashMap::from([
-                        ("network".to_string(), format!("{:?}", network_id)),
+                        ("network".to_string(), format!("{network_id:?}")),
                         ("http".to_string(), indexer_urls.http),
                         ("ws".to_string(), indexer_urls.ws),
                     ])),

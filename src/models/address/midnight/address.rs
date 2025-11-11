@@ -68,7 +68,7 @@ impl MidnightAddress {
     /// * `String` - The bech32m-encoded address string
     pub fn encode(&self) -> String {
         let network_str = match &self.network {
-            Some(network) => format!("_{}", network),
+            Some(network) => format!("_{network}"),
             None => "".to_string(),
         };
 

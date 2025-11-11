@@ -128,7 +128,7 @@ impl NetworkRepoModel {
     /// A new NetworkRepoModel instance
     pub fn new_midnight(config: MidnightNetworkConfig) -> Self {
         let name = config.common.network.clone();
-        let id = format!("midnight:{}", name).to_lowercase();
+        let id = format!("midnight:{name}").to_lowercase();
         Self {
             id,
             name,

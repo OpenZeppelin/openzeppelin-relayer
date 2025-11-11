@@ -181,8 +181,7 @@ pub fn convert_to_internal_rpc_request(
             let midnight_request: crate::models::MidnightRpcRequest =
                 serde_json::from_value(request.clone()).map_err(|e| {
                     crate::models::ApiError::BadRequest(format!(
-                        "Invalid Midnight RPC request: {}",
-                        e
+                        "Invalid Midnight RPC request: {e}"
                     ))
                 })?;
 

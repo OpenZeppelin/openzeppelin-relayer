@@ -523,8 +523,7 @@ impl<
                     MidnightSignerFactory::create_midnight_signer(&signer.into(), network_id)
                         .map_err(|e| {
                             RelayerError::NetworkConfiguration(format!(
-                                "Failed to create signer: {}",
-                                e
+                                "Failed to create signer: {e}"
                             ))
                         })?;
                 let wallet_seed = midnight_signer.wallet_seed();
@@ -543,8 +542,7 @@ impl<
                 .await
                 .map_err(|e| {
                     RelayerError::NetworkConfiguration(format!(
-                        "Failed to create sync manager: {}",
-                        e
+                        "Failed to create sync manager: {e}"
                     ))
                 })?;
 

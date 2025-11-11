@@ -115,7 +115,7 @@ impl<D: DB> MidnightTransactionBuilder<D> {
 
         // Get the ledger state from the context
         let ledger_state_guard = context_arc.ledger_state.lock().map_err(|e| {
-            TransactionError::UnexpectedError(format!("Failed to acquire ledger state lock: {}", e))
+            TransactionError::UnexpectedError(format!("Failed to acquire ledger state lock: {e}"))
         })?;
 
         let ref_state = &*ledger_state_guard;
@@ -125,8 +125,7 @@ impl<D: DB> MidnightTransactionBuilder<D> {
             .well_formed(ref_state, WellFormedStrictness::default())
             .map_err(|e| {
                 TransactionError::ValidationError(format!(
-                    "Transaction failed well_formed validation: {:?}",
-                    e
+                    "Transaction failed well_formed validation: {e:?}"
                 ))
             })?;
 
