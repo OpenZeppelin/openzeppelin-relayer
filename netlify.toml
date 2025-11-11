@@ -1,6 +1,6 @@
 [build]
 base = "/"
-command = "rustup default stable && cargo install cargo-make --locked --force && cargo make rust-docs"
+command = "rustup update stable && rustup default stable && cargo install cargo-make --locked --force && cargo make rust-docs"
 publish = "docs/build/site"
 
 [build.environment]
