@@ -5,4 +5,4 @@ publish = "docs/build/site"
 
 [build.environment]
 PKG_CONFIG_PATH = "/home/linuxbrew/.linuxbrew/lib/pkgconfig"
-RUST_TOOLCHAIN = "1.88.0"
+RUSTUP_TOOLCHAIN = "1.88.0"
