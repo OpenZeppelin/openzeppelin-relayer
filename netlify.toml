@@ -1,6 +1,6 @@
 [build]
 base = "/"
-command = "cargo install cargo-make --locked --force && cargo make rust-docs"
+command = "rustup toolchain install 1.88.0 && rustup default 1.88.0 && cargo install cargo-make --locked --force && cargo make rust-docs"
 publish = "docs/build/site"
 
 [build.environment]
