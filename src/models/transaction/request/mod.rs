@@ -2,8 +2,12 @@ pub mod evm;
 pub mod solana;
 pub mod stellar;
 
+use crate::models::rpc::{
+    SolanaFeeEstimateRequestParams, SolanaPrepareTransactionRequestParams,
+    StellarFeeEstimateRequestParams, StellarPrepareTransactionRequestParams,
+};
 use crate::models::{ApiError, NetworkType, RelayerRepoModel};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub use evm::EvmTransactionRequest;
 pub use solana::SolanaTransactionRequest;
@@ -43,4 +47,30 @@ impl NetworkTransactionRequest {
             NetworkTransactionRequest::Solana(request) => request.validate(relayer),
         }
     }
+}
+
+/// Network-agnostic fee estimate request parameters for gasless transactions.
+/// Contains network-specific request parameters for fee estimation.
+/// The network type is inferred from the relayer's network configuration.
+#[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema, Clone)]
+#[serde(untagged)]
+#[schema(as = GaslessTransactionQuoteRequest)]
+pub enum GaslessTransactionQuoteRequest {
+    /// Solana-specific fee estimate request parameters
+    Solana(SolanaFeeEstimateRequestParams),
+    /// Stellar-specific fee estimate request parameters
+    Stellar(StellarFeeEstimateRequestParams),
+}
+
+/// Network-agnostic prepare transaction request parameters for gasless transactions.
+/// Contains network-specific request parameters for preparing transactions with fee payments.
+/// The network type is inferred from the relayer's network configuration.
+#[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema, Clone)]
+#[serde(untagged)]
+#[schema(as = GaslessTransactionBuildRequest)]
+pub enum GaslessTransactionBuildRequest {
+    /// Solana-specific prepare transaction request parameters
+    Solana(SolanaPrepareTransactionRequestParams),
+    /// Stellar-specific prepare transaction request parameters
+    Stellar(StellarPrepareTransactionRequestParams),
 }

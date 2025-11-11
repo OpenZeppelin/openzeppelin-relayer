@@ -19,8 +19,10 @@ use mockall::automock;
 use crate::{
     jobs::JobProducerTrait,
     models::{
+        transaction::request::{GaslessTransactionBuildRequest, GaslessTransactionQuoteRequest},
         AppState, DecoratedSignature, DeletePendingTransactionsResponse,
-        EncodedSerializedTransaction, EvmNetwork, EvmTransactionDataSignature, JsonRpcRequest,
+        EncodedSerializedTransaction, EvmNetwork, EvmTransactionDataSignature,
+        GaslessTransactionBuildResponse, GaslessTransactionQuoteResponse, JsonRpcRequest,
         JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest, NetworkRpcResult,
         NetworkTransactionRequest, NetworkType, NotificationRepoModel, RelayerError,
         RelayerRepoModel, RelayerStatus, SignerRepoModel, StellarNetwork, TransactionError,
@@ -217,33 +219,33 @@ pub trait StellarRelayerDexTrait {
 #[allow(dead_code)]
 #[cfg_attr(test, automock)]
 pub trait GasAbstractionTrait {
-    /// Estimates the fee for a transaction.
+    /// Gets a quote for a gasless transaction.
     ///
     /// # Arguments
     ///
-    /// * `params` - The fee estimate request parameters containing transaction and fee token.
+    /// * `params` - The gasless transaction quote request parameters (network-agnostic).
     ///
     /// # Returns
     ///
-    /// A `Result` containing a `FeeEstimateResult` on success, or a `RelayerError` on failure.
-    async fn estimate_fee(
+    /// A `Result` containing a fee estimate result on success, or a `RelayerError` on failure.
+    async fn get_gasless_transaction_quote(
         &self,
-        params: crate::models::StellarFeeEstimateRequestParams,
-    ) -> Result<crate::models::StellarFeeEstimateResult, RelayerError>;
+        params: GaslessTransactionQuoteRequest,
+    ) -> Result<GaslessTransactionQuoteResponse, RelayerError>;
 
     /// Prepares a transaction with fee payments.
     ///
     /// # Arguments
     ///
-    /// * `params` - The prepare transaction request parameters containing transaction and fee token.
+    /// * `params` - The prepare transaction request parameters (network-agnostic).
     ///
     /// # Returns
     ///
-    /// A `Result` containing a `PrepareTransactionResult` on success, or a `RelayerError` on failure.
-    async fn prepare_transaction(
+    /// A `Result` containing a prepare transaction result on success, or a `RelayerError` on failure.
+    async fn build_gasless_transaction(
         &self,
-        params: crate::models::StellarPrepareTransactionRequestParams,
-    ) -> Result<crate::models::StellarPrepareTransactionResult, RelayerError>;
+        params: GaslessTransactionBuildRequest,
+    ) -> Result<GaslessTransactionBuildResponse, RelayerError>;
 }
 
 pub enum NetworkRelayer<
@@ -385,33 +387,51 @@ impl<
         TCR: TransactionCounterTrait + Send + Sync + 'static,
     > GasAbstractionTrait for NetworkRelayer<J, T, RR, NR, TCR>
 {
-    async fn estimate_fee(
+    async fn get_gasless_transaction_quote(
         &self,
-        params: crate::models::StellarFeeEstimateRequestParams,
-    ) -> Result<crate::models::StellarFeeEstimateResult, RelayerError> {
-        match self {
-            NetworkRelayer::Evm(_) => Err(RelayerError::NotSupported(
+        params: GaslessTransactionQuoteRequest,
+    ) -> Result<GaslessTransactionQuoteResponse, RelayerError> {
+        match (self, params) {
+            (NetworkRelayer::Solana(relayer), GaslessTransactionQuoteRequest::Solana(params)) => {
+                Ok(relayer
+                    .get_gasless_transaction_quote(GaslessTransactionQuoteRequest::Solana(params))
+                    .await?)
+            }
+            (NetworkRelayer::Stellar(relayer), GaslessTransactionQuoteRequest::Stellar(params)) => {
+                Ok(relayer
+                    .get_gasless_transaction_quote(GaslessTransactionQuoteRequest::Stellar(params))
+                    .await?)
+            }
+            (NetworkRelayer::Evm(_), _) => Err(RelayerError::NotSupported(
                 "Gas abstraction not supported for EVM relayers".to_string(),
             )),
-            NetworkRelayer::Solana(_) => Err(RelayerError::NotSupported(
-                "Gas abstraction not supported for Solana relayers".to_string(),
+            _ => Err(RelayerError::ValidationError(
+                "Network type mismatch between relayer and request parameters".to_string(),
             )),
-            NetworkRelayer::Stellar(relayer) => relayer.estimate_fee(params).await,
         }
     }
 
-    async fn prepare_transaction(
+    async fn build_gasless_transaction(
         &self,
-        params: crate::models::StellarPrepareTransactionRequestParams,
-    ) -> Result<crate::models::StellarPrepareTransactionResult, RelayerError> {
-        match self {
-            NetworkRelayer::Evm(_) => Err(RelayerError::NotSupported(
+        params: GaslessTransactionBuildRequest,
+    ) -> Result<GaslessTransactionBuildResponse, RelayerError> {
+        match (self, params) {
+            (NetworkRelayer::Solana(relayer), GaslessTransactionBuildRequest::Solana(params)) => {
+                Ok(relayer
+                    .build_gasless_transaction(GaslessTransactionBuildRequest::Solana(params))
+                    .await?)
+            }
+            (NetworkRelayer::Stellar(relayer), GaslessTransactionBuildRequest::Stellar(params)) => {
+                Ok(relayer
+                    .build_gasless_transaction(GaslessTransactionBuildRequest::Stellar(params))
+                    .await?)
+            }
+            (NetworkRelayer::Evm(_), _) => Err(RelayerError::NotSupported(
                 "Gas abstraction not supported for EVM relayers".to_string(),
             )),
-            NetworkRelayer::Solana(_) => Err(RelayerError::NotSupported(
-                "Gas abstraction not supported for Solana relayers".to_string(),
+            _ => Err(RelayerError::ValidationError(
+                "Network type mismatch between relayer and request parameters".to_string(),
             )),
-            NetworkRelayer::Stellar(relayer) => relayer.prepare_transaction(params).await,
         }
     }
 }

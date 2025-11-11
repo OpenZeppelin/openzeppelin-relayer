@@ -4,7 +4,10 @@
 use crate::{
     api::controllers::relayer,
     domain::{SignDataRequest, SignTransactionRequest, SignTypedDataRequest},
-    models::{CreateRelayerRequest, DefaultAppState, PaginationQuery},
+    models::{
+        transaction::request::{GaslessTransactionBuildRequest, GaslessTransactionQuoteRequest},
+        CreateRelayerRequest, DefaultAppState, PaginationQuery,
+    },
 };
 use actix_web::{delete, get, patch, post, put, web, Responder};
 use serde::Deserialize;
@@ -191,31 +194,31 @@ async fn rpc(
 }
 
 /// Estimates fees for a transaction (gas abstraction endpoint).
-#[post("/relayers/{relayer_id}/transactions/estimate")]
-async fn estimate_fee(
+#[post("/relayers/{relayer_id}/transactions/gasless/quote")]
+async fn get_gasless_transaction_quote(
     relayer_id: web::Path<String>,
-    req: web::Json<crate::models::StellarFeeEstimateRequestParams>,
+    req: web::Json<GaslessTransactionQuoteRequest>,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
-    relayer::estimate_fee(relayer_id.into_inner(), req.into_inner(), data).await
+    relayer::get_gasless_transaction_quote(relayer_id.into_inner(), req.into_inner(), data).await
 }
 
 /// Prepares a transaction with fee payments (gas abstraction endpoint).
-#[post("/relayers/{relayer_id}/transactions/prepare")]
-async fn prepare_transaction(
+#[post("/relayers/{relayer_id}/transactions/gasless/build")]
+async fn build_gasless_transaction(
     relayer_id: web::Path<String>,
-    req: web::Json<crate::models::StellarPrepareTransactionRequestParams>,
+    req: web::Json<GaslessTransactionBuildRequest>,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
-    relayer::prepare_transaction(relayer_id.into_inner(), req.into_inner(), data).await
+    relayer::build_gasless_transaction(relayer_id.into_inner(), req.into_inner(), data).await
 }
 
 /// Initializes the routes for the relayer module.
 pub fn init(cfg: &mut web::ServiceConfig) {
     // Register routes with literal segments before routes with path parameters
     cfg.service(delete_pending_transactions); // /relayers/{id}/transactions/pending
-    cfg.service(estimate_fee); // /relayers/{id}/transactions/estimate
-    cfg.service(prepare_transaction); // /relayers/{id}/transactions/prepare
+    cfg.service(get_gasless_transaction_quote); // /relayers/{id}/transactions/gasless/quote
+    cfg.service(build_gasless_transaction); // /relayers/{id}/transactions/gasless/build
 
     // Then register other routes
     cfg.service(cancel_transaction); // /relayers/{id}/transactions/{tx_id}

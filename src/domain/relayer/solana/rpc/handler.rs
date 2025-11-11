@@ -27,6 +27,13 @@ pub struct SolanaRpcHandler<T> {
 }
 
 impl<T: SolanaRpcMethods> SolanaRpcHandler<T> {
+    /// Gets a reference to the underlying RPC methods implementation.
+    pub fn rpc_methods(&self) -> &T {
+        &self.rpc_methods
+    }
+}
+
+impl<T: SolanaRpcMethods> SolanaRpcHandler<T> {
     /// Creates a new `SolanaRpcHandler` with the specified RPC methods.
     ///
     /// # Arguments

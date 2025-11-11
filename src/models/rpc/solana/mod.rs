@@ -88,7 +88,7 @@ pub struct FeeEstimateRequestParams {
     pub fee_token: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Clone, ToSchema)]
 pub struct FeeEstimateResult {
     pub estimated_fee: String,
     pub conversion_rate: String,
@@ -123,7 +123,7 @@ pub struct PrepareTransactionRequestParams {
     pub fee_token: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Clone, ToSchema)]
 pub struct PrepareTransactionResult {
     pub transaction: EncodedSerializedTransaction,
     pub fee_in_spl: String,

@@ -10,14 +10,19 @@
 use std::{str::FromStr, sync::Arc};
 
 use crate::constants::SOLANA_STATUS_CHECK_INITIAL_DELAY_SECONDS;
+use crate::domain::relayer::solana::rpc::SolanaRpcMethods;
 use crate::domain::{
-    create_error_response, Relayer, SignDataRequest, SignTransactionExternalResponse,
-    SignTransactionRequest, SignTransactionResponse, SignTypedDataRequest, SolanaRpcHandlerType,
-    SwapParams,
+    create_error_response, GasAbstractionTrait, Relayer, SignDataRequest,
+    SignTransactionExternalResponse, SignTransactionRequest, SignTransactionResponse,
+    SignTypedDataRequest, SolanaRpcHandlerType, SwapParams,
 };
 use crate::jobs::{TransactionRequest, TransactionStatusCheck};
+use crate::models::transaction::request::{
+    GaslessTransactionBuildRequest, GaslessTransactionQuoteRequest,
+};
 use crate::models::{
-    DeletePendingTransactionsResponse, JsonRpcRequest, JsonRpcResponse, NetworkRpcRequest,
+    DeletePendingTransactionsResponse, GaslessTransactionBuildResponse,
+    GaslessTransactionQuoteResponse, JsonRpcRequest, JsonRpcResponse, NetworkRpcRequest,
     NetworkRpcResult, RelayerStatus, RepositoryError, RpcErrorCodes, SolanaRpcRequest,
     SolanaRpcResult,
 };
@@ -1018,6 +1023,67 @@ where
         }
 
         Ok(())
+    }
+}
+
+#[async_trait]
+impl<RR, TR, J, S, JS, SP, NR> GasAbstractionTrait for SolanaRelayer<RR, TR, J, S, JS, SP, NR>
+where
+    RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    S: SolanaSignTrait + Signer + Send + Sync + 'static,
+    JS: JupiterServiceTrait + Send + Sync + 'static,
+    SP: SolanaProviderTrait + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+{
+    async fn get_gasless_transaction_quote(
+        &self,
+        params: GaslessTransactionQuoteRequest,
+    ) -> Result<GaslessTransactionQuoteResponse, RelayerError> {
+        let params = match params {
+            GaslessTransactionQuoteRequest::Solana(p) => p,
+            _ => {
+                return Err(RelayerError::ValidationError(
+                    "Expected Solana fee estimate request parameters".to_string(),
+                ));
+            }
+        };
+
+        let result = self
+            .rpc_handler
+            .rpc_methods()
+            .fee_estimate(params)
+            .await
+            .map_err(|e| RelayerError::Internal(e.to_string()))?;
+
+        Ok(GaslessTransactionQuoteResponse::Solana(result))
+    }
+
+    async fn build_gasless_transaction(
+        &self,
+        params: GaslessTransactionBuildRequest,
+    ) -> Result<GaslessTransactionBuildResponse, RelayerError> {
+        let params = match params {
+            GaslessTransactionBuildRequest::Solana(p) => p,
+            _ => {
+                return Err(RelayerError::ValidationError(
+                    "Expected Solana prepare transaction request parameters".to_string(),
+                ));
+            }
+        };
+
+        let result = self
+            .rpc_handler
+            .rpc_methods()
+            .prepare_transaction(params)
+            .await
+            .map_err(|e| {
+                let error_msg = format!("{}", e);
+                RelayerError::Internal(error_msg)
+            })?;
+
+        Ok(GaslessTransactionBuildResponse::Solana(result))
     }
 }
 

@@ -1,5 +1,9 @@
 use crate::domain::map_provider_error;
 use crate::domain::relayer::evm::create_error_response;
+use crate::models::transaction::request::{
+    GaslessTransactionBuildRequest, GaslessTransactionQuoteRequest,
+};
+use crate::models::{GaslessTransactionBuildResponse, GaslessTransactionQuoteResponse};
 /// This module defines the `StellarRelayer` struct and its associated functionality for
 /// interacting with Stellar networks. The `StellarRelayer` is responsible for managing
 /// transactions, synchronizing sequence numbers, and ensuring the relayer's state is
@@ -634,11 +638,19 @@ where
     TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
     S: StellarSignTrait + Send + Sync + 'static,
 {
-    async fn estimate_fee(
+    async fn get_gasless_transaction_quote(
         &self,
-        params: crate::models::StellarFeeEstimateRequestParams,
-    ) -> Result<crate::models::StellarFeeEstimateResult, RelayerError> {
-        info!(
+        params: GaslessTransactionQuoteRequest,
+    ) -> Result<GaslessTransactionQuoteResponse, RelayerError> {
+        let params = match params {
+            GaslessTransactionQuoteRequest::Stellar(p) => p,
+            _ => {
+                return Err(RelayerError::ValidationError(
+                    "Expected Stellar fee estimate request parameters".to_string(),
+                ));
+            }
+        };
+        debug!(
             "Processing fee estimate request for token: {}",
             params.fee_token
         );
@@ -683,17 +695,26 @@ where
             RelayerError::Internal(format!("Failed to validate token-specific max fee: {}", e))
         })?;
 
-        Ok(StellarFeeEstimateResult {
+        let result = StellarFeeEstimateResult {
             estimated_fee: fee_quote.fee_in_token_ui,
             conversion_rate: fee_quote.conversion_rate.to_string(),
-        })
+        };
+        Ok(GaslessTransactionQuoteResponse::Stellar(result))
     }
 
-    async fn prepare_transaction(
+    async fn build_gasless_transaction(
         &self,
-        params: crate::models::StellarPrepareTransactionRequestParams,
-    ) -> Result<crate::models::StellarPrepareTransactionResult, RelayerError> {
-        info!(
+        params: GaslessTransactionBuildRequest,
+    ) -> Result<GaslessTransactionBuildResponse, RelayerError> {
+        let params = match params {
+            GaslessTransactionBuildRequest::Stellar(p) => p,
+            _ => {
+                return Err(RelayerError::ValidationError(
+                    "Expected Stellar prepare transaction request parameters".to_string(),
+                ));
+            }
+        };
+        debug!(
             "Processing prepare transaction request for token: {}",
             params.fee_token
         );
@@ -780,23 +801,15 @@ where
             .to_xdr_base64(Limits::none())
             .map_err(|e| RelayerError::Internal(format!("Failed to serialize XDR: {}", e)))?;
 
-        // Construct Stellar StellarPrepareTransactionResult explicitly to avoid ambiguity with Solana type
-        // Use serde_json to ensure we get the correct Stellar struct
-        let result_json = serde_json::json!({
-            "transaction": extended_xdr,
-            "fee_in_token": fee_quote.fee_in_token_ui,
-            "fee_in_stroops": buffered_xlm_fee.to_string(),
-            "fee_token": params.fee_token,
-            "valid_until": valid_until.to_rfc3339(),
-        });
-        let result: StellarPrepareTransactionResult =
-            serde_json::from_value(result_json).map_err(|e| {
-                RelayerError::Internal(format!(
-                    "Failed to create StellarPrepareTransactionResult: {}",
-                    e
-                ))
-            })?;
-        Ok(result)
+        Ok(GaslessTransactionBuildResponse::Stellar(
+            StellarPrepareTransactionResult {
+                transaction: extended_xdr,
+                fee_in_token: fee_quote.fee_in_token_ui,
+                fee_in_stroops: buffered_xlm_fee.to_string(),
+                fee_token: params.fee_token,
+                valid_until: valid_until.to_rfc3339(),
+            },
+        ))
     }
 }
 

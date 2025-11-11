@@ -1,4 +1,4 @@
-mod request;
+pub mod request;
 pub use request::*;
 
 mod response;

@@ -11,7 +11,7 @@ pub use app_state::*;
 mod api_response;
 pub use api_response::*;
 
-mod transaction;
+pub mod transaction;
 pub use transaction::*;
 
 pub mod relayer;

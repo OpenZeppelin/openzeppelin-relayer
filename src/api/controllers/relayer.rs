@@ -18,8 +18,9 @@ use crate::{
     },
     jobs::JobProducerTrait,
     models::{
-        convert_to_internal_rpc_request, deserialize_policy_for_network_type, ApiError,
-        ApiResponse, CreateRelayerRequest, DefaultAppState, NetworkRepoModel,
+        convert_to_internal_rpc_request, deserialize_policy_for_network_type,
+        transaction::request::{GaslessTransactionBuildRequest, GaslessTransactionQuoteRequest},
+        ApiError, ApiResponse, CreateRelayerRequest, DefaultAppState, NetworkRepoModel,
         NetworkTransactionRequest, NetworkType, NotificationRepoModel, PaginationMeta,
         PaginationQuery, Relayer as RelayerDomainModel, RelayerRepoModel, RelayerRepoUpdater,
         RelayerResponse, Signer as SignerDomainModel, SignerRepoModel, ThinDataAppState,
@@ -839,9 +840,9 @@ where
 /// # Returns
 ///
 /// The fee estimate result.
-pub async fn estimate_fee<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn get_gasless_transaction_quote<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     relayer_id: String,
-    params: crate::models::StellarFeeEstimateRequestParams,
+    params: GaslessTransactionQuoteRequest,
     state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
@@ -860,7 +861,9 @@ where
 
     let network_relayer = get_network_relayer_by_model(relayer, &state).await?;
 
-    let result = network_relayer.estimate_fee(params).await?;
+    let result = network_relayer
+        .get_gasless_transaction_quote(params)
+        .await?;
     Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
 }
 
@@ -869,15 +872,15 @@ where
 /// # Arguments
 ///
 /// * `relayer_id` - The ID of the relayer.
-/// * `params` - The prepare transaction request parameters.
+/// * `params` - The prepare transaction request parameters (network-agnostic).
 /// * `state` - The application state containing the relayer repository.
 ///
 /// # Returns
 ///
 /// The prepare transaction result.
-pub async fn prepare_transaction<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn build_gasless_transaction<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     relayer_id: String,
-    params: crate::models::StellarPrepareTransactionRequestParams,
+    params: GaslessTransactionBuildRequest,
     state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
@@ -896,7 +899,7 @@ where
 
     let network_relayer = get_network_relayer_by_model(relayer, &state).await?;
 
-    let result = network_relayer.prepare_transaction(params).await?;
+    let result = network_relayer.build_gasless_transaction(params).await?;
     Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
 }
 

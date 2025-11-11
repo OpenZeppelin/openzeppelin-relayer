@@ -12,7 +12,7 @@ pub struct FeeEstimateRequestParams {
     pub fee_token: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Clone, ToSchema)]
 pub struct FeeEstimateResult {
     /// Estimated fee in token amount (as string for precision)
     pub estimated_fee: String,
@@ -31,7 +31,7 @@ pub struct PrepareTransactionRequestParams {
     pub fee_token: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Clone, ToSchema)]
 pub struct PrepareTransactionResult {
     /// Extended transaction XDR (base64 encoded)
     pub transaction: String,
