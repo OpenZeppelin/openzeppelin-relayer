@@ -1,6 +1,6 @@
 # Base image
 # Rustc v1.91.1
-# The digest needs to be updated everytime the minimum version is changed
+# The digest needs to be updated everytime the minimum version is changed, and if the version is above 1.91.1
 FROM cgr.dev/chainguard/rust:latest-dev@sha256:33faad9a26e8437ed9725bea3eb2d1e85facd1c035a31af8d485ea8c0a935532 AS base
 
 USER root
