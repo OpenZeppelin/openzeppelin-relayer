@@ -17,7 +17,7 @@ impl FromStr for RepositoryStorageType {
         match s.to_lowercase().as_str() {
             "inmemory" | "in_memory" => Ok(Self::InMemory),
             "redis" => Ok(Self::Redis),
-            _ => Err(format!("Invalid repository storage type: {}", s)),
+            _ => Err(format!("Invalid repository storage type: {s}")),
         }
     }
 }
@@ -153,7 +153,7 @@ impl ServerConfig {
         let config_file_name =
             env::var("CONFIG_FILE_NAME").unwrap_or_else(|_| "config.json".to_string());
 
-        format!("{}{}", conf_dir, config_file_name)
+        format!("{conf_dir}{config_file_name}")
     }
 
     /// Gets the API key from environment variable (panics if not set or too short)
@@ -162,8 +162,7 @@ impl ServerConfig {
 
         if !api_key.has_minimum_length(MINIMUM_SECRET_VALUE_LENGTH) {
             panic!(
-                "Security error: API_KEY must be at least {} characters long",
-                MINIMUM_SECRET_VALUE_LENGTH
+                "Security error: API_KEY must be at least {MINIMUM_SECRET_VALUE_LENGTH} characters long"
             );
         }
 

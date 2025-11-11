@@ -48,7 +48,7 @@ impl LocalSigner {
             let key_bytes = config.raw_key.borrow();
 
             Keypair::from_seed(&key_bytes).map_err(|e| {
-                SignerError::Configuration(format!("Failed to create local signer: {}", e))
+                SignerError::Configuration(format!("Failed to create local signer: {e}"))
             })?
         };
 

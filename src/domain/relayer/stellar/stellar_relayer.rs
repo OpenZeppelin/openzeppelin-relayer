@@ -274,7 +274,7 @@ where
             .get_account(&self.relayer.address)
             .await
             .map_err(|e| {
-                RelayerError::ProviderError(format!("Failed to fetch account for balance: {}", e))
+                RelayerError::ProviderError(format!("Failed to fetch account for balance: {e}"))
             })?;
 
         Ok(BalanceResponse {
@@ -291,7 +291,7 @@ where
             .get_account(&relayer_model.address)
             .await
             .map_err(|e| {
-                RelayerError::ProviderError(format!("Failed to get account details: {}", e))
+                RelayerError::ProviderError(format!("Failed to get account details: {e}"))
             })?;
 
         let sequence_number_str = account_entry.seq_num.0.to_string();

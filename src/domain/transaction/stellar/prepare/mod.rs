@@ -163,7 +163,7 @@ where
         tx: TransactionRepoModel,
         error: TransactionError,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        let error_reason = format!("Preparation failed: {}", error);
+        let error_reason = format!("Preparation failed: {error}");
         let tx_id = tx.id.clone(); // Clone the ID before moving tx
         warn!(reason = %error_reason, "transaction preparation failed");
 

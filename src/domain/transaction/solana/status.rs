@@ -115,7 +115,7 @@ where
         })?;
 
         let signature = Signature::from_str(signature_str).map_err(|e| {
-            TransactionError::ValidationError(format!("Invalid signature format: {}", e))
+            TransactionError::ValidationError(format!("Invalid signature format: {e}"))
         })?;
 
         // Query on-chain status
@@ -234,8 +234,7 @@ where
                 .mark_as_failed(
                     tx,
                     format!(
-                        "Transaction stuck in Pending status for more than {} minutes",
-                        SOLANA_PENDING_TIMEOUT_MINUTES
+                        "Transaction stuck in Pending status for more than {SOLANA_PENDING_TIMEOUT_MINUTES} minutes"
                     ),
                 )
                 .await;
@@ -265,8 +264,7 @@ where
                 .await
                 .map_err(|e| {
                     TransactionError::UnexpectedError(format!(
-                        "Failed to enqueue transaction request job: {}",
-                        e
+                        "Failed to enqueue transaction request job: {e}"
                     ))
                 })?;
         } else {
@@ -518,8 +516,7 @@ where
                     .mark_as_failed(
                         tx,
                         format!(
-                            "Transaction exceeded maximum resubmission attempts ({} > {})",
-                            attempt_count, MAXIMUM_SOLANA_TX_ATTEMPTS
+                            "Transaction exceeded maximum resubmission attempts ({attempt_count} > {MAXIMUM_SOLANA_TX_ATTEMPTS})"
                         ),
                     )
                     .await;
@@ -542,8 +539,7 @@ where
                 .mark_as_failed(
                     tx,
                     format!(
-                        "Transaction stuck in {:?} status for more than {} minutes",
-                        status, timeout_minutes
+                        "Transaction stuck in {status:?} status for more than {timeout_minutes} minutes"
                     ),
                 )
                 .await;
@@ -640,8 +636,7 @@ where
                 .await
                 .map_err(|e| {
                     TransactionError::UnexpectedError(format!(
-                        "Failed to enqueue resubmit job: {}",
-                        e
+                        "Failed to enqueue resubmit job: {e}"
                     ))
                 })?;
 

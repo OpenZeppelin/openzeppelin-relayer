@@ -52,7 +52,7 @@ pub enum PluginError {
     #[error("Invalid payload: {0}")]
     InvalidPayload(String),
     #[error("{0}")]
-    HandlerError(PluginHandlerPayload),
+    HandlerError(Box<PluginHandlerPayload>),
 }
 
 impl PluginError {
@@ -200,7 +200,7 @@ impl<R: PluginRunnerTrait> PluginService<R> {
         if plugin_path.starts_with("plugins/") {
             plugin_path.to_string()
         } else {
-            format!("plugins/{}", plugin_path)
+            format!("plugins/{plugin_path}")
         }
     }
 
@@ -462,7 +462,7 @@ mod tests {
             logs: None,
             traces: Some(vec![serde_json::json!({"trace": "1"})]),
         };
-        let error = PluginError::HandlerError(payload);
+        let error = PluginError::HandlerError(Box::new(payload));
         let new_traces = vec![
             serde_json::json!({"trace": "2"}),
             serde_json::json!({"trace": "3"}),
@@ -706,7 +706,7 @@ mod tests {
         plugin_runner
             .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
             .returning(move |_, _, _, _, _, _, _| {
-                Err(PluginError::HandlerError(PluginHandlerPayload {
+                Err(PluginError::HandlerError(Box::new(PluginHandlerPayload {
                     status: 400,
                     message: "Plugin handler error".to_string(),
                     code: Some("VALIDATION_ERROR".to_string()),
@@ -716,7 +716,7 @@ mod tests {
                         message: "Invalid email".to_string(),
                     }]),
                     traces: Some(vec![serde_json::json!({"step": "validation"})]),
-                }))
+                })))
             });
 
         let plugin_service = PluginService::<MockPluginRunnerTrait>::new(plugin_runner);

@@ -242,11 +242,11 @@ where
 
     // convert patch to UpdateRelayerRequest to validate
     let update_request: UpdateRelayerRequestRaw = serde_json::from_value(patch.clone())
-        .map_err(|e| ApiError::BadRequest(format!("Invalid update request: {}", e)))?;
+        .map_err(|e| ApiError::BadRequest(format!("Invalid update request: {e}")))?;
 
     if let Some(policies) = update_request.policies {
         deserialize_policy_for_network_type(&policies, relayer.network_type)
-            .map_err(|e| ApiError::BadRequest(format!("Invalid policy: {}", e)))?;
+            .map_err(|e| ApiError::BadRequest(format!("Invalid policy: {e}")))?;
     }
 
     if relayer.system_disabled {
@@ -518,7 +518,7 @@ where
         .transaction_repository
         .find_by_nonce(&relayer_id, nonce)
         .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Transaction with nonce {} not found", nonce)))?;
+        .ok_or_else(|| ApiError::NotFound(format!("Transaction with nonce {nonce} not found")))?;
 
     let transaction_response: TransactionResponse = transaction.into();
 

@@ -71,8 +71,7 @@ pub fn validate_evm_transaction_request(
         let intrinsic_gas = calculate_intrinsic_gas(request);
         if gas_limit < intrinsic_gas {
             return Err(ApiError::BadRequest(format!(
-                "gas_limit is too low, intrinsic gas is {} and gas_limit is {}",
-                intrinsic_gas, gas_limit
+                "gas_limit is too low, intrinsic gas is {intrinsic_gas} and gas_limit is {gas_limit}"
             )));
         }
     }

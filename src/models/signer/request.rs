@@ -214,7 +214,7 @@ impl TryFrom<SignerConfigRequest> for SignerConfig {
                 // Decode hex string to raw bytes for cryptographic key
                 let key_bytes = hex::decode(&local_config.key)
                     .map_err(|e| ApiError::BadRequest(format!(
-                        "Invalid hex key format: {}. Key must be a 64-character hex string (32 bytes).", e
+                        "Invalid hex key format: {e}. Key must be a 64-character hex string (32 bytes)."
                     )))?;
 
                 let raw_key = SecretVec::new(key_bytes.len(), |buffer| {

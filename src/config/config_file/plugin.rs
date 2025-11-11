@@ -53,8 +53,7 @@ impl PluginsFileConfig {
 
             if !plugin.path.ends_with(PLUGIN_FILE_TYPE) {
                 return Err(ConfigFileError::InvalidFormat(format!(
-                    "Plugin path must be a {} file (ends with '{}')",
-                    PLUGIN_LANG, PLUGIN_FILE_TYPE
+                    "Plugin path must be a {PLUGIN_LANG} file (ends with '{PLUGIN_FILE_TYPE}')"
                 )));
             }
         }

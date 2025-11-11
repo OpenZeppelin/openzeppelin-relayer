@@ -197,7 +197,7 @@ impl SocketService {
 
         while let Ok(Some(line)) = reader.next_line().await {
             let trace: serde_json::Value = serde_json::from_str(&line)
-                .map_err(|e| PluginError::PluginError(format!("Failed to parse trace: {}", e)))?;
+                .map_err(|e| PluginError::PluginError(format!("Failed to parse trace: {e}")))?;
             traces.push(trace);
 
             let request: Request =

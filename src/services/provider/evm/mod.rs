@@ -167,11 +167,11 @@ impl EvmProvider {
         }
 
         RpcConfig::validate_list(&configs)
-            .map_err(|e| ProviderError::NetworkConfiguration(format!("Invalid URL: {}", e)))?;
+            .map_err(|e| ProviderError::NetworkConfiguration(format!("Invalid URL: {e}")))?;
 
         // Create the RPC selector
         let selector = RpcSelector::new(configs).map_err(|e| {
-            ProviderError::NetworkConfiguration(format!("Failed to create RPC selector: {}", e))
+            ProviderError::NetworkConfiguration(format!("Failed to create RPC selector: {e}"))
         })?;
 
         let retry_config = RetryConfig::from_env();
@@ -185,16 +185,16 @@ impl EvmProvider {
 
     /// Initialize a provider for a given URL
     fn initialize_provider(&self, url: &str) -> Result<EvmProviderType, ProviderError> {
-        let rpc_url = url.parse().map_err(|e| {
-            ProviderError::NetworkConfiguration(format!("Invalid URL format: {}", e))
-        })?;
+        let rpc_url = url
+            .parse()
+            .map_err(|e| ProviderError::NetworkConfiguration(format!("Invalid URL format: {e}")))?;
 
         // Using use_rustls_tls() forces the use of rustls instead of native-tls to support TLS 1.3
         let client = ReqwestClientBuilder::new()
             .timeout(Duration::from_secs(self.timeout_seconds))
             .use_rustls_tls()
             .build()
-            .map_err(|e| ProviderError::Other(format!("Failed to build HTTP client: {}", e)))?;
+            .map_err(|e| ProviderError::Other(format!("Failed to build HTTP client: {e}")))?;
 
         let mut transport = Http::new(rpc_url);
         transport.set_client(client);
@@ -279,7 +279,7 @@ impl EvmProviderTrait for EvmProvider {
 
     async fn estimate_gas(&self, tx: &EvmTransactionData) -> Result<u64, ProviderError> {
         let transaction_request = TransactionRequest::try_from(tx)
-            .map_err(|e| ProviderError::Other(format!("Failed to convert transaction: {}", e)))?;
+            .map_err(|e| ProviderError::Other(format!("Failed to convert transaction: {e}")))?;
 
         self.retry_rpc_call("estimate_gas", move |provider| {
             let tx_req = transaction_request.clone();
@@ -395,7 +395,7 @@ impl EvmProviderTrait for EvmProvider {
     ) -> Result<Option<TransactionReceipt>, ProviderError> {
         let parsed_tx_hash = tx_hash
             .parse::<alloy::primitives::TxHash>()
-            .map_err(|e| ProviderError::Other(format!("Invalid transaction hash: {}", e)))?;
+            .map_err(|e| ProviderError::Other(format!("Invalid transaction hash: {e}")))?;
 
         self.retry_rpc_call("get_transaction_receipt", move |provider| async move {
             provider
@@ -429,7 +429,7 @@ impl EvmProviderTrait for EvmProvider {
             async move {
                 // Convert params to RawValue and use Cow for method
                 let params_raw = serde_json::value::to_raw_value(&params_clone).map_err(|e| {
-                    ProviderError::Other(format!("Failed to serialize params: {}", e))
+                    ProviderError::Other(format!("Failed to serialize params: {e}"))
                 })?;
 
                 let result = provider
@@ -438,9 +438,8 @@ impl EvmProviderTrait for EvmProvider {
                     .map_err(ProviderError::from)?;
 
                 // Convert RawValue back to Value
-                serde_json::from_str(result.get()).map_err(|e| {
-                    ProviderError::Other(format!("Failed to deserialize result: {}", e))
-                })
+                serde_json::from_str(result.get())
+                    .map_err(|e| ProviderError::Other(format!("Failed to deserialize result: {e}")))
             }
         })
         .await

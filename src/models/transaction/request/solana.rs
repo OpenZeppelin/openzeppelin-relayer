@@ -91,7 +91,7 @@ impl SolanaTransactionRequest {
     ) -> Result<(), ApiError> {
         // Parse the transaction from encoded bytes
         let tx = Transaction::try_from(transaction.clone())
-            .map_err(|e| ApiError::BadRequest(format!("Failed to decode transaction: {}", e)))?;
+            .map_err(|e| ApiError::BadRequest(format!("Failed to decode transaction: {e}")))?;
 
         // Get the fee payer (first account in account_keys)
         let fee_payer = tx.message.account_keys.first().ok_or_else(|| {
@@ -100,13 +100,12 @@ impl SolanaTransactionRequest {
 
         // Parse relayer address
         let relayer_pubkey = Pubkey::from_str(&relayer.address)
-            .map_err(|e| ApiError::BadRequest(format!("Invalid relayer address: {}", e)))?;
+            .map_err(|e| ApiError::BadRequest(format!("Invalid relayer address: {e}")))?;
 
         // Validate fee payer matches relayer address
         if fee_payer != &relayer_pubkey {
             return Err(ApiError::BadRequest(format!(
-                "Transaction fee payer {} does not match relayer address {}",
-                fee_payer, relayer_pubkey
+                "Transaction fee payer {fee_payer} does not match relayer address {relayer_pubkey}"
             )));
         }
 
@@ -129,7 +128,7 @@ impl SolanaTransactionRequest {
     ) -> Result<(), ApiError> {
         // Parse relayer address once for validation
         let relayer_pubkey = Pubkey::from_str(&relayer.address)
-            .map_err(|e| ApiError::BadRequest(format!("Invalid relayer address: {}", e)))?;
+            .map_err(|e| ApiError::BadRequest(format!("Invalid relayer address: {e}")))?;
         if instructions.is_empty() {
             return Err(ApiError::BadRequest(
                 "Instructions cannot be empty".to_string(),
@@ -151,24 +150,21 @@ impl SolanaTransactionRequest {
             let trimmed_program_id = instruction.program_id.trim();
             if trimmed_program_id.is_empty() {
                 return Err(ApiError::BadRequest(format!(
-                    "Instruction {}: program_id cannot be empty",
-                    idx
+                    "Instruction {idx}: program_id cannot be empty"
                 )));
             }
 
             // Validate program_id is valid pubkey
             let program_pubkey = Pubkey::from_str(trimmed_program_id).map_err(|e| {
                 ApiError::BadRequest(format!(
-                    "Instruction {}: Invalid program_id '{}' - {}",
-                    idx, trimmed_program_id, e
+                    "Instruction {idx}: Invalid program_id '{trimmed_program_id}' - {e}"
                 ))
             })?;
 
             // Reject default/zero pubkey as program_id
             if program_pubkey == Pubkey::default() {
                 return Err(ApiError::BadRequest(format!(
-                    "Instruction {}: program_id cannot be default pubkey",
-                    idx
+                    "Instruction {idx}: program_id cannot be default pubkey"
                 )));
             }
 
@@ -189,25 +185,22 @@ impl SolanaTransactionRequest {
                 let trimmed_pubkey = account.pubkey.trim();
                 if trimmed_pubkey.is_empty() {
                     return Err(ApiError::BadRequest(format!(
-                        "Instruction {} account {}: pubkey cannot be empty",
-                        idx, acc_idx
+                        "Instruction {idx} account {acc_idx}: pubkey cannot be empty"
                     )));
                 }
 
                 let pubkey = Pubkey::from_str(trimmed_pubkey).map_err(|e| {
                     ApiError::BadRequest(format!(
-                        "Instruction {} account {}: Invalid pubkey '{}' - {}",
-                        idx, acc_idx, trimmed_pubkey, e
+                        "Instruction {idx} account {acc_idx}: Invalid pubkey '{trimmed_pubkey}' - {e}"
                     ))
                 })?;
 
                 // Validate that only the relayer can be marked as a signer
                 if account.is_signer && pubkey != relayer_pubkey {
                     return Err(ApiError::BadRequest(format!(
-                        "Instruction {} account {}: Only the relayer address {} can be marked as \
-                         a signer, but '{}' is marked as a signer. The relayer can only provide \
-                         its own signature.",
-                        idx, acc_idx, relayer_pubkey, pubkey
+                        "Instruction {idx} account {acc_idx}: Only the relayer address {relayer_pubkey} can be marked as \
+                         a signer, but '{pubkey}' is marked as a signer. The relayer can only provide \
+                         its own signature."
                     )));
                 }
 
@@ -216,7 +209,7 @@ impl SolanaTransactionRequest {
 
             // Validate data is valid base64 and decode it
             let decoded_data = base64_decode(&instruction.data).map_err(|e| {
-                ApiError::BadRequest(format!("Instruction {}: Invalid base64 data - {}", idx, e))
+                ApiError::BadRequest(format!("Instruction {idx}: Invalid base64 data - {e}"))
             })?;
 
             // Validate decoded data size

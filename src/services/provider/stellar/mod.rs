@@ -71,7 +71,7 @@ fn categorize_stellar_error_with_context(
 ) -> ProviderError {
     let add_context = |msg: String| -> String {
         match context {
-            Some(ctx) => format!("{}: {}", ctx, msg),
+            Some(ctx) => format!("{ctx}: {msg}"),
             None => msg,
         }
     };
@@ -81,38 +81,36 @@ fn categorize_stellar_error_with_context(
 
         // === Address/Encoding Errors (Non-retriable, Client-side) ===
         StellarClientError::InvalidAddress(decode_err) => ProviderError::InvalidAddress(
-            add_context(format!("Invalid Stellar address: {}", decode_err)),
+            add_context(format!("Invalid Stellar address: {decode_err}")),
         ),
 
         // === XDR/Serialization Errors (Non-retriable, Client-side) ===
         StellarClientError::Xdr(xdr_err) => {
-            ProviderError::Other(add_context(format!("XDR processing error: {}", xdr_err)))
+            ProviderError::Other(add_context(format!("XDR processing error: {xdr_err}")))
         }
 
         // === JSON Parsing Errors (Non-retriable, may indicate RPC response issue) ===
         StellarClientError::Serde(serde_err) => {
-            ProviderError::Other(add_context(format!("JSON parsing error: {}", serde_err)))
+            ProviderError::Other(add_context(format!("JSON parsing error: {serde_err}")))
         }
 
         // === URL Configuration Errors (Non-retriable, Configuration issue) ===
-        StellarClientError::InvalidRpcUrl(uri_err) => ProviderError::NetworkConfiguration(
-            add_context(format!("Invalid RPC URL: {}", uri_err)),
-        ),
+        StellarClientError::InvalidRpcUrl(uri_err) => {
+            ProviderError::NetworkConfiguration(add_context(format!("Invalid RPC URL: {uri_err}")))
+        }
         StellarClientError::InvalidRpcUrlFromUriParts(uri_err) => {
             ProviderError::NetworkConfiguration(add_context(format!(
-                "Invalid RPC URL parts: {}",
-                uri_err
+                "Invalid RPC URL parts: {uri_err}"
             )))
         }
         StellarClientError::InvalidUrl(url) => {
-            ProviderError::NetworkConfiguration(add_context(format!("Invalid URL: {}", url)))
+            ProviderError::NetworkConfiguration(add_context(format!("Invalid URL: {url}")))
         }
 
         // === Network Passphrase Mismatch (Non-retriable, Configuration issue) ===
         StellarClientError::InvalidNetworkPassphrase { expected, server } => {
             ProviderError::NetworkConfiguration(add_context(format!(
-                "Network passphrase mismatch: expected {:?}, server returned {:?}",
-                expected, server
+                "Network passphrase mismatch: expected {expected:?}, server returned {server:?}"
             )))
         }
 
@@ -141,12 +139,11 @@ fn categorize_stellar_error_with_context(
                     }
 
                     ProviderError::TransportError(add_context(format!(
-                        "Transport error: {}",
-                        transport_err
+                        "Transport error: {transport_err}"
                     )))
                 }
                 // Catch-all for other jsonrpsee errors
-                other => ProviderError::Other(add_context(format!("JSON-RPC error: {}", other))),
+                other => ProviderError::Other(add_context(format!("JSON-RPC error: {other}"))),
             }
         }
         // === Response Parsing/Validation Errors (May indicate RPC node issue) ===
@@ -165,21 +162,21 @@ fn categorize_stellar_error_with_context(
 
         // === Transaction Errors (Non-retriable, Transaction-specific issues) ===
         StellarClientError::TransactionFailed(msg) => {
-            ProviderError::Other(add_context(format!("Transaction failed: {}", msg)))
+            ProviderError::Other(add_context(format!("Transaction failed: {msg}")))
         }
-        StellarClientError::TransactionSubmissionFailed(msg) => ProviderError::Other(add_context(
-            format!("Transaction submission failed: {}", msg),
-        )),
-        StellarClientError::TransactionSimulationFailed(msg) => ProviderError::Other(add_context(
-            format!("Transaction simulation failed: {}", msg),
-        )),
+        StellarClientError::TransactionSubmissionFailed(msg) => {
+            ProviderError::Other(add_context(format!("Transaction submission failed: {msg}")))
+        }
+        StellarClientError::TransactionSimulationFailed(msg) => {
+            ProviderError::Other(add_context(format!("Transaction simulation failed: {msg}")))
+        }
         StellarClientError::UnexpectedTransactionStatus(status) => ProviderError::Other(
-            add_context(format!("Unexpected transaction status: {}", status)),
+            add_context(format!("Unexpected transaction status: {status}")),
         ),
 
         // === Resource Not Found Errors (Non-retriable) ===
         StellarClientError::NotFound(resource, id) => {
-            ProviderError::Other(add_context(format!("{} not found: {}", resource, id)))
+            ProviderError::Other(add_context(format!("{resource} not found: {id}")))
         }
 
         // === Client-side Validation Errors (Non-retriable) ===
@@ -188,24 +185,23 @@ fn categorize_stellar_error_with_context(
         }
         StellarClientError::UnexpectedSimulateTransactionResultSize { length } => {
             ProviderError::Other(add_context(format!(
-                "Unexpected simulate transaction result size: {}",
-                length
+                "Unexpected simulate transaction result size: {length}"
             )))
         }
-        StellarClientError::UnexpectedOperationCount { count } => ProviderError::Other(
-            add_context(format!("Unexpected operation count: {}", count)),
-        ),
+        StellarClientError::UnexpectedOperationCount { count } => {
+            ProviderError::Other(add_context(format!("Unexpected operation count: {count}")))
+        }
         StellarClientError::UnsupportedOperationType => {
             ProviderError::Other(add_context("Unsupported operation type".to_string()))
         }
         StellarClientError::UnexpectedContractCodeDataType(data) => ProviderError::Other(
-            add_context(format!("Unexpected contract code data type: {:?}", data)),
+            add_context(format!("Unexpected contract code data type: {data:?}")),
         ),
         StellarClientError::UnexpectedContractInstance(val) => ProviderError::Other(add_context(
-            format!("Unexpected contract instance: {:?}", val),
+            format!("Unexpected contract instance: {val:?}"),
         )),
         StellarClientError::LargeFee(fee) => {
-            ProviderError::Other(add_context(format!("Fee too large: {}", fee)))
+            ProviderError::Other(add_context(format!("Fee too large: {fee}")))
         }
         StellarClientError::CannotAuthorizeRawTransaction => {
             ProviderError::Other(add_context("Cannot authorize raw transaction".to_string()))
@@ -214,13 +210,13 @@ fn categorize_stellar_error_with_context(
             ProviderError::Other(add_context("Missing operation in transaction".to_string()))
         }
         StellarClientError::MissingSignerForAddress { address } => ProviderError::Other(
-            add_context(format!("Missing signer for address: {}", address)),
+            add_context(format!("Missing signer for address: {address}")),
         ),
 
         // === Deprecated/Other Errors ===
         #[allow(deprecated)]
         StellarClientError::UnexpectedToken(entry) => {
-            ProviderError::Other(add_context(format!("Unexpected token: {:?}", entry)))
+            ProviderError::Other(add_context(format!("Unexpected token: {entry:?}")))
         }
     }
 }
@@ -246,7 +242,7 @@ fn normalize_url_for_log(url: &str) -> String {
         if let Some(at_pos) = s[start..].find('@') {
             let after = &s[start + at_pos + 1..];
             let prefix = &s[..start];
-            s = format!("{}<redacted>@{}", prefix, after);
+            s = format!("{prefix}<redacted>@{after}");
         }
     }
 
@@ -335,7 +331,7 @@ impl StellarProvider {
         }
 
         let selector = RpcSelector::new(rpc_configs).map_err(|e| {
-            ProviderError::NetworkConfiguration(format!("Failed to create RPC selector: {}", e))
+            ProviderError::NetworkConfiguration(format!("Failed to create RPC selector: {e}"))
         })?;
 
         let retry_config = RetryConfig::from_env();
@@ -351,8 +347,7 @@ impl StellarProvider {
     fn initialize_provider(&self, url: &str) -> Result<Client, ProviderError> {
         Client::new(url).map_err(|e| {
             ProviderError::NetworkConfiguration(format!(
-                "Failed to create Stellar RPC client: {} - URL: '{}'",
-                e, url
+                "Failed to create Stellar RPC client: {e} - URL: '{url}'"
             ))
         })
     }
@@ -366,8 +361,7 @@ impl StellarProvider {
             .build()
             .map_err(|e| {
                 ProviderError::NetworkConfiguration(format!(
-                    "Failed to create HTTP client for raw RPC: {} - URL: '{}'",
-                    e, url
+                    "Failed to create HTTP client for raw RPC: {e} - URL: '{url}'"
                 ))
             })
     }
@@ -386,8 +380,7 @@ impl StellarProvider {
             Ok(url) => url,
             Err(e) => {
                 return Err(ProviderError::NetworkConfiguration(format!(
-                    "No RPC URL available for StellarProvider: {}",
-                    e
+                    "No RPC URL available for StellarProvider: {e}"
                 )));
             }
         };
@@ -422,8 +415,7 @@ impl StellarProvider {
             Ok(url) => url,
             Err(e) => {
                 return Err(ProviderError::NetworkConfiguration(format!(
-                    "No RPC URL available for StellarProvider: {}",
-                    e
+                    "No RPC URL available for StellarProvider: {e}"
                 )));
             }
         };
@@ -654,7 +646,7 @@ impl StellarProviderTrait for StellarProvider {
     ) -> Result<serde_json::Value, ProviderError> {
         let id_value = match id {
             Some(id) => serde_json::to_value(id)
-                .map_err(|e| ProviderError::Other(format!("Failed to serialize id: {}", e)))?,
+                .map_err(|e| ProviderError::Other(format!("Failed to serialize id: {e}")))?,
             None => serde_json::json!(generate_unique_rpc_id()),
         };
 
@@ -679,7 +671,7 @@ impl StellarProviderTrait for StellarProvider {
                         .to_string(),
                 });
             }
-            return Err(ProviderError::Other(format!("JSON-RPC error: {}", error)));
+            return Err(ProviderError::Other(format!("JSON-RPC error: {error}")));
         }
 
         // Extract result

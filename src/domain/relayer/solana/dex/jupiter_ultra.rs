@@ -63,7 +63,7 @@ where
             })
             .await
             .map_err(|e| {
-                RelayerError::DexError(format!("Failed to get Jupiter Ultra order: {}", e))
+                RelayerError::DexError(format!("Failed to get Jupiter Ultra order: {e}"))
             })?;
 
         debug!(order = ?order, "received order");
@@ -75,7 +75,7 @@ where
         let mut swap_tx =
             VersionedTransaction::try_from(EncodedSerializedTransaction::new(encoded_transaction))
                 .map_err(|e| {
-                    RelayerError::DexError(format!("Failed to decode swap transaction: {}", e))
+                    RelayerError::DexError(format!("Failed to decode swap transaction: {e}"))
                 })?;
 
         let signature = self
@@ -83,16 +83,14 @@ where
             .sign(&swap_tx.message.serialize())
             .await
             .map_err(|e| {
-                RelayerError::DexError(format!("Failed to sign Dex swap transaction: {}", e))
+                RelayerError::DexError(format!("Failed to sign Dex swap transaction: {e}"))
             })?;
 
         swap_tx.signatures[0] = signature;
 
         info!("Execute order transaction");
-        let serialized_transaction =
-            EncodedSerializedTransaction::try_from(&swap_tx).map_err(|e| {
-                RelayerError::DexError(format!("Failed to serialize transaction: {}", e))
-            })?;
+        let serialized_transaction = EncodedSerializedTransaction::try_from(&swap_tx)
+            .map_err(|e| RelayerError::DexError(format!("Failed to serialize transaction: {e}")))?;
         let response = self
             .jupiter_service
             .execute_ultra_order(UltraExecuteRequest {
@@ -100,7 +98,7 @@ where
                 request_id: order.request_id,
             })
             .await
-            .map_err(|e| RelayerError::DexError(format!("Failed to execute order: {}", e)))?;
+            .map_err(|e| RelayerError::DexError(format!("Failed to execute order: {e}")))?;
         debug!(response = ?response, "order executed successfully");
 
         Ok(SwapResult {
