@@ -82,7 +82,7 @@ async fn metric_detail(path: web::Path<String>) -> impl Responder {
             let encoder = TextEncoder::new();
             let mut buffer = Vec::new();
             if let Err(e) = encoder.encode(&[mf], &mut buffer) {
-                return HttpResponse::InternalServerError().body(format!("Encoding error: {}", e));
+                return HttpResponse::InternalServerError().body(format!("Encoding error: {e}"));
             }
             return HttpResponse::Ok()
                 .content_type(encoder.format_type())
@@ -112,7 +112,7 @@ async fn scrape_metrics() -> impl Responder {
     update_system_metrics();
     match crate::metrics::gather_metrics() {
         Ok(body) => HttpResponse::Ok().content_type("text/plain;").body(body),
-        Err(e) => HttpResponse::InternalServerError().body(format!("Error: {}", e)),
+        Err(e) => HttpResponse::InternalServerError().body(format!("Error: {e}")),
     }
 }
 

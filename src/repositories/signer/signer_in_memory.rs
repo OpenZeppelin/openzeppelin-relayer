@@ -70,8 +70,7 @@ impl Repository<SignerRepoModel, String> for InMemorySignerRepository {
         match store.get(&id) {
             Some(signer) => Ok(signer.clone()),
             None => Err(RepositoryError::NotFound(format!(
-                "Signer with ID {} not found",
-                id
+                "Signer with ID {id} not found"
             ))),
         }
     }
@@ -86,8 +85,7 @@ impl Repository<SignerRepoModel, String> for InMemorySignerRepository {
             Self::acquire_lock(&self.store).await?;
         if !store.contains_key(&id) {
             return Err(RepositoryError::NotFound(format!(
-                "Signer with ID {} not found",
-                id
+                "Signer with ID {id} not found"
             )));
         }
         store.insert(id, signer.clone());
@@ -99,8 +97,7 @@ impl Repository<SignerRepoModel, String> for InMemorySignerRepository {
             Self::acquire_lock(&self.store).await?;
         if !store.contains_key(&id) {
             return Err(RepositoryError::NotFound(format!(
-                "Signer with ID {} not found",
-                id
+                "Signer with ID {id} not found"
             )));
         }
         store.remove(&id);

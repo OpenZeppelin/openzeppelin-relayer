@@ -62,7 +62,7 @@ impl<T: TurnkeyServiceTrait> TurnkeySigner<T> {
         let signature_payload = create_transaction_signature_payload(transaction, network_id);
 
         let payload_bytes = signature_payload.to_xdr(Limits::none()).map_err(|e| {
-            SignerError::SigningError(format!("Failed to serialize signature payload: {}", e))
+            SignerError::SigningError(format!("Failed to serialize signature payload: {e}"))
         })?;
 
         debug!(
@@ -83,11 +83,11 @@ impl<T: TurnkeyServiceTrait> TurnkeySigner<T> {
         network_id: &Hash,
     ) -> Result<Vec<u8>, SignerError> {
         let signature_payload = create_signature_payload(envelope, network_id).map_err(|e| {
-            SignerError::SigningError(format!("Failed to create signature payload: {}", e))
+            SignerError::SigningError(format!("Failed to create signature payload: {e}"))
         })?;
 
         let payload_bytes = signature_payload.to_xdr(Limits::none()).map_err(|e| {
-            SignerError::SigningError(format!("Failed to serialize signature payload: {}", e))
+            SignerError::SigningError(format!("Failed to serialize signature payload: {e}"))
         })?;
 
         debug!(
@@ -110,10 +110,8 @@ impl<T: TurnkeyServiceTrait> TurnkeySigner<T> {
 
         match stellar_address {
             Address::Stellar(addr) => {
-                let public_key =
-                    stellar_strkey::ed25519::PublicKey::from_string(&addr).map_err(|e| {
-                        SignerError::KeyError(format!("Invalid Stellar address: {}", e))
-                    })?;
+                let public_key = stellar_strkey::ed25519::PublicKey::from_string(&addr)
+                    .map_err(|e| SignerError::KeyError(format!("Invalid Stellar address: {e}")))?;
 
                 let payload = public_key.0;
                 let mut key_bytes = [0u8; 32];
@@ -185,10 +183,10 @@ impl<T: TurnkeyServiceTrait> StellarSignTrait for TurnkeySigner<T> {
 
         let mut envelope = envelope;
         attach_signatures_to_envelope(&mut envelope, vec![decorated_signature.clone()])
-            .map_err(|e| SignerError::SigningError(format!("Failed to attach signature: {}", e)))?;
+            .map_err(|e| SignerError::SigningError(format!("Failed to attach signature: {e}")))?;
 
         let signed_xdr = envelope.to_xdr_base64(Limits::none()).map_err(|e| {
-            SignerError::SigningError(format!("Failed to serialize signed transaction: {}", e))
+            SignerError::SigningError(format!("Failed to serialize signed transaction: {e}"))
         })?;
 
         Ok(SignXdrTransactionResponseStellar {
@@ -211,7 +209,7 @@ impl<T: TurnkeyServiceTrait> Signer for TurnkeySigner<T> {
         transaction: NetworkTransactionData,
     ) -> Result<SignTransactionResponse, SignerError> {
         let stellar_data = transaction.get_stellar_transaction_data().map_err(|e| {
-            SignerError::SigningError(format!("Failed to get Stellar transaction data: {}", e))
+            SignerError::SigningError(format!("Failed to get Stellar transaction data: {e}"))
         })?;
 
         let network_passphrase = &stellar_data.network_passphrase;
@@ -228,8 +226,7 @@ impl<T: TurnkeyServiceTrait> Signer for TurnkeySigner<T> {
             TransactionInput::Operations(_) => {
                 let transaction = Transaction::try_from(stellar_data).map_err(|e| {
                     SignerError::SigningError(format!(
-                        "Failed to build Stellar transaction from operations: {}",
-                        e
+                        "Failed to build Stellar transaction from operations: {e}"
                     ))
                 })?;
                 self.sign_transaction_directly(&transaction, &network_id)

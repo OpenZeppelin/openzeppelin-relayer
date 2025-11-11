@@ -88,7 +88,7 @@ impl<T: GoogleCloudKmsServiceTrait> SolanaSignTrait for GoogleCloudKmsSigner<T> 
             .map_err(|e| SignerError::SigningError(e.to_string()))?;
 
         Ok(Signature::try_from(sig_bytes.as_slice()).map_err(|e| {
-            SignerError::SigningError(format!("Failed to create signature from bytes: {}", e))
+            SignerError::SigningError(format!("Failed to create signature from bytes: {e}"))
         })?)
     }
 }

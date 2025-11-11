@@ -90,7 +90,7 @@ pub fn decode_solana_transaction_from_string(
 ) -> Result<SolanaTransaction, TransactionError> {
     let encoded_tx = EncodedSerializedTransaction::new(encoded.to_string());
     SolanaTransaction::try_from(encoded_tx)
-        .map_err(|e| TransactionError::ValidationError(format!("Invalid transaction: {}", e)))
+        .map_err(|e| TransactionError::ValidationError(format!("Invalid transaction: {e}")))
 }
 
 /// Converts instruction specifications to Solana SDK instructions.
@@ -111,10 +111,7 @@ pub fn convert_instruction_specs_to_instructions(
 
     for (idx, spec) in instructions.iter().enumerate() {
         let program_id = Pubkey::from_str(&spec.program_id).map_err(|e| {
-            TransactionError::ValidationError(format!(
-                "Instruction {}: Invalid program_id: {}",
-                idx, e
-            ))
+            TransactionError::ValidationError(format!("Instruction {idx}: Invalid program_id: {e}"))
         })?;
 
         let accounts = spec
@@ -124,8 +121,7 @@ pub fn convert_instruction_specs_to_instructions(
             .map(|(acc_idx, a)| {
                 let pubkey = Pubkey::from_str(&a.pubkey).map_err(|e| {
                     TransactionError::ValidationError(format!(
-                        "Instruction {} account {}: Invalid pubkey: {}",
-                        idx, acc_idx, e
+                        "Instruction {idx} account {acc_idx}: Invalid pubkey: {e}"
                     ))
                 })?;
                 Ok(AccountMeta {
@@ -138,8 +134,7 @@ pub fn convert_instruction_specs_to_instructions(
 
         let data = base64_decode(&spec.data).map_err(|e| {
             TransactionError::ValidationError(format!(
-                "Instruction {}: Invalid base64 data: {}",
-                idx, e
+                "Instruction {idx}: Invalid base64 data: {e}"
             ))
         })?;
 

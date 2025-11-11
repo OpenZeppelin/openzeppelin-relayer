@@ -148,7 +148,7 @@ where
             );
 
             let payer = Pubkey::from_str(&self.relayer.address).map_err(|e| {
-                TransactionError::ValidationError(format!("Invalid relayer address: {}", e))
+                TransactionError::ValidationError(format!("Invalid relayer address: {e}"))
             })?;
 
             // Fetch fresh blockhash for instructions mode
@@ -217,8 +217,7 @@ where
                     EncodedSerializedTransaction::try_from(&transaction)
                         .map_err(|e| {
                             TransactionError::ValidationError(format!(
-                                "Failed to encode transaction: {}",
-                                e
+                                "Failed to encode transaction: {e}"
                             ))
                         })?
                         .into_inner(),
@@ -429,8 +428,7 @@ where
                     EncodedSerializedTransaction::try_from(&transaction)
                         .map_err(|e| {
                             TransactionError::ValidationError(format!(
-                                "Failed to encode transaction: {}",
-                                e
+                                "Failed to encode transaction: {e}"
                             ))
                         })?
                         .into_inner(),
@@ -608,7 +606,7 @@ where
 
         let policy = self.relayer.policies.get_solana_policy();
         let relayer_pubkey = Pubkey::from_str(&self.relayer.address).map_err(|e| {
-            TransactionError::ValidationError(format!("Invalid relayer address: {}", e))
+            TransactionError::ValidationError(format!("Invalid relayer address: {e}"))
         })?;
 
         // Group all synchronous policy validations together

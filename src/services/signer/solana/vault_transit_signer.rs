@@ -107,10 +107,10 @@ impl<T: VaultServiceTrait> SolanaSignTrait for VaultTransitSigner<T> {
             .unwrap_or(&vault_signature_str);
 
         let sig_bytes = base64_decode(base64_sig)
-            .map_err(|e| SignerError::SigningError(format!("Failed to decode signature: {}", e)))?;
+            .map_err(|e| SignerError::SigningError(format!("Failed to decode signature: {e}")))?;
 
         Ok(Signature::try_from(sig_bytes.as_slice()).map_err(|e| {
-            SignerError::SigningError(format!("Failed to create signature from bytes: {}", e))
+            SignerError::SigningError(format!("Failed to create signature from bytes: {e}"))
         })?)
     }
 }

@@ -43,7 +43,7 @@ where
 impl CdpSigner<DefaultCdpService> {
     pub fn new(config: CdpSignerConfig) -> Result<Self, SignerError> {
         let cdp_service = DefaultCdpService::new(config).map_err(|e| {
-            SignerError::Configuration(format!("Failed to create CDP service: {}", e))
+            SignerError::Configuration(format!("Failed to create CDP service: {e}"))
         })?;
 
         Ok(Self { cdp_service })
@@ -80,7 +80,7 @@ impl<T: CdpServiceTrait> SolanaSignTrait for CdpSigner<T> {
         // Deserialize the message from bincode
         let solana_message: solana_sdk::message::Message =
             bincode::deserialize(message).map_err(|e| {
-                SignerError::SigningError(format!("Failed to deserialize message: {}", e))
+                SignerError::SigningError(format!("Failed to deserialize message: {e}"))
             })?;
 
         // Create an unsigned transaction from the message
@@ -88,9 +88,7 @@ impl<T: CdpServiceTrait> SolanaSignTrait for CdpSigner<T> {
 
         // Convert to EncodedSerializedTransaction (base64)
         let encoded_tx = crate::models::EncodedSerializedTransaction::try_from(&transaction)
-            .map_err(|e| {
-                SignerError::SigningError(format!("Failed to encode transaction: {}", e))
-            })?;
+            .map_err(|e| SignerError::SigningError(format!("Failed to encode transaction: {e}")))?;
 
         // Use the CDP transaction signing API instead of message signing
         let signed_tx_bytes = self
@@ -105,7 +103,7 @@ impl<T: CdpServiceTrait> SolanaSignTrait for CdpSigner<T> {
 
         let signed_tx_data = crate::models::EncodedSerializedTransaction::new(signed_tx_encoded);
         let signed_transaction: Transaction = signed_tx_data.try_into().map_err(|e| {
-            SignerError::SigningError(format!("Failed to decode signed transaction: {}", e))
+            SignerError::SigningError(format!("Failed to decode signed transaction: {e}"))
         })?;
 
         // Get the CDP signer's address to find the correct signature index
@@ -117,7 +115,7 @@ impl<T: CdpServiceTrait> SolanaSignTrait for CdpSigner<T> {
 
         let cdp_pubkey = match cdp_address {
             crate::models::Address::Solana(addr) => Pubkey::from_str(&addr)
-                .map_err(|e| SignerError::SigningError(format!("Invalid CDP pubkey: {}", e)))?,
+                .map_err(|e| SignerError::SigningError(format!("Invalid CDP pubkey: {e}")))?,
             _ => {
                 return Err(SignerError::SigningError(
                     "CDP address is not a Solana address".to_string(),

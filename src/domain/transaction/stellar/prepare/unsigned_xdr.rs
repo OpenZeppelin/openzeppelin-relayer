@@ -55,7 +55,7 @@ where
 
     // Step 2: Validate source account matches relayer
     let source_account = extract_source_account(&envelope).map_err(|e| {
-        TransactionError::ValidationError(format!("Failed to extract source account: {}", e))
+        TransactionError::ValidationError(format!("Failed to extract source account: {e}"))
     })?;
 
     if source_account != relayer_address {
@@ -84,7 +84,7 @@ where
 
     // Re-serialize the envelope after fee update
     let updated_xdr = envelope.to_xdr_base64(Limits::none()).map_err(|e| {
-        TransactionError::ValidationError(format!("Failed to serialize updated envelope: {}", e))
+        TransactionError::ValidationError(format!("Failed to serialize updated envelope: {e}"))
     })?;
 
     // Update stellar data with new XDR
@@ -100,8 +100,7 @@ where
                 .with_simulation_data(sim_resp, op_count)
                 .map_err(|e| {
                     TransactionError::ValidationError(format!(
-                        "Failed to apply simulation data: {}",
-                        e
+                        "Failed to apply simulation data: {e}"
                     ))
                 })?
         }

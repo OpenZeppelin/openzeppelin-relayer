@@ -26,9 +26,9 @@ use crate::constants::{
 pub fn compute_rolled_file_path(base_file_path: &str, date_str: &str, index: u32) -> String {
     if base_file_path.ends_with(".log") {
         let trimmed = base_file_path.strip_suffix(".log").unwrap();
-        format!("{}-{}.{}.log", trimmed, date_str, index)
+        format!("{trimmed}-{date_str}.{index}.log")
     } else {
-        format!("{}-{}.{}.log", base_file_path, date_str, index)
+        format!("{base_file_path}-{date_str}.{index}.log")
     }
 }
 
@@ -91,7 +91,7 @@ pub fn setup_logging() {
 
         let now = Utc::now();
         let date_str = now.format("%Y-%m-%d").to_string();
-        let base_file_path = format!("{}{}", log_dir, LOG_FILE_NAME);
+        let base_file_path = format!("{log_dir}{LOG_FILE_NAME}");
 
         if let Some(parent) = Path::new(&base_file_path).parent() {
             create_dir_all(parent).expect("Failed to create log directory");

@@ -129,8 +129,7 @@ impl SolanaTransactionValidator {
         let allowed_token = policy.get_allowed_token_entry(token_mint);
         if allowed_token.is_none() {
             return Err(SolanaTransactionValidationError::PolicyViolation(format!(
-                "Token {} not allowed for transfers",
-                token_mint
+                "Token {token_mint} not allowed for transfers"
             )));
         }
 
@@ -150,8 +149,7 @@ impl SolanaTransactionValidator {
         // Verify fee payer matches relayer address
         if fee_payer != relayer_pubkey {
             return Err(SolanaTransactionValidationError::PolicyViolation(format!(
-                "Fee payer {} does not match relayer address {}",
-                fee_payer, relayer_pubkey
+                "Fee payer {fee_payer} does not match relayer address {relayer_pubkey}"
             )));
         }
 
@@ -187,8 +185,7 @@ impl SolanaTransactionValidator {
 
         if !is_valid {
             return Err(SolanaTransactionValidationError::ExpiredBlockhash(format!(
-                "Blockhash {} is no longer valid",
-                blockhash
+                "Blockhash {blockhash} is no longer valid"
             )));
         }
 
@@ -208,8 +205,7 @@ impl SolanaTransactionValidator {
 
         if num_signatures > max_signatures {
             return Err(SolanaTransactionValidationError::PolicyViolation(format!(
-                "Transaction requires {} signatures, which exceeds maximum allowed {}",
-                num_signatures, max_signatures
+                "Transaction requires {num_signatures} signatures, which exceeds maximum allowed {max_signatures}"
             )));
         }
 
@@ -230,8 +226,7 @@ impl SolanaTransactionValidator {
             {
                 if !allowed_programs.contains(&program_id.to_string()) {
                     return Err(SolanaTransactionValidationError::PolicyViolation(format!(
-                        "Program {} not allowed",
-                        program_id
+                        "Program {program_id} not allowed"
                     )));
                 }
             }
@@ -247,8 +242,7 @@ impl SolanaTransactionValidator {
         if let Some(allowed_accounts) = &policy.allowed_accounts {
             if !allowed_accounts.contains(&account.to_string()) {
                 return Err(SolanaTransactionValidationError::PolicyViolation(format!(
-                    "Account {} not allowed",
-                    account
+                    "Account {account} not allowed"
                 )));
             }
         }
@@ -266,8 +260,7 @@ impl SolanaTransactionValidator {
                 info!(account_key = %account_key, "checking account");
                 if !allowed_accounts.contains(&account_key.to_string()) {
                     return Err(SolanaTransactionValidationError::PolicyViolation(format!(
-                        "Account {} not allowed",
-                        account_key
+                        "Account {account_key} not allowed"
                     )));
                 }
             }
@@ -283,8 +276,7 @@ impl SolanaTransactionValidator {
         if let Some(disallowed_accounts) = &policy.disallowed_accounts {
             if disallowed_accounts.contains(&account.to_string()) {
                 return Err(SolanaTransactionValidationError::PolicyViolation(format!(
-                    "Account {} not allowed",
-                    account
+                    "Account {account} not allowed"
                 )));
             }
         }
@@ -304,8 +296,7 @@ impl SolanaTransactionValidator {
         for account_key in &tx.message.account_keys {
             if disallowed_accounts.contains(&account_key.to_string()) {
                 return Err(SolanaTransactionValidationError::PolicyViolation(format!(
-                    "Account {} is explicitly disallowed",
-                    account_key
+                    "Account {account_key} is explicitly disallowed"
                 )));
             }
         }
@@ -353,8 +344,7 @@ impl SolanaTransactionValidator {
                         // second is the destination.
                         let source_index = ix.accounts.first().ok_or_else(|| {
                             SolanaTransactionValidationError::ValidationError(format!(
-                                "Missing source account in instruction {}",
-                                ix_index
+                                "Missing source account in instruction {ix_index}"
                             ))
                         })?;
                         let source_pubkey = &tx.message.account_keys[*source_index as usize];
@@ -381,8 +371,7 @@ impl SolanaTransactionValidator {
         if let Some(max_amount) = policy.max_allowed_fee_lamports {
             if amount > max_amount {
                 return Err(SolanaTransactionValidationError::PolicyViolation(format!(
-                    "Fee amount {} exceeds max allowed fee amount {}",
-                    amount, max_amount
+                    "Fee amount {amount} exceeds max allowed fee amount {max_amount}"
                 )));
             }
         }
@@ -404,8 +393,7 @@ impl SolanaTransactionValidator {
 
         if balance < required_balance {
             return Err(SolanaTransactionValidationError::InsufficientBalance(format!(
-                "Insufficient relayer balance. Required: {}, Available: {}, Fee: {}, Min balance: {}",
-                required_balance, balance, fee, min_balance
+                "Insufficient relayer balance. Required: {required_balance}, Available: {balance}, Fee: {fee}, Min balance: {min_balance}"
             )));
         }
 
@@ -509,8 +497,7 @@ impl SolanaTransactionValidator {
                             SolanaTokenProgram::unpack_account(&program_id, &source_account)
                                 .map_err(|e| {
                                     SolanaTransactionValidationError::ValidationError(format!(
-                                        "Invalid token account: {}",
-                                        e
+                                        "Invalid token account: {e}"
                                     ))
                                 })?;
 
@@ -601,8 +588,7 @@ impl SolanaTransactionValidator {
             if balance < total_transfer {
                 return Err(SolanaTransactionValidationError::ValidationError(
                     format!(
-                        "Insufficient balance for cumulative transfers: account {} has balance {} but requires {} across all instructions",
-                        account, balance, total_transfer
+                        "Insufficient balance for cumulative transfers: account {account} has balance {balance} but requires {total_transfer} across all instructions"
                     ),
                 ));
             }

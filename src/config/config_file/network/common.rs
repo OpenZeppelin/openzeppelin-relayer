@@ -56,7 +56,7 @@ impl NetworkConfigCommon {
         if let Some(urls) = &self.rpc_urls {
             for url in urls {
                 reqwest::Url::parse(url).map_err(|_| {
-                    ConfigFileError::InvalidFormat(format!("Invalid RPC URL: {}", url))
+                    ConfigFileError::InvalidFormat(format!("Invalid RPC URL: {url}"))
                 })?;
             }
         }
@@ -64,7 +64,7 @@ impl NetworkConfigCommon {
         if let Some(urls) = &self.explorer_urls {
             for url in urls {
                 reqwest::Url::parse(url).map_err(|_| {
-                    ConfigFileError::InvalidFormat(format!("Invalid Explorer URL: {}", url))
+                    ConfigFileError::InvalidFormat(format!("Invalid Explorer URL: {url}"))
                 })?;
             }
         }

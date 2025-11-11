@@ -53,7 +53,7 @@ where
         .plugin_repository
         .get_by_id(&plugin_id)
         .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Plugin with id {} not found", plugin_id)))?;
+        .ok_or_else(|| ApiError::NotFound(format!("Plugin with id {plugin_id} not found")))?;
 
     let plugin_runner = PluginRunner;
     let plugin_service = PluginService::new(plugin_runner);

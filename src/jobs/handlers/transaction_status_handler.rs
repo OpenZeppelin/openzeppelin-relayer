@@ -88,7 +88,7 @@ fn handle_status_check_result(result: Result<TransactionRepoModel>) -> Result<()
         }
         Err(e) => {
             // Error occurred, retry
-            Err(Error::Failed(Arc::new(format!("{}", e).into())))
+            Err(Error::Failed(Arc::new(format!("{e}").into())))
         }
     }
 }

@@ -89,7 +89,7 @@ where
         token_mint_str: &str,
     ) -> Result<u8, SolanaRpcError> {
         let token_mint = Pubkey::from_str(token_mint_str)
-            .map_err(|e| SolanaRpcError::Internal(format!("Invalid mint address: {}", e)))?;
+            .map_err(|e| SolanaRpcError::Internal(format!("Invalid mint address: {e}")))?;
 
         self.fetch_token_decimals_from_chain_pubkey(&token_mint)
             .await
@@ -104,12 +104,10 @@ where
             .provider
             .get_account_from_pubkey(token_mint)
             .await
-            .map_err(|e| {
-                SolanaRpcError::Internal(format!("Failed to fetch mint account: {}", e))
-            })?;
+            .map_err(|e| SolanaRpcError::Internal(format!("Failed to fetch mint account: {e}")))?;
 
         let mint_info = spl_token_interface::state::Mint::unpack(&mint_account.data)
-            .map_err(|e| SolanaRpcError::Internal(format!("Failed to unpack mint data: {}", e)))?;
+            .map_err(|e| SolanaRpcError::Internal(format!("Failed to unpack mint data: {e}")))?;
 
         Ok(mint_info.decimals)
     }
@@ -258,8 +256,7 @@ where
                         // second is the destination.
                         let source_index = ix.accounts.first().ok_or_else(|| {
                             SolanaRpcError::Internal(format!(
-                                "Missing source account in instruction {}",
-                                ix_index
+                                "Missing source account in instruction {ix_index}"
                             ))
                         })?;
                         let source_pubkey = &tx.message.account_keys[*source_index as usize];
@@ -327,7 +324,7 @@ where
         } else {
             // Allowed tokens are configured - check if token is in the list
             let token_entry = policy.get_allowed_token_entry(token).ok_or_else(|| {
-                SolanaRpcError::UnsupportedFeeToken(format!("Token {} not allowed", token))
+                SolanaRpcError::UnsupportedFeeToken(format!("Token {token} not allowed"))
             })?;
 
             // Get token decimals from policy first, then fetch from blockchain

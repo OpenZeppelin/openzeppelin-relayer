@@ -182,7 +182,7 @@ impl SolanaProviderError {
 
             // RPC errors - classify based on error code and message
             ClientErrorKind::RpcError(rpc_err) => {
-                let rpc_err_str = format!("{}", rpc_err);
+                let rpc_err_str = format!("{rpc_err}");
                 Self::from_rpc_response_error(&rpc_err_str, &error)
             }
 
@@ -522,11 +522,11 @@ impl SolanaProvider {
         }
 
         RpcConfig::validate_list(&configs)
-            .map_err(|e| ProviderError::NetworkConfiguration(format!("Invalid URL: {}", e)))?;
+            .map_err(|e| ProviderError::NetworkConfiguration(format!("Invalid URL: {e}")))?;
 
         // Now create the selector with validated configs
         let selector = RpcSelector::new(configs).map_err(|e| {
-            ProviderError::NetworkConfiguration(format!("Failed to create RPC selector: {}", e))
+            ProviderError::NetworkConfiguration(format!("Failed to create RPC selector: {e}"))
         })?;
 
         let retry_config = RetryConfig::from_env();
@@ -562,7 +562,7 @@ impl SolanaProvider {
     /// Initialize a provider for a given URL
     fn initialize_provider(&self, url: &str) -> Result<Arc<RpcClient>, SolanaProviderError> {
         let rpc_url: Url = url.parse().map_err(|e| {
-            SolanaProviderError::NetworkConfiguration(format!("Invalid URL format: {}", e))
+            SolanaProviderError::NetworkConfiguration(format!("Invalid URL format: {e}"))
         })?;
 
         let client = RpcClient::new_with_timeout_and_commitment(
@@ -748,7 +748,7 @@ impl SolanaProviderTrait for SolanaProvider {
     /// Retrieves account data for the given account string.
     async fn get_account_from_str(&self, account: &str) -> Result<Account, SolanaProviderError> {
         let address = Pubkey::from_str(account).map_err(|e| {
-            SolanaProviderError::InvalidAddress(format!("Invalid pubkey {}: {}", account, e))
+            SolanaProviderError::InvalidAddress(format!("Invalid pubkey {account}: {e}"))
         })?;
         self.retry_rpc_call("get_account", |client| async move {
             client
@@ -780,7 +780,7 @@ impl SolanaProviderTrait for SolanaProvider {
     ) -> Result<TokenMetadata, SolanaProviderError> {
         // Parse and validate pubkey once
         let mint_pubkey = Pubkey::from_str(pubkey).map_err(|e| {
-            SolanaProviderError::InvalidAddress(format!("Invalid pubkey {}: {}", pubkey, e))
+            SolanaProviderError::InvalidAddress(format!("Invalid pubkey {pubkey}: {e}"))
         })?;
 
         // Retrieve account using already-parsed pubkey (avoids re-parsing)
@@ -790,8 +790,7 @@ impl SolanaProviderTrait for SolanaProvider {
         let decimals = Mint::unpack(&account.data)
             .map_err(|e| {
                 SolanaProviderError::InvalidTransaction(format!(
-                    "Failed to unpack mint info for {}: {}",
-                    pubkey, e
+                    "Failed to unpack mint info for {pubkey}: {e}"
                 ))
             })?
             .decimals;

@@ -50,7 +50,7 @@ where
 impl CdpSigner<DefaultCdpService> {
     pub fn new(config: CdpSignerConfig) -> Result<Self, SignerError> {
         let cdp_service = DefaultCdpService::new(config).map_err(|e| {
-            SignerError::Configuration(format!("Failed to create CDP service: {}", e))
+            SignerError::Configuration(format!("Failed to create CDP service: {e}"))
         })?;
         Ok(Self { cdp_service })
     }
@@ -106,8 +106,7 @@ impl<T: CdpServiceTrait> Signer for CdpSigner<T> {
                 alloy::consensus::Signed::<TxEip1559>::eip2718_decode(&mut signed_bytes_slice)
                     .map_err(|e| {
                         SignerError::SigningError(format!(
-                            "Failed to decode signed transaction: {}",
-                            e
+                            "Failed to decode signed transaction: {e}"
                         ))
                     })?;
 
@@ -127,8 +126,7 @@ impl<T: CdpServiceTrait> Signer for CdpSigner<T> {
                 alloy::consensus::Signed::<TxLegacy>::eip2718_decode(&mut signed_bytes_slice)
                     .map_err(|e| {
                         SignerError::SigningError(format!(
-                            "Failed to decode signed transaction: {}",
-                            e
+                            "Failed to decode signed transaction: {e}"
                         ))
                     })?;
 
@@ -166,7 +164,7 @@ impl<T: CdpServiceTrait> DataSignerTrait for CdpSigner<T> {
 
         let v_byte = signature_bytes[64];
         let original_parity = normalize_v(v_byte as u64)
-            .ok_or_else(|| SignerError::SigningError(format!("Invalid v value: {}", v_byte)))?;
+            .ok_or_else(|| SignerError::SigningError(format!("Invalid v value: {v_byte}")))?;
 
         let normalized_sig = if let Some(normalized) = sig.normalize_s() {
             normalized.with_parity(!original_parity)

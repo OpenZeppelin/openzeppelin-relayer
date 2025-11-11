@@ -317,7 +317,7 @@ impl TryFrom<RelayerFileConfig> for Relayer {
             RelayerValidationError::EmptyNetwork => ConfigFileError::MissingField("network".into()),
             RelayerValidationError::InvalidPolicy(msg) => ConfigFileError::InvalidPolicy(msg),
             RelayerValidationError::InvalidRpcUrl(msg) => {
-                ConfigFileError::InvalidFormat(format!("Invalid RPC URL: {}", msg))
+                ConfigFileError::InvalidFormat(format!("Invalid RPC URL: {msg}"))
             }
             RelayerValidationError::InvalidRpcWeight => {
                 ConfigFileError::InvalidFormat("RPC URL weight must be in range 0-100".to_string())
@@ -472,7 +472,7 @@ impl RelayersFileConfig {
                 }
                 RelayerValidationError::InvalidPolicy(msg) => ConfigFileError::InvalidPolicy(msg),
                 RelayerValidationError::InvalidRpcUrl(msg) => {
-                    ConfigFileError::InvalidFormat(format!("Invalid RPC URL: {}", msg))
+                    ConfigFileError::InvalidFormat(format!("Invalid RPC URL: {msg}"))
                 }
                 RelayerValidationError::InvalidRpcWeight => ConfigFileError::InvalidFormat(
                     "RPC URL weight must be in range 0-100".to_string(),

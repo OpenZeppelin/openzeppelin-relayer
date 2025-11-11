@@ -208,12 +208,12 @@ pub enum HostFunctionSpec {
 fn wasm_source_to_bytes(wasm: WasmSource) -> Result<Vec<u8>, SignerError> {
     match wasm {
         WasmSource::Hex { hex } => hex::decode(&hex)
-            .map_err(|e| SignerError::ConversionError(format!("Invalid hex in wasm: {}", e))),
+            .map_err(|e| SignerError::ConversionError(format!("Invalid hex in wasm: {e}"))),
         WasmSource::Base64 { base64 } => {
             use base64::{engine::general_purpose, Engine as _};
             general_purpose::STANDARD
                 .decode(&base64)
-                .map_err(|e| SignerError::ConversionError(format!("Invalid base64 in wasm: {}", e)))
+                .map_err(|e| SignerError::ConversionError(format!("Invalid base64 in wasm: {e}")))
         }
     }
 }
@@ -222,7 +222,7 @@ fn wasm_source_to_bytes(wasm: WasmSource) -> Result<Vec<u8>, SignerError> {
 fn parse_salt_bytes(salt: Option<String>) -> Result<[u8; 32], SignerError> {
     if let Some(salt_hex) = salt {
         let bytes = hex::decode(&salt_hex)
-            .map_err(|e| SignerError::ConversionError(format!("Invalid salt hex: {}", e)))?;
+            .map_err(|e| SignerError::ConversionError(format!("Invalid salt hex: {e}")))?;
         if bytes.len() != 32 {
             return Err(SignerError::ConversionError("Salt must be 32 bytes".into()));
         }
@@ -237,7 +237,7 @@ fn parse_salt_bytes(salt: Option<String>) -> Result<[u8; 32], SignerError> {
 /// Converts hex string to 32-byte hash
 fn parse_wasm_hash(wasm_hash: &str) -> Result<Hash, SignerError> {
     let hash_bytes = hex::decode(wasm_hash)
-        .map_err(|e| SignerError::ConversionError(format!("Invalid hex in wasm_hash: {}", e)))?;
+        .map_err(|e| SignerError::ConversionError(format!("Invalid hex in wasm_hash: {e}")))?;
     if hash_bytes.len() != 32 {
         return Err(SignerError::ConversionError(format!(
             "Hash must be 32 bytes, got {}",
@@ -260,7 +260,7 @@ fn build_contract_preimage(
         ContractSource::Address { address } => {
             let public_key =
                 stellar_strkey::ed25519::PublicKey::from_string(&address).map_err(|e| {
-                    SignerError::ConversionError(format!("Invalid account address: {}", e))
+                    SignerError::ConversionError(format!("Invalid account address: {e}"))
                 })?;
             let account_id = AccountId(XdrPublicKey::PublicKeyTypeEd25519(Uint256(public_key.0)));
 
@@ -271,7 +271,7 @@ fn build_contract_preimage(
         }
         ContractSource::Contract { contract } => {
             let contract_id = stellar_strkey::Contract::from_string(&contract).map_err(|e| {
-                SignerError::ConversionError(format!("Invalid contract address: {}", e))
+                SignerError::ConversionError(format!("Invalid contract address: {e}"))
             })?;
 
             Ok(ContractIdPreimage::Address(ContractIdPreimageFromAddress {
@@ -290,12 +290,12 @@ fn convert_invoke_contract(
 ) -> Result<HostFunction, SignerError> {
     // Parse contract address
     let contract = stellar_strkey::Contract::from_string(&contract_address)
-        .map_err(|e| SignerError::ConversionError(format!("Invalid contract address: {}", e)))?;
+        .map_err(|e| SignerError::ConversionError(format!("Invalid contract address: {e}")))?;
     let contract_addr = ScAddress::Contract(ContractId(Hash(contract.0)));
 
     // Convert function name to symbol
     let function_symbol = ScSymbol::try_from(function_name.as_bytes().to_vec())
-        .map_err(|e| SignerError::ConversionError(format!("Invalid function name: {}", e)))?;
+        .map_err(|e| SignerError::ConversionError(format!("Invalid function name: {e}")))?;
 
     // Convert JSON args to ScVals using serde
     // HACK: stellar-xdr expects u64 as number but it should be string
@@ -308,9 +308,9 @@ fn convert_invoke_contract(
             serde_json::from_value(modified_json)
         })
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| SignerError::ConversionError(format!("Failed to deserialize ScVal: {}", e)))?;
+        .map_err(|e| SignerError::ConversionError(format!("Failed to deserialize ScVal: {e}")))?;
     let args_vec = VecM::try_from(scval_args)
-        .map_err(|e| SignerError::ConversionError(format!("Failed to convert arguments: {}", e)))?;
+        .map_err(|e| SignerError::ConversionError(format!("Failed to convert arguments: {e}")))?;
 
     Ok(HostFunction::InvokeContract(InvokeContractArgs {
         contract_address: contract_addr,
@@ -323,7 +323,7 @@ fn convert_invoke_contract(
 fn convert_upload_wasm(wasm: WasmSource) -> Result<HostFunction, SignerError> {
     let bytes = wasm_source_to_bytes(wasm)?;
     Ok(HostFunction::UploadContractWasm(bytes.try_into().map_err(
-        |e| SignerError::ConversionError(format!("Failed to convert wasm bytes: {:?}", e)),
+        |e| SignerError::ConversionError(format!("Failed to convert wasm bytes: {e:?}")),
     )?))
 }
 
@@ -352,12 +352,11 @@ fn convert_create_contract(
                 })
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| {
-                    SignerError::ConversionError(format!("Failed to deserialize ScVal: {}", e))
+                    SignerError::ConversionError(format!("Failed to deserialize ScVal: {e}"))
                 })?;
             let constructor_args_vec = VecM::try_from(scval_args).map_err(|e| {
                 SignerError::ConversionError(format!(
-                    "Failed to convert constructor arguments: {}",
-                    e
+                    "Failed to convert constructor arguments: {e}"
                 ))
             })?;
 

@@ -149,10 +149,10 @@ impl NetworkFileLoader {
     /// - `Err(ConfigFileError)` if the file cannot be read or parsed.
     fn load_network_file(file_path: &Path) -> Result<Vec<NetworkFileConfig>, ConfigFileError> {
         let file_content = fs::read_to_string(file_path)
-            .map_err(|e| ConfigFileError::InvalidFormat(format!("Failed to read file: {}", e)))?;
+            .map_err(|e| ConfigFileError::InvalidFormat(format!("Failed to read file: {e}")))?;
 
         let dir_network_list: DirectoryNetworkList = serde_json::from_str(&file_content)
-            .map_err(|e| ConfigFileError::InvalidFormat(format!("Failed to parse JSON: {}", e)))?;
+            .map_err(|e| ConfigFileError::InvalidFormat(format!("Failed to parse JSON: {e}")))?;
 
         Ok(dir_network_list.networks)
     }
@@ -271,7 +271,7 @@ impl<'de> serde::Deserialize<'de> for NetworksSource {
             Value::Array(arr) => {
                 let networks: Vec<NetworkFileConfig> = serde_json::from_value(Value::Array(arr))
                     .map_err(|e| {
-                        de::Error::custom(format!("Failed to deserialize network array: {}", e))
+                        de::Error::custom(format!("Failed to deserialize network array: {e}"))
                     })?;
                 Ok(NetworksSource::List(networks))
             }
