@@ -230,8 +230,8 @@ mod tests {
         repositories::{
             ApiKeyRepositoryStorage, ApiKeyRepositoryTrait, NetworkRepositoryStorage,
             NotificationRepositoryStorage, PluginRepositoryStorage, RelayerRepositoryStorage,
-            Repository, SignerRepositoryStorage, TransactionCounterRepositoryStorage,
-            TransactionRepositoryStorage,
+            RelayerStateRepositoryStorage, Repository, SignerRepositoryStorage,
+            TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
         },
     };
     use actix_web::{http::StatusCode, test, App};
@@ -246,6 +246,7 @@ mod tests {
         NotificationRepositoryStorage,
         SignerRepositoryStorage,
         TransactionCounterRepositoryStorage,
+        RelayerStateRepositoryStorage,
         PluginRepositoryStorage,
         ApiKeyRepositoryStorage,
     > {
@@ -362,6 +363,7 @@ mod tests {
             transaction_counter_store: Arc::new(
                 TransactionCounterRepositoryStorage::new_in_memory(),
             ),
+            sync_state_store: Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
             job_producer: Arc::new(MockJobProducerTrait::new()),
             plugin_repository: Arc::new(PluginRepositoryStorage::new_in_memory()),
             api_key_repository: api_key_repo,

@@ -40,8 +40,8 @@ pub use plugin::*;
 
 pub mod network;
 pub use network::{
-    EvmNetworkConfig, GasPriceCacheConfig, NetworkConfigCommon, NetworkFileConfig,
-    NetworksFileConfig, SolanaNetworkConfig, StellarNetworkConfig,
+    EvmNetworkConfig, GasPriceCacheConfig, MidnightNetworkConfig, NetworkConfigCommon,
+    NetworkFileConfig, NetworksFileConfig, SolanaNetworkConfig, StellarNetworkConfig,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
@@ -50,6 +50,7 @@ pub enum ConfigFileNetworkType {
     Evm,
     Stellar,
     Solana,
+    Midnight,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -698,8 +699,12 @@ mod tests {
                 2,
                 "Incorrect number of networks loaded"
             );
-            let has_evm = config.networks.iter().any(|n| matches!(n, NetworkFileConfig::Evm(evm) if evm.common.network == "custom-evm-file"));
-            let has_solana = config.networks.iter().any(|n| matches!(n, NetworkFileConfig::Solana(sol) if sol.common.network == "custom-solana-file"));
+            let has_evm = config.networks.iter().any(
+				|n| matches!(n, NetworkFileConfig::Evm(evm) if evm.common.network == "custom-evm-file"),
+			);
+            let has_solana = config.networks.iter().any(
+				|n| matches!(n, NetworkFileConfig::Solana(sol) if sol.common.network == "custom-solana-file"),
+			);
             assert!(has_evm, "EVM network from file not found or incorrect");
             assert!(
                 has_solana,

@@ -14,7 +14,7 @@ use crate::{
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
-        Repository, TransactionCounterTrait, TransactionRepository,
+        Repository, SyncStateTrait, TransactionCounterTrait, TransactionRepository,
     },
     utils::calculate_scheduled_timestamp,
 };
@@ -58,9 +58,9 @@ pub async fn relayer_health_check_handler(
 
 /// Generic implementation of the health check handler
 #[allow(clippy::type_complexity)]
-async fn relayer_health_check_handler_impl<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+async fn relayer_health_check_handler_impl<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     job: Job<RelayerHealthCheck>,
-    app_state: Data<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
+    app_state: Data<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>>,
     attempt: Attempt,
 ) -> Result<(), Error>
 where
@@ -71,6 +71,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -83,9 +84,9 @@ where
     )
 }
 
-async fn check_and_reenable_relayer<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+async fn check_and_reenable_relayer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     data: RelayerHealthCheck,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -95,6 +96,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -255,8 +257,11 @@ fn calculate_backoff_delay(retry_count: u32) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{
-        DisabledReason, NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel,
+    use crate::{
+        models::{
+            DisabledReason, NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel,
+        },
+        repositories::RelayerStateRepositoryStorage,
     };
 
     #[test]
@@ -360,6 +365,7 @@ mod tests {
                 TransactionCounterRepositoryStorage::new_in_memory(),
             ),
             job_producer: Arc::new(mock_job_producer),
+            sync_state_store: Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
             plugin_repository: Arc::new(PluginRepositoryStorage::new_in_memory()),
             api_key_repository: Arc::new(ApiKeyRepositoryStorage::new_in_memory()),
         }));
@@ -459,6 +465,7 @@ mod tests {
                 TransactionCounterRepositoryStorage::new_in_memory(),
             ),
             job_producer: Arc::new(mock_job_producer),
+            sync_state_store: Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
             plugin_repository: Arc::new(PluginRepositoryStorage::new_in_memory()),
             api_key_repository: Arc::new(ApiKeyRepositoryStorage::new_in_memory()),
         };

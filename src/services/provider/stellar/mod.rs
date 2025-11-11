@@ -344,7 +344,7 @@ impl StellarProvider {
     }
 
     /// Initialize a Stellar client for a given URL
-    fn initialize_provider(&self, url: &str) -> Result<Client, ProviderError> {
+    async fn initialize_provider(&self, url: &str) -> Result<Client, ProviderError> {
         Client::new(url).map_err(|e| {
             ProviderError::NetworkConfiguration(format!(
                 "Failed to create Stellar RPC client: {e} - URL: '{url}'"
@@ -393,12 +393,17 @@ impl StellarProvider {
             provider_url
         );
 
+        let self_clone = self.clone();
         retry_rpc_call(
             &self.selector,
             operation_name,
             is_retriable_error,
             should_mark_provider_failed,
-            |url| self.initialize_provider(url),
+            move |url| {
+                let self_clone = self_clone.clone();
+                let url = url.to_string();
+                async move { self_clone.initialize_provider(&url).await }
+            },
             operation,
             Some(self.retry_config.clone()),
         )
@@ -429,27 +434,34 @@ impl StellarProvider {
         );
 
         let request_clone = request.clone();
+        let timeout_seconds = self.timeout_seconds;
+        let self_clone = self.clone();
         retry_rpc_call(
             &self.selector,
             operation_name,
             is_retriable_error,
             should_mark_provider_failed,
-            |url| {
-                // Initialize an HTTP client for this URL and return it together with the URL string
-                self.initialize_raw_provider(url)
-                    .map(|client| (url.to_string(), client))
+            move |url| {
+                let self_clone = self_clone.clone();
+                let url = url.to_string();
+                async move {
+                    // Initialize an HTTP client for this URL and return it together with the URL string
+                    let client = self_clone.initialize_raw_provider(&url)?;
+                    Ok((url, client))
+                }
             },
-            |(url, client): (String, ReqwestClient)| {
+            move |(url, client): (String, ReqwestClient)| {
                 let request_for_call = request_clone.clone();
+                let timeout_seconds = timeout_seconds;
                 async move {
                     let response = client
-                        .post(&url)
-                        .json(&request_for_call)
-                        // Keep a per-request timeout as a safeguard (client also has a default timeout)
-                        .timeout(self.timeout_seconds)
-                        .send()
-                        .await
-                        .map_err(ProviderError::from)?;
+						.post(&url)
+						.json(&request_for_call)
+						// Keep a per-request timeout as a safeguard (client also has a default timeout)
+						.timeout(timeout_seconds)
+						.send()
+						.await
+						.map_err(ProviderError::from)?;
 
                     let json_response: serde_json::Value =
                         response.json().await.map_err(ProviderError::from)?;
@@ -1596,8 +1608,8 @@ mod stellar_rpc_tests {
         }
     }
 
-    #[test]
-    fn test_initialize_provider_invalid_url() {
+    #[tokio::test]
+    async fn test_initialize_provider_invalid_url() {
         let _env_guard = setup_test_env();
         let provider = StellarProvider::new(
             vec![RpcConfig::new("http://localhost:8000".to_string())],
@@ -1606,7 +1618,7 @@ mod stellar_rpc_tests {
         .unwrap();
 
         // Test with invalid URL that should fail client creation
-        let result = provider.initialize_provider("invalid-url");
+        let result = provider.initialize_provider("invalid-url").await;
         assert!(result.is_err());
         match result.unwrap_err() {
             ProviderError::NetworkConfiguration(msg) => {

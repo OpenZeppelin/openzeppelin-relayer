@@ -11,7 +11,7 @@ use crate::{
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
-        Repository, TransactionCounterTrait, TransactionRepository,
+        Repository, SyncStateTrait, TransactionCounterTrait, TransactionRepository,
     },
     services::plugins::{
         PluginCallResponse, PluginCallResult, PluginHandlerResponse, PluginRunner, PluginService,
@@ -33,10 +33,10 @@ use std::sync::Arc;
 /// # Returns
 ///
 /// The result of the plugin call.
-pub async fn call_plugin<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn call_plugin<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     plugin_id: String,
     plugin_call_request: PluginCallRequest,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -46,6 +46,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -124,9 +125,9 @@ where
 /// # Returns
 ///
 /// The result of the plugin list.
-pub async fn list_plugins<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn list_plugins<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     query: PaginationQuery,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -136,6 +137,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {

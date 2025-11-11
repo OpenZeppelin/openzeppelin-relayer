@@ -157,6 +157,48 @@ pub fn create_stellar_network_with_parent(network: &str, parent: &str) -> Stella
     }
 }
 
+/// Creates a default valid Midnight network configuration.
+pub fn create_midnight_network(network: &str) -> MidnightNetworkConfig {
+    MidnightNetworkConfig {
+        common: NetworkConfigCommon {
+            network: network.to_string(),
+            from: None,
+            rpc_urls: Some(vec![format!("https://rpc.{}.midnight.org", network)]),
+            explorer_urls: Some(vec!["https://explorer.example.com".to_string()]),
+            average_blocktime_ms: Some(5000),
+            is_testnet: Some(true),
+            tags: Some(vec!["stellar".to_string()]),
+        },
+        indexer_urls: IndexerUrls {
+            http: "https://indexer.midnight.network".to_string(),
+            ws: "wss://indexer.midnight.network".to_string(),
+        },
+        prover_url: "http://localhost:6300".to_string(),
+        commitment_tree_ttl: None,
+    }
+}
+
+/// Creates a Midnight network configuration with inheritance.
+pub fn create_midnight_network_with_parent(network: &str, parent: &str) -> MidnightNetworkConfig {
+    MidnightNetworkConfig {
+        common: NetworkConfigCommon {
+            network: network.to_string(),
+            from: Some(parent.to_string()),
+            rpc_urls: Some(vec![format!("https://rpc.{}.midnight.org", network)]), // Override parent's RPC URLs
+            explorer_urls: Some(vec!["https://explorer.example.com".to_string()]),
+            average_blocktime_ms: Some(6000), // Override parent's blocktime
+            is_testnet: None,                 // Will inherit from parent
+            tags: None,                       // Will inherit from parent
+        },
+        indexer_urls: IndexerUrls {
+            http: "https://indexer.midnight.network".to_string(),
+            ws: "wss://indexer.midnight.network".to_string(),
+        },
+        prover_url: "http://localhost:6300".to_string(),
+        commitment_tree_ttl: None,
+    }
+}
+
 // =============================================================================
 // Wrapped Network Creation Functions (for NetworkFileConfig)
 // =============================================================================
@@ -189,6 +231,11 @@ pub fn create_solana_network_wrapped_with_parent(network: &str, parent: &str) ->
 /// Creates a wrapped Stellar network configuration.
 pub fn create_stellar_network_wrapped(network: &str) -> NetworkFileConfig {
     NetworkFileConfig::Stellar(create_stellar_network(network))
+}
+
+/// Creates a wrapped Midnight network configuration.
+pub fn create_midnight_network_wrapped(network: &str) -> NetworkFileConfig {
+    NetworkFileConfig::Midnight(create_midnight_network(network))
 }
 
 // =============================================================================

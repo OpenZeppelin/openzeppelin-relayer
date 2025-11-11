@@ -17,7 +17,7 @@ use crate::{
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
-        Repository, TransactionCounterTrait, TransactionRepository,
+        Repository, SyncStateTrait, TransactionCounterTrait, TransactionRepository,
     },
 };
 
@@ -32,7 +32,7 @@ use mockall::automock;
 #[async_trait]
 pub trait PluginRunnerTrait {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-    async fn run<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    async fn run<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
         &self,
         plugin_id: String,
         socket_path: &str,
@@ -40,7 +40,7 @@ pub trait PluginRunnerTrait {
         timeout_duration: Duration,
         script_params: String,
         http_request_id: Option<String>,
-        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
+        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>>,
     ) -> Result<ScriptResult, PluginError>
     where
         J: JobProducerTrait + Send + Sync + 'static,
@@ -54,6 +54,7 @@ pub trait PluginRunnerTrait {
         NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
         SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
         TCR: TransactionCounterTrait + Send + Sync + 'static,
+        RSR: SyncStateTrait + Send + Sync + 'static,
         PR: PluginRepositoryTrait + Send + Sync + 'static,
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static;
 }
@@ -63,7 +64,7 @@ pub struct PluginRunner;
 
 #[async_trait]
 impl PluginRunnerTrait for PluginRunner {
-    async fn run<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    async fn run<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
         &self,
         plugin_id: String,
         socket_path: &str,
@@ -71,7 +72,7 @@ impl PluginRunnerTrait for PluginRunner {
         timeout_duration: Duration,
         script_params: String,
         http_request_id: Option<String>,
-        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
+        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>>,
     ) -> Result<ScriptResult, PluginError>
     where
         J: JobProducerTrait + Send + Sync + 'static,
@@ -85,6 +86,7 @@ impl PluginRunnerTrait for PluginRunner {
         NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
         SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
         TCR: TransactionCounterTrait + Send + Sync + 'static,
+        RSR: SyncStateTrait + Send + Sync + 'static,
         PR: PluginRepositoryTrait + Send + Sync + 'static,
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {
@@ -149,8 +151,9 @@ mod tests {
         jobs::MockJobProducerTrait,
         repositories::{
             ApiKeyRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage,
-            PluginRepositoryStorage, RelayerRepositoryStorage, SignerRepositoryStorage,
-            TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
+            PluginRepositoryStorage, RelayerRepositoryStorage, RelayerStateRepositoryStorage,
+            SignerRepositoryStorage, TransactionCounterRepositoryStorage,
+            TransactionRepositoryStorage,
         },
         services::plugins::LogLevel,
         utils::mocks::mockutils::create_mock_app_state,
@@ -196,7 +199,7 @@ mod tests {
         let socket_path_str = socket_path.display().to_string();
         let script_path_str = script_path.display().to_string();
         let result = plugin_runner
-            .run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>(
+            .run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, RelayerStateRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>(
                 plugin_id,
                 &socket_path_str,
                 script_path_str,
@@ -254,7 +257,7 @@ mod tests {
         let socket_path_str = socket_path.display().to_string();
         let script_path_str = script_path.display().to_string();
         let result = plugin_runner
-            .run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>(
+            .run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, RelayerStateRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>(
                 plugin_id,
                 &socket_path_str,
                 script_path_str,

@@ -647,8 +647,10 @@ impl NetworkRepository for RedisNetworkRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::network::IndexerUrls;
     use crate::config::{
-        EvmNetworkConfig, NetworkConfigCommon, SolanaNetworkConfig, StellarNetworkConfig,
+        EvmNetworkConfig, MidnightNetworkConfig, NetworkConfigCommon, SolanaNetworkConfig,
+        StellarNetworkConfig,
     };
     use crate::models::NetworkConfigData;
     use redis::aio::ConnectionManager;
@@ -687,6 +689,18 @@ mod tests {
                     passphrase: None,
                 };
                 NetworkRepoModel::new_stellar(stellar_config)
+            }
+            NetworkType::Midnight => {
+                let midnight_config = MidnightNetworkConfig {
+                    common,
+                    indexer_urls: IndexerUrls {
+                        http: "https://indexer.midnight.network".to_string(),
+                        ws: "wss://indexer.midnight.network".to_string(),
+                    },
+                    prover_url: "https://prover.example.com".to_string(),
+                    commitment_tree_ttl: Some(3600),
+                };
+                NetworkRepoModel::new_midnight(midnight_config)
             }
         }
     }

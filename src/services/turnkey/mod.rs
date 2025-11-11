@@ -703,27 +703,30 @@ mod tests {
     // Setup mock for signing raw payload
     async fn setup_mock_sign_raw_payload(mock_server: &mut mockito::ServerGuard) -> mockito::Mock {
         mock_server
-            .mock("POST", "/public/v1/submit/sign_raw_payload")
-            .match_header("Content-Type", "application/json")
-            .match_header("X-Stamp", mockito::Matcher::Any)
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(serde_json::to_string(&json!({
-                "activity": {
-                    "id": "test-activity-id",
-                    "status": "ACTIVITY_STATUS_COMPLETE",
-                    "result": {
-                        "signRawPayloadResult": {
-                            "r": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                            "s": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
-                            "v": "1b"
-                        }
-                    }
-                }
-            })).unwrap())
-            .expect(1)
-            .create_async()
-            .await
+			.mock("POST", "/public/v1/submit/sign_raw_payload")
+			.match_header("Content-Type", "application/json")
+			.match_header("X-Stamp", mockito::Matcher::Any)
+			.with_status(200)
+			.with_header("content-type", "application/json")
+			.with_body(
+				serde_json::to_string(&json!({
+					"activity": {
+						"id": "test-activity-id",
+						"status": "ACTIVITY_STATUS_COMPLETE",
+						"result": {
+							"signRawPayloadResult": {
+								"r": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+								"s": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+								"v": "1b"
+							}
+						}
+					}
+				}))
+				.unwrap(),
+			)
+			.expect(1)
+			.create_async()
+			.await
     }
 
     // Setup mock for signing EVM transaction

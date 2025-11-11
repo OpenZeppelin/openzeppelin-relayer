@@ -17,7 +17,7 @@ use crate::models::{
 use crate::observability::request_id::set_request_id;
 use crate::repositories::{
     ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
-    TransactionCounterTrait, TransactionRepository,
+    SyncStateTrait, TransactionCounterTrait, TransactionRepository,
 };
 use crate::services::plugins::PluginError;
 use actix_web::web;
@@ -71,7 +71,7 @@ pub struct Response {
 
 #[async_trait]
 #[cfg_attr(test, automock)]
-pub trait RelayerApiTrait<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>: Send + Sync
+pub trait RelayerApiTrait<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>: Send + Sync
 where
     J: JobProducerTrait + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
@@ -80,53 +80,54 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     async fn handle_request(
         &self,
         request: Request,
-        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
+        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>>,
     ) -> Response;
 
     async fn process_request(
         &self,
         request: Request,
-        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
+        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>>,
     ) -> Result<Response, PluginError>;
 
     async fn handle_send_transaction(
         &self,
         request: Request,
-        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
+        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>>,
     ) -> Result<Response, PluginError>;
 
     async fn handle_get_transaction(
         &self,
         request: Request,
-        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
+        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>>,
     ) -> Result<Response, PluginError>;
 
     async fn handle_get_relayer_status(
         &self,
         request: Request,
-        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
+        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>>,
     ) -> Result<Response, PluginError>;
 
     async fn handle_sign_transaction(
         &self,
         request: Request,
-        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
+        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>>,
     ) -> Result<Response, PluginError>;
     async fn handle_get_relayer_info(
         &self,
         request: Request,
-        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
+        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>>,
     ) -> Result<Response, PluginError>;
     async fn handle_rpc_request(
         &self,
         request: Request,
-        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
+        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>>,
     ) -> Result<Response, PluginError>;
 }
 
@@ -135,10 +136,10 @@ pub struct RelayerApi;
 
 impl RelayerApi {
     #[instrument(name = "Plugin::handle_request", skip_all, fields(method = %request.method, relayer_id = %request.relayer_id, plugin_req_id = %request.request_id))]
-    pub async fn handle_request<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    pub async fn handle_request<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
         &self,
         request: Request,
-        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
     ) -> Response
     where
         J: JobProducerTrait + 'static,
@@ -152,6 +153,7 @@ impl RelayerApi {
         NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
         SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
         TCR: TransactionCounterTrait + Send + Sync + 'static,
+        RSR: SyncStateTrait + Send + Sync + 'static,
         PR: PluginRepositoryTrait + Send + Sync + 'static,
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {
@@ -170,10 +172,10 @@ impl RelayerApi {
         }
     }
 
-    async fn process_request<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    async fn process_request<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
         &self,
         request: Request,
-        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
     ) -> Result<Response, PluginError>
     where
         J: JobProducerTrait + 'static,
@@ -187,6 +189,7 @@ impl RelayerApi {
         NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
         SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
         TCR: TransactionCounterTrait + Send + Sync + 'static,
+        RSR: SyncStateTrait + Send + Sync + 'static,
         PR: PluginRepositoryTrait + Send + Sync + 'static,
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {
@@ -200,10 +203,10 @@ impl RelayerApi {
         }
     }
 
-    async fn handle_send_transaction<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    async fn handle_send_transaction<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
         &self,
         request: Request,
-        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
     ) -> Result<Response, PluginError>
     where
         J: JobProducerTrait + 'static,
@@ -217,6 +220,7 @@ impl RelayerApi {
         NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
         SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
         TCR: TransactionCounterTrait + Send + Sync + 'static,
+        RSR: SyncStateTrait + Send + Sync + 'static,
         PR: PluginRepositoryTrait + Send + Sync + 'static,
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {
@@ -258,10 +262,10 @@ impl RelayerApi {
         })
     }
 
-    async fn handle_get_transaction<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    async fn handle_get_transaction<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
         &self,
         request: Request,
-        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
     ) -> Result<Response, PluginError>
     where
         J: JobProducerTrait + 'static,
@@ -275,6 +279,7 @@ impl RelayerApi {
         NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
         SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
         TCR: TransactionCounterTrait + Send + Sync + 'static,
+        RSR: SyncStateTrait + Send + Sync + 'static,
         PR: PluginRepositoryTrait + Send + Sync + 'static,
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {
@@ -303,10 +308,10 @@ impl RelayerApi {
         })
     }
 
-    async fn handle_get_relayer_status<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    async fn handle_get_relayer_status<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
         &self,
         request: Request,
-        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
     ) -> Result<Response, PluginError>
     where
         J: JobProducerTrait + 'static,
@@ -320,6 +325,7 @@ impl RelayerApi {
         NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
         SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
         TCR: TransactionCounterTrait + Send + Sync + 'static,
+        RSR: SyncStateTrait + Send + Sync + 'static,
         PR: PluginRepositoryTrait + Send + Sync + 'static,
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {
@@ -342,10 +348,10 @@ impl RelayerApi {
         })
     }
 
-    async fn handle_sign_transaction<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    async fn handle_sign_transaction<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
         &self,
         request: Request,
-        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
     ) -> Result<Response, PluginError>
     where
         J: JobProducerTrait + 'static,
@@ -359,6 +365,7 @@ impl RelayerApi {
         NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
         SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
         TCR: TransactionCounterTrait + Send + Sync + 'static,
+        RSR: SyncStateTrait + Send + Sync + 'static,
         PR: PluginRepositoryTrait + Send + Sync + 'static,
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {
@@ -384,10 +391,10 @@ impl RelayerApi {
         })
     }
 
-    async fn handle_get_relayer_info<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    async fn handle_get_relayer_info<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
         &self,
         request: Request,
-        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
     ) -> Result<Response, PluginError>
     where
         J: JobProducerTrait + 'static,
@@ -401,6 +408,7 @@ impl RelayerApi {
         NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
         SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
         TCR: TransactionCounterTrait + Send + Sync + 'static,
+        RSR: SyncStateTrait + Send + Sync + 'static,
         PR: PluginRepositoryTrait + Send + Sync + 'static,
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {
@@ -417,10 +425,10 @@ impl RelayerApi {
         })
     }
 
-    async fn handle_rpc_request<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    async fn handle_rpc_request<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
         &self,
         request: Request,
-        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
     ) -> Result<Response, PluginError>
     where
         J: JobProducerTrait + 'static,
@@ -434,6 +442,7 @@ impl RelayerApi {
         NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
         SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
         TCR: TransactionCounterTrait + Send + Sync + 'static,
+        RSR: SyncStateTrait + Send + Sync + 'static,
         PR: PluginRepositoryTrait + Send + Sync + 'static,
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {
@@ -476,8 +485,8 @@ impl RelayerApi {
 }
 
 #[async_trait]
-impl<J, RR, TR, NR, NFR, SR, TCR, PR, AKR> RelayerApiTrait<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>
-    for RelayerApi
+impl<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>
+    RelayerApiTrait<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR> for RelayerApi
 where
     J: JobProducerTrait + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
@@ -486,13 +495,14 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     async fn handle_request(
         &self,
         request: Request,
-        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
     ) -> Response {
         self.handle_request(request, state).await
     }
@@ -500,7 +510,7 @@ where
     async fn process_request(
         &self,
         request: Request,
-        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
     ) -> Result<Response, PluginError> {
         self.process_request(request, state).await
     }
@@ -508,7 +518,7 @@ where
     async fn handle_send_transaction(
         &self,
         request: Request,
-        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
     ) -> Result<Response, PluginError> {
         self.handle_send_transaction(request, state).await
     }
@@ -516,7 +526,7 @@ where
     async fn handle_get_transaction(
         &self,
         request: Request,
-        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
     ) -> Result<Response, PluginError> {
         self.handle_get_transaction(request, state).await
     }
@@ -524,7 +534,7 @@ where
     async fn handle_get_relayer_status(
         &self,
         request: Request,
-        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
     ) -> Result<Response, PluginError> {
         self.handle_get_relayer_status(request, state).await
     }
@@ -532,7 +542,7 @@ where
     async fn handle_sign_transaction(
         &self,
         request: Request,
-        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
     ) -> Result<Response, PluginError> {
         self.handle_sign_transaction(request, state).await
     }
@@ -540,7 +550,7 @@ where
     async fn handle_get_relayer_info(
         &self,
         request: Request,
-        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
     ) -> Result<Response, PluginError> {
         self.handle_get_relayer_info(request, state).await
     }
@@ -548,7 +558,7 @@ where
     async fn handle_rpc_request(
         &self,
         request: Request,
-        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
     ) -> Result<Response, PluginError> {
         self.handle_rpc_request(request, state).await
     }

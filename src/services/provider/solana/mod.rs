@@ -443,7 +443,7 @@ pub trait SolanaProviderTrait: Send + Sync {
     ) -> Result<serde_json::Value, SolanaProviderError>;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SolanaProvider {
     // RPC selector for handling multiple client connections
     selector: RpcSelector,
@@ -560,7 +560,7 @@ impl SolanaProvider {
     }
 
     /// Initialize a provider for a given URL
-    fn initialize_provider(&self, url: &str) -> Result<Arc<RpcClient>, SolanaProviderError> {
+    async fn initialize_provider(&self, url: &str) -> Result<Arc<RpcClient>, SolanaProviderError> {
         let rpc_url: Url = url.parse().map_err(|e| {
             SolanaProviderError::NetworkConfiguration(format!("Invalid URL format: {e}"))
         })?;
@@ -592,14 +592,16 @@ impl SolanaProvider {
             self.timeout_seconds.as_secs()
         );
 
+        let self_clone = self.clone();
         retry_rpc_call(
             &self.selector,
             operation_name,
             is_retriable,
             should_mark_solana_provider_failed,
-            |url| match self.initialize_provider(url) {
-                Ok(provider) => Ok(provider),
-                Err(e) => Err(e),
+            move |url| {
+                let self_clone = self_clone.clone();
+                let url = url.to_string();
+                async move { self_clone.initialize_provider(&url).await }
             },
             operation,
             Some(self.retry_config.clone()),
@@ -931,20 +933,20 @@ mod tests {
     use std::sync::Mutex;
 
     lazy_static! {
-        static ref EVM_TEST_ENV_MUTEX: Mutex<()> = Mutex::new(());
+        static ref SOLANA_TEST_ENV_MUTEX: Mutex<()> = Mutex::new(());
     }
 
-    struct EvmTestEnvGuard {
+    struct SolanaTestEnvGuard {
         _mutex_guard: std::sync::MutexGuard<'static, ()>,
     }
 
-    impl EvmTestEnvGuard {
+    impl SolanaTestEnvGuard {
         fn new(mutex_guard: std::sync::MutexGuard<'static, ()>) -> Self {
             std::env::set_var(
                 "API_KEY",
-                "test_api_key_for_evm_provider_new_this_is_long_enough_32_chars",
+                "test_api_key_for_solana_provider_new_this_is_long_enough_32_chars",
             );
-            std::env::set_var("REDIS_URL", "redis://test-dummy-url-for-evm-provider");
+            std::env::set_var("REDIS_URL", "redis://test-dummy-url-for-solana-provider");
 
             Self {
                 _mutex_guard: mutex_guard,
@@ -952,7 +954,7 @@ mod tests {
         }
     }
 
-    impl Drop for EvmTestEnvGuard {
+    impl Drop for SolanaTestEnvGuard {
         fn drop(&mut self) {
             std::env::remove_var("API_KEY");
             std::env::remove_var("REDIS_URL");
@@ -960,9 +962,11 @@ mod tests {
     }
 
     // Helper function to set up the test environment
-    fn setup_test_env() -> EvmTestEnvGuard {
-        let guard = EVM_TEST_ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        EvmTestEnvGuard::new(guard)
+    fn setup_test_env() -> SolanaTestEnvGuard {
+        let guard = SOLANA_TEST_ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        SolanaTestEnvGuard::new(guard)
     }
 
     fn get_funded_keypair() -> Keypair {
@@ -1283,8 +1287,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_initialize_provider_valid_url() {
+    #[tokio::test]
+    async fn test_initialize_provider_valid_url() {
         let _env_guard = setup_test_env();
 
         let configs = vec![RpcConfig {
@@ -1292,15 +1296,17 @@ mod tests {
             weight: 1,
         }];
         let provider = SolanaProvider::new(configs, 10).unwrap();
-        let result = provider.initialize_provider("https://api.devnet.solana.com");
+        let result = provider
+            .initialize_provider("https://api.devnet.solana.com")
+            .await;
         assert!(result.is_ok());
         let arc_client = result.unwrap();
         // Arc pointer should not be null and should point to RpcClient
         let _client: &RpcClient = Arc::as_ref(&arc_client);
     }
 
-    #[test]
-    fn test_initialize_provider_invalid_url() {
+    #[tokio::test]
+    async fn test_initialize_provider_invalid_url() {
         let _env_guard = setup_test_env();
 
         let configs = vec![RpcConfig {
@@ -1308,7 +1314,7 @@ mod tests {
             weight: 1,
         }];
         let provider = SolanaProvider::new(configs, 10).unwrap();
-        let result = provider.initialize_provider("not-a-valid-url");
+        let result = provider.initialize_provider("not-a-valid-url").await;
         assert!(result.is_err());
         match result {
             Err(SolanaProviderError::NetworkConfiguration(msg)) => {

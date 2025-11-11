@@ -20,7 +20,7 @@ use crate::{
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
-        Repository, TransactionCounterTrait, TransactionRepository,
+        Repository, SyncStateTrait, TransactionCounterTrait, TransactionRepository,
     },
 };
 
@@ -37,9 +37,9 @@ use super::NetworkRelayer;
 ///
 /// * `Result<RelayerRepoModel, ApiError>` - Returns a `RelayerRepoModel` on success, or an
 ///   `ApiError` on failure.
-pub async fn get_relayer_by_id<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn get_relayer_by_id<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
-    state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<RelayerRepoModel, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -49,6 +49,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -70,10 +71,10 @@ where
 ///
 /// * `Result<NetworkRelayer, ApiError>` - Returns a `NetworkRelayer` on success, or an `ApiError`
 ///   on failure.
-pub async fn get_network_relayer<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn get_network_relayer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
-    state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
-) -> Result<NetworkRelayer<J, TR, RR, NR, TCR>, ApiError>
+    state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
+) -> Result<NetworkRelayer<J, TR, RR, NR, TCR, RSR>, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
@@ -82,6 +83,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -107,10 +109,10 @@ where
 ///
 /// * `Result<NetworkRelayer, ApiError>` - Returns a `NetworkRelayer` on success, or an `ApiError`
 ///   on failure.
-pub async fn get_network_relayer_by_model<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn get_network_relayer_by_model<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_model: RelayerRepoModel,
-    state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
-) -> Result<NetworkRelayer<J, TR, RR, NR, TCR>, ApiError>
+    state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
+) -> Result<NetworkRelayer<J, TR, RR, NR, TCR, RSR>, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
@@ -119,6 +121,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {

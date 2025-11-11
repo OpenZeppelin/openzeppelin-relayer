@@ -1,0 +1,93 @@
+# Base image
+FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/rust:latest-dev@sha256:faf49718aaa95c798ed1dfdf3e4edee2cdbc3790c8994705ca6ef35972128459 AS base
+
+USER root
+RUN apk update && apk --no-cache add \
+    openssl-dev \
+    perl \
+    libsodium-dev \
+    git \
+    curl
+
+ENV PKG_CONFIG_PATH=/usr/lib/pkgconfig
+
+WORKDIR /usr/app
+
+# Configure git to use credentials for private repos
+# TEMPORARY: GitHub credentials are only required until Midnight repositories are open-sourced
+# Once the repos are public, this authentication step can be removed entirely
+# Credentials are provided via Docker secrets for security (not exposed in logs)
+RUN --mount=type=secret,id=github_user,mode=0400 \
+    --mount=type=secret,id=github_pat,mode=0400 \
+    if [ ! -f /run/secrets/github_user ] || [ ! -f /run/secrets/github_pat ]; then \
+        echo "ERROR: GitHub credentials must be provided as Docker secrets" && \
+        echo "Please ensure GITHUB_USER and GITHUB_PAT are set in your .env file" && \
+        echo "Note: This is temporary until Midnight repositories are open-sourced" && \
+        exit 1; \
+    fi && \
+    GITHUB_USER=$(cat /run/secrets/github_user) && \
+    GITHUB_PAT=$(cat /run/secrets/github_pat) && \
+    echo "Configuring git for user: ${GITHUB_USER}" && \
+    echo "Note: GitHub authentication is temporary until Midnight repos are public" && \
+    mkdir -p /root/.cargo && \
+    echo '[net]' >> /root/.cargo/config.toml && \
+    echo 'git-fetch-with-cli = true' >> /root/.cargo/config.toml && \
+    git config --global url."https://${GITHUB_USER}:${GITHUB_PAT}@github.com/".insteadOf "https://github.com/" && \
+    echo "Git config set. Testing access..." && \
+    git ls-remote https://github.com/midnightntwrk/midnight-ledger-prototype > /dev/null 2>&1 && echo "✓ Git access successful" || echo "✗ Git access failed"
+
+# Copy source
+COPY . .
+
+# Build
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/app/target \
+    --mount=type=secret,id=github_user,mode=0400 \
+    --mount=type=secret,id=github_pat,mode=0400 \
+    GITHUB_USER=$(cat /run/secrets/github_user) && \
+    GITHUB_PAT=$(cat /run/secrets/github_pat) && \
+    cargo build --release && \
+    cargo install --root /usr/app --path . --debug && \
+    git config --global --unset-all url."https://${GITHUB_USER}:${GITHUB_PAT}@github.com/".insteadOf && \
+    echo "Git credentials cleared"
+
+# Setting up build directories
+FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/wolfi-base
+
+WORKDIR /app
+
+COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
+
+# Install plugin dependencies
+ARG TARGETARCH
+ARG NODE_VERSION=20.19
+
+# Install Node.js
+USER root
+RUN apk add --no-cache nodejs=~${NODE_VERSION} npm
+
+ENV PATH="/usr/local/bin:$PATH"
+
+# Install pnpm and ts-node
+RUN npm install -g pnpm ts-node typescript
+
+# removes apk and unneeded wolfi-base tools.
+RUN apk del wolfi-base apk-tools
+
+# Copy plugins folder and install dependencies
+COPY --chown=nonroot:nonroot ./plugins /app/plugins
+
+USER nonroot
+WORKDIR /app/plugins
+RUN pnpm install --frozen-lockfile
+
+# Return to app root
+WORKDIR /app
+
+ENV APP_PORT=8080
+ENV METRICS_PORT=8081
+
+EXPOSE ${APP_PORT}/tcp ${METRICS_PORT}/tcp
+
+# starting up
+ENTRYPOINT ["/app/openzeppelin-relayer"]

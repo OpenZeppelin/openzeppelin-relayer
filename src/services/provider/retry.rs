@@ -187,7 +187,7 @@ impl RetryConfig {
 ///
 /// # Returns
 /// * The result of the operation if successful, or an error
-pub async fn retry_rpc_call<P, T, E, F, Fut, I>(
+pub async fn retry_rpc_call<P, T, E, F, Fut, I, IFut>(
     selector: &RpcSelector,
     operation_name: &str,
     is_retriable_error: impl Fn(&E) -> bool,
@@ -201,7 +201,8 @@ where
     E: std::fmt::Display + From<String>,
     F: Fn(P) -> Fut,
     Fut: Future<Output = Result<T, E>>,
-    I: Fn(&str) -> Result<P, E>,
+    I: Fn(&str) -> IFut,
+    IFut: Future<Output = Result<P, E>>,
 {
     let config = config.unwrap_or_else(RetryConfig::from_env);
     let total_providers = selector.provider_count();
@@ -221,7 +222,7 @@ where
     while failover_count <= max_failovers && selector.available_provider_count() > 0 {
         // Try to get and initialize a provider
         let (provider, provider_url) =
-            match get_provider(selector, operation_name, &provider_initializer) {
+            match get_provider(selector, operation_name, &provider_initializer).await {
                 Ok((provider, url)) => (provider, url),
                 Err(e) => {
                     last_error = Some(e);
@@ -349,14 +350,15 @@ where
 }
 
 /// Helper function to get and initialize a provider
-fn get_provider<P, E, I>(
+async fn get_provider<P, E, I, IFut>(
     selector: &RpcSelector,
     operation_name: &str,
     provider_initializer: &I,
 ) -> Result<(P, String), E>
 where
     E: std::fmt::Display + From<String>,
-    I: Fn(&str) -> Result<P, E>,
+    I: Fn(&str) -> IFut,
+    IFut: Future<Output = Result<P, E>>,
 {
     // Get the next provider URL from the selector
     let provider_url = selector
@@ -368,7 +370,7 @@ where
         })?;
 
     // Initialize the provider
-    let provider = provider_initializer(&provider_url).map_err(|e| {
+    let provider = provider_initializer(&provider_url).await.map_err(|e| {
         tracing::warn!(
             provider_url = %provider_url,
             operation_name = %operation_name,
@@ -779,8 +781,8 @@ mod tests {
         let _config = RetryConfig::new(3, 1, 100, 0);
     }
 
-    #[test]
-    fn test_get_provider() {
+    #[tokio::test]
+    async fn test_get_provider() {
         let _guard = setup_test_env();
 
         let configs = vec![
@@ -789,20 +791,22 @@ mod tests {
         ];
         let selector = RpcSelector::new(configs).expect("Failed to create selector");
 
-        let initializer =
-            |url: &str| -> Result<String, TestError> { Ok(format!("provider-{}", url)) };
+        let initializer = |url: &str| {
+            let url = url.to_string();
+            async move { Ok::<String, TestError>(format!("provider-{}", url)) }
+        };
 
-        let result = get_provider(&selector, "test_operation", &initializer);
+        let result = get_provider(&selector, "test_operation", &initializer).await;
         assert!(result.is_ok());
         let (provider, url) = result.unwrap();
         assert_eq!(url, "http://localhost:8545");
         assert_eq!(provider, "provider-http://localhost:8545");
 
-        let initializer = |_: &str| -> Result<String, TestError> {
-            Err(TestError("Failed to initialize".to_string()))
+        let initializer = |_: &str| async move {
+            Err::<String, TestError>(TestError("Failed to initialize".to_string()))
         };
 
-        let result = get_provider(&selector, "test_operation", &initializer);
+        let result = get_provider(&selector, "test_operation", &initializer).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(format!("{}", err).contains("Failed to initialize"));
@@ -1007,7 +1011,10 @@ mod tests {
         ];
         let selector = RpcSelector::new(configs).expect("Failed to create selector");
 
-        let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
+        let provider_initializer = |url: &str| {
+            let url = url.to_string();
+            async move { Ok::<String, TestError>(url) }
+        };
 
         // Operation that always fails with a non-retriable error
         let operation =
@@ -1049,7 +1056,10 @@ mod tests {
         ];
         let selector = RpcSelector::new(configs).expect("Failed to create selector");
 
-        let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
+        let provider_initializer = |url: &str| {
+            let url = url.to_string();
+            async move { Ok::<String, TestError>(url) }
+        };
 
         // Operation that always fails with a retriable error
         let operation = |_provider: String| async { Err(TestError("Retriable error".to_string())) };
@@ -1092,7 +1102,7 @@ mod tests {
         let attempts_clone = attempts.clone();
 
         let provider_initializer =
-            |_url: &str| -> Result<String, TestError> { Ok("mock_provider".to_string()) };
+            |_url: &str| async move { Ok::<String, TestError>("mock_provider".to_string()) };
 
         let operation = move |_provider: String| {
             let attempts = attempts_clone.clone();
@@ -1133,10 +1143,14 @@ mod tests {
         let current_provider = Arc::new(Mutex::new(String::new()));
         let current_provider_clone = current_provider.clone();
 
-        let provider_initializer = move |url: &str| -> Result<String, TestError> {
-            let mut provider = current_provider_clone.lock().unwrap();
-            *provider = url.to_string();
-            Ok(url.to_string())
+        let provider_initializer = move |url: &str| {
+            let current_provider_clone = current_provider_clone.clone();
+            let url = url.to_string();
+            async move {
+                let mut provider = current_provider_clone.lock().unwrap();
+                *provider = url.clone();
+                Ok::<String, TestError>(url)
+            }
         };
 
         let operation = move |provider: String| async move {
@@ -1183,7 +1197,7 @@ mod tests {
         let selector = RpcSelector::new(configs).expect("Failed to create selector");
 
         let provider_initializer =
-            |_: &str| -> Result<String, TestError> { Ok("mock_provider".to_string()) };
+            |_: &str| async move { Ok::<String, TestError>("mock_provider".to_string()) };
 
         let operation = |_: String| async { Err(TestError("Always fails".to_string())) };
 
@@ -1217,7 +1231,7 @@ mod tests {
         };
 
         let provider_initializer =
-            |_url: &str| -> Result<String, TestError> { Ok("mock_provider".to_string()) };
+            |_url: &str| async move { Ok::<String, TestError>("mock_provider".to_string()) };
 
         let operation = |_provider: String| async move { Ok::<_, TestError>(42) };
 
@@ -1250,12 +1264,16 @@ mod tests {
         let attempt_count = Arc::new(AtomicU8::new(0));
         let attempt_count_clone = attempt_count.clone();
 
-        let provider_initializer = move |url: &str| -> Result<String, TestError> {
-            let count = attempt_count_clone.fetch_add(1, AtomicOrdering::SeqCst);
-            if count == 0 && url.contains("8545") {
-                Err(TestError("First provider init failed".to_string()))
-            } else {
-                Ok(url.to_string())
+        let provider_initializer = move |url: &str| {
+            let attempt_count_clone = attempt_count_clone.clone();
+            let url = url.to_string();
+            async move {
+                let count = attempt_count_clone.fetch_add(1, AtomicOrdering::SeqCst);
+                if count == 0 && url.contains("8545") {
+                    Err(TestError("First provider init failed".to_string()))
+                } else {
+                    Ok::<String, TestError>(url)
+                }
             }
         };
 
@@ -1279,8 +1297,8 @@ mod tests {
         assert!(attempt_count.load(AtomicOrdering::SeqCst) >= 2); // Should have tried multiple providers
     }
 
-    #[test]
-    fn test_get_provider_selector_errors() {
+    #[tokio::test]
+    async fn test_get_provider_selector_errors() {
         let _guard = setup_test_env();
 
         // Create selector with a single provider, select it, then mark it as failed
@@ -1291,11 +1309,13 @@ mod tests {
         let _ = selector.get_current_url().unwrap(); // This selects the provider
         selector.mark_current_as_failed(); // Now mark it as failed
 
-        let provider_initializer =
-            |url: &str| -> Result<String, TestError> { Ok(format!("provider-{}", url)) };
+        let provider_initializer = |url: &str| {
+            let url = url.to_string();
+            async move { Ok::<String, TestError>(format!("provider-{}", url)) }
+        };
 
         // Now get_provider should fail because the only provider is marked as failed
-        let result = get_provider(&selector, "test_operation", &provider_initializer);
+        let result = get_provider(&selector, "test_operation", &provider_initializer).await;
         assert!(result.is_err());
     }
 
@@ -1307,7 +1327,10 @@ mod tests {
         let configs = vec![RpcConfig::new("http://localhost:8545".to_string())];
         let selector = RpcSelector::new(configs).expect("Failed to create selector");
 
-        let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
+        let provider_initializer = |url: &str| {
+            let url = url.to_string();
+            async move { Ok::<String, TestError>(url) }
+        };
 
         // Operation that always fails with a retriable error
         let operation = |_provider: String| async { Err(TestError("Always fails".to_string())) };
@@ -1355,7 +1378,10 @@ mod tests {
         ];
         let selector = RpcSelector::new(configs).expect("Failed to create selector");
 
-        let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
+        let provider_initializer = |url: &str| {
+            let url = url.to_string();
+            async move { Ok::<String, TestError>(url) }
+        };
 
         // Operation that always fails with a retriable error
         let operation = |_provider: String| async { Err(TestError("Always fails".to_string())) };
@@ -1397,7 +1423,10 @@ mod tests {
         ];
         let selector = RpcSelector::new(configs).expect("Failed to create selector");
 
-        let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
+        let provider_initializer = |url: &str| {
+            let url = url.to_string();
+            async move { Ok::<String, TestError>(url) }
+        };
 
         // Operation that fails with a non-retriable error that SHOULD mark provider as failed
         let operation = |_provider: String| async move {
@@ -1439,7 +1468,10 @@ mod tests {
         ];
         let selector = RpcSelector::new(configs).expect("Failed to create selector");
 
-        let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
+        let provider_initializer = |url: &str| {
+            let url = url.to_string();
+            async move { Ok::<String, TestError>(url) }
+        };
 
         // Operation that fails with a non-retriable error that should NOT mark provider as failed
         let operation = |_provider: String| async move {
@@ -1481,7 +1513,10 @@ mod tests {
         ];
         let selector = RpcSelector::new(configs).expect("Failed to create selector");
 
-        let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
+        let provider_initializer = |url: &str| {
+            let url = url.to_string();
+            async move { Ok::<String, TestError>(url) }
+        };
 
         // Operation that always fails with a retriable error
         let operation =
@@ -1524,7 +1559,10 @@ mod tests {
         ];
         let selector = RpcSelector::new(configs).expect("Failed to create selector");
 
-        let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
+        let provider_initializer = |url: &str| {
+            let url = url.to_string();
+            async move { Ok::<String, TestError>(url) }
+        };
 
         let operation =
             |_provider: String| async move { Err(TestError("Critical network error".to_string())) };
@@ -1582,7 +1620,10 @@ mod tests {
         let configs = vec![RpcConfig::new("http://localhost:8545".to_string())];
         let selector = RpcSelector::new(configs).expect("Failed to create selector");
 
-        let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
+        let provider_initializer = |url: &str| {
+            let url = url.to_string();
+            async move { Ok::<String, TestError>(url) }
+        };
 
         // Operation that fails with a non-retriable error that SHOULD mark provider as failed
         let operation =
@@ -1631,7 +1672,10 @@ mod tests {
         let attempt_count = Arc::new(AtomicU8::new(0));
         let attempt_count_clone = attempt_count.clone();
 
-        let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
+        let provider_initializer = |url: &str| {
+            let url = url.to_string();
+            async move { Ok::<String, TestError>(url) }
+        };
 
         // Operation that always fails with errors that should mark provider as failed
         let operation = move |_provider: String| {

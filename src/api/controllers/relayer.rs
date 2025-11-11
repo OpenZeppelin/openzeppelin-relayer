@@ -27,7 +27,7 @@ use crate::{
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
-        Repository, TransactionCounterTrait, TransactionRepository,
+        Repository, SyncStateTrait, TransactionCounterTrait, TransactionRepository,
     },
     services::signer::{Signer, SignerFactory},
 };
@@ -44,9 +44,9 @@ use eyre::Result;
 /// # Returns
 ///
 /// A paginated list of relayers.
-pub async fn list_relayers<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn list_relayers<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     query: PaginationQuery,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -56,6 +56,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -84,9 +85,9 @@ where
 /// # Returns
 ///
 /// The details of the specified relayer.
-pub async fn get_relayer<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn get_relayer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -96,6 +97,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -126,9 +128,9 @@ where
 /// - **Network Validation**: Confirms the specified network exists for the given network type
 ///
 /// All validations must pass before the relayer is created, ensuring referential integrity and security constraints.
-pub async fn create_relayer<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn create_relayer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     request: CreateRelayerRequest,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -138,6 +140,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -191,6 +194,7 @@ where
     let signer_service = SignerFactory::create_signer(
         &relayer_model.network_type,
         &SignerDomainModel::from(signer_model.clone()),
+        &relayer_model.network,
     )
     .await
     .map_err(|e| ApiError::InternalError(e.to_string()))?;
@@ -222,10 +226,10 @@ where
 /// # Returns
 ///
 /// The updated relayer information.
-pub async fn update_relayer<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn update_relayer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
     patch: serde_json::Value,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -235,6 +239,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -294,9 +299,9 @@ where
 ///
 /// This endpoint ensures that relayers cannot be deleted if they have any pending
 /// or active transactions. This prevents data loss and maintains system integrity.
-pub async fn delete_relayer<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn delete_relayer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -306,6 +311,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -349,9 +355,9 @@ where
 /// # Returns
 ///
 /// The status of the specified relayer.
-pub async fn get_relayer_status<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn get_relayer_status<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -361,6 +367,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -381,9 +388,9 @@ where
 /// # Returns
 ///
 /// The balance of the specified relayer.
-pub async fn get_relayer_balance<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn get_relayer_balance<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -393,6 +400,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -447,10 +455,10 @@ pub async fn send_transaction(
 /// # Returns
 ///
 /// The details of the specified transaction.
-pub async fn get_transaction_by_id<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn get_transaction_by_id<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
     transaction_id: String,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -460,6 +468,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -489,10 +498,10 @@ where
 /// # Returns
 ///
 /// The details of the specified transaction.
-pub async fn get_transaction_by_nonce<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn get_transaction_by_nonce<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
     nonce: u64,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -502,6 +511,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -536,10 +546,10 @@ where
 /// # Returns
 ///
 /// A paginated list of transactions
-pub async fn list_transactions<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn list_transactions<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
     query: PaginationQuery,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -549,6 +559,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -582,9 +593,9 @@ where
 /// # Returns
 ///
 /// A success response with details about cancelled and failed transactions.
-pub async fn delete_pending_transactions<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn delete_pending_transactions<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -594,6 +605,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -689,10 +701,10 @@ pub async fn replace_transaction(
 /// # Returns
 ///
 /// The signed data response.
-pub async fn sign_data<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn sign_data<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
     request: SignDataRequest,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -702,6 +714,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -729,10 +742,10 @@ where
 /// # Returns
 ///
 /// The signed typed data response.
-pub async fn sign_typed_data<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn sign_typed_data<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
     request: SignTypedDataRequest,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -742,6 +755,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -765,10 +779,10 @@ where
 /// # Returns
 ///
 /// The result of the JSON-RPC call.
-pub async fn relayer_rpc<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn relayer_rpc<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
     request: serde_json::Value,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -778,6 +792,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -802,10 +817,10 @@ where
 /// # Returns
 ///
 /// The signed transaction response.
-pub async fn sign_transaction<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn sign_transaction<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
     request: SignTransactionRequest,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -815,6 +830,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {

@@ -13,7 +13,7 @@ use crate::{
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
-        Repository, TransactionCounterTrait, TransactionRepository,
+        Repository, SyncStateTrait, TransactionCounterTrait, TransactionRepository,
     },
 };
 use actix_web::HttpResponse;
@@ -32,9 +32,9 @@ use eyre::Result;
 /// # Returns
 ///
 /// The result of the plugin call.
-pub async fn create_api_key<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn create_api_key<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     api_key_request: ApiKeyRequest,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -44,6 +44,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -66,9 +67,9 @@ where
 /// # Returns
 ///
 /// The result of the api key list.
-pub async fn list_api_keys<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn list_api_keys<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     query: PaginationQuery,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -78,6 +79,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -108,9 +110,9 @@ where
 /// * `api_key_id` - The id of the api key.
 /// * `state` - The application state containing the api key repository.
 ///
-pub async fn get_api_key_permissions<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn get_api_key_permissions<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     api_key_id: String,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -120,6 +122,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -138,9 +141,9 @@ where
 /// * `api_key_id` - The id of the api key.
 /// * `state` - The application state containing the api key repository.
 ///
-pub async fn delete_api_key<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn delete_api_key<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     _api_key_id: String,
-    _state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    _state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -150,6 +153,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {

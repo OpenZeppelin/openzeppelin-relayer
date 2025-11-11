@@ -26,7 +26,7 @@ use crate::{
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
-        Repository, TransactionCounterTrait, TransactionRepository,
+        Repository, SyncStateTrait, TransactionCounterTrait, TransactionRepository,
     },
 };
 use apalis::prelude::*;
@@ -76,8 +76,8 @@ fn create_backoff(initial_ms: u64, max_ms: u64, jitter: f64) -> Result<Exponenti
     Ok(maker)
 }
 
-pub async fn initialize_workers<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
-    app_state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+pub async fn initialize_workers<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
+    app_state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -87,6 +87,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -311,8 +312,8 @@ fn filter_relayers_for_swap(relayers: Vec<RelayerRepoModel>) -> Vec<RelayerRepoM
 
 /// Initializes the Solana swap workers
 /// This function creates and registers workers for Solana relayers that have swap enabled and cron schedule set.
-pub async fn initialize_solana_swap_workers<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
-    app_state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+pub async fn initialize_solana_swap_workers<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
+    app_state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -322,6 +323,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {

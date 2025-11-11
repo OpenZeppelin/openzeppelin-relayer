@@ -11,7 +11,7 @@ use crate::{
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
-        Repository, TransactionCounterTrait, TransactionRepository,
+        Repository, SyncStateTrait, TransactionCounterTrait, TransactionRepository,
     },
 };
 use color_eyre::{eyre::WrapErr, Result};
@@ -35,9 +35,9 @@ where
     Ok(())
 }
 
-pub async fn initialize_relayer<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn initialize_relayer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     relayer_id: String,
-    app_state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    app_state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -47,6 +47,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -60,8 +61,8 @@ pub fn get_relayer_ids_to_initialize(relayers: &[RelayerRepoModel]) -> Vec<Strin
     relayers.iter().map(|r| r.id.clone()).collect()
 }
 
-pub async fn initialize_relayers<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
-    app_state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+pub async fn initialize_relayers<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
+    app_state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -71,6 +72,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {

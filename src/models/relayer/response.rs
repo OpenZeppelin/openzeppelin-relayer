@@ -12,13 +12,13 @@
 //! with the domain model for business logic.
 
 use super::{
-    DisabledReason, Relayer, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerNetworkType,
-    RelayerRepoModel, RelayerSolanaPolicy, RelayerSolanaSwapConfig, RelayerStellarPolicy,
-    RpcConfig, SolanaAllowedTokensPolicy, SolanaFeePaymentStrategy,
+    DisabledReason, Relayer, RelayerEvmPolicy, RelayerMidnightPolicy, RelayerNetworkPolicy,
+    RelayerNetworkType, RelayerRepoModel, RelayerSolanaPolicy, RelayerSolanaSwapConfig,
+    RelayerStellarPolicy, RpcConfig, SolanaAllowedTokensPolicy, SolanaFeePaymentStrategy,
 };
 use crate::constants::{
-    DEFAULT_EVM_GAS_LIMIT_ESTIMATION, DEFAULT_EVM_MIN_BALANCE, DEFAULT_SOLANA_MAX_TX_DATA_SIZE,
-    DEFAULT_SOLANA_MIN_BALANCE, DEFAULT_STELLAR_MIN_BALANCE,
+    DEFAULT_EVM_GAS_LIMIT_ESTIMATION, DEFAULT_EVM_MIN_BALANCE, DEFAULT_MIDNIGHT_MIN_BALANCE,
+    DEFAULT_SOLANA_MAX_TX_DATA_SIZE, DEFAULT_SOLANA_MIN_BALANCE, DEFAULT_STELLAR_MIN_BALANCE,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -43,6 +43,7 @@ pub enum RelayerNetworkPolicyResponse {
     Stellar(StellarPolicyResponse),
     // Solana has many fields but some overlap with others, so it should be tried last
     Solana(SolanaPolicyResponse),
+    Midnight(MidnightPolicyResponse),
 }
 
 impl From<RelayerNetworkPolicy> for RelayerNetworkPolicyResponse {
@@ -56,6 +57,9 @@ impl From<RelayerNetworkPolicy> for RelayerNetworkPolicyResponse {
             }
             RelayerNetworkPolicy::Stellar(stellar_policy) => {
                 RelayerNetworkPolicyResponse::Stellar(stellar_policy.into())
+            }
+            RelayerNetworkPolicy::Midnight(midnight_policy) => {
+                RelayerNetworkPolicyResponse::Midnight(midnight_policy.into())
             }
         }
     }
@@ -141,6 +145,15 @@ pub enum RelayerStatus {
         system_disabled: bool,
         paused: bool,
     },
+    #[serde(rename = "midnight")]
+    Midnight {
+        balance: String,
+        pending_transactions_count: u64,
+        last_confirmed_transaction_timestamp: Option<String>,
+        system_disabled: bool,
+        paused: bool,
+        nonce: String,
+    },
 }
 
 /// Convert RelayerNetworkPolicy to RelayerNetworkPolicyResponse based on network type
@@ -168,6 +181,9 @@ fn convert_policy_to_response(
         (RelayerNetworkPolicy::Stellar(stellar_policy), _) => {
             RelayerNetworkPolicyResponse::Stellar(StellarPolicyResponse::from(stellar_policy))
         }
+        (RelayerNetworkPolicy::Midnight(midnight_policy), _) => {
+            RelayerNetworkPolicyResponse::Midnight(MidnightPolicyResponse::from(midnight_policy))
+        }
     }
 }
 
@@ -190,6 +206,11 @@ impl From<Relayer> for RelayerResponse {
             disabled_reason: None,
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct MidnightPolicyResponse {
+    pub min_balance: u64,
 }
 
 impl From<RelayerRepoModel> for RelayerResponse {
@@ -263,6 +284,12 @@ impl<'de> serde::Deserialize<'de> for RelayerResponse {
                             serde_json::from_value(policies_value.clone())
                                 .map_err(D::Error::custom)?;
                         RelayerNetworkPolicyResponse::Stellar(stellar_policy)
+                    }
+                    RelayerNetworkType::Midnight => {
+                        let midnight_policy: MidnightPolicyResponse =
+                            serde_json::from_value(policies_value.clone())
+                                .map_err(D::Error::custom)?;
+                        RelayerNetworkPolicyResponse::Midnight(midnight_policy)
                     }
                 };
                 Some(policy_response)
@@ -348,6 +375,7 @@ fn is_empty_policy(policy: &RelayerNetworkPolicy) -> bool {
                 && stellar_policy.max_fee.is_none()
                 && stellar_policy.timeout_seconds.is_none()
         }
+        RelayerNetworkPolicy::Midnight(midnight_policy) => midnight_policy.min_balance.is_none(),
     }
 }
 
@@ -513,6 +541,14 @@ impl From<RelayerStellarPolicy> for StellarPolicyResponse {
             max_fee: policy.max_fee,
             timeout_seconds: policy.timeout_seconds,
             concurrent_transactions: policy.concurrent_transactions,
+        }
+    }
+}
+
+impl From<RelayerMidnightPolicy> for MidnightPolicyResponse {
+    fn from(policy: RelayerMidnightPolicy) -> Self {
+        Self {
+            min_balance: policy.min_balance.unwrap_or(DEFAULT_MIDNIGHT_MIN_BALANCE),
         }
     }
 }

@@ -1,7 +1,7 @@
 use crate::{
     config::{
-        EvmNetworkConfig, NetworkConfigCommon, NetworkFileConfig, SolanaNetworkConfig,
-        StellarNetworkConfig,
+        EvmNetworkConfig, MidnightNetworkConfig, NetworkConfigCommon, NetworkFileConfig,
+        SolanaNetworkConfig, StellarNetworkConfig,
     },
     models::NetworkType,
 };
@@ -17,6 +17,8 @@ pub enum NetworkConfigData {
     Solana(SolanaNetworkConfig),
     /// Stellar network configuration
     Stellar(StellarNetworkConfig),
+    /// Midnight network configuration
+    Midnight(MidnightNetworkConfig),
 }
 
 impl NetworkConfigData {
@@ -26,6 +28,7 @@ impl NetworkConfigData {
             NetworkConfigData::Evm(config) => &config.common,
             NetworkConfigData::Solana(config) => &config.common,
             NetworkConfigData::Stellar(config) => &config.common,
+            NetworkConfigData::Midnight(config) => &config.common,
         }
     }
 
@@ -35,6 +38,7 @@ impl NetworkConfigData {
             NetworkConfigData::Evm(_) => NetworkType::Evm,
             NetworkConfigData::Solana(_) => NetworkType::Solana,
             NetworkConfigData::Stellar(_) => NetworkType::Stellar,
+            NetworkConfigData::Midnight(_) => NetworkType::Midnight,
         }
     }
 
@@ -115,6 +119,24 @@ impl NetworkRepoModel {
         }
     }
 
+    /// Creates a new NetworkRepoModel with Midnight configuration.
+    ///
+    /// # Arguments
+    /// * `config` - The Midnight network configuration
+    ///
+    /// # Returns
+    /// A new NetworkRepoModel instance
+    pub fn new_midnight(config: MidnightNetworkConfig) -> Self {
+        let name = config.common.network.clone();
+        let id = format!("midnight:{name}").to_lowercase();
+        Self {
+            id,
+            name,
+            network_type: NetworkType::Midnight,
+            config: NetworkConfigData::Midnight(config),
+        }
+    }
+
     /// Creates an ID string from network type and name.
     ///
     /// # Arguments
@@ -153,6 +175,7 @@ impl TryFrom<NetworkFileConfig> for NetworkRepoModel {
             NetworkFileConfig::Evm(evm_config) => Ok(Self::new_evm(evm_config)),
             NetworkFileConfig::Solana(solana_config) => Ok(Self::new_solana(solana_config)),
             NetworkFileConfig::Stellar(stellar_config) => Ok(Self::new_stellar(stellar_config)),
+            NetworkFileConfig::Midnight(midnight_config) => Ok(Self::new_midnight(midnight_config)),
         }
     }
 }

@@ -917,9 +917,7 @@ mod tests {
             }));
         }
 
-        let large_json = json!({
-            "networks": networks_array
-        });
+        let large_json = json!({ "networks": networks_array });
 
         create_temp_file(&dir, "large.json", &large_json.to_string());
 

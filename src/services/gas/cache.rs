@@ -259,7 +259,7 @@ impl GasPriceCache {
             let refresh = async {
                 // Get network provider and fetch fresh data
                 let provider =
-                    crate::services::provider::get_network_provider(&network, None).ok()?;
+                    crate::services::provider::get_network_provider(&network, None, None).ok()?;
 
                 // Use the generic fetcher factory to get the best gas price for this network
                 let fresh_gas_price = GasPriceFetcherFactory::fetch_gas_price(&provider, &network)

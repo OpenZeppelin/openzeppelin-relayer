@@ -13,7 +13,11 @@ use crate::{
     },
     models::{
         transaction::{
-            request::{evm::EvmTransactionRequest, stellar::StellarTransactionRequest},
+            request::{
+                evm::EvmTransactionRequest,
+                midnight::{MidnightIntentRequest, MidnightOfferRequest},
+                stellar::StellarTransactionRequest,
+            },
             solana::SolanaInstructionSpec,
             stellar::{DecoratedSignature, MemoSpec, OperationSpec},
         },
@@ -31,7 +35,7 @@ use alloy::{
 
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
-use std::{convert::TryFrom, str::FromStr};
+use std::{collections::HashMap, convert::TryFrom, str::FromStr};
 use strum::Display;
 
 use utoipa::ToSchema;
@@ -204,6 +208,7 @@ pub enum NetworkTransactionData {
     Evm(EvmTransactionData),
     Solana(SolanaTransactionData),
     Stellar(StellarTransactionData),
+    Midnight(MidnightTransactionData),
 }
 
 impl NetworkTransactionData {
@@ -230,6 +235,17 @@ impl NetworkTransactionData {
             NetworkTransactionData::Stellar(data) => Ok(data.clone()),
             _ => Err(TransactionError::InvalidType(
                 "Expected Stellar transaction".to_string(),
+            )),
+        }
+    }
+
+    pub fn get_midnight_transaction_data(
+        &self,
+    ) -> Result<MidnightTransactionData, TransactionError> {
+        match self {
+            NetworkTransactionData::Midnight(data) => Ok(data.clone()),
+            _ => Err(TransactionError::InvalidType(
+                "Expected Midnight transaction".to_string(),
             )),
         }
     }
@@ -789,6 +805,22 @@ impl StellarTransactionData {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MidnightTransactionData {
+    // Transaction lifecycle fields
+    pub hash: Option<String>,        // Extrinsic transaction hash
+    pub pallet_hash: Option<String>, // Midnight pallet transaction hash
+    pub block_hash: Option<String>,  // Hash of the block containing the transaction
+    pub segment_results: Option<HashMap<u16, bool>>, // For partial success tracking
+    pub raw: Option<Vec<u8>>,
+    pub signature: Option<String>, // Signature of the transaction
+
+    // Request data stored for prepare_transaction
+    pub guaranteed_offer: Option<MidnightOfferRequest>,
+    pub intents: Vec<MidnightIntentRequest>,
+    pub fallible_offers: Vec<(u16, MidnightOfferRequest)>,
+}
+
 impl
     TryFrom<(
         &NetworkTransactionRequest,
@@ -902,6 +934,33 @@ impl
                     is_canceled: Some(false),
                 })
             }
+            NetworkTransactionRequest::Midnight(midnight_request) => Ok(Self {
+                id: Uuid::new_v4().to_string(),
+                relayer_id: relayer_model.id.clone(),
+                status: TransactionStatus::Pending,
+                status_reason: None,
+                created_at: now,
+                sent_at: None,
+                confirmed_at: None,
+                valid_until: midnight_request.ttl.clone(),
+                network_type: NetworkType::Midnight,
+                network_data: NetworkTransactionData::Midnight(MidnightTransactionData {
+                    hash: None,
+                    pallet_hash: None,
+                    block_hash: None,
+                    segment_results: None,
+                    raw: None,
+                    signature: None,
+                    guaranteed_offer: midnight_request.guaranteed_offer.clone(),
+                    intents: midnight_request.intents.clone(),
+                    fallible_offers: midnight_request.fallible_offers.clone(),
+                }),
+                delete_at: None,
+                priced_at: None,
+                hashes: Vec::new(),
+                noop_count: None,
+                is_canceled: Some(false),
+            }),
         }
     }
 }

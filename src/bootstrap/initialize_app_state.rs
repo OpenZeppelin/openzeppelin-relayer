@@ -8,8 +8,8 @@ use crate::{
     models::{AppState, DefaultAppState},
     repositories::{
         ApiKeyRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage,
-        PluginRepositoryStorage, RelayerRepositoryStorage, SignerRepositoryStorage,
-        TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
+        PluginRepositoryStorage, RelayerRepositoryStorage, RelayerStateRepositoryStorage,
+        SignerRepositoryStorage, TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
     },
     utils::initialize_redis_connection,
 };
@@ -25,6 +25,7 @@ pub struct RepositoryCollection {
     pub notification: Arc<NotificationRepositoryStorage>,
     pub network: Arc<NetworkRepositoryStorage>,
     pub transaction_counter: Arc<TransactionCounterRepositoryStorage>,
+    pub sync_state: Arc<RelayerStateRepositoryStorage>,
     pub plugin: Arc<PluginRepositoryStorage>,
     pub api_key: Arc<ApiKeyRepositoryStorage>,
 }
@@ -45,6 +46,7 @@ pub async fn initialize_repositories(config: &ServerConfig) -> eyre::Result<Repo
             notification: Arc::new(NotificationRepositoryStorage::new_in_memory()),
             network: Arc::new(NetworkRepositoryStorage::new_in_memory()),
             transaction_counter: Arc::new(TransactionCounterRepositoryStorage::new_in_memory()),
+            sync_state: Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
             plugin: Arc::new(PluginRepositoryStorage::new_in_memory()),
             api_key: Arc::new(ApiKeyRepositoryStorage::new_in_memory()),
         },
@@ -80,6 +82,10 @@ pub async fn initialize_repositories(config: &ServerConfig) -> eyre::Result<Repo
                     config.redis_key_prefix.clone(),
                 )?),
                 transaction_counter: Arc::new(TransactionCounterRepositoryStorage::new_redis(
+                    connection_manager.clone(),
+                    config.redis_key_prefix.clone(),
+                )?),
+                sync_state: Arc::new(RelayerStateRepositoryStorage::new_redis(
                     connection_manager.clone(),
                     config.redis_key_prefix.clone(),
                 )?),
@@ -124,6 +130,7 @@ pub async fn initialize_app_state(
         network_repository: repositories.network,
         notification_repository: repositories.notification,
         transaction_counter_store: repositories.transaction_counter,
+        sync_state_store: repositories.sync_state,
         job_producer,
         plugin_repository: repositories.plugin,
         api_key_repository: repositories.api_key,
@@ -160,6 +167,7 @@ mod tests {
         assert!(Arc::strong_count(&repositories.notification) >= 1);
         assert!(Arc::strong_count(&repositories.network) >= 1);
         assert!(Arc::strong_count(&repositories.transaction_counter) >= 1);
+        assert!(Arc::strong_count(&repositories.sync_state) >= 1);
         assert!(Arc::strong_count(&repositories.plugin) >= 1);
         assert!(Arc::strong_count(&repositories.api_key) >= 1);
     }

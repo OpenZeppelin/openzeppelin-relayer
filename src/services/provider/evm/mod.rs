@@ -184,7 +184,7 @@ impl EvmProvider {
     }
 
     /// Initialize a provider for a given URL
-    fn initialize_provider(&self, url: &str) -> Result<EvmProviderType, ProviderError> {
+    async fn initialize_provider(&self, url: &str) -> Result<EvmProviderType, ProviderError> {
         let rpc_url = url
             .parse()
             .map_err(|e| ProviderError::NetworkConfiguration(format!("Invalid URL format: {e}")))?;
@@ -229,14 +229,16 @@ impl EvmProvider {
             self.timeout_seconds
         );
 
+        let self_clone = self.clone();
         retry_rpc_call(
             &self.selector,
             operation_name,
             is_retriable_error,
             should_mark_provider_failed,
-            |url| match self.initialize_provider(url) {
-                Ok(provider) => Ok(provider),
-                Err(e) => Err(e),
+            move |url| {
+                let self_clone = self_clone.clone();
+                let url = url.to_string();
+                async move { self_clone.initialize_provider(&url).await }
             },
             operation,
             Some(self.retry_config.clone()),

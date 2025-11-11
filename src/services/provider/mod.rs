@@ -1,7 +1,10 @@
+use std::collections::HashMap;
 use std::num::ParseIntError;
 
+use crate::config::network::IndexerUrls;
 use crate::config::ServerConfig;
-use crate::models::{EvmNetwork, RpcConfig, SolanaNetwork, StellarNetwork};
+use crate::domain::to_midnight_network_id;
+use crate::models::{EvmNetwork, MidnightNetwork, RpcConfig, SolanaNetwork, StellarNetwork};
 use serde::Serialize;
 use thiserror::Error;
 
@@ -15,6 +18,9 @@ pub use solana::*;
 
 mod stellar;
 pub use stellar::*;
+
+mod midnight;
+pub use midnight::*;
 
 mod retry;
 pub use retry::*;
@@ -179,6 +185,7 @@ pub trait NetworkConfiguration: Sized {
     fn new_provider(
         rpc_urls: Vec<RpcConfig>,
         timeout_seconds: u64,
+        metadata: Option<&HashMap<String, String>>,
     ) -> Result<Self::Provider, ProviderError>;
 }
 
@@ -195,6 +202,7 @@ impl NetworkConfiguration for EvmNetwork {
     fn new_provider(
         rpc_urls: Vec<RpcConfig>,
         timeout_seconds: u64,
+        _metadata: Option<&HashMap<String, String>>,
     ) -> Result<Self::Provider, ProviderError> {
         EvmProvider::new(rpc_urls, timeout_seconds)
     }
@@ -213,6 +221,7 @@ impl NetworkConfiguration for SolanaNetwork {
     fn new_provider(
         rpc_urls: Vec<RpcConfig>,
         timeout_seconds: u64,
+        _metadata: Option<&HashMap<String, String>>,
     ) -> Result<Self::Provider, ProviderError> {
         SolanaProvider::new(rpc_urls, timeout_seconds)
     }
@@ -231,8 +240,52 @@ impl NetworkConfiguration for StellarNetwork {
     fn new_provider(
         rpc_urls: Vec<RpcConfig>,
         timeout_seconds: u64,
+        _metadata: Option<&HashMap<String, String>>,
     ) -> Result<Self::Provider, ProviderError> {
         StellarProvider::new(rpc_urls, timeout_seconds)
+    }
+}
+
+impl NetworkConfiguration for MidnightNetwork {
+    type Provider = MidnightProvider;
+
+    fn public_rpc_urls(&self) -> Vec<String> {
+        (*self)
+            .public_rpc_urls()
+            .map(|urls| urls.to_vec())
+            .unwrap_or_default()
+    }
+
+    fn new_provider(
+        rpc_urls: Vec<RpcConfig>,
+        timeout_seconds: u64,
+        metadata: Option<&HashMap<String, String>>,
+    ) -> Result<Self::Provider, ProviderError> {
+        let indexer_urls = metadata.map(|metadata| IndexerUrls {
+            http: metadata.get("http").cloned().unwrap_or_default(),
+            ws: metadata.get("ws").cloned().unwrap_or_default(),
+        });
+
+        if indexer_urls.is_none() {
+            return Err(ProviderError::NetworkConfiguration(
+                "Indexer URLs are required for Midnight network".to_string(),
+            ));
+        }
+
+        let network_id =
+            metadata.map(|metadata| metadata.get("network").cloned().unwrap_or_default());
+
+        if network_id.is_none() {
+            return Err(ProviderError::NetworkConfiguration(
+                "Network ID is required for Midnight network".to_string(),
+            ));
+        }
+
+        // We can safely unwrap because we checked for None above
+        let network_id = to_midnight_network_id(&network_id.unwrap());
+
+        // We can safely unwrap because we checked for None above
+        MidnightProvider::new(rpc_urls, indexer_urls.unwrap(), network_id, timeout_seconds)
     }
 }
 
@@ -251,6 +304,7 @@ impl NetworkConfiguration for StellarNetwork {
 ///   are used to configure the provider. If `None` or `Some` but empty, the function
 ///   falls back to using the public RPC URLs defined by the `network`'s
 ///   `NetworkConfiguration` implementation.
+/// * `metadata`: An `Option<HashMap<String, String>>`. If `Some`, it is used to configure the provider.
 ///
 /// # Returns
 ///
@@ -261,6 +315,7 @@ impl NetworkConfiguration for StellarNetwork {
 pub fn get_network_provider<N: NetworkConfiguration>(
     network: &N,
     custom_rpc_urls: Option<Vec<RpcConfig>>,
+    metadata: Option<&HashMap<String, String>>,
 ) -> Result<N::Provider, ProviderError> {
     let rpc_timeout_ms = ServerConfig::from_env().rpc_timeout_ms;
     let timeout_seconds = rpc_timeout_ms / 1000; // Convert ms to s
@@ -278,7 +333,7 @@ pub fn get_network_provider<N: NetworkConfiguration>(
         }
     };
 
-    N::new_provider(rpc_urls, timeout_seconds)
+    N::new_provider(rpc_urls, timeout_seconds, metadata)
 }
 
 /// Determines if an HTTP status code indicates the provider should be marked as failed.
@@ -578,7 +633,7 @@ mod tests {
         setup_test_env();
 
         let network = create_test_evm_network();
-        let result = get_network_provider(&network, None);
+        let result = get_network_provider(&network, None, None);
 
         cleanup_test_env();
         assert!(result.is_ok());
@@ -600,7 +655,7 @@ mod tests {
                 weight: 1,
             },
         ];
-        let result = get_network_provider(&network, Some(custom_urls));
+        let result = get_network_provider(&network, Some(custom_urls), None);
 
         cleanup_test_env();
         assert!(result.is_ok());
@@ -613,7 +668,7 @@ mod tests {
 
         let network = create_test_evm_network();
         let custom_urls: Vec<RpcConfig> = vec![];
-        let result = get_network_provider(&network, Some(custom_urls));
+        let result = get_network_provider(&network, Some(custom_urls), None);
 
         cleanup_test_env();
         assert!(result.is_ok()); // Should fall back to public URLs
@@ -625,7 +680,7 @@ mod tests {
         setup_test_env();
 
         let network = create_test_solana_network("mainnet-beta");
-        let result = get_network_provider(&network, None);
+        let result = get_network_provider(&network, None, None);
 
         cleanup_test_env();
         assert!(result.is_ok());
@@ -637,7 +692,7 @@ mod tests {
         setup_test_env();
 
         let network = create_test_solana_network("testnet");
-        let result = get_network_provider(&network, None);
+        let result = get_network_provider(&network, None, None);
 
         cleanup_test_env();
         assert!(result.is_ok());
@@ -659,7 +714,7 @@ mod tests {
                 weight: 1,
             },
         ];
-        let result = get_network_provider(&network, Some(custom_urls));
+        let result = get_network_provider(&network, Some(custom_urls), None);
 
         cleanup_test_env();
         assert!(result.is_ok());
@@ -672,7 +727,7 @@ mod tests {
 
         let network = create_test_solana_network("testnet");
         let custom_urls: Vec<RpcConfig> = vec![];
-        let result = get_network_provider(&network, Some(custom_urls));
+        let result = get_network_provider(&network, Some(custom_urls), None);
 
         cleanup_test_env();
         assert!(result.is_ok()); // Should fall back to public URLs
@@ -685,7 +740,7 @@ mod tests {
         setup_test_env();
 
         let network = create_test_stellar_network();
-        let result = get_network_provider(&network, None); // No custom URLs
+        let result = get_network_provider(&network, None, None); // No custom URLs
 
         cleanup_test_env();
         assert!(result.is_ok()); // Should fall back to public URLs for testnet
@@ -703,7 +758,7 @@ mod tests {
             RpcConfig::with_weight("http://custom-stellar-rpc2.example.com".to_string(), 50)
                 .unwrap(),
         ];
-        let result = get_network_provider(&network, Some(custom_urls));
+        let result = get_network_provider(&network, Some(custom_urls), None);
 
         cleanup_test_env();
         assert!(result.is_ok());
@@ -717,7 +772,7 @@ mod tests {
 
         let network = create_test_stellar_network();
         let custom_urls: Vec<RpcConfig> = vec![]; // Empty custom URLs
-        let result = get_network_provider(&network, Some(custom_urls));
+        let result = get_network_provider(&network, Some(custom_urls), None);
 
         cleanup_test_env();
         assert!(result.is_ok()); // Should fall back to public URLs for mainnet
@@ -734,7 +789,7 @@ mod tests {
             RpcConfig::with_weight("http://zero-weight-rpc.example.com".to_string(), 0).unwrap(),
             RpcConfig::new("http://active-rpc.example.com".to_string()), // Default weight 100
         ];
-        let result = get_network_provider(&network, Some(custom_urls));
+        let result = get_network_provider(&network, Some(custom_urls), None);
         cleanup_test_env();
         assert!(result.is_ok()); // active-rpc should be chosen
     }
@@ -754,7 +809,7 @@ mod tests {
         // The current get_network_provider logic passes the custom_urls to N::new_provider if Some and not empty.
         // If custom_urls becomes effectively empty *inside* N::new_provider (like StellarProvider::new after filtering weights),
         // then N::new_provider is responsible for erroring or handling.
-        let result = get_network_provider(&network, Some(custom_urls));
+        let result = get_network_provider(&network, Some(custom_urls), None);
         cleanup_test_env();
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -782,7 +837,7 @@ mod tests {
         setup_test_env();
         let network = create_test_stellar_network();
         let custom_urls = vec![RpcConfig::new("ftp://custom-ftp.example.com".to_string())];
-        let result = get_network_provider(&network, Some(custom_urls));
+        let result = get_network_provider(&network, Some(custom_urls), None);
         cleanup_test_env();
         assert!(result.is_err());
         match result.unwrap_err() {

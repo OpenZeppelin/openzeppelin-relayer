@@ -82,7 +82,7 @@ impl NetworkConfigCommon {
     pub fn merge_with_parent(&self, parent: &Self) -> Self {
         Self {
             network: self.network.clone(),
-            from: self.from.clone(),
+            from: self.from.clone().or(parent.from.clone()),
             rpc_urls: self.rpc_urls.clone().or_else(|| parent.rpc_urls.clone()),
             explorer_urls: self
                 .explorer_urls

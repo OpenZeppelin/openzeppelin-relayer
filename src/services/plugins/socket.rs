@@ -55,7 +55,7 @@ use crate::models::{
 };
 use crate::repositories::{
     ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
-    TransactionCounterTrait, TransactionRepository,
+    SyncStateTrait, TransactionCounterTrait, TransactionRepository,
 };
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -108,14 +108,14 @@ impl SocketService {
     ///
     /// A vector of traces.
     #[allow(clippy::type_complexity)]
-    pub async fn listen<RA, J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    pub async fn listen<RA, J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
         self,
         shutdown_rx: oneshot::Receiver<()>,
-        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
+        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>>,
         relayer_api: Arc<RA>,
     ) -> Result<Vec<serde_json::Value>, PluginError>
     where
-        RA: RelayerApiTrait<J, RR, TR, NR, NFR, SR, TCR, PR, AKR> + 'static + Send + Sync,
+        RA: RelayerApiTrait<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR> + 'static + Send + Sync,
         J: JobProducerTrait + Send + Sync + 'static,
         RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
         TR: TransactionRepository
@@ -127,6 +127,7 @@ impl SocketService {
         NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
         SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
         TCR: TransactionCounterTrait + Send + Sync + 'static,
+        RSR: SyncStateTrait + Send + Sync + 'static,
         PR: PluginRepositoryTrait + Send + Sync + 'static,
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {
@@ -139,7 +140,7 @@ impl SocketService {
             let relayer_api = Arc::clone(&relayer_api);
             tokio::select! {
                 Ok((stream, _)) = self.listener.accept() => {
-                    let result = tokio::spawn(Self::handle_connection::<RA, J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(stream, state, relayer_api))
+                    let result = tokio::spawn(Self::handle_connection::<RA, J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(stream, state, relayer_api))
                         .await
                         .map_err(|e| PluginError::SocketError(e.to_string()))?;
 
@@ -170,13 +171,13 @@ impl SocketService {
     ///
     /// A vector of traces.
     #[allow(clippy::type_complexity)]
-    async fn handle_connection<RA, J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    async fn handle_connection<RA, J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
         stream: UnixStream,
-        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
+        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>>,
         relayer_api: Arc<RA>,
     ) -> Result<Vec<serde_json::Value>, PluginError>
     where
-        RA: RelayerApiTrait<J, RR, TR, NR, NFR, SR, TCR, PR, AKR> + 'static + Send + Sync,
+        RA: RelayerApiTrait<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR> + 'static + Send + Sync,
         J: JobProducerTrait + 'static,
         RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
         TR: TransactionRepository
@@ -188,6 +189,7 @@ impl SocketService {
         NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
         SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
         TCR: TransactionCounterTrait + Send + Sync + 'static,
+        RSR: SyncStateTrait + Send + Sync + 'static,
         PR: PluginRepositoryTrait + Send + Sync + 'static,
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {

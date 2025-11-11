@@ -77,7 +77,7 @@ async fn handle_request(
     let relayer_transaction =
         get_relayer_transaction(status_request.relayer_id.clone(), &state).await?;
 
-    let transaction = get_transaction_by_id(status_request.transaction_id, &state).await?;
+    let transaction = get_transaction_by_id(status_request.transaction_id.clone(), &state).await?;
 
     match status_request.command {
         TransactionCommand::Submit => {

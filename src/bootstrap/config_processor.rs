@@ -12,7 +12,7 @@ use crate::{
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
-        Repository, TransactionCounterTrait, TransactionRepository,
+        Repository, SyncStateTrait, TransactionCounterTrait, TransactionRepository,
     },
     services::signer::{Signer as SignerService, SignerFactory},
 };
@@ -20,9 +20,9 @@ use color_eyre::{eyre::WrapErr, Report, Result};
 use futures::future::try_join_all;
 use tracing::info;
 
-async fn process_api_key<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+async fn process_api_key<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     server_config: &ServerConfig,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -32,6 +32,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -52,9 +53,9 @@ where
 }
 
 /// Process all plugins from the config file and store them in the repository.
-async fn process_plugins<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+async fn process_plugins<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     config_file: &Config,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -64,6 +65,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -107,9 +109,9 @@ async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
 /// 2. Store the resulting repository model
 ///
 /// This function processes signers in parallel using futures.
-async fn process_signers<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+async fn process_signers<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     config_file: &Config,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -119,6 +121,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -146,9 +149,9 @@ where
 /// 2. Store the resulting model in the repository
 ///
 /// This function processes notifications in parallel using futures.
-async fn process_notifications<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+async fn process_notifications<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     config_file: &Config,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -158,6 +161,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -186,9 +190,9 @@ where
 /// 2. Store the resulting model in the repository
 ///
 /// This function processes networks in parallel using futures.
-async fn process_networks<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+async fn process_networks<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     config_file: &Config,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -198,6 +202,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -228,9 +233,9 @@ where
 /// 5. Store the resulting model in the repository
 ///
 /// This function processes relayers in parallel using futures.
-async fn process_relayers<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+async fn process_relayers<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     config_file: &Config,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -240,6 +245,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -259,6 +265,7 @@ where
         let signer_service = SignerFactory::create_signer(
             &network_type,
             &SignerDomainModel::from(signer_model.clone()),
+            &repo_model.network,
         )
         .await
         .wrap_err("Failed to create signer service")?;
@@ -284,8 +291,8 @@ where
 ///
 /// This function checks if any of the main repository list keys exist in Redis.
 /// If they exist, it means Redis already contains data from a previous configuration load.
-async fn is_redis_populated<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+async fn is_redis_populated<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<bool>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -295,6 +302,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -332,10 +340,10 @@ where
 /// 2. Process notifications
 /// 3. Process networks
 /// 4. Process relayers
-pub async fn process_config_file<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn process_config_file<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     config_file: Config,
     server_config: Arc<ServerConfig>,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -345,6 +353,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -400,9 +409,10 @@ mod tests {
         },
         repositories::{
             ApiKeyRepositoryStorage, InMemoryApiKeyRepository, InMemoryNetworkRepository,
-            InMemoryNotificationRepository, InMemoryPluginRepository, InMemorySignerRepository,
-            InMemoryTransactionCounter, InMemoryTransactionRepository, NetworkRepositoryStorage,
-            NotificationRepositoryStorage, PluginRepositoryStorage, RelayerRepositoryStorage,
+            InMemoryNotificationRepository, InMemoryPluginRepository,
+            InMemoryRelayerStateRepository, InMemorySignerRepository, InMemoryTransactionCounter,
+            InMemoryTransactionRepository, NetworkRepositoryStorage, NotificationRepositoryStorage,
+            PluginRepositoryStorage, RelayerRepositoryStorage, RelayerStateRepositoryStorage,
             SignerRepositoryStorage, TransactionCounterRepositoryStorage,
             TransactionRepositoryStorage,
         },
@@ -424,6 +434,7 @@ mod tests {
         NotificationRepositoryStorage,
         SignerRepositoryStorage,
         TransactionCounterRepositoryStorage,
+        RelayerStateRepositoryStorage,
         PluginRepositoryStorage,
         ApiKeyRepositoryStorage,
     > {
@@ -456,6 +467,7 @@ mod tests {
             transaction_counter_store: Arc::new(
                 TransactionCounterRepositoryStorage::new_in_memory(),
             ),
+            sync_state_store: Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
             job_producer: Arc::new(mock_job_producer),
             plugin_repository: Arc::new(PluginRepositoryStorage::new_in_memory()),
             api_key_repository: Arc::new(ApiKeyRepositoryStorage::new_in_memory()),
@@ -627,32 +639,35 @@ mod tests {
         .await;
 
         let _secret_mock = mock_server
-            .mock("GET", "/v1/secret/data/test-key")
-            .match_header("X-Vault-Token", "test-token")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(serde_json::to_string(&json!({
-                "request_id": "test-request-id",
-                "lease_id": "",
-                "renewable": false,
-                "lease_duration": 0,
-                "data": {
-                    "data": {
-                        "value": "C5ACE14AB163556747F02C1110911537578FBE335FB74D18FBF82990AD70C3B9"
-                    },
-                    "metadata": {
-                        "created_time": "2024-01-01T00:00:00Z",
-                        "deletion_time": "",
-                        "destroyed": false,
-                        "version": 1
-                    }
-                },
-                "wrap_info": null,
-                "warnings": null,
-                "auth": null
-            })).unwrap())
-            .create_async()
-            .await;
+			.mock("GET", "/v1/secret/data/test-key")
+			.match_header("X-Vault-Token", "test-token")
+			.with_status(200)
+			.with_header("content-type", "application/json")
+			.with_body(
+				serde_json::to_string(&json!({
+					"request_id": "test-request-id",
+					"lease_id": "",
+					"renewable": false,
+					"lease_duration": 0,
+					"data": {
+						"data": {
+							"value": "C5ACE14AB163556747F02C1110911537578FBE335FB74D18FBF82990AD70C3B9"
+						},
+						"metadata": {
+							"created_time": "2024-01-01T00:00:00Z",
+							"deletion_time": "",
+							"destroyed": false,
+							"version": 1
+						}
+					},
+					"wrap_info": null,
+					"warnings": null,
+					"auth": null
+				}))
+				.unwrap(),
+			)
+			.create_async()
+			.await;
 
         let signer = SignerFileConfig {
             id: "vault-signer".to_string(),
@@ -1210,6 +1225,7 @@ mod tests {
             InMemoryTransactionRepository::new(),
         ));
         let transaction_counter = Arc::new(InMemoryTransactionCounter::default());
+        let sync_state_store = Arc::new(InMemoryRelayerStateRepository::default());
         let plugin_repo = Arc::new(InMemoryPluginRepository::default());
         let api_key_repo = Arc::new(InMemoryApiKeyRepository::default());
 
@@ -1237,6 +1253,7 @@ mod tests {
             network_repository: network_repo.clone(),
             transaction_repository: transaction_repo.clone(),
             transaction_counter_store: transaction_counter.clone(),
+            sync_state_store: sync_state_store.clone(),
             job_producer: job_producer.clone(),
             plugin_repository: plugin_repo.clone(),
             api_key_repository: api_key_repo.clone(),

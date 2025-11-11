@@ -48,6 +48,7 @@ pub enum RelayerNetworkType {
     Evm,
     Solana,
     Stellar,
+    Midnight,
 }
 
 impl Display for RelayerNetworkType {
@@ -56,6 +57,7 @@ impl Display for RelayerNetworkType {
             RelayerNetworkType::Evm => write!(f, "evm"),
             RelayerNetworkType::Solana => write!(f, "solana"),
             RelayerNetworkType::Stellar => write!(f, "stellar"),
+            RelayerNetworkType::Midnight => write!(f, "midnight"),
         }
     }
 }
@@ -66,6 +68,7 @@ impl From<ConfigFileNetworkType> for RelayerNetworkType {
             ConfigFileNetworkType::Evm => RelayerNetworkType::Evm,
             ConfigFileNetworkType::Solana => RelayerNetworkType::Solana,
             ConfigFileNetworkType::Stellar => RelayerNetworkType::Stellar,
+            ConfigFileNetworkType::Midnight => RelayerNetworkType::Midnight,
         }
     }
 }
@@ -76,6 +79,7 @@ impl From<RelayerNetworkType> for ConfigFileNetworkType {
             RelayerNetworkType::Evm => ConfigFileNetworkType::Evm,
             RelayerNetworkType::Solana => ConfigFileNetworkType::Solana,
             RelayerNetworkType::Stellar => ConfigFileNetworkType::Stellar,
+            RelayerNetworkType::Midnight => ConfigFileNetworkType::Midnight,
         }
     }
 }
@@ -491,6 +495,15 @@ impl RelayerSolanaPolicy {
             .and_then(|entry| entry.decimals)
     }
 }
+
+/// Midnight-specific relayer policy configuration
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct RelayerMidnightPolicy {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_balance: Option<u64>,
+}
+
 /// Stellar-specific relayer policy configuration
 #[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
@@ -515,6 +528,8 @@ pub enum RelayerNetworkPolicy {
     Solana(RelayerSolanaPolicy),
     #[serde(rename = "stellar")]
     Stellar(RelayerStellarPolicy),
+    #[serde(rename = "midnight")]
+    Midnight(RelayerMidnightPolicy),
 }
 
 impl RelayerNetworkPolicy {
@@ -539,6 +554,14 @@ impl RelayerNetworkPolicy {
         match self {
             Self::Stellar(policy) => policy.clone(),
             _ => RelayerStellarPolicy::default(),
+        }
+    }
+
+    /// Get Midnight policy, returning default if not Midnight
+    pub fn get_midnight_policy(&self) -> RelayerMidnightPolicy {
+        match self {
+            Self::Midnight(policy) => policy.clone(),
+            _ => RelayerMidnightPolicy::default(),
         }
     }
 }
@@ -651,12 +674,16 @@ impl Relayer {
             (RelayerNetworkType::Stellar, Some(RelayerNetworkPolicy::Stellar(_))) => {
                 // Stellar policies don't need special validation currently
             }
+            (RelayerNetworkType::Midnight, Some(RelayerNetworkPolicy::Midnight(_))) => {
+                // Midnight policies don't need special validation currently
+            }
             // Mismatched network type and policy type
             (network_type, Some(policy)) => {
                 let policy_type = match policy {
                     RelayerNetworkPolicy::Evm(_) => "EVM",
                     RelayerNetworkPolicy::Solana(_) => "Solana",
                     RelayerNetworkPolicy::Stellar(_) => "Stellar",
+                    RelayerNetworkPolicy::Midnight(_) => "Midnight",
                 };
                 let network_type_str = format!("{network_type:?}");
                 return Err(RelayerValidationError::InvalidPolicy(format!(
@@ -1075,6 +1102,7 @@ mod tests {
         assert_eq!(RelayerNetworkType::Evm.to_string(), "evm");
         assert_eq!(RelayerNetworkType::Solana.to_string(), "solana");
         assert_eq!(RelayerNetworkType::Stellar.to_string(), "stellar");
+        assert_eq!(RelayerNetworkType::Midnight.to_string(), "midnight");
     }
 
     #[test]
@@ -1090,6 +1118,10 @@ mod tests {
         assert_eq!(
             RelayerNetworkType::from(ConfigFileNetworkType::Stellar),
             RelayerNetworkType::Stellar
+        );
+        assert_eq!(
+            RelayerNetworkType::from(ConfigFileNetworkType::Midnight),
+            RelayerNetworkType::Midnight
         );
     }
 
@@ -1107,6 +1139,10 @@ mod tests {
             ConfigFileNetworkType::from(RelayerNetworkType::Stellar),
             ConfigFileNetworkType::Stellar
         );
+        assert_eq!(
+            ConfigFileNetworkType::from(RelayerNetworkType::Midnight),
+            ConfigFileNetworkType::Midnight
+        );
     }
 
     #[test]
@@ -1123,6 +1159,7 @@ mod tests {
             (RelayerNetworkType::Evm, "\"evm\""),
             (RelayerNetworkType::Solana, "\"solana\""),
             (RelayerNetworkType::Stellar, "\"stellar\""),
+            (RelayerNetworkType::Midnight, "\"midnight\""),
         ];
 
         for (network_type, expected_json) in types {

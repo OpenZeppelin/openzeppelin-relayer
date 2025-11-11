@@ -7,7 +7,6 @@
 [![CI](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/ci.yaml/badge.svg)](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/ci.yaml)
 [![Release Workflow](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/release-please.yml/badge.svg)](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/release-please.yml)
 
-
 This relayer service enables interaction with blockchain networks through transaction submissions. It offers multi-chain support and an extensible architecture for adding new chains.
 
 [User Docs](https://docs.openzeppelin.com/relayer/) | [Quickstart](https://docs.openzeppelin.com/relayer/quickstart)
@@ -33,6 +32,7 @@ This relayer service enables interaction with blockchain networks through transa
 - Solana
 - EVM
 - Stellar
+- Midnight (🚧 Partial support)
 
 > For details about current development status and upcoming features, check our [Project Roadmap](https://docs.openzeppelin.com/relayer/roadmap).
 

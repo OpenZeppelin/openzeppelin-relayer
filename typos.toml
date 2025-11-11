@@ -1,6 +1,7 @@
 [default.extend-identifiers]
 HashiCorp = "HashiCorp"
 NOOPs = "NOOPs"
+StandardTrasactionInfo = "StandardTrasactionInfo"
 
 [default.extend-words]
 # Technical term for "no operation" transactions
@@ -9,6 +10,4 @@ noop = "noop"
 
 [default]
 # Ignore short and long SHA commit hashes (7-40 hex characters)
-extend-ignore-identifiers-re = [
-    "[a-f0-9]{7,40}",
-]
+extend-ignore-identifiers-re = ["[a-f0-9]{7,40}"]

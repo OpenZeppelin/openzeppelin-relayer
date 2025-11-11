@@ -15,7 +15,7 @@ use crate::{
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
-        Repository, TransactionCounterTrait, TransactionRepository,
+        Repository, SyncStateTrait, TransactionCounterTrait, TransactionRepository,
     },
 };
 
@@ -32,9 +32,9 @@ use super::{NetworkTransaction, RelayerTransactionFactory};
 ///
 /// A `Result` containing a `TransactionRepoModel` if successful, or an `ApiError` if an error
 /// occurs.
-pub async fn get_transaction_by_id<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn get_transaction_by_id<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     transaction_id: String,
-    state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<TransactionRepoModel, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -44,6 +44,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -81,6 +82,7 @@ pub async fn get_relayer_transaction(
         state.network_repository(),
         state.transaction_repository(),
         state.transaction_counter_store(),
+        state.sync_state_store(),
         state.job_producer(),
     )
     .await
@@ -113,6 +115,7 @@ pub async fn get_relayer_transaction_by_model(
         state.network_repository(),
         state.transaction_repository(),
         state.transaction_counter_store(),
+        state.sync_state_store(),
         state.job_producer(),
     )
     .await

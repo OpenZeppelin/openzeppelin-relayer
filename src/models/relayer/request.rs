@@ -12,8 +12,8 @@
 //! while delegating business logic validation to the domain model.
 
 use super::{
-    Relayer, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerNetworkType, RelayerSolanaPolicy,
-    RelayerStellarPolicy, RpcConfig,
+    Relayer, RelayerEvmPolicy, RelayerMidnightPolicy, RelayerNetworkPolicy, RelayerNetworkType,
+    RelayerSolanaPolicy, RelayerStellarPolicy, RpcConfig,
 };
 use crate::{models::error::ApiError, utils::generate_uuid};
 use serde::{Deserialize, Serialize};
@@ -81,6 +81,9 @@ impl<'de> serde::Deserialize<'de> for CreateRelayerRequest {
                 RelayerNetworkPolicy::Stellar(stellar_policy) => {
                     CreateRelayerPolicyRequest::Stellar(stellar_policy)
                 }
+                RelayerNetworkPolicy::Midnight(midnight_policy) => {
+                    CreateRelayerPolicyRequest::Midnight(midnight_policy)
+                }
             };
             Some(policy)
         } else {
@@ -108,6 +111,7 @@ pub enum CreateRelayerPolicyRequest {
     Evm(RelayerEvmPolicy),
     Solana(RelayerSolanaPolicy),
     Stellar(RelayerStellarPolicy),
+    Midnight(RelayerMidnightPolicy),
 }
 
 impl CreateRelayerPolicyRequest {
@@ -125,6 +129,9 @@ impl CreateRelayerPolicyRequest {
             }
             (CreateRelayerPolicyRequest::Stellar(policy), RelayerNetworkType::Stellar) => {
                 Ok(RelayerNetworkPolicy::Stellar(policy.clone()))
+            }
+            (CreateRelayerPolicyRequest::Midnight(policy), RelayerNetworkType::Midnight) => {
+                Ok(RelayerNetworkPolicy::Midnight(policy.clone()))
             }
             _ => Err(ApiError::BadRequest(
                 "Policy type does not match relayer network type".to_string(),
@@ -155,6 +162,12 @@ pub fn deserialize_policy_for_network_type(
                 serde_json::from_value(policies_value.clone())
                     .map_err(|e| ApiError::BadRequest(format!("Invalid Stellar policy: {e}")))?;
             Ok(RelayerNetworkPolicy::Stellar(stellar_policy))
+        }
+        RelayerNetworkType::Midnight => {
+            let midnight_policy: RelayerMidnightPolicy =
+                serde_json::from_value(policies_value.clone())
+                    .map_err(|e| ApiError::BadRequest(format!("Invalid Midnight policy: {e}")))?;
+            Ok(RelayerNetworkPolicy::Midnight(midnight_policy))
         }
     }
 }

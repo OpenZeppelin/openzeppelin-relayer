@@ -26,6 +26,9 @@ pub use transaction_counter::*;
 pub mod network;
 pub use network::*;
 
+mod relayer_state;
+pub use relayer_state::*;
+
 mod plugin;
 pub use plugin::*;
 

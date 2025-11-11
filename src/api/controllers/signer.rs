@@ -16,7 +16,7 @@ use crate::{
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
-        Repository, TransactionCounterTrait, TransactionRepository,
+        Repository, SyncStateTrait, TransactionCounterTrait, TransactionRepository,
     },
 };
 use actix_web::HttpResponse;
@@ -32,9 +32,9 @@ use eyre::Result;
 /// # Returns
 ///
 /// A paginated list of signers.
-pub async fn list_signers<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn list_signers<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     query: PaginationQuery,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -44,6 +44,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -71,9 +72,9 @@ where
 /// # Returns
 ///
 /// The signer details or an error if not found.
-pub async fn get_signer<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn get_signer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     signer_id: String,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -83,6 +84,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -109,9 +111,9 @@ where
 /// (keys, credentials, etc.) should be provided through configuration files or
 /// other secure channels. This is a security measure to prevent sensitive data
 /// from being transmitted through API requests.
-pub async fn create_signer<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn create_signer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     request: SignerCreateRequest,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -121,6 +123,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -152,10 +155,10 @@ where
 ///
 /// Signer updates are not supported for security reasons. To modify a signer,
 /// delete the existing one and create a new signer with the desired configuration.
-pub async fn update_signer<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn update_signer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     _signer_id: String,
     _request: SignerUpdateRequest,
-    _state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    _state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -165,6 +168,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
@@ -189,9 +193,9 @@ where
 /// This endpoint ensures that signers cannot be deleted if they are still being
 /// used by any relayers. This prevents breaking existing relayer configurations
 /// and maintains system integrity.
-pub async fn delete_signer<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn delete_signer<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>(
     signer_id: String,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -201,6 +205,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
