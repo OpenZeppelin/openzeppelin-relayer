@@ -6,6 +6,8 @@
 
 use async_trait::async_trait;
 use eyre::Result;
+#[cfg(test)]
+use mockall::automock;
 use soroban_rs::SorobanTransactionResponse;
 use soroban_rs::stellar_rpc_client::Client;
 use soroban_rs::stellar_rpc_client::{
