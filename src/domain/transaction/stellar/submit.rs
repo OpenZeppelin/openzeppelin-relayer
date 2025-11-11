@@ -103,7 +103,7 @@ where
         tx: TransactionRepoModel,
         error: TransactionError,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        let error_reason = format!("Submission failed: {}", error);
+        let error_reason = format!("Submission failed: {error}");
         let tx_id = tx.id.clone();
         warn!(reason = %error_reason, "transaction submission failed");
 

@@ -66,13 +66,13 @@ impl From<hex::FromHexError> for ProviderError {
 
 impl From<std::net::AddrParseError> for ProviderError {
     fn from(err: std::net::AddrParseError) -> Self {
-        ProviderError::NetworkConfiguration(format!("Invalid network address: {}", err))
+        ProviderError::NetworkConfiguration(format!("Invalid network address: {err}"))
     }
 }
 
 impl From<ParseIntError> for ProviderError {
     fn from(err: ParseIntError) -> Self {
-        ProviderError::Other(format!("Number parsing error: {}", err))
+        ProviderError::Other(format!("Number parsing error: {err}"))
     }
 }
 
@@ -165,7 +165,7 @@ where
                 code: json_rpc_err.code,
                 message: json_rpc_err.message.to_string(),
             },
-            _ => ProviderError::Other(format!("Other RPC error: {}", err)),
+            _ => ProviderError::Other(format!("Other RPC error: {err}")),
         }
     }
 }
@@ -173,7 +173,7 @@ where
 // Implement From for RpcSelectorError
 impl From<rpc_selector::RpcSelectorError> for ProviderError {
     fn from(err: rpc_selector::RpcSelectorError) -> Self {
-        ProviderError::NetworkConfiguration(format!("RPC selector error: {}", err))
+        ProviderError::NetworkConfiguration(format!("RPC selector error: {err}"))
     }
 }
 
@@ -433,7 +433,7 @@ pub fn is_retriable_error(error: &ProviderError) -> bool {
 
         // Any other errors: check message for network-related issues
         _ => {
-            let err_msg = format!("{}", error);
+            let err_msg = format!("{error}");
             let msg_lower = err_msg.to_lowercase();
             msg_lower.contains("timeout")
                 || msg_lower.contains("connection")

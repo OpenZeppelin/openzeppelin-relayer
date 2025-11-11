@@ -57,11 +57,11 @@ where
     let account = provider
         .get_account(relayer_address)
         .await
-        .map_err(|e| format!("Failed to fetch account from chain: {}", e))?;
+        .map_err(|e| format!("Failed to fetch account from chain: {e}"))?;
 
     let on_chain_seq = account.seq_num.0; // Extract the i64 value
     let next_usable = next_sequence_u64(on_chain_seq)
-        .map_err(|e| format!("Failed to calculate next sequence: {}", e))?;
+        .map_err(|e| format!("Failed to calculate next sequence: {e}"))?;
 
     info!(
         "Fetched sequence from chain: on-chain={}, next usable={}",

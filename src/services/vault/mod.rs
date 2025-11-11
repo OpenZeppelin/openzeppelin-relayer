@@ -199,12 +199,11 @@ impl VaultService {
         }
 
         let auth_settings = auth_settings_builder.build().map_err(|e| {
-            VaultError::ConfigError(format!("Failed to build Vault client settings: {}", e))
+            VaultError::ConfigError(format!("Failed to build Vault client settings: {e}"))
         })?;
 
-        let client = VaultClient::new(auth_settings).map_err(|e| {
-            VaultError::ConfigError(format!("Failed to create Vault client: {}", e))
-        })?;
+        let client = VaultClient::new(auth_settings)
+            .map_err(|e| VaultError::ConfigError(format!("Failed to create Vault client: {e}")))?;
 
         let token = login(
             &client,
@@ -227,14 +226,11 @@ impl VaultService {
         }
 
         let transit_settings = transit_settings_builder.build().map_err(|e| {
-            VaultError::ConfigError(format!("Failed to build Vault client settings: {}", e))
+            VaultError::ConfigError(format!("Failed to build Vault client settings: {e}"))
         })?;
 
         let client = Arc::new(VaultClient::new(transit_settings).map_err(|e| {
-            VaultError::ConfigError(format!(
-                "Failed to create authenticated Vault client: {}",
-                e
-            ))
+            VaultError::ConfigError(format!("Failed to create authenticated Vault client: {e}"))
         })?);
 
         Ok(client)
@@ -253,7 +249,7 @@ impl VaultServiceTrait for VaultService {
         let value = secret["value"]
             .as_str()
             .ok_or_else(|| {
-                VaultError::SecretNotFound(format!("Secret value invalid for key: {}", key_name))
+                VaultError::SecretNotFound(format!("Secret value invalid for key: {key_name}"))
             })?
             .to_string();
 
@@ -271,7 +267,7 @@ impl VaultServiceTrait for VaultService {
             None,
         )
         .await
-        .map_err(|e| VaultError::SigningError(format!("Failed to sign with Vault: {}", e)))?;
+        .map_err(|e| VaultError::SigningError(format!("Failed to sign with Vault: {e}")))?;
 
         let vault_signature_str = &vault_signature.signature;
 

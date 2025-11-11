@@ -148,8 +148,7 @@ impl TransactionCounterTrait for RedisTransactionCounter {
 
         if !exists {
             return Err(RepositoryError::NotFound(format!(
-                "Counter not found for relayer {} and address {}",
-                relayer_id, address
+                "Counter not found for relayer {relayer_id} and address {address}"
             )));
         }
 

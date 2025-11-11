@@ -102,8 +102,7 @@ impl<T: TurnkeyServiceTrait> Signer for TurnkeySigner<T> {
                 alloy::consensus::Signed::<TxEip1559>::eip2718_decode(&mut signed_bytes_slice)
                     .map_err(|e| {
                         SignerError::SigningError(format!(
-                            "Failed to decode signed transaction: {}",
-                            e
+                            "Failed to decode signed transaction: {e}"
                         ))
                     })?;
 
@@ -123,8 +122,7 @@ impl<T: TurnkeyServiceTrait> Signer for TurnkeySigner<T> {
                 alloy::consensus::Signed::<TxLegacy>::eip2718_decode(&mut signed_bytes_slice)
                     .map_err(|e| {
                         SignerError::SigningError(format!(
-                            "Failed to decode signed transaction: {}",
-                            e
+                            "Failed to decode signed transaction: {e}"
                         ))
                     })?;
 
@@ -159,7 +157,7 @@ impl<T: TurnkeyServiceTrait> DataSignerTrait for TurnkeySigner<T> {
 
         let v_byte = signature_bytes[64];
         let original_parity = normalize_v(v_byte as u64)
-            .ok_or_else(|| SignerError::SigningError(format!("Invalid v value: {}", v_byte)))?;
+            .ok_or_else(|| SignerError::SigningError(format!("Invalid v value: {v_byte}")))?;
 
         let normalized_sig = if let Some(normalized) = sig.normalize_s() {
             normalized.with_parity(!original_parity)
@@ -191,7 +189,7 @@ impl<T: TurnkeyServiceTrait> DataSignerTrait for TurnkeySigner<T> {
 
         let v_byte = signature_bytes[64];
         let original_parity = normalize_v(v_byte as u64)
-            .ok_or_else(|| SignerError::SigningError(format!("Invalid v value: {}", v_byte)))?;
+            .ok_or_else(|| SignerError::SigningError(format!("Invalid v value: {v_byte}")))?;
 
         let normalized_sig = if let Some(normalized) = sig.normalize_s() {
             normalized.with_parity(!original_parity)

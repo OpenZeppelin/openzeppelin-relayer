@@ -36,11 +36,11 @@ pub async fn apply_sequence(
     sequence: i64,
 ) -> Result<String, TransactionError> {
     update_xdr_sequence(envelope, sequence).map_err(|e| {
-        TransactionError::ValidationError(format!("Failed to update sequence: {}", e))
+        TransactionError::ValidationError(format!("Failed to update sequence: {e}"))
     })?;
 
     envelope.to_xdr_base64(Limits::none()).map_err(|e| {
-        TransactionError::ValidationError(format!("Failed to serialize envelope: {}", e))
+        TransactionError::ValidationError(format!("Failed to serialize envelope: {e}"))
     })
 }
 
@@ -108,10 +108,10 @@ where
     let signed_envelope = signed_stellar_data
         .get_envelope_for_submission()
         .map_err(|e| {
-            TransactionError::SignerError(format!("Failed to build signed envelope: {}", e))
+            TransactionError::SignerError(format!("Failed to build signed envelope: {e}"))
         })?;
     let signed_xdr = signed_envelope.to_xdr_base64(Limits::none()).map_err(|e| {
-        TransactionError::SignerError(format!("Failed to serialize signed envelope: {}", e))
+        TransactionError::SignerError(format!("Failed to serialize signed envelope: {e}"))
     })?;
     signed_stellar_data.signed_envelope_xdr = Some(signed_xdr);
 
@@ -136,10 +136,7 @@ where
         .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
 
     i64_from_u64(sequence_u64).map_err(|relayer_err| {
-        let msg = format!(
-            "Sequence conversion error for {}: {}",
-            sequence_u64, relayer_err
-        );
+        let msg = format!("Sequence conversion error for {sequence_u64}: {relayer_err}");
         TransactionError::ValidationError(msg)
     })
 }
@@ -196,9 +193,8 @@ pub async fn ensure_minimum_fee(
             "Updating transaction fee from {} to minimum {} stroops",
             current_fee, min_fee
         );
-        update_xdr_fee(envelope, min_fee).map_err(|e| {
-            TransactionError::ValidationError(format!("Failed to update fee: {}", e))
-        })?;
+        update_xdr_fee(envelope, min_fee)
+            .map_err(|e| TransactionError::ValidationError(format!("Failed to update fee: {e}")))?;
     }
 
     Ok(())
@@ -236,8 +232,7 @@ where
                 if (max_fee as u64) < required_fee {
                     return Err(TransactionError::ValidationError(
                         format!(
-                            "max_fee ({}) is insufficient. Required fee: {} (inclusion: {} + resource: {})",
-                            max_fee, required_fee, inclusion_fee, resource_fee
+                            "max_fee ({max_fee}) is insufficient. Required fee: {required_fee} (inclusion: {inclusion_fee} + resource: {resource_fee})"
                         )
                     ));
                 }
@@ -344,10 +339,10 @@ where
     let signed_envelope = final_stellar_data
         .get_envelope_for_submission()
         .map_err(|e| {
-            TransactionError::SignerError(format!("Failed to build signed envelope: {}", e))
+            TransactionError::SignerError(format!("Failed to build signed envelope: {e}"))
         })?;
     let signed_xdr = signed_envelope.to_xdr_base64(Limits::none()).map_err(|e| {
-        TransactionError::SignerError(format!("Failed to serialize signed envelope: {}", e))
+        TransactionError::SignerError(format!("Failed to serialize signed envelope: {e}"))
     })?;
     final_stellar_data.signed_envelope_xdr = Some(signed_xdr);
 

@@ -69,9 +69,10 @@ impl Repository<TransactionRepoModel, String> for InMemoryTransactionRepository 
 
     async fn get_by_id(&self, id: String) -> Result<TransactionRepoModel, RepositoryError> {
         let store = Self::acquire_lock(&self.store).await?;
-        store.get(&id).cloned().ok_or_else(|| {
-            RepositoryError::NotFound(format!("Transaction with ID {} not found", id))
-        })
+        store
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| RepositoryError::NotFound(format!("Transaction with ID {id} not found")))
     }
 
     #[allow(clippy::map_entry)]
@@ -88,8 +89,7 @@ impl Repository<TransactionRepoModel, String> for InMemoryTransactionRepository 
             Ok(updated_tx)
         } else {
             Err(RepositoryError::NotFound(format!(
-                "Transaction with ID {} not found",
-                id
+                "Transaction with ID {id} not found"
             )))
         }
     }
@@ -100,8 +100,7 @@ impl Repository<TransactionRepoModel, String> for InMemoryTransactionRepository 
             Ok(())
         } else {
             Err(RepositoryError::NotFound(format!(
-                "Transaction with ID {} not found",
-                id
+                "Transaction with ID {id} not found"
             )))
         }
     }
@@ -260,8 +259,7 @@ impl TransactionRepository for InMemoryTransactionRepository {
             Ok(tx.clone())
         } else {
             Err(RepositoryError::NotFound(format!(
-                "Transaction with ID {} not found",
-                tx_id
+                "Transaction with ID {tx_id} not found"
             )))
         }
     }

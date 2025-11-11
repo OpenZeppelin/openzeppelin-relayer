@@ -88,7 +88,7 @@ pub fn derive_viewing_key(
         .map_err(|e| SyncError::ViewingKeyError(format!("Invalid HRP for viewing key: {}", e)))?;
 
     let viewing_key_bech32 = bech32::encode::<Bech32m>(hrp, &enc_secret_bytes).map_err(|e| {
-        SyncError::ViewingKeyError(format!("Failed to encode viewing key in Bech32m: {}", e))
+        SyncError::ViewingKeyError(format!("Failed to encode viewing key in Bech32m: {e}"))
     })?;
 
     Ok(ViewingKeyFormat::Bech32m(viewing_key_bech32))

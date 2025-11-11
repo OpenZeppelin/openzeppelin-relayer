@@ -32,9 +32,8 @@ impl TryFrom<MemoSpec> for Memo {
         Ok(match m {
             MemoSpec::None => Memo::None,
             MemoSpec::Text { value } => {
-                let text = StringM::<28>::try_from(value.as_str()).map_err(|e| {
-                    SignerError::ConversionError(format!("Invalid memo text: {}", e))
-                })?;
+                let text = StringM::<28>::try_from(value.as_str())
+                    .map_err(|e| SignerError::ConversionError(format!("Invalid memo text: {e}")))?;
                 Memo::Text(text)
             }
             MemoSpec::Id { value } => Memo::Id(value),

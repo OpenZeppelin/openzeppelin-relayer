@@ -311,7 +311,7 @@ where
             .provider
             .get_transaction_count(&relayer_model.address)
             .await
-            .map_err(|e| RelayerError::ProviderError(format!("Failed to get nonce: {}", e)))?;
+            .map_err(|e| RelayerError::ProviderError(format!("Failed to get nonce: {e}")))?;
         let nonce_str = nonce_u256.to_string();
 
         let balance_response = self.get_balance().await?;

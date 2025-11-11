@@ -37,8 +37,7 @@ impl PlainOrEnvValue {
             PlainOrEnvValue::Env { value } => {
                 let value = Zeroizing::new(std::env::var(value).map_err(|_| {
                     PlainOrEnvValueError::MissingEnvVar(format!(
-                        "Environment variable {} not found",
-                        value
+                        "Environment variable {value} not found"
                     ))
                 })?);
                 Ok(SecretString::new(&value))
@@ -59,7 +58,7 @@ impl PlainOrEnvValue {
 pub fn validate_plain_or_env_value(plain_or_env: &PlainOrEnvValue) -> Result<(), ValidationError> {
     let value = plain_or_env.get_value().map_err(|e| {
         let mut err = ValidationError::new("plain_or_env_value_error");
-        err.message = Some(format!("plain_or_env_value_error: {}", e).into());
+        err.message = Some(format!("plain_or_env_value_error: {e}").into());
         err
     })?;
 

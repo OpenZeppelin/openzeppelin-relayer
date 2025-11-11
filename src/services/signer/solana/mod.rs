@@ -81,7 +81,7 @@ impl Signer for SolanaSigner {
     ) -> Result<SignTransactionResponse, SignerError> {
         // Extract Solana transaction data
         let solana_data = transaction.get_solana_transaction_data().map_err(|e| {
-            SignerError::SigningError(format!("Invalid transaction type for Solana signer: {}", e))
+            SignerError::SigningError(format!("Invalid transaction type for Solana signer: {e}"))
         })?;
 
         // Get the pre-built transaction string
@@ -93,9 +93,8 @@ impl Signer for SolanaSigner {
 
         // Decode transaction from base64
         let encoded_tx = EncodedSerializedTransaction::new(transaction_str);
-        let sdk_transaction = SolanaTransaction::try_from(encoded_tx).map_err(|e| {
-            SignerError::SigningError(format!("Failed to decode transaction: {}", e))
-        })?;
+        let sdk_transaction = SolanaTransaction::try_from(encoded_tx)
+            .map_err(|e| SignerError::SigningError(format!("Failed to decode transaction: {e}")))?;
 
         // Sign using the SDK transaction signing helper function
         let (signed_tx, signature) = sign_sdk_transaction(self, sdk_transaction).await?;
@@ -103,7 +102,7 @@ impl Signer for SolanaSigner {
         // Encode back to base64
         let encoded_signed_tx =
             EncodedSerializedTransaction::try_from(&signed_tx).map_err(|e| {
-                SignerError::SigningError(format!("Failed to encode signed transaction: {}", e))
+                SignerError::SigningError(format!("Failed to encode signed transaction: {e}"))
             })?;
 
         // Return Solana-specific response
@@ -167,7 +166,7 @@ pub async fn sign_sdk_transaction<T: SolanaSignTrait + ?Sized>(
     // Get signer's public key
     let signer_address = signer.pubkey().await?;
     let signer_pubkey = Pubkey::from_str(&signer_address.to_string())
-        .map_err(|e| SignerError::KeyError(format!("Invalid signer address: {}", e)))?;
+        .map_err(|e| SignerError::KeyError(format!("Invalid signer address: {e}")))?;
 
     // Find the position of the signer's public key in account_keys
     let signer_index = transaction
@@ -278,7 +277,7 @@ impl SolanaSignerFactory {
             }
             SignerConfig::Cdp(config) => {
                 let cdp_signer = CdpSigner::new(config.clone()).map_err(|e| {
-                    SignerFactoryError::CreationFailed(format!("CDP service error: {}", e))
+                    SignerFactoryError::CreationFailed(format!("CDP service error: {e}"))
                 })?;
                 return Ok(SolanaSigner::Cdp(cdp_signer));
             }
@@ -286,8 +285,7 @@ impl SolanaSignerFactory {
                 let turnkey_service =
                     TurnkeyService::new(turnkey_signer_config.clone()).map_err(|e| {
                         SignerFactoryError::InvalidConfig(format!(
-                            "Failed to create Turnkey service: {}",
-                            e
+                            "Failed to create Turnkey service: {e}"
                         ))
                     })?;
 
@@ -297,8 +295,7 @@ impl SolanaSignerFactory {
                 let google_cloud_kms_service =
                     GoogleCloudKmsService::new(google_cloud_kms_signer_config).map_err(|e| {
                         SignerFactoryError::InvalidConfig(format!(
-                            "Failed to create Google Cloud KMS service: {}",
-                            e
+                            "Failed to create Google Cloud KMS service: {e}"
                         ))
                     })?;
                 return Ok(SolanaSigner::GoogleCloudKms(GoogleCloudKmsSigner::new(

@@ -53,8 +53,7 @@ impl TryFrom<NotificationConfig> for Notification {
             }
             NotificationValidationError::SigningKeyTooShort(min_len) => {
                 ConfigFileError::InvalidFormat(format!(
-                    "Signing key must be at least {} characters long",
-                    min_len
+                    "Signing key must be at least {min_len} characters long"
                 ))
             }
         })?;
@@ -92,8 +91,7 @@ impl NotificationConfig {
                             Ok(Some(secret))
                         }
                         Err(e) => Err(ConfigFileError::MissingEnvVar(format!(
-                            "Environment variable '{}' not found: {}",
-                            value, e
+                            "Environment variable '{value}' not found: {e}"
                         ))),
                     }
                 }

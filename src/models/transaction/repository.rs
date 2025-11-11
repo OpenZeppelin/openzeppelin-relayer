@@ -719,7 +719,7 @@ impl StellarTransactionData {
     fn parse_xdr_envelope(&self, xdr: &str) -> Result<TransactionEnvelope, SignerError> {
         use soroban_rs::xdr::{Limits, ReadXdr};
         TransactionEnvelope::from_xdr_base64(xdr, Limits::none())
-            .map_err(|e| SignerError::ConversionError(format!("Invalid XDR: {}", e)))
+            .map_err(|e| SignerError::ConversionError(format!("Invalid XDR: {e}")))
     }
 
     // Helper method to attach signatures to an envelope
@@ -731,13 +731,11 @@ impl StellarTransactionData {
 
         // Serialize and re-parse to get a mutable version
         let envelope_xdr = envelope.to_xdr_base64(Limits::none()).map_err(|e| {
-            SignerError::ConversionError(format!("Failed to serialize envelope: {}", e))
+            SignerError::ConversionError(format!("Failed to serialize envelope: {e}"))
         })?;
 
         let mut envelope = TransactionEnvelope::from_xdr_base64(&envelope_xdr, Limits::none())
-            .map_err(|e| {
-                SignerError::ConversionError(format!("Failed to parse envelope: {}", e))
-            })?;
+            .map_err(|e| SignerError::ConversionError(format!("Failed to parse envelope: {e}")))?;
 
         let sigs = VecM::try_from(self.signatures.clone())
             .map_err(|_| SignerError::ConversionError("too many signatures".into()))?;
@@ -977,7 +975,7 @@ impl EvmTransactionData {
     pub fn to_address(&self) -> Result<Option<AlloyAddress>, SignerError> {
         Ok(match self.to.as_deref().filter(|s| !s.is_empty()) {
             Some(addr_str) => Some(AlloyAddress::from_str(addr_str).map_err(|e| {
-                AddressError::ConversionError(format!("Invalid 'to' address: {}", e))
+                AddressError::ConversionError(format!("Invalid 'to' address: {e}"))
             })?),
             None => None,
         })
@@ -990,7 +988,7 @@ impl EvmTransactionData {
     /// * `Err(SignerError)` if the hex string is invalid
     pub fn data_to_bytes(&self) -> Result<Bytes, SignerError> {
         Bytes::from_str(self.data.as_deref().unwrap_or(""))
-            .map_err(|e| SignerError::SigningError(format!("Invalid transaction data: {}", e)))
+            .map_err(|e| SignerError::SigningError(format!("Invalid transaction data: {e}")))
     }
 }
 

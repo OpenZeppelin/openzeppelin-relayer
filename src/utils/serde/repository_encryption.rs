@@ -18,7 +18,7 @@ where
 
     // Then encrypt the base64 string for secure storage
     let encrypted = encrypt_sensitive_field(&base64)
-        .map_err(|e| serde::ser::Error::custom(format!("Encryption failed: {}", e)))?;
+        .map_err(|e| serde::ser::Error::custom(format!("Encryption failed: {e}")))?;
 
     serializer.serialize_str(&encrypted)
 }
@@ -32,11 +32,11 @@ where
 
     // First decrypt the encrypted string to get the base64 string
     let base64_str = decrypt_sensitive_field(&encrypted_str)
-        .map_err(|e| serde::de::Error::custom(format!("Decryption failed: {}", e)))?;
+        .map_err(|e| serde::de::Error::custom(format!("Decryption failed: {e}")))?;
 
     // Then decode the base64 to get the raw secret bytes
     let decoded = base64_decode(&base64_str)
-        .map_err(|e| serde::de::Error::custom(format!("Invalid base64: {}", e)))?;
+        .map_err(|e| serde::de::Error::custom(format!("Invalid base64: {e}")))?;
 
     Ok(SecretVec::new(decoded.len(), |v| {
         v.copy_from_slice(&decoded)
@@ -50,7 +50,7 @@ where
 {
     let secret_content = secret.to_str();
     let encrypted = encrypt_sensitive_field(&secret_content)
-        .map_err(|e| serde::ser::Error::custom(format!("Encryption failed: {}", e)))?;
+        .map_err(|e| serde::ser::Error::custom(format!("Encryption failed: {e}")))?;
 
     let encoded = base64_encode(encrypted.as_bytes());
 
@@ -66,15 +66,15 @@ where
 
     // First decode the base64 to get the encrypted bytes
     let encrypted_bytes = base64_decode(&base64_str)
-        .map_err(|e| serde::de::Error::custom(format!("Invalid base64: {}", e)))?;
+        .map_err(|e| serde::de::Error::custom(format!("Invalid base64: {e}")))?;
 
     // Convert encrypted bytes back to string
     let encrypted_str = String::from_utf8(encrypted_bytes)
-        .map_err(|e| serde::de::Error::custom(format!("Invalid UTF-8: {}", e)))?;
+        .map_err(|e| serde::de::Error::custom(format!("Invalid UTF-8: {e}")))?;
 
     // Then decrypt the encrypted string to get the original content
     let decrypted = decrypt_sensitive_field(&encrypted_str)
-        .map_err(|e| serde::de::Error::custom(format!("Decryption failed: {}", e)))?;
+        .map_err(|e| serde::de::Error::custom(format!("Decryption failed: {e}")))?;
 
     Ok(SecretString::new(&decrypted))
 }
@@ -91,7 +91,7 @@ where
         Some(secret_string) => {
             let secret_content = secret_string.to_str();
             let encrypted = encrypt_sensitive_field(&secret_content)
-                .map_err(|e| serde::ser::Error::custom(format!("Encryption failed: {}", e)))?;
+                .map_err(|e| serde::ser::Error::custom(format!("Encryption failed: {e}")))?;
 
             let encoded = base64_encode(encrypted.as_bytes());
             serializer.serialize_some(&encoded)
@@ -113,15 +113,15 @@ where
         Some(base64_str) => {
             // First decode the base64 to get the encrypted bytes
             let encrypted_bytes = base64_decode(&base64_str)
-                .map_err(|e| serde::de::Error::custom(format!("Invalid base64: {}", e)))?;
+                .map_err(|e| serde::de::Error::custom(format!("Invalid base64: {e}")))?;
 
             // Convert encrypted bytes back to string
             let encrypted_str = String::from_utf8(encrypted_bytes)
-                .map_err(|e| serde::de::Error::custom(format!("Invalid UTF-8: {}", e)))?;
+                .map_err(|e| serde::de::Error::custom(format!("Invalid UTF-8: {e}")))?;
 
             // Then decrypt the encrypted string to get the original content
             let decrypted = decrypt_sensitive_field(&encrypted_str)
-                .map_err(|e| serde::de::Error::custom(format!("Decryption failed: {}", e)))?;
+                .map_err(|e| serde::de::Error::custom(format!("Decryption failed: {e}")))?;
 
             Ok(Some(SecretString::new(&decrypted)))
         }
