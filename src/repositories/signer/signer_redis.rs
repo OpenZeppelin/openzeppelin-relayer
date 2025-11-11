@@ -53,7 +53,7 @@ impl RedisSignerRepository {
         let result: Result<i64, RedisError> = conn.sadd(&key, id).await;
         result.map_err(|e| {
             error!(signer_id = %id, error = %e, "failed to add signer to list");
-            RepositoryError::Other(format!("Failed to add signer to list: {}", e))
+            RepositoryError::Other(format!("Failed to add signer to list: {e}"))
         })?;
 
         debug!(signer_id = %id, "added signer to list");
@@ -67,7 +67,7 @@ impl RedisSignerRepository {
         let result: Result<i64, RedisError> = conn.srem(&key, id).await;
         result.map_err(|e| {
             error!(signer_id = %id, error = %e, "failed to remove signer from list");
-            RepositoryError::Other(format!("Failed to remove signer from list: {}", e))
+            RepositoryError::Other(format!("Failed to remove signer from list: {e}"))
         })?;
 
         debug!(signer_id = %id, "removed signer from list");
@@ -81,7 +81,7 @@ impl RedisSignerRepository {
         let result: Result<Vec<String>, RedisError> = conn.smembers(&key).await;
         result.map_err(|e| {
             error!(error = %e, "failed to get signer IDs");
-            RepositoryError::Other(format!("Failed to get signer IDs: {}", e))
+            RepositoryError::Other(format!("Failed to get signer IDs: {e}"))
         })
     }
 
@@ -182,8 +182,7 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
             Err(e) => {
                 error!(error = %e, "failed to check if signer exists");
                 return Err(RepositoryError::Other(format!(
-                    "Failed to check signer existence: {}",
-                    e
+                    "Failed to check signer existence: {e}"
                 )));
             }
         }
@@ -195,7 +194,7 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         let result: Result<(), RedisError> = conn.set(&key, &serialized).await;
         result.map_err(|e| {
             error!(signer_id = %signer.id, error = %e, "failed to store signer");
-            RepositoryError::Other(format!("Failed to store signer: {}", e))
+            RepositoryError::Other(format!("Failed to store signer: {e}"))
         })?;
 
         // Add to list
@@ -226,15 +225,13 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
             Ok(None) => {
                 debug!(signer_id = %id, "signer not found");
                 Err(RepositoryError::NotFound(format!(
-                    "Signer with ID {} not found",
-                    id
+                    "Signer with ID {id} not found"
                 )))
             }
             Err(e) => {
                 error!(signer_id = %id, error = %e, "failed to retrieve signer");
                 Err(RepositoryError::Other(format!(
-                    "Failed to retrieve signer: {}",
-                    e
+                    "Failed to retrieve signer: {e}"
                 )))
             }
         }
@@ -265,8 +262,7 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         match exists {
             Ok(false) => {
                 return Err(RepositoryError::NotFound(format!(
-                    "Signer with ID {} not found",
-                    id
+                    "Signer with ID {id} not found"
                 )));
             }
             Ok(true) => {
@@ -275,8 +271,7 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
             Err(e) => {
                 error!(error = %e, "failed to check if signer exists");
                 return Err(RepositoryError::Other(format!(
-                    "Failed to check signer existence: {}",
-                    e
+                    "Failed to check signer existence: {e}"
                 )));
             }
         }
@@ -288,7 +283,7 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         let result: Result<(), RedisError> = conn.set(&key, &serialized).await;
         result.map_err(|e| {
             error!(signer_id = %id, error = %e, "failed to update signer");
-            RepositoryError::Other(format!("Failed to update signer: {}", e))
+            RepositoryError::Other(format!("Failed to update signer: {e}"))
         })?;
 
         debug!(signer_id = %id, "updated signer");
@@ -310,8 +305,7 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         match exists {
             Ok(false) => {
                 return Err(RepositoryError::NotFound(format!(
-                    "Signer with ID {} not found",
-                    id
+                    "Signer with ID {id} not found"
                 )));
             }
             Ok(true) => {
@@ -320,8 +314,7 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
             Err(e) => {
                 error!(error = %e, "failed to check if signer exists");
                 return Err(RepositoryError::Other(format!(
-                    "Failed to check signer existence: {}",
-                    e
+                    "Failed to check signer existence: {e}"
                 )));
             }
         }
@@ -330,7 +323,7 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         let result: Result<i64, RedisError> = conn.del(&key).await;
         result.map_err(|e| {
             error!(signer_id = %id, error = %e, "failed to delete signer");
-            RepositoryError::Other(format!("Failed to delete signer: {}", e))
+            RepositoryError::Other(format!("Failed to delete signer: {e}"))
         })?;
 
         // Remove from list

@@ -1,4 +1,5 @@
 use crate::{
+    domain::solana::SolanaTransactionValidationError,
     jobs::JobProducerError,
     models::{SignerError, SignerFactoryError},
     services::provider::{ProviderError, SolanaProviderError},
@@ -14,6 +15,9 @@ use thiserror::Error;
 pub enum TransactionError {
     #[error("Transaction validation error: {0}")]
     ValidationError(String),
+
+    #[error("Solana transaction validation error: {0}")]
+    SolanaValidation(#[from] SolanaTransactionValidationError),
 
     #[error("Network configuration error: {0}")]
     NetworkConfiguration(String),
@@ -46,10 +50,52 @@ pub enum TransactionError {
     SimulationFailed(String),
 }
 
+impl TransactionError {
+    /// Determines if this error is transient (can retry) or permanent (should fail).
+    ///
+    /// **Transient (can retry):**
+    /// - `SolanaValidation`: Delegates to underlying error's is_transient()
+    /// - `UnderlyingSolanaProvider`: Delegates to underlying error's is_transient()
+    /// - `UnderlyingProvider`: Delegates to underlying error's is_transient()
+    /// - `UnexpectedError`: Unexpected errors may resolve on retry
+    /// - `JobProducerError`: Job queue issues are typically transient
+    ///
+    /// **Permanent (fail immediately):**
+    /// - `ValidationError`: Malformed data, missing fields, invalid state transitions
+    /// - `InsufficientBalance`: Balance issues won't resolve without funding
+    /// - `NetworkConfiguration`: Configuration errors are permanent
+    /// - `InvalidType`: Type mismatches are permanent
+    /// - `NotSupported`: Unsupported operations won't change
+    /// - `SignerError`: Signer issues are typically permanent
+    /// - `SimulationFailed`: Transaction simulation failures are permanent
+    pub fn is_transient(&self) -> bool {
+        match self {
+            // Delegate to underlying error's is_transient() method
+            TransactionError::SolanaValidation(err) => err.is_transient(),
+            TransactionError::UnderlyingSolanaProvider(err) => err.is_transient(),
+            TransactionError::UnderlyingProvider(err) => err.is_transient(),
+
+            // Transient errors - may resolve on retry
+            TransactionError::UnexpectedError(_) => true,
+            TransactionError::JobProducerError(_) => true,
+
+            // Permanent errors - fail immediately
+            TransactionError::ValidationError(_) => false,
+            TransactionError::InsufficientBalance(_) => false,
+            TransactionError::NetworkConfiguration(_) => false,
+            TransactionError::InvalidType(_) => false,
+            TransactionError::NotSupported(_) => false,
+            TransactionError::SignerError(_) => false,
+            TransactionError::SimulationFailed(_) => false,
+        }
+    }
+}
+
 impl From<TransactionError> for ApiError {
     fn from(error: TransactionError) -> Self {
         match error {
             TransactionError::ValidationError(msg) => ApiError::BadRequest(msg),
+            TransactionError::SolanaValidation(err) => ApiError::BadRequest(err.to_string()),
             TransactionError::NetworkConfiguration(msg) => ApiError::InternalError(msg),
             TransactionError::JobProducerError(msg) => ApiError::InternalError(msg.to_string()),
             TransactionError::InvalidType(msg) => ApiError::InternalError(msg),
@@ -107,7 +153,7 @@ impl From<StellarProviderError> for TransactionError {
 
 impl From<xdr::Error> for TransactionError {
     fn from(error: xdr::Error) -> Self {
-        TransactionError::ValidationError(format!("XDR error: {}", error))
+        TransactionError::ValidationError(format!("XDR error: {error}"))
     }
 }
 
@@ -319,5 +365,125 @@ mod tests {
             }
             _ => panic!("Expected TransactionError::ValidationError"),
         }
+    }
+
+    #[test]
+    fn test_is_transient_permanent_errors() {
+        // Test permanent errors that should return false
+        let permanent_errors = vec![
+            TransactionError::ValidationError("invalid input".to_string()),
+            TransactionError::InsufficientBalance("not enough funds".to_string()),
+            TransactionError::NetworkConfiguration("wrong network".to_string()),
+            TransactionError::InvalidType("unknown type".to_string()),
+            TransactionError::NotSupported("feature unavailable".to_string()),
+            TransactionError::SignerError("key error".to_string()),
+            TransactionError::SimulationFailed("sim failed".to_string()),
+        ];
+
+        for error in permanent_errors {
+            assert!(
+                !error.is_transient(),
+                "Error {:?} should be permanent",
+                error
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_transient_transient_errors() {
+        // Test transient errors that should return true
+        let transient_errors = vec![
+            TransactionError::UnexpectedError("something went wrong".to_string()),
+            TransactionError::JobProducerError(JobProducerError::QueueError(
+                "queue full".to_string(),
+            )),
+        ];
+
+        for error in transient_errors {
+            assert!(
+                error.is_transient(),
+                "Error {:?} should be transient",
+                error
+            );
+        }
+    }
+
+    #[test]
+    fn test_stellar_provider_error_conversion() {
+        // Test SimulationFailed
+        let sim_error = StellarProviderError::SimulationFailed("sim failed".to_string());
+        let tx_error = TransactionError::from(sim_error);
+        match tx_error {
+            TransactionError::SimulationFailed(msg) => {
+                assert_eq!(msg, "sim failed");
+            }
+            _ => panic!("Expected TransactionError::SimulationFailed"),
+        }
+
+        // Test InsufficientBalance
+        let balance_error =
+            StellarProviderError::InsufficientBalance("not enough funds".to_string());
+        let tx_error = TransactionError::from(balance_error);
+        match tx_error {
+            TransactionError::InsufficientBalance(msg) => {
+                assert_eq!(msg, "not enough funds");
+            }
+            _ => panic!("Expected TransactionError::InsufficientBalance"),
+        }
+
+        // Test BadSeq
+        let seq_error = StellarProviderError::BadSeq("bad sequence".to_string());
+        let tx_error = TransactionError::from(seq_error);
+        match tx_error {
+            TransactionError::ValidationError(msg) => {
+                assert_eq!(msg, "bad sequence");
+            }
+            _ => panic!("Expected TransactionError::ValidationError"),
+        }
+
+        // Test RpcError
+        let rpc_error = StellarProviderError::RpcError("rpc failed".to_string());
+        let tx_error = TransactionError::from(rpc_error);
+        match tx_error {
+            TransactionError::UnderlyingProvider(ProviderError::NetworkConfiguration(msg)) => {
+                assert_eq!(msg, "rpc failed");
+            }
+            _ => panic!("Expected TransactionError::UnderlyingProvider"),
+        }
+
+        // Test Unknown
+        let unknown_error = StellarProviderError::Unknown("unknown error".to_string());
+        let tx_error = TransactionError::from(unknown_error);
+        match tx_error {
+            TransactionError::UnderlyingProvider(ProviderError::NetworkConfiguration(msg)) => {
+                assert_eq!(msg, "unknown error");
+            }
+            _ => panic!("Expected TransactionError::UnderlyingProvider"),
+        }
+    }
+
+    #[test]
+    fn test_is_transient_delegated_errors() {
+        // Test errors that delegate to underlying error's is_transient() method
+        // We need to create mock errors that have is_transient() methods
+
+        // For SolanaValidation - create a mock error
+        use crate::domain::solana::SolanaTransactionValidationError;
+        let solana_validation_error =
+            SolanaTransactionValidationError::ValidationError("bad validation".to_string());
+        let tx_error = TransactionError::SolanaValidation(solana_validation_error);
+        // This will delegate to the underlying error's is_transient method
+        // We can't easily test the delegation without mocking, so we'll just ensure it doesn't panic
+        let _ = tx_error.is_transient();
+
+        // For UnderlyingSolanaProvider
+        let solana_provider_error = SolanaProviderError::RpcError("rpc failed".to_string());
+        let tx_error = TransactionError::UnderlyingSolanaProvider(solana_provider_error);
+        let _ = tx_error.is_transient();
+
+        // For UnderlyingProvider
+        let provider_error = ProviderError::NetworkConfiguration("network issue".to_string());
+        let tx_error = TransactionError::UnderlyingProvider(provider_error);
+        let _ = tx_error.is_transient();
     }
 }

@@ -6,8 +6,7 @@ use chrono::Utc;
 use soroban_rs::xdr::{Error, Hash};
 use tracing::{debug, info, warn};
 
-use super::StellarRelayerTransaction;
-use crate::domain::transaction::common::is_final_state;
+use super::{StellarRelayerTransaction, is_final_state};
 use crate::{
     jobs::JobProducerTrait,
     models::{
@@ -68,7 +67,7 @@ where
                             "validation error detected - marking transaction as failed"
                         );
 
-                        self.mark_as_failed(tx, format!("Validation error: {}", msg))
+                        self.mark_as_failed(tx, format!("Validation error: {msg}"))
                             .await
                     }
                     _ => {
@@ -210,7 +209,7 @@ where
                 tx_result_xdr.result.name()
             )
         } else {
-            format!("{} No detailed XDR result available.", base_reason)
+            format!("{base_reason} No detailed XDR result available.")
         };
 
         warn!(reason = %detailed_reason, "stellar transaction failed");
@@ -267,6 +266,8 @@ mod tests {
     }
 
     mod handle_transaction_status_tests {
+        use crate::services::provider::ProviderError;
+
         use super::*;
 
         #[tokio::test]
@@ -542,7 +543,9 @@ mod tests {
                 .expect_get_transaction()
                 .with(eq(expected_stellar_hash.clone()))
                 .times(1)
-                .returning(move |_| Box::pin(async { Err(eyre::eyre!("RPC boom")) }));
+                .returning(move |_| {
+                    Box::pin(async { Err(ProviderError::Other("RPC boom".to_string())) })
+                });
 
             // 2. Mock partial_update: should NOT be called
             mocks.tx_repo.expect_partial_update().never();
@@ -790,7 +793,9 @@ mod tests {
                 .expect_get_transaction()
                 .with(eq(expected_stellar_hash.clone()))
                 .times(1)
-                .returning(move |_| Box::pin(async { Err(eyre::eyre!("Network timeout")) }));
+                .returning(move |_| {
+                    Box::pin(async { Err(ProviderError::Other("Network timeout".to_string())) })
+                });
 
             // No partial update should occur
             mocks.tx_repo.expect_partial_update().never();

@@ -49,9 +49,7 @@ impl TransactionCounterTrait for InMemoryTransactionCounter {
         let mut entry = self
             .store
             .get_mut(&(relayer_id.to_string(), address.to_string()))
-            .ok_or_else(|| {
-                RepositoryError::NotFound(format!("Counter not found for {}", address))
-            })?;
+            .ok_or_else(|| RepositoryError::NotFound(format!("Counter not found for {address}")))?;
         if *entry > 0 {
             *entry -= 1;
         }

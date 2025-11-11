@@ -128,7 +128,7 @@ async fn validate_sign_transaction<P: SolanaProviderTrait + Send + Sync>(
 ) -> Result<(), SolanaTransactionValidationError> {
     let policy = &relayer.policies.get_solana_policy();
     let relayer_pubkey = Pubkey::from_str(&relayer.address).map_err(|e| {
-        SolanaTransactionValidationError::ValidationError(format!("Invalid relayer address: {}", e))
+        SolanaTransactionValidationError::ValidationError(format!("Invalid relayer address: {e}"))
     })?;
 
     let sync_validations = async {
@@ -161,28 +161,20 @@ mod tests {
         services::{QuoteResponse, RoutePlan, SwapInfo},
     };
 
+    use super::super::test_setup::setup_signer_mocks;
     use super::*;
     use mockall::predicate::{self};
-    use solana_sdk::{
-        message::Message,
-        program_pack::Pack,
-        signature::{Keypair, Signature},
-        signer::Signer,
-    };
+    use solana_sdk::{message::Message, program_pack::Pack, signature::Keypair, signer::Signer};
     use solana_system_interface::instruction;
-    use spl_token::state::Account;
+    use spl_token_interface::state::Account;
 
     #[tokio::test]
     async fn test_sign_transaction_success_relayer_fee_strategy() {
         let (relayer, mut signer, mut provider, jupiter_service, encoded_tx, job_producer, network) =
             setup_test_context();
 
-        let signature = Signature::new_unique();
-
-        signer.expect_sign().returning(move |_| {
-            let signature_clone = signature;
-            Box::pin(async move { Ok(signature_clone) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut signer, relayer.address.clone());
         provider
             .expect_is_blockhash_valid()
             .with(predicate::always(), predicate::always())
@@ -207,6 +199,12 @@ mod tests {
                     replacement_blockhash: None,
                     inner_instructions: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -252,36 +250,38 @@ mod tests {
 
                     if pubkey == ctx.relayer_token_account {
                         // Create relayer's token account
-                        let token_account = spl_token::state::Account {
+                        let token_account = spl_token_interface::state::Account {
                             mint: ctx.token_mint,
                             owner: relayer_pubkey,
                             amount: 0, // Current balance doesn't matter
-                            state: spl_token::state::AccountState::Initialized,
+                            state: spl_token_interface::state::AccountState::Initialized,
                             ..Default::default()
                         };
-                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                        spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                            .unwrap();
 
                         Ok(solana_sdk::account::Account {
                             lamports: 1_000_000,
                             data: account_data,
-                            owner: spl_token::id(),
+                            owner: spl_token_interface::id(),
                             executable: false,
                             rent_epoch: 0,
                         })
                     } else if pubkey == ctx.user_token_account {
                         // Create user's token account with sufficient balance
-                        let token_account = spl_token::state::Account {
+                        let token_account = spl_token_interface::state::Account {
                             mint: ctx.token_mint,
                             owner: user_pubkey,
                             amount: ctx.main_transfer_amount + ctx.fee_amount, // Enough for both transfers
-                            state: spl_token::state::AccountState::Initialized,
+                            state: spl_token_interface::state::AccountState::Initialized,
                             ..Default::default()
                         };
-                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                        spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                            .unwrap();
                         Ok(solana_sdk::account::Account {
                             lamports: 1_000_000,
                             data: account_data,
-                            owner: spl_token::id(),
+                            owner: spl_token_interface::id(),
                             executable: false,
                             rent_epoch: 0,
                         })
@@ -293,11 +293,8 @@ mod tests {
                 })
             });
 
-        let signature = Signature::new_unique();
-        ctx.signer.expect_sign().returning(move |_| {
-            let signature_clone = signature;
-            Box::pin(async move { Ok(signature_clone) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut ctx.signer, ctx.relayer.address.clone());
 
         ctx.provider
             .expect_is_blockhash_valid()
@@ -358,6 +355,12 @@ mod tests {
                     replacement_blockhash: None,
                     inner_instructions: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -396,12 +399,8 @@ mod tests {
         let (relayer, mut signer, mut provider, jupiter_service, encoded_tx, job_producer, network) =
             setup_test_context();
 
-        let signature = Signature::new_unique();
-
-        signer.expect_sign().returning(move |_| {
-            let signature_clone = signature;
-            Box::pin(async move { Ok(signature_clone) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut signer, relayer.address.clone());
         provider
             .expect_is_blockhash_valid()
             .with(predicate::always(), predicate::always())
@@ -427,6 +426,12 @@ mod tests {
                     replacement_blockhash: None,
                     inner_instructions: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -477,36 +482,38 @@ mod tests {
 
                     if pubkey == ctx.relayer_token_account {
                         // Create relayer's token account
-                        let token_account = spl_token::state::Account {
+                        let token_account = spl_token_interface::state::Account {
                             mint: ctx.token_mint,
                             owner: relayer_pubkey,
                             amount: 0, // Current balance doesn't matter
-                            state: spl_token::state::AccountState::Initialized,
+                            state: spl_token_interface::state::AccountState::Initialized,
                             ..Default::default()
                         };
-                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                        spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                            .unwrap();
 
                         Ok(solana_sdk::account::Account {
                             lamports: 1_000_000,
                             data: account_data,
-                            owner: spl_token::id(),
+                            owner: spl_token_interface::id(),
                             executable: false,
                             rent_epoch: 0,
                         })
                     } else if pubkey == ctx.user_token_account {
                         // Create user's token account with sufficient balance
-                        let token_account = spl_token::state::Account {
+                        let token_account = spl_token_interface::state::Account {
                             mint: ctx.token_mint,
                             owner: user_pubkey,
                             amount: ctx.main_transfer_amount + ctx.fee_amount, // Enough for both transfers
-                            state: spl_token::state::AccountState::Initialized,
+                            state: spl_token_interface::state::AccountState::Initialized,
                             ..Default::default()
                         };
-                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                        spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                            .unwrap();
                         Ok(solana_sdk::account::Account {
                             lamports: 1_000_000,
                             data: account_data,
-                            owner: spl_token::id(),
+                            owner: spl_token_interface::id(),
                             executable: false,
                             rent_epoch: 0,
                         })
@@ -518,11 +525,8 @@ mod tests {
                 })
             });
 
-        let signature = Signature::new_unique();
-        ctx.signer.expect_sign().returning(move |_| {
-            let signature_clone = signature;
-            Box::pin(async move { Ok(signature_clone) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut ctx.signer, ctx.relayer.address.clone());
 
         ctx.provider
             .expect_is_blockhash_valid()
@@ -583,6 +587,12 @@ mod tests {
                     replacement_blockhash: None,
                     inner_instructions: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -678,6 +688,12 @@ mod tests {
                     replacement_blockhash: None,
                     inner_instructions: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -735,6 +751,12 @@ mod tests {
                     replacement_blockhash: None,
                     inner_instructions: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -797,6 +819,12 @@ mod tests {
                     replacement_blockhash: None,
                     inner_instructions: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -897,12 +925,8 @@ mod tests {
             ..Default::default()
         });
 
-        let signature = Signature::new_unique();
-
-        signer.expect_sign().returning(move |_| {
-            let signature = signature;
-            Box::pin(async move { Ok(signature) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut signer, relayer.address.clone());
         provider
             .expect_is_blockhash_valid()
             .with(predicate::always(), predicate::always())
@@ -927,6 +951,12 @@ mod tests {
                     replacement_blockhash: None,
                     inner_instructions: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -986,6 +1016,12 @@ mod tests {
                     replacement_blockhash: None,
                     inner_instructions: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -1035,11 +1071,8 @@ mod tests {
 
         relayer.notification_id = Some("test-webhook-id".to_string());
 
-        let signature = Signature::new_unique();
-        signer.expect_sign().returning(move |_| {
-            let signature = signature;
-            Box::pin(async move { Ok(signature) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut signer, relayer.address.clone());
         provider
             .expect_is_blockhash_valid()
             .returning(|_, _| Box::pin(async { Ok(true) }));
@@ -1063,6 +1096,12 @@ mod tests {
                     replacement_blockhash: None,
                     inner_instructions: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });

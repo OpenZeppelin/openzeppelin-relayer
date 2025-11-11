@@ -4,13 +4,13 @@ use solana_sdk::{
     transaction::Transaction,
 };
 use solana_system_interface::instruction;
-use spl_associated_token_account::get_associated_token_address;
+use spl_associated_token_account_interface::address::get_associated_token_address;
 use std::str::FromStr;
 
 use crate::{
     jobs::MockJobProducerTrait,
     models::{
-        EncodedSerializedTransaction, NetworkRepoModel, NetworkType, RelayerNetworkPolicy,
+        Address, EncodedSerializedTransaction, NetworkRepoModel, NetworkType, RelayerNetworkPolicy,
         RelayerRepoModel, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
         SolanaAllowedTokensSwapConfig, SolanaFeePaymentStrategy,
     },
@@ -20,6 +20,29 @@ use crate::{
     },
     utils::mocks::mockutils::create_mock_solana_network,
 };
+
+/// Sets up common mock expectations for `pubkey()` and `sign()` that all SDK transaction signing needs
+/// Returns the signature that will be used by the mock, so tests can assert on it
+pub fn setup_signer_mocks(
+    signer: &mut MockSolanaSignTrait,
+    relayer_address: String,
+) -> solana_sdk::signature::Signature {
+    // Generate a unique signature for this test
+    let signature = solana_sdk::signature::Signature::new_unique();
+
+    // Mock pubkey() to return the relayer's address
+    signer.expect_pubkey().returning(move || {
+        let addr = relayer_address.clone();
+        Box::pin(async move { Ok(Address::Solana(addr)) })
+    });
+
+    // Mock sign() to return the generated signature
+    signer
+        .expect_sign()
+        .returning(move |_| Box::pin(async move { Ok(signature) }));
+
+    signature
+}
 
 /// Creates a test context for Solana RPC methods
 /// It includes a test transaction, relayer, and mock services
@@ -123,8 +146,8 @@ pub fn setup_test_context_relayer_fee_strategy() -> RelayerFeeStrategyTestContex
 
     let main_transfer_amount = 5_000_000u64; // Main transfer amount (5 USDC)
 
-    let main_transfer_ix = spl_token::instruction::transfer_checked(
-        &spl_token::id(),           // Token program ID
+    let main_transfer_ix = spl_token_interface::instruction::transfer_checked(
+        &spl_token_interface::id(), // Token program ID
         &source_token_account,      // Source token account
         &token_mint,                // Token mint
         &destination_token_account, // Destination token account
@@ -239,8 +262,8 @@ pub fn setup_test_context_user_fee_strategy() -> UserFeeStrategyTestContext {
     let main_transfer_amount = 5_000_000u64; // Main transfer amount (5 USDC)
     let fee_amount = 1_000_000u64; // Fee amount (1 USDC)
 
-    let main_transfer_ix = spl_token::instruction::transfer_checked(
-        &spl_token::id(),           // Token program ID
+    let main_transfer_ix = spl_token_interface::instruction::transfer_checked(
+        &spl_token_interface::id(), // Token program ID
         &source_token_account,      // Source token account
         &token_mint,                // Token mint
         &destination_token_account, // Destination token account
@@ -252,15 +275,15 @@ pub fn setup_test_context_user_fee_strategy() -> UserFeeStrategyTestContext {
     .unwrap();
 
     // Create fee transfer instruction using standard SPL Token method
-    let fee_transfer_ix = spl_token::instruction::transfer_checked(
-        &spl_token::id(),       // Token program ID
-        &source_token_account,  // Source token account
-        &token_mint,            // Token mint
-        &relayer_token_account, // Relayer's token account
-        &token_owner.pubkey(),  // Owner of the source token account
-        &[],                    // Additional signers (empty array)
-        fee_amount,             // Fee amount
-        6,                      // Decimals (6 for USDC)
+    let fee_transfer_ix = spl_token_interface::instruction::transfer_checked(
+        &spl_token_interface::id(), // Token program ID
+        &source_token_account,      // Source token account
+        &token_mint,                // Token mint
+        &relayer_token_account,     // Relayer's token account
+        &token_owner.pubkey(),      // Owner of the source token account
+        &[],                        // Additional signers (empty array)
+        fee_amount,                 // Fee amount
+        6,                          // Decimals (6 for USDC)
     )
     .unwrap();
 
@@ -379,8 +402,8 @@ pub fn setup_test_context_single_tx_user_fee_strategy() -> UserFeeStrategySingle
     let main_transfer_amount = 5_000_000u64; // Main transfer amount (5 USDC)
     let fee_amount = 1_000_000u64; // Fee amount (1 USDC)
 
-    let transfer_ix = spl_token::instruction::transfer_checked(
-        &spl_token::id(),           // Token program ID
+    let transfer_ix = spl_token_interface::instruction::transfer_checked(
+        &spl_token_interface::id(), // Token program ID
         &source_token_account,      // Source token account
         &token_mint,                // Token mint
         &destination_token_account, // Destination token account

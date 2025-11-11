@@ -203,8 +203,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
             None => {
                 debug!("notification not found");
                 Err(RepositoryError::NotFound(format!(
-                    "Notification with ID '{}' not found",
-                    id
+                    "Notification with ID '{id}' not found"
                 )))
             }
         }
@@ -304,8 +303,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
 
         if existing.is_none() {
             return Err(RepositoryError::NotFound(format!(
-                "Notification with ID '{}' not found",
-                id
+                "Notification with ID '{id}' not found"
             )));
         }
 
@@ -342,8 +340,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
 
         if existing.is_none() {
             return Err(RepositoryError::NotFound(format!(
-                "Notification with ID '{}' not found",
-                id
+                "Notification with ID '{id}' not found"
             )));
         }
 

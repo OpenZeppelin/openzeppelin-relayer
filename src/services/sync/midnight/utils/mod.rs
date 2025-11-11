@@ -19,11 +19,11 @@ pub fn parse_transaction(
     _network: NetworkId,
 ) -> Result<Transaction<Signature, ProofMarker, PureGeneratorPedersen, DefaultDB>, SyncError> {
     let tx_bytes = hex::decode(raw_hex)
-        .map_err(|e| SyncError::ParseError(format!("Failed to decode hex: {}", e)))?;
+        .map_err(|e| SyncError::ParseError(format!("Failed to decode hex: {e}")))?;
 
     let transaction: Transaction<Signature, ProofMarker, PureGeneratorPedersen, DefaultDB> =
         deserialize(&tx_bytes[..]).map_err(|e| {
-            SyncError::ParseError(format!("Failed to deserialize transaction: {}", e))
+            SyncError::ParseError(format!("Failed to deserialize transaction: {e}"))
         })?;
 
     Ok(transaction)
@@ -55,7 +55,7 @@ pub fn parse_collapsed_update(
     _network: NetworkId,
 ) -> Result<MerkleTreeCollapsedUpdate, SyncError> {
     let update_bytes = hex::decode(&update_info.update_data)
-        .map_err(|e| SyncError::MerkleTreeUpdateError(format!("Failed to decode hex: {}", e)))?;
+        .map_err(|e| SyncError::MerkleTreeUpdateError(format!("Failed to decode hex: {e}")))?;
 
     let collapsed_update: MerkleTreeCollapsedUpdate =
         deserialize(&update_bytes[..]).map_err(|e| {
@@ -80,7 +80,7 @@ pub fn derive_viewing_key(
     let enc_secret_key = &secret_keys.encryption_secret_key;
     let mut enc_secret_bytes = Vec::new();
     Serializable::serialize(enc_secret_key, &mut enc_secret_bytes).map_err(|e| {
-        SyncError::ViewingKeyError(format!("Failed to serialize encryption secret key: {}", e))
+        SyncError::ViewingKeyError(format!("Failed to serialize encryption secret key: {e}"))
     })?;
 
     let network_suffix = match network {
@@ -91,12 +91,12 @@ pub fn derive_viewing_key(
         _ => "",
     };
 
-    let hrp_str = format!("mn_shield-esk{}", network_suffix);
+    let hrp_str = format!("mn_shield-esk{network_suffix}");
     let hrp = Hrp::parse(&hrp_str)
-        .map_err(|e| SyncError::ViewingKeyError(format!("Invalid HRP for viewing key: {}", e)))?;
+        .map_err(|e| SyncError::ViewingKeyError(format!("Invalid HRP for viewing key: {e}")))?;
 
     let viewing_key_bech32 = bech32::encode::<Bech32m>(hrp, &enc_secret_bytes).map_err(|e| {
-        SyncError::ViewingKeyError(format!("Failed to encode viewing key in Bech32m: {}", e))
+        SyncError::ViewingKeyError(format!("Failed to encode viewing key in Bech32m: {e}"))
     })?;
 
     Ok(ViewingKeyFormat::Bech32m(viewing_key_bech32))

@@ -50,7 +50,7 @@ impl<S: SyncStrategy + Sync + Send, SS: SyncStateTrait + Send + Sync> SyncManage
                 .context
                 .wallets
                 .lock()
-                .map_err(|e| SyncError::SyncError(format!("Failed to lock wallets: {}", e)))?;
+                .map_err(|e| SyncError::SyncError(format!("Failed to lock wallets: {e}")))?;
 
             wallets_guard
                 .get(&self.seed)
@@ -68,7 +68,7 @@ impl<S: SyncStrategy + Sync + Send, SS: SyncStateTrait + Send + Sync> SyncManage
         let ledger_state_bytes = {
             let ledger_state_guard =
                 self.context.ledger_state.lock().map_err(|e| {
-                    SyncError::SyncError(format!("Failed to lock ledger state: {}", e))
+                    SyncError::SyncError(format!("Failed to lock ledger state: {e}"))
                 })?;
 
             serialize(&*ledger_state_guard).map_err(|e| {
@@ -78,7 +78,7 @@ impl<S: SyncStrategy + Sync + Send, SS: SyncStateTrait + Send + Sync> SyncManage
 
         // Combine wallet state and ledger state into a single serialized context
         bincode::serialize(&(wallet_state, ledger_state_bytes))
-            .map_err(|e| SyncError::SyncError(format!("Failed to serialize context: {}", e)))
+            .map_err(|e| SyncError::SyncError(format!("Failed to serialize context: {e}")))
     }
 
     /// Restore the ledger context from serialized bytes
@@ -97,10 +97,7 @@ impl<S: SyncStrategy + Sync + Send, SS: SyncStateTrait + Send + Sync> SyncManage
                         }
                     }
                     Err(e) => {
-                        warn!(
-                            "Failed to deserialize ledger state: {:?}, starting fresh",
-                            e
-                        );
+                        warn!("Failed to deserialize ledger state: {e:?}, starting fresh");
                     }
                 }
 
@@ -117,17 +114,14 @@ impl<S: SyncStrategy + Sync + Send, SS: SyncStateTrait + Send + Sync> SyncManage
                             }
                         }
                         Err(e) => {
-                            warn!(
-                                "Failed to deserialize wallet state: {:?}, starting fresh",
-                                e
-                            );
+                            warn!("Failed to deserialize wallet state: {e:?}, starting fresh");
                         }
                     }
                 }
                 Ok(())
             }
             Err(e) => {
-                warn!("Failed to deserialize context: {}, starting fresh", e);
+                warn!("Failed to deserialize context: {e}, starting fresh");
                 Ok(())
             }
         }
@@ -191,7 +185,7 @@ impl<S: SyncStrategy + Sync + Send, SS: SyncStateTrait + Send + Sync> SyncManage
             );
 
             if let Err(e) = manager.restore_context(&serialized_context) {
-                warn!("Failed to restore context: {}", e);
+                warn!("Failed to restore context: {e}");
             }
         }
 
@@ -212,7 +206,7 @@ impl<S: SyncStrategy + Sync + Send, SS: SyncStateTrait + Send + Sync> SyncManage
                 self.sync_state_store
                     .get_last_synced_index(&self.relayer_id)
                     .await
-                    .map_err(|e| SyncError::SyncError(format!("Failed to get sync state: {}", e)))?
+                    .map_err(|e| SyncError::SyncError(format!("Failed to get sync state: {e}")))?
                     .unwrap_or(0)
             }
         };
@@ -258,7 +252,7 @@ impl<S: SyncStrategy + Sync + Send, SS: SyncStateTrait + Send + Sync> SyncManage
         for update in updates {
             match update {
                 ChronologicalUpdate::MerkleUpdate { index, update } => {
-                    info!("Applying merkle update at index {}", index);
+                    info!("Applying merkle update at index {index}");
                     last_blockchain_index = index;
 
                     let mut wallets_guard = self.context.wallets.lock().unwrap();
@@ -280,8 +274,7 @@ impl<S: SyncStrategy + Sync + Send, SS: SyncStateTrait + Send + Sync> SyncManage
                         }
                         Err(e) => {
                             return Err(SyncError::MerkleTreeUpdateError(format!(
-                                "Failed to apply collapsed update to wallet state: {}",
-                                e
+                                "Failed to apply collapsed update to wallet state: {e}"
                             )));
                         }
                     }
@@ -319,7 +312,7 @@ impl<S: SyncStrategy + Sync + Send, SS: SyncStateTrait + Send + Sync> SyncManage
             self.sync_state_store
                 .set_sync_state(&self.relayer_id, last_blockchain_index, Some(context_bytes))
                 .await
-                .map_err(|e| SyncError::SyncError(format!("Failed to save sync state: {}", e)))?;
+                .map_err(|e| SyncError::SyncError(format!("Failed to save sync state: {e}")))?;
 
             info!(
                 "Updated sync state to blockchain index {} for relayer {}",

@@ -85,7 +85,7 @@ impl MidnightIndexerClient {
             .ok_or_else(|| IndexerError::NoData)?
             .to_string();
 
-        info!("Connected wallet with session ID: {}", session_id);
+        info!("Connected wallet with session ID: {session_id}");
         Ok(session_id)
     }
 
@@ -235,8 +235,7 @@ impl MidnightIndexerClient {
                                                 Ok(event) => Some(Ok(event)),
                                                 Err(e) => {
                                                     error!(
-                                                        "Failed to deserialize wallet event: {}",
-                                                        e
+                                                        "Failed to deserialize wallet event: {e}"
                                                     );
                                                     error!(
                                                         "Raw data was: {}",
@@ -265,7 +264,7 @@ impl MidnightIndexerClient {
                                         None // End the stream
                                     }
                                     _ => {
-                                        debug!("Ignoring message type: {}", msg_type);
+                                        debug!("Ignoring message type: {msg_type}");
                                         None // Skip other message types
                                     }
                                 }
@@ -362,7 +361,7 @@ impl MidnightIndexerClient {
         let subscription_query = format!(
             r#"
             subscription Blocks {{
-                blocks(offset: {{ height: {} }}) {{
+                blocks(offset: {{ height: {start_height} }}) {{
                     hash
                     height
                     protocolVersion
@@ -378,8 +377,7 @@ impl MidnightIndexerClient {
                     }}
                 }}
             }}
-            "#,
-            start_height
+            "#
         );
 
         let start_message = json!({
@@ -432,7 +430,7 @@ impl MidnightIndexerClient {
                                         None // End the stream
                                     }
                                     _ => {
-                                        debug!("Ignoring message type: {}", msg_type);
+                                        debug!("Ignoring message type: {msg_type}");
                                         None // Skip other message types
                                     }
                                 }
@@ -492,8 +490,7 @@ impl MidnightIndexerClient {
 
         if let Some(errors) = response_json.get("errors") {
             return Err(IndexerError::GraphQLError(format!(
-                "GraphQL errors: {}",
-                errors
+                "GraphQL errors: {errors}"
             )));
         }
 

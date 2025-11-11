@@ -32,6 +32,7 @@ use crate::{
 
 use super::SolanaSignTrait;
 
+#[derive(Debug)]
 pub struct LocalSigner {
     local_signer_client: Keypair,
 }
@@ -47,7 +48,7 @@ impl LocalSigner {
             let key_bytes = config.raw_key.borrow();
 
             Keypair::from_seed(&key_bytes).map_err(|e| {
-                SignerError::Configuration(format!("Failed to create local signer: {}", e))
+                SignerError::Configuration(format!("Failed to create local signer: {e}"))
             })?
         };
 
@@ -66,23 +67,6 @@ impl SolanaSignTrait for LocalSigner {
 
     async fn sign(&self, message: &[u8]) -> Result<Signature, SignerError> {
         Ok(self.local_signer_client.sign_message(message))
-    }
-}
-
-#[async_trait]
-impl Signer for LocalSigner {
-    async fn address(&self) -> Result<Address, SignerError> {
-        let address: Address = Address::Solana(self.local_signer_client.pubkey().to_string());
-        Ok(address)
-    }
-
-    async fn sign_transaction(
-        &self,
-        _transaction: NetworkTransactionData,
-    ) -> Result<SignTransactionResponse, SignerError> {
-        Err(SignerError::NotImplemented(
-            "sign_transaction is not implemented".to_string(),
-        ))
     }
 }
 
@@ -206,24 +190,6 @@ mod tests {
                 assert_eq!(pubkey, expected_pubkey);
             }
             _ => panic!("Expected Address::Solana variant"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_sign_transaction_not_implemented() {
-        let local_signer = create_testing_signer();
-        let transaction_data = NetworkTransactionData::Solana(SolanaTransactionData {
-            transaction: "transaction_123".to_string(),
-            signature: None,
-        });
-
-        let result = local_signer.sign_transaction(transaction_data).await;
-
-        match result {
-            Err(SignerError::NotImplemented(msg)) => {
-                assert_eq!(msg, "sign_transaction is not implemented".to_string());
-            }
-            _ => panic!("Expected SignerError::NotImplemented"),
         }
     }
 }

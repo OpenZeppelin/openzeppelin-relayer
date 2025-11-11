@@ -33,8 +33,7 @@ impl EvmTransactionValidator {
 
         if balance < min_balance {
             return Err(EvmTransactionValidationError::InsufficientBalance(format!(
-                "Relayer balance ({}) is below minimum required balance ({})",
-                balance, min_balance
+                "Relayer balance ({balance}) is below minimum required balance ({min_balance})"
             )));
         }
 

@@ -359,8 +359,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             None => {
                 debug!(tx_id = %id, "transaction not found (no reverse lookup)");
                 return Err(RepositoryError::NotFound(format!(
-                    "Transaction with ID {} not found",
-                    id
+                    "Transaction with ID {id} not found"
                 )));
             }
         };
@@ -381,8 +380,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             None => {
                 debug!(tx_id = %id, "transaction not found");
                 Err(RepositoryError::NotFound(format!(
-                    "Transaction with ID {} not found",
-                    id
+                    "Transaction with ID {id} not found"
                 )))
             }
         }

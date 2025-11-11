@@ -167,7 +167,7 @@ where
             )
             .await
             .map_err(|e| {
-                TransactionError::UnexpectedError(format!("Failed to schedule status check: {}", e))
+                TransactionError::UnexpectedError(format!("Failed to schedule status check: {e}"))
             })
     }
 
@@ -182,7 +182,7 @@ where
             .produce_submit_transaction_job(job, None)
             .await
             .map_err(|e| {
-                TransactionError::UnexpectedError(format!("Failed to produce submit job: {}", e))
+                TransactionError::UnexpectedError(format!("Failed to produce submit job: {e}"))
             })
     }
 
@@ -197,7 +197,7 @@ where
             .produce_submit_transaction_job(job, None)
             .await
             .map_err(|e| {
-                TransactionError::UnexpectedError(format!("Failed to produce resubmit job: {}", e))
+                TransactionError::UnexpectedError(format!("Failed to produce resubmit job: {e}"))
             })
     }
 
@@ -212,7 +212,7 @@ where
             .produce_submit_transaction_job(job, None)
             .await
             .map_err(|e| {
-                TransactionError::UnexpectedError(format!("Failed to produce resend job: {}", e))
+                TransactionError::UnexpectedError(format!("Failed to produce resend job: {e}"))
             })
     }
 
@@ -229,7 +229,7 @@ where
             .produce_transaction_request_job(job, None)
             .await
             .map_err(|e| {
-                TransactionError::UnexpectedError(format!("Failed to produce request job: {}", e))
+                TransactionError::UnexpectedError(format!("Failed to produce request job: {e}"))
             })
     }
 
@@ -315,11 +315,11 @@ where
             }
             // Provider errors are retryable (RPC down, timeout, etc.)
             EvmTransactionValidationError::ProviderError(msg) => {
-                TransactionError::UnexpectedError(format!("Failed to check balance: {}", msg))
+                TransactionError::UnexpectedError(format!("Failed to check balance: {msg}"))
             }
             // Validation errors are also retryable
             EvmTransactionValidationError::ValidationError(msg) => {
-                TransactionError::UnexpectedError(format!("Balance validation error: {}", msg))
+                TransactionError::UnexpectedError(format!("Balance validation error: {msg}"))
             }
         })
     }
@@ -348,7 +348,7 @@ where
 
         let estimated_gas = self.provider.estimate_gas(evm_data).await.map_err(|e| {
             warn!(error = ?e, tx_data = ?evm_data, "failed to estimate gas");
-            TransactionError::UnexpectedError(format!("Failed to estimate gas: {}", e))
+            TransactionError::UnexpectedError(format!("Failed to estimate gas: {e}"))
         })?;
 
         Ok(estimated_gas * GAS_LIMIT_BUFFER_MULTIPLIER / 100)
@@ -923,10 +923,7 @@ where
             })?;
 
         let network = EvmNetwork::try_from(network_repo_model).map_err(|e| {
-            TransactionError::NetworkConfiguration(format!(
-                "Failed to convert network model: {}",
-                e
-            ))
+            TransactionError::NetworkConfiguration(format!("Failed to convert network model: {e}"))
         })?;
 
         // First, create updated EVM data without price parameters

@@ -1,3 +1,4 @@
+use crate::models::{ApiError, RelayerRepoModel};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -60,6 +61,24 @@ pub struct MidnightOutputRequest {
     pub token_type: String,
     /// Amount to send (in smallest unit)
     pub value: String,
+}
+
+impl MidnightTransactionRequest {
+    /// Validate the Midnight transaction request
+    pub fn validate(&self, _relayer: &RelayerRepoModel) -> Result<(), ApiError> {
+        // TODO: Add validation logic for Midnight transactions
+        // For now, basic validation: ensure at least one offer or intent is present
+        if self.guaranteed_offer.is_none()
+            && self.intents.is_empty()
+            && self.fallible_offers.is_empty()
+        {
+            return Err(ApiError::BadRequest(
+                "At least one of guaranteed_offer, intents, or fallible_offers must be provided"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

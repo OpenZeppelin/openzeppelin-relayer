@@ -77,7 +77,7 @@ pub trait CdpServiceTrait: Send + Sync {
     async fn sign_solana_transaction(&self, message: String) -> Result<Vec<u8>, CdpError>;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CdpService {
     pub config: CdpSignerConfig,
     pub client: Client,
@@ -93,13 +93,13 @@ impl CdpService {
             .source("openzeppelin-relayer".to_string())
             .source_version(env!("CARGO_PKG_VERSION").to_string())
             .build()
-            .map_err(|e| CdpError::ConfigError(format!("Invalid CDP configuration: {}", e)))?;
+            .map_err(|e| CdpError::ConfigError(format!("Invalid CDP configuration: {e}")))?;
 
         let inner = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(10))
             .build()
-            .map_err(|e| CdpError::ConfigError(format!("Failed to build HTTP client: {}", e)))?;
+            .map_err(|e| CdpError::ConfigError(format!("Failed to build HTTP client: {e}")))?;
         let wallet_client = ClientBuilder::new(inner).with(wallet_auth).build();
         let client = Client::new_with_client(CDP_BASE_URL, wallet_client);
         Ok(Self { config, client })
@@ -128,7 +128,7 @@ impl CdpService {
 
             // Decode hex string to bytes
             let bytes = hex::decode(hex_str)
-                .map_err(|e| CdpError::ConfigError(format!("Invalid hex address: {}", e)))?;
+                .map_err(|e| CdpError::ConfigError(format!("Invalid hex address: {e}")))?;
 
             if bytes.len() != 20 {
                 return Err(CdpError::ConfigError(format!(
@@ -173,7 +173,7 @@ impl CdpServiceTrait for CdpService {
             .body(message_body)
             .send()
             .await
-            .map_err(|e| CdpError::SigningError(format!("Failed to sign message: {}", e)))?;
+            .map_err(|e| CdpError::SigningError(format!("Failed to sign message: {e}")))?;
 
         let result = response.into_inner();
 
@@ -184,7 +184,7 @@ impl CdpServiceTrait for CdpService {
                 .strip_prefix("0x")
                 .unwrap_or(&result.signature),
         )
-        .map_err(|e| CdpError::SigningError(format!("Invalid signature hex: {}", e)))?;
+        .map_err(|e| CdpError::SigningError(format!("Invalid signature hex: {e}")))?;
 
         Ok(signature_bytes)
     }
@@ -201,7 +201,7 @@ impl CdpServiceTrait for CdpService {
         let hex_encoded = hex::encode(message);
 
         let tx_body =
-            types::SignEvmTransactionBody::builder().transaction(format!("0x{}", hex_encoded));
+            types::SignEvmTransactionBody::builder().transaction(format!("0x{hex_encoded}"));
 
         let response = self
             .client
@@ -211,7 +211,7 @@ impl CdpServiceTrait for CdpService {
             .body(tx_body)
             .send()
             .await
-            .map_err(|e| CdpError::SigningError(format!("Failed to sign transaction: {}", e)))?;
+            .map_err(|e| CdpError::SigningError(format!("Failed to sign transaction: {e}")))?;
 
         let result = response.into_inner();
 
@@ -222,7 +222,7 @@ impl CdpServiceTrait for CdpService {
                 .strip_prefix("0x")
                 .unwrap_or(&result.signed_transaction),
         )
-        .map_err(|e| CdpError::SigningError(format!("Invalid signed transaction hex: {}", e)))?;
+        .map_err(|e| CdpError::SigningError(format!("Invalid signed transaction hex: {e}")))?;
 
         Ok(signed_tx_bytes)
     }
@@ -235,7 +235,7 @@ impl CdpServiceTrait for CdpService {
         }
         let address = self.get_account_address();
         let encoded_message = str::from_utf8(message)
-            .map_err(|e| CdpError::SerializationError(format!("Invalid UTF-8 message: {}", e)))?
+            .map_err(|e| CdpError::SerializationError(format!("Invalid UTF-8 message: {e}")))?
             .to_string();
 
         let message_body = types::SignSolanaMessageBody::builder().message(encoded_message);
@@ -248,14 +248,14 @@ impl CdpServiceTrait for CdpService {
             .body(message_body)
             .send()
             .await
-            .map_err(|e| CdpError::SigningError(format!("Failed to sign Solana message: {}", e)))?;
+            .map_err(|e| CdpError::SigningError(format!("Failed to sign Solana message: {e}")))?;
 
         let result = response.into_inner();
 
         // Parse the signature base58 string to bytes
-        let signature_bytes = bs58::decode(result.signature).into_vec().map_err(|e| {
-            CdpError::SigningError(format!("Invalid Solana signature base58: {}", e))
-        })?;
+        let signature_bytes = bs58::decode(result.signature)
+            .into_vec()
+            .map_err(|e| CdpError::SigningError(format!("Invalid Solana signature base58: {e}")))?;
 
         Ok(signature_bytes)
     }
@@ -278,7 +278,7 @@ impl CdpServiceTrait for CdpService {
             .body(message_body)
             .send()
             .await
-            .map_err(|e| CdpError::SigningError(format!("Failed to sign Solana transaction: {}", e)))?;
+            .map_err(|e| CdpError::SigningError(format!("Failed to sign Solana transaction: {e}")))?;
 
         let result = response.into_inner();
 
@@ -286,7 +286,7 @@ impl CdpServiceTrait for CdpService {
         let signature_bytes = general_purpose::STANDARD
             .decode(result.signed_transaction)
             .map_err(|e| {
-                CdpError::SigningError(format!("Invalid Solana signed transaction base64: {}", e))
+                CdpError::SigningError(format!("Invalid Solana signed transaction base64: {e}"))
             })?;
 
         Ok(signature_bytes)

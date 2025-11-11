@@ -240,8 +240,7 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
         match api_key {
             Some(api_key) => Ok(api_key.permissions),
             None => Err(RepositoryError::NotFound(format!(
-                "Api key with ID {} not found",
-                api_key_id
+                "Api key with ID {api_key_id} not found"
             ))),
         }
     }
@@ -267,8 +266,7 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
 
         if existing.is_none() {
             return Err(RepositoryError::NotFound(format!(
-                "Api key with ID {} not found",
-                id
+                "Api key with ID {id} not found"
             )));
         }
 

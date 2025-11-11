@@ -72,8 +72,7 @@ impl Repository<NotificationRepoModel, String> for InMemoryNotificationRepositor
         match store.get(&id) {
             Some(entity) => Ok(entity.clone()),
             None => Err(RepositoryError::NotFound(format!(
-                "Notification with ID '{}' not found",
-                id
+                "Notification with ID '{id}' not found"
             ))),
         }
     }
@@ -89,8 +88,7 @@ impl Repository<NotificationRepoModel, String> for InMemoryNotificationRepositor
         // Check if notification exists
         if !store.contains_key(&id) {
             return Err(RepositoryError::NotFound(format!(
-                "Notification with ID '{}' not found",
-                id
+                "Notification with ID '{id}' not found"
             )));
         }
 
@@ -111,8 +109,7 @@ impl Repository<NotificationRepoModel, String> for InMemoryNotificationRepositor
         match store.remove(&id) {
             Some(_) => Ok(()),
             None => Err(RepositoryError::NotFound(format!(
-                "Notification with ID {} not found",
-                id
+                "Notification with ID {id} not found"
             ))),
         }
     }
@@ -170,7 +167,7 @@ impl TryFrom<NotificationConfig> for NotificationRepoModel {
 
     fn try_from(config: NotificationConfig) -> Result<Self, Self::Error> {
         let signing_key = config.get_signing_key().map_err(|e| {
-            ConversionError::InvalidConfig(format!("Failed to get signing key: {}", e))
+            ConversionError::InvalidConfig(format!("Failed to get signing key: {e}"))
         })?;
 
         Ok(NotificationRepoModel {

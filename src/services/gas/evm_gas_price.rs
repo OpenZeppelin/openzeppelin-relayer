@@ -379,8 +379,7 @@ impl<P: EvmProviderTrait + Send + Sync + 'static> EvmGasPriceServiceTrait
                     .await
                     .map_err(|e| {
                         TransactionError::NetworkConfiguration(format!(
-                            "Failed to fetch fee history data: {}",
-                            e
+                            "Failed to fetch fee history data: {e}"
                         ))
                     })
             }

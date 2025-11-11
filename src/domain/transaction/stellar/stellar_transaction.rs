@@ -227,10 +227,7 @@ where
             .set(&self.relayer().id, relayer_address, next_usable_seq)
             .await
             .map_err(|e| {
-                TransactionError::UnexpectedError(format!(
-                    "Failed to update sequence counter: {}",
-                    e
-                ))
+                TransactionError::UnexpectedError(format!("Failed to update sequence counter: {e}"))
             })?;
 
         info!(sequence = %next_usable_seq, "updated local sequence counter");
@@ -339,7 +336,10 @@ pub type DefaultStellarTransaction = StellarRelayerTransaction<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{NetworkTransactionData, RepositoryError};
+    use crate::{
+        models::{NetworkTransactionData, RepositoryError},
+        services::provider::ProviderError,
+    };
     use std::sync::Arc;
 
     use crate::domain::transaction::stellar::test_helpers::*;
@@ -594,11 +594,9 @@ mod tests {
         let mut mocks = default_test_mocks();
 
         // Mock provider to fail
-        mocks
-            .provider
-            .expect_get_account()
-            .times(1)
-            .returning(|_| Box::pin(async { Err(eyre::eyre!("Account not found")) }));
+        mocks.provider.expect_get_account().times(1).returning(|_| {
+            Box::pin(async { Err(ProviderError::Other("Account not found".to_string())) })
+        });
 
         let handler = make_stellar_tx_handler(relayer.clone(), mocks);
 

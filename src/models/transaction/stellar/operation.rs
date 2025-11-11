@@ -75,7 +75,7 @@ fn parse_destination_address(destination: &str) -> Result<XdrMuxedAccount, Signe
     } else {
         // fall-back to plain G... public key
         let pk = PublicKey::from_string(destination)
-            .map_err(|e| SignerError::ConversionError(format!("Invalid destination: {}", e)))?;
+            .map_err(|e| SignerError::ConversionError(format!("Invalid destination: {e}")))?;
         Ok(XdrMuxedAccount::Ed25519(Uint256(pk.0)))
     }
 }
@@ -103,7 +103,7 @@ fn decode_xdr_auth_entries(
         .iter()
         .map(|xdr_str| {
             SorobanAuthorizationEntry::from_xdr_base64(xdr_str, Limits::none())
-                .map_err(|e| SignerError::ConversionError(format!("Invalid auth XDR: {}", e)))
+                .map_err(|e| SignerError::ConversionError(format!("Invalid auth XDR: {e}")))
         })
         .collect()
 }
@@ -153,9 +153,9 @@ fn build_auth_vector(
         None => generate_default_auth_entries(host_function)?,
     };
 
-    auth_entries.try_into().map_err(|e| {
-        SignerError::ConversionError(format!("Failed to convert auth entries: {:?}", e))
-    })
+    auth_entries
+        .try_into()
+        .map_err(|e| SignerError::ConversionError(format!("Failed to convert auth entries: {e:?}")))
 }
 
 /// Converts Payment operation spec to Operation

@@ -8,7 +8,7 @@ use eyre::Result;
 use solana_client::rpc_client::RpcClient;
 use solana_sdk::{hash::Hash, message::Message, pubkey::Pubkey, transaction::Transaction};
 use solana_system_interface::instruction;
-use spl_token::instruction as token_instruction;
+use spl_token_interface::instruction as token_instruction;
 use std::str::FromStr;
 
 #[tokio::main]
@@ -97,7 +97,7 @@ fn create_token_transfer(
     recent_blockhash: Hash,
 ) -> Result<Transaction> {
     let ix = token_instruction::transfer(
-        &spl_token::id(),
+        &spl_token_interface::id(),
         token_account,
         recipient_token_account,
         payer,

@@ -55,7 +55,7 @@ where
 
     // Step 2: Validate source account matches relayer
     let source_account = extract_source_account(&envelope).map_err(|e| {
-        TransactionError::ValidationError(format!("Failed to extract source account: {}", e))
+        TransactionError::ValidationError(format!("Failed to extract source account: {e}"))
     })?;
 
     if source_account != relayer_address {
@@ -84,7 +84,7 @@ where
 
     // Re-serialize the envelope after fee update
     let updated_xdr = envelope.to_xdr_base64(Limits::none()).map_err(|e| {
-        TransactionError::ValidationError(format!("Failed to serialize updated envelope: {}", e))
+        TransactionError::ValidationError(format!("Failed to serialize updated envelope: {e}"))
     })?;
 
     // Update stellar data with new XDR
@@ -100,8 +100,7 @@ where
                 .with_simulation_data(sim_resp, op_count)
                 .map_err(|e| {
                     TransactionError::ValidationError(format!(
-                        "Failed to apply simulation data: {}",
-                        e
+                        "Failed to apply simulation data: {e}"
                     ))
                 })?
         }
@@ -125,7 +124,8 @@ mod tests {
     use super::*;
     use crate::{
         domain::SignTransactionResponse,
-        models::{DecoratedSignature, NetworkTransactionData, RepositoryError},
+        models::{DecoratedSignature, JsonRpcId, NetworkTransactionData, RepositoryError},
+        services::provider::ProviderError,
     };
     use soroban_rs::xdr::{
         BytesM, Memo, MuxedAccount, Operation, OperationBody, PaymentOp, Preconditions,
@@ -181,14 +181,14 @@ mod tests {
         async fn get_account(
             &self,
             _account_id: &str,
-        ) -> Result<soroban_rs::xdr::AccountEntry, eyre::Error> {
+        ) -> Result<soroban_rs::xdr::AccountEntry, ProviderError> {
             unimplemented!()
         }
 
         async fn simulate_transaction_envelope(
             &self,
             _envelope: &TransactionEnvelope,
-        ) -> Result<soroban_rs::stellar_rpc_client::SimulateTransactionResponse, eyre::Error>
+        ) -> Result<soroban_rs::stellar_rpc_client::SimulateTransactionResponse, ProviderError>
         {
             // Return a response indicating no simulation needed
             Ok(
@@ -203,58 +203,66 @@ mod tests {
         async fn send_transaction_polling(
             &self,
             _tx_envelope: &TransactionEnvelope,
-        ) -> Result<soroban_rs::SorobanTransactionResponse, eyre::Error> {
+        ) -> Result<soroban_rs::SorobanTransactionResponse, ProviderError> {
             unimplemented!()
         }
 
         async fn get_network(
             &self,
-        ) -> Result<soroban_rs::stellar_rpc_client::GetNetworkResponse, eyre::Error> {
+        ) -> Result<soroban_rs::stellar_rpc_client::GetNetworkResponse, ProviderError> {
             unimplemented!()
         }
 
         async fn get_latest_ledger(
             &self,
-        ) -> Result<soroban_rs::stellar_rpc_client::GetLatestLedgerResponse, eyre::Error> {
+        ) -> Result<soroban_rs::stellar_rpc_client::GetLatestLedgerResponse, ProviderError>
+        {
             unimplemented!()
         }
 
         async fn send_transaction(
             &self,
             _tx_envelope: &TransactionEnvelope,
-        ) -> Result<soroban_rs::xdr::Hash, eyre::Error> {
+        ) -> Result<soroban_rs::xdr::Hash, ProviderError> {
             unimplemented!()
         }
 
         async fn get_transaction(
             &self,
             _tx_id: &soroban_rs::xdr::Hash,
-        ) -> Result<soroban_rs::stellar_rpc_client::GetTransactionResponse, eyre::Error> {
+        ) -> Result<soroban_rs::stellar_rpc_client::GetTransactionResponse, ProviderError> {
             unimplemented!()
         }
 
         async fn get_transactions(
             &self,
             _request: soroban_rs::stellar_rpc_client::GetTransactionsRequest,
-        ) -> Result<soroban_rs::stellar_rpc_client::GetTransactionsResponse, eyre::Error> {
+        ) -> Result<soroban_rs::stellar_rpc_client::GetTransactionsResponse, ProviderError>
+        {
             unimplemented!()
         }
 
         async fn get_ledger_entries(
             &self,
             _keys: &[soroban_rs::xdr::LedgerKey],
-        ) -> Result<soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse, eyre::Error> {
+        ) -> Result<soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse, ProviderError>
+        {
             unimplemented!()
         }
 
         async fn get_events(
             &self,
             _request: crate::services::provider::GetEventsRequest,
-        ) -> Result<soroban_rs::stellar_rpc_client::GetEventsResponse, eyre::Error> {
+        ) -> Result<soroban_rs::stellar_rpc_client::GetEventsResponse, ProviderError> {
             unimplemented!()
         }
 
-        fn rpc_url(&self) -> &str {
+        async fn raw_request_dyn(
+            &self,
+            _method: &str,
+            _params: serde_json::Value,
+            _id: Option<JsonRpcId>,
+        ) -> Result<serde_json::Value, ProviderError> {
             unimplemented!()
         }
     }

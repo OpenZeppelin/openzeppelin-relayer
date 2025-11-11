@@ -76,7 +76,7 @@ where
                 slippage: params.slippage_percent as f32,
             })
             .await
-            .map_err(|e| RelayerError::DexError(format!("Failed to get Jupiter quote: {}", e)))?;
+            .map_err(|e| RelayerError::DexError(format!("Failed to get Jupiter quote: {e}")))?;
         debug!(quote = ?quote, "received quote");
 
         let swap_tx = self
@@ -105,23 +105,19 @@ where
                     .map(|o| o.dynamic_compute_unit_limit.unwrap_or_default()),
             })
             .await
-            .map_err(|e| {
-                RelayerError::DexError(format!("Failed to get swap transaction: {}", e))
-            })?;
+            .map_err(|e| RelayerError::DexError(format!("Failed to get swap transaction: {e}")))?;
 
         debug!(swap_tx = ?swap_tx, "received swap transaction");
 
         let mut swap_tx = VersionedTransaction::try_from(EncodedSerializedTransaction::new(
             swap_tx.swap_transaction,
         ))
-        .map_err(|e| RelayerError::DexError(format!("Failed to decode swap transaction: {}", e)))?;
+        .map_err(|e| RelayerError::DexError(format!("Failed to decode swap transaction: {e}")))?;
         let signature = self
             .signer
             .sign(&swap_tx.message.serialize())
             .await
-            .map_err(|e| {
-                RelayerError::DexError(format!("Failed to sign Dex transaction: {}", e))
-            })?;
+            .map_err(|e| RelayerError::DexError(format!("Failed to sign Dex transaction: {e}")))?;
 
         swap_tx.signatures[0] = signature;
 
@@ -131,9 +127,9 @@ where
             .await
             .map_err(|e| match e {
                 SolanaProviderError::RpcError(err) => {
-                    RelayerError::ProviderError(format!("Failed to send transaction: {}", err))
+                    RelayerError::ProviderError(format!("Failed to send transaction: {err}"))
                 }
-                _ => RelayerError::ProviderError(format!("Unexpected error: {}", e)),
+                _ => RelayerError::ProviderError(format!("Unexpected error: {e}")),
             })?;
 
         // Wait for transaction confirmation
@@ -142,7 +138,7 @@ where
             .confirm_transaction(&signature)
             .await
             .map_err(|e| {
-                RelayerError::ProviderError(format!("Transaction failed to confirm: {}", e))
+                RelayerError::ProviderError(format!("Transaction failed to confirm: {e}"))
             })?;
 
         debug!(signature = %signature, "transaction confirmed");

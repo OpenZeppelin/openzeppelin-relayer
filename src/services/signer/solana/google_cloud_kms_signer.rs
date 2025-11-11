@@ -32,6 +32,7 @@ use crate::{
 use super::SolanaSignTrait;
 
 pub type DefaultGoogleCloudKmsService = GoogleCloudKmsService;
+#[derive(Debug)]
 pub struct GoogleCloudKmsSigner<T = DefaultGoogleCloudKmsService>
 where
     T: GoogleCloudKmsServiceTrait,
@@ -87,32 +88,8 @@ impl<T: GoogleCloudKmsServiceTrait> SolanaSignTrait for GoogleCloudKmsSigner<T> 
             .map_err(|e| SignerError::SigningError(e.to_string()))?;
 
         Ok(Signature::try_from(sig_bytes.as_slice()).map_err(|e| {
-            SignerError::SigningError(format!("Failed to create signature from bytes: {}", e))
+            SignerError::SigningError(format!("Failed to create signature from bytes: {e}"))
         })?)
-    }
-}
-
-#[async_trait]
-impl<T: GoogleCloudKmsServiceTrait> Signer for GoogleCloudKmsSigner<T> {
-    async fn address(&self) -> Result<Address, SignerError> {
-        let pubkey = self
-            .google_cloud_kms_service
-            .get_solana_address()
-            .await
-            .map_err(|e| SignerError::SigningError(e.to_string()));
-
-        let address = pubkey.map(|pubkey| Address::Solana(pubkey.to_string()))?;
-
-        Ok(address)
-    }
-
-    async fn sign_transaction(
-        &self,
-        _transaction: NetworkTransactionData,
-    ) -> Result<SignTransactionResponse, SignerError> {
-        Err(SignerError::NotImplemented(
-            "sign_transaction is not implemented".to_string(),
-        ))
     }
 }
 
@@ -137,7 +114,7 @@ mod tests {
             });
 
         let signer = GoogleCloudKmsSigner::new_for_testing(mock_service);
-        let result = signer.address().await.unwrap();
+        let result = signer.pubkey().await.unwrap();
 
         match result {
             Address::Solana(addr) => {
@@ -257,7 +234,7 @@ mod tests {
             });
 
         let signer = GoogleCloudKmsSigner::new_for_testing(mock_service);
-        let result = signer.address().await;
+        let result = signer.pubkey().await;
 
         assert!(result.is_err());
         match result {

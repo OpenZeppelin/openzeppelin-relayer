@@ -46,7 +46,8 @@ impl NetworkTransactionRequest {
         match self {
             NetworkTransactionRequest::Evm(request) => request.validate(relayer),
             NetworkTransactionRequest::Stellar(request) => request.validate(),
-            _ => Ok(()),
+            NetworkTransactionRequest::Solana(request) => request.validate(relayer),
+            NetworkTransactionRequest::Midnight(request) => request.validate(relayer),
         }
     }
 }

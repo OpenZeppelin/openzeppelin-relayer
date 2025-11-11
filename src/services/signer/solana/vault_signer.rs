@@ -62,7 +62,7 @@ static VAULT_SIGNER_CACHE: Lazy<RwLock<HashMap<VaultCacheKey, Arc<LocalSigner>>>
     Lazy::new(|| RwLock::new(HashMap::new()));
 
 /// Solana signer that fetches private keys from HashiCorp Vault KV2 engine
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct VaultSigner<T>
 where
     T: VaultServiceTrait + Clone,
@@ -181,7 +181,7 @@ impl<T: VaultServiceTrait + Clone> VaultSigner<T> {
         }
 
         let decoded_bytes = hex::decode(hex_str)
-            .map_err(|e| SignerError::KeyError(format!("Failed to decode hex: {}", e)))?;
+            .map_err(|e| SignerError::KeyError(format!("Failed to decode hex: {e}")))?;
 
         Ok(SecretVec::new(decoded_bytes.len(), |buffer| {
             buffer.copy_from_slice(&decoded_bytes);
@@ -199,22 +199,6 @@ impl<T: VaultServiceTrait + Clone> VaultSigner<T> {
                 .clone()
                 .unwrap_or_else(|| "secret".to_string()),
         })
-    }
-}
-
-#[async_trait]
-impl<T: VaultServiceTrait + Clone> Signer for VaultSigner<T> {
-    async fn address(&self) -> Result<Address, SignerError> {
-        let signer = self.get_local_signer().await?;
-        signer.address().await
-    }
-
-    async fn sign_transaction(
-        &self,
-        transaction: NetworkTransactionData,
-    ) -> Result<SignTransactionResponse, SignerError> {
-        let signer = self.get_local_signer().await?;
-        signer.sign_transaction(transaction).await
     }
 }
 
@@ -281,7 +265,7 @@ mod tests {
         let mock_service = MockVaultService::new(mock_private_key.to_string());
         let signer_id = uuid::Uuid::new_v4().to_string();
         let signer = VaultSigner::new(signer_id, config, mock_service);
-        let address_result = signer.address().await;
+        let address_result = signer.pubkey().await;
 
         assert!(
             address_result.is_ok(),
@@ -296,7 +280,7 @@ mod tests {
         let mock_service = MockVaultService::new(mock_private_key.to_string());
         let signer_id = uuid::Uuid::new_v4().to_string();
         let signer = VaultSigner::new(signer_id, config, mock_service);
-        let address_result = signer.address().await;
+        let address_result = signer.pubkey().await;
 
         assert!(address_result.is_ok(), "Signer should handle 0x prefix");
     }
@@ -308,7 +292,7 @@ mod tests {
         let mock_service = MockVaultService::new(invalid_hex.to_string());
         let signer_id = uuid::Uuid::new_v4().to_string();
         let signer = VaultSigner::new(signer_id, config, mock_service);
-        let result = signer.address().await;
+        let result = signer.pubkey().await;
 
         assert!(result.is_err(), "Should fail with invalid hex characters");
         if let Err(SignerError::KeyError(msg)) = result {
@@ -328,7 +312,7 @@ mod tests {
         let mock_service = MockVaultService::new(short_key.to_string());
         let signer_id = uuid::Uuid::new_v4().to_string();
         let signer = VaultSigner::new(signer_id, config, mock_service);
-        let result = signer.address().await;
+        let result = signer.pubkey().await;
 
         assert!(result.is_err(), "Should fail with invalid key length");
         if let Err(SignerError::KeyError(msg)) = result {
@@ -348,7 +332,7 @@ mod tests {
         let mock_service = MockVaultService::new(empty_key.to_string());
         let signer_id = uuid::Uuid::new_v4().to_string();
         let signer = VaultSigner::new(signer_id, config, mock_service);
-        let result = signer.address().await;
+        let result = signer.pubkey().await;
 
         assert!(result.is_err(), "Should fail with empty key");
         if let Err(SignerError::KeyError(msg)) = result {
@@ -367,11 +351,11 @@ mod tests {
         let signer = VaultSigner::new(signer_id, config, mock_service);
 
         // First call should load from vault
-        let address1 = signer.address().await;
+        let address1 = signer.pubkey().await;
         assert!(address1.is_ok());
 
         // Second call should use cached version
-        let address2 = signer.address().await;
+        let address2 = signer.pubkey().await;
         assert!(address2.is_ok());
         assert_eq!(address1.unwrap(), address2.unwrap());
     }

@@ -98,8 +98,7 @@ impl ApiKeyRepositoryTrait for InMemoryApiKeyRepository {
         let api_key = store
             .get(api_key_id)
             .ok_or(RepositoryError::NotFound(format!(
-                "Api key with id {} not found",
-                api_key_id
+                "Api key with id {api_key_id} not found"
             )))?;
         Ok(api_key.permissions.clone())
     }

@@ -74,7 +74,7 @@ impl ScriptExecutor {
             .stderr(Stdio::piped())
             .output()
             .await
-            .map_err(|e| PluginError::SocketError(format!("Failed to execute script: {}", e)))?;
+            .map_err(|e| PluginError::SocketError(format!("Failed to execute script: {e}")))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -104,24 +104,28 @@ impl ScriptExecutor {
                     .get("details")
                     .cloned()
                     .or_else(|| error_info.get("data").cloned());
-                return Err(PluginError::HandlerError(super::PluginHandlerPayload {
-                    message,
-                    status,
-                    code,
-                    details,
-                    logs: Some(logs),
-                    traces: None,
-                }));
+                return Err(PluginError::HandlerError(Box::new(
+                    super::PluginHandlerPayload {
+                        message,
+                        status,
+                        code,
+                        details,
+                        logs: Some(logs),
+                        traces: None,
+                    },
+                )));
             }
             // Fallback to stderr as error message
-            return Err(PluginError::HandlerError(super::PluginHandlerPayload {
-                message: stderr.to_string(),
-                status: 500,
-                code: None,
-                details: None,
-                logs: Some(logs),
-                traces: None,
-            }));
+            return Err(PluginError::HandlerError(Box::new(
+                super::PluginHandlerPayload {
+                    message: stderr.to_string(),
+                    status: 500,
+                    code: None,
+                    details: None,
+                    logs: Some(logs),
+                    traces: None,
+                },
+            )));
         }
 
         Ok(ScriptResult {
@@ -139,7 +143,7 @@ impl ScriptExecutor {
 
         for log in logs {
             let log: LogEntry = serde_json::from_str(&log).map_err(|e| {
-                PluginError::PluginExecutionError(format!("Failed to parse log: {}", e))
+                PluginError::PluginExecutionError(format!("Failed to parse log: {e}"))
             })?;
 
             if log.level == LogLevel::Result {

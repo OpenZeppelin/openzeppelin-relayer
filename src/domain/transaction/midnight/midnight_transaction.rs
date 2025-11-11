@@ -162,7 +162,7 @@ where
                 )
                 .await
                 .map_err(|e| {
-                    TransactionError::UnexpectedError(format!("Failed to send notification: {}", e))
+                    TransactionError::UnexpectedError(format!("Failed to send notification: {e}"))
                 })?;
         }
         Ok(())
@@ -189,7 +189,7 @@ where
         for input_req in &offer_request.inputs {
             // Parse the origin wallet seed
             let origin_seed_bytes = hex::decode(&input_req.origin).map_err(|e| {
-                TransactionError::ValidationError(format!("Invalid origin wallet seed hex: {}", e))
+                TransactionError::ValidationError(format!("Invalid origin wallet seed hex: {e}"))
             })?;
 
             if origin_seed_bytes.len() != 32 {
@@ -227,7 +227,7 @@ where
 
         for output_req in output_requests {
             let amount = output_req.value.parse::<u128>().map_err(|e| {
-                TransactionError::ValidationError(format!("Invalid output value: {}", e))
+                TransactionError::ValidationError(format!("Invalid output value: {e}"))
             })?;
             total_output_amount += amount;
         }
@@ -280,7 +280,7 @@ where
         for input_req in &offer_request.inputs {
             // Parse input value
             let requested_value = input_req.value.parse::<u128>().map_err(|e| {
-                TransactionError::ValidationError(format!("Invalid input value: {}", e))
+                TransactionError::ValidationError(format!("Invalid input value: {e}"))
             })?;
 
             // Create a temporary input_info to find the minimum UTXO that can cover this input
@@ -295,8 +295,7 @@ where
             let actual_utxo_value = selected_coin.value;
 
             debug!(
-                "Selected UTXO with value: {} tDUST for requested value: {} tDUST",
-                actual_utxo_value, requested_value
+                "Selected UTXO with value: {actual_utxo_value} tDUST for requested value: {requested_value} tDUST"
             );
 
             // Create the actual input with the exact UTXO value
@@ -326,8 +325,7 @@ where
             // Parse destination wallet seed
             let dest_seed_bytes = hex::decode(&output_req.destination).map_err(|e| {
                 TransactionError::ValidationError(format!(
-                    "Invalid destination wallet seed hex: {}",
-                    e
+                    "Invalid destination wallet seed hex: {e}"
                 ))
             })?;
 
@@ -343,7 +341,7 @@ where
 
             // Parse amount
             let value = output_req.value.parse::<u128>().map_err(|e| {
-                TransactionError::ValidationError(format!("Invalid output value: {}", e))
+                TransactionError::ValidationError(format!("Invalid output value: {e}"))
             })?;
 
             // For now, we only support DUST_TOKEN_TYPE
@@ -371,10 +369,7 @@ where
                 value: change_amount,
             };
             offer.outputs.push(Box::new(change_output));
-            debug!(
-                "Added change output: {} tDUST back to sender",
-                change_amount
-            );
+            debug!("Added change output: {change_amount} tDUST back to sender");
         } else {
             debug!("No change output needed (exact amount)");
         }
@@ -400,7 +395,7 @@ where
             )
             .await
             .map_err(|e| {
-                TransactionError::UnexpectedError(format!("Failed to schedule status check: {}", e))
+                TransactionError::UnexpectedError(format!("Failed to schedule status check: {e}"))
             })
     }
 }
@@ -438,7 +433,7 @@ where
 
         // Check balance
         let balance = self.provider.get_balance(wallet_seed, &context).await?;
-        info!("Wallet balance: {} tDUST", balance);
+        info!("Wallet balance: {balance} tDUST");
 
         // Create proof provider
         let proof_provider = Box::new(RemoteProofServer::new(
@@ -549,7 +544,7 @@ where
             _,
         >(&serialized_tx[..])
         .map_err(|e| {
-            TransactionError::UnexpectedError(format!("Failed to deserialize transaction: {:?}", e))
+            TransactionError::UnexpectedError(format!("Failed to deserialize transaction: {e:?}"))
         })?;
 
         // Submit to the network
@@ -559,8 +554,7 @@ where
         let result: TransactionSubmissionResult =
             serde_json::from_str(&result_json).map_err(|e| {
                 TransactionError::UnexpectedError(format!(
-                    "Failed to parse transaction result: {}",
-                    e
+                    "Failed to parse transaction result: {e}"
                 ))
             })?;
 
@@ -639,8 +633,7 @@ where
                     let apply_stage: ApplyStage = serde_json::from_value(apply_stage_value.clone())
                         .map_err(|e| {
                             TransactionError::UnexpectedError(format!(
-                                "Failed to parse applyStage: {}",
-                                e
+                                "Failed to parse applyStage: {e}"
                             ))
                         })?;
 

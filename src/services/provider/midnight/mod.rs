@@ -131,11 +131,11 @@ impl MidnightProvider {
         }
 
         RpcConfig::validate_list(&configs)
-            .map_err(|e| ProviderError::NetworkConfiguration(format!("Invalid URL: {}", e)))?;
+            .map_err(|e| ProviderError::NetworkConfiguration(format!("Invalid URL: {e}")))?;
 
         // Create the RPC selector
         let selector = RpcSelector::new(configs).map_err(|e| {
-            ProviderError::NetworkConfiguration(format!("Failed to create RPC selector: {}", e))
+            ProviderError::NetworkConfiguration(format!("Failed to create RPC selector: {e}"))
         })?;
 
         let retry_config = RetryConfig::from_env();
@@ -181,7 +181,7 @@ impl MidnightProvider {
             // Any other errors are not automatically retriable
             _ => {
                 // Optionally inspect error message for network-related issues
-                let err_msg = format!("{}", error);
+                let err_msg = format!("{error}");
                 err_msg.to_lowercase().contains("timeout")
                     || err_msg.to_lowercase().contains("connection")
                     || err_msg.to_lowercase().contains("reset")
@@ -205,8 +205,7 @@ impl MidnightProvider {
         {
             Ok(Ok(client)) => Ok(client),
             Ok(Err(e)) => Err(ProviderError::NetworkConfiguration(format!(
-                "Failed to connect to {}: {}",
-                url, e
+                "Failed to connect to {url}: {e}"
             ))),
             Err(_) => Err(ProviderError::Timeout),
         }
@@ -286,7 +285,7 @@ impl MidnightProviderTrait for MidnightProvider {
         self.retry_rpc_call("get_block_number", |api| async move {
             let block =
                 api.blocks().at_latest().await.map_err(|e| {
-                    ProviderError::Other(format!("Failed to get latest block: {}", e))
+                    ProviderError::Other(format!("Failed to get latest block: {e}"))
                 })?;
 
             Ok(block.number().into())
@@ -306,7 +305,7 @@ impl MidnightProviderTrait for MidnightProvider {
 
                 // Serialize the transaction
                 let tx_serialize = serialize(&tx_clone).map_err(|e| {
-                    ProviderError::Other(format!("Failed to serialize transaction: {:?}", e))
+                    ProviderError::Other(format!("Failed to serialize transaction: {e}"))
                 })?;
 
                 // Create the transaction call using metadata
@@ -316,17 +315,14 @@ impl MidnightProviderTrait for MidnightProvider {
                 // The metadata payload should work directly with create_unsigned
                 // If there's a version mismatch, we may need to use a different approach
                 let unsigned_extrinsic = api.tx().create_unsigned(&mn_tx).map_err(|e| {
-                    ProviderError::Other(format!(
-                        "Failed to create unsigned extrinsic (possible subxt version mismatch): {}",
-                        e
-                    ))
+                    ProviderError::Other(format!("Failed to create extrinsic: {e}"))
                 })?;
 
                 let tx_hash_string =
                     format!("0x{}", hex::encode(unsigned_extrinsic.hash().as_bytes()));
 
                 let validation_result = unsigned_extrinsic.validate().await.map_err(|e| {
-                    ProviderError::Other(format!("Failed to validate transaction: {}", e))
+                    ProviderError::Other(format!("Failed to validate transaction: {e}"))
                 })?;
 
                 // Check if validation result indicates success
@@ -334,14 +330,12 @@ impl MidnightProviderTrait for MidnightProvider {
                     subxt::tx::ValidationResult::Valid(_) => {}
                     subxt::tx::ValidationResult::Invalid(e) => {
                         return Err(ProviderError::Other(format!(
-                            "Transaction validation failed: {:?}",
-                            e
+                            "Transaction validation failed: {e:?}"
                         )));
                     }
                     subxt::tx::ValidationResult::Unknown(e) => {
                         return Err(ProviderError::Other(format!(
-                            "Transaction validation unknown: {:?}",
-                            e
+                            "Transaction validation unknown: {e:?}"
                         )));
                     }
                 }
@@ -367,14 +361,13 @@ impl MidnightProviderTrait for MidnightProvider {
 
                         // Serialize to JSON string
                         let json_result = serde_json::to_string(&result).map_err(|e| {
-                            ProviderError::Other(format!("Failed to serialize result: {}", e))
+                            ProviderError::Other(format!("Failed to serialize result: {e}"))
                         })?;
 
                         Ok(json_result)
                     }
                     Err(e) => Err(ProviderError::Other(format!(
-                        "Failed to submit transaction: {}",
-                        e
+                        "Failed to submit transaction: {e}"
                     ))),
                 }
             }
@@ -401,8 +394,7 @@ impl MidnightProviderTrait for MidnightProvider {
             Ok(Some(block)) => Ok(Some(block)),
             Ok(None) => Ok(None),
             Err(e) => Err(ProviderError::Other(format!(
-                "Failed to get block by hash: {}",
-                e
+                "Failed to get block by hash: {e}"
             ))),
         }
     }
@@ -416,8 +408,7 @@ impl MidnightProviderTrait for MidnightProvider {
             Ok(Some(tx)) => Ok(Some(tx)),
             Ok(None) => Ok(None),
             Err(e) => Err(ProviderError::Other(format!(
-                "Failed to get transaction by hash: {}",
-                e
+                "Failed to get transaction by hash: {e}"
             ))),
         }
     }

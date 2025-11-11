@@ -120,7 +120,7 @@ pub trait GoogleCloudKmsK256: Send + Sync {
     async fn sign_digest(&self, digest: [u8; 32]) -> GoogleCloudKmsResult<Vec<u8>>;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct GoogleCloudKmsService {
     pub config: GoogleCloudKmsSignerConfig,
@@ -224,13 +224,12 @@ impl GoogleCloudKmsService {
 
         if !status.is_success() {
             return Err(GoogleCloudKmsError::ApiError(format!(
-                "KMS request failed ({}): {}",
-                status, text
+                "KMS request failed ({status}): {text}"
             )));
         }
 
         serde_json::from_str(&text)
-            .map_err(|e| GoogleCloudKmsError::ParseError(format!("{}: {}", e, text)))
+            .map_err(|e| GoogleCloudKmsError::ParseError(format!("{e}: {text}")))
     }
 
     async fn kms_post(&self, url: &str, body: &Value) -> GoogleCloudKmsResult<Value> {
@@ -249,13 +248,12 @@ impl GoogleCloudKmsService {
 
         if !status.is_success() {
             return Err(GoogleCloudKmsError::ApiError(format!(
-                "KMS request failed ({}): {}",
-                status, text
+                "KMS request failed ({status}): {text}"
             )));
         }
 
         serde_json::from_str(&text)
-            .map_err(|e| GoogleCloudKmsError::ParseError(format!("{}: {}", e, text)))
+            .map_err(|e| GoogleCloudKmsError::ParseError(format!("{e}: {text}")))
     }
 
     fn get_key_path(&self) -> String {
@@ -273,7 +271,7 @@ impl GoogleCloudKmsService {
     async fn get_pem(&self) -> GoogleCloudKmsResult<String> {
         let base_url = self.get_base_url();
         let key_path = self.get_key_path();
-        let url = format!("{}/v1/{}/publicKey", base_url, key_path,);
+        let url = format!("{base_url}/v1/{key_path}/publicKey",);
         debug!(url = %url, "kms public key url");
 
         let body = self.kms_get(&url).await?;
@@ -354,7 +352,7 @@ impl GoogleCloudKmsK256 for GoogleCloudKmsService {
     async fn sign_digest(&self, digest: [u8; 32]) -> GoogleCloudKmsResult<Vec<u8>> {
         let base_url = self.get_base_url();
         let key_path = self.get_key_path();
-        let url = format!("{}/v1/{}:asymmetricSign", base_url, key_path);
+        let url = format!("{base_url}/v1/{key_path}:asymmetricSign");
 
         let digest_b64 = base64_encode(&digest);
 
@@ -402,7 +400,7 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
         let base_url = self.get_base_url();
         let key_path = self.get_key_path();
 
-        let url = format!("{}/v1/{}:asymmetricSign", base_url, key_path,);
+        let url = format!("{base_url}/v1/{key_path}:asymmetricSign",);
 
         let body = serde_json::json!({
             "name": key_path,
@@ -424,7 +422,7 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
     async fn sign_evm(&self, message: &[u8]) -> GoogleCloudKmsResult<Vec<u8>> {
         let base_url = self.get_base_url();
         let key_path = self.get_key_path();
-        let url = format!("{}/v1/{}:asymmetricSign", base_url, key_path,);
+        let url = format!("{base_url}/v1/{key_path}:asymmetricSign",);
 
         let hash = Sha256::digest(message);
         let digest = base64_encode(&hash);
@@ -463,7 +461,7 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
         let base_url = self.get_base_url();
         let key_path = self.get_key_path();
 
-        let url = format!("{}/v1/{}:asymmetricSign", base_url, key_path);
+        let url = format!("{base_url}/v1/{key_path}:asymmetricSign",);
         debug!(url = %url, "kms asymmetric sign url for stellar");
 
         // For Ed25519, we can sign the message directly without pre-hashing

@@ -74,7 +74,7 @@ impl NetworkRepoModel {
     /// A new NetworkRepoModel instance
     pub fn new_evm(config: EvmNetworkConfig) -> Self {
         let name = config.common.network.clone();
-        let id = format!("evm:{}", name).to_lowercase();
+        let id = format!("evm:{name}").to_lowercase();
         Self {
             id,
             name,
@@ -92,7 +92,7 @@ impl NetworkRepoModel {
     /// A new NetworkRepoModel instance
     pub fn new_solana(config: SolanaNetworkConfig) -> Self {
         let name = config.common.network.clone();
-        let id = format!("solana:{}", name).to_lowercase();
+        let id = format!("solana:{name}").to_lowercase();
         Self {
             id,
             name,
@@ -110,7 +110,7 @@ impl NetworkRepoModel {
     /// A new NetworkRepoModel instance
     pub fn new_stellar(config: StellarNetworkConfig) -> Self {
         let name = config.common.network.clone();
-        let id = format!("stellar:{}", name).to_lowercase();
+        let id = format!("stellar:{name}").to_lowercase();
         Self {
             id,
             name,
@@ -128,7 +128,7 @@ impl NetworkRepoModel {
     /// A new NetworkRepoModel instance
     pub fn new_midnight(config: MidnightNetworkConfig) -> Self {
         let name = config.common.network.clone();
-        let id = format!("midnight:{}", name).to_lowercase();
+        let id = format!("midnight:{name}").to_lowercase();
         Self {
             id,
             name,
@@ -146,7 +146,7 @@ impl NetworkRepoModel {
     /// # Returns
     /// A lowercase string ID in format "network_type:name"
     pub fn create_id(network_type: NetworkType, name: &str) -> String {
-        format!("{:?}:{}", network_type, name).to_lowercase()
+        format!("{network_type:?}:{name}").to_lowercase()
     }
 
     /// Returns the common network configuration.

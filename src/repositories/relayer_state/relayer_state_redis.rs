@@ -52,12 +52,12 @@ impl RedisRelayerStateRepository {
         let data: Option<String> = conn
             .get(&key)
             .await
-            .map_err(|e| SyncStateError::SerializationError(format!("Redis get error: {}", e)))?;
+            .map_err(|e| SyncStateError::SerializationError(format!("Redis get error: {e}")))?;
 
         match data {
             Some(json) => {
                 let state = serde_json::from_str(&json).map_err(|e| {
-                    SyncStateError::SerializationError(format!("Deserialization error: {}", e))
+                    SyncStateError::SerializationError(format!("Deserialization error: {e}"))
                 })?;
                 Ok(Some(state))
             }
@@ -71,15 +71,14 @@ impl RedisRelayerStateRepository {
         state: &RelayerSyncState,
     ) -> Result<(), SyncStateError> {
         let key = self.get_key(relayer_id);
-        let json = serde_json::to_string(state).map_err(|e| {
-            SyncStateError::SerializationError(format!("Serialization error: {}", e))
-        })?;
+        let json = serde_json::to_string(state)
+            .map_err(|e| SyncStateError::SerializationError(format!("Serialization error: {e}")))?;
 
         let mut conn = self.connection_manager.as_ref().clone();
 
         conn.set::<_, _, ()>(&key, json)
             .await
-            .map_err(|e| SyncStateError::SerializationError(format!("Redis set error: {}", e)))?;
+            .map_err(|e| SyncStateError::SerializationError(format!("Redis set error: {e}")))?;
 
         Ok(())
     }
@@ -182,7 +181,7 @@ impl SyncStateTrait for RedisRelayerStateRepository {
 
         conn.del::<_, ()>(&key)
             .await
-            .map_err(|e| SyncStateError::SerializationError(format!("Redis del error: {}", e)))?;
+            .map_err(|e| SyncStateError::SerializationError(format!("Redis del error: {e}")))?;
 
         Ok(())
     }

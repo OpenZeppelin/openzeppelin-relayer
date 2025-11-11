@@ -73,42 +73,42 @@ impl Queue {
             .unwrap_or_default();
         Ok(Self {
             transaction_request_queue: Self::storage(
-                &format!("{}transaction_request_queue", redis_key_prefix),
+                &format!("{redis_key_prefix}transaction_request_queue"),
                 shared.clone(),
             )
             .await?,
             transaction_submission_queue: Self::storage(
-                &format!("{}transaction_submission_queue", redis_key_prefix),
+                &format!("{redis_key_prefix}transaction_submission_queue"),
                 shared.clone(),
             )
             .await?,
             transaction_status_queue: Self::storage(
-                &format!("{}transaction_status_queue", redis_key_prefix),
+                &format!("{redis_key_prefix}transaction_status_queue"),
                 shared.clone(),
             )
             .await?,
             transaction_status_queue_evm: Self::storage(
-                &format!("{}transaction_status_queue_evm", redis_key_prefix),
+                &format!("{redis_key_prefix}transaction_status_queue_evm"),
                 shared.clone(),
             )
             .await?,
             transaction_status_queue_stellar: Self::storage(
-                &format!("{}transaction_status_queue_stellar", redis_key_prefix),
+                &format!("{redis_key_prefix}transaction_status_queue_stellar"),
                 shared.clone(),
             )
             .await?,
             notification_queue: Self::storage(
-                &format!("{}notification_queue", redis_key_prefix),
+                &format!("{redis_key_prefix}notification_queue"),
                 shared.clone(),
             )
             .await?,
             solana_token_swap_request_queue: Self::storage(
-                &format!("{}solana_token_swap_request_queue", redis_key_prefix),
+                &format!("{redis_key_prefix}solana_token_swap_request_queue"),
                 shared.clone(),
             )
             .await?,
             relayer_health_check_queue: Self::storage(
-                &format!("{}relayer_health_check_queue", redis_key_prefix),
+                &format!("{redis_key_prefix}relayer_health_check_queue"),
                 shared.clone(),
             )
             .await?,

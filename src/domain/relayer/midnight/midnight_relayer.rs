@@ -225,7 +225,7 @@ where
             .provider
             .get_nonce(&self.relayer.address)
             .await
-            .map_err(|e| RelayerError::ProviderError(format!("Failed to fetch account: {}", e)))?;
+            .map_err(|e| RelayerError::ProviderError(format!("Failed to fetch account: {e}")))?;
 
         let next = next_sequence_u64(i64_from_u64(nonce)?)?;
 
@@ -320,12 +320,12 @@ where
             .provider
             .get_balance(wallet_seed, &context)
             .await
-            .map_err(|e| RelayerError::ProviderError(format!("Failed to fetch balance: {}", e)))?;
+            .map_err(|e| RelayerError::ProviderError(format!("Failed to fetch balance: {e}")))?;
 
         let balance_u128 = balance
             .to_string()
             .parse::<u128>()
-            .map_err(|e| RelayerError::ProviderError(format!("Failed to parse balance: {}", e)))?;
+            .map_err(|e| RelayerError::ProviderError(format!("Failed to parse balance: {e}")))?;
 
         Ok(BalanceResponse {
             balance: balance_u128,
@@ -360,7 +360,7 @@ where
             info!("all health checks passed");
             Ok(())
         } else {
-            warn!("health checks failed: {:?}", failures);
+            warn!("health checks failed: {failures:?}");
             Err(failures)
         }
     }
@@ -373,7 +373,7 @@ where
             .get_nonce(&relayer_model.address)
             .await
             .map_err(|e| {
-                RelayerError::ProviderError(format!("Failed to get account details: {}", e))
+                RelayerError::ProviderError(format!("Failed to get account details: {e}"))
             })?;
 
         let nonce_str = nonce.to_string();
@@ -467,7 +467,7 @@ where
         sync_service
             .sync(0)
             .await
-            .map_err(|e| RelayerError::ProviderError(format!("Initial sync failed: {}", e)))?;
+            .map_err(|e| RelayerError::ProviderError(format!("Initial sync failed: {e}")))?;
         drop(sync_service); // Explicitly drop the lock
 
         info!("Initial wallet sync completed successfully");
@@ -476,7 +476,7 @@ where
 
         let mut failures: Vec<String> = Vec::new();
         if let Some(e) = seq_res {
-            failures.push(format!("Sequence sync failed: {}", e));
+            failures.push(format!("Sequence sync failed: {e}"));
         }
 
         if !failures.is_empty() {

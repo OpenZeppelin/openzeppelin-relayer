@@ -60,7 +60,7 @@ impl LocalSigner {
             let key_bytes = config.raw_key.borrow();
 
             AlloyLocalSignerClient::from_bytes(&FixedBytes::from_slice(&key_bytes)).map_err(
-                |e| SignerError::Configuration(format!("Failed to create local signer: {}", e)),
+                |e| SignerError::Configuration(format!("Failed to create local signer: {e}")),
             )?
         };
 
@@ -152,7 +152,7 @@ impl DataSignerTrait for LocalSigner {
             .local_signer_client
             .sign_message(message)
             .await
-            .map_err(|e| SignerError::SigningError(format!("Failed to sign message: {}", e)))?;
+            .map_err(|e| SignerError::SigningError(format!("Failed to sign message: {e}")))?;
 
         validate_and_format_signature(&signature.as_bytes(), "Local")
     }
@@ -167,7 +167,7 @@ impl DataSignerTrait for LocalSigner {
             .sign_hash(&message_hash.into())
             .await
             .map_err(|e| {
-                SignerError::SigningError(format!("Failed to sign EIP-712 message: {}", e))
+                SignerError::SigningError(format!("Failed to sign EIP-712 message: {e}"))
             })?;
 
         validate_and_format_signature(&signature.as_bytes(), "Local")

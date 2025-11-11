@@ -11,8 +11,7 @@ pub mod unsigned_xdr;
 use eyre::Result;
 use tracing::{debug, info, warn};
 
-use super::{StellarRelayerTransaction, lane_gate};
-use crate::domain::transaction::common::is_final_state;
+use super::{StellarRelayerTransaction, is_final_state, lane_gate};
 use crate::models::RelayerRepoModel;
 use crate::{
     jobs::JobProducerTrait,
@@ -164,7 +163,7 @@ where
         tx: TransactionRepoModel,
         error: TransactionError,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        let error_reason = format!("Preparation failed: {}", error);
+        let error_reason = format!("Preparation failed: {error}");
         let tx_id = tx.id.clone(); // Clone the ID before moving tx
         warn!(reason = %error_reason, "transaction preparation failed");
 
@@ -229,6 +228,7 @@ mod prepare_transaction_tests {
     use crate::{
         domain::SignTransactionResponse,
         models::{NetworkTransactionData, OperationSpec, RepositoryError, TransactionStatus},
+        services::provider::ProviderError,
     };
     use soroban_rs::xdr::{Limits, ReadXdr, TransactionEnvelope};
 
@@ -736,7 +736,11 @@ mod prepare_transaction_tests {
             .expect_simulate_transaction_envelope()
             .times(1)
             .returning(|_| {
-                Box::pin(async { Err(eyre::eyre!("Simulation failed: insufficient resources")) })
+                Box::pin(async {
+                    Err(ProviderError::Other(
+                        "Simulation failed: insufficient resources".to_string(),
+                    ))
+                })
             });
 
         // Mock transaction update for failure

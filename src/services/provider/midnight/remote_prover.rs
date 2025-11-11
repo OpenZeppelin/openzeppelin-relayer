@@ -82,21 +82,18 @@ impl<D: DB + Clone> ProofProvider<D> for RemoteProofServer {
                 .send()
                 .await
                 .map_err(|e| {
-                    println!("Proof Server Send Error: {:?}", e);
+                    println!("Proof Server Send Error: {e:?}");
                     backoff::Error::transient(e)
                 })?;
 
             let resp_err = resp.error_for_status_ref().err();
             let resp_bytes = resp.bytes().await.map_err(|e| {
-                println!("Proof Server to Bytes Error: {:?}", e);
+                println!("Proof Server to Bytes Error: {e:?}");
                 backoff::Error::transient(e)
             })?;
 
             if let Some(e) = resp_err {
-                println!(
-                    "Proof Server Response Error: {:?}. Bytes: {:?}",
-                    e, resp_bytes
-                );
+                println!("Proof Server Response Error: {e:?}. Bytes: {resp_bytes:?}");
                 return Err(backoff::Error::transient(e));
             }
 

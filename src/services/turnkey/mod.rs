@@ -206,7 +206,7 @@ pub trait TurnkeyServiceTrait: Send + Sync {
     ) -> TurnkeyResult<(Transaction, Signature)>;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TurnkeyService {
     pub api_public_key: String,
     pub api_private_key: SecretString,
@@ -230,14 +230,14 @@ impl TurnkeyService {
         })
     }
 
-    /// Converts the public key to an Solana address
+    /// Converts the public key to a Solana address
     pub fn address_solana(&self) -> Result<Address, TurnkeyError> {
         if self.public_key.is_empty() {
             return Err(TurnkeyError::ConfigError("Public key is empty".to_string()));
         }
 
         let raw_pubkey = hex::decode(&self.public_key)
-            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid public key hex: {}", e)))?;
+            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid public key hex: {e}")))?;
 
         let pubkey_bs58 = bs58::encode(&raw_pubkey).into_string();
 
@@ -247,7 +247,7 @@ impl TurnkeyService {
     /// Converts the public key to an EVM address
     pub fn address_evm(&self) -> Result<Address, TurnkeyError> {
         let public_key = hex::decode(&self.public_key)
-            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid public key hex: {}", e)))?;
+            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid public key hex: {e}")))?;
 
         // Remove the first byte (0x04 prefix)
         let pub_key_no_prefix = &public_key[1..];
@@ -279,11 +279,11 @@ impl TurnkeyService {
 
         // For Stellar, we expect Ed25519 public key in hex format
         let raw_pubkey = hex::decode(&self.public_key)
-            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid public key hex: {}", e)))?;
+            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid public key hex: {e}")))?;
 
         // Stellar uses StrKey encoding with 'G' prefix for account addresses
         let stellar_address = stellar_strkey::ed25519::PublicKey::from_payload(&raw_pubkey)
-            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid Ed25519 public key: {}", e)))?
+            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid Ed25519 public key: {e}")))?
             .to_string();
 
         Ok(Address::Stellar(stellar_address))
@@ -291,15 +291,15 @@ impl TurnkeyService {
 
     /// Creates a digital stamp for API authentication
     fn stamp(&self, message: &str) -> TurnkeyResult<String> {
-        let private_api_key_bytes =
-            hex::decode(self.api_private_key.to_str().as_str()).map_err(|e| {
-                TurnkeyError::ConfigError(format!("Failed to decode private key: {}", e))
-            })?;
+        let private_api_key_bytes = hex::decode(self.api_private_key.to_str().as_str())
+            .map_err(|e| TurnkeyError::ConfigError(format!("Failed to decode private key: {e}")))?;
 
-        #[allow(deprecated)] // TODO: Update to use new signing key
-        let signing_key: SigningKey =
-            SigningKey::from_bytes(FieldBytes::from_slice(&private_api_key_bytes))
-                .map_err(|e| TurnkeyError::SigningError(format!("Turnkey stamp error: {}", e)))?;
+        let key_array: [u8; 32] = private_api_key_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| TurnkeyError::ConfigError("Invalid private key length".to_string()))?;
+        let signing_key: SigningKey = SigningKey::from_bytes(&FieldBytes::from(key_array))
+            .map_err(|e| TurnkeyError::SigningError(format!("Turnkey stamp error: {e}")))?;
 
         let signature: P256Signature = signing_key.sign(message.as_bytes());
 
@@ -310,7 +310,7 @@ impl TurnkeyService {
         };
 
         let json_stamp = serde_json::to_string(&stamp).map_err(|e| {
-            TurnkeyError::SerializationError(format!("Serialization stamp error: {}", e))
+            TurnkeyError::SerializationError(format!("Serialization stamp error: {e}"))
         })?;
         let encoded_stamp = base64_url_encode(json_stamp.as_bytes());
 
@@ -325,7 +325,7 @@ impl TurnkeyService {
     {
         // Serialize the request body
         let body = serde_json::to_string(request_body).map_err(|e| {
-            TurnkeyError::SerializationError(format!("Request serialization error: {}", e))
+            TurnkeyError::SerializationError(format!("Request serialization error: {e}"))
         })?;
 
         // Create the authentication stamp
@@ -379,7 +379,7 @@ impl TurnkeyService {
             };
 
             let signature_bytes = hex::decode(&concatenated_hex)
-                .map_err(|e| TurnkeyError::SigningError(format!("Turnkey signing error {}", e)))?;
+                .map_err(|e| TurnkeyError::SigningError(format!("Turnkey signing error {e}")))?;
 
             return Ok(signature_bytes);
         }
@@ -441,9 +441,7 @@ impl TurnkeyService {
             .and_then(|result| result.sign_transaction_result)
             .map(|tx_result| hex::decode(&tx_result.signed_transaction))
             .transpose()
-            .map_err(|e| {
-                TurnkeyError::SigningError(format!("Failed to decode transaction: {}", e))
-            })?
+            .map_err(|e| TurnkeyError::SigningError(format!("Failed to decode transaction: {e}")))?
             .ok_or_else(|| TurnkeyError::OtherError("Missing transaction result".into()))
     }
 
@@ -480,23 +478,20 @@ impl TurnkeyService {
                                     Err(e) => {
                                         debug!(error = %e, "failed to parse error response as json");
                                         Err(TurnkeyError::HttpError(format!(
-                                            "HTTP {} error: {}",
-                                            status, body_text
+                                            "HTTP {status} error: {body_text}"
                                         )))
                                     }
                                 }
                             } else {
                                 Err(TurnkeyError::HttpError(format!(
-                                    "HTTP {} error: {}",
-                                    status, body_text
+                                    "HTTP {status} error: {body_text}"
                                 )))
                             }
                         }
                         Err(e) => {
                             info!(error = %e, "failed to read error response body");
                             Err(TurnkeyError::HttpError(format!(
-                                "HTTP {} error (failed to read body): {}",
-                                status, e
+                                "HTTP {status} error (failed to read body): {e}"
                             )))
                         }
                     }
@@ -519,7 +514,7 @@ impl TurnkeyServiceTrait for TurnkeyService {
         }
 
         let raw_pubkey = hex::decode(&self.public_key)
-            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid public key hex: {}", e)))?;
+            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid public key hex: {e}")))?;
 
         let pubkey_bs58 = bs58::encode(&raw_pubkey).into_string();
 
@@ -528,7 +523,7 @@ impl TurnkeyServiceTrait for TurnkeyService {
 
     fn address_evm(&self) -> Result<Address, TurnkeyError> {
         let public_key = hex::decode(&self.public_key)
-            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid public key hex: {}", e)))?;
+            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid public key hex: {e}")))?;
 
         // Remove the first byte (0x04 prefix)
         let pub_key_no_prefix = &public_key[1..];
@@ -582,12 +577,12 @@ impl TurnkeyServiceTrait for TurnkeyService {
         let serialized_message = transaction.message_data();
 
         let public_key = Pubkey::from_str(&self.address_solana()?.to_string())
-            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid pubkey: {}", e)))?;
+            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid pubkey: {e}")))?;
 
         let signature_bytes = self.sign_bytes_solana(&serialized_message).await?;
 
         let signature = Signature::try_from(signature_bytes.as_slice())
-            .map_err(|e| TurnkeyError::SignatureError(format!("Invalid signature: {}", e)))?;
+            .map_err(|e| TurnkeyError::SignatureError(format!("Invalid signature: {e}")))?;
 
         let index = transaction
             .message
