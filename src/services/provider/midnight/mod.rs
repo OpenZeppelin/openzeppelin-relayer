@@ -10,14 +10,15 @@ use async_trait::async_trait;
 use eyre::Result;
 use hex;
 use midnight_node_ledger_helpers::{
-    serialize, DefaultDB, LedgerContext, NetworkId, Proof, Transaction, WalletSeed, NATIVE_TOKEN,
+    DefaultDB, LedgerContext, NetworkId, PedersenRandomness, ProofMarker, ShieldedTokenType,
+    Signature, Transaction, WalletSeed, serialize,
 };
-use midnight_node_res::subxt_metadata::api as mn_meta;
+use midnight_node_metadata::midnight_metadata_latest as mn_meta;
 use serde::{Deserialize, Serialize};
 use subxt::{OnlineClient, PolkadotConfig};
 
 use super::rpc_selector::RpcSelector;
-use super::{retry_rpc_call, RetryConfig};
+use super::{RetryConfig, retry_rpc_call};
 use crate::config::network::IndexerUrls;
 use crate::models::{RpcConfig, U256};
 use crate::services::midnight::indexer::MidnightIndexerClient;
@@ -48,6 +49,7 @@ pub struct MidnightProvider {
     /// Configuration for retry behavior
     retry_config: RetryConfig,
     /// Network ID for transaction serialization
+    #[allow(dead_code)]
     network_id: NetworkId,
 }
 
@@ -79,7 +81,7 @@ pub trait MidnightProviderTrait: Send + Sync {
     /// * `tx` - The transaction request to send
     async fn send_transaction(
         &self,
-        tx: Transaction<Proof, DefaultDB>,
+        tx: Transaction<Signature, ProofMarker, PedersenRandomness, DefaultDB>,
     ) -> Result<String, ProviderError>;
 
     /// Performs a health check by attempting to get the latest block number.
@@ -258,10 +260,12 @@ impl MidnightProviderTrait for MidnightProvider {
         let wallet = context.wallet_from_seed(*seed);
         let mut balance = 0u128;
 
-        for (_, qualified_coin_info) in wallet.state.coins.iter() {
+        for (_, qualified_coin_info) in wallet.shielded.state.coins.iter() {
             let coin_info: midnight_node_ledger_helpers::CoinInfo = (&*qualified_coin_info).into();
 
-            if coin_info.type_ == NATIVE_TOKEN {
+            // coin_info.type_ is ShieldedTokenType, check if it's Dust (zero hash)
+            use midnight_node_ledger_helpers::HashOutput;
+            if coin_info.type_ == ShieldedTokenType(HashOutput([0u8; 32])) {
                 balance = balance.saturating_add(coin_info.value);
             }
         }
@@ -291,21 +295,25 @@ impl MidnightProviderTrait for MidnightProvider {
 
     async fn send_transaction(
         &self,
-        tx: Transaction<Proof, DefaultDB>,
+        tx: Transaction<Signature, ProofMarker, PedersenRandomness, DefaultDB>,
     ) -> Result<String, ProviderError> {
-        let network_id = self.network_id;
         self.retry_rpc_call("send_transaction", move |api| {
             let tx_clone = tx.clone();
             async move {
+                // Get the transaction hash from the midnight transaction
+                let midnight_tx_hash = tx_clone.transaction_hash();
+
                 // Serialize the transaction
-                let serialized = serialize(&tx_clone, network_id).map_err(|e| {
-                    ProviderError::Other(format!("Failed to serialize transaction: {e:?}"))
+                let tx_serialize = serialize(&tx_clone).map_err(|e| {
+                    ProviderError::Other(format!("Failed to serialize transaction: {e}"))
                 })?;
 
-                let mn_tx = mn_meta::tx()
-                    .midnight()
-                    .send_mn_transaction(hex::encode(&serialized).into_bytes());
+                // Create the transaction call using metadata
+                let mn_tx = mn_meta::tx().midnight().send_mn_transaction(tx_serialize);
 
+                // Create unsigned extrinsic and submit it
+                // The metadata payload should work directly with create_unsigned
+                // If there's a version mismatch, we may need to use a different approach
                 let unsigned_extrinsic = api.tx().create_unsigned(&mn_tx).map_err(|e| {
                     ProviderError::Other(format!("Failed to create extrinsic: {e}"))
                 })?;
@@ -332,12 +340,10 @@ impl MidnightProviderTrait for MidnightProvider {
                     }
                 }
 
-                // Get the transaction hash from the midnight transaction
-                let tx_hash = tx_clone.transaction_hash();
                 // TransactionHash doesn't implement Display, but we can serialize it
                 // and convert to hex to get the proper format
-                let tx_hash_bytes = serialize(&tx_hash, network_id).map_err(|e| {
-                    ProviderError::Other(format!("Failed to serialize transaction hash: {e:?}"))
+                let tx_hash_bytes = serialize(&midnight_tx_hash).map_err(|e| {
+                    ProviderError::Other(format!("Failed to serialize transaction hash: {:?}", e))
                 })?;
                 let pallet_tx_hash = format!("0x{}", hex::encode(tx_hash_bytes));
 
@@ -424,11 +430,13 @@ mod tests {
 
     impl MidnightTestEnvGuard {
         fn new(mutex_guard: std::sync::MutexGuard<'static, ()>) -> Self {
-            std::env::set_var(
-                "API_KEY",
-                "test_api_key_for_evm_provider_new_this_is_long_enough_32_chars",
-            );
-            std::env::set_var("REDIS_URL", "redis://test-dummy-url-for-evm-provider");
+            unsafe {
+                std::env::set_var(
+                    "API_KEY",
+                    "test_api_key_for_evm_provider_new_this_is_long_enough_32_chars",
+                );
+                std::env::set_var("REDIS_URL", "redis://test-dummy-url-for-evm-provider");
+            }
 
             Self {
                 _mutex_guard: mutex_guard,
@@ -438,8 +446,10 @@ mod tests {
 
     impl Drop for MidnightTestEnvGuard {
         fn drop(&mut self) {
-            std::env::remove_var("API_KEY");
-            std::env::remove_var("REDIS_URL");
+            unsafe {
+                std::env::remove_var("API_KEY");
+                std::env::remove_var("REDIS_URL");
+            }
         }
     }
 

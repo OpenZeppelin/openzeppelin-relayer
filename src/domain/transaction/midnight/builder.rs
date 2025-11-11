@@ -9,28 +9,29 @@
 //! during synchronization.
 
 use midnight_node_ledger_helpers::{
+    DB,
     FromContext,
     IntentInfo,
     LedgerContext,
     OfferInfo,
-    Proof,
+    ProofMarker,
     ProofProvider,
+    Signature,
     // StandardTrasactionInfo has a typo and may be changed in the future
     StandardTrasactionInfo,
     Transaction,
     WellFormedStrictness,
-    DB,
 };
 use std::sync::Arc;
 
 use crate::models::TransactionError;
 
 /// Builder for constructing Midnight transactions using midnight-node patterns
-pub struct MidnightTransactionBuilder<D: DB> {
+pub struct MidnightTransactionBuilder<D: DB + Clone> {
     /// The ledger context containing wallet and network information
     context: Option<Arc<LedgerContext<D>>>,
     /// The proof provider for generating ZK proofs
-    proof_provider: Option<Box<dyn ProofProvider<D>>>,
+    proof_provider: Option<Arc<dyn ProofProvider<D>>>,
     /// Random seed for transaction building
     rng_seed: Option<[u8; 32]>,
     /// The guaranteed offer to be added
@@ -39,7 +40,7 @@ pub struct MidnightTransactionBuilder<D: DB> {
     intent_info: Option<IntentInfo<D>>,
 }
 
-impl<D: DB> MidnightTransactionBuilder<D> {
+impl<D: DB + Clone> MidnightTransactionBuilder<D> {
     /// Creates a new transaction builder
     pub fn new() -> Self {
         Self {
@@ -58,7 +59,7 @@ impl<D: DB> MidnightTransactionBuilder<D> {
     }
 
     /// Sets the proof provider
-    pub fn with_proof_provider(mut self, proof_provider: Box<dyn ProofProvider<D>>) -> Self {
+    pub fn with_proof_provider(mut self, proof_provider: Arc<dyn ProofProvider<D>>) -> Self {
         self.proof_provider = Some(proof_provider);
         self
     }
@@ -82,7 +83,12 @@ impl<D: DB> MidnightTransactionBuilder<D> {
     }
 
     /// Builds the final transaction
-    pub async fn build(self) -> Result<Transaction<Proof, D>, TransactionError> {
+    pub async fn build(
+        self,
+    ) -> Result<
+        Transaction<Signature, ProofMarker, midnight_node_ledger_helpers::PureGeneratorPedersen, D>,
+        TransactionError,
+    > {
         let context_arc = self
             .context
             .ok_or_else(|| TransactionError::ValidationError("Context not provided".to_string()))?;
@@ -96,22 +102,30 @@ impl<D: DB> MidnightTransactionBuilder<D> {
         // Create StandardTransactionInfo with the context
         let mut tx_info = StandardTrasactionInfo::new_from_context(
             context_arc.clone(),
-            proof_provider.into(),
+            proof_provider,
             Some(rng_seed),
+            None, // now will be set automatically
         );
 
         // Set the guaranteed offer if present
         if let Some(offer) = self.guaranteed_offer {
-            tx_info.set_guaranteed_coins(offer);
+            tx_info.set_guaranteed_offer(offer);
         }
 
         // Set the intent info if present to preserve segment information
-        if let Some(intent) = self.intent_info {
-            tx_info.set_intents(vec![intent]);
+        // Note: IntentInfo needs to be converted to BuildIntent, which requires implementing
+        // the BuildIntent trait. This is currently not supported in the builder pattern.
+        // IntentInfo should be handled through the StandardTransactionInfo API directly.
+        if self.intent_info.is_some() {
+            return Err(TransactionError::ValidationError(
+                "Intent info is not yet supported in builder pattern".to_string(),
+            ));
         }
 
         // Build transaction and generate proofs
-        let proven_tx = tx_info.prove().await;
+        let proven_tx = tx_info.prove().await.map_err(|e| {
+            TransactionError::ValidationError(format!("Failed to prove transaction: {:?}", e))
+        })?;
 
         // Get the ledger state from the context
         let ledger_state_guard = context_arc.ledger_state.lock().map_err(|e| {
@@ -121,8 +135,15 @@ impl<D: DB> MidnightTransactionBuilder<D> {
         let ref_state = &*ledger_state_guard;
 
         // Perform well_formed validation
+        use midnight_node_ledger_helpers::Timestamp;
+        let now = Timestamp::from_secs(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time went backwards")
+                .as_secs(),
+        );
         proven_tx
-            .well_formed(ref_state, WellFormedStrictness::default())
+            .well_formed(ref_state, WellFormedStrictness::default(), now)
             .map_err(|e| {
                 TransactionError::ValidationError(format!(
                     "Transaction failed well_formed validation: {e:?}"
@@ -133,7 +154,7 @@ impl<D: DB> MidnightTransactionBuilder<D> {
     }
 }
 
-impl<D: DB> Default for MidnightTransactionBuilder<D> {
+impl<D: DB + Clone> Default for MidnightTransactionBuilder<D> {
     fn default() -> Self {
         Self::new()
     }
@@ -142,18 +163,23 @@ impl<D: DB> Default for MidnightTransactionBuilder<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use midnight_node_ledger_helpers::{DefaultDB, LedgerContext, WalletSeed};
+    use midnight_node_ledger_helpers::{DefaultDB, LedgerContext, NetworkId, WalletSeed};
     use std::sync::Arc;
 
     fn create_test_context() -> Arc<LedgerContext<DefaultDB>> {
         // Set required environment variable for Midnight tests
-        std::env::set_var(
-            "MIDNIGHT_LEDGER_TEST_STATIC_DIR",
-            "/tmp/midnight-test-static",
-        );
+        unsafe {
+            std::env::set_var(
+                "MIDNIGHT_LEDGER_TEST_STATIC_DIR",
+                "/tmp/midnight-test-static",
+            );
+        }
 
-        let wallet_seed = WalletSeed::from([1u8; 32]);
-        Arc::new(LedgerContext::new_from_wallet_seeds(&[wallet_seed]))
+        let wallet_seed = WalletSeed::Medium([1u8; 32]);
+        Arc::new(LedgerContext::new_from_wallet_seeds(
+            NetworkId::TestNet,
+            &[wallet_seed],
+        ))
     }
 
     #[test]

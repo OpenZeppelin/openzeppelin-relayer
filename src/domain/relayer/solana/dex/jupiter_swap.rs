@@ -13,10 +13,10 @@ use super::{DexStrategy, SwapParams, SwapResult};
 use crate::domain::relayer::RelayerError;
 use crate::models::{EncodedSerializedTransaction, JupiterSwapOptions};
 use crate::services::{
-    provider::{SolanaProvider, SolanaProviderError, SolanaProviderTrait},
-    signer::{SolanaSignTrait, SolanaSigner},
     JupiterService, JupiterServiceTrait, PrioritizationFeeLamports, PriorityLevelWitMaxLamports,
     QuoteRequest, SwapRequest,
+    provider::{SolanaProvider, SolanaProviderError, SolanaProviderTrait},
+    signer::{SolanaSignTrait, SolanaSigner},
 };
 use async_trait::async_trait;
 use solana_sdk::transaction::VersionedTransaction;
@@ -159,8 +159,8 @@ mod tests {
     use crate::{
         models::SignerError,
         services::{
-            provider::MockSolanaProviderTrait, signer::MockSolanaSignTrait, JupiterServiceError,
-            MockJupiterServiceTrait, QuoteResponse, RoutePlan, SwapInfo, SwapResponse,
+            JupiterServiceError, MockJupiterServiceTrait, QuoteResponse, RoutePlan, SwapInfo,
+            SwapResponse, provider::MockSolanaProviderTrait, signer::MockSolanaSignTrait,
         },
     };
     use solana_sdk::signature::Signature;

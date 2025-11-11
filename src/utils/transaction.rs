@@ -108,8 +108,8 @@ fn calculate_data_gas(data: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::evm::Speed;
     use crate::models::EvmTransactionData;
+    use crate::models::evm::Speed;
 
     #[test]
     fn test_get_resubmit_timeout_for_speed() {

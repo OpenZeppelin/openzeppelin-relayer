@@ -5,7 +5,7 @@ use crate::{
     api::controllers::plugin,
     models::{DefaultAppState, PaginationQuery, PluginCallRequest},
 };
-use actix_web::{get, post, web, Responder};
+use actix_web::{Responder, get, post, web};
 
 /// List plugins
 #[get("/plugins")]
@@ -39,7 +39,7 @@ mod tests {
 
     use super::*;
     use crate::{models::PluginModel, services::plugins::PluginCallResponse};
-    use actix_web::{test, App, HttpResponse};
+    use actix_web::{App, HttpResponse, test};
 
     async fn mock_plugin_call() -> impl Responder {
         HttpResponse::Ok().json(PluginCallResponse {

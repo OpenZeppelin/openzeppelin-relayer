@@ -506,10 +506,12 @@ mod tests {
 
         let result = RedisSignerRepository::new(Arc::new(connection_manager), "".to_string());
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("key prefix cannot be empty"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("key prefix cannot be empty")
+        );
     }
 
     #[tokio::test]
@@ -728,10 +730,12 @@ mod tests {
 
         let result = repo.get_by_id("".to_string()).await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("ID cannot be empty"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("ID cannot be empty")
+        );
     }
 
     #[tokio::test]
@@ -747,10 +751,12 @@ mod tests {
 
         let result = repo.create(signer).await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("ID cannot be empty"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("ID cannot be empty")
+        );
     }
 
     #[tokio::test]
@@ -788,10 +794,12 @@ mod tests {
         let updated_signer = create_local_signer("different-id");
         let result = repo.update(signer_name, updated_signer).await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("ID in data does not match"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("ID in data does not match")
+        );
     }
 
     #[tokio::test]

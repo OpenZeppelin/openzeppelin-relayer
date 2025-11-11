@@ -43,7 +43,7 @@ impl InMemoryTransactionRepository {
         }
     }
 
-    async fn acquire_lock<T>(lock: &Mutex<T>) -> Result<MutexGuard<T>, RepositoryError> {
+    async fn acquire_lock<T>(lock: &Mutex<T>) -> Result<MutexGuard<'_, T>, RepositoryError> {
         Ok(lock.lock().await)
     }
 }
@@ -303,7 +303,7 @@ impl Default for InMemoryTransactionRepository {
 
 #[cfg(test)]
 mod tests {
-    use crate::models::{evm::Speed, EvmTransactionData, NetworkType};
+    use crate::models::{EvmTransactionData, NetworkType, evm::Speed};
     use lazy_static::lazy_static;
     use std::str::FromStr;
 
@@ -950,10 +950,9 @@ mod tests {
         let _lock = ENV_MUTEX.lock().await;
 
         use chrono::{DateTime, Duration, Utc};
-        use std::env;
-
-        // Use a unique test environment variable to avoid conflicts
-        env::set_var("TRANSACTION_EXPIRATION_HOURS", "6");
+        unsafe {
+            std::env::set_var("TRANSACTION_EXPIRATION_HOURS", "6");
+        }
 
         let repo = InMemoryTransactionRepository::new();
 
@@ -999,24 +998,27 @@ mod tests {
             let tolerance = Duration::minutes(5);
 
             assert!(
-                duration_from_before >= expected_duration - tolerance &&
-                duration_from_before <= expected_duration + tolerance,
+                duration_from_before >= expected_duration - tolerance
+                    && duration_from_before <= expected_duration + tolerance,
                 "delete_at should be approximately 6 hours from now for status: {:?}. Duration: {:?}",
-                status, duration_from_before
+                status,
+                duration_from_before
             );
         }
 
         // Cleanup
-        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        unsafe {
+            std::env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        }
     }
 
     #[tokio::test]
     async fn test_update_status_does_not_set_delete_at_for_non_final_statuses() {
         let _lock = ENV_MUTEX.lock().await;
 
-        use std::env;
-
-        env::set_var("TRANSACTION_EXPIRATION_HOURS", "4");
+        unsafe {
+            std::env::set_var("TRANSACTION_EXPIRATION_HOURS", "4");
+        }
 
         let repo = InMemoryTransactionRepository::new();
 
@@ -1048,7 +1050,9 @@ mod tests {
         }
 
         // Cleanup
-        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        unsafe {
+            std::env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        }
     }
 
     #[tokio::test]
@@ -1056,9 +1060,9 @@ mod tests {
         let _lock = ENV_MUTEX.lock().await;
 
         use chrono::{DateTime, Duration, Utc};
-        use std::env;
-
-        env::set_var("TRANSACTION_EXPIRATION_HOURS", "8");
+        unsafe {
+            std::env::set_var("TRANSACTION_EXPIRATION_HOURS", "8");
+        }
 
         let repo = InMemoryTransactionRepository::new();
         let tx = create_test_transaction_pending_state("test-partial-final");
@@ -1115,16 +1119,18 @@ mod tests {
         );
 
         // Cleanup
-        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        unsafe {
+            std::env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        }
     }
 
     #[tokio::test]
     async fn test_update_status_preserves_existing_delete_at() {
         let _lock = ENV_MUTEX.lock().await;
 
-        use std::env;
-
-        env::set_var("TRANSACTION_EXPIRATION_HOURS", "2");
+        unsafe {
+            std::env::set_var("TRANSACTION_EXPIRATION_HOURS", "2");
+        }
 
         let repo = InMemoryTransactionRepository::new();
         let mut tx = create_test_transaction_pending_state("test-preserve-delete-at");
@@ -1152,16 +1158,18 @@ mod tests {
         );
 
         // Cleanup
-        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        unsafe {
+            std::env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        }
     }
 
     #[tokio::test]
     async fn test_partial_update_without_status_change_preserves_delete_at() {
         let _lock = ENV_MUTEX.lock().await;
 
-        use std::env;
-
-        env::set_var("TRANSACTION_EXPIRATION_HOURS", "3");
+        unsafe {
+            std::env::set_var("TRANSACTION_EXPIRATION_HOURS", "3");
+        }
 
         let repo = InMemoryTransactionRepository::new();
         let tx = create_test_transaction_pending_state("test-preserve-no-status");
@@ -1208,16 +1216,18 @@ mod tests {
         );
 
         // Cleanup
-        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        unsafe {
+            std::env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        }
     }
 
     #[tokio::test]
     async fn test_update_status_multiple_updates_idempotent() {
         let _lock = ENV_MUTEX.lock().await;
 
-        use std::env;
-
-        env::set_var("TRANSACTION_EXPIRATION_HOURS", "12");
+        unsafe {
+            std::env::set_var("TRANSACTION_EXPIRATION_HOURS", "12");
+        }
 
         let repo = InMemoryTransactionRepository::new();
         let tx = create_test_transaction_pending_state("test-idempotent");
@@ -1249,6 +1259,8 @@ mod tests {
         assert_eq!(updated2.status, TransactionStatus::Failed);
 
         // Cleanup
-        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        unsafe {
+            std::env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        }
     }
 }

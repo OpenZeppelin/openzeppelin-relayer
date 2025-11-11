@@ -33,12 +33,12 @@ use crate::{
         TransactionRepoModel,
     },
     repositories::{Repository, TransactionRepository},
-    services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
+    services::{JupiterServiceTrait, provider::SolanaProviderTrait, signer::SolanaSignTrait},
 };
 
 use super::{
-    utils::FeeQuote, SolanaRpcMethodsImpl, SolanaTransactionValidationError,
-    SolanaTransactionValidator,
+    SolanaRpcMethodsImpl, SolanaTransactionValidationError, SolanaTransactionValidator,
+    utils::FeeQuote,
 };
 
 impl<P, S, J, JP, TR> SolanaRpcMethodsImpl<P, S, J, JP, TR>
@@ -212,7 +212,7 @@ mod tests {
     use crate::{
         constants::WRAPPED_SOL_MINT,
         domain::{
-            setup_test_context, setup_test_context_single_tx_user_fee_strategy, SolanaRpcMethods,
+            SolanaRpcMethods, setup_test_context, setup_test_context_single_tx_user_fee_strategy,
         },
         models::{
             RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
@@ -220,8 +220,8 @@ mod tests {
         },
         repositories::MockTransactionRepository,
         services::{
-            provider::{MockSolanaProviderTrait, SolanaProviderError},
             QuoteResponse, RoutePlan, SwapInfo,
+            provider::{MockSolanaProviderTrait, SolanaProviderError},
         },
     };
 

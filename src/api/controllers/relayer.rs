@@ -11,19 +11,19 @@
 //! - JSON-RPC proxy
 use crate::{
     domain::{
-        get_network_relayer, get_network_relayer_by_model, get_relayer_by_id,
-        get_relayer_transaction_by_model, get_transaction_by_id as get_tx_by_id, Relayer,
-        RelayerFactory, RelayerFactoryTrait, SignDataRequest, SignDataResponse,
-        SignTransactionRequest, SignTypedDataRequest, Transaction,
+        Relayer, RelayerFactory, RelayerFactoryTrait, SignDataRequest, SignDataResponse,
+        SignTransactionRequest, SignTypedDataRequest, Transaction, get_network_relayer,
+        get_network_relayer_by_model, get_relayer_by_id, get_relayer_transaction_by_model,
+        get_transaction_by_id as get_tx_by_id,
     },
     jobs::JobProducerTrait,
     models::{
-        convert_to_internal_rpc_request, deserialize_policy_for_network_type, ApiError,
-        ApiResponse, CreateRelayerRequest, DefaultAppState, NetworkRepoModel,
+        ApiError, ApiResponse, CreateRelayerRequest, DefaultAppState, NetworkRepoModel,
         NetworkTransactionRequest, NetworkType, NotificationRepoModel, PaginationMeta,
         PaginationQuery, Relayer as RelayerDomainModel, RelayerRepoModel, RelayerRepoUpdater,
         RelayerResponse, Signer as SignerDomainModel, SignerRepoModel, ThinDataAppState,
         TransactionRepoModel, TransactionResponse, TransactionStatus, UpdateRelayerRequestRaw,
+        convert_to_internal_rpc_request, deserialize_policy_for_network_type,
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
@@ -31,7 +31,7 @@ use crate::{
     },
     services::signer::{Signer, SignerFactory},
 };
-use actix_web::{web, HttpResponse};
+use actix_web::{HttpResponse, web};
 use eyre::Result;
 
 /// Lists all relayers with pagination support.
@@ -162,8 +162,7 @@ where
     if network.is_none() {
         return Err(ApiError::BadRequest(format!(
             "Network '{}' not found for network type '{}'. Please ensure the network configuration exists.",
-            relayer.network,
-            relayer.network_type
+            relayer.network, relayer.network_type
         )));
     }
 
@@ -869,13 +868,17 @@ mod tests {
     }
 
     fn setup_test_env() {
-        env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D"); // noboost nosemgrep
-        env::set_var("REDIS_URL", "redis://localhost:6379");
+        unsafe {
+            env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D"); // noboost nosemgrep
+            env::set_var("REDIS_URL", "redis://localhost:6379");
+        }
     }
 
     fn cleanup_test_env() {
-        env::remove_var("API_KEY");
-        env::remove_var("REDIS_URL");
+        unsafe {
+            env::remove_var("API_KEY");
+            env::remove_var("REDIS_URL");
+        }
     }
 
     /// Helper function to create a test relayer create request
@@ -1021,7 +1024,7 @@ mod tests {
             private_transactions: Some(false),
             gas_limit_estimation: Some(true),
             whitelist_receivers: Some(vec![
-                "0x1234567890123456789012345678901234567890".to_string()
+                "0x1234567890123456789012345678901234567890".to_string(),
             ]),
         }));
 

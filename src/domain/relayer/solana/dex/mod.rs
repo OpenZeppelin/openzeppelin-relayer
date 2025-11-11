@@ -5,9 +5,9 @@ use std::sync::Arc;
 use crate::domain::relayer::RelayerError;
 use crate::models::{RelayerRepoModel, SolanaSwapStrategy};
 use crate::services::{
+    JupiterService, JupiterServiceTrait,
     provider::{SolanaProvider, SolanaProviderTrait},
     signer::{SolanaSignTrait, SolanaSigner},
-    JupiterService, JupiterServiceTrait,
 };
 use async_trait::async_trait;
 #[cfg(test)]

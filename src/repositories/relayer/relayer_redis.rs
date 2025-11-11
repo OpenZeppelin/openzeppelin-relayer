@@ -7,8 +7,8 @@ use crate::models::{
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{BatchRetrievalResult, PaginatedResult, RelayerRepository, Repository};
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
+use redis::aio::ConnectionManager;
 use std::fmt;
 use std::sync::Arc;
 use tracing::{debug, error, warn};

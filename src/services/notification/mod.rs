@@ -1,7 +1,7 @@
 //! This module provides the `WebhookNotificationService` for sending notifications via webhooks.
 use crate::models::{SecretString, WebhookNotification, WebhookResponse};
 use async_trait::async_trait;
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use hmac::{Hmac, Mac};
 #[cfg(test)]
 use mockall::automock;
@@ -132,7 +132,7 @@ mod tests {
     };
     use crate::models::{WebhookNotification, WebhookPayload};
     use crate::services::notification::WebhookNotificationService;
-    use base64::{engine::general_purpose::STANDARD, Engine};
+    use base64::{Engine, engine::general_purpose::STANDARD};
     use mockito;
     use serde_json::json;
 

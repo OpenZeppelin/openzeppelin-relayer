@@ -25,8 +25,8 @@ use alloy::primitives::keccak256;
 use async_trait::async_trait;
 use chrono;
 use p256::{
-    ecdsa::{signature::Signer, Signature as P256Signature, SigningKey},
     FieldBytes,
+    ecdsa::{Signature as P256Signature, SigningKey, signature::Signer},
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -369,20 +369,19 @@ impl TurnkeyService {
             .make_turnkey_request::<_, ActivityResponse>("sign_raw_payload", &sign_raw_payload_body)
             .await?;
 
-        if let Some(result) = response_body.activity.result {
-            if let Some(result) = result.sign_raw_payload_result {
-                let concatenated_hex = if include_v {
-                    format!("{}{}{}", result.r, result.s, result.v)
-                } else {
-                    format!("{}{}", result.r, result.s)
-                };
+        if let Some(result) = response_body.activity.result
+            && let Some(result) = result.sign_raw_payload_result
+        {
+            let concatenated_hex = if include_v {
+                format!("{}{}{}", result.r, result.s, result.v)
+            } else {
+                format!("{}{}", result.r, result.s)
+            };
 
-                let signature_bytes = hex::decode(&concatenated_hex).map_err(|e| {
-                    TurnkeyError::SigningError(format!("Turnkey signing error {e}"))
-                })?;
+            let signature_bytes = hex::decode(&concatenated_hex)
+                .map_err(|e| TurnkeyError::SigningError(format!("Turnkey signing error {e}")))?;
 
-                return Ok(signature_bytes);
-            }
+            return Ok(signature_bytes);
         }
 
         Err(TurnkeyError::OtherError(

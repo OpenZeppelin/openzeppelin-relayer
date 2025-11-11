@@ -18,12 +18,12 @@ use alloy::{
     network::{EthereumWallet, TransactionBuilder, TxSigner},
     rpc::types::Transaction,
     signers::{
-        k256::ecdsa::SigningKey, local::LocalSigner as AlloyLocalSignerClient,
-        Signer as AlloySigner, SignerSync,
+        Signer as AlloySigner, SignerSync, k256::ecdsa::SigningKey,
+        local::LocalSigner as AlloyLocalSignerClient,
     },
 };
 
-use alloy::primitives::{address, Address as AlloyAddress, Bytes, FixedBytes, TxKind, U256};
+use alloy::primitives::{Address as AlloyAddress, Bytes, FixedBytes, TxKind, U256, address};
 
 use async_trait::async_trait;
 
@@ -37,10 +37,10 @@ use crate::{
         NetworkTransactionData, Signer as SignerDomainModel, SignerError, SignerRepoModel,
         SignerType, TransactionRepoModel,
     },
-    services::signer::{evm::construct_eip712_message_hash, Signer},
+    services::signer::{Signer, evm::construct_eip712_message_hash},
 };
 
-use super::{validate_and_format_signature, DataSignerTrait};
+use super::{DataSignerTrait, validate_and_format_signature};
 
 use alloy::rpc::types::TransactionRequest;
 

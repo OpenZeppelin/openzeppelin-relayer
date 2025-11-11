@@ -35,12 +35,12 @@ use crate::{
         Repository, SyncStateTrait, TransactionCounterTrait, TransactionRepository,
     },
     services::{
+        TransactionCounterService,
         midnight::handler::{QuickSyncStrategy, SyncManager},
-        provider::{get_network_provider, MidnightProvider, MidnightProviderTrait},
+        provider::{MidnightProvider, MidnightProviderTrait, get_network_provider},
         signer::{
             EvmSignerFactory, MidnightSignerFactory, MidnightSignerTrait, StellarSignerFactory,
         },
-        TransactionCounterService,
     },
 };
 
@@ -218,13 +218,13 @@ pub enum NetworkRelayer<
 
 #[async_trait]
 impl<
-        J: JobProducerTrait + 'static,
-        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
-        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
-        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
-        TCR: TransactionCounterTrait + Send + Sync + 'static,
-        RSR: SyncStateTrait + Send + Sync + 'static,
-    > Relayer for NetworkRelayer<J, T, RR, NR, TCR, RSR>
+    J: JobProducerTrait + 'static,
+    T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
+> Relayer for NetworkRelayer<J, T, RR, NR, TCR, RSR>
 {
     async fn process_transaction_request(
         &self,
@@ -373,17 +373,17 @@ pub struct RelayerFactory;
 
 #[async_trait]
 impl<
-        J: JobProducerTrait + 'static,
-        TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
-        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
-        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
-        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
-        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
-        TCR: TransactionCounterTrait + Send + Sync + 'static,
-        RSR: SyncStateTrait + Send + Sync + 'static,
-        PR: PluginRepositoryTrait + Send + Sync + 'static,
-        AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
-    > RelayerFactoryTrait<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR> for RelayerFactory
+    J: JobProducerTrait + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+> RelayerFactoryTrait<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR> for RelayerFactory
 {
     async fn create_relayer(
         relayer: RelayerRepoModel,

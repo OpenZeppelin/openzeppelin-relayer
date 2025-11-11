@@ -162,8 +162,9 @@ pub fn update_system_metrics() {
 mod actix_tests {
     use super::*;
     use actix_web::{
+        Error, HttpResponse,
         dev::{Service, ServiceRequest, ServiceResponse, Transform},
-        http, test, Error, HttpResponse,
+        http, test,
     };
     use futures::future::{self};
     use middleware::MetricsMiddleware;

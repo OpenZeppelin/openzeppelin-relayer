@@ -10,7 +10,7 @@
 //! (in-memory, Redis, etc.), ensuring consistent data representation across repositories.
 
 use crate::models::{
-    notification::Notification, NotificationType, NotificationValidationError, SecretString,
+    NotificationType, NotificationValidationError, SecretString, notification::Notification,
 };
 use crate::utils::{deserialize_option_secret_string, serialize_option_secret_string};
 use serde::{Deserialize, Serialize};

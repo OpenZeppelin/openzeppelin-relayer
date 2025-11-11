@@ -321,29 +321,31 @@ mod tests {
 
     fn setup() {
         // Clear all environment variables first
-        env::remove_var("HOST");
-        env::remove_var("APP_PORT");
-        env::remove_var("REDIS_URL");
-        env::remove_var("CONFIG_DIR");
-        env::remove_var("CONFIG_FILE_NAME");
-        env::remove_var("CONFIG_FILE_PATH");
-        env::remove_var("API_KEY");
-        env::remove_var("RATE_LIMIT_REQUESTS_PER_SECOND");
-        env::remove_var("RATE_LIMIT_BURST_SIZE");
-        env::remove_var("METRICS_PORT");
-        env::remove_var("REDIS_CONNECTION_TIMEOUT_MS");
-        env::remove_var("RPC_TIMEOUT_MS");
-        env::remove_var("PROVIDER_MAX_RETRIES");
-        env::remove_var("PROVIDER_RETRY_BASE_DELAY_MS");
-        env::remove_var("PROVIDER_RETRY_MAX_DELAY_MS");
-        env::remove_var("PROVIDER_MAX_FAILOVERS");
-        env::remove_var("REPOSITORY_STORAGE_TYPE");
-        env::remove_var("RESET_STORAGE_ON_START");
-        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
-        // Set required variables for most tests
-        env::set_var("REDIS_URL", "redis://localhost:6379");
-        env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
-        env::set_var("REDIS_CONNECTION_TIMEOUT_MS", "5000");
+        unsafe {
+            env::remove_var("HOST");
+            env::remove_var("APP_PORT");
+            env::remove_var("REDIS_URL");
+            env::remove_var("CONFIG_DIR");
+            env::remove_var("CONFIG_FILE_NAME");
+            env::remove_var("CONFIG_FILE_PATH");
+            env::remove_var("API_KEY");
+            env::remove_var("RATE_LIMIT_REQUESTS_PER_SECOND");
+            env::remove_var("RATE_LIMIT_BURST_SIZE");
+            env::remove_var("METRICS_PORT");
+            env::remove_var("REDIS_CONNECTION_TIMEOUT_MS");
+            env::remove_var("RPC_TIMEOUT_MS");
+            env::remove_var("PROVIDER_MAX_RETRIES");
+            env::remove_var("PROVIDER_RETRY_BASE_DELAY_MS");
+            env::remove_var("PROVIDER_RETRY_MAX_DELAY_MS");
+            env::remove_var("PROVIDER_MAX_FAILOVERS");
+            env::remove_var("REPOSITORY_STORAGE_TYPE");
+            env::remove_var("RESET_STORAGE_ON_START");
+            env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+            // Set required variables for most tests
+            env::set_var("REDIS_URL", "redis://localhost:6379");
+            env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
+            env::set_var("REDIS_CONNECTION_TIMEOUT_MS", "5000");
+        }
     }
 
     #[test]
@@ -388,21 +390,23 @@ mod tests {
             Err(poisoned) => poisoned.into_inner(),
         };
         setup();
-        env::set_var("REDIS_URL", "redis://localhost:6379");
-        env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
-        env::set_var("APP_PORT", "not_a_number");
-        env::set_var("METRICS_PORT", "also_not_a_number");
-        env::set_var("RATE_LIMIT_REQUESTS_PER_SECOND", "invalid");
-        env::set_var("RATE_LIMIT_BURST_SIZE", "invalid");
-        env::set_var("REDIS_CONNECTION_TIMEOUT_MS", "invalid");
-        env::set_var("RPC_TIMEOUT_MS", "invalid");
-        env::set_var("PROVIDER_MAX_RETRIES", "invalid");
-        env::set_var("PROVIDER_RETRY_BASE_DELAY_MS", "invalid");
-        env::set_var("PROVIDER_RETRY_MAX_DELAY_MS", "invalid");
-        env::set_var("PROVIDER_MAX_FAILOVERS", "invalid");
-        env::set_var("REPOSITORY_STORAGE_TYPE", "invalid");
-        env::set_var("RESET_STORAGE_ON_START", "invalid");
-        env::set_var("TRANSACTION_EXPIRATION_HOURS", "invalid");
+        unsafe {
+            env::set_var("REDIS_URL", "redis://localhost:6379");
+            env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
+            env::set_var("APP_PORT", "not_a_number");
+            env::set_var("METRICS_PORT", "also_not_a_number");
+            env::set_var("RATE_LIMIT_REQUESTS_PER_SECOND", "invalid");
+            env::set_var("RATE_LIMIT_BURST_SIZE", "invalid");
+            env::set_var("REDIS_CONNECTION_TIMEOUT_MS", "invalid");
+            env::set_var("RPC_TIMEOUT_MS", "invalid");
+            env::set_var("PROVIDER_MAX_RETRIES", "invalid");
+            env::set_var("PROVIDER_RETRY_BASE_DELAY_MS", "invalid");
+            env::set_var("PROVIDER_RETRY_MAX_DELAY_MS", "invalid");
+            env::set_var("PROVIDER_MAX_FAILOVERS", "invalid");
+            env::set_var("REPOSITORY_STORAGE_TYPE", "invalid");
+            env::set_var("RESET_STORAGE_ON_START", "invalid");
+            env::set_var("TRANSACTION_EXPIRATION_HOURS", "invalid");
+        }
         let config = ServerConfig::from_env();
 
         // Should fall back to defaults when parsing fails
@@ -432,24 +436,26 @@ mod tests {
         };
         setup();
 
-        env::set_var("HOST", "127.0.0.1");
-        env::set_var("APP_PORT", "9090");
-        env::set_var("REDIS_URL", "redis://custom:6379");
-        env::set_var("CONFIG_DIR", "custom");
-        env::set_var("CONFIG_FILE_NAME", "path.json");
-        env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
-        env::set_var("RATE_LIMIT_REQUESTS_PER_SECOND", "200");
-        env::set_var("RATE_LIMIT_BURST_SIZE", "500");
-        env::set_var("METRICS_PORT", "9091");
-        env::set_var("REDIS_CONNECTION_TIMEOUT_MS", "10000");
-        env::set_var("RPC_TIMEOUT_MS", "33333");
-        env::set_var("PROVIDER_MAX_RETRIES", "5");
-        env::set_var("PROVIDER_RETRY_BASE_DELAY_MS", "200");
-        env::set_var("PROVIDER_RETRY_MAX_DELAY_MS", "3000");
-        env::set_var("PROVIDER_MAX_FAILOVERS", "4");
-        env::set_var("REPOSITORY_STORAGE_TYPE", "in_memory");
-        env::set_var("RESET_STORAGE_ON_START", "true");
-        env::set_var("TRANSACTION_EXPIRATION_HOURS", "6");
+        unsafe {
+            env::set_var("HOST", "127.0.0.1");
+            env::set_var("APP_PORT", "9090");
+            env::set_var("REDIS_URL", "redis://custom:6379");
+            env::set_var("CONFIG_DIR", "custom");
+            env::set_var("CONFIG_FILE_NAME", "path.json");
+            env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
+            env::set_var("RATE_LIMIT_REQUESTS_PER_SECOND", "200");
+            env::set_var("RATE_LIMIT_BURST_SIZE", "500");
+            env::set_var("METRICS_PORT", "9091");
+            env::set_var("REDIS_CONNECTION_TIMEOUT_MS", "10000");
+            env::set_var("RPC_TIMEOUT_MS", "33333");
+            env::set_var("PROVIDER_MAX_RETRIES", "5");
+            env::set_var("PROVIDER_RETRY_BASE_DELAY_MS", "200");
+            env::set_var("PROVIDER_RETRY_MAX_DELAY_MS", "3000");
+            env::set_var("PROVIDER_MAX_FAILOVERS", "4");
+            env::set_var("REPOSITORY_STORAGE_TYPE", "in_memory");
+            env::set_var("RESET_STORAGE_ON_START", "true");
+            env::set_var("TRANSACTION_EXPIRATION_HOURS", "6");
+        }
         let config = ServerConfig::from_env();
 
         assert_eq!(config.host, "127.0.0.1");
@@ -485,14 +491,15 @@ mod tests {
             Err(poisoned) => poisoned.into_inner(),
         };
         setup();
-        env::set_var("REDIS_URL", "redis://localhost:6379");
-        env::set_var("API_KEY", "insufficient_length");
-        env::set_var("APP_PORT", "8080");
-        env::set_var("RATE_LIMIT_REQUESTS_PER_SECOND", "100");
-        env::set_var("RATE_LIMIT_BURST_SIZE", "300");
-        env::set_var("METRICS_PORT", "9091");
-        env::set_var("TRANSACTION_EXPIRATION_HOURS", "4");
-
+        unsafe {
+            env::set_var("REDIS_URL", "redis://localhost:6379");
+            env::set_var("API_KEY", "insufficient_length");
+            env::set_var("APP_PORT", "8080");
+            env::set_var("RATE_LIMIT_REQUESTS_PER_SECOND", "100");
+            env::set_var("RATE_LIMIT_BURST_SIZE", "300");
+            env::set_var("METRICS_PORT", "9091");
+            env::set_var("TRANSACTION_EXPIRATION_HOURS", "4");
+        }
         let _ = ServerConfig::from_env();
 
         panic!("Test should have panicked before reaching here");
@@ -507,27 +514,29 @@ mod tests {
         };
 
         // Clear all environment variables to test defaults
-        env::remove_var("HOST");
-        env::remove_var("APP_PORT");
-        env::remove_var("REDIS_URL");
-        env::remove_var("CONFIG_DIR");
-        env::remove_var("CONFIG_FILE_NAME");
-        env::remove_var("API_KEY");
-        env::remove_var("RATE_LIMIT_REQUESTS_PER_SECOND");
-        env::remove_var("RATE_LIMIT_BURST_SIZE");
-        env::remove_var("METRICS_PORT");
-        env::remove_var("ENABLE_SWAGGER");
-        env::remove_var("REDIS_CONNECTION_TIMEOUT_MS");
-        env::remove_var("REDIS_KEY_PREFIX");
-        env::remove_var("RPC_TIMEOUT_MS");
-        env::remove_var("PROVIDER_MAX_RETRIES");
-        env::remove_var("PROVIDER_RETRY_BASE_DELAY_MS");
-        env::remove_var("PROVIDER_RETRY_MAX_DELAY_MS");
-        env::remove_var("PROVIDER_MAX_FAILOVERS");
-        env::remove_var("REPOSITORY_STORAGE_TYPE");
-        env::remove_var("RESET_STORAGE_ON_START");
-        env::remove_var("STORAGE_ENCRYPTION_KEY");
-        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        unsafe {
+            env::remove_var("HOST");
+            env::remove_var("APP_PORT");
+            env::remove_var("REDIS_URL");
+            env::remove_var("CONFIG_DIR");
+            env::remove_var("CONFIG_FILE_NAME");
+            env::remove_var("API_KEY");
+            env::remove_var("RATE_LIMIT_REQUESTS_PER_SECOND");
+            env::remove_var("RATE_LIMIT_BURST_SIZE");
+            env::remove_var("METRICS_PORT");
+            env::remove_var("ENABLE_SWAGGER");
+            env::remove_var("REDIS_CONNECTION_TIMEOUT_MS");
+            env::remove_var("REDIS_KEY_PREFIX");
+            env::remove_var("RPC_TIMEOUT_MS");
+            env::remove_var("PROVIDER_MAX_RETRIES");
+            env::remove_var("PROVIDER_RETRY_BASE_DELAY_MS");
+            env::remove_var("PROVIDER_RETRY_MAX_DELAY_MS");
+            env::remove_var("PROVIDER_MAX_FAILOVERS");
+            env::remove_var("REPOSITORY_STORAGE_TYPE");
+            env::remove_var("RESET_STORAGE_ON_START");
+            env::remove_var("STORAGE_ENCRYPTION_KEY");
+            env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        }
 
         // Test individual getters with defaults
         assert_eq!(ServerConfig::get_host(), "0.0.0.0");
@@ -563,27 +572,29 @@ mod tests {
         };
 
         // Set custom values
-        env::set_var("HOST", "192.168.1.1");
-        env::set_var("APP_PORT", "9999");
-        env::set_var("REDIS_URL", "redis://custom:6379");
-        env::set_var("CONFIG_DIR", "/custom/config");
-        env::set_var("CONFIG_FILE_NAME", "custom.json");
-        env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
-        env::set_var("RATE_LIMIT_REQUESTS_PER_SECOND", "500");
-        env::set_var("RATE_LIMIT_BURST_SIZE", "1000");
-        env::set_var("METRICS_PORT", "9999");
-        env::set_var("ENABLE_SWAGGER", "true");
-        env::set_var("REDIS_CONNECTION_TIMEOUT_MS", "5000");
-        env::set_var("REDIS_KEY_PREFIX", "custom-prefix");
-        env::set_var("RPC_TIMEOUT_MS", "15000");
-        env::set_var("PROVIDER_MAX_RETRIES", "5");
-        env::set_var("PROVIDER_RETRY_BASE_DELAY_MS", "200");
-        env::set_var("PROVIDER_RETRY_MAX_DELAY_MS", "5000");
-        env::set_var("PROVIDER_MAX_FAILOVERS", "10");
-        env::set_var("REPOSITORY_STORAGE_TYPE", "redis");
-        env::set_var("RESET_STORAGE_ON_START", "true");
-        env::set_var("STORAGE_ENCRYPTION_KEY", "my-encryption-key");
-        env::set_var("TRANSACTION_EXPIRATION_HOURS", "12");
+        unsafe {
+            env::set_var("HOST", "192.168.1.1");
+            env::set_var("APP_PORT", "9999");
+            env::set_var("REDIS_URL", "redis://custom:6379");
+            env::set_var("CONFIG_DIR", "/custom/config");
+            env::set_var("CONFIG_FILE_NAME", "custom.json");
+            env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
+            env::set_var("RATE_LIMIT_REQUESTS_PER_SECOND", "500");
+            env::set_var("RATE_LIMIT_BURST_SIZE", "1000");
+            env::set_var("METRICS_PORT", "9999");
+            env::set_var("ENABLE_SWAGGER", "true");
+            env::set_var("REDIS_CONNECTION_TIMEOUT_MS", "5000");
+            env::set_var("REDIS_KEY_PREFIX", "custom-prefix");
+            env::set_var("RPC_TIMEOUT_MS", "15000");
+            env::set_var("PROVIDER_MAX_RETRIES", "5");
+            env::set_var("PROVIDER_RETRY_BASE_DELAY_MS", "200");
+            env::set_var("PROVIDER_RETRY_MAX_DELAY_MS", "5000");
+            env::set_var("PROVIDER_MAX_FAILOVERS", "10");
+            env::set_var("REPOSITORY_STORAGE_TYPE", "redis");
+            env::set_var("RESET_STORAGE_ON_START", "true");
+            env::set_var("STORAGE_ENCRYPTION_KEY", "my-encryption-key");
+            env::set_var("TRANSACTION_EXPIRATION_HOURS", "12");
+        }
 
         // Test individual getters with custom values
         assert_eq!(ServerConfig::get_host(), "192.168.1.1");
@@ -625,7 +636,9 @@ mod tests {
             Err(poisoned) => poisoned.into_inner(),
         };
 
-        env::remove_var("REDIS_URL");
+        unsafe {
+            env::remove_var("REDIS_URL");
+        }
         let _ = ServerConfig::get_redis_url();
     }
 
@@ -637,7 +650,9 @@ mod tests {
             Err(poisoned) => poisoned.into_inner(),
         };
 
-        env::remove_var("API_KEY");
+        unsafe {
+            env::remove_var("API_KEY");
+        }
         let _ = ServerConfig::get_api_key();
     }
 
@@ -648,9 +663,11 @@ mod tests {
             Err(poisoned) => poisoned.into_inner(),
         };
 
-        env::remove_var("REDIS_URL");
-        env::remove_var("API_KEY");
-        env::remove_var("STORAGE_ENCRYPTION_KEY");
+        unsafe {
+            env::remove_var("REDIS_URL");
+            env::remove_var("API_KEY");
+            env::remove_var("STORAGE_ENCRYPTION_KEY");
+        }
 
         assert!(ServerConfig::get_redis_url_optional().is_none());
         assert!(ServerConfig::get_api_key_optional().is_none());
@@ -666,13 +683,15 @@ mod tests {
         setup();
 
         // Set custom values to test both default and custom paths
-        env::set_var("HOST", "custom-host");
-        env::set_var("APP_PORT", "7777");
-        env::set_var("RATE_LIMIT_REQUESTS_PER_SECOND", "250");
-        env::set_var("METRICS_PORT", "7778");
-        env::set_var("ENABLE_SWAGGER", "true");
-        env::set_var("PROVIDER_MAX_RETRIES", "7");
-        env::set_var("TRANSACTION_EXPIRATION_HOURS", "8");
+        unsafe {
+            env::set_var("HOST", "custom-host");
+            env::set_var("APP_PORT", "7777");
+            env::set_var("RATE_LIMIT_REQUESTS_PER_SECOND", "250");
+            env::set_var("METRICS_PORT", "7778");
+            env::set_var("ENABLE_SWAGGER", "true");
+            env::set_var("PROVIDER_MAX_RETRIES", "7");
+            env::set_var("TRANSACTION_EXPIRATION_HOURS", "8");
+        }
 
         let config = ServerConfig::from_env();
 
@@ -752,7 +771,9 @@ mod tests {
             );
 
             // Ensure env var is not set
-            env::remove_var(&env_var);
+            unsafe {
+                env::remove_var(&env_var);
+            }
 
             let default_value = 42;
             let result = ServerConfig::get_worker_concurrency(worker_name, default_value);
@@ -773,7 +794,9 @@ mod tests {
             );
 
             // Set env var to a specific value
-            env::set_var(&env_var, "100");
+            unsafe {
+                env::set_var(&env_var, "100");
+            }
 
             let default_value = 10;
             let result = ServerConfig::get_worker_concurrency(worker_name, default_value);
@@ -781,7 +804,9 @@ mod tests {
             assert_eq!(result, 100, "Should return env var value when set");
 
             // Cleanup
-            env::remove_var(&env_var);
+            unsafe {
+                env::remove_var(&env_var);
+            }
         }
 
         #[test]
@@ -794,7 +819,9 @@ mod tests {
             );
 
             // Set env var to invalid value
-            env::set_var(&env_var, "not_a_number");
+            unsafe {
+                env::set_var(&env_var, "not_a_number");
+            }
 
             let default_value = 25;
             let result = ServerConfig::get_worker_concurrency(worker_name, default_value);
@@ -805,7 +832,9 @@ mod tests {
             );
 
             // Cleanup
-            env::remove_var(&env_var);
+            unsafe {
+                env::remove_var(&env_var);
+            }
         }
 
         #[test]
@@ -818,7 +847,9 @@ mod tests {
             );
 
             // Set env var to empty string
-            env::set_var(&env_var, "");
+            unsafe {
+                env::set_var(&env_var, "");
+            }
 
             let default_value = 15;
             let result = ServerConfig::get_worker_concurrency(worker_name, default_value);
@@ -829,7 +860,9 @@ mod tests {
             );
 
             // Cleanup
-            env::remove_var(&env_var);
+            unsafe {
+                env::remove_var(&env_var);
+            }
         }
 
         #[test]
@@ -842,7 +875,9 @@ mod tests {
             );
 
             // Set env var to negative value
-            env::set_var(&env_var, "-5");
+            unsafe {
+                env::set_var(&env_var, "-5");
+            }
 
             let default_value = 20;
             let result = ServerConfig::get_worker_concurrency(worker_name, default_value);
@@ -853,7 +888,9 @@ mod tests {
             );
 
             // Cleanup
-            env::remove_var(&env_var);
+            unsafe {
+                env::remove_var(&env_var);
+            }
         }
 
         #[test]
@@ -898,7 +935,9 @@ mod tests {
             );
 
             // Set env var to zero
-            env::set_var(&env_var, "0");
+            unsafe {
+                env::set_var(&env_var, "0");
+            }
 
             let default_value = 30;
             let result = ServerConfig::get_worker_concurrency(worker_name, default_value);
@@ -906,7 +945,9 @@ mod tests {
             assert_eq!(result, 0, "Should accept zero as a valid value");
 
             // Cleanup
-            env::remove_var(&env_var);
+            unsafe {
+                env::remove_var(&env_var);
+            }
         }
 
         #[test]
@@ -919,7 +960,9 @@ mod tests {
             );
 
             // Set env var to a large value
-            env::set_var(&env_var, "10000");
+            unsafe {
+                env::set_var(&env_var, "10000");
+            }
 
             let default_value = 50;
             let result = ServerConfig::get_worker_concurrency(worker_name, default_value);
@@ -927,7 +970,9 @@ mod tests {
             assert_eq!(result, 10000, "Should accept large values");
 
             // Cleanup
-            env::remove_var(&env_var);
+            unsafe {
+                env::remove_var(&env_var);
+            }
         }
 
         #[test]
@@ -940,7 +985,9 @@ mod tests {
             );
 
             // Set env var with leading/trailing whitespace
-            env::set_var(&env_var, "  75  ");
+            unsafe {
+                env::set_var(&env_var, "  75  ");
+            }
 
             let default_value = 35;
             let result = ServerConfig::get_worker_concurrency(worker_name, default_value);
@@ -953,7 +1000,9 @@ mod tests {
             );
 
             // Cleanup
-            env::remove_var(&env_var);
+            unsafe {
+                env::remove_var(&env_var);
+            }
         }
 
         #[test]
@@ -966,7 +1015,9 @@ mod tests {
             );
 
             // Set env var to float value
-            env::set_var(&env_var, "12.5");
+            unsafe {
+                env::set_var(&env_var, "12.5");
+            }
 
             let default_value = 40;
             let result = ServerConfig::get_worker_concurrency(worker_name, default_value);
@@ -977,7 +1028,9 @@ mod tests {
             );
 
             // Cleanup
-            env::remove_var(&env_var);
+            unsafe {
+                env::remove_var(&env_var);
+            }
         }
     }
 }

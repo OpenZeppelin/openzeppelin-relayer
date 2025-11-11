@@ -1,7 +1,7 @@
 use crate::{
     constants::{
-        REQUEST_MAX_ACCOUNTS_PER_INSTRUCTION, REQUEST_MAX_INSTRUCTIONS,
-        REQUEST_MAX_INSTRUCTION_DATA_SIZE, REQUEST_MAX_TOTAL_ACCOUNTS,
+        REQUEST_MAX_ACCOUNTS_PER_INSTRUCTION, REQUEST_MAX_INSTRUCTION_DATA_SIZE,
+        REQUEST_MAX_INSTRUCTIONS, REQUEST_MAX_TOTAL_ACCOUNTS,
     },
     models::{ApiError, EncodedSerializedTransaction, RelayerRepoModel, SolanaInstructionSpec},
     utils::base64_decode,
@@ -352,10 +352,12 @@ mod tests {
 
         let result = request.validate(&relayer);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Cannot provide both transaction and instructions"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot provide both transaction and instructions")
+        );
     }
 
     #[test]
@@ -370,10 +372,12 @@ mod tests {
 
         let result = request.validate(&relayer);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Must provide either transaction or instructions"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Must provide either transaction or instructions")
+        );
     }
 
     #[test]
@@ -403,10 +407,12 @@ mod tests {
 
         let result = request.validate(&relayer);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("valid_until cannot be in the past"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("valid_until cannot be in the past")
+        );
     }
 
     #[test]
@@ -421,10 +427,12 @@ mod tests {
 
         let result = request.validate(&relayer);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("valid_until must be a valid RFC3339 timestamp"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("valid_until must be a valid RFC3339 timestamp")
+        );
     }
 
     #[test]
@@ -434,10 +442,12 @@ mod tests {
 
         let result = SolanaTransactionRequest::validate_transaction(&transaction, &relayer);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Failed to decode transaction"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to decode transaction")
+        );
     }
 
     #[test]
@@ -447,10 +457,12 @@ mod tests {
 
         let result = SolanaTransactionRequest::validate_transaction(&transaction, &relayer);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("does not match relayer address"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("does not match relayer address")
+        );
     }
 
     #[test]
@@ -459,10 +471,12 @@ mod tests {
 
         let result = SolanaTransactionRequest::validate_instructions(&[], &relayer);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Instructions cannot be empty"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Instructions cannot be empty")
+        );
     }
 
     #[test]
@@ -472,10 +486,12 @@ mod tests {
 
         let result = SolanaTransactionRequest::validate_instructions(&instructions, &relayer);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Too many instructions"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Too many instructions")
+        );
     }
 
     #[test]
@@ -486,10 +502,12 @@ mod tests {
 
         let result = SolanaTransactionRequest::validate_instructions(&[instruction], &relayer);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("program_id cannot be empty"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("program_id cannot be empty")
+        );
     }
 
     #[test]
@@ -500,10 +518,12 @@ mod tests {
 
         let result = SolanaTransactionRequest::validate_instructions(&[instruction], &relayer);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid program_id"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid program_id")
+        );
     }
 
     #[test]
@@ -514,10 +534,12 @@ mod tests {
 
         let result = SolanaTransactionRequest::validate_instructions(&[instruction], &relayer);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("program_id cannot be default pubkey"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("program_id cannot be default pubkey")
+        );
     }
 
     #[test]
@@ -529,10 +551,12 @@ mod tests {
 
         let result = SolanaTransactionRequest::validate_instructions(&[instruction], &relayer);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Too many accounts"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Too many accounts")
+        );
     }
 
     #[test]
@@ -543,10 +567,12 @@ mod tests {
 
         let result = SolanaTransactionRequest::validate_instructions(&[instruction], &relayer);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("pubkey cannot be empty"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("pubkey cannot be empty")
+        );
     }
 
     #[test]
@@ -569,10 +595,12 @@ mod tests {
 
         let result = SolanaTransactionRequest::validate_instructions(&[instruction], &relayer);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Only the relayer address"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Only the relayer address")
+        );
     }
 
     #[test]
@@ -583,10 +611,12 @@ mod tests {
 
         let result = SolanaTransactionRequest::validate_instructions(&[instruction], &relayer);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid base64 data"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid base64 data")
+        );
     }
 
     #[test]
@@ -612,7 +642,7 @@ mod tests {
             let mut instruction = create_valid_instruction_spec();
             // Change program_id to create unique accounts
             instruction.program_id = format!("{:0>44}", i); // Create unique but invalid pubkeys
-                                                            // Add a unique account
+            // Add a unique account
             instruction.accounts.push(crate::models::SolanaAccountMeta {
                 pubkey: format!("{:0>44}", i + 1000), // Another unique account
                 is_signer: false,
@@ -674,9 +704,11 @@ mod tests {
 
         let result = SolanaTransactionRequest::validate_instructions(&instructions, &relayer);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Too many unique accounts"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Too many unique accounts")
+        );
     }
 }

@@ -29,14 +29,14 @@ use std::sync::Arc;
 use actix_governor::{Governor, GovernorConfigBuilder};
 use actix_web::HttpResponse;
 use actix_web::{
+    App, HttpServer,
     dev::Service,
     middleware::{self},
     web::{self},
-    App, HttpServer,
 };
-use color_eyre::{eyre::WrapErr, Result};
+use color_eyre::{Result, eyre::WrapErr};
 use config::Config;
-use futures::future::{ready, Either};
+use futures::future::{Either, ready};
 use metrics::middleware::MetricsMiddleware;
 
 use config::ApiKeyRateLimit;

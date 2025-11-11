@@ -9,7 +9,7 @@
 //! - **Feature merging**: Parent and child features are merged preserving unique items
 //! - **Type safety**: Inheritance only allowed between EVM networks
 
-use super::common::{merge_optional_string_vecs, NetworkConfigCommon};
+use super::common::{NetworkConfigCommon, merge_optional_string_vecs};
 use crate::config::ConfigFileError;
 use serde::{Deserialize, Serialize};
 

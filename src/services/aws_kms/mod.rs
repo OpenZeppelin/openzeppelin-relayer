@@ -32,11 +32,11 @@
 
 use alloy::primitives::keccak256;
 use async_trait::async_trait;
-use aws_config::{meta::region::RegionProviderChain, BehaviorVersion, Region};
+use aws_config::{BehaviorVersion, Region, meta::region::RegionProviderChain};
 use aws_sdk_kms::{
+    Client,
     primitives::Blob,
     types::{MessageType, SigningAlgorithmSpec},
-    Client,
 };
 use once_cell::sync::Lazy;
 use serde::Serialize;
@@ -332,7 +332,7 @@ pub mod tests {
     use k256::{
         ecdsa::SigningKey,
         elliptic_curve::rand_core::OsRng,
-        pkcs8::{der::Encode, EncodePublicKey},
+        pkcs8::{EncodePublicKey, der::Encode},
     };
     use mockall::predicate::{eq, ne};
 

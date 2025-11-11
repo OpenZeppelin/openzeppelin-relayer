@@ -297,12 +297,12 @@ fn validate_cdp_config(config: &CdpSignerConfig) -> Result<(), validator::Valida
         }
 
         // Check if the hex part is valid
-        if let Some(end) = addr.strip_prefix("0x") {
-            if !end.chars().all(|c| c.is_ascii_hexdigit()) {
-                let mut error = validator::ValidationError::new("invalid_evm_address_hex");
-                error.message = Some("EVM account address contains invalid hex characters".into());
-                return Err(error);
-            }
+        if let Some(end) = addr.strip_prefix("0x")
+            && !end.chars().all(|c| c.is_ascii_hexdigit())
+        {
+            let mut error = validator::ValidationError::new("invalid_evm_address_hex");
+            error.message = Some("EVM account address contains invalid hex characters".into());
+            return Err(error);
         }
     } else {
         // Assume it's a Solana address - validate using Pubkey::from_str
@@ -537,7 +537,9 @@ impl Signer {
 pub enum SignerValidationError {
     #[error("Signer ID cannot be empty")]
     EmptyId,
-    #[error("Signer ID must contain only letters, numbers, dashes and underscores and must be at most 36 characters long")]
+    #[error(
+        "Signer ID must contain only letters, numbers, dashes and underscores and must be at most 36 characters long"
+    )]
     InvalidIdFormat,
     #[error("Invalid signer configuration: {0}")]
     InvalidConfig(String),

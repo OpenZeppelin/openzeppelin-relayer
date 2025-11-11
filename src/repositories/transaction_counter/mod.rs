@@ -58,7 +58,7 @@ pub trait TransactionCounterTrait {
     async fn decrement(&self, relayer_id: &str, address: &str) -> Result<u64, RepositoryError>;
 
     async fn set(&self, relayer_id: &str, address: &str, value: u64)
-        -> Result<(), RepositoryError>;
+    -> Result<(), RepositoryError>;
 }
 
 /// Enum wrapper for different transaction counter repository implementations

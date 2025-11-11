@@ -6,12 +6,15 @@ use crate::{
         STELLAR_DEFAULT_MAX_FEE, STELLAR_DEFAULT_TRANSACTION_FEE,
     },
     domain::{
+        SignTransactionResponseEvm,
         evm::PriceParams,
         stellar::validation::{validate_operations, validate_soroban_memo_restriction},
         xdr_utils::{is_signed, parse_transaction_xdr},
-        SignTransactionResponseEvm,
     },
     models::{
+        AddressError, EvmNetwork, NetworkRepoModel, NetworkTransactionRequest, NetworkType,
+        RelayerError, RelayerRepoModel, SignerError, StellarNetwork, StellarValidationError,
+        TransactionError, U256,
         transaction::{
             request::{
                 evm::EvmTransactionRequest,
@@ -21,9 +24,6 @@ use crate::{
             solana::SolanaInstructionSpec,
             stellar::{DecoratedSignature, MemoSpec, OperationSpec},
         },
-        AddressError, EvmNetwork, NetworkRepoModel, NetworkTransactionRequest, NetworkType,
-        RelayerError, RelayerRepoModel, SignerError, StellarNetwork, StellarValidationError,
-        TransactionError, U256,
     },
     utils::{deserialize_optional_u128, serialize_optional_u128},
 };
@@ -741,8 +741,8 @@ impl StellarTransactionData {
             .map_err(|_| SignerError::ConversionError("too many signatures".into()))?;
 
         match &mut envelope {
-            TransactionEnvelope::Tx(ref mut v1) => v1.signatures = sigs,
-            TransactionEnvelope::TxV0(ref mut v0) => v0.signatures = sigs,
+            TransactionEnvelope::Tx(v1) => v1.signatures = sigs,
+            TransactionEnvelope::TxV0(v0) => v0.signatures = sigs,
             TransactionEnvelope::TxFeeBump(_) => {
                 return Err(SignerError::ConversionError(
                     "Cannot attach signatures to fee-bump transaction directly".into(),
@@ -1133,12 +1133,12 @@ mod tests {
             EvmNetworkConfig, NetworkConfigCommon, SolanaNetworkConfig, StellarNetworkConfig,
         },
         models::{
+            EncodedSerializedTransaction,
             network::NetworkConfigData,
             relayer::{
                 RelayerEvmPolicy, RelayerNetworkPolicy, RelayerSolanaPolicy, RelayerStellarPolicy,
             },
             transaction::stellar::AssetSpec,
-            EncodedSerializedTransaction,
         },
     };
 
@@ -2446,10 +2446,12 @@ mod tests {
         let request = NetworkTransactionRequest::Stellar(stellar_request);
         let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Expected unsigned XDR but received signed XDR"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Expected unsigned XDR but received signed XDR")
+        );
 
         // Test case 5: Operations with fee_bump should fail
         let stellar_request = StellarTransactionRequest {
@@ -2472,10 +2474,12 @@ mod tests {
         let request = NetworkTransactionRequest::Stellar(stellar_request);
         let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Cannot request fee_bump with operations mode"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot request fee_bump with operations mode")
+        );
     }
 
     #[test]
@@ -2747,10 +2751,10 @@ mod tests {
             Err(poisoned) => poisoned.into_inner(),
         };
 
-        use std::env;
-
         // Set custom expiration hours for test
-        env::set_var("TRANSACTION_EXPIRATION_HOURS", "6");
+        unsafe {
+            std::env::set_var("TRANSACTION_EXPIRATION_HOURS", "6");
+        }
 
         let mut transaction = create_test_transaction();
         transaction.delete_at = Some("2024-01-01T00:00:00Z".to_string());
@@ -2764,7 +2768,9 @@ mod tests {
         assert_eq!(transaction.delete_at, original_delete_at);
 
         // Cleanup
-        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        unsafe {
+            std::env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        }
     }
 
     #[test]
@@ -2774,10 +2780,10 @@ mod tests {
             Err(poisoned) => poisoned.into_inner(),
         };
 
-        use std::env;
-
         // Set custom expiration hours for test
-        env::set_var("TRANSACTION_EXPIRATION_HOURS", "6");
+        unsafe {
+            std::env::set_var("TRANSACTION_EXPIRATION_HOURS", "6");
+        }
 
         let mut transaction = create_test_transaction();
         transaction.delete_at = None;
@@ -2789,7 +2795,9 @@ mod tests {
         assert!(transaction.delete_at.is_none());
 
         // Cleanup
-        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        unsafe {
+            std::env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        }
     }
 
     #[test]
@@ -2801,10 +2809,11 @@ mod tests {
 
         use crate::config::ServerConfig;
         use chrono::{DateTime, Duration, Utc};
-        use std::env;
 
         // Set custom expiration hours for test
-        env::set_var("TRANSACTION_EXPIRATION_HOURS", "3"); // Use 3 hours for this test
+        unsafe {
+            std::env::set_var("TRANSACTION_EXPIRATION_HOURS", "3"); // Use 3 hours for this test
+        }
 
         // Verify the env var is actually set correctly
         let actual_hours = ServerConfig::get_transaction_expiration_hours();
@@ -2850,15 +2859,20 @@ mod tests {
             let actual_hours_at_runtime = ServerConfig::get_transaction_expiration_hours();
 
             assert!(
-                duration_from_before >= expected_duration - tolerance &&
-                duration_from_before <= expected_duration + tolerance,
+                duration_from_before >= expected_duration - tolerance
+                    && duration_from_before <= expected_duration + tolerance,
                 "delete_at should be approximately 3 hours from now for status: {:?}. Duration from start: {:?}, Expected: {:?}, Config hours at runtime: {}",
-                status, duration_from_before, expected_duration, actual_hours_at_runtime
+                status,
+                duration_from_before,
+                expected_duration,
+                actual_hours_at_runtime
             );
         }
 
         // Cleanup
-        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        unsafe {
+            std::env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        }
     }
 
     #[test]
@@ -2869,10 +2883,11 @@ mod tests {
         };
 
         use chrono::{DateTime, Duration, Utc};
-        use std::env;
 
         // Remove env var to test default behavior
-        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        unsafe {
+            std::env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        }
 
         let mut transaction = create_test_transaction();
         transaction.delete_at = None;
@@ -2895,10 +2910,11 @@ mod tests {
         let tolerance = Duration::minutes(5); // Allow 5 minutes tolerance
 
         assert!(
-            duration_from_before >= expected_duration - tolerance &&
-            duration_from_before <= expected_duration + tolerance,
+            duration_from_before >= expected_duration - tolerance
+                && duration_from_before <= expected_duration + tolerance,
             "delete_at should be approximately 4 hours from now (default). Duration from start: {:?}, Expected: {:?}",
-            duration_from_before, expected_duration
+            duration_from_before,
+            expected_duration
         );
     }
 
@@ -2910,13 +2926,14 @@ mod tests {
         };
 
         use chrono::{DateTime, Duration, Utc};
-        use std::env;
 
         // Test with various custom expiration hours
         let test_cases = vec![1, 2, 6, 12]; // 1 hour, 2 hours, 6 hours, 12 hours
 
         for expiration_hours in test_cases {
-            env::set_var("TRANSACTION_EXPIRATION_HOURS", expiration_hours.to_string());
+            unsafe {
+                std::env::set_var("TRANSACTION_EXPIRATION_HOURS", expiration_hours.to_string());
+            }
 
             let mut transaction = create_test_transaction();
             transaction.delete_at = None;
@@ -2941,15 +2958,19 @@ mod tests {
             let tolerance = Duration::minutes(5); // Allow 5 minutes tolerance
 
             assert!(
-                duration_from_before >= expected_duration - tolerance &&
-                duration_from_before <= expected_duration + tolerance,
+                duration_from_before >= expected_duration - tolerance
+                    && duration_from_before <= expected_duration + tolerance,
                 "delete_at should be approximately {} hours from now. Duration from start: {:?}, Expected: {:?}",
-                expiration_hours, duration_from_before, expected_duration
+                expiration_hours,
+                duration_from_before,
+                expected_duration
             );
         }
 
         // Cleanup
-        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        unsafe {
+            std::env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        }
     }
 
     #[test]
@@ -2982,7 +3003,10 @@ mod tests {
             assert!(
                 delete_at >= expected_min && delete_at <= expected_max,
                 "Calculated delete_at should be approximately {} hours from now. Got: {}, Expected between: {} and {}",
-                hours, delete_at, expected_min, expected_max
+                hours,
+                delete_at,
+                expected_min,
+                expected_max
             );
         }
     }
@@ -2994,9 +3018,9 @@ mod tests {
             Err(poisoned) => poisoned.into_inner(),
         };
 
-        use std::env;
-
-        env::set_var("TRANSACTION_EXPIRATION_HOURS", "8");
+        unsafe {
+            std::env::set_var("TRANSACTION_EXPIRATION_HOURS", "8");
+        }
 
         let mut transaction = create_test_transaction();
         transaction.delete_at = None;
@@ -3016,7 +3040,9 @@ mod tests {
         assert_eq!(transaction.delete_at, first_delete_at);
 
         // Cleanup
-        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        unsafe {
+            std::env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        }
     }
 
     /// Helper function to create a test transaction for testing delete_at functionality

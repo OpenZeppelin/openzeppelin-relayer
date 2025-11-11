@@ -29,7 +29,7 @@ use crate::{
             price_params_handler::PriceParamsHandler,
         },
         midnight::handler::{QuickSyncStrategy, SyncManager},
-        provider::{get_network_provider, MidnightProviderTrait},
+        provider::{MidnightProviderTrait, get_network_provider},
         signer::{
             EvmSignerFactory, MidnightSignerFactory, MidnightSignerTrait, SolanaSignerFactory,
             StellarSignerFactory,
@@ -55,7 +55,7 @@ pub use util::*;
 // Explicit re-exports to avoid ambiguous glob re-exports
 pub use common::is_final_state;
 pub use common::*;
-pub use evm::{ensure_status, ensure_status_one_of, DefaultEvmTransaction, EvmRelayerTransaction};
+pub use evm::{DefaultEvmTransaction, EvmRelayerTransaction, ensure_status, ensure_status_one_of};
 pub use midnight::{midnight_transaction::DefaultMidnightTransaction, to_midnight_network_id};
 pub use solana::{DefaultSolanaTransaction, SolanaRelayerTransaction};
 pub use stellar::{DefaultStellarTransaction, StellarRelayerTransaction};

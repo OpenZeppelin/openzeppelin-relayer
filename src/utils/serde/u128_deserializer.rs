@@ -4,7 +4,7 @@
 
 use std::fmt;
 
-use serde::{de, Deserialize, Deserializer, Serializer};
+use serde::{Deserialize, Deserializer, Serializer, de};
 
 use super::deserialize_u64;
 

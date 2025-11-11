@@ -12,7 +12,7 @@ use tracing::{debug, instrument};
 use std::sync::Arc;
 
 use crate::{
-    domain::{get_relayer_transaction, get_transaction_by_id, is_final_state, Transaction},
+    domain::{Transaction, get_relayer_transaction, get_transaction_by_id, is_final_state},
     jobs::{Job, TransactionStatusCheck},
     models::{DefaultAppState, TransactionRepoModel},
     observability::request_id::set_request_id,

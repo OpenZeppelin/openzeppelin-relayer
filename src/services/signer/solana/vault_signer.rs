@@ -23,7 +23,7 @@ use crate::{
         VaultSignerConfig,
     },
     services::{
-        signer::{solana::local_signer::LocalSigner, Signer},
+        signer::{Signer, solana::local_signer::LocalSigner},
         vault::{VaultService, VaultServiceTrait},
     },
 };

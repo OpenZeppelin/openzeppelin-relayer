@@ -25,23 +25,23 @@ use crate::domain::relayer::evm::create_error_response;
 use crate::{
     constants::{STELLAR_SMALLEST_UNIT_NAME, STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS},
     domain::{
-        create_success_response, transaction::stellar::fetch_next_sequence_from_chain,
         BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
         SignTransactionExternalResponseStellar, SignTransactionRequest, SignTypedDataRequest,
+        create_success_response, transaction::stellar::fetch_next_sequence_from_chain,
     },
     jobs::{JobProducerTrait, RelayerHealthCheck, TransactionRequest, TransactionStatusCheck},
     models::{
-        produce_relayer_disabled_payload, DeletePendingTransactionsResponse, DisabledReason,
-        HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest,
-        NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus,
-        RepositoryError, RpcErrorCodes, StellarNetwork, StellarRpcRequest, TransactionRepoModel,
-        TransactionStatus,
+        DeletePendingTransactionsResponse, DisabledReason, HealthCheckFailure, JsonRpcRequest,
+        JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest, NetworkRpcResult,
+        NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus, RepositoryError,
+        RpcErrorCodes, StellarNetwork, StellarRpcRequest, TransactionRepoModel, TransactionStatus,
+        produce_relayer_disabled_payload,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
+        TransactionCounterService, TransactionCounterServiceTrait,
         provider::{StellarProvider, StellarProviderTrait},
         signer::{StellarSignTrait, StellarSigner},
-        TransactionCounterService, TransactionCounterServiceTrait,
     },
     utils::calculate_scheduled_timestamp,
 };
@@ -368,7 +368,7 @@ where
                     RpcErrorCodes::INVALID_PARAMS,
                     "Invalid params",
                     "Expected Stellar network request",
-                ))
+                ));
             }
         };
 
@@ -488,7 +488,7 @@ where
             _ => {
                 return Err(RelayerError::NotSupported(
                     "Invalid request type for Stellar relayer".to_string(),
-                ))
+                ));
             }
         };
 
@@ -529,9 +529,9 @@ mod tests {
             InMemoryNetworkRepository, MockRelayerRepository, MockTransactionRepository,
         },
         services::{
+            MockTransactionCounterServiceTrait,
             provider::{MockStellarProviderTrait, ProviderError},
             signer::MockStellarSignTrait,
-            MockTransactionCounterServiceTrait,
         },
     };
     use mockall::predicate::*;

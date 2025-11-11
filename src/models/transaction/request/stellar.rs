@@ -111,10 +111,12 @@ mod tests {
 
         let result = req.validate();
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Cannot provide both"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot provide both")
+        );
     }
 
     #[test]
@@ -134,10 +136,12 @@ mod tests {
 
         let result = req.validate();
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Must provide either"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Must provide either")
+        );
     }
 
     #[test]
@@ -161,10 +165,12 @@ mod tests {
 
         let result = req.validate();
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Cannot request fee_bump with operations"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot request fee_bump with operations")
+        );
     }
 
     #[test]

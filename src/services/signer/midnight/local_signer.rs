@@ -15,7 +15,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use ed25519_dalek::Signer as Ed25519Signer;
-use ed25519_dalek::{ed25519::signature::SignerMut, SigningKey};
+use ed25519_dalek::{SigningKey, ed25519::signature::SignerMut};
 use eyre::Result;
 use midnight_node_ledger_helpers::{DefaultDB, NetworkId, Wallet, WalletKind, WalletSeed};
 use sha2::{Digest, Sha256};
@@ -60,7 +60,9 @@ impl LocalSigner {
 
         // Create the wallet from the seed
         // Using index 0 and NoLegacy wallet kind as default
-        let wallet = Wallet::new(wallet_seed, 0, WalletKind::NoLegacy);
+        use midnight_node_ledger_helpers::LedgerState;
+        let ledger_state = LedgerState::new(network_id);
+        let wallet = Wallet::default(wallet_seed, &ledger_state);
 
         Ok(Self {
             network_id,
@@ -107,7 +109,15 @@ impl Signer for LocalSigner {
             .as_ref()
             .ok_or_else(|| SignerError::SigningError("Transaction data not serialized".into()))?;
 
-        let signing_key = SigningKey::from_bytes(&self.wallet_seed.0);
+        let seed_bytes = match &self.wallet_seed {
+            WalletSeed::Medium(bytes) => bytes,
+            _ => {
+                return Err(SignerError::SigningError(
+                    "Unsupported wallet seed format".into(),
+                ));
+            }
+        };
+        let signing_key = SigningKey::from_bytes(seed_bytes);
 
         // Hash the transaction data with SHA-256
         let mut hasher = Sha256::new();

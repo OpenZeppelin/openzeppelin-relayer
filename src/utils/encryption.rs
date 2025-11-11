@@ -4,8 +4,8 @@
 //! It's designed to be used transparently in the repository layer to protect data at rest.
 
 use aes_gcm::{
-    aead::{rand_core::RngCore, Aead, KeyInit, OsRng},
     Aes256Gcm, Key, Nonce,
+    aead::{Aead, KeyInit, OsRng, rand_core::RngCore},
 };
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -236,16 +236,16 @@ pub fn decrypt_sensitive_field(data: &str) -> Result<String, EncryptionError> {
         .map_err(|e| EncryptionError::InvalidFormat(format!("Invalid UTF-8: {e}")))?;
 
     // Try to parse as encrypted data first (if encryption is configured)
-    if FieldEncryption::is_configured() {
-        if let Ok(encryption) = get_encryption() {
-            // Check if this looks like encrypted data by trying to parse as EncryptedData
-            if let Ok(encrypted_data) = serde_json::from_str::<EncryptedData>(&json_str) {
-                // This is encrypted data, decrypt it
-                let plaintext_bytes = encryption.decrypt(&encrypted_data)?;
-                return String::from_utf8(plaintext_bytes).map_err(|e| {
-                    EncryptionError::DecryptionFailed(format!("Invalid UTF-8 in plaintext: {e}"))
-                });
-            }
+    if FieldEncryption::is_configured()
+        && let Ok(encryption) = get_encryption()
+    {
+        // Check if this looks like encrypted data by trying to parse as EncryptedData
+        if let Ok(encrypted_data) = serde_json::from_str::<EncryptedData>(&json_str) {
+            // This is encrypted data, decrypt it
+            let plaintext_bytes = encryption.decrypt(&encrypted_data)?;
+            return String::from_utf8(plaintext_bytes).map_err(|e| {
+                EncryptionError::DecryptionFailed(format!("Invalid UTF-8 in plaintext: {e}"))
+            });
         }
     }
 
@@ -337,20 +337,24 @@ mod tests {
         assert!(encryption.decrypt_string("invalid base64!").is_err());
 
         // Test with valid base64 but invalid JSON inside
-        assert!(encryption
-            .decrypt_string(&base64_encode(b"not json"))
-            .is_err());
+        assert!(
+            encryption
+                .decrypt_string(&base64_encode(b"not json"))
+                .is_err()
+        );
 
         // Test with valid base64 but wrong JSON structure inside
         let invalid_json_b64 = base64_encode(b"{\"wrong\": \"structure\"}");
         assert!(encryption.decrypt_string(&invalid_json_b64).is_err());
 
         // Test with plain JSON (old format) - should fail since we only accept base64
-        assert!(encryption
-            .decrypt_string(&base64_encode(
-                b"{\"nonce\":\"test\",\"ciphertext\":\"test\",\"version\":1}"
-            ))
-            .is_err());
+        assert!(
+            encryption
+                .decrypt_string(&base64_encode(
+                    b"{\"nonce\":\"test\",\"ciphertext\":\"test\",\"version\":1}"
+                ))
+                .is_err()
+        );
     }
 
     #[test]
@@ -374,7 +378,7 @@ mod tests {
     fn test_env_key_loading() {
         // Test base64 key
         let test_key = FieldEncryption::generate_key();
-        env::set_var("STORAGE_ENCRYPTION_KEY", &test_key);
+        unsafe { env::set_var("STORAGE_ENCRYPTION_KEY", &test_key) };
 
         let encryption = FieldEncryption::new().unwrap();
         let plaintext = "test message";
@@ -383,11 +387,11 @@ mod tests {
         assert_eq!(plaintext, decrypted);
 
         // Test missing key
-        env::remove_var("STORAGE_ENCRYPTION_KEY");
+        unsafe { env::remove_var("STORAGE_ENCRYPTION_KEY") };
         assert!(FieldEncryption::new().is_err());
 
         // Clean up
-        env::set_var("STORAGE_ENCRYPTION_KEY", &test_key);
+        unsafe { env::set_var("STORAGE_ENCRYPTION_KEY", &test_key) };
     }
 
     #[test]
@@ -411,7 +415,7 @@ mod tests {
         // Temporarily clear encryption key to test fallback
         let old_key = env::var("STORAGE_ENCRYPTION_KEY").ok();
 
-        env::remove_var("STORAGE_ENCRYPTION_KEY");
+        unsafe { env::remove_var("STORAGE_ENCRYPTION_KEY") };
 
         let plaintext = "fallback test";
 
@@ -427,7 +431,7 @@ mod tests {
 
         // Restore original environment
         if let Some(key) = old_key {
-            env::set_var("STORAGE_ENCRYPTION_KEY", key);
+            unsafe { env::set_var("STORAGE_ENCRYPTION_KEY", key) };
         }
     }
 

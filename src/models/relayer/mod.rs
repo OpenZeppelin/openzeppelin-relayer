@@ -713,12 +713,12 @@ impl Relayer {
         }
 
         // Validate fee margin percentage
-        if let Some(fee_margin) = policy.fee_margin_percentage {
-            if fee_margin < 0.0 {
-                return Err(RelayerValidationError::InvalidPolicy(
-                    "Negative fee margin percentage values are not accepted".into(),
-                ));
-            }
+        if let Some(fee_margin) = policy.fee_margin_percentage
+            && fee_margin < 0.0
+        {
+            return Err(RelayerValidationError::InvalidPolicy(
+                "Negative fee margin percentage values are not accepted".into(),
+            ));
         }
 
         // Check for conflicting allowed/disallowed accounts
@@ -765,12 +765,12 @@ impl Relayer {
         policy: &RelayerSolanaPolicy,
     ) -> Result<(), RelayerValidationError> {
         // Swap config only supported for user fee payment strategy
-        if let Some(fee_payment_strategy) = &policy.fee_payment_strategy {
-            if *fee_payment_strategy == SolanaFeePaymentStrategy::Relayer {
-                return Err(RelayerValidationError::InvalidPolicy(
-                    "Swap config only supported for user fee payment strategy".into(),
-                ));
-            }
+        if let Some(fee_payment_strategy) = &policy.fee_payment_strategy
+            && *fee_payment_strategy == SolanaFeePaymentStrategy::Relayer
+        {
+            return Err(RelayerValidationError::InvalidPolicy(
+                "Swap config only supported for user fee payment strategy".into(),
+            ));
         }
 
         // Validate strategy-specific restrictions
@@ -811,12 +811,12 @@ impl Relayer {
                 ));
             }
 
-            if let Some(max_lamports) = jupiter_options.priority_fee_max_lamports {
-                if max_lamports == 0 {
-                    return Err(RelayerValidationError::InvalidPolicy(
-                        "Max lamports must be greater than 0".into(),
-                    ));
-                }
+            if let Some(max_lamports) = jupiter_options.priority_fee_max_lamports
+                && max_lamports == 0
+            {
+                return Err(RelayerValidationError::InvalidPolicy(
+                    "Max lamports must be greater than 0".into(),
+                ));
             }
 
             if let Some(priority_level) = &jupiter_options.priority_level {
@@ -909,7 +909,9 @@ impl Relayer {
 pub enum RelayerValidationError {
     #[error("Relayer ID cannot be empty")]
     EmptyId,
-    #[error("Relayer ID must contain only letters, numbers, dashes and underscores and must be at most 36 characters long")]
+    #[error(
+        "Relayer ID must contain only letters, numbers, dashes and underscores and must be at most 36 characters long"
+    )]
     InvalidIdFormat,
     #[error("Relayer ID must not exceed 36 characters")]
     IdTooLong,
@@ -1807,7 +1809,9 @@ mod tests {
         let result = relayer.validate();
         assert!(result.is_err());
         if let Err(RelayerValidationError::InvalidPolicy(msg)) = result {
-            assert!(msg.contains("allowed_accounts and disallowed_accounts cannot be both present"));
+            assert!(
+                msg.contains("allowed_accounts and disallowed_accounts cannot be both present")
+            );
         } else {
             panic!("Expected InvalidPolicy error for conflicting accounts");
         }
@@ -2206,14 +2210,35 @@ mod tests {
         // Test each variant
         let errors = vec![
             (RelayerValidationError::EmptyId, "ID cannot be empty"),
-            (RelayerValidationError::InvalidIdFormat, "ID must contain only letters, numbers, dashes and underscores and must be at most 36 characters long"),
-            (RelayerValidationError::IdTooLong, "ID must not exceed 36 characters"),
+            (
+                RelayerValidationError::InvalidIdFormat,
+                "ID must contain only letters, numbers, dashes and underscores and must be at most 36 characters long",
+            ),
+            (
+                RelayerValidationError::IdTooLong,
+                "ID must not exceed 36 characters",
+            ),
             (RelayerValidationError::EmptyName, "Name cannot be empty"),
-            (RelayerValidationError::EmptyNetwork, "Network cannot be empty"),
-            (RelayerValidationError::InvalidPolicy("test error".to_string()), "Invalid relayer policy: test error"),
-            (RelayerValidationError::InvalidRpcUrl("http://invalid".to_string()), "Invalid RPC URL: http://invalid"),
-            (RelayerValidationError::InvalidRpcWeight, "RPC URL weight must be in range 0-100"),
-            (RelayerValidationError::InvalidField("test field error".to_string()), "test field error"),
+            (
+                RelayerValidationError::EmptyNetwork,
+                "Network cannot be empty",
+            ),
+            (
+                RelayerValidationError::InvalidPolicy("test error".to_string()),
+                "Invalid relayer policy: test error",
+            ),
+            (
+                RelayerValidationError::InvalidRpcUrl("http://invalid".to_string()),
+                "Invalid RPC URL: http://invalid",
+            ),
+            (
+                RelayerValidationError::InvalidRpcWeight,
+                "RPC URL weight must be in range 0-100",
+            ),
+            (
+                RelayerValidationError::InvalidField("test field error".to_string()),
+                "test field error",
+            ),
         ];
 
         for (validation_error, expected_message) in errors {
@@ -2312,10 +2337,12 @@ mod tests {
         // Should fail validation during final validation step
         let result = relayer.apply_json_patch(&invalid_patch);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Relayer name cannot be empty"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Relayer name cannot be empty")
+        );
     }
 
     #[test]

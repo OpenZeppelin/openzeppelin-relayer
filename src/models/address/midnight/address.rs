@@ -10,9 +10,7 @@ use bech32::Bech32m;
 use rand::Rng;
 use thiserror::Error;
 
-use midnight_node_ledger_helpers::{
-    DefaultDB, NetworkId, Serializable, Wallet, WalletKind, WalletSeed, DB,
-};
+use midnight_node_ledger_helpers::{DB, DefaultDB, NetworkId, Serializable, Wallet, WalletSeed};
 
 /// Errors that can occur during address operations
 #[derive(Error, Debug)]
@@ -97,9 +95,9 @@ impl MidnightAddress {
             _ => None,
         };
 
-        let coin_pub_key = wallet.secret_keys.coin_public_key().0 .0;
+        let coin_pub_key = wallet.shielded.coin_public_key.0.0;
         let mut enc_pub_key = Vec::new();
-        Serializable::serialize(&wallet.secret_keys.enc_public_key(), &mut enc_pub_key)
+        Serializable::serialize(&wallet.shielded.enc_public_key, &mut enc_pub_key)
             .expect("Failed serializing secret keys");
 
         Self {
@@ -119,11 +117,11 @@ impl MidnightAddress {
     /// * `Self` - The created MidnightAddress
     pub fn from_seed(seed: String, network: NetworkId) -> Self {
         let seed = hex::decode(seed).unwrap();
-        let wallet: Wallet<DefaultDB> = Wallet::new(
-            WalletSeed(seed.try_into().unwrap()),
-            0,
-            WalletKind::NoLegacy,
-        );
+        let seed_array: [u8; 32] = seed.try_into().unwrap();
+        use midnight_node_ledger_helpers::LedgerState;
+        let ledger_state = LedgerState::new(network);
+        let wallet: Wallet<DefaultDB> =
+            Wallet::default(WalletSeed::Medium(seed_array), &ledger_state);
         Self::from_wallet(&wallet, network)
     }
 
@@ -165,6 +163,7 @@ impl TryFrom<&MidnightAddress> for NetworkId {
 mod tests {
     use super::*;
     use bech32::{Bech32m, Hrp};
+    use midnight_node_ledger_helpers::LedgerState;
 
     #[test]
     fn test_parse() {
@@ -186,7 +185,10 @@ mod tests {
         let address = MidnightAddress::from_seed(seed.to_string(), NetworkId::TestNet);
         assert_eq!(address.type_, "shield-addr".to_string());
         assert_eq!(address.network, Some("test".to_string()));
-        assert_eq!(address.encode(), "mn_shield-addr_test1quc5snkchyepu6rpn5sn85cmnjfk2kzynwtf3lapt9t8q0qlw97sxqypw479uxdvf48386urhyndrty9vmpkjlydmdcur78rr3lw345kg5r4fgc2");
+        assert_eq!(
+            address.encode(),
+            "mn_shield-addr_test1j9qa8ekx5n5xlfa77ev8jjgmdu0akarkd8wkuugxxss258yqkgfvmkv8nh7z53lkrct9mc5pkxwppamklqrg9xnsc53f092jpg9t4ycgc96m5"
+        );
         let decoded_address = MidnightAddress::decode(&address.encode()).unwrap();
         assert_eq!(decoded_address.type_, "shield-addr".to_string());
         assert_eq!(decoded_address.network, Some("test".to_string()));
@@ -195,20 +197,22 @@ mod tests {
 
     #[test]
     fn test_from_wallet() {
-        let wallet = Wallet::<DefaultDB>::new(
-            WalletSeed(
-                hex::decode("b49408db310c043ab736fb57a98e15c8cedbed4c38450df3755ac9726ee14d0c")
-                    .unwrap()
-                    .try_into()
-                    .unwrap(),
-            ),
-            0,
-            WalletKind::NoLegacy,
+        let seed_bytes =
+            hex::decode("b49408db310c043ab736fb57a98e15c8cedbed4c38450df3755ac9726ee14d0c")
+                .unwrap()
+                .try_into()
+                .unwrap();
+        let wallet = Wallet::<DefaultDB>::default(
+            WalletSeed::Medium(seed_bytes),
+            &LedgerState::new(NetworkId::TestNet),
         );
         let address = MidnightAddress::from_wallet(&wallet, NetworkId::TestNet);
         assert_eq!(address.type_, "shield-addr".to_string());
         assert_eq!(address.network, Some("test".to_string()));
-        assert_eq!(address.encode(), "mn_shield-addr_test1quc5snkchyepu6rpn5sn85cmnjfk2kzynwtf3lapt9t8q0qlw97sxqypw479uxdvf48386urhyndrty9vmpkjlydmdcur78rr3lw345kg5r4fgc2");
+        assert_eq!(
+            address.encode(),
+            "mn_shield-addr_test1j9qa8ekx5n5xlfa77ev8jjgmdu0akarkd8wkuugxxss258yqkgfvmkv8nh7z53lkrct9mc5pkxwppamklqrg9xnsc53f092jpg9t4ycgc96m5"
+        );
     }
 
     #[test]

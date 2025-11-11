@@ -24,12 +24,12 @@ use tracing::info;
 
 use crate::{
     models::{
-        produce_solana_rpc_webhook_payload, EncodedSerializedTransaction,
-        SignTransactionRequestParams, SignTransactionResult, SolanaFeePaymentStrategy,
-        SolanaWebhookRpcPayload, TransactionRepoModel,
+        EncodedSerializedTransaction, SignTransactionRequestParams, SignTransactionResult,
+        SolanaFeePaymentStrategy, SolanaWebhookRpcPayload, TransactionRepoModel,
+        produce_solana_rpc_webhook_payload,
     },
     repositories::{Repository, TransactionRepository},
-    services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
+    services::{JupiterServiceTrait, provider::SolanaProviderTrait, signer::SolanaSignTrait},
 };
 
 use super::*;

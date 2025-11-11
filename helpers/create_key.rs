@@ -209,10 +209,12 @@ mod tests {
         // Password too short
         let result = validate_password("Short1!");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("at least 12 characters"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("at least 12 characters")
+        );
     }
 
     #[test]
@@ -244,10 +246,12 @@ mod tests {
         // Missing special character
         let result = validate_password("SecurePass1234");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("special character"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("special character")
+        );
     }
 
     // Mock for LocalClient to avoid actual key generation in tests

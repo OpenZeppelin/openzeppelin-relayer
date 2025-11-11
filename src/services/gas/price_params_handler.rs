@@ -89,9 +89,11 @@ mod tests {
     }
 
     fn setup_test_env() {
-        env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
-        env::set_var("REDIS_URL", "redis://localhost:6379");
-        env::set_var("RPC_TIMEOUT_MS", "5000");
+        unsafe {
+            env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
+            env::set_var("REDIS_URL", "redis://localhost:6379");
+            env::set_var("RPC_TIMEOUT_MS", "5000");
+        }
     }
 
     #[test]

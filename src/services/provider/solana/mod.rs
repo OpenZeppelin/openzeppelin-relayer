@@ -42,8 +42,8 @@ use crate::{
 
 use super::ProviderError;
 use super::{
-    rpc_selector::{RpcSelector, RpcSelectorError},
     RetryConfig,
+    rpc_selector::{RpcSelector, RpcSelectorError},
 };
 
 /// Utility function to match error patterns by normalizing both strings.
@@ -381,7 +381,7 @@ pub trait SolanaProviderTrait: Send + Sync {
 
     /// Confirms a transaction given its signature.
     async fn confirm_transaction(&self, signature: &Signature)
-        -> Result<bool, SolanaProviderError>;
+    -> Result<bool, SolanaProviderError>;
 
     /// Retrieves the minimum balance required for rent exemption for the specified data size.
     async fn get_minimum_balance_for_rent_exemption(
@@ -927,7 +927,7 @@ mod tests {
     use solana_sdk::{
         hash::Hash,
         message::Message,
-        signer::{keypair::Keypair, Signer},
+        signer::{Signer, keypair::Keypair},
         transaction::Transaction,
     };
     use std::sync::Mutex;
@@ -942,11 +942,13 @@ mod tests {
 
     impl SolanaTestEnvGuard {
         fn new(mutex_guard: std::sync::MutexGuard<'static, ()>) -> Self {
-            std::env::set_var(
-                "API_KEY",
-                "test_api_key_for_solana_provider_new_this_is_long_enough_32_chars",
-            );
-            std::env::set_var("REDIS_URL", "redis://test-dummy-url-for-solana-provider");
+            unsafe {
+                std::env::set_var(
+                    "API_KEY",
+                    "test_api_key_for_solana_provider_new_this_is_long_enough_32_chars",
+                );
+                std::env::set_var("REDIS_URL", "redis://test-dummy-url-for-solana-provider");
+            }
 
             Self {
                 _mutex_guard: mutex_guard,
@@ -956,8 +958,10 @@ mod tests {
 
     impl Drop for SolanaTestEnvGuard {
         fn drop(&mut self) {
-            std::env::remove_var("API_KEY");
-            std::env::remove_var("REDIS_URL");
+            unsafe {
+                std::env::remove_var("API_KEY");
+                std::env::remove_var("REDIS_URL");
+            }
         }
     }
 

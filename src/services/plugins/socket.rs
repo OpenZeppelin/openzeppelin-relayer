@@ -64,8 +64,8 @@ use tokio::sync::oneshot;
 use tracing::debug;
 
 use super::{
-    relayer_api::{RelayerApiTrait, Request},
     PluginError,
+    relayer_api::{RelayerApiTrait, Request},
 };
 
 pub struct SocketService {
@@ -79,6 +79,7 @@ impl SocketService {
     /// # Arguments
     ///
     /// * `socket_path` - The path to the socket file.
+    #[allow(clippy::result_large_err)]
     pub fn new(socket_path: &str) -> Result<Self, PluginError> {
         // Remove existing socket file if it exists
         let _ = std::fs::remove_file(socket_path);

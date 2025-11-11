@@ -10,7 +10,7 @@ use tracing::{debug, instrument};
 
 use crate::{
     constants::WORKER_NOTIFICATION_SENDER_RETRIES,
-    jobs::{handle_result, Job, NotificationSend},
+    jobs::{Job, NotificationSend, handle_result},
     models::DefaultAppState,
     observability::request_id::set_request_id,
     repositories::Repository,
@@ -83,7 +83,7 @@ mod tests {
     use crate::models::{
         EvmTransactionResponse, NetworkType, RelayerDisabledPayload, RelayerEvmPolicy,
         RelayerNetworkPolicyResponse, RelayerResponse, TransactionResponse, TransactionStatus,
-        WebhookNotification, WebhookPayload, U256,
+        U256, WebhookNotification, WebhookPayload,
     };
 
     #[tokio::test]

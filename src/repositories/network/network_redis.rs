@@ -10,8 +10,8 @@ use crate::models::{NetworkRepoModel, NetworkType, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{BatchRetrievalResult, PaginatedResult, PaginationQuery, Repository};
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
+use redis::aio::ConnectionManager;
 use std::fmt;
 use std::sync::Arc;
 use tracing::{debug, error, warn};
@@ -116,13 +116,13 @@ impl RedisNetworkRepository {
             let old_chain_id = self.extract_chain_id(old);
             let new_chain_id = self.extract_chain_id(network);
 
-            if old_chain_id != new_chain_id {
-                if let Some(old_chain_id) = old_chain_id {
-                    let old_chain_id_key =
-                        self.network_chain_id_index_key(&old.network_type, old_chain_id);
-                    pipe.del(&old_chain_id_key);
-                    debug!(network_id = %network.id, old_chain_id = %old_chain_id, new_chain_id = ?new_chain_id, "removing old chain ID index for network");
-                }
+            if old_chain_id != new_chain_id
+                && let Some(old_chain_id) = old_chain_id
+            {
+                let old_chain_id_key =
+                    self.network_chain_id_index_key(&old.network_type, old_chain_id);
+                pipe.del(&old_chain_id_key);
+                debug!(network_id = %network.id, old_chain_id = %old_chain_id, new_chain_id = ?new_chain_id, "removing old chain ID index for network");
             }
         }
 
@@ -1086,11 +1086,12 @@ mod tests {
         // Verify they exist
         assert!(repo.has_entries().await.unwrap());
         assert_eq!(repo.count().await.unwrap(), 2);
-        assert!(repo
-            .get_by_name(NetworkType::Evm, &test_network_random1)
-            .await
-            .unwrap()
-            .is_some());
+        assert!(
+            repo.get_by_name(NetworkType::Evm, &test_network_random1)
+                .await
+                .unwrap()
+                .is_some()
+        );
 
         // Drop all entries
         let result = repo.drop_all_entries().await;
@@ -1099,16 +1100,18 @@ mod tests {
         // Verify everything is cleaned up
         assert!(!repo.has_entries().await.unwrap());
         assert_eq!(repo.count().await.unwrap(), 0);
-        assert!(repo
-            .get_by_name(NetworkType::Evm, &test_network_random1)
-            .await
-            .unwrap()
-            .is_none());
-        assert!(repo
-            .get_by_name(NetworkType::Solana, &test_network_random2)
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            repo.get_by_name(NetworkType::Evm, &test_network_random1)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            repo.get_by_name(NetworkType::Solana, &test_network_random2)
+                .await
+                .unwrap()
+                .is_none()
+        );
 
         // Verify individual networks are gone
         assert!(matches!(
@@ -1137,30 +1140,34 @@ mod tests {
         repo.create(network.clone()).await.unwrap();
 
         // Verify indexes work
-        assert!(repo
-            .get_by_name(NetworkType::Evm, &test_network_random)
-            .await
-            .unwrap()
-            .is_some());
-        assert!(repo
-            .get_by_chain_id(NetworkType::Evm, 12345)
-            .await
-            .unwrap()
-            .is_some());
+        assert!(
+            repo.get_by_name(NetworkType::Evm, &test_network_random)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            repo.get_by_chain_id(NetworkType::Evm, 12345)
+                .await
+                .unwrap()
+                .is_some()
+        );
 
         // Drop all entries
         repo.drop_all_entries().await.unwrap();
 
         // Verify indexes are cleaned up
-        assert!(repo
-            .get_by_name(NetworkType::Evm, &test_network_random)
-            .await
-            .unwrap()
-            .is_none());
-        assert!(repo
-            .get_by_chain_id(NetworkType::Evm, 12345)
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            repo.get_by_name(NetworkType::Evm, &test_network_random)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            repo.get_by_chain_id(NetworkType::Evm, 12345)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 }

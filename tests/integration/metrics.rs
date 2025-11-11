@@ -1,5 +1,5 @@
 // integration tests for the relayer server, main.rs
-use actix_web::{dev::Service, test, web, App, HttpResponse};
+use actix_web::{App, HttpResponse, dev::Service, test, web};
 use std::sync::Arc;
 
 use openzeppelin_relayer::{

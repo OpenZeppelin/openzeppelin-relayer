@@ -57,12 +57,12 @@ use crate::{
         SignerRepoModel, SignerType, TransactionRepoModel, VaultSignerConfig,
     },
     services::{
+        AwsKmsService, CdpService, GoogleCloudKmsService, TurnkeyServiceTrait,
         signer::Signer,
         signer::SignerError,
         signer::SignerFactoryError,
         turnkey::TurnkeyService,
         vault::{VaultConfig, VaultService, VaultServiceTrait},
-        AwsKmsService, CdpService, GoogleCloudKmsService, TurnkeyServiceTrait,
     },
 };
 use eyre::Result;
@@ -409,8 +409,8 @@ mod tests {
     use crate::models::{
         AwsKmsSignerConfig, CdpSignerConfig, EvmTransactionData, GoogleCloudKmsSignerConfig,
         GoogleCloudKmsSignerKeyConfig, GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig,
-        SecretString, SignerConfig, SignerRepoModel, TurnkeySignerConfig, VaultTransitSignerConfig,
-        U256,
+        SecretString, SignerConfig, SignerRepoModel, TurnkeySignerConfig, U256,
+        VaultTransitSignerConfig,
     };
     use futures;
     use mockall::predicate::*;

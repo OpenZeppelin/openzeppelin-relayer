@@ -53,7 +53,7 @@ pub trait RelayerRepository: Repository<RelayerRepoModel, String> + Send + Sync 
         update: UpdateRelayerRequest,
     ) -> Result<RelayerRepoModel, RepositoryError>;
     async fn enable_relayer(&self, relayer_id: String)
-        -> Result<RelayerRepoModel, RepositoryError>;
+    -> Result<RelayerRepoModel, RepositoryError>;
     async fn disable_relayer(
         &self,
         relayer_id: String,

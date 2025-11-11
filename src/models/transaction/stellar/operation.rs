@@ -1,8 +1,8 @@
 //! Operation types and conversions for Stellar transactions
 
+use crate::models::SignerError;
 use crate::models::transaction::stellar::asset::AssetSpec;
 use crate::models::transaction::stellar::host_function::{ContractSource, WasmSource};
-use crate::models::SignerError;
 use serde::{Deserialize, Serialize};
 use soroban_rs::xdr::{
     HostFunction, InvokeHostFunctionOp, MuxedAccount as XdrMuxedAccount, MuxedAccountMed25519,
@@ -113,19 +113,19 @@ fn generate_default_auth_entries(
     host_function: &HostFunction,
 ) -> Result<Vec<SorobanAuthorizationEntry>, SignerError> {
     match host_function {
-        HostFunction::CreateContract(ref create_args) => {
+        HostFunction::CreateContract(create_args) => {
             let auth_entry = create_source_account_auth_entry(
                 SorobanAuthorizedFunction::CreateContractHostFn(create_args.clone()),
             );
             Ok(vec![auth_entry])
         }
-        HostFunction::CreateContractV2(ref create_args_v2) => {
+        HostFunction::CreateContractV2(create_args_v2) => {
             let auth_entry = create_source_account_auth_entry(
                 SorobanAuthorizedFunction::CreateContractV2HostFn(create_args_v2.clone()),
             );
             Ok(vec![auth_entry])
         }
-        HostFunction::InvokeContract(ref invoke_args) => {
+        HostFunction::InvokeContract(invoke_args) => {
             let auth_entry = create_source_account_auth_entry(
                 SorobanAuthorizedFunction::ContractFn(invoke_args.clone()),
             );

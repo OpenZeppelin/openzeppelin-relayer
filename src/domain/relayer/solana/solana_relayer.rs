@@ -11,9 +11,9 @@ use std::{str::FromStr, sync::Arc};
 
 use crate::constants::SOLANA_STATUS_CHECK_INITIAL_DELAY_SECONDS;
 use crate::domain::{
-    create_error_response, Relayer, SignDataRequest, SignTransactionExternalResponse,
-    SignTransactionRequest, SignTransactionResponse, SignTypedDataRequest, SolanaRpcHandlerType,
-    SwapParams,
+    Relayer, SignDataRequest, SignTransactionExternalResponse, SignTransactionRequest,
+    SignTransactionResponse, SignTypedDataRequest, SolanaRpcHandlerType, SwapParams,
+    create_error_response,
 };
 use crate::jobs::{TransactionRequest, TransactionStatusCheck};
 use crate::models::{
@@ -27,20 +27,20 @@ use crate::{
         DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, DEFAULT_SOLANA_MIN_BALANCE,
         SOLANA_SMALLEST_UNIT_NAME, WRAPPED_SOL_MINT,
     },
-    domain::{relayer::RelayerError, BalanceResponse, DexStrategy, SolanaRelayerDexTrait},
+    domain::{BalanceResponse, DexStrategy, SolanaRelayerDexTrait, relayer::RelayerError},
     jobs::{JobProducerTrait, RelayerHealthCheck, SolanaTokenSwapRequest},
     models::{
-        produce_relayer_disabled_payload, produce_solana_dex_webhook_payload, DisabledReason,
-        HealthCheckFailure, NetworkRepoModel, NetworkTransactionData, NetworkType,
+        DisabledReason, HealthCheckFailure, NetworkRepoModel, NetworkTransactionData, NetworkType,
         RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
         SolanaDexPayload, SolanaFeePaymentStrategy, SolanaNetwork, SolanaTransactionData,
-        TransactionRepoModel, TransactionStatus,
+        TransactionRepoModel, TransactionStatus, produce_relayer_disabled_payload,
+        produce_solana_dex_webhook_payload,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
+        JupiterService, JupiterServiceTrait,
         provider::{SolanaProvider, SolanaProviderTrait},
         signer::{Signer, SolanaSignTrait, SolanaSigner},
-        JupiterService, JupiterServiceTrait,
     },
 };
 
@@ -306,10 +306,10 @@ where
         }
 
         // Check if we have enough tokens to meet minimum swap requirement
-        if let Some(min) = min_amount {
-            if amount < min {
-                return Ok(0); // Not enough tokens to swap
-            }
+        if let Some(min) = min_amount
+            && amount < min
+        {
+            return Ok(0); // Not enough tokens to swap
         }
 
         Ok(amount)
@@ -693,7 +693,7 @@ where
             _ => {
                 return Err(RelayerError::ProviderError(
                     "Unexpected response type from Solana signer".to_string(),
-                ))
+                ));
             }
         };
 
@@ -717,7 +717,7 @@ where
                     RpcErrorCodes::INVALID_PARAMS,
                     "Invalid params",
                     "Expected Solana network request",
-                ))
+                ));
             }
         };
 
@@ -824,11 +824,13 @@ where
                                     "Failed to submit the transaction to the blockchain: {msg}"
                                 ),
                             ),
-                            SolanaRpcError::SolanaTransactionValidation(msg) => JsonRpcResponse::error(
-                                -32013,
-                                "PREPARATION_ERROR",
-                                &format!("Failed to prepare the transfer transaction: {msg}"),
-                            ),
+                            SolanaRpcError::SolanaTransactionValidation(msg) => {
+                                JsonRpcResponse::error(
+                                    -32013,
+                                    "PREPARATION_ERROR",
+                                    &format!("Failed to prepare the transfer transaction: {msg}"),
+                                )
+                            }
                             SolanaRpcError::Encoding(msg) => JsonRpcResponse::error(
                                 -32601,
                                 "INVALID_PARAMS",
@@ -1023,8 +1025,8 @@ mod tests {
     use crate::{
         config::{NetworkConfigCommon, SolanaNetworkConfig},
         domain::{
-            create_network_dex_generic, Relayer, SignTransactionRequestSolana, SolanaRpcHandler,
-            SolanaRpcMethodsImpl,
+            Relayer, SignTransactionRequestSolana, SolanaRpcHandler, SolanaRpcMethodsImpl,
+            create_network_dex_generic,
         },
         jobs::MockJobProducerTrait,
         models::{
@@ -1035,10 +1037,10 @@ mod tests {
         },
         repositories::{MockNetworkRepository, MockRelayerRepository, MockTransactionRepository},
         services::{
-            provider::{MockSolanaProviderTrait, SolanaProviderError},
-            signer::MockSolanaSignTrait,
             MockJupiterServiceTrait, QuoteResponse, RoutePlan, SwapEvents, SwapInfo, SwapResponse,
             UltraExecuteResponse, UltraOrderResponse,
+            provider::{MockSolanaProviderTrait, SolanaProviderError},
+            signer::MockSolanaSignTrait,
         },
         utils::mocks::mockutils::create_mock_solana_network,
     };
@@ -1417,7 +1419,10 @@ mod tests {
         });
 
         let mut signer = MockSolanaSignTrait::new();
-        let test_signature = Signature::from_str("2jg9xbGLtZRsiJBrDWQnz33JuLjDkiKSZuxZPdjJ3qrJbMeTEerXFAKynkPW63J88nq63cvosDNRsg9VqHtGixvP").unwrap();
+        let test_signature = Signature::from_str(
+			"2jg9xbGLtZRsiJBrDWQnz33JuLjDkiKSZuxZPdjJ3qrJbMeTEerXFAKynkPW63J88nq63cvosDNRsg9VqHtGixvP",
+		)
+		.unwrap();
 
         signer
             .expect_sign()
@@ -1592,7 +1597,10 @@ mod tests {
         });
 
         let mut signer = MockSolanaSignTrait::new();
-        let test_signature = Signature::from_str("2jg9xbGLtZRsiJBrDWQnz33JuLjDkiKSZuxZPdjJ3qrJbMeTEerXFAKynkPW63J88nq63cvosDNRsg9VqHtGixvP").unwrap();
+        let test_signature = Signature::from_str(
+			"2jg9xbGLtZRsiJBrDWQnz33JuLjDkiKSZuxZPdjJ3qrJbMeTEerXFAKynkPW63J88nq63cvosDNRsg9VqHtGixvP",
+		)
+		.unwrap();
 
         signer
             .expect_sign()
@@ -1813,10 +1821,12 @@ mod tests {
         let solana_relayer = ctx.into_relayer().await;
 
         // should do nothing and succeed
-        assert!(solana_relayer
-            .check_balance_and_trigger_token_swap_if_needed()
-            .await
-            .is_ok());
+        assert!(
+            solana_relayer
+                .check_balance_and_trigger_token_swap_if_needed()
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -1836,10 +1846,12 @@ mod tests {
         ctx.relayer_model = model;
         let solana_relayer = ctx.into_relayer().await;
 
-        assert!(solana_relayer
-            .check_balance_and_trigger_token_swap_if_needed()
-            .await
-            .is_ok());
+        assert!(
+            solana_relayer
+                .check_balance_and_trigger_token_swap_if_needed()
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -1877,10 +1889,12 @@ mod tests {
         ctx.relayer_model = model;
 
         let solana_relayer = ctx.into_relayer().await;
-        assert!(solana_relayer
-            .check_balance_and_trigger_token_swap_if_needed()
-            .await
-            .is_ok());
+        assert!(
+            solana_relayer
+                .check_balance_and_trigger_token_swap_if_needed()
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -1917,10 +1931,12 @@ mod tests {
         };
 
         let solana_relayer = ctx.into_relayer().await;
-        assert!(solana_relayer
-            .check_balance_and_trigger_token_swap_if_needed()
-            .await
-            .is_ok());
+        assert!(
+            solana_relayer
+                .check_balance_and_trigger_token_swap_if_needed()
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]

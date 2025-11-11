@@ -1,13 +1,14 @@
 use crate::services::midnight::{
-    indexer::{CollapsedUpdateInfo, TransactionData, ViewingKeyFormat},
     SyncError,
+    indexer::{CollapsedUpdateInfo, TransactionData, ViewingKeyFormat},
 };
 
 use bech32::{Bech32m, Hrp};
-use midnight_ledger_prototype::transient_crypto::merkle_tree::MerkleTreeCollapsedUpdate;
 use midnight_node_ledger_helpers::{
-    deserialize, DefaultDB, NetworkId, Proof, Serializable, Transaction, Wallet,
+    DefaultDB, NetworkId, ProofMarker, PureGeneratorPedersen, Serializable, Signature, Transaction,
+    Wallet, deserialize,
 };
+use midnight_transient_crypto::merkle_tree::MerkleTreeCollapsedUpdate;
 
 /// Parse raw transaction hex into a Transaction type.
 ///
@@ -15,13 +16,15 @@ use midnight_node_ledger_helpers::{
 #[allow(clippy::result_large_err)]
 pub fn parse_transaction(
     raw_hex: &str,
-    network: NetworkId,
-) -> Result<Transaction<Proof, DefaultDB>, SyncError> {
+    _network: NetworkId,
+) -> Result<Transaction<Signature, ProofMarker, PureGeneratorPedersen, DefaultDB>, SyncError> {
     let tx_bytes = hex::decode(raw_hex)
         .map_err(|e| SyncError::ParseError(format!("Failed to decode hex: {e}")))?;
 
-    let transaction: Transaction<Proof, DefaultDB> = deserialize(&tx_bytes[..], network)
-        .map_err(|e| SyncError::ParseError(format!("Failed to deserialize transaction: {e}")))?;
+    let transaction: Transaction<Signature, ProofMarker, PureGeneratorPedersen, DefaultDB> =
+        deserialize(&tx_bytes[..]).map_err(|e| {
+            SyncError::ParseError(format!("Failed to deserialize transaction: {e}"))
+        })?;
 
     Ok(transaction)
 }
@@ -32,10 +35,11 @@ pub fn parse_transaction(
 #[allow(clippy::result_large_err)]
 pub fn process_transaction(
     transaction_data: &TransactionData,
-    network: NetworkId,
-) -> Result<Option<Transaction<Proof, DefaultDB>>, SyncError> {
+    _network: NetworkId,
+) -> Result<Option<Transaction<Signature, ProofMarker, PureGeneratorPedersen, DefaultDB>>, SyncError>
+{
     if let Some(raw_hex) = &transaction_data.raw {
-        let parsed_tx = parse_transaction(raw_hex, network)?;
+        let parsed_tx = parse_transaction(raw_hex, _network)?;
         Ok(Some(parsed_tx))
     } else {
         Ok(None)
@@ -48,14 +52,17 @@ pub fn process_transaction(
 #[allow(clippy::result_large_err)]
 pub fn parse_collapsed_update(
     update_info: &CollapsedUpdateInfo,
-    network: NetworkId,
+    _network: NetworkId,
 ) -> Result<MerkleTreeCollapsedUpdate, SyncError> {
     let update_bytes = hex::decode(&update_info.update_data)
         .map_err(|e| SyncError::MerkleTreeUpdateError(format!("Failed to decode hex: {e}")))?;
 
-    let collapsed_update: MerkleTreeCollapsedUpdate = deserialize(&update_bytes[..], network)
-        .map_err(|e| {
-            SyncError::MerkleTreeUpdateError(format!("Failed to deserialize collapsed update: {e}"))
+    let collapsed_update: MerkleTreeCollapsedUpdate =
+        deserialize(&update_bytes[..]).map_err(|e| {
+            SyncError::MerkleTreeUpdateError(format!(
+                "Failed to deserialize collapsed update: {}",
+                e
+            ))
         })?;
 
     Ok(collapsed_update)
@@ -69,7 +76,7 @@ pub fn derive_viewing_key(
     wallet: &Wallet<DefaultDB>,
     network: NetworkId,
 ) -> Result<ViewingKeyFormat, SyncError> {
-    let secret_keys = &wallet.secret_keys;
+    let secret_keys = wallet.shielded.secret_keys();
     let enc_secret_key = &secret_keys.encryption_secret_key;
     let mut enc_secret_bytes = Vec::new();
     Serializable::serialize(enc_secret_key, &mut enc_secret_bytes).map_err(|e| {

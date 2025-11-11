@@ -109,7 +109,7 @@ impl<T: SolanaRpcMethods> SolanaRpcHandler<T> {
             _ => {
                 return Err(SolanaRpcError::Internal(
                     "Unsupported Solana RPC Paymaster method".to_string(),
-                ))
+                ));
             }
         };
 

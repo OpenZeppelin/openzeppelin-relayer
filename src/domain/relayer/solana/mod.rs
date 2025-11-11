@@ -21,7 +21,7 @@ use crate::{
         SolanaNetwork, TransactionRepoModel,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
-    services::{provider::get_network_provider, signer::SolanaSignerFactory, JupiterService},
+    services::{JupiterService, provider::get_network_provider, signer::SolanaSignerFactory},
 };
 
 /// Function to create a Solana relayer instance

@@ -290,10 +290,12 @@ mod tests {
             all_map.get("relayer_2").map(|s| s.last_synced_index),
             Some(200)
         );
-        assert!(all_map
-            .get("relayer_2")
-            .and_then(|s| s.ledger_context.as_ref())
-            .is_some());
+        assert!(
+            all_map
+                .get("relayer_2")
+                .and_then(|s| s.ledger_context.as_ref())
+                .is_some()
+        );
     }
 
     #[tokio::test]

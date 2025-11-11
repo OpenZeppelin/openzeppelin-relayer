@@ -2,7 +2,7 @@ use thiserror::Error;
 
 use crate::{
     constants::DEFAULT_EVM_MIN_BALANCE,
-    models::{types::U256, RelayerEvmPolicy},
+    models::{RelayerEvmPolicy, types::U256},
     services::provider::EvmProviderTrait,
 };
 
@@ -64,9 +64,10 @@ impl EvmTransactionValidator {
 
         // Check if remaining balance would fall below minimum requirement
         if !min_balance.is_zero() && remaining_balance < min_balance {
-            return Err(EvmTransactionValidationError::InsufficientBalance(
-                format!("Relayer balance {balance} is insufficient to cover {balance_to_use}, with an enforced minimum balance of {}", policy.min_balance.unwrap_or(DEFAULT_EVM_MIN_BALANCE))
-            ));
+            return Err(EvmTransactionValidationError::InsufficientBalance(format!(
+                "Relayer balance {balance} is insufficient to cover {balance_to_use}, with an enforced minimum balance of {}",
+                policy.min_balance.unwrap_or(DEFAULT_EVM_MIN_BALANCE)
+            )));
         }
 
         Ok(())
@@ -78,8 +79,8 @@ mod tests {
     use std::future::ready;
 
     use super::*;
-    use crate::services::provider::evm::MockEvmProviderTrait;
     use crate::services::provider::ProviderError;
+    use crate::services::provider::evm::MockEvmProviderTrait;
     use mockall::predicate::*;
 
     fn create_test_policy(min_balance: u128) -> RelayerEvmPolicy {

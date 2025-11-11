@@ -18,7 +18,7 @@ use crate::{
         PluginServiceTrait,
     },
 };
-use actix_web::{http::StatusCode, HttpResponse};
+use actix_web::{HttpResponse, http::StatusCode};
 use eyre::Result;
 use std::sync::Arc;
 

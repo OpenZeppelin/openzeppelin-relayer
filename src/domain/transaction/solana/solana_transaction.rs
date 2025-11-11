@@ -13,6 +13,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     domain::transaction::{
+        Transaction,
         solana::{
             utils::{
                 build_transaction_from_instructions, decode_solana_transaction,
@@ -20,13 +21,13 @@ use crate::{
             },
             validation::SolanaTransactionValidator,
         },
-        Transaction,
     },
     jobs::{JobProducer, JobProducerTrait, TransactionSend},
     models::{
-        produce_transaction_update_notification_payload, EncodedSerializedTransaction,
-        NetworkTransactionData, NetworkTransactionRequest, RelayerRepoModel, SolanaTransactionData,
-        TransactionError, TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
+        EncodedSerializedTransaction, NetworkTransactionData, NetworkTransactionRequest,
+        RelayerRepoModel, SolanaTransactionData, TransactionError, TransactionRepoModel,
+        TransactionStatus, TransactionUpdateRequest,
+        produce_transaction_update_notification_payload,
     },
     repositories::{
         RelayerRepository, RelayerRepositoryStorage, Repository, TransactionRepository,
@@ -602,7 +603,7 @@ where
         &self,
         tx: &SolanaTransaction,
     ) -> Result<(), TransactionError> {
-        use futures::{try_join, TryFutureExt};
+        use futures::{TryFutureExt, try_join};
 
         let policy = self.relayer.policies.get_solana_policy();
         let relayer_pubkey = Pubkey::from_str(&self.relayer.address).map_err(|e| {

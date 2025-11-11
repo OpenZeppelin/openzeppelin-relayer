@@ -6,7 +6,7 @@
 
 use crate::{
     models::EvmNetwork,
-    services::provider::{evm::EvmProviderTrait, ProviderError},
+    services::provider::{ProviderError, evm::EvmProviderTrait},
 };
 use tracing::{debug, error, info, warn};
 

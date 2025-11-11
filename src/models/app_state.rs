@@ -107,17 +107,17 @@ pub type DefaultAppState = AppState<
 >;
 
 impl<
-        J: JobProducerTrait,
-        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
-        TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
-        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
-        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
-        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
-        TCR: TransactionCounterTrait + Send + Sync + 'static,
-        RSR: SyncStateTrait + Send + Sync + 'static,
-        PR: PluginRepositoryTrait + Send + Sync + 'static,
-        AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
-    > AppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>
+    J: JobProducerTrait,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+> AppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR, AKR>
 {
     /// Returns a clone of the relayer repository.
     ///

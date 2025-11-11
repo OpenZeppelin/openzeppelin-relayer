@@ -32,12 +32,12 @@ use tracing::info;
 use crate::{
     domain::relayer::solana::rpc::methods::utils::FeeQuote,
     models::{
-        produce_solana_rpc_webhook_payload, EncodedSerializedTransaction, SolanaFeePaymentStrategy,
-        SolanaWebhookRpcPayload, TransactionRepoModel, TransferTransactionRequestParams,
-        TransferTransactionResult,
+        EncodedSerializedTransaction, SolanaFeePaymentStrategy, SolanaWebhookRpcPayload,
+        TransactionRepoModel, TransferTransactionRequestParams, TransferTransactionResult,
+        produce_solana_rpc_webhook_payload,
     },
     repositories::{Repository, TransactionRepository},
-    services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
+    services::{JupiterServiceTrait, provider::SolanaProviderTrait, signer::SolanaSignTrait},
 };
 
 use super::*;

@@ -11,7 +11,7 @@ pub mod unsigned_xdr;
 use eyre::Result;
 use tracing::{debug, info, warn};
 
-use super::{is_final_state, lane_gate, StellarRelayerTransaction};
+use super::{StellarRelayerTransaction, is_final_state, lane_gate};
 use crate::models::RelayerRepoModel;
 use crate::{
     jobs::JobProducerTrait,
@@ -885,7 +885,7 @@ mod prepare_transaction_tests {
 mod refactoring_tests {
     use crate::domain::transaction::stellar::prepare::common::update_and_notify_transaction;
     use crate::domain::transaction::stellar::test_helpers::*;
-    use crate::domain::{stellar::lane_gate, SignTransactionResponse};
+    use crate::domain::{SignTransactionResponse, stellar::lane_gate};
     use crate::models::{
         NetworkTransactionData, RepositoryError, StellarTransactionData, TransactionInput,
         TransactionStatus,

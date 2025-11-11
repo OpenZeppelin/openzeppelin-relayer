@@ -1,13 +1,13 @@
 //! This module provides rate limiting functionality using API keys.
 
 use crate::constants::{AUTHORIZATION_HEADER_NAME, PUBLIC_ENDPOINTS};
-use actix_governor::governor::clock::{Clock, DefaultClock, QuantaInstant};
 use actix_governor::governor::NotUntil;
+use actix_governor::governor::clock::{Clock, DefaultClock, QuantaInstant};
 use actix_governor::{KeyExtractor, SimpleKeyExtractionError};
 use actix_web::{
-    dev::ServiceRequest,
-    http::{header::ContentType, StatusCode},
     HttpResponse, HttpResponseBuilder,
+    dev::ServiceRequest,
+    http::{StatusCode, header::ContentType},
 };
 use serde::{Deserialize, Serialize};
 

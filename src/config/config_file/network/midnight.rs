@@ -62,17 +62,17 @@ impl MidnightNetworkConfig {
                 return Err(ConfigFileError::InvalidFormat(format!(
                     "Invalid network_id: {}. Must be one of: testnet",
                     self.common.network
-                )))
+                )));
             }
         }
 
         // Validate commitment_tree_ttl is reasonable if provided
-        if let Some(ttl) = self.commitment_tree_ttl {
-            if ttl == 0 {
-                return Err(ConfigFileError::InvalidFormat(
-                    "commitment_tree_ttl must be greater than 0".to_string(),
-                ));
-            }
+        if let Some(ttl) = self.commitment_tree_ttl
+            && ttl == 0
+        {
+            return Err(ConfigFileError::InvalidFormat(
+                "commitment_tree_ttl must be greater than 0".to_string(),
+            ));
         }
 
         Ok(())
@@ -155,10 +155,12 @@ mod tests {
 
         let result = config.validate();
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid indexer HTTP URL"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid indexer HTTP URL")
+        );
     }
 
     #[test]
@@ -168,10 +170,12 @@ mod tests {
 
         let result = config.validate();
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid indexer WebSocket URL"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid indexer WebSocket URL")
+        );
     }
 
     #[test]
@@ -181,10 +185,12 @@ mod tests {
 
         let result = config.validate();
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid prover URL"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid prover URL")
+        );
     }
 
     #[test]
@@ -205,10 +211,12 @@ mod tests {
 
         let result = config.validate();
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid network_id"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid network_id")
+        );
     }
 
     #[test]
@@ -218,10 +226,12 @@ mod tests {
 
         let result = config.validate();
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("commitment_tree_ttl must be greater than 0"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("commitment_tree_ttl must be greater than 0")
+        );
     }
 
     #[test]

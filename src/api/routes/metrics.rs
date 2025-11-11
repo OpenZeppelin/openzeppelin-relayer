@@ -12,8 +12,8 @@
 //! These endpoints are designed to be used with a Prometheus server to scrape and monitor system
 //! metrics.
 
-use crate::metrics::{update_system_metrics, REGISTRY};
-use actix_web::{get, web, HttpResponse, Responder};
+use crate::metrics::{REGISTRY, update_system_metrics};
+use actix_web::{HttpResponse, Responder, get, web};
 use prometheus::{Encoder, TextEncoder};
 
 /// Metrics routes implementation
@@ -130,7 +130,7 @@ pub fn init(cfg: &mut web::ServiceConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actix_web::{test, App};
+    use actix_web::{App, test};
     use prometheus::{Counter, Opts, Registry};
 
     // Helper function to create a test registry with a sample metric

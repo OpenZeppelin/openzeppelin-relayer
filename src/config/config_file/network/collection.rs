@@ -11,8 +11,8 @@
 //! - **Validation**: Comprehensive validation with detailed error reporting
 
 use super::{InheritanceResolver, NetworkFileConfig, NetworkFileLoader, NetworksSource};
-use crate::config::config_file::ConfigFileNetworkType;
 use crate::config::ConfigFileError;
+use crate::config::config_file::ConfigFileNetworkType;
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -49,7 +49,7 @@ impl<'de> Deserialize<'de> for NetworksFileConfig {
         // Check if networks is empty and return error
         if final_networks.is_empty() {
             return Err(de::Error::custom(
-                "NetworksFileConfig cannot be empty - networks must contain at least one network configuration"
+                "NetworksFileConfig cannot be empty - networks must contain at least one network configuration",
             ));
         }
 
@@ -338,8 +338,8 @@ impl Index<usize> for NetworksFileConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::config_file::network::test_utils::*;
     use crate::config::config_file::ConfigFileNetworkType;
+    use crate::config::config_file::network::test_utils::*;
     use std::fs::File;
     use std::io::Write;
     use tempfile::tempdir;
@@ -353,9 +353,11 @@ mod tests {
         let config = config.unwrap();
         assert_eq!(config.networks.len(), 1);
         assert_eq!(config.network_map.len(), 1);
-        assert!(config
-            .network_map
-            .contains_key(&(ConfigFileNetworkType::Evm, "test-evm".to_string())));
+        assert!(
+            config
+                .network_map
+                .contains_key(&(ConfigFileNetworkType::Evm, "test-evm".to_string()))
+        );
     }
 
     #[test]
@@ -372,18 +374,26 @@ mod tests {
         let config = config.unwrap();
         assert_eq!(config.networks.len(), 4);
         assert_eq!(config.network_map.len(), 4);
-        assert!(config
-            .network_map
-            .contains_key(&(ConfigFileNetworkType::Evm, "evm-1".to_string())));
-        assert!(config
-            .network_map
-            .contains_key(&(ConfigFileNetworkType::Solana, "solana-1".to_string())));
-        assert!(config
-            .network_map
-            .contains_key(&(ConfigFileNetworkType::Stellar, "stellar-1".to_string())));
-        assert!(config
-            .network_map
-            .contains_key(&(ConfigFileNetworkType::Midnight, "midnight-1".to_string())));
+        assert!(
+            config
+                .network_map
+                .contains_key(&(ConfigFileNetworkType::Evm, "evm-1".to_string()))
+        );
+        assert!(
+            config
+                .network_map
+                .contains_key(&(ConfigFileNetworkType::Solana, "solana-1".to_string()))
+        );
+        assert!(
+            config
+                .network_map
+                .contains_key(&(ConfigFileNetworkType::Stellar, "stellar-1".to_string()))
+        );
+        assert!(
+            config
+                .network_map
+                .contains_key(&(ConfigFileNetworkType::Midnight, "midnight-1".to_string()))
+        );
     }
 
     #[test]
@@ -522,15 +532,21 @@ mod tests {
         let networks = vec![create_evm_network_wrapped("Test-Network")];
         let config = NetworksFileConfig::new(networks).unwrap();
 
-        assert!(config
-            .get_network(ConfigFileNetworkType::Evm, "Test-Network")
-            .is_some());
-        assert!(config
-            .get_network(ConfigFileNetworkType::Evm, "test-network")
-            .is_none());
-        assert!(config
-            .get_network(ConfigFileNetworkType::Evm, "TEST-NETWORK")
-            .is_none());
+        assert!(
+            config
+                .get_network(ConfigFileNetworkType::Evm, "Test-Network")
+                .is_some()
+        );
+        assert!(
+            config
+                .get_network(ConfigFileNetworkType::Evm, "test-network")
+                .is_none()
+        );
+        assert!(
+            config
+                .get_network(ConfigFileNetworkType::Evm, "TEST-NETWORK")
+                .is_none()
+        );
     }
 
     #[test]
@@ -796,9 +812,11 @@ mod tests {
         assert!(result.is_ok());
         let config = result.unwrap();
         assert_eq!(config.len(), 1);
-        assert!(config
-            .get_network(ConfigFileNetworkType::Evm, "test-evm")
-            .is_some());
+        assert!(
+            config
+                .get_network(ConfigFileNetworkType::Evm, "test-evm")
+                .is_some()
+        );
     }
 
     #[test]
@@ -831,12 +849,16 @@ mod tests {
         assert!(result.is_ok());
         let config = result.unwrap();
         assert_eq!(config.len(), 2);
-        assert!(config
-            .get_network(ConfigFileNetworkType::Evm, "test-evm-from-file")
-            .is_some());
-        assert!(config
-            .get_network(ConfigFileNetworkType::Solana, "test-solana-from-file")
-            .is_some());
+        assert!(
+            config
+                .get_network(ConfigFileNetworkType::Evm, "test-evm-from-file")
+                .is_some()
+        );
+        assert!(
+            config
+                .get_network(ConfigFileNetworkType::Solana, "test-solana-from-file")
+                .is_some()
+        );
     }
 
     #[test]
@@ -919,9 +941,11 @@ mod tests {
 
         // Test that all networks are accessible
         for i in 0..100 {
-            assert!(config
-                .get_network(ConfigFileNetworkType::Evm, &format!("network-{}", i))
-                .is_some());
+            assert!(
+                config
+                    .get_network(ConfigFileNetworkType::Evm, &format!("network-{}", i))
+                    .is_some()
+            );
         }
     }
 
@@ -938,18 +962,26 @@ mod tests {
         assert!(config.is_ok());
         let config = config.unwrap();
         assert_eq!(config.len(), 4);
-        assert!(config
-            .get_network(ConfigFileNetworkType::Evm, "测试网络")
-            .is_some());
-        assert!(config
-            .get_network(ConfigFileNetworkType::Solana, "тестовая-сеть")
-            .is_some());
-        assert!(config
-            .get_network(ConfigFileNetworkType::Stellar, "réseau-test")
-            .is_some());
-        assert!(config
-            .get_network(ConfigFileNetworkType::Midnight, "❣⩪❅♒Ⱎ")
-            .is_some());
+        assert!(
+            config
+                .get_network(ConfigFileNetworkType::Evm, "测试网络")
+                .is_some()
+        );
+        assert!(
+            config
+                .get_network(ConfigFileNetworkType::Solana, "тестовая-сеть")
+                .is_some()
+        );
+        assert!(
+            config
+                .get_network(ConfigFileNetworkType::Stellar, "réseau-test")
+                .is_some()
+        );
+        assert!(
+            config
+                .get_network(ConfigFileNetworkType::Midnight, "❣⩪❅♒Ⱎ")
+                .is_some()
+        );
     }
 
     #[test]
@@ -975,9 +1007,11 @@ mod tests {
         let config = NetworksFileConfig::new(networks);
         assert!(config.is_ok());
         let config = config.unwrap();
-        assert!(config
-            .get_network(ConfigFileNetworkType::Evm, &long_name)
-            .is_some());
+        assert!(
+            config
+                .get_network(ConfigFileNetworkType::Evm, &long_name)
+                .is_some()
+        );
     }
 
     #[test]
@@ -1022,18 +1056,26 @@ mod tests {
         assert_eq!(config.network_map.len(), 4);
 
         // Verify we can retrieve each network by type and name
-        assert!(config
-            .get_network(ConfigFileNetworkType::Evm, "mainnet")
-            .is_some());
-        assert!(config
-            .get_network(ConfigFileNetworkType::Solana, "mainnet")
-            .is_some());
-        assert!(config
-            .get_network(ConfigFileNetworkType::Stellar, "mainnet")
-            .is_some());
-        assert!(config
-            .get_network(ConfigFileNetworkType::Midnight, "mainnet")
-            .is_some());
+        assert!(
+            config
+                .get_network(ConfigFileNetworkType::Evm, "mainnet")
+                .is_some()
+        );
+        assert!(
+            config
+                .get_network(ConfigFileNetworkType::Solana, "mainnet")
+                .is_some()
+        );
+        assert!(
+            config
+                .get_network(ConfigFileNetworkType::Stellar, "mainnet")
+                .is_some()
+        );
+        assert!(
+            config
+                .get_network(ConfigFileNetworkType::Midnight, "mainnet")
+                .is_some()
+        );
     }
 
     #[test]

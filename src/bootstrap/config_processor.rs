@@ -16,7 +16,7 @@ use crate::{
     },
     services::signer::{Signer as SignerService, SignerFactory},
 };
-use color_eyre::{eyre::WrapErr, Report, Result};
+use color_eyre::{Report, Result, eyre::WrapErr};
 use futures::future::try_join_all;
 use tracing::info;
 
@@ -400,12 +400,12 @@ mod tests {
         constants::DEFAULT_PLUGIN_TIMEOUT_SECONDS,
         jobs::MockJobProducerTrait,
         models::{
-            relayer::RelayerFileConfig, AppState, AwsKmsSignerFileConfig,
-            GoogleCloudKmsKeyFileConfig, GoogleCloudKmsServiceAccountFileConfig,
-            GoogleCloudKmsSignerFileConfig, LocalSignerFileConfig, NetworkType, NotificationConfig,
-            NotificationType, PaginationQuery, PlainOrEnvValue, SecretString, SignerConfigStorage,
-            SignerFileConfig, SignerFileConfigEnum, VaultSignerFileConfig,
-            VaultTransitSignerFileConfig,
+            AppState, AwsKmsSignerFileConfig, GoogleCloudKmsKeyFileConfig,
+            GoogleCloudKmsServiceAccountFileConfig, GoogleCloudKmsSignerFileConfig,
+            LocalSignerFileConfig, NetworkType, NotificationConfig, NotificationType,
+            PaginationQuery, PlainOrEnvValue, SecretString, SignerConfigStorage, SignerFileConfig,
+            SignerFileConfigEnum, VaultSignerFileConfig, VaultTransitSignerFileConfig,
+            relayer::RelayerFileConfig,
         },
         repositories::{
             ApiKeyRepositoryStorage, InMemoryApiKeyRepository, InMemoryNetworkRepository,
@@ -788,12 +788,16 @@ mod tests {
         // Verify notifications were created
         let stored_notifications = app_state.notification_repository.list_all().await?;
         assert_eq!(stored_notifications.len(), 2);
-        assert!(stored_notifications
-            .iter()
-            .any(|n| n.id == "test-notification-1"));
-        assert!(stored_notifications
-            .iter()
-            .any(|n| n.id == "test-notification-2"));
+        assert!(
+            stored_notifications
+                .iter()
+                .any(|n| n.id == "test-notification-1")
+        );
+        assert!(
+            stored_notifications
+                .iter()
+                .any(|n| n.id == "test-notification-2")
+        );
 
         Ok(())
     }
@@ -979,12 +983,16 @@ mod tests {
             .filter(|n| n.name == "mainnet")
             .collect();
         assert_eq!(mainnet_networks.len(), 2);
-        assert!(mainnet_networks
-            .iter()
-            .any(|n| n.network_type == NetworkType::Evm));
-        assert!(mainnet_networks
-            .iter()
-            .any(|n| n.network_type == NetworkType::Solana));
+        assert!(
+            mainnet_networks
+                .iter()
+                .any(|n| n.network_type == NetworkType::Evm)
+        );
+        assert!(
+            mainnet_networks
+                .iter()
+                .any(|n| n.network_type == NetworkType::Solana)
+        );
 
         Ok(())
     }
@@ -1012,12 +1020,16 @@ mod tests {
 
         let stored_networks = app_state.network_repository.list_all().await?;
         assert_eq!(stored_networks.len(), 2);
-        assert!(stored_networks
-            .iter()
-            .any(|n| n.name == "mainnet" && n.network_type == NetworkType::Evm));
-        assert!(stored_networks
-            .iter()
-            .any(|n| n.name == "devnet" && n.network_type == NetworkType::Solana));
+        assert!(
+            stored_networks
+                .iter()
+                .any(|n| n.name == "mainnet" && n.network_type == NetworkType::Evm)
+        );
+        assert!(
+            stored_networks
+                .iter()
+                .any(|n| n.name == "devnet" && n.network_type == NetworkType::Solana)
+        );
 
         Ok(())
     }

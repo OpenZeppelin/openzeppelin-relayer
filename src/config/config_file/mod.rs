@@ -24,9 +24,9 @@
 use crate::{
     config::ConfigFileError,
     models::{
+        NotificationConfig, NotificationConfigs,
         relayer::{RelayerFileConfig, RelayersFileConfig},
         signer::{SignerFileConfig, SignersFileConfig},
-        NotificationConfig, NotificationConfigs,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -118,13 +118,13 @@ impl Config {
         let notification_ids: HashSet<_> = self.notifications.iter().map(|s| &s.id).collect();
 
         for relayer in &self.relayers {
-            if let Some(notification_id) = &relayer.notification_id {
-                if !notification_ids.contains(notification_id) {
-                    return Err(ConfigFileError::InvalidReference(format!(
-                        "Relayer '{}' references non-existent notification '{}'",
-                        relayer.id, notification_id
-                    )));
-                }
+            if let Some(notification_id) = &relayer.notification_id
+                && !notification_ids.contains(notification_id)
+            {
+                return Err(ConfigFileError::InvalidReference(format!(
+                    "Relayer '{}' references non-existent notification '{}'",
+                    relayer.id, notification_id
+                )));
             }
         }
 
@@ -186,8 +186,8 @@ pub fn load_config(config_file_path: &str) -> Result<Config, ConfigFileError> {
 #[cfg(test)]
 mod tests {
     use crate::models::{
-        signer::{LocalSignerFileConfig, SignerFileConfig, SignerFileConfigEnum},
         NotificationType, PlainOrEnvValue, SecretString,
+        signer::{LocalSignerFileConfig, SignerFileConfig, SignerFileConfigEnum},
     };
     use std::path::Path;
 
@@ -396,15 +396,17 @@ mod tests {
         let mut config = create_valid_config();
         config.relayers[0].network = "custom-evm".to_string();
 
-        let network_items = vec![serde_json::from_value(serde_json::json!({
-            "type": "evm",
-            "network": "custom-evm",
-            "required_confirmations": 1,
-            "chain_id": 1234,
-            "rpc_urls": ["https://rpc.example.com"],
-            "symbol": "ETH"
-        }))
-        .unwrap()];
+        let network_items = vec![
+            serde_json::from_value(serde_json::json!({
+                "type": "evm",
+                "network": "custom-evm",
+                "required_confirmations": 1,
+                "chain_id": 1234,
+                "rpc_urls": ["https://rpc.example.com"],
+                "symbol": "ETH"
+            }))
+            .unwrap(),
+        ];
         config.networks = NetworksFileConfig::new(network_items).unwrap();
 
         assert!(
@@ -417,12 +419,14 @@ mod tests {
     #[test]
     fn test_config_with_invalid_networks() {
         let mut config = create_valid_config();
-        let network_items = vec![serde_json::from_value(serde_json::json!({
-            "type": "evm",
-            "network": "invalid-network",
-            "rpc_urls": ["https://rpc.example.com"]
-        }))
-        .unwrap()];
+        let network_items = vec![
+            serde_json::from_value(serde_json::json!({
+                "type": "evm",
+                "network": "invalid-network",
+                "rpc_urls": ["https://rpc.example.com"]
+            }))
+            .unwrap(),
+        ];
         config.networks = NetworksFileConfig::new(network_items.clone())
             .expect("Should allow creation, validation happens later or should fail here");
 
@@ -472,13 +476,15 @@ mod tests {
     #[test]
     fn test_config_with_invalid_network_inheritance() {
         let mut config = create_valid_config();
-        let network_items = vec![serde_json::from_value(serde_json::json!({
-            "type": "evm",
-            "network": "custom-evm",
-            "from": "non-existent-network",
-            "rpc_urls": ["https://rpc.example.com"]
-        }))
-        .unwrap()];
+        let network_items = vec![
+            serde_json::from_value(serde_json::json!({
+                "type": "evm",
+                "network": "custom-evm",
+                "from": "non-existent-network",
+                "rpc_urls": ["https://rpc.example.com"]
+            }))
+            .unwrap(),
+        ];
         let networks_config_result = NetworksFileConfig::new(network_items);
 
         match networks_config_result {

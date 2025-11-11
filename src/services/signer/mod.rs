@@ -46,8 +46,8 @@ pub use midnight::*;
 
 use crate::{
     domain::{
-        to_midnight_network_id, SignDataRequest, SignDataResponse, SignTransactionResponse,
-        SignTypedDataRequest, SignXdrTransactionResponseStellar,
+        SignDataRequest, SignDataResponse, SignTransactionResponse, SignTypedDataRequest,
+        SignXdrTransactionResponseStellar, to_midnight_network_id,
     },
     models::{
         Address, DecoratedSignature, NetworkTransactionData, NetworkType,

@@ -3,20 +3,20 @@ use std::sync::{Arc, Mutex};
 use crate::{
     repositories::{RelayerStateRepositoryStorage, SyncStateTrait},
     services::midnight::{
+        SyncError,
         handler::{
             ChronologicalUpdate, EventDispatcher, EventHandlerType, ProgressTracker, SyncConfig,
             SyncStrategy,
         },
         indexer::MidnightIndexerClient,
         utils::derive_viewing_key,
-        SyncError,
     },
 };
 
 use log::{debug, info, warn};
 use midnight_node_ledger_helpers::{
-    mn_ledger_serialize::{deserialize, serialize},
-    DefaultDB, LedgerContext, LedgerState, NetworkId, WalletSeed, WalletState,
+    DefaultDB, LedgerContext, LedgerState, NetworkId, WalletSeed, WalletState, deserialize,
+    serialize,
 };
 
 /// Main sync manager that coordinates all sync components.
@@ -56,9 +56,8 @@ impl<S: SyncStrategy + Sync + Send, SS: SyncStateTrait + Send + Sync> SyncManage
                 .get(&self.seed)
                 .map(|wallet| {
                     // We only serialize the wallet state, not the secret keys
-                    let mut state_bytes = Vec::new();
-                    serialize(&wallet.state, &mut state_bytes, self.network).map_err(|e| {
-                        SyncError::SyncError(format!("Failed to serialize wallet state: {e:?}"))
+                    let state_bytes = serialize(&wallet.shielded.state).map_err(|e| {
+                        SyncError::SyncError(format!("Failed to serialize wallet state: {:?}", e))
                     })?;
                     Ok::<Vec<u8>, SyncError>(state_bytes)
                 })
@@ -72,11 +71,9 @@ impl<S: SyncStrategy + Sync + Send, SS: SyncStateTrait + Send + Sync> SyncManage
                     SyncError::SyncError(format!("Failed to lock ledger state: {e}"))
                 })?;
 
-            let mut bytes = Vec::new();
-            serialize(&*ledger_state_guard, &mut bytes, self.network).map_err(|e| {
-                SyncError::SyncError(format!("Failed to serialize ledger state: {e:?}"))
-            })?;
-            bytes
+            serialize(&*ledger_state_guard).map_err(|e| {
+                SyncError::SyncError(format!("Failed to serialize ledger state: {:?}", e))
+            })?
         };
 
         // Combine wallet state and ledger state into a single serialized context
@@ -92,7 +89,7 @@ impl<S: SyncStrategy + Sync + Send, SS: SyncStateTrait + Send + Sync> SyncManage
             Ok((wallet_state_bytes, ledger_state_bytes)) => {
                 // Restore ledger state
                 let mut reader = &ledger_state_bytes[..];
-                match deserialize::<LedgerState<DefaultDB>, _>(&mut reader, self.network) {
+                match deserialize::<LedgerState<DefaultDB>, _>(&mut reader) {
                     Ok(ledger_state) => {
                         if let Ok(mut ledger_state_guard) = self.context.ledger_state.lock() {
                             *ledger_state_guard = ledger_state;
@@ -107,13 +104,13 @@ impl<S: SyncStrategy + Sync + Send, SS: SyncStateTrait + Send + Sync> SyncManage
                 // Restore wallet state if available
                 if let Some(state_bytes) = wallet_state_bytes {
                     let mut reader = &state_bytes[..];
-                    match deserialize::<WalletState<DefaultDB>, _>(&mut reader, self.network) {
+                    match deserialize::<WalletState<DefaultDB>, _>(&mut reader) {
                         Ok(wallet_state) => {
-                            if let Ok(mut wallets_guard) = self.context.wallets.lock() {
-                                if let Some(wallet) = wallets_guard.get_mut(&self.seed) {
-                                    wallet.update_state(wallet_state);
-                                    debug!("Successfully restored wallet state");
-                                }
+                            if let Ok(mut wallets_guard) = self.context.wallets.lock()
+                                && let Some(wallet) = wallets_guard.get_mut(&self.seed)
+                            {
+                                wallet.shielded.state = wallet_state;
+                                debug!("Successfully restored wallet state");
                             }
                         }
                         Err(e) => {
@@ -144,13 +141,17 @@ impl<S: SyncStrategy + Sync + Send, SS: SyncStateTrait + Send + Sync> SyncManage
         // Temporarily add random destination seed to the context until Midnight fixes this
         // mn_shield-addr_test1cx5yug2suxqec6pzzfgwrg90crcvlk6ktlvg52eczkrw426suglqxqzl5ad0jpxv4mtdc0kpyswfjdjjqs8zh0fu0kupaha382r3py8wwqm03l5k
         // TODO: Remove this once Midnight fixes this
-        let destination_seed =
-            WalletSeed::from("8e0622a9987a7bef7b6a1417c693172b79e75f2308fe3ae9cc897f6108e3a067");
+        let destination_seed = WalletSeed::try_from_hex_str(
+            "8e0622a9987a7bef7b6a1417c693172b79e75f2308fe3ae9cc897f6108e3a067",
+        )
+        .map_err(|e| {
+            SyncError::ViewingKeyError(format!("Failed to parse destination seed: {}", e))
+        })?;
 
-        let context = Arc::new(LedgerContext::new_from_wallet_seeds(&[
-            *seed,
-            destination_seed,
-        ]));
+        let context = Arc::new(LedgerContext::new_from_wallet_seeds(
+            String::from(network),
+            &[*seed, destination_seed],
+        ));
 
         let wallet = context.wallet_from_seed(*seed);
         let viewing_key = derive_viewing_key(&wallet, network)?;
@@ -260,16 +261,16 @@ impl<S: SyncStrategy + Sync + Send, SS: SyncStateTrait + Send + Sync> SyncManage
                         SyncError::MerkleTreeUpdateError("Wallet not found in context".to_string())
                     })?;
 
-                    match wallet.state.apply_collapsed_update(&update) {
+                    match wallet.shielded.state.apply_collapsed_update(&update) {
                         Ok(new_state) => {
                             debug!(
-									"Applied collapsed update: start={}, end={}, new first_free={} (was {})",
-									update.start,
-									update.end,
-									new_state.first_free,
-									wallet.state.first_free
-								);
-                            wallet.update_state(new_state);
+                                "Applied collapsed update: start={}, end={}, new first_free={} (was {})",
+                                update.start,
+                                update.end,
+                                new_state.first_free,
+                                wallet.shielded.state.first_free
+                            );
+                            wallet.shielded.state = new_state;
                         }
                         Err(e) => {
                             return Err(SyncError::MerkleTreeUpdateError(format!(
@@ -292,8 +293,11 @@ impl<S: SyncStrategy + Sync + Send, SS: SyncStateTrait + Send + Sync> SyncManage
                     };
 
                     if should_apply {
-                        debug!("Applying transaction at index {index}");
-                        self.context.update_from_txs(&[*tx]);
+                        debug!("Applying transaction at index {}", index);
+                        use midnight_node_ledger_helpers::{BlockContext, SerdeTransaction};
+                        let block_context = BlockContext::default();
+                        let serde_tx = SerdeTransaction::Midnight((*tx).clone());
+                        self.context.update_from_tx(&serde_tx, &block_context);
                     }
                 }
             }
@@ -349,9 +353,9 @@ mod tests {
         repositories::{RelayerStateRepositoryStorage, SyncStateTrait},
         services::{
             midnight::{
+                SyncError,
                 handler::{QuickSyncStrategy, SyncManager, SyncManagerTrait},
                 indexer::MidnightIndexerClient,
-                SyncError,
             },
             sync::midnight::handler::{
                 EventDispatcher, ProgressTracker, SyncConfig, SyncEvent, SyncStrategy,
@@ -362,10 +366,12 @@ mod tests {
     use std::sync::Arc;
 
     fn setup_test_env() {
-        std::env::set_var(
-            "MIDNIGHT_LEDGER_TEST_STATIC_DIR",
-            "/tmp/midnight-test-static",
-        );
+        unsafe {
+            std::env::set_var(
+                "MIDNIGHT_LEDGER_TEST_STATIC_DIR",
+                "/tmp/midnight-test-static",
+            );
+        }
     }
     // Mock sync strategy for testing
     struct MockSyncStrategy {

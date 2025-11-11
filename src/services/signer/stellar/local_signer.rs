@@ -15,9 +15,9 @@
 use super::StellarSignTrait;
 use crate::{
     domain::{
-        attach_signatures_to_envelope, parse_transaction_xdr, stellar::create_signature_payload,
         SignDataRequest, SignDataResponse, SignTransactionResponse, SignTransactionResponseStellar,
-        SignTypedDataRequest, SignXdrTransactionResponseStellar,
+        SignTypedDataRequest, SignXdrTransactionResponseStellar, attach_signatures_to_envelope,
+        parse_transaction_xdr, stellar::create_signature_payload,
     },
     models::{
         Address, NetworkTransactionData, Signer as SignerDomainModel, SignerError, TransactionInput,
@@ -27,7 +27,7 @@ use crate::{
 
 use async_trait::async_trait;
 use ed25519_dalek::Signer as Ed25519Signer;
-use ed25519_dalek::{ed25519::signature::SignerMut, SigningKey};
+use ed25519_dalek::{SigningKey, ed25519::signature::SignerMut};
 use eyre::Result;
 use sha2::{Digest, Sha256};
 use soroban_rs::xdr::{

@@ -37,8 +37,8 @@
 use crate::{
     constants::{DEFAULT_GAS_LIMIT, DEFAULT_TRANSACTION_SPEED},
     models::{
-        evm::Speed, EvmNetwork, EvmTransactionData, EvmTransactionDataTrait, RelayerRepoModel,
-        TransactionError, U256,
+        EvmNetwork, EvmTransactionData, EvmTransactionDataTrait, RelayerRepoModel,
+        TransactionError, U256, evm::Speed,
     },
     services::{
         evm_gas_price::{EvmGasPriceServiceTrait, GasPrices},
@@ -256,7 +256,7 @@ where
             _ => {
                 return Err(TransactionError::InvalidType(
                     "Transaction missing required gas price parameters".to_string(),
-                ))
+                ));
             }
         };
 
@@ -670,8 +670,8 @@ mod tests {
     use super::*;
     use crate::constants::{ARBITRUM_BASED_TAG, NO_MEMPOOL_TAG};
     use crate::models::{
-        evm::Speed, EvmNetwork, EvmTransactionData, NetworkType, RelayerEvmPolicy,
-        RelayerNetworkPolicy, RelayerRepoModel, U256,
+        EvmNetwork, EvmTransactionData, NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy,
+        RelayerRepoModel, U256, evm::Speed,
     };
     use crate::services::{
         evm_gas_price::{EvmGasPriceService, GasPrices, MockEvmGasPriceServiceTrait, SpeedPrices},

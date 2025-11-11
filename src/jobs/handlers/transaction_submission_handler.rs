@@ -15,8 +15,8 @@ use crate::{
         WORKER_TRANSACTION_CANCEL_RETRIES, WORKER_TRANSACTION_RESEND_RETRIES,
         WORKER_TRANSACTION_RESUBMIT_RETRIES, WORKER_TRANSACTION_SUBMIT_RETRIES,
     },
-    domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
-    jobs::{handle_result, Job, TransactionCommand, TransactionSend},
+    domain::{Transaction, get_relayer_transaction, get_transaction_by_id},
+    jobs::{Job, TransactionCommand, TransactionSend, handle_result},
     models::DefaultAppState,
     observability::request_id::set_request_id,
 };

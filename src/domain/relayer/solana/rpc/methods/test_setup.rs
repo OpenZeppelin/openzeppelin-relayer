@@ -16,7 +16,7 @@ use crate::{
     },
     repositories::MockTransactionRepository,
     services::{
-        provider::MockSolanaProviderTrait, signer::MockSolanaSignTrait, MockJupiterServiceTrait,
+        MockJupiterServiceTrait, provider::MockSolanaProviderTrait, signer::MockSolanaSignTrait,
     },
     utils::mocks::mockutils::create_mock_solana_network,
 };

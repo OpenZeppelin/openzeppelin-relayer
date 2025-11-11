@@ -6,6 +6,9 @@
 
 use async_trait::async_trait;
 use eyre::Result;
+#[cfg(test)]
+use mockall::automock;
+use soroban_rs::SorobanTransactionResponse;
 use soroban_rs::stellar_rpc_client::Client;
 use soroban_rs::stellar_rpc_client::{
     Error as StellarClientError, EventStart, EventType, GetEventsResponse, GetLatestLedgerResponse,
@@ -15,19 +18,15 @@ use soroban_rs::stellar_rpc_client::{
 use soroban_rs::xdr::{AccountEntry, Hash, LedgerKey, TransactionEnvelope};
 #[cfg(test)]
 use soroban_rs::xdr::{AccountId, LedgerKeyAccount, PublicKey, Uint256};
-use soroban_rs::SorobanTransactionResponse;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-#[cfg(test)]
-use mockall::automock;
-
 use crate::models::{JsonRpcId, RpcConfig};
+use crate::services::provider::ProviderError;
+use crate::services::provider::RetryConfig;
 use crate::services::provider::is_retriable_error;
 use crate::services::provider::retry::retry_rpc_call;
 use crate::services::provider::rpc_selector::RpcSelector;
 use crate::services::provider::should_mark_provider_failed;
-use crate::services::provider::ProviderError;
-use crate::services::provider::RetryConfig;
 // Reqwest client is used for raw JSON-RPC HTTP requests. Alias to avoid name clash with the
 // soroban `Client` type imported above.
 use reqwest::Client as ReqwestClient;
@@ -713,7 +712,7 @@ mod stellar_rpc_tests {
         TransactionEnvelope, TransactionResult, TransactionResultExt, TransactionResultResult,
         VecM,
     };
-    use soroban_rs::{create_mock_set_options_tx_envelope, SorobanTransactionResponse};
+    use soroban_rs::{SorobanTransactionResponse, create_mock_set_options_tx_envelope};
     use std::str::FromStr;
     use std::sync::Mutex;
 
@@ -727,16 +726,18 @@ mod stellar_rpc_tests {
 
     impl StellarTestEnvGuard {
         fn new(mutex_guard: std::sync::MutexGuard<'static, ()>) -> Self {
-            std::env::set_var(
-                "API_KEY",
-                "test_api_key_for_evm_provider_new_this_is_long_enough_32_chars",
-            );
-            std::env::set_var("REDIS_URL", "redis://test-dummy-url-for-evm-provider");
-            // Set minimal retry config to avoid excessive retries and TCP exhaustion in concurrent tests
-            std::env::set_var("PROVIDER_MAX_RETRIES", "1");
-            std::env::set_var("PROVIDER_MAX_FAILOVERS", "0");
-            std::env::set_var("PROVIDER_RETRY_BASE_DELAY_MS", "0");
-            std::env::set_var("PROVIDER_RETRY_MAX_DELAY_MS", "0");
+            unsafe {
+                std::env::set_var(
+                    "API_KEY",
+                    "test_api_key_for_evm_provider_new_this_is_long_enough_32_chars",
+                );
+                std::env::set_var("REDIS_URL", "redis://test-dummy-url-for-evm-provider");
+                // Set minimal retry config to avoid excessive retries and TCP exhaustion in concurrent tests
+                std::env::set_var("PROVIDER_MAX_RETRIES", "1");
+                std::env::set_var("PROVIDER_MAX_FAILOVERS", "0");
+                std::env::set_var("PROVIDER_RETRY_BASE_DELAY_MS", "0");
+                std::env::set_var("PROVIDER_RETRY_MAX_DELAY_MS", "0");
+            }
 
             Self {
                 _mutex_guard: mutex_guard,
@@ -746,12 +747,14 @@ mod stellar_rpc_tests {
 
     impl Drop for StellarTestEnvGuard {
         fn drop(&mut self) {
-            std::env::remove_var("API_KEY");
-            std::env::remove_var("REDIS_URL");
-            std::env::remove_var("PROVIDER_MAX_RETRIES");
-            std::env::remove_var("PROVIDER_MAX_FAILOVERS");
-            std::env::remove_var("PROVIDER_RETRY_BASE_DELAY_MS");
-            std::env::remove_var("PROVIDER_RETRY_MAX_DELAY_MS");
+            unsafe {
+                std::env::remove_var("API_KEY");
+                std::env::remove_var("REDIS_URL");
+                std::env::remove_var("PROVIDER_MAX_RETRIES");
+                std::env::remove_var("PROVIDER_MAX_FAILOVERS");
+                std::env::remove_var("PROVIDER_RETRY_BASE_DELAY_MS");
+                std::env::remove_var("PROVIDER_RETRY_MAX_DELAY_MS");
+            }
         }
     }
 

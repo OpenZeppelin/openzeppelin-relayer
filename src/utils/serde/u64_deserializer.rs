@@ -4,7 +4,7 @@
 
 use std::fmt;
 
-use serde::{de, Deserializer};
+use serde::{Deserializer, de};
 
 #[derive(Debug)]
 struct U64Visitor;

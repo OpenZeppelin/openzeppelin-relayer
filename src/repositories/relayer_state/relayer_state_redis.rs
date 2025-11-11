@@ -4,8 +4,8 @@
 //! allowing the service to maintain state across restarts and scale horizontally.
 
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
+use redis::aio::ConnectionManager;
 use std::sync::Arc;
 
 use crate::models::RepositoryError;
@@ -200,11 +200,11 @@ impl SyncStateTrait for RedisRelayerStateRepository {
         let prefix_len = format!("{}:relayer_state:", self.key_prefix).len();
 
         for key in keys {
-            if let Ok(Some(data)) = conn.get::<_, Option<String>>(&key).await {
-                if let Ok(state) = serde_json::from_str::<RelayerSyncState>(&data) {
-                    let relayer_id = key[prefix_len..].to_string();
-                    results.push((relayer_id, state));
-                }
+            if let Ok(Some(data)) = conn.get::<_, Option<String>>(&key).await
+                && let Ok(state) = serde_json::from_str::<RelayerSyncState>(&data)
+            {
+                let relayer_id = key[prefix_len..].to_string();
+                results.push((relayer_id, state));
             }
         }
 

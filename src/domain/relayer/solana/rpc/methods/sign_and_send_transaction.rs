@@ -25,14 +25,14 @@ use tracing::{debug, error};
 
 use crate::{
     models::{
-        produce_solana_rpc_webhook_payload, EncodedSerializedTransaction, NetworkTransactionData,
-        NetworkTransactionRequest, SignAndSendTransactionRequestParams,
-        SignAndSendTransactionResult, SolanaFeePaymentStrategy, SolanaTransactionData,
-        SolanaTransactionRequest, SolanaWebhookRpcPayload, TransactionRepoModel, TransactionStatus,
-        TransactionUpdateRequest,
+        EncodedSerializedTransaction, NetworkTransactionData, NetworkTransactionRequest,
+        SignAndSendTransactionRequestParams, SignAndSendTransactionResult,
+        SolanaFeePaymentStrategy, SolanaTransactionData, SolanaTransactionRequest,
+        SolanaWebhookRpcPayload, TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
+        produce_solana_rpc_webhook_payload,
     },
     repositories::{Repository, TransactionRepository},
-    services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
+    services::{JupiterServiceTrait, provider::SolanaProviderTrait, signer::SolanaSignTrait},
 };
 
 use super::*;
@@ -219,7 +219,7 @@ async fn validate_sign_and_send_transaction<P: SolanaProviderTrait + Send + Sync
     relayer: &RelayerRepoModel,
     provider: &P,
 ) -> Result<(), SolanaTransactionValidationError> {
-    use futures::{try_join, TryFutureExt};
+    use futures::{TryFutureExt, try_join};
 
     let policy = &relayer.policies.get_solana_policy();
     let relayer_pubkey = Pubkey::from_str(&relayer.address).map_err(|e| {

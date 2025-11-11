@@ -5,12 +5,12 @@
 /// services and repositories to perform these operations asynchronously.
 use crate::{
     constants::DEFAULT_STELLAR_CONCURRENT_TRANSACTIONS,
-    domain::transaction::{stellar::fetch_next_sequence_from_chain, Transaction},
+    domain::transaction::{Transaction, stellar::fetch_next_sequence_from_chain},
     jobs::{JobProducer, JobProducerTrait, TransactionRequest},
     models::{
-        produce_transaction_update_notification_payload, NetworkTransactionRequest,
-        RelayerNetworkPolicy, RelayerRepoModel, TransactionError, TransactionRepoModel,
-        TransactionStatus, TransactionUpdateRequest,
+        NetworkTransactionRequest, RelayerNetworkPolicy, RelayerRepoModel, TransactionError,
+        TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
+        produce_transaction_update_notification_payload,
     },
     repositories::{
         RelayerRepositoryStorage, Repository, TransactionCounterRepositoryStorage,
@@ -146,17 +146,16 @@ where
     /// This is a best-effort operation that logs errors but does not propagate them,
     /// as notification failures should not affect the transaction lifecycle.
     pub(super) async fn send_transaction_update_notification(&self, tx: &TransactionRepoModel) {
-        if let Some(notification_id) = &self.relayer().notification_id {
-            if let Err(e) = self
+        if let Some(notification_id) = &self.relayer().notification_id
+            && let Err(e) = self
                 .job_producer()
                 .produce_send_notification_job(
                     produce_transaction_update_notification_payload(notification_id, tx),
                     None,
                 )
                 .await
-            {
-                error!(error = %e, "failed to produce notification job");
-            }
+        {
+            error!(error = %e, "failed to produce notification job");
         }
     }
 

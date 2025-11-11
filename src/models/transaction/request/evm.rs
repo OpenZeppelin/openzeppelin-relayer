@@ -4,7 +4,7 @@ use crate::{
     utils::calculate_intrinsic_gas,
 };
 use serde::{Deserialize, Serialize};
-use utoipa::{schema, ToSchema};
+use utoipa::{ToSchema, schema};
 
 #[derive(Deserialize, Serialize, Default, ToSchema)]
 pub struct EvmTransactionRequest {
@@ -101,19 +101,19 @@ pub fn validate_target_address(
     request: &EvmTransactionRequest,
     relayer: &RelayerRepoModel,
 ) -> Result<(), ApiError> {
-    if let RelayerNetworkPolicy::Evm(evm_policy) = &relayer.policies {
-        if let Some(whitelist) = &evm_policy.whitelist_receivers {
-            let target_address = request.to.clone().unwrap_or_default().to_lowercase();
-            let mut allowed_addresses: Vec<String> =
-                whitelist.iter().map(|addr| addr.to_lowercase()).collect();
-            allowed_addresses.push(ZERO_ADDRESS.to_string());
-            allowed_addresses.push(relayer.address.to_lowercase());
+    if let RelayerNetworkPolicy::Evm(evm_policy) = &relayer.policies
+        && let Some(whitelist) = &evm_policy.whitelist_receivers
+    {
+        let target_address = request.to.clone().unwrap_or_default().to_lowercase();
+        let mut allowed_addresses: Vec<String> =
+            whitelist.iter().map(|addr| addr.to_lowercase()).collect();
+        allowed_addresses.push(ZERO_ADDRESS.to_string());
+        allowed_addresses.push(relayer.address.to_lowercase());
 
-            if !allowed_addresses.contains(&target_address) {
-                return Err(ApiError::BadRequest(
-                    "Transaction target address is not whitelisted".to_string(),
-                ));
-            }
+        if !allowed_addresses.contains(&target_address) {
+            return Err(ApiError::BadRequest(
+                "Transaction target address is not whitelisted".to_string(),
+            ));
         }
     }
     Ok(())
@@ -171,14 +171,12 @@ pub fn validate_price_params(
         }
     }
 
-    if is_legacy {
-        if let RelayerNetworkPolicy::Evm(evm_policy) = &relayer.policies {
-            if let Some(gas_price_cap) = evm_policy.gas_price_cap {
-                if request.gas_price.unwrap_or(0) > gas_price_cap {
-                    return Err(ApiError::BadRequest("Gas price is too high".to_string()));
-                }
-            }
-        }
+    if is_legacy
+        && let RelayerNetworkPolicy::Evm(evm_policy) = &relayer.policies
+        && let Some(gas_price_cap) = evm_policy.gas_price_cap
+        && request.gas_price.unwrap_or(0) > gas_price_cap
+    {
+        return Err(ApiError::BadRequest("Gas price is too high".to_string()));
     }
 
     Ok(())

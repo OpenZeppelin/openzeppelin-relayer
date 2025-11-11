@@ -3,8 +3,8 @@
 
 use crate::metrics::{ERROR_COUNTER, RAW_REQUEST_COUNTER, REQUEST_COUNTER, REQUEST_LATENCY};
 use actix_web::{
-    dev::{Service, ServiceRequest, ServiceResponse, Transform},
     Error,
+    dev::{Service, ServiceRequest, ServiceResponse, Transform},
 };
 use futures::future::{LocalBoxFuture, Ready};
 use std::{

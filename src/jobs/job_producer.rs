@@ -296,8 +296,8 @@ impl JobProducerTrait for JobProducer {
 mod tests {
     use super::*;
     use crate::models::{
-        EvmTransactionResponse, TransactionResponse, TransactionStatus, WebhookNotification,
-        WebhookPayload, U256,
+        EvmTransactionResponse, TransactionResponse, TransactionStatus, U256, WebhookNotification,
+        WebhookPayload,
     };
     use crate::utils::calculate_scheduled_timestamp;
 

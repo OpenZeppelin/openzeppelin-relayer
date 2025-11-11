@@ -3,7 +3,7 @@
 use crate::models::SignerError;
 use serde::{Deserialize, Serialize};
 use soroban_rs::xdr::{
-    AccountId, AlphaNum12, AlphaNum4, Asset, AssetCode12, AssetCode4, PublicKey as XdrPublicKey,
+    AccountId, AlphaNum4, AlphaNum12, Asset, AssetCode4, AssetCode12, PublicKey as XdrPublicKey,
     Uint256,
 };
 use std::convert::TryFrom;

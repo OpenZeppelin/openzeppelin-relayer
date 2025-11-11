@@ -14,9 +14,9 @@ use super::{
     too_many_noop_attempts,
 };
 use crate::constants::{
+    ARBITRUM_TIME_TO_RESUBMIT, EVM_MIN_HASHES_FOR_RECOVERY, EVM_PREPARE_TIMEOUT_MINUTES,
     get_evm_min_age_for_hash_recovery, get_evm_pending_recovery_trigger_timeout,
-    get_evm_prepare_timeout, get_evm_resend_timeout, ARBITRUM_TIME_TO_RESUBMIT,
-    EVM_MIN_HASHES_FOR_RECOVERY, EVM_PREPARE_TIMEOUT_MINUTES,
+    get_evm_prepare_timeout, get_evm_resend_timeout,
 };
 use crate::domain::transaction::common::{
     get_age_of_sent_at, is_final_state, is_pending_transaction,
@@ -116,14 +116,14 @@ where
             // FALLBACK: Try to find transaction by checking all historical hashes
             // Only do this for transactions that have multiple resubmission attempts
             // and have been stuck in Submitted for a while
-            if tx.hashes.len() > 1 && self.should_try_hash_recovery(tx)? {
-                if let Some(recovered_tx) = self
+            if tx.hashes.len() > 1
+                && self.should_try_hash_recovery(tx)?
+                && let Some(recovered_tx) = self
                     .try_recover_with_historical_hashes(tx, &evm_data)
                     .await?
-                {
-                    // Return the status from the recovered (updated) transaction
-                    return Ok(recovered_tx.status);
-                }
+            {
+                // Return the status from the recovered (updated) transaction
+                return Ok(recovered_tx.status);
             }
 
             Ok(TransactionStatus::Submitted)
@@ -223,7 +223,9 @@ where
                 .with_timezone(&Utc);
             let age = Utc::now().signed_duration_since(created_time);
             if age > get_evm_prepare_timeout() {
-                info!("Transaction in Pending state for over {EVM_PREPARE_TIMEOUT_MINUTES} minutes, will replace with NOOP");
+                info!(
+                    "Transaction in Pending state for over {EVM_PREPARE_TIMEOUT_MINUTES} minutes, will replace with NOOP"
+                );
                 return Ok(true);
             }
         }
@@ -658,9 +660,9 @@ mod tests {
         domain::transaction::evm::{EvmRelayerTransaction, MockPriceCalculatorTrait},
         jobs::MockJobProducerTrait,
         models::{
-            evm::Speed, EvmTransactionData, NetworkConfigData, NetworkRepoModel,
-            NetworkTransactionData, NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy,
-            RelayerRepoModel, TransactionReceipt, TransactionRepoModel, TransactionStatus, U256,
+            EvmTransactionData, NetworkConfigData, NetworkRepoModel, NetworkTransactionData,
+            NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel,
+            TransactionReceipt, TransactionRepoModel, TransactionStatus, U256, evm::Speed,
         },
         repositories::{
             MockNetworkRepository, MockRelayerRepository, MockTransactionCounterTrait,
@@ -671,7 +673,7 @@ mod tests {
     use alloy::{
         consensus::{Eip658Value, Receipt, ReceiptWithBloom},
         network::AnyReceiptEnvelope,
-        primitives::{b256, Address, BlockHash, Bloom, TxHash},
+        primitives::{Address, BlockHash, Bloom, TxHash, b256},
     };
     use chrono::{Duration, Utc};
     use std::sync::Arc;

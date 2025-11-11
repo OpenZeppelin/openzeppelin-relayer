@@ -17,7 +17,7 @@ use std::str::FromStr;
 
 use alloy::{
     consensus::{SignableTransaction, TxEip1559, TxLegacy},
-    primitives::{eip191_hash_message, normalize_v, Signature},
+    primitives::{Signature, eip191_hash_message, normalize_v},
 };
 use async_trait::async_trait;
 use tracing::{debug, info};
@@ -32,7 +32,7 @@ use crate::{
         NetworkTransactionData, SignerError, SignerRepoModel,
     },
     services::{
-        signer::evm::validate_and_format_signature, signer::Signer, CdpService, CdpServiceTrait,
+        CdpService, CdpServiceTrait, signer::Signer, signer::evm::validate_and_format_signature,
     },
 };
 

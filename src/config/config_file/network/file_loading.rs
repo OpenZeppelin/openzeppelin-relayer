@@ -285,7 +285,7 @@ mod tests {
     use super::*;
     use crate::config::config_file::network::test_utils::*;
     use serde_json::json;
-    use std::fs::{create_dir, File};
+    use std::fs::{File, create_dir};
     use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
 

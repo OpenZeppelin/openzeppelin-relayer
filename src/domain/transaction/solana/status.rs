@@ -16,7 +16,7 @@ use solana_sdk::{signature::Signature, transaction::Transaction as SolanaTransac
 use std::str::FromStr;
 use tracing::{debug, error, info, warn};
 
-use super::{utils::decode_solana_transaction, SolanaRelayerTransaction};
+use super::{SolanaRelayerTransaction, utils::decode_solana_transaction};
 use crate::domain::transaction::common::is_final_state;
 use crate::domain::transaction::solana::utils::{
     is_resubmitable, map_solana_status_to_transaction_status, too_many_solana_attempts,
@@ -27,7 +27,7 @@ use crate::{
         RelayerRepoModel, SolanaTransactionStatus, TransactionError, TransactionRepoModel,
         TransactionStatus, TransactionUpdateRequest,
     },
-    repositories::{transaction::TransactionRepository, RelayerRepository, Repository},
+    repositories::{RelayerRepository, Repository, transaction::TransactionRepository},
     services::{provider::SolanaProviderTrait, signer::SolanaSignTrait},
 };
 
@@ -231,13 +231,13 @@ where
                 "pending transaction has exceeded timeout, marking as failed"
             );
             return self
-                .mark_as_failed(
-                    tx,
-                    format!(
-                        "Transaction stuck in Pending status for more than {SOLANA_PENDING_TIMEOUT_MINUTES} minutes"
-                    ),
-                )
-                .await;
+				.mark_as_failed(
+					tx,
+					format!(
+						"Transaction stuck in Pending status for more than {SOLANA_PENDING_TIMEOUT_MINUTES} minutes"
+					),
+				)
+				.await;
         }
 
         // Step 3: Check if transaction is stuck (prepare job may have failed)
@@ -435,10 +435,10 @@ where
     /// 2. Default valid_until based on created_at + DEFAULT_TX_VALID_TIMESPAN
     fn is_valid_until_expired(&self, tx: &TransactionRepoModel) -> bool {
         // Check user-provided valid_until first
-        if let Some(valid_until_str) = &tx.valid_until {
-            if let Ok(valid_until) = DateTime::parse_from_rfc3339(valid_until_str) {
-                return Utc::now() > valid_until.with_timezone(&Utc);
-            }
+        if let Some(valid_until_str) = &tx.valid_until
+            && let Ok(valid_until) = DateTime::parse_from_rfc3339(valid_until_str)
+        {
+            return Utc::now() > valid_until.with_timezone(&Utc);
         }
 
         // Fall back to default valid_until based on created_at
@@ -536,13 +536,13 @@ where
                 "transaction has exceeded timeout for status"
             );
             return self
-                .mark_as_failed(
-                    tx,
-                    format!(
-                        "Transaction stuck in {status:?} status for more than {timeout_minutes} minutes"
-                    ),
-                )
-                .await;
+				.mark_as_failed(
+					tx,
+					format!(
+						"Transaction stuck in {status:?} status for more than {timeout_minutes} minutes"
+					),
+				)
+				.await;
         }
 
         // Step 3: Check if enough time has passed for blockhash check
@@ -751,8 +751,7 @@ mod tests {
         let mut tx_repo = MockTransactionRepository::new();
         let job_producer = MockJobProducerTrait::new();
 
-        let signature_str =
-            "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
+        let signature_str = "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
         // Start with Submitted status
         let tx = create_tx_with_signature(TransactionStatus::Submitted, Some(signature_str));
 
@@ -818,8 +817,7 @@ mod tests {
         let mut tx_repo = MockTransactionRepository::new();
         let job_producer = MockJobProducerTrait::new();
 
-        let signature_str =
-            "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
+        let signature_str = "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
         let tx = create_tx_with_signature(TransactionStatus::Submitted, Some(signature_str));
 
         provider
@@ -881,8 +879,7 @@ mod tests {
         let mut tx_repo = MockTransactionRepository::new();
         let job_producer = MockJobProducerTrait::new();
 
-        let signature_str =
-            "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
+        let signature_str = "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
         let tx = create_tx_with_signature(TransactionStatus::Mined, Some(signature_str));
 
         provider
@@ -989,8 +986,7 @@ mod tests {
         let mut tx_repo = MockTransactionRepository::new();
         let job_producer = MockJobProducerTrait::new();
 
-        let signature_str =
-            "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
+        let signature_str = "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
         let tx = create_tx_with_signature(TransactionStatus::Submitted, Some(signature_str));
 
         provider
@@ -1103,8 +1099,7 @@ mod tests {
         let recent_created_at = (Utc::now()
             - Duration::milliseconds(SOLANA_DEFAULT_TX_VALID_TIMESPAN - 60000))
         .to_rfc3339();
-        let signature_str =
-            "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
+        let signature_str = "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
         let mut tx = create_tx_with_signature(TransactionStatus::Submitted, Some(signature_str));
         tx.created_at = recent_created_at.clone();
         tx.valid_until = None; // No user-provided valid_until
@@ -1173,8 +1168,7 @@ mod tests {
         let job_producer = MockJobProducerTrait::new();
 
         // Create transaction with too many signatures (attempts exceeded)
-        let signature_str =
-            "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
+        let signature_str = "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
         let mut tx = create_tx_with_signature(TransactionStatus::Submitted, Some(signature_str));
         tx.hashes = vec!["sig".to_string(); MAXIMUM_SOLANA_TX_ATTEMPTS + 1];
         tx.sent_at = Some(Utc::now().to_rfc3339()); // Ensure sent_at is set

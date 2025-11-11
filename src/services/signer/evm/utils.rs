@@ -58,7 +58,7 @@ mod tests {
     use k256::{
         ecdsa::SigningKey,
         elliptic_curve::rand_core::OsRng,
-        pkcs8::{der::Encode, EncodePublicKey},
+        pkcs8::{EncodePublicKey, der::Encode},
     };
 
     #[test]
