@@ -102,4 +102,34 @@ impl StellarNetwork {
     pub fn is_testnet(&self) -> bool {
         self.is_testnet
     }
+
+    /// Gets the Horizon base URL from the first RPC URL.
+    ///
+    /// Strips "/rpc" suffix if present, as Horizon API endpoints are at the base URL.
+    ///
+    /// # Returns
+    ///
+    /// The Horizon base URL, or an error if no RPC URLs are configured.
+    pub fn horizon_base_url(&self) -> Result<String, RepositoryError> {
+        let horizon_url = self
+            .rpc_urls
+            .first()
+            .ok_or_else(|| {
+                RepositoryError::InvalidData(
+                    "No RPC URL configured for Stellar network".to_string(),
+                )
+            })?
+            .clone();
+
+        let horizon_base = if horizon_url.ends_with("/rpc") {
+            horizon_url
+                .strip_suffix("/rpc")
+                .unwrap_or(&horizon_url)
+                .to_string()
+        } else {
+            horizon_url
+        };
+
+        Ok(horizon_base)
+    }
 }

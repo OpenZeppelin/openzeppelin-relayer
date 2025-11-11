@@ -12,9 +12,9 @@
 use crate::{
     domain::{
         get_network_relayer, get_network_relayer_by_model, get_relayer_by_id,
-        get_relayer_transaction_by_model, get_transaction_by_id as get_tx_by_id, Relayer,
-        RelayerFactory, RelayerFactoryTrait, SignDataRequest, SignDataResponse,
-        SignTransactionRequest, SignTypedDataRequest, Transaction,
+        get_relayer_transaction_by_model, get_transaction_by_id as get_tx_by_id,
+        GasAbstractionTrait, Relayer, RelayerFactory, RelayerFactoryTrait, SignDataRequest,
+        SignDataResponse, SignTransactionRequest, SignTypedDataRequest, Transaction,
     },
     jobs::JobProducerTrait,
     models::{
@@ -828,6 +828,78 @@ where
     Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
 }
 
+/// Estimates fees for a transaction using gas abstraction.
+///
+/// # Arguments
+///
+/// * `relayer_id` - The ID of the relayer.
+/// * `params` - The fee estimate request parameters.
+/// * `state` - The application state containing the relayer repository.
+///
+/// # Returns
+///
+/// The fee estimate result.
+pub async fn estimate_fee<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    relayer_id: String,
+    params: crate::models::StellarFeeEstimateRequestParams,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+) -> Result<HttpResponse, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
+    relayer.validate_active_state()?;
+
+    let network_relayer = get_network_relayer_by_model(relayer, &state).await?;
+
+    let result = network_relayer.estimate_fee(params).await?;
+    Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
+}
+
+/// Prepares a transaction with fee payments using gas abstraction.
+///
+/// # Arguments
+///
+/// * `relayer_id` - The ID of the relayer.
+/// * `params` - The prepare transaction request parameters.
+/// * `state` - The application state containing the relayer repository.
+///
+/// # Returns
+///
+/// The prepare transaction result.
+pub async fn prepare_transaction<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    relayer_id: String,
+    params: crate::models::StellarPrepareTransactionRequestParams,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+) -> Result<HttpResponse, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
+    relayer.validate_active_state()?;
+
+    let network_relayer = get_network_relayer_by_model(relayer, &state).await?;
+
+    let result = network_relayer.prepare_transaction(params).await?;
+    Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1186,6 +1258,11 @@ mod tests {
             max_fee: Some(100),
             timeout_seconds: Some(30),
             concurrent_transactions: None,
+            allowed_tokens: None,
+            fee_payment_strategy: None,
+            slippage_percentage: None,
+            fee_margin_percentage: None,
+            swap_config: None,
         }));
 
         let result = create_relayer(request, actix_web::web::ThinData(app_state)).await;

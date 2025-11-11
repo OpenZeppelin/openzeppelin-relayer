@@ -119,11 +119,13 @@ where
             }
             TransactionInput::SignedXdr { .. } => {
                 debug!("preparing fee-bump transaction {}", tx.id);
+                let policy = self.relayer().policies.get_stellar_policy();
                 let stellar_data_with_fee_bump = fee_bump::process_fee_bump(
                     &self.relayer().address,
                     stellar_data,
                     self.provider(),
                     self.signer(),
+                    Some(&policy),
                 )
                 .await?;
                 update_and_notify_transaction(

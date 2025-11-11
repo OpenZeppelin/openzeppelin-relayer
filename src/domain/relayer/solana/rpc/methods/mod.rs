@@ -48,12 +48,13 @@ use async_trait::async_trait;
 
 use crate::{
     models::{
-        FeeEstimateRequestParams, FeeEstimateResult, GetFeaturesEnabledRequestParams,
-        GetFeaturesEnabledResult, GetSupportedTokensRequestParams, GetSupportedTokensResult,
-        PrepareTransactionRequestParams, PrepareTransactionResult,
-        SignAndSendTransactionRequestParams, SignAndSendTransactionResult,
-        SignTransactionRequestParams, SignTransactionResult, TransferTransactionRequestParams,
-        TransferTransactionResult,
+        SolanaFeeEstimateRequestParams, SolanaFeeEstimateResult,
+        SolanaGetFeaturesEnabledRequestParams, SolanaGetFeaturesEnabledResult,
+        SolanaGetSupportedTokensRequestParams, SolanaGetSupportedTokensResult,
+        SolanaPrepareTransactionRequestParams, SolanaPrepareTransactionResult,
+        SolanaSignAndSendTransactionRequestParams, SolanaSignAndSendTransactionResult,
+        SolanaSignTransactionRequestParams, SolanaSignTransactionResult,
+        SolanaTransferTransactionRequestParams, SolanaTransferTransactionResult,
     },
     services::{provider::SolanaProvider, signer::SolanaSigner, JupiterService},
 };
@@ -63,32 +64,32 @@ use crate::{
 pub trait SolanaRpcMethods: Send + Sync {
     async fn fee_estimate(
         &self,
-        request: FeeEstimateRequestParams,
-    ) -> Result<FeeEstimateResult, SolanaRpcError>;
+        request: SolanaFeeEstimateRequestParams,
+    ) -> Result<SolanaFeeEstimateResult, SolanaRpcError>;
     async fn transfer_transaction(
         &self,
-        request: TransferTransactionRequestParams,
-    ) -> Result<TransferTransactionResult, SolanaRpcError>;
+        request: SolanaTransferTransactionRequestParams,
+    ) -> Result<SolanaTransferTransactionResult, SolanaRpcError>;
     async fn prepare_transaction(
         &self,
-        request: PrepareTransactionRequestParams,
-    ) -> Result<PrepareTransactionResult, SolanaRpcError>;
+        request: SolanaPrepareTransactionRequestParams,
+    ) -> Result<SolanaPrepareTransactionResult, SolanaRpcError>;
     async fn sign_transaction(
         &self,
-        request: SignTransactionRequestParams,
-    ) -> Result<SignTransactionResult, SolanaRpcError>;
+        request: SolanaSignTransactionRequestParams,
+    ) -> Result<SolanaSignTransactionResult, SolanaRpcError>;
     async fn sign_and_send_transaction(
         &self,
-        request: SignAndSendTransactionRequestParams,
-    ) -> Result<SignAndSendTransactionResult, SolanaRpcError>;
+        request: SolanaSignAndSendTransactionRequestParams,
+    ) -> Result<SolanaSignAndSendTransactionResult, SolanaRpcError>;
     async fn get_supported_tokens(
         &self,
-        request: GetSupportedTokensRequestParams,
-    ) -> Result<GetSupportedTokensResult, SolanaRpcError>;
+        request: SolanaGetSupportedTokensRequestParams,
+    ) -> Result<SolanaGetSupportedTokensResult, SolanaRpcError>;
     async fn get_features_enabled(
         &self,
-        request: GetFeaturesEnabledRequestParams,
-    ) -> Result<GetFeaturesEnabledResult, SolanaRpcError>;
+        request: SolanaGetFeaturesEnabledRequestParams,
+    ) -> Result<SolanaGetFeaturesEnabledResult, SolanaRpcError>;
 }
 
 pub type DefaultProvider = SolanaProvider;
@@ -193,50 +194,50 @@ where
 {
     async fn fee_estimate(
         &self,
-        params: FeeEstimateRequestParams,
-    ) -> Result<FeeEstimateResult, SolanaRpcError> {
+        params: SolanaFeeEstimateRequestParams,
+    ) -> Result<SolanaFeeEstimateResult, SolanaRpcError> {
         self.fee_estimate_impl(params).await
     }
 
     async fn prepare_transaction(
         &self,
-        params: PrepareTransactionRequestParams,
-    ) -> Result<PrepareTransactionResult, SolanaRpcError> {
+        params: SolanaPrepareTransactionRequestParams,
+    ) -> Result<SolanaPrepareTransactionResult, SolanaRpcError> {
         self.prepare_transaction_impl(params).await
     }
 
     async fn sign_transaction(
         &self,
-        params: SignTransactionRequestParams,
-    ) -> Result<SignTransactionResult, SolanaRpcError> {
+        params: SolanaSignTransactionRequestParams,
+    ) -> Result<SolanaSignTransactionResult, SolanaRpcError> {
         self.sign_transaction_impl(params).await
     }
 
     async fn sign_and_send_transaction(
         &self,
-        params: SignAndSendTransactionRequestParams,
-    ) -> Result<SignAndSendTransactionResult, SolanaRpcError> {
+        params: SolanaSignAndSendTransactionRequestParams,
+    ) -> Result<SolanaSignAndSendTransactionResult, SolanaRpcError> {
         self.sign_and_send_transaction_impl(params).await
     }
 
     async fn transfer_transaction(
         &self,
-        params: TransferTransactionRequestParams,
-    ) -> Result<TransferTransactionResult, SolanaRpcError> {
+        params: SolanaTransferTransactionRequestParams,
+    ) -> Result<SolanaTransferTransactionResult, SolanaRpcError> {
         self.transfer_transaction_impl(params).await
     }
 
     async fn get_supported_tokens(
         &self,
-        params: GetSupportedTokensRequestParams,
-    ) -> Result<GetSupportedTokensResult, SolanaRpcError> {
+        params: SolanaGetSupportedTokensRequestParams,
+    ) -> Result<SolanaGetSupportedTokensResult, SolanaRpcError> {
         self.get_supported_tokens_impl(params).await
     }
 
     async fn get_features_enabled(
         &self,
-        params: GetFeaturesEnabledRequestParams,
-    ) -> Result<GetFeaturesEnabledResult, SolanaRpcError> {
+        params: SolanaGetFeaturesEnabledRequestParams,
+    ) -> Result<SolanaGetFeaturesEnabledResult, SolanaRpcError> {
         self.get_features_enabled_impl(params).await
     }
 }

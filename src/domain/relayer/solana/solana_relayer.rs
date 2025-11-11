@@ -28,7 +28,7 @@ use crate::{
         SOLANA_SMALLEST_UNIT_NAME, WRAPPED_SOL_MINT,
     },
     domain::{relayer::RelayerError, BalanceResponse, DexStrategy, SolanaRelayerDexTrait},
-    jobs::{JobProducerTrait, RelayerHealthCheck, SolanaTokenSwapRequest},
+    jobs::{JobProducerTrait, RelayerHealthCheck, TokenSwapRequest},
     models::{
         produce_relayer_disabled_payload, produce_solana_dex_webhook_payload, DisabledReason,
         HealthCheckFailure, NetworkRepoModel, NetworkTransactionData, NetworkType,
@@ -270,8 +270,8 @@ where
             );
 
             self.job_producer
-                .produce_solana_token_swap_request_job(
-                    SolanaTokenSwapRequest {
+                .produce_token_swap_request_job(
+                    TokenSwapRequest {
                         relayer_id: self.relayer.id.clone(),
                     },
                     None,
@@ -1032,10 +1032,9 @@ mod tests {
         },
         jobs::MockJobProducerTrait,
         models::{
-            EncodedSerializedTransaction, FeeEstimateRequestParams,
-            GetFeaturesEnabledRequestParams, JsonRpcId, NetworkConfigData, NetworkRepoModel,
-            RelayerSolanaSwapConfig, SolanaAllowedTokensSwapConfig, SolanaRpcResult,
-            SolanaSwapStrategy,
+            EncodedSerializedTransaction, JsonRpcId, NetworkConfigData, NetworkRepoModel,
+            RelayerSolanaSwapConfig, SolanaAllowedTokensSwapConfig, SolanaFeeEstimateRequestParams,
+            SolanaGetFeaturesEnabledRequestParams, SolanaRpcResult, SolanaSwapStrategy,
         },
         repositories::{MockNetworkRepository, MockRelayerRepository, MockTransactionRepository},
         services::{
@@ -1856,7 +1855,7 @@ mod tests {
         let provider = Arc::new(raw_provider);
         let mut raw_job = MockJobProducerTrait::new();
         raw_job
-            .expect_produce_solana_token_swap_request_job()
+            .expect_produce_token_swap_request_job()
             .withf(move |req, _opts| req.relayer_id == "test-id")
             .times(0);
         let job_producer = Arc::new(raw_job);
@@ -1897,7 +1896,7 @@ mod tests {
 
         let mut raw_job = MockJobProducerTrait::new();
         raw_job
-            .expect_produce_solana_token_swap_request_job()
+            .expect_produce_token_swap_request_job()
             .times(1)
             .returning(|_, _| Box::pin(async { Ok(()) }));
         let job_producer = Arc::new(raw_job);
@@ -2053,7 +2052,7 @@ mod tests {
         let req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             params: NetworkRpcRequest::Solana(crate::models::SolanaRpcRequest::FeeEstimate(
-                FeeEstimateRequestParams {
+                SolanaFeeEstimateRequestParams {
                     transaction: EncodedSerializedTransaction::new("".to_string()),
                     fee_token: "".to_string(),
                 },
@@ -2076,7 +2075,7 @@ mod tests {
         let req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             params: NetworkRpcRequest::Solana(crate::models::SolanaRpcRequest::GetFeaturesEnabled(
-                GetFeaturesEnabledRequestParams {},
+                SolanaGetFeaturesEnabledRequestParams {},
             )),
             id: Some(JsonRpcId::Number(1)),
         };

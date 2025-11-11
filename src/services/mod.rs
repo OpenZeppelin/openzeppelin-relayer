@@ -17,6 +17,9 @@ pub use gas::*;
 mod jupiter;
 pub use jupiter::*;
 
+pub mod stellar_dex;
+pub use stellar_dex::*;
+
 mod vault;
 pub use vault::*;
 

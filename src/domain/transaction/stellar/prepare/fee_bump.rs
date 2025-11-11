@@ -13,21 +13,25 @@ use crate::{
 };
 
 use super::common::{calculate_fee_bump_required_fee, create_signing_data};
+use crate::domain::transaction::stellar::StellarTransactionValidator;
+use crate::models::RelayerStellarPolicy;
 
 /// Process a fee-bump transaction from signed XDR input.
 ///
 /// This function:
 /// 1. Extracts and validates the inner transaction from the signed XDR
-/// 2. Simulates the transaction if needed (for Soroban operations)
-/// 3. Calculates the required fee based on simulation results or max_fee
-/// 4. Builds the fee-bump envelope
-/// 5. Signs the fee-bump transaction
-/// 6. Returns the updated stellar data with the signed fee-bump envelope
+/// 2. Validates token payment if fee_payment_strategy is User
+/// 3. Simulates the transaction if needed (for Soroban operations)
+/// 4. Calculates the required fee based on simulation results or max_fee
+/// 5. Builds the fee-bump envelope
+/// 6. Signs the fee-bump transaction
+/// 7. Returns the updated stellar data with the signed fee-bump envelope
 pub async fn process_fee_bump<S, P>(
     relayer_address: &str,
     stellar_data: StellarTransactionData,
     provider: &P,
     signer: &S,
+    relayer_policy: Option<&RelayerStellarPolicy>,
 ) -> Result<StellarTransactionData, TransactionError>
 where
     S: Signer + Send + Sync,
@@ -36,21 +40,70 @@ where
     // Step 1: Extract and validate the inner transaction
     let (inner_envelope, max_fee) = extract_inner_transaction(&stellar_data)?;
 
-    // Step 2: Calculate the required fee (may include simulation for Soroban)
+    // Step 2: Validate token payment if fee_payment_strategy is User
+    if let Some(policy) = relayer_policy {
+        if matches!(
+            policy.fee_payment_strategy,
+            Some(crate::models::StellarFeePaymentStrategy::User)
+        ) {
+            // Check if transaction has payment operations to relayer
+            let payments = StellarTransactionValidator::extract_relayer_payments(
+                &inner_envelope,
+                relayer_address,
+            )
+            .map_err(|e| {
+                TransactionError::ValidationError(format!(
+                    "Failed to extract relayer payments: {}",
+                    e
+                ))
+            })?;
+
+            if !payments.is_empty() {
+                // Transaction has token payment - validate it
+                // Note: We can't validate exact amount here without knowing the expected fee token
+                // This validation will be done at the API level when the transaction is submitted
+                // For now, just verify that at least one payment to relayer exists and token is allowed
+                for (asset_id, amount) in &payments {
+                    StellarTransactionValidator::validate_allowed_token(asset_id, policy).map_err(
+                        |e| {
+                            TransactionError::ValidationError(format!(
+                                "Token payment validation failed: {}",
+                                e
+                            ))
+                        },
+                    )?;
+
+                    StellarTransactionValidator::validate_token_max_fee(asset_id, *amount, policy)
+                        .map_err(|e| {
+                            TransactionError::ValidationError(format!(
+                                "Token fee validation failed: {}",
+                                e
+                            ))
+                        })?;
+                }
+
+                tracing::info!("Validated token payment(s) to relayer: {:?}", payments);
+            }
+            // If no payments found and strategy is User, that's okay - user might pay in XLM
+            // The actual validation of payment amount will happen at submission time
+        }
+    }
+
+    // Step 3: Calculate the required fee (may include simulation for Soroban)
     let required_fee = calculate_fee_bump_required_fee(&inner_envelope, max_fee, provider).await?;
 
-    // Step 3: Build the fee-bump envelope
+    // Step 4: Build the fee-bump envelope (relayer pays XLM fee)
     let fee_bump_envelope =
         build_fee_bump_envelope(inner_envelope.clone(), relayer_address, required_fee as i64)
             .map_err(|e| {
                 TransactionError::ValidationError(format!("Cannot create fee-bump envelope: {}", e))
             })?;
 
-    // Step 4: Sign the fee-bump transaction
+    // Step 5: Sign the fee-bump transaction
     let signed_stellar_data =
         sign_fee_bump_transaction(stellar_data, fee_bump_envelope, relayer_address, signer).await?;
 
-    // Step 5: Update the fee in stellar data
+    // Step 6: Update the fee in stellar data
     let signed_stellar_data = signed_stellar_data.with_fee(required_fee);
 
     Ok(signed_stellar_data)

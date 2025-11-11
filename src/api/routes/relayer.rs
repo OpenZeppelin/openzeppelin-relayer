@@ -190,10 +190,32 @@ async fn rpc(
     relayer::relayer_rpc(relayer_id.into_inner(), req.into_inner(), data).await
 }
 
+/// Estimates fees for a transaction (gas abstraction endpoint).
+#[post("/relayers/{relayer_id}/transactions/estimate")]
+async fn estimate_fee(
+    relayer_id: web::Path<String>,
+    req: web::Json<crate::models::StellarFeeEstimateRequestParams>,
+    data: web::ThinData<DefaultAppState>,
+) -> impl Responder {
+    relayer::estimate_fee(relayer_id.into_inner(), req.into_inner(), data).await
+}
+
+/// Prepares a transaction with fee payments (gas abstraction endpoint).
+#[post("/relayers/{relayer_id}/transactions/prepare")]
+async fn prepare_transaction(
+    relayer_id: web::Path<String>,
+    req: web::Json<crate::models::StellarPrepareTransactionRequestParams>,
+    data: web::ThinData<DefaultAppState>,
+) -> impl Responder {
+    relayer::prepare_transaction(relayer_id.into_inner(), req.into_inner(), data).await
+}
+
 /// Initializes the routes for the relayer module.
 pub fn init(cfg: &mut web::ServiceConfig) {
     // Register routes with literal segments before routes with path parameters
     cfg.service(delete_pending_transactions); // /relayers/{id}/transactions/pending
+    cfg.service(estimate_fee); // /relayers/{id}/transactions/estimate
+    cfg.service(prepare_transaction); // /relayers/{id}/transactions/prepare
 
     // Then register other routes
     cfg.service(cancel_transaction); // /relayers/{id}/transactions/{tx_id}

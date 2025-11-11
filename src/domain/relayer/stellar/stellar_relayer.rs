@@ -23,34 +23,60 @@ use crate::domain::relayer::evm::create_error_response;
 /// To use the `StellarRelayer`, create an instance using the `new` method, providing the necessary
 /// components. Then, call the appropriate methods to process transactions and manage the relayer's state.
 use crate::{
-    constants::{STELLAR_SMALLEST_UNIT_NAME, STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS},
+    constants::{
+        DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, STELLAR_SMALLEST_UNIT_NAME,
+        STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+    },
+    domain::relayer::SwapResult,
     domain::{
         create_success_response, transaction::stellar::fetch_next_sequence_from_chain,
         BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
         SignTransactionExternalResponseStellar, SignTransactionRequest, SignTypedDataRequest,
+        StellarRelayerDexTrait,
     },
     jobs::{JobProducerTrait, RelayerHealthCheck, TransactionRequest, TransactionStatusCheck},
     models::{
-        produce_relayer_disabled_payload, DeletePendingTransactionsResponse, DisabledReason,
-        HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest,
-        NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus,
-        RepositoryError, RpcErrorCodes, StellarNetwork, StellarRpcRequest, TransactionRepoModel,
+        produce_relayer_disabled_payload, AssetSpec, DeletePendingTransactionsResponse,
+        DisabledReason, HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel,
+        NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest, NetworkType, OperationSpec,
+        RelayerRepoModel, RelayerStatus, RepositoryError, RpcErrorCodes, StellarFeeEstimateResult,
+        StellarNetwork, StellarPrepareTransactionResult, StellarRpcRequest, TransactionRepoModel,
         TransactionStatus,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
         provider::{StellarProvider, StellarProviderTrait},
         signer::{StellarSignTrait, StellarSigner},
+        stellar_dex::{PathsService, StellarDexServiceTrait},
         TransactionCounterService, TransactionCounterServiceTrait,
     },
     utils::calculate_scheduled_timestamp,
 };
 use async_trait::async_trait;
+use chrono::{Duration, Utc};
 use eyre::Result;
+use soroban_rs::xdr::{Limits, Operation, WriteXdr};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
-use crate::domain::relayer::{Relayer, RelayerError};
+use crate::domain::relayer::xdr_utils::extract_source_account;
+use crate::domain::relayer::{GasAbstractionTrait, Relayer, RelayerError};
+use crate::domain::transaction::stellar::utils::{
+    add_operation_to_envelope, amount_to_ui_amount, create_fee_payment_operation,
+    estimate_base_fee, parse_transaction_and_count_operations, parse_transaction_envelope,
+    set_time_bounds,
+};
+use crate::domain::transaction::stellar::{
+    StellarTransactionValidationError, StellarTransactionValidator,
+};
+
+/// Fee quote structure containing fee estimates in both tokens and stroops
+struct FeeQuote {
+    fee_in_token: u64,
+    fee_in_token_ui: String,
+    fee_in_stroops: u64,
+    conversion_rate: f64,
+}
 
 /// Dependencies container for `StellarRelayer` construction.
 pub struct StellarRelayerDependencies<RR, NR, TR, J, TCS>
@@ -109,7 +135,7 @@ where
 #[allow(dead_code)]
 pub struct StellarRelayer<P, RR, NR, TR, J, TCS, S>
 where
-    P: StellarProviderTrait + Send + Sync,
+    P: StellarProviderTrait + Send + Sync + 'static,
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
     TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
@@ -126,6 +152,7 @@ where
     transaction_repository: Arc<TR>,
     transaction_counter_service: Arc<TCS>,
     job_producer: Arc<J>,
+    dex_service: Arc<dyn StellarDexServiceTrait + Send + Sync>,
 }
 
 pub type DefaultStellarRelayer<J, TR, NR, RR, TCR> =
@@ -175,7 +202,15 @@ where
                 RelayerError::NetworkConfiguration(format!("Network {} not found", relayer.network))
             })?;
 
-        let network = StellarNetwork::try_from(network_repo)?;
+        let network = StellarNetwork::try_from(network_repo.clone())?;
+
+        // Create DEX service for swap operations
+        let horizon_base = network.horizon_base_url().map_err(|e| {
+            RelayerError::NetworkConfiguration(format!("Failed to get Horizon base URL: {}", e))
+        })?;
+        let dex_service = Arc::new(PathsService::new(horizon_base).map_err(|e| {
+            RelayerError::NetworkConfiguration(format!("Failed to create DEX service: {}", e))
+        })?);
 
         Ok(Self {
             relayer,
@@ -187,6 +222,7 @@ where
             transaction_repository: dependencies.transaction_repository,
             transaction_counter_service: dependencies.transaction_counter_service,
             job_producer: dependencies.job_producer,
+            dex_service,
         })
     }
 
@@ -210,12 +246,86 @@ where
             .map_err(RelayerError::from)?;
         Ok(())
     }
+
+    /// Estimate fee and convert to token amount using DEX service
+    async fn estimate_and_convert_fee(
+        &self,
+        xlm_fee: u64,
+        fee_token: &str,
+        fee_margin_percentage: Option<f32>,
+    ) -> Result<(FeeQuote, u64), RelayerError> {
+        // Handle native XLM - no conversion needed
+        if fee_token == "native" || fee_token.is_empty() {
+            let buffered_fee = if let Some(margin) = fee_margin_percentage {
+                (xlm_fee as f64 * (1.0 + margin as f64 / 100.0)) as u64
+            } else {
+                xlm_fee
+            };
+
+            return Ok((
+                FeeQuote {
+                    fee_in_token: buffered_fee,
+                    fee_in_token_ui: amount_to_ui_amount(buffered_fee, 7),
+                    fee_in_stroops: buffered_fee,
+                    conversion_rate: 1.0,
+                },
+                buffered_fee,
+            ));
+        }
+
+        // Apply fee margin if specified
+        let buffered_xlm_fee = if let Some(margin) = fee_margin_percentage {
+            (xlm_fee as f64 * (1.0 + margin as f64 / 100.0)) as u64
+        } else {
+            xlm_fee
+        };
+
+        // Get slippage from policy or use default
+        let policy = self.relayer.policies.get_stellar_policy();
+        let slippage = policy
+            .get_allowed_token_entry(fee_token)
+            .and_then(|token| {
+                token
+                    .swap_config
+                    .as_ref()
+                    .and_then(|config| config.slippage_percentage)
+            })
+            .or(policy.slippage_percentage)
+            .unwrap_or(DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE);
+
+        // Get quote from DEX service
+        let quote = self
+            .dex_service
+            .get_xlm_to_token_quote(fee_token, buffered_xlm_fee, slippage)
+            .await
+            .map_err(|e| RelayerError::Internal(format!("Failed to get quote: {}", e)))?;
+
+        // Get token decimals from policy or default to 7
+        let decimals = policy.get_allowed_token_decimals(fee_token).unwrap_or(7);
+
+        // Calculate conversion rate
+        let conversion_rate = if buffered_xlm_fee > 0 {
+            quote.out_amount as f64 / buffered_xlm_fee as f64
+        } else {
+            0.0
+        };
+
+        Ok((
+            FeeQuote {
+                fee_in_token: quote.out_amount,
+                fee_in_token_ui: amount_to_ui_amount(quote.out_amount, decimals),
+                fee_in_stroops: buffered_xlm_fee,
+                conversion_rate,
+            },
+            buffered_xlm_fee,
+        ))
+    }
 }
 
 #[async_trait]
 impl<P, RR, NR, TR, J, TCS, S> Relayer for StellarRelayer<P, RR, NR, TR, J, TCS, S>
 where
-    P: StellarProviderTrait + Send + Sync,
+    P: StellarProviderTrait + Send + Sync + 'static,
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
     TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
@@ -399,28 +509,6 @@ where
         Ok(())
     }
 
-    async fn check_health(&self) -> Result<(), Vec<HealthCheckFailure>> {
-        debug!(
-            "running health checks for Stellar relayer {}",
-            self.relayer.id
-        );
-
-        match self.sync_sequence().await {
-            Ok(_) => {
-                debug!(
-                    "all health checks passed for Stellar relayer {}",
-                    self.relayer.id
-                );
-                Ok(())
-            }
-            Err(e) => {
-                let reason = HealthCheckFailure::SequenceSyncFailed(e.to_string());
-                warn!("health checks failed: {:?}", reason);
-                Err(vec![reason])
-            }
-        }
-    }
-
     async fn initialize_relayer(&self) -> Result<(), RelayerError> {
         debug!("initializing Stellar relayer {}", self.relayer.id);
 
@@ -479,6 +567,28 @@ where
         }
     }
 
+    async fn check_health(&self) -> Result<(), Vec<HealthCheckFailure>> {
+        debug!(
+            "running health checks for Stellar relayer {}",
+            self.relayer.id
+        );
+
+        match self.sync_sequence().await {
+            Ok(_) => {
+                debug!(
+                    "all health checks passed for Stellar relayer {}",
+                    self.relayer.id
+                );
+                Ok(())
+            }
+            Err(e) => {
+                let reason = HealthCheckFailure::SequenceSyncFailed(e.to_string());
+                warn!("health checks failed: {:?}", reason);
+                Err(vec![reason])
+            }
+        }
+    }
+
     async fn sign_transaction(
         &self,
         request: &SignTransactionRequest,
@@ -513,6 +623,285 @@ where
     }
 }
 
+#[async_trait]
+impl<P, RR, NR, TR, J, TCS, S> GasAbstractionTrait for StellarRelayer<P, RR, NR, TR, J, TCS, S>
+where
+    P: StellarProviderTrait + Send + Sync,
+    RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
+    S: StellarSignTrait + Send + Sync + 'static,
+{
+    async fn estimate_fee(
+        &self,
+        params: crate::models::StellarFeeEstimateRequestParams,
+    ) -> Result<crate::models::StellarFeeEstimateResult, RelayerError> {
+        info!(
+            "Processing fee estimate request for token: {}",
+            params.fee_token
+        );
+
+        // Validate allowed token
+        let policy = self.relayer.policies.get_stellar_policy();
+        StellarTransactionValidator::validate_allowed_token(&params.fee_token, &policy).map_err(
+            |e| RelayerError::Internal(format!("Failed to validate allowed token: {}", e)),
+        )?;
+
+        // Parse transaction and count operations
+        let num_operations =
+            parse_transaction_and_count_operations(&params.transaction).map_err(|e| {
+                RelayerError::Internal(format!(
+                    "Failed to parse transaction and count operations: {}",
+                    e
+                ))
+            })?;
+
+        // Estimate base XLM fee
+        let xlm_fee = estimate_base_fee(num_operations);
+
+        // Convert to token amount via DEX service
+        let (fee_quote, _) = self
+            .estimate_and_convert_fee(xlm_fee, &params.fee_token, policy.fee_margin_percentage)
+            .await
+            .map_err(|e| {
+                RelayerError::Internal(format!("Failed to estimate and convert fee: {}", e))
+            })?;
+
+        // Validate max fee
+        StellarTransactionValidator::validate_max_fee(fee_quote.fee_in_stroops, &policy)
+            .map_err(|e| RelayerError::Internal(format!("Failed to validate max fee: {}", e)))?;
+
+        // Validate token-specific max fee
+        StellarTransactionValidator::validate_token_max_fee(
+            &params.fee_token,
+            fee_quote.fee_in_token,
+            &policy,
+        )
+        .map_err(|e| {
+            RelayerError::Internal(format!("Failed to validate token-specific max fee: {}", e))
+        })?;
+
+        Ok(StellarFeeEstimateResult {
+            estimated_fee: fee_quote.fee_in_token_ui,
+            conversion_rate: fee_quote.conversion_rate.to_string(),
+        })
+    }
+
+    async fn prepare_transaction(
+        &self,
+        params: crate::models::StellarPrepareTransactionRequestParams,
+    ) -> Result<crate::models::StellarPrepareTransactionResult, RelayerError> {
+        info!(
+            "Processing prepare transaction request for token: {}",
+            params.fee_token
+        );
+
+        // Validate allowed token
+        let policy = self.relayer.policies.get_stellar_policy();
+        StellarTransactionValidator::validate_allowed_token(&params.fee_token, &policy).map_err(
+            |e| RelayerError::Internal(format!("Failed to validate allowed token: {}", e)),
+        )?;
+
+        // Parse transaction and count operations
+        let num_operations =
+            parse_transaction_and_count_operations(&params.transaction).map_err(|e| {
+                RelayerError::Internal(format!(
+                    "Failed to parse transaction and count operations: {}",
+                    e
+                ))
+            })?;
+
+        // Estimate base XLM fee
+        let xlm_fee = estimate_base_fee(num_operations);
+
+        // Convert to token amount via DEX service
+        let (fee_quote, buffered_xlm_fee) = self
+            .estimate_and_convert_fee(xlm_fee, &params.fee_token, policy.fee_margin_percentage)
+            .await
+            .map_err(|e| {
+                RelayerError::Internal(format!("Failed to estimate and convert fee: {}", e))
+            })?;
+
+        // Validate max fee
+        StellarTransactionValidator::validate_max_fee(fee_quote.fee_in_stroops, &policy)
+            .map_err(|e| RelayerError::Internal(format!("Failed to validate max fee: {}", e)))?;
+
+        // Validate token-specific max fee
+        StellarTransactionValidator::validate_token_max_fee(
+            &params.fee_token,
+            fee_quote.fee_in_token,
+            &policy,
+        )
+        .map_err(|e| {
+            RelayerError::Internal(format!("Failed to validate token-specific max fee: {}", e))
+        })?;
+
+        // Parse transaction to add payment operation
+        let mut envelope = parse_transaction_envelope(&params.transaction).map_err(|e| {
+            RelayerError::Internal(format!("Failed to parse transaction envelope: {}", e))
+        })?;
+
+        // Extract source account from envelope
+        let source_account = extract_source_account(&envelope).map_err(|e| {
+            RelayerError::Internal(format!(
+                "Failed to extract source account from envelope: {}",
+                e
+            ))
+        })?;
+
+        // Create payment operation for fee payment
+        let payment_op_spec = create_fee_payment_operation(
+            &self.relayer.address,
+            &params.fee_token,
+            fee_quote.fee_in_token as i64, // PaymentOp uses i64
+        )
+        .map_err(|e| {
+            RelayerError::Internal(format!("Failed to create fee payment operation: {}", e))
+        })?;
+
+        // Convert OperationSpec to XDR Operation
+        let payment_op = Operation::try_from(payment_op_spec).map_err(|e| {
+            RelayerError::Internal(format!("Failed to convert payment operation: {}", e))
+        })?;
+
+        // Add payment operation to transaction
+        add_operation_to_envelope(&mut envelope, payment_op)
+            .map_err(|e| RelayerError::Internal(format!("Failed to add operation: {}", e)))?;
+
+        // Set time bounds (valid for 5 minutes due to quote volatility)
+        let valid_until = Utc::now() + Duration::minutes(5);
+        set_time_bounds(&mut envelope, valid_until)
+            .map_err(|e| RelayerError::Internal(format!("Failed to set time bounds: {}", e)))?;
+
+        // Serialize extended transaction
+        let extended_xdr = envelope
+            .to_xdr_base64(Limits::none())
+            .map_err(|e| RelayerError::Internal(format!("Failed to serialize XDR: {}", e)))?;
+
+        // Construct Stellar StellarPrepareTransactionResult explicitly to avoid ambiguity with Solana type
+        // Use serde_json to ensure we get the correct Stellar struct
+        let result_json = serde_json::json!({
+            "transaction": extended_xdr,
+            "fee_in_token": fee_quote.fee_in_token_ui,
+            "fee_in_stroops": buffered_xlm_fee.to_string(),
+            "fee_token": params.fee_token,
+            "valid_until": valid_until.to_rfc3339(),
+        });
+        let result: StellarPrepareTransactionResult =
+            serde_json::from_value(result_json).map_err(|e| {
+                RelayerError::Internal(format!(
+                    "Failed to create StellarPrepareTransactionResult: {}",
+                    e
+                ))
+            })?;
+        Ok(result)
+    }
+}
+
+#[async_trait]
+impl<P, RR, NR, TR, J, TCS, S> StellarRelayerDexTrait for StellarRelayer<P, RR, NR, TR, J, TCS, S>
+where
+    P: StellarProviderTrait + Send + Sync,
+    RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
+    S: StellarSignTrait + Send + Sync + 'static,
+{
+    /// Processes a token swap request for the given relayer ID:
+    ///
+    /// 1. Loads the relayer's policy (must include swap_config & strategy).
+    /// 2. Checks XLM balance - if below threshold, swaps collected tokens to XLM.
+    /// 3. Iterates allowed tokens, checking balances and calculating swap amounts.
+    /// 4. Executes swaps through the DEX service (Paths service).
+    /// 5. Collects and returns all `SwapResult`s (empty if no swaps were needed).
+    ///
+    /// Returns a `RelayerError` on any repository, provider, or swap execution failure.
+    async fn handle_token_swap_request(
+        &self,
+        relayer_id: String,
+    ) -> Result<Vec<SwapResult>, RelayerError> {
+        debug!("handling token swap request for relayer {}", relayer_id);
+        let relayer = self
+            .relayer_repository
+            .get_by_id(relayer_id.clone())
+            .await?;
+
+        let policy = relayer.policies.get_stellar_policy();
+
+        let swap_config = match policy.get_swap_config() {
+            Some(config) => config,
+            None => {
+                debug!(%relayer_id, "No swap configuration specified for relayer; Exiting.");
+                return Ok(vec![]);
+            }
+        };
+
+        match swap_config.strategy {
+            Some(_strategy) => {
+                // Strategy is set, proceed with swap
+            }
+            None => {
+                debug!(%relayer_id, "No swap strategy specified for relayer; Exiting.");
+                return Ok(vec![]);
+            }
+        }
+
+        // Check XLM balance
+        let account_entry = self
+            .provider
+            .get_account(&relayer.address)
+            .await
+            .map_err(|e| RelayerError::ProviderError(format!("Failed to get account: {}", e)))?;
+
+        let xlm_balance = account_entry.balance as u64;
+
+        // Check if balance is below threshold
+        if let Some(threshold) = swap_config.min_balance_threshold {
+            if xlm_balance >= threshold {
+                debug!(
+                    %relayer_id,
+                    balance = xlm_balance,
+                    threshold = threshold,
+                    "XLM balance above threshold, no swap needed"
+                );
+                return Ok(vec![]);
+            }
+        }
+
+        info!(
+            %relayer_id,
+            balance = xlm_balance,
+            "XLM balance below threshold, checking tokens for swap"
+        );
+
+        // Get allowed tokens
+        let allowed_tokens = policy.get_allowed_tokens();
+        if allowed_tokens.is_empty() {
+            debug!(%relayer_id, "No allowed tokens configured for swap");
+            return Ok(vec![]);
+        }
+
+        // Note: For Stellar, token balances are stored in account trustlines
+        // This requires Horizon API integration to fetch balances for each asset
+        // For now, we'll create a placeholder implementation that can be extended
+        // TODO: Implement token balance fetching from Horizon API
+        // TODO: Calculate swap amounts based on min/max/retain settings
+        // TODO: Execute swaps using DEX service
+
+        warn!(
+            %relayer_id,
+            "Token swap implementation requires Horizon API integration for balance fetching"
+        );
+
+        // Return empty results for now - implementation can be extended later
+        Ok(vec![])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -531,6 +920,7 @@ mod tests {
         services::{
             provider::{MockStellarProviderTrait, ProviderError},
             signer::MockStellarSignTrait,
+            stellar_dex::MockStellarDexServiceTrait,
             MockTransactionCounterServiceTrait,
         },
     };

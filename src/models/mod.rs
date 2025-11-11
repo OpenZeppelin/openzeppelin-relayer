@@ -18,7 +18,10 @@ pub mod relayer;
 pub use relayer::*;
 
 // Type aliases for backward compatibility with domain logic
-pub use relayer::{SolanaAllowedTokensPolicy, SolanaFeePaymentStrategy, SolanaSwapStrategy};
+pub use relayer::{
+    RelayerStellarSwapConfig, SolanaAllowedTokensPolicy, SolanaFeePaymentStrategy,
+    SolanaSwapStrategy, StellarAllowedTokensPolicy, StellarFeePaymentStrategy, StellarSwapStrategy,
+};
 
 mod error;
 pub use error::*;

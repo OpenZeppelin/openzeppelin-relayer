@@ -1855,7 +1855,7 @@ mod tests {
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             params: NetworkRpcRequest::Solana(crate::models::SolanaRpcRequest::GetSupportedTokens(
-                crate::models::GetSupportedTokensRequestParams {},
+                crate::models::SolanaGetSupportedTokensRequestParams {},
             )),
             id: Some(JsonRpcId::Number(1)),
         };

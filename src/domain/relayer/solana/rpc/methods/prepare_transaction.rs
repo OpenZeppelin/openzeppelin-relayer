@@ -31,8 +31,9 @@ use tracing::info;
 use super::{utils::FeeQuote, *};
 use crate::{
     models::{
-        EncodedSerializedTransaction, PrepareTransactionRequestParams, PrepareTransactionResult,
-        SolanaFeePaymentStrategy, TransactionRepoModel,
+        EncodedSerializedTransaction, SolanaFeePaymentStrategy,
+        SolanaPrepareTransactionRequestParams, SolanaPrepareTransactionResult,
+        TransactionRepoModel,
     },
     repositories::{Repository, TransactionRepository},
     services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
@@ -48,8 +49,8 @@ where
 {
     pub(crate) async fn prepare_transaction_impl(
         &self,
-        params: PrepareTransactionRequestParams,
-    ) -> Result<PrepareTransactionResult, SolanaRpcError> {
+        params: SolanaPrepareTransactionRequestParams,
+    ) -> Result<SolanaPrepareTransactionResult, SolanaRpcError> {
         info!(
             "Processing prepare transaction request for fee token: {}",
             params.fee_token
@@ -104,7 +105,7 @@ where
             fee_quote.fee_in_spl, recent_blockhash.1
         );
 
-        Ok(PrepareTransactionResult {
+        Ok(SolanaPrepareTransactionResult {
             transaction: encoded_tx,
             fee_in_spl: fee_quote.fee_in_spl.to_string(),
             fee_in_lamports: fee_quote.fee_in_lamports.to_string(),
@@ -331,7 +332,7 @@ mod tests {
             Arc::new(MockTransactionRepository::new()),
         );
 
-        let params = PrepareTransactionRequestParams {
+        let params = SolanaPrepareTransactionRequestParams {
             transaction: encoded_tx,
             fee_token: WRAPPED_SOL_MINT.to_string(),
         };
@@ -524,7 +525,7 @@ mod tests {
 
         let token_test = &ctx.token;
 
-        let params = PrepareTransactionRequestParams {
+        let params = SolanaPrepareTransactionRequestParams {
             transaction: ctx.encoded_tx,
             fee_token: token_test.to_string(),
         };
@@ -606,7 +607,7 @@ mod tests {
             Arc::new(MockTransactionRepository::new()),
         );
 
-        let params = PrepareTransactionRequestParams {
+        let params = SolanaPrepareTransactionRequestParams {
             transaction: encoded_tx,
             fee_token: WRAPPED_SOL_MINT.to_string(),
         };
@@ -688,7 +689,7 @@ mod tests {
             Arc::new(MockTransactionRepository::new()),
         );
 
-        let params = PrepareTransactionRequestParams {
+        let params = SolanaPrepareTransactionRequestParams {
             transaction: encoded_tx,
             fee_token: WRAPPED_SOL_MINT.to_string(),
         };
@@ -781,7 +782,7 @@ mod tests {
             Arc::new(MockTransactionRepository::new()),
         );
 
-        let params = PrepareTransactionRequestParams {
+        let params = SolanaPrepareTransactionRequestParams {
             transaction: encoded_tx,
             fee_token: WRAPPED_SOL_MINT.to_string(),
         };
@@ -952,7 +953,7 @@ mod tests {
             Arc::new(MockTransactionRepository::new()),
         );
 
-        let params = PrepareTransactionRequestParams {
+        let params = SolanaPrepareTransactionRequestParams {
             transaction: encoded_tx,
             fee_token: WRAPPED_SOL_MINT.to_string(),
         };
@@ -1068,7 +1069,7 @@ mod tests {
             Arc::new(MockTransactionRepository::new()),
         );
 
-        let params = PrepareTransactionRequestParams {
+        let params = SolanaPrepareTransactionRequestParams {
             transaction: encoded_tx,
             fee_token: WRAPPED_SOL_MINT.to_string(),
         };

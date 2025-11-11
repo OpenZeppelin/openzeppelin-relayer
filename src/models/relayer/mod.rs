@@ -491,6 +491,105 @@ impl RelayerSolanaPolicy {
             .and_then(|entry| entry.decimals)
     }
 }
+
+/// Stellar token swap configuration
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct StellarAllowedTokensSwapConfig {
+    /// Conversion slippage percentage for token. Optional.
+    #[schema(nullable = false)]
+    pub slippage_percentage: Option<f32>,
+    /// Minimum amount of tokens to swap. Optional.
+    #[schema(nullable = false)]
+    pub min_amount: Option<u64>,
+    /// Maximum amount of tokens to swap. Optional.
+    #[schema(nullable = false)]
+    pub max_amount: Option<u64>,
+    /// Minimum amount of tokens to retain after swap. Optional.
+    #[schema(nullable = false)]
+    pub retain_min_amount: Option<u64>,
+}
+
+/// Configuration for allowed token handling on Stellar
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StellarAllowedTokensPolicy {
+    pub asset_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub issuer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub decimals: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub max_allowed_fee: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub swap_config: Option<StellarAllowedTokensSwapConfig>,
+}
+
+impl StellarAllowedTokensPolicy {
+    /// Create a new AllowedToken with required parameters
+    pub fn new(
+        asset_id: String,
+        max_allowed_fee: Option<u64>,
+        swap_config: Option<StellarAllowedTokensSwapConfig>,
+    ) -> Self {
+        Self {
+            asset_id,
+            code: None,
+            issuer: None,
+            decimals: None,
+            max_allowed_fee,
+            swap_config,
+        }
+    }
+}
+
+/// Stellar fee payment strategy
+///
+/// Determines who pays transaction fees:
+/// - `User`: User must include fee payment to relayer in transaction (for custom RPC methods)
+/// - `Relayer`: Relayer pays all transaction fees (recommended for send transaction endpoint)
+///
+/// Default is `User`.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum StellarFeePaymentStrategy {
+    #[default]
+    User,
+    Relayer,
+}
+
+/// Stellar swap strategy
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum StellarSwapStrategy {
+    /// Use Stellar native paths (Horizon /paths/strict-receive endpoint)
+    Paths,
+    /// Use Soroswap DEX (future implementation)
+    Soroswap,
+}
+
+/// Stellar swap policy configuration
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct RelayerStellarSwapConfig {
+    /// DEX strategy to use for token swaps.
+    #[schema(nullable = false)]
+    pub strategy: Option<StellarSwapStrategy>,
+    /// Cron schedule for executing token swap logic to keep relayer funded. Optional.
+    #[schema(nullable = false)]
+    pub cron_schedule: Option<String>,
+    /// Min XLM balance (in stroops) to execute token swap logic to keep relayer funded. Optional.
+    #[schema(nullable = false)]
+    pub min_balance_threshold: Option<u64>,
+}
+
 /// Stellar-specific relayer policy configuration
 #[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
@@ -503,6 +602,45 @@ pub struct RelayerStellarPolicy {
     pub timeout_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub concurrent_transactions: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_tokens: Option<Vec<StellarAllowedTokensPolicy>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub fee_payment_strategy: Option<StellarFeePaymentStrategy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slippage_percentage: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fee_margin_percentage: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub swap_config: Option<RelayerStellarSwapConfig>,
+}
+
+impl RelayerStellarPolicy {
+    /// Get allowed tokens for this policy
+    pub fn get_allowed_tokens(&self) -> Vec<StellarAllowedTokensPolicy> {
+        self.allowed_tokens.clone().unwrap_or_default()
+    }
+
+    /// Get allowed token entry by asset identifier
+    pub fn get_allowed_token_entry(&self, asset_id: &str) -> Option<StellarAllowedTokensPolicy> {
+        self.allowed_tokens
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .find(|entry| entry.asset_id == asset_id)
+    }
+
+    /// Get allowed token decimals by asset identifier
+    pub fn get_allowed_token_decimals(&self, asset_id: &str) -> Option<u8> {
+        self.get_allowed_token_entry(asset_id)
+            .and_then(|entry| entry.decimals)
+    }
+
+    /// Get swap configuration for this policy
+    pub fn get_swap_config(&self) -> Option<RelayerStellarSwapConfig> {
+        self.swap_config.clone()
+    }
 }
 
 /// Network-specific policy for relayers
@@ -1396,6 +1534,11 @@ mod tests {
             max_fee: Some(100000),
             timeout_seconds: Some(30),
             concurrent_transactions: None,
+            allowed_tokens: None,
+            fee_payment_strategy: None,
+            slippage_percentage: None,
+            fee_margin_percentage: None,
+            swap_config: None,
         };
 
         let network_policy = RelayerNetworkPolicy::Stellar(stellar_policy.clone());

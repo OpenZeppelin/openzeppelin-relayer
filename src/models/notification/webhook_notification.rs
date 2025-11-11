@@ -2,8 +2,9 @@ use crate::{
     domain::SwapResult,
     jobs::NotificationSend,
     models::{
-        RelayerRepoModel, RelayerResponse, SignAndSendTransactionResult, SignTransactionResult,
-        TransactionRepoModel, TransactionResponse, TransferTransactionResult,
+        RelayerRepoModel, RelayerResponse, SolanaSignAndSendTransactionResult,
+        SolanaSignTransactionResult, SolanaTransferTransactionResult, TransactionRepoModel,
+        TransactionResponse,
     },
 };
 use chrono::Utc;
@@ -130,9 +131,9 @@ pub fn produce_relayer_enabled_payload(
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
 pub enum SolanaWebhookRpcPayload {
-    SignAndSendTransaction(SignAndSendTransactionResult),
-    SignTransaction(SignTransactionResult),
-    TransferTransaction(TransferTransactionResult),
+    SignAndSendTransaction(SolanaSignAndSendTransactionResult),
+    SignTransaction(SolanaSignTransactionResult),
+    TransferTransaction(SolanaTransferTransactionResult),
 }
 
 /// Produces a notification payload for a Solana RPC webhook event
@@ -315,10 +316,11 @@ mod tests {
 
         let notification_id = "test-notification-id";
         let event = "solana_sign_transaction".to_string();
-        let solana_payload = SolanaWebhookRpcPayload::SignTransaction(SignTransactionResult {
-            transaction: EncodedSerializedTransaction::new("test-transaction".to_string()),
-            signature: "test-signature".to_string(),
-        });
+        let solana_payload =
+            SolanaWebhookRpcPayload::SignTransaction(SolanaSignTransactionResult {
+                transaction: EncodedSerializedTransaction::new("test-transaction".to_string()),
+                signature: "test-signature".to_string(),
+            });
 
         let result =
             produce_solana_rpc_webhook_payload(notification_id, event.clone(), solana_payload);

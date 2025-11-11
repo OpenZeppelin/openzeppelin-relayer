@@ -157,7 +157,7 @@ impl<T: TurnkeyServiceTrait> TurnkeySigner<T> {
 }
 
 #[async_trait]
-impl<T: TurnkeyServiceTrait> StellarSignTrait for TurnkeySigner<T> {
+impl<T: TurnkeyServiceTrait + Clone> StellarSignTrait for TurnkeySigner<T> {
     async fn sign_xdr_transaction(
         &self,
         unsigned_xdr: &str,

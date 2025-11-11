@@ -7,7 +7,7 @@ mod submit;
 
 mod status;
 
-mod utils;
+pub mod utils;
 pub use utils::*;
 
 mod lane_gate;
@@ -17,6 +17,7 @@ pub use lane_gate::*;
 pub use crate::domain::transaction::common::is_final_state;
 
 pub mod validation;
+pub use validation::{StellarTransactionValidationError, StellarTransactionValidator};
 
 #[cfg(test)]
 pub mod test_helpers;

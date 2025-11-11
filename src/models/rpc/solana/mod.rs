@@ -82,6 +82,7 @@ impl TryFrom<EncodedSerializedTransaction> for VersionedTransaction {
 // feeEstimate
 #[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
 #[serde(deny_unknown_fields)]
+#[derive(Clone)]
 pub struct FeeEstimateRequestParams {
     pub transaction: EncodedSerializedTransaction,
     pub fee_token: String,
@@ -96,6 +97,7 @@ pub struct FeeEstimateResult {
 // transferTransaction
 #[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
 #[serde(deny_unknown_fields)]
+#[derive(Clone)]
 pub struct TransferTransactionRequestParams {
     pub amount: u64,
     pub token: String,
@@ -115,6 +117,7 @@ pub struct TransferTransactionResult {
 // prepareTransaction
 #[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
 #[serde(deny_unknown_fields)]
+#[derive(Clone)]
 pub struct PrepareTransactionRequestParams {
     pub transaction: EncodedSerializedTransaction,
     pub fee_token: String,
@@ -132,6 +135,7 @@ pub struct PrepareTransactionResult {
 // signTransaction
 #[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
 #[serde(deny_unknown_fields)]
+#[derive(Clone)]
 pub struct SignTransactionRequestParams {
     pub transaction: EncodedSerializedTransaction,
 }
@@ -145,6 +149,7 @@ pub struct SignTransactionResult {
 // signAndSendTransaction
 #[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
 #[serde(deny_unknown_fields)]
+#[derive(Clone)]
 pub struct SignAndSendTransactionRequestParams {
     pub transaction: EncodedSerializedTransaction,
 }
@@ -159,6 +164,7 @@ pub struct SignAndSendTransactionResult {
 // getSupportedTokens
 #[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
 #[serde(deny_unknown_fields)]
+#[derive(Clone)]
 pub struct GetSupportedTokensRequestParams {}
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
@@ -180,6 +186,7 @@ pub struct GetSupportedTokensResult {
 // getFeaturesEnabled
 #[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
 #[serde(deny_unknown_fields)]
+#[derive(Clone)]
 pub struct GetFeaturesEnabledRequestParams {}
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
@@ -213,7 +220,7 @@ impl SolanaRpcMethod {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq, Clone)]
 #[serde(tag = "method", content = "params")]
 #[schema(as = SolanaRpcRequest)]
 pub enum SolanaRpcRequest {

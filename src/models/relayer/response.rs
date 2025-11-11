@@ -14,7 +14,8 @@
 use super::{
     DisabledReason, Relayer, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerNetworkType,
     RelayerRepoModel, RelayerSolanaPolicy, RelayerSolanaSwapConfig, RelayerStellarPolicy,
-    RpcConfig, SolanaAllowedTokensPolicy, SolanaFeePaymentStrategy,
+    RelayerStellarSwapConfig, RpcConfig, SolanaAllowedTokensPolicy, SolanaFeePaymentStrategy,
+    StellarAllowedTokensPolicy, StellarFeePaymentStrategy,
 };
 use crate::constants::{
     DEFAULT_EVM_GAS_LIMIT_ESTIMATION, DEFAULT_EVM_MIN_BALANCE, DEFAULT_SOLANA_MAX_TX_DATA_SIZE,
@@ -347,6 +348,12 @@ fn is_empty_policy(policy: &RelayerNetworkPolicy) -> bool {
             stellar_policy.min_balance.is_none()
                 && stellar_policy.max_fee.is_none()
                 && stellar_policy.timeout_seconds.is_none()
+                && stellar_policy.concurrent_transactions.is_none()
+                && stellar_policy.allowed_tokens.is_none()
+                && stellar_policy.fee_payment_strategy.is_none()
+                && stellar_policy.slippage_percentage.is_none()
+                && stellar_policy.fee_margin_percentage.is_none()
+                && stellar_policy.swap_config.is_none()
         }
     }
 }
@@ -469,6 +476,21 @@ pub struct StellarPolicyResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub concurrent_transactions: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub allowed_tokens: Option<Vec<StellarAllowedTokensPolicy>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub fee_payment_strategy: Option<StellarFeePaymentStrategy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub slippage_percentage: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub fee_margin_percentage: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub swap_config: Option<RelayerStellarSwapConfig>,
 }
 
 impl From<RelayerEvmPolicy> for EvmPolicyResponse {
@@ -513,6 +535,11 @@ impl From<RelayerStellarPolicy> for StellarPolicyResponse {
             max_fee: policy.max_fee,
             timeout_seconds: policy.timeout_seconds,
             concurrent_transactions: policy.concurrent_transactions,
+            allowed_tokens: policy.allowed_tokens,
+            fee_payment_strategy: policy.fee_payment_strategy,
+            slippage_percentage: policy.slippage_percentage,
+            fee_margin_percentage: policy.fee_margin_percentage,
+            swap_config: policy.swap_config,
         }
     }
 }
@@ -523,6 +550,7 @@ mod tests {
     use crate::models::relayer::{
         RelayerEvmPolicy, RelayerSolanaPolicy, RelayerSolanaSwapConfig, RelayerStellarPolicy,
         SolanaAllowedTokensPolicy, SolanaFeePaymentStrategy, SolanaSwapStrategy,
+        StellarAllowedTokensPolicy, StellarFeePaymentStrategy, StellarSwapStrategy,
     };
 
     #[test]
@@ -631,6 +659,11 @@ mod tests {
                 max_fee: Some(100000),
                 timeout_seconds: Some(30),
                 concurrent_transactions: None,
+                allowed_tokens: None,
+                fee_payment_strategy: None,
+                slippage_percentage: None,
+                fee_margin_percentage: None,
+                swap_config: None,
             })),
             "test-signer".to_string(),
             None,
@@ -746,6 +779,11 @@ mod tests {
                     timeout_seconds: None,
                     min_balance: 20000000,
                     concurrent_transactions: None,
+                    allowed_tokens: None,
+                    fee_payment_strategy: None,
+                    slippage_percentage: None,
+                    fee_margin_percentage: None,
+                    swap_config: None,
                 },
             )),
             signer_id: "test-signer".to_string(),
@@ -872,6 +910,11 @@ mod tests {
                     max_fee: Some(100000),
                     timeout_seconds: Some(30),
                     concurrent_transactions: None,
+                    allowed_tokens: None,
+                    fee_payment_strategy: None,
+                    slippage_percentage: None,
+                    fee_margin_percentage: None,
+                    swap_config: None,
                 },
             )),
             signer_id: "test-signer".to_string(),
@@ -1101,8 +1144,21 @@ mod tests {
             policies: RelayerNetworkPolicy::Stellar(RelayerStellarPolicy {
                 max_fee: Some(100000),
                 timeout_seconds: Some(30),
-                min_balance: None, // Some fields can still be None
-                concurrent_transactions: None,
+                min_balance: Some(20000000),
+                concurrent_transactions: Some(true),
+                allowed_tokens: Some(vec![StellarAllowedTokensPolicy::new(
+                    "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".to_string(),
+                    Some(1000000),
+                    None,
+                )]),
+                fee_payment_strategy: Some(StellarFeePaymentStrategy::Relayer),
+                slippage_percentage: Some(0.5),
+                fee_margin_percentage: Some(2.0),
+                swap_config: Some(RelayerStellarSwapConfig {
+                    strategy: Some(StellarSwapStrategy::Soroswap),
+                    cron_schedule: Some("0 0 * * *".to_string()),
+                    min_balance_threshold: Some(10000000),
+                }),
             }),
             signer_id: "test-signer".to_string(),
             notification_id: None,
@@ -1130,6 +1186,26 @@ mod tests {
         );
         assert!(
             serialized.contains("timeout_seconds"),
+            "User-provided Stellar policy values should appear in JSON response"
+        );
+        assert!(
+            serialized.contains("allowed_tokens"),
+            "User-provided Stellar policy values should appear in JSON response"
+        );
+        assert!(
+            serialized.contains("fee_payment_strategy"),
+            "User-provided Stellar policy values should appear in JSON response"
+        );
+        assert!(
+            serialized.contains("slippage_percentage"),
+            "User-provided Stellar policy values should appear in JSON response"
+        );
+        assert!(
+            serialized.contains("fee_margin_percentage"),
+            "User-provided Stellar policy values should appear in JSON response"
+        );
+        assert!(
+            serialized.contains("swap_config"),
             "User-provided Stellar policy values should appear in JSON response"
         );
     }

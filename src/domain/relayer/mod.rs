@@ -50,6 +50,9 @@ pub use solana::*;
 pub use stellar::*;
 pub use util::*;
 
+// Re-export SwapResult from solana module for use in Stellar
+pub use solana::SwapResult;
+
 /// The `Relayer` trait defines the core functionality required for a relayer
 /// in the system. Implementors of this trait are responsible for handling
 /// transaction requests, managing balances, and interacting with the network.
@@ -194,6 +197,55 @@ pub trait SolanaRelayerDexTrait {
     ) -> Result<Vec<SwapResult>, RelayerError>;
 }
 
+/// Subset of methods for Stellar relayer
+#[async_trait]
+#[allow(dead_code)]
+#[cfg_attr(test, automock)]
+pub trait StellarRelayerDexTrait {
+    /// Handles a token swap request.
+    async fn handle_token_swap_request(
+        &self,
+        relayer_id: String,
+    ) -> Result<Vec<SwapResult>, RelayerError>;
+}
+
+/// Gas abstraction trait for relayers that support fee estimation and transaction preparation.
+///
+/// This trait provides a REST-friendly interface for gas abstraction operations,
+/// allowing clients to estimate fees and prepare transactions without using JSON-RPC.
+#[async_trait]
+#[allow(dead_code)]
+#[cfg_attr(test, automock)]
+pub trait GasAbstractionTrait {
+    /// Estimates the fee for a transaction.
+    ///
+    /// # Arguments
+    ///
+    /// * `params` - The fee estimate request parameters containing transaction and fee token.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a `FeeEstimateResult` on success, or a `RelayerError` on failure.
+    async fn estimate_fee(
+        &self,
+        params: crate::models::StellarFeeEstimateRequestParams,
+    ) -> Result<crate::models::StellarFeeEstimateResult, RelayerError>;
+
+    /// Prepares a transaction with fee payments.
+    ///
+    /// # Arguments
+    ///
+    /// * `params` - The prepare transaction request parameters containing transaction and fee token.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a `PrepareTransactionResult` on success, or a `RelayerError` on failure.
+    async fn prepare_transaction(
+        &self,
+        params: crate::models::StellarPrepareTransactionRequestParams,
+    ) -> Result<crate::models::StellarPrepareTransactionResult, RelayerError>;
+}
+
 pub enum NetworkRelayer<
     J: JobProducerTrait + 'static,
     T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
@@ -325,6 +377,74 @@ impl<
 }
 
 #[async_trait]
+impl<
+        J: JobProducerTrait + 'static,
+        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+    > GasAbstractionTrait for NetworkRelayer<J, T, RR, NR, TCR>
+{
+    async fn estimate_fee(
+        &self,
+        params: crate::models::StellarFeeEstimateRequestParams,
+    ) -> Result<crate::models::StellarFeeEstimateResult, RelayerError> {
+        match self {
+            NetworkRelayer::Evm(_) => Err(RelayerError::NotSupported(
+                "Gas abstraction not supported for EVM relayers".to_string(),
+            )),
+            NetworkRelayer::Solana(_) => Err(RelayerError::NotSupported(
+                "Gas abstraction not supported for Solana relayers".to_string(),
+            )),
+            NetworkRelayer::Stellar(relayer) => relayer.estimate_fee(params).await,
+        }
+    }
+
+    async fn prepare_transaction(
+        &self,
+        params: crate::models::StellarPrepareTransactionRequestParams,
+    ) -> Result<crate::models::StellarPrepareTransactionResult, RelayerError> {
+        match self {
+            NetworkRelayer::Evm(_) => Err(RelayerError::NotSupported(
+                "Gas abstraction not supported for EVM relayers".to_string(),
+            )),
+            NetworkRelayer::Solana(_) => Err(RelayerError::NotSupported(
+                "Gas abstraction not supported for Solana relayers".to_string(),
+            )),
+            NetworkRelayer::Stellar(relayer) => relayer.prepare_transaction(params).await,
+        }
+    }
+}
+
+impl<
+        J: JobProducerTrait + 'static,
+        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+    > NetworkRelayer<J, T, RR, NR, TCR>
+{
+    /// Handles a token swap request for supported networks (Solana and Stellar).
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a `Vec<SwapResult>` on success, or a `RelayerError` on failure.
+    /// Returns `NotSupported` error for EVM networks.
+    pub async fn handle_token_swap_request(
+        &self,
+        relayer_id: String,
+    ) -> Result<Vec<SwapResult>, RelayerError> {
+        match self {
+            NetworkRelayer::Evm(_) => Err(RelayerError::NotSupported(
+                "Token swap not supported for EVM relayers".to_string(),
+            )),
+            NetworkRelayer::Solana(relayer) => relayer.handle_token_swap_request(relayer_id).await,
+            NetworkRelayer::Stellar(relayer) => relayer.handle_token_swap_request(relayer_id).await,
+        }
+    }
+}
+
+#[async_trait]
 pub trait RelayerFactoryTrait<
     J: JobProducerTrait + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
@@ -428,7 +548,7 @@ impl<
                         ))
                     })?;
 
-                let network = StellarNetwork::try_from(network_repo)?;
+                let network = StellarNetwork::try_from(network_repo.clone())?;
 
                 let stellar_provider =
                     get_network_provider(&network, relayer.custom_rpc_urls.clone())
@@ -441,6 +561,31 @@ impl<
                     relayer.address.clone(),
                     state.transaction_counter_store(),
                 ));
+
+                // Create DEX service for swap operations
+                let horizon_url = network
+                    .rpc_urls
+                    .first()
+                    .ok_or_else(|| {
+                        RelayerError::NetworkConfiguration("No RPC URL configured".to_string())
+                    })?
+                    .clone();
+                let horizon_base = if horizon_url.ends_with("/rpc") {
+                    horizon_url
+                        .strip_suffix("/rpc")
+                        .unwrap_or(&horizon_url)
+                        .to_string()
+                } else {
+                    horizon_url
+                };
+                let dex_service = Arc::new(
+                    crate::services::stellar_dex::PathsService::new(horizon_base).map_err(|e| {
+                        RelayerError::NetworkConfiguration(format!(
+                            "Failed to create DEX service: {}",
+                            e
+                        ))
+                    })?,
+                );
 
                 let relayer = DefaultStellarRelayer::<J, TR, NR, RR, TCR>::new(
                     relayer,
