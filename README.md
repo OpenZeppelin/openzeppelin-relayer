@@ -514,7 +514,7 @@ docker compose logs -f
 
 - You can directly make changes to the specific files and raise a PR on this repo as well as on [docs](https://github.com/OpenZeppelin/docs) repo for the content that is modified.
 
-- To generate technical rust documentation locally, run the following command
+- To generate technical rust documentation locally, run the following command;
 
   ```sh
   cargo make rust-docs
