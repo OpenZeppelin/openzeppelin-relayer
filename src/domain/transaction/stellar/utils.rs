@@ -4,9 +4,14 @@ use crate::models::{AssetSpec, OperationSpec, RelayerError};
 use crate::services::provider::StellarProviderTrait;
 use chrono::{DateTime, Utc};
 use soroban_rs::xdr::{
-    Limits, Operation, Preconditions, ReadXdr, TimeBounds, TimePoint, TransactionEnvelope, VecM,
+    AccountId, AlphaNum12, AlphaNum4, Asset, AssetCode12, AssetCode4, ContractDataEntry,
+    ContractId, LedgerEntry, LedgerEntryData, LedgerKey, LedgerKeyContractData, Limits, Operation,
+    Preconditions, PublicKey as XdrPublicKey, ReadXdr, ScAddress, ScVal, TimeBounds, TimePoint,
+    TransactionEnvelope, TrustLineEntry, TrustLineEntryExt, Uint256, VecM,
 };
-use tracing::info;
+use std::str::FromStr;
+use stellar_strkey::ed25519::PublicKey;
+use tracing::{info, trace};
 
 /// Returns true if any operation needs simulation (contract invocation, creation, or wasm upload).
 pub fn needs_simulation(operations: &[OperationSpec]) -> bool {
@@ -348,6 +353,338 @@ pub fn set_time_bounds(
         }
     }
     Ok(())
+}
+
+/// Fetch token balance for a given account and asset identifier.
+///
+/// Supports:
+/// - Native XLM: Returns account balance directly
+/// - Traditional assets (Credit4/Credit12): Queries trustline balance via LedgerKey::Trustline
+/// - Contract tokens: Queries contract data balance via LedgerKey::ContractData
+///
+/// # Arguments
+///
+/// * `provider` - Stellar provider for querying ledger entries
+/// * `account_id` - Account address to check balance for
+/// * `asset_id` - Asset identifier:
+///   - "native" or "" for XLM
+///   - "CODE:ISSUER" for traditional assets (e.g., "USDC:GA5Z...")
+///   - Contract address (starts with "C", 56 chars) for Soroban contract tokens
+///
+/// # Returns
+///
+/// Balance in stroops (or token's smallest unit) as u64, or error if balance cannot be fetched
+pub async fn get_token_balance<P>(
+    provider: &P,
+    account_id: &str,
+    asset_id: &str,
+) -> Result<u64, RelayerError>
+where
+    P: StellarProviderTrait + Send + Sync,
+{
+    // Handle native XLM - accept both "native" and "XLM" for UX
+    if asset_id == "native" || asset_id == "XLM" {
+        let account_entry = provider.get_account(account_id).await.map_err(|e| {
+            RelayerError::ProviderError(format!("Failed to fetch account for balance: {}", e))
+        })?;
+        return Ok(account_entry.balance as u64);
+    }
+
+    // Check if it's a contract address (starts with 'C' and is 56 characters)
+    if asset_id.starts_with('C') && asset_id.len() == 56 {
+        return get_contract_token_balance(provider, account_id, asset_id).await;
+    }
+
+    // Otherwise, treat as traditional asset (CODE:ISSUER format)
+    get_asset_trustline_balance(provider, account_id, asset_id).await
+}
+
+/// Fetch balance for a traditional Stellar asset (Credit4/Credit12) via trustline
+async fn get_asset_trustline_balance<P>(
+    provider: &P,
+    account_id: &str,
+    asset_id: &str,
+) -> Result<u64, RelayerError>
+where
+    P: StellarProviderTrait + Send + Sync,
+{
+    // Parse asset identifier (format: "CODE:ISSUER")
+    let (code, issuer) = asset_id.split_once(':').ok_or_else(|| {
+        RelayerError::Internal(format!(
+            "Invalid asset identifier format. Expected 'CODE:ISSUER', got: {}",
+            asset_id
+        ))
+    })?;
+
+    // Parse issuer public key
+    let issuer_pk = PublicKey::from_str(issuer).map_err(|e| {
+        RelayerError::Internal(format!("Invalid issuer public key '{}': {}", issuer, e))
+    })?;
+
+    // Convert to XDR types
+    let uint256 = Uint256(issuer_pk.0);
+    let xdr_pk = XdrPublicKey::PublicKeyTypeEd25519(uint256);
+    let issuer_account_id = AccountId(xdr_pk);
+
+    // Parse account ID
+    let account_pk = PublicKey::from_str(account_id).map_err(|e| {
+        RelayerError::Internal(format!(
+            "Invalid account public key '{}': {}",
+            account_id, e
+        ))
+    })?;
+    let account_uint256 = Uint256(account_pk.0);
+    let account_xdr_pk = XdrPublicKey::PublicKeyTypeEd25519(account_uint256);
+    let account_xdr_id = AccountId(account_xdr_pk);
+
+    // Create Asset XDR based on code length
+    let asset = if code.len() <= 4 {
+        let mut buf = [0u8; 4];
+        buf[..code.len()].copy_from_slice(code.as_bytes());
+        Asset::CreditAlphanum4(AlphaNum4 {
+            asset_code: AssetCode4(buf),
+            issuer: issuer_account_id,
+        })
+    } else if code.len() <= 12 {
+        let mut buf = [0u8; 12];
+        buf[..code.len()].copy_from_slice(code.as_bytes());
+        Asset::CreditAlphanum12(AlphaNum12 {
+            asset_code: AssetCode12(buf),
+            issuer: issuer_account_id,
+        })
+    } else {
+        return Err(RelayerError::Internal(format!(
+            "Asset code too long (max 12 characters): {}",
+            code
+        )));
+    };
+
+    // Construct LedgerKey::Trustline
+    // Note: LedgerKeyTrustLine uses TrustLineAsset which wraps Asset
+    // Native assets are already handled above, so this is unreachable for Native
+    let ledger_key = LedgerKey::Trustline(soroban_rs::xdr::LedgerKeyTrustLine {
+        account_id: account_xdr_id,
+        asset: match asset {
+            Asset::CreditAlphanum4(alpha4) => {
+                soroban_rs::xdr::TrustLineAsset::CreditAlphanum4(alpha4)
+            }
+            Asset::CreditAlphanum12(alpha12) => {
+                soroban_rs::xdr::TrustLineAsset::CreditAlphanum12(alpha12)
+            }
+            Asset::Native => {
+                // This should never happen as native is handled earlier
+                return Err(RelayerError::Internal(
+                    "Native asset should be handled before trustline query".to_string(),
+                ));
+            }
+        },
+    });
+
+    // Query ledger entry
+    let ledger_entries = provider
+        .get_ledger_entries(&[ledger_key])
+        .await
+        .map_err(|e| {
+            RelayerError::ProviderError(format!(
+                "Failed to query trustline for asset {}: {}",
+                asset_id, e
+            ))
+        })?;
+
+    // Extract balance from trustline entry
+    let entries = ledger_entries.entries.ok_or_else(|| {
+        RelayerError::ValidationError(format!(
+            "No trustline found for asset {} on account {}",
+            asset_id, account_id
+        ))
+    })?;
+
+    if entries.is_empty() {
+        return Err(RelayerError::ValidationError(format!(
+            "No trustline found for asset {} on account {}",
+            asset_id, account_id
+        )));
+    }
+
+    let entry_result = &entries[0];
+    // Parse XDR string to LedgerEntry
+    let entry = LedgerEntry::from_xdr_base64(&entry_result.xdr, Limits::none()).map_err(|e| {
+        RelayerError::Internal(format!("Failed to parse trustline ledger entry XDR: {}", e))
+    })?;
+
+    match &entry.data {
+        LedgerEntryData::Trustline(TrustLineEntry {
+            balance,
+            ext: TrustLineEntryExt::V0,
+            ..
+        }) => Ok(*balance as u64),
+        LedgerEntryData::Trustline(_) => Err(RelayerError::Internal(
+            "Unsupported trustline entry version".to_string(),
+        )),
+        _ => Err(RelayerError::Internal(
+            "Unexpected ledger entry type for trustline query".to_string(),
+        )),
+    }
+}
+
+/// Fetch balance for a Soroban contract token via ContractData
+async fn get_contract_token_balance<P>(
+    provider: &P,
+    account_id: &str,
+    contract_address: &str,
+) -> Result<u64, RelayerError>
+where
+    P: StellarProviderTrait + Send + Sync,
+{
+    // Parse contract address using ContractId::from_str to ensure valid Strkey encoding
+    let contract_id = ContractId::from_str(contract_address).map_err(|e| {
+        RelayerError::Internal(format!(
+            "Invalid contract address '{}': {}",
+            contract_address, e
+        ))
+    })?;
+    let contract_hash = contract_id.0;
+
+    // Parse account ID
+    let account_pk = PublicKey::from_str(account_id).map_err(|e| {
+        RelayerError::Internal(format!(
+            "Invalid account public key '{}': {}",
+            account_id, e
+        ))
+    })?;
+    let account_uint256 = Uint256(account_pk.0);
+    let account_xdr_pk = XdrPublicKey::PublicKeyTypeEd25519(account_uint256);
+    let account_xdr_id = AccountId(account_xdr_pk);
+
+    // Create ScAddress for the account
+    let account_sc_address = ScAddress::Account(account_xdr_id);
+
+    // Create balance key (Soroban token standard uses "Balance" as the key)
+    // The key format is: ScVal::Vec with [ScVal::Symbol("Balance"), ScVal::Address(account)]
+    // ScVec requires VecM with u32::MAX capacity (though actual XDR limit is 9223)
+    let balance_vec_items: Vec<ScVal> = vec![
+        ScVal::Symbol("Balance".try_into().map_err(|e| {
+            RelayerError::Internal(format!("Failed to create balance symbol: {:?}", e))
+        })?),
+        ScVal::Address(account_sc_address.clone()),
+    ];
+    // Convert to VecM - ScVec type requires u32::MAX, but we only have 2 items (safe)
+    let balance_vec: VecM<ScVal, { u32::MAX }> =
+        VecM::try_from(balance_vec_items).map_err(|e| {
+            RelayerError::Internal(format!("Failed to create balance key vector: {:?}", e))
+        })?;
+    let balance_key = ScVal::Vec(Some(soroban_rs::xdr::ScVec(balance_vec)));
+
+    // Construct LedgerKey::ContractData
+    // Try Persistent first (most common), fallback to Temporary if not found
+    let contract_address_sc =
+        soroban_rs::xdr::ScAddress::Contract(soroban_rs::xdr::ContractId(contract_hash));
+
+    let mut ledger_key = LedgerKey::ContractData(LedgerKeyContractData {
+        contract: contract_address_sc.clone(),
+        key: balance_key.clone(),
+        durability: soroban_rs::xdr::ContractDataDurability::Persistent,
+    });
+
+    // Query ledger entry with Persistent durability
+    let mut ledger_entries = provider
+        .get_ledger_entries(&[ledger_key.clone()])
+        .await
+        .map_err(|e| {
+            RelayerError::ProviderError(format!(
+                "Failed to query contract balance for contract {}: {}",
+                contract_address, e
+            ))
+        })?;
+
+    // If not found, try Temporary durability (some test tokens use temporary storage)
+    if ledger_entries
+        .entries
+        .as_ref()
+        .map(|e| e.is_empty())
+        .unwrap_or(true)
+    {
+        ledger_key = LedgerKey::ContractData(LedgerKeyContractData {
+            contract: contract_address_sc,
+            key: balance_key,
+            durability: soroban_rs::xdr::ContractDataDurability::Temporary,
+        });
+        ledger_entries = provider
+            .get_ledger_entries(&[ledger_key])
+            .await
+            .map_err(|e| {
+                RelayerError::ProviderError(format!(
+                    "Failed to query contract balance (temporary) for contract {}: {}",
+                    contract_address, e
+                ))
+            })?;
+    }
+
+    // Extract balance from contract data entry
+    let entries = match ledger_entries.entries {
+        Some(entries) if !entries.is_empty() => entries,
+        _ => {
+            // No balance entry means balance is 0
+            trace!(
+                "No balance entry found for contract {} on account {}, assuming zero balance",
+                contract_address,
+                account_id
+            );
+            return Ok(0);
+        }
+    };
+
+    let entry_result = &entries[0];
+    // Parse XDR string to LedgerEntry
+    let entry = LedgerEntry::from_xdr_base64(&entry_result.xdr, Limits::none()).map_err(|e| {
+        RelayerError::Internal(format!(
+            "Failed to parse contract data ledger entry XDR: {}",
+            e
+        ))
+    })?;
+
+    match &entry.data {
+        LedgerEntryData::ContractData(ContractDataEntry { val, .. }) => {
+            // Extract balance from ScVal - support multiple types for robustness
+            match val {
+                ScVal::I128(parts) => {
+                    // Most tokens use i128, check if it fits in u64
+                    if parts.hi != 0 {
+                        return Err(RelayerError::Internal(format!(
+                            "Balance too large (i128 hi={}, lo={}) to fit in u64",
+                            parts.hi, parts.lo
+                        )));
+                    }
+                    let lo = parts.lo as i64;
+                    if lo < 0 {
+                        return Err(RelayerError::Internal(format!(
+                            "Negative balance not allowed: i128 lo={}",
+                            parts.lo
+                        )));
+                    }
+                    Ok(lo as u64)
+                }
+                ScVal::U64(n) => Ok(*n),
+                ScVal::I64(n) => {
+                    if *n < 0 {
+                        Err(RelayerError::Internal(format!(
+                            "Negative balance not allowed: i64={}",
+                            n
+                        )))
+                    } else {
+                        Ok(*n as u64)
+                    }
+                }
+                _ => Err(RelayerError::Internal(format!(
+                    "Unexpected balance value type in contract data: {:?}. Expected I128, U64, or I64",
+                    val
+                ))),
+            }
+        }
+        _ => Err(RelayerError::Internal(
+            "Unexpected ledger entry type for contract data query".to_string(),
+        )),
+    }
 }
 
 // ============================================================================

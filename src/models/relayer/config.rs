@@ -160,13 +160,7 @@ pub struct StellarAllowedTokenSwapConfig {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 pub struct StellarAllowedToken {
-    pub asset_id: String,
-    /// Token code. Optional (None for native XLM).
-    pub code: Option<String>,
-    /// Token issuer. Optional (None for native XLM).
-    pub issuer: Option<String>,
-    /// Decimals for the token. Optional.
-    pub decimals: Option<u8>,
+    pub asset: String,
     /// Maximum supported token fee (in stroops) for a transaction. Optional.
     pub max_allowed_fee: Option<u64>,
     /// Swap configuration for the token. Optional.
@@ -176,7 +170,7 @@ pub struct StellarAllowedToken {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ConfigFileRelayerStellarSwapStrategy {
-    Paths,
+    OrderBook,
     Soroswap,
 }
 
@@ -473,8 +467,8 @@ fn convert_config_policies_to_domain(
             let swap_config = if let Some(config_swap) = stellar_policy.swap_config {
                 Some(super::RelayerStellarSwapConfig {
                     strategy: config_swap.strategy.map(|s| match s {
-                        ConfigFileRelayerStellarSwapStrategy::Paths => {
-                            super::StellarSwapStrategy::Paths
+                        ConfigFileRelayerStellarSwapStrategy::OrderBook => {
+                            super::StellarSwapStrategy::OrderBook
                         }
                         ConfigFileRelayerStellarSwapStrategy::Soroswap => {
                             super::StellarSwapStrategy::Soroswap
@@ -496,10 +490,8 @@ fn convert_config_policies_to_domain(
                     tokens
                         .into_iter()
                         .map(|t| super::StellarAllowedTokensPolicy {
-                            asset_id: t.asset_id,
-                            code: t.code,
-                            issuer: t.issuer,
-                            decimals: t.decimals,
+                            asset: t.asset,
+                            metadata: None,
                             max_allowed_fee: t.max_allowed_fee,
                             swap_config: t.swap_config.map(|sc| {
                                 super::StellarAllowedTokensSwapConfig {

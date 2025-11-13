@@ -1847,6 +1847,7 @@ mod tests {
                     tags: Some(vec!["mainnet".to_string()]),
                 },
                 passphrase: Some("Public Global Stellar Network ; September 2015".to_string()),
+                horizon_url: Some("https://horizon.stellar.org".to_string()),
             }),
         };
 
@@ -2106,6 +2107,7 @@ mod tests {
                 tags: None,
             },
             passphrase: Some("Test SDF Network ; September 2015".to_string()),
+            horizon_url: Some("https://horizon-testnet.stellar.org".to_string()),
         });
 
         let network_model = NetworkRepoModel {

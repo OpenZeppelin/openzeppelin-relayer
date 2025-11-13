@@ -510,20 +510,30 @@ pub struct StellarAllowedTokensSwapConfig {
     pub retain_min_amount: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum StellarTokenKind {
+    Native,
+    Classic { code: String, issuer: String },
+    Contract { contract_id: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StellarTokenMetadata {
+    pub kind: StellarTokenKind,
+    pub decimals: u32,
+    pub canonical_asset_id: String,
+}
+
 /// Configuration for allowed token handling on Stellar
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StellarAllowedTokensPolicy {
-    pub asset_id: String,
+    pub asset: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
-    pub code: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(nullable = false)]
-    pub issuer: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(nullable = false)]
-    pub decimals: Option<u8>,
+    pub metadata: Option<StellarTokenMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub max_allowed_fee: Option<u64>,
@@ -535,15 +545,14 @@ pub struct StellarAllowedTokensPolicy {
 impl StellarAllowedTokensPolicy {
     /// Create a new AllowedToken with required parameters
     pub fn new(
-        asset_id: String,
+        asset: String,
+        metadata: Option<StellarTokenMetadata>,
         max_allowed_fee: Option<u64>,
         swap_config: Option<StellarAllowedTokensSwapConfig>,
     ) -> Self {
         Self {
-            asset_id,
-            code: None,
-            issuer: None,
-            decimals: None,
+            asset,
+            metadata,
             max_allowed_fee,
             swap_config,
         }
@@ -569,8 +578,8 @@ pub enum StellarFeePaymentStrategy {
 #[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum StellarSwapStrategy {
-    /// Use Stellar native paths (Horizon /paths/strict-receive endpoint)
-    Paths,
+    /// Use Stellar Horizon order book API (/order_book endpoint)
+    OrderBook,
     /// Use Soroswap DEX (future implementation)
     Soroswap,
 }
@@ -623,18 +632,21 @@ impl RelayerStellarPolicy {
     }
 
     /// Get allowed token entry by asset identifier
-    pub fn get_allowed_token_entry(&self, asset_id: &str) -> Option<StellarAllowedTokensPolicy> {
+    pub fn get_allowed_token_entry(&self, asset: &str) -> Option<StellarAllowedTokensPolicy> {
         self.allowed_tokens
             .clone()
             .unwrap_or_default()
             .into_iter()
-            .find(|entry| entry.asset_id == asset_id)
+            .find(|entry| entry.asset == asset)
     }
 
     /// Get allowed token decimals by asset identifier
-    pub fn get_allowed_token_decimals(&self, asset_id: &str) -> Option<u8> {
-        self.get_allowed_token_entry(asset_id)
-            .and_then(|entry| entry.decimals)
+    pub fn get_allowed_token_decimals(&self, asset: &str) -> Option<u8> {
+        self.get_allowed_token_entry(asset).and_then(|entry| {
+            entry
+                .metadata
+                .and_then(|metadata| u8::try_from(metadata.decimals).ok())
+        })
     }
 
     /// Get swap configuration for this policy

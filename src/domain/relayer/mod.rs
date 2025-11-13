@@ -25,17 +25,14 @@ use crate::{
         GaslessTransactionBuildResponse, GaslessTransactionQuoteResponse, JsonRpcRequest,
         JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest, NetworkRpcResult,
         NetworkTransactionRequest, NetworkType, NotificationRepoModel, RelayerError,
-        RelayerRepoModel, RelayerStatus, SignerRepoModel, StellarNetwork, TransactionError,
-        TransactionRepoModel,
+        RelayerRepoModel, RelayerStatus, SignerRepoModel, TransactionError, TransactionRepoModel,
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
         Repository, TransactionCounterTrait, TransactionRepository,
     },
     services::{
-        provider::get_network_provider,
-        signer::{EvmSignerFactory, StellarSignerFactory},
-        TransactionCounterService,
+        provider::get_network_provider, signer::EvmSignerFactory, TransactionCounterService,
     },
 };
 
@@ -555,72 +552,17 @@ impl<
                 Ok(NetworkRelayer::Solana(solana_relayer))
             }
             NetworkType::Stellar => {
-                let network_repo = state
-                    .network_repository()
-                    .get_by_name(NetworkType::Stellar, &relayer.network)
-                    .await
-                    .ok()
-                    .flatten()
-                    .ok_or_else(|| {
-                        RelayerError::NetworkConfiguration(format!(
-                            "Network {} not found",
-                            relayer.network
-                        ))
-                    })?;
-
-                let network = StellarNetwork::try_from(network_repo.clone())?;
-
-                let stellar_provider =
-                    get_network_provider(&network, relayer.custom_rpc_urls.clone())
-                        .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
-
-                let signer_service = StellarSignerFactory::create_stellar_signer(&signer.into())?;
-
-                let transaction_counter_service = Arc::new(TransactionCounterService::new(
-                    relayer.id.clone(),
-                    relayer.address.clone(),
-                    state.transaction_counter_store(),
-                ));
-
-                // Create DEX service for swap operations
-                let horizon_url = network
-                    .rpc_urls
-                    .first()
-                    .ok_or_else(|| {
-                        RelayerError::NetworkConfiguration("No RPC URL configured".to_string())
-                    })?
-                    .clone();
-                let horizon_base = if horizon_url.ends_with("/rpc") {
-                    horizon_url
-                        .strip_suffix("/rpc")
-                        .unwrap_or(&horizon_url)
-                        .to_string()
-                } else {
-                    horizon_url
-                };
-                let dex_service = Arc::new(
-                    crate::services::stellar_dex::PathsService::new(horizon_base).map_err(|e| {
-                        RelayerError::NetworkConfiguration(format!(
-                            "Failed to create DEX service: {}",
-                            e
-                        ))
-                    })?,
-                );
-
-                let relayer = DefaultStellarRelayer::<J, TR, NR, RR, TCR>::new(
+                let stellar_relayer = create_stellar_relayer(
                     relayer,
-                    signer_service,
-                    stellar_provider,
-                    stellar::StellarRelayerDependencies::new(
-                        state.relayer_repository(),
-                        state.network_repository(),
-                        state.transaction_repository(),
-                        transaction_counter_service,
-                        state.job_producer(),
-                    ),
+                    signer,
+                    state.relayer_repository(),
+                    state.network_repository(),
+                    state.transaction_repository(),
+                    state.job_producer(),
+                    state.transaction_counter_store(),
                 )
                 .await?;
-                Ok(NetworkRelayer::Stellar(relayer))
+                Ok(NetworkRelayer::Stellar(stellar_relayer))
             }
         }
     }

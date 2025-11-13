@@ -6,7 +6,7 @@ use soroban_rs::xdr::Hash;
 
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub struct StellarNetwork {
-    /// Unique network identifier (e.g., "mainnet", "sepolia", "custom-devnet").
+    /// Unique network identifier (e.g., "mainnet", "devnet", "custom-devnet").
     pub network: String,
     /// List of RPC endpoint URLs for connecting to the network.
     pub rpc_urls: Vec<String>,
@@ -20,6 +20,8 @@ pub struct StellarNetwork {
     pub tags: Vec<String>,
     /// The passphrase for the Stellar network.
     pub passphrase: String,
+    /// The Horizon API URL for the Stellar network.
+    pub horizon_url: Option<String>,
 }
 
 impl TryFrom<NetworkRepoModel> for StellarNetwork {
@@ -66,6 +68,7 @@ impl TryFrom<NetworkRepoModel> for StellarNetwork {
                     is_testnet: common.is_testnet.unwrap_or(false),
                     tags: common.tags.clone().unwrap_or_default(),
                     passphrase,
+                    horizon_url: stellar_config.horizon_url.clone(),
                 })
             }
             _ => Err(RepositoryError::InvalidData(format!(
@@ -101,35 +104,5 @@ impl StellarNetwork {
 
     pub fn is_testnet(&self) -> bool {
         self.is_testnet
-    }
-
-    /// Gets the Horizon base URL from the first RPC URL.
-    ///
-    /// Strips "/rpc" suffix if present, as Horizon API endpoints are at the base URL.
-    ///
-    /// # Returns
-    ///
-    /// The Horizon base URL, or an error if no RPC URLs are configured.
-    pub fn horizon_base_url(&self) -> Result<String, RepositoryError> {
-        let horizon_url = self
-            .rpc_urls
-            .first()
-            .ok_or_else(|| {
-                RepositoryError::InvalidData(
-                    "No RPC URL configured for Stellar network".to_string(),
-                )
-            })?
-            .clone();
-
-        let horizon_base = if horizon_url.ends_with("/rpc") {
-            horizon_url
-                .strip_suffix("/rpc")
-                .unwrap_or(&horizon_url)
-                .to_string()
-        } else {
-            horizon_url
-        };
-
-        Ok(horizon_base)
     }
 }

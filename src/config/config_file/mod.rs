@@ -1314,6 +1314,7 @@ mod tests {
                 tags: Some(vec!["test".to_string()]),
             },
             passphrase: Some("Test SDF Network ; September 2015".to_string()),
+            horizon_url: Some("https://horizon-testnet.stellar.org".to_string()),
         });
 
         let mut networks = config.networks.networks;
@@ -1355,6 +1356,7 @@ mod tests {
                 tags: Some(vec!["stellar".to_string()]),
             },
             passphrase: Some("Test Network ; September 2015".to_string()),
+            horizon_url: Some("https://horizon-testnet.stellar.org".to_string()),
         });
 
         // Get the existing networks and add new ones

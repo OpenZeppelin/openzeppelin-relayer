@@ -1001,6 +1001,7 @@ mod tests {
                     tags: None,
                 },
                 passphrase: Some("Test Network ; September 2015".to_string()),
+                horizon_url: Some("https://horizon-testnet.stellar.org".to_string()),
             }),
         }
     }

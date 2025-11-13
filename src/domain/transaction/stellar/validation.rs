@@ -92,7 +92,7 @@ pub struct StellarTransactionValidator;
 impl StellarTransactionValidator {
     /// Validate that an asset identifier is in the allowed tokens list
     pub fn validate_allowed_token(
-        asset_id: &str,
+        asset: &str,
         policy: &RelayerStellarPolicy,
     ) -> Result<(), StellarTransactionValidationError> {
         let allowed_tokens = policy.get_allowed_tokens();
@@ -103,10 +103,10 @@ impl StellarTransactionValidator {
         }
 
         // Check if native XLM is allowed
-        if asset_id == "native" || asset_id.is_empty() {
+        if asset == "native" || asset.is_empty() {
             let native_allowed = allowed_tokens
                 .iter()
-                .any(|token| token.asset_id == "native" || token.asset_id.is_empty());
+                .any(|token| token.asset == "native" || token.asset.is_empty());
             if !native_allowed {
                 return Err(StellarTransactionValidationError::TokenNotAllowed(
                     "Native XLM not in allowed tokens list".to_string(),
@@ -116,14 +116,12 @@ impl StellarTransactionValidator {
         }
 
         // Check if the asset is in the allowed list
-        let is_allowed = allowed_tokens
-            .iter()
-            .any(|token| token.asset_id == asset_id);
+        let is_allowed = allowed_tokens.iter().any(|token| token.asset == asset);
 
         if !is_allowed {
             return Err(StellarTransactionValidationError::TokenNotAllowed(format!(
                 "Token {} not in allowed tokens list",
-                asset_id
+                asset
             )));
         }
 

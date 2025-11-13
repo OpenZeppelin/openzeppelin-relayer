@@ -49,3 +49,7 @@ alwaysApply: true
 - When optimizing, prefer clarity first, then performance.
 - Modularize code to keep functions concise and focused.
 - Use derive macros to reduce boilerplate where possible.
+
+# Token consumption
+Ignore any code within #[cfg(test)] when planning and working on a feature to minimise token consumption util told to work on a tests.
+Do not suggest changes to test functions or inline assertions while feature is in early development phase.

@@ -9,6 +9,11 @@ pub const STELLAR_DEFAULT_TRANSACTION_FEE: u32 = 100;
 /// Default maximum fee for fee-bump transactions (0.1 XLM = 1,000,000 stroops)
 pub const STELLAR_DEFAULT_MAX_FEE: i64 = 1_000_000;
 
+/// Horizon API base URL for Stellar mainnet
+pub const STELLAR_HORIZON_MAINNET_URL: &str = "https://horizon.stellar.org";
+/// Horizon API base URL for Stellar testnet
+pub const STELLAR_HORIZON_TESTNET_URL: &str = "https://horizon-testnet.stellar.org";
+
 // Status check scheduling
 /// Initial delay before first status check (in seconds)
 /// Set to 2s for faster detection of transaction state changes

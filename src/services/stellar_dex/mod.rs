@@ -2,8 +2,8 @@
 //! Provides quote conversion services for Stellar tokens to XLM
 //! Supports native Stellar paths API and optional Soroswap integration
 
-mod paths_service;
-pub use paths_service::PathsService;
+mod order_book_service;
+pub use order_book_service::OrderBookService;
 
 use async_trait::async_trait;
 #[cfg(test)]
@@ -98,5 +98,5 @@ pub trait StellarDexServiceTrait: Send + Sync {
     ) -> Result<StellarQuoteResponse, StellarDexServiceError>;
 }
 
-/// Default implementation using Stellar Paths service
-pub type DefaultStellarDexService = PathsService;
+/// Default implementation using Stellar Order Book service
+pub type DefaultStellarDexService = OrderBookService;

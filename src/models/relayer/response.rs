@@ -547,10 +547,13 @@ impl From<RelayerStellarPolicy> for StellarPolicyResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::relayer::{
-        RelayerEvmPolicy, RelayerSolanaPolicy, RelayerSolanaSwapConfig, RelayerStellarPolicy,
-        SolanaAllowedTokensPolicy, SolanaFeePaymentStrategy, SolanaSwapStrategy,
-        StellarAllowedTokensPolicy, StellarFeePaymentStrategy, StellarSwapStrategy,
+    use crate::models::{
+        relayer::{
+            RelayerEvmPolicy, RelayerSolanaPolicy, RelayerSolanaSwapConfig, RelayerStellarPolicy,
+            SolanaAllowedTokensPolicy, SolanaFeePaymentStrategy, SolanaSwapStrategy,
+            StellarAllowedTokensPolicy, StellarFeePaymentStrategy, StellarSwapStrategy,
+        },
+        StellarTokenKind, StellarTokenMetadata,
     };
 
     #[test]
@@ -1148,7 +1151,18 @@ mod tests {
                 concurrent_transactions: Some(true),
                 allowed_tokens: Some(vec![StellarAllowedTokensPolicy::new(
                     "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".to_string(),
-                    Some(1000000),
+                    Some(StellarTokenMetadata {
+                        kind: StellarTokenKind::Classic {
+                            code: "USDC".to_string(),
+                            issuer: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+                                .to_string(),
+                        },
+                        decimals: 6,
+                        canonical_asset_id:
+                            "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+                                .to_string(),
+                    }),
+                    None,
                     None,
                 )]),
                 fee_payment_strategy: Some(StellarFeePaymentStrategy::Relayer),

@@ -4,9 +4,13 @@ pub use stellar_relayer::*;
 pub mod xdr_utils;
 pub use xdr_utils::*;
 
+mod dex;
+pub use dex::*;
+
 use std::sync::Arc;
 
 use crate::{
+    constants::{STELLAR_HORIZON_MAINNET_URL, STELLAR_HORIZON_TESTNET_URL},
     jobs::JobProducerTrait,
     models::{
         NetworkRepoModel, NetworkType, RelayerError, RelayerRepoModel, SignerRepoModel,
@@ -17,7 +21,8 @@ use crate::{
         TransactionRepository,
     },
     services::{
-        provider::get_network_provider, signer::StellarSignerFactory, TransactionCounterService,
+        provider::get_network_provider, signer::StellarSignerFactory, OrderBookService,
+        TransactionCounterService,
     },
 };
 
@@ -56,25 +61,20 @@ pub async fn create_stellar_relayer<
         transaction_counter_store,
     ));
 
-    // Create DEX service for swap operations
-    let horizon_url = network
-        .rpc_urls
-        .first()
-        .ok_or_else(|| RelayerError::NetworkConfiguration("No RPC URL configured".to_string()))?
-        .clone();
-    let horizon_base = if horizon_url.ends_with("/rpc") {
-        horizon_url
-            .strip_suffix("/rpc")
-            .unwrap_or(&horizon_url)
-            .to_string()
-    } else {
-        horizon_url
-    };
-    let dex_service = Arc::new(
-        crate::services::stellar_dex::PathsService::new(horizon_base).map_err(|e| {
-            RelayerError::NetworkConfiguration(format!("Failed to create DEX service: {}", e))
-        })?,
-    );
+    // Create DEX service for swap operations using Horizon API
+    let horizon_url = network.horizon_url.clone().unwrap_or_else(|| {
+        if network.is_testnet() {
+            STELLAR_HORIZON_TESTNET_URL.to_string()
+        } else {
+            STELLAR_HORIZON_MAINNET_URL.to_string()
+        }
+    });
+    let order_book_service = Arc::new(OrderBookService::new(horizon_url).map_err(|e| {
+        RelayerError::NetworkConfiguration(format!("Failed to create DEX service: {}", e))
+    })?);
+
+    // Create network DEX strategy based on relayer configuration
+    let dex_service = create_stellar_network_dex(&relayer, order_book_service.clone())?;
 
     let relayer = DefaultStellarRelayer::<J, TR, NR, RR, TCR>::new(
         relayer,
@@ -87,6 +87,7 @@ pub async fn create_stellar_relayer<
             transaction_counter_service,
             job_producer,
         ),
+        Arc::new(dex_service),
     )
     .await?;
 
