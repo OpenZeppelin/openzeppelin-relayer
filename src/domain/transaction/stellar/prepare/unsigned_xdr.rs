@@ -129,8 +129,8 @@ mod tests {
         services::provider::ProviderError,
     };
     use soroban_rs::xdr::{
-        BytesM, Memo, MuxedAccount, Operation, OperationBody, PaymentOp, Preconditions,
-        SequenceNumber, Signature, SignatureHint, Transaction, TransactionExt,
+        BytesM, Memo, MuxedAccount, Operation, OperationBody, PaymentOp, Preconditions, ScSymbol,
+        ScVal, SequenceNumber, Signature, SignatureHint, Transaction, TransactionExt,
         TransactionV1Envelope, Uint256, VecM, WriteXdr,
     };
     use stellar_strkey::ed25519::PublicKey;
@@ -183,6 +183,15 @@ mod tests {
             &self,
             _account_id: &str,
         ) -> Result<soroban_rs::xdr::AccountEntry, ProviderError> {
+            unimplemented!()
+        }
+
+        async fn call_contract(
+            &self,
+            _contract_address: &str,
+            _function_name: &ScSymbol,
+            _args: Vec<ScVal>,
+        ) -> Result<ScVal, ProviderError> {
             unimplemented!()
         }
 

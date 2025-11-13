@@ -42,8 +42,9 @@ use crate::{
     models::{
         produce_relayer_disabled_payload, DeletePendingTransactionsResponse, DisabledReason,
         HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest,
-        NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus,
-        RepositoryError, RpcErrorCodes, StellarFeeEstimateResult, StellarNetwork,
+        NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerNetworkPolicy,
+        RelayerRepoModel, RelayerStatus, RelayerStellarPolicy, RepositoryError, RpcErrorCodes,
+        StellarAllowedTokensPolicy, StellarFeeEstimateResult, StellarNetwork,
         StellarPrepareTransactionResult, StellarRpcRequest, TransactionRepoModel,
         TransactionStatus,
     },
@@ -59,16 +60,18 @@ use crate::{
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use eyre::Result;
+use futures::future::try_join_all;
 use soroban_rs::xdr::{Limits, Operation, WriteXdr};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 use crate::domain::relayer::xdr_utils::extract_source_account;
 use crate::domain::relayer::{GasAbstractionTrait, Relayer, RelayerError};
+use crate::domain::transaction::stellar::token::{get_token_balance, get_token_metadata};
 use crate::domain::transaction::stellar::utils::{
     add_operation_to_envelope, amount_to_ui_amount, create_fee_payment_operation,
-    estimate_base_fee, get_token_balance, parse_transaction_and_count_operations,
-    parse_transaction_envelope, set_time_bounds,
+    estimate_base_fee, parse_transaction_and_count_operations, parse_transaction_envelope,
+    set_time_bounds,
 };
 use crate::domain::transaction::stellar::StellarTransactionValidator;
 
@@ -242,6 +245,57 @@ where
         Ok(())
     }
 
+    /// Populates the allowed tokens metadata for the Stellar relayer policy.
+    ///
+    /// This method checks whether allowed tokens have been configured in the relayer's policy.
+    /// If allowed tokens are provided, it concurrently fetches token metadata for each token,
+    /// determines the token kind (Native, Classic, or Contract), and populates metadata including
+    /// decimals and canonical asset ID. The updated policy is then stored in the repository.
+    ///
+    /// If no allowed tokens are specified, it logs an informational message and returns the policy
+    /// unchanged.
+    async fn populate_allowed_tokens_metadata(&self) -> Result<RelayerStellarPolicy, RelayerError> {
+        let mut policy = self.relayer.policies.get_stellar_policy();
+        // Check if allowed_tokens is specified; if not, return the policy unchanged.
+        let allowed_tokens = match policy.allowed_tokens.as_ref() {
+            Some(tokens) if !tokens.is_empty() => tokens,
+            _ => {
+                info!("No allowed tokens specified; skipping token metadata population.");
+                return Ok(policy);
+            }
+        };
+
+        let token_metadata_futures = allowed_tokens.iter().map(|token| {
+            let asset_id = token.asset.clone();
+            let provider = &self.provider;
+            async move {
+                let metadata = get_token_metadata(provider, &asset_id)
+                    .await
+                    .map_err(RelayerError::from)?;
+
+                Ok::<StellarAllowedTokensPolicy, RelayerError>(StellarAllowedTokensPolicy {
+                    asset: asset_id,
+                    metadata: Some(metadata),
+                    max_allowed_fee: token.max_allowed_fee,
+                    swap_config: token.swap_config.clone(),
+                })
+            }
+        });
+
+        let updated_allowed_tokens = try_join_all(token_metadata_futures).await?;
+
+        policy.allowed_tokens = Some(updated_allowed_tokens);
+
+        self.relayer_repository
+            .update_policy(
+                self.relayer.id.clone(),
+                RelayerNetworkPolicy::Stellar(policy.clone()),
+            )
+            .await?;
+
+        Ok(policy)
+    }
+
     /// Estimate fee and convert to token amount using DEX service
     async fn estimate_and_convert_fee(
         &self,
@@ -326,12 +380,7 @@ where
         // Use utility function to fetch token balance (supports native, assets, and contract tokens)
         let balance = get_token_balance(&self.provider, source_account, fee_token)
             .await
-            .map_err(|e| {
-                RelayerError::ProviderError(format!(
-                    "Failed to fetch token balance for account {} and token {}: {}",
-                    source_account, fee_token, e
-                ))
-            })?;
+            .map_err(RelayerError::from)?;
 
         if balance < required_amount {
             let token_name = if fee_token == "native" || fee_token.is_empty() {
@@ -538,6 +587,14 @@ where
 
     async fn initialize_relayer(&self) -> Result<(), RelayerError> {
         debug!("initializing Stellar relayer {}", self.relayer.id);
+
+        // Populate model with allowed token metadata and update DB entry
+        // Error will be thrown if any of the tokens are not found
+        self.populate_allowed_tokens_metadata().await.map_err(|_| {
+            RelayerError::PolicyConfigurationError(
+                "Error while processing allowed tokens policy".into(),
+            )
+        })?;
 
         match self.check_health().await {
             Ok(_) => {
