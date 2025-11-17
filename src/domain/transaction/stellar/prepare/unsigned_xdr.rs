@@ -5,7 +5,10 @@ use eyre::Result;
 use soroban_rs::xdr::{Limits, ReadXdr, TransactionEnvelope, WriteXdr};
 use tracing::info;
 
-use crate::domain::transaction::stellar::{utils::estimate_base_fee, StellarTransactionValidator};
+use crate::domain::transaction::stellar::{
+    utils::{convert_xlm_fee_to_token, estimate_fee},
+    StellarTransactionValidator,
+};
 use crate::{
     constants::STELLAR_DEFAULT_TRANSACTION_FEE,
     domain::{extract_operations, extract_source_account},
@@ -65,7 +68,7 @@ where
         TransactionError::ValidationError(format!("Gasless transaction validation failed: {}", e))
     })?;
 
-    // Validate that transaction includes fee payment operation to relayer
+    // Validate that transaction includes exactly one fee payment operation to relayer
     let payments = StellarTransactionValidator::extract_relayer_payments(envelope, relayer_address)
         .map_err(|e| {
             TransactionError::ValidationError(format!("Failed to extract relayer payments: {}", e))
@@ -77,50 +80,77 @@ where
         ));
     }
 
-    // Calculate required XLM fee based on operations
-    let operations = extract_operations(envelope).map_err(|e| {
-        TransactionError::ValidationError(format!("Failed to extract operations: {}", e))
-    })?;
-    let num_operations = operations.len();
-    // Calculate fee for all operations (excluding fee payment operation itself)
-    let required_xlm_fee = estimate_base_fee(num_operations);
+    // Validate only one fee payment operation (build transaction flow doesn't support multiple fee tokens)
+    if payments.len() > 1 {
+        return Err(TransactionError::ValidationError(format!(
+            "Gasless transactions must include exactly one fee payment operation to the relayer, found {}",
+            payments.len()
+        )));
+    }
 
-    // Validate fee payment token, amount, and compare with DEX quote
-    for (asset_id, amount) in &payments {
-        StellarTransactionValidator::validate_allowed_token(asset_id, policy).map_err(|e| {
-            TransactionError::ValidationError(format!("Fee payment token validation failed: {}", e))
+    // Extract the single payment
+    let (asset_id, amount) = &payments[0];
+
+    // Validate fee payment token
+    StellarTransactionValidator::validate_allowed_token(asset_id, policy).map_err(|e| {
+        TransactionError::ValidationError(format!("Fee payment token validation failed: {}", e))
+    })?;
+
+    // Validate max fee
+    StellarTransactionValidator::validate_token_max_fee(asset_id, *amount, policy).map_err(
+        |e| {
+            TransactionError::ValidationError(format!(
+                "Fee payment amount validation failed: {}",
+                e
+            ))
+        },
+    )?;
+
+    // Calculate required XLM fee using estimate_fee (handles Soroban transactions correctly)
+    // This will simulate if needed for Soroban operations, otherwise count operations
+    let required_xlm_fee = estimate_fee(envelope, provider, None)
+        .await
+        .map_err(|e| match e {
+            crate::models::RelayerError::ValidationError(msg) => {
+                TransactionError::ValidationError(format!("Failed to estimate fee: {}", msg))
+            }
+            crate::models::RelayerError::Internal(msg) => {
+                TransactionError::ValidationError(format!("Failed to estimate fee: {}", msg))
+            }
+            _ => TransactionError::ValidationError(format!("Failed to estimate fee: {}", e)),
         })?;
 
-        StellarTransactionValidator::validate_token_max_fee(asset_id, *amount, policy).map_err(
-            |e| {
-                TransactionError::ValidationError(format!(
-                    "Fee payment amount validation failed: {}",
-                    e
-                ))
-            },
-        )?;
+    // Use convert_xlm_fee_to_token to get the required token amount (includes fee margin from policy)
+    // This matches the flow used when building the transaction
+    let (fee_quote, _buffered_xlm_fee) = convert_xlm_fee_to_token(
+        dex_service,
+        policy,
+        required_xlm_fee,
+        asset_id,
+        policy.fee_margin_percentage,
+    )
+    .await
+    .map_err(|e| match e {
+        crate::models::RelayerError::ValidationError(msg) => TransactionError::ValidationError(
+            format!("Failed to convert XLM fee to token {}: {}", asset_id, msg),
+        ),
+        crate::models::RelayerError::Internal(msg) => TransactionError::ValidationError(format!(
+            "Failed to convert XLM fee to token {}: {}",
+            asset_id, msg
+        )),
+        _ => TransactionError::ValidationError(format!(
+            "Failed to convert XLM fee to token {}: {}",
+            asset_id, e
+        )),
+    })?;
 
-        // Get quote from DEX service to convert required XLM fee to token amount
-        // Use default slippage of 1% for quote validation
-        // This matches the flow used when building the transaction (estimate_and_convert_fee)
-        let quote = dex_service
-            .get_xlm_to_token_quote(asset_id, required_xlm_fee, 1.0)
-            .await
-            .map_err(|e| {
-                TransactionError::ValidationError(format!(
-                    "Failed to get DEX quote for token {}: {}",
-                    asset_id, e
-                ))
-            })?;
-
-        // Compare payment amount with required token amount
-        // The payment amount must be at least equal to the required token amount for the fee
-        if *amount < quote.out_amount {
-            return Err(TransactionError::ValidationError(format!(
-                "Insufficient fee payment: payment of {} {} is less than required {} {} (for {} stroops XLM fee)",
-                amount, asset_id, quote.out_amount, asset_id, required_xlm_fee
-            )));
-        }
+    // Compare payment amount with required token amount (from convert_xlm_fee_to_token which includes margin)
+    // The payment amount must be at least equal to the required token amount for the fee
+    if *amount < fee_quote.fee_in_token {
+        return Err(TransactionError::ValidationError(format!(
+            "Insufficient fee payment: payment of {} {} is less than required {} {} (for {} stroops XLM fee with margin)",
+            amount, asset_id, fee_quote.fee_in_token, asset_id, required_xlm_fee
+        )));
     }
 
     Ok(())

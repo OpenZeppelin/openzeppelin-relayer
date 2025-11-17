@@ -1,8 +1,11 @@
 //! Utility functions for Stellar transaction domain logic.
-use crate::constants::{STELLAR_DEFAULT_TRANSACTION_FEE, STELLAR_MAX_OPERATIONS};
+use crate::constants::{
+    DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, STELLAR_DEFAULT_TRANSACTION_FEE, STELLAR_MAX_OPERATIONS,
+};
 use crate::domain::relayer::xdr_utils::{extract_operations, xdr_needs_simulation};
-use crate::models::{AssetSpec, OperationSpec, RelayerError};
+use crate::models::{AssetSpec, OperationSpec, RelayerError, RelayerStellarPolicy};
 use crate::services::provider::StellarProviderTrait;
+use crate::services::stellar_dex::StellarDexServiceTrait;
 use chrono::{DateTime, Utc};
 use soroban_rs::xdr::{
     Limits, Operation, Preconditions, ReadXdr, TimeBounds, TimePoint, TransactionEnvelope, VecM,
@@ -218,6 +221,15 @@ pub fn parse_transaction_and_count_operations(
     ))
 }
 
+/// Fee quote structure containing fee estimates in both tokens and stroops
+#[derive(Debug)]
+pub struct FeeQuote {
+    pub fee_in_token: u64,
+    pub fee_in_token_ui: String,
+    pub fee_in_stroops: u64,
+    pub conversion_rate: f64,
+}
+
 /// Estimate the base transaction fee in XLM (stroops)
 ///
 /// For Stellar, the base fee is typically 100 stroops per operation.
@@ -296,6 +308,111 @@ where
         );
         Ok(fee)
     }
+}
+
+/// Convert XLM fee to token amount using DEX service
+///
+/// This function converts an XLM fee (in stroops) to the equivalent amount in the requested token
+/// using the DEX service. For native XLM, no conversion is needed.
+/// Optionally applies a fee margin percentage to the XLM fee before conversion.
+///
+/// # Arguments
+/// * `dex_service` - DEX service for token conversion quotes
+/// * `policy` - Stellar relayer policy for slippage and token decimals
+/// * `xlm_fee` - Fee amount in XLM stroops (already estimated)
+/// * `fee_token` - Token identifier (e.g., "native" or "USDC:GA5Z...")
+/// * `fee_margin_percentage` - Optional fee margin percentage to add as buffer
+///
+/// # Returns
+/// A tuple containing:
+/// * `FeeQuote` - Fee quote with amounts in both token and XLM
+/// * `u64` - Buffered XLM fee (with margin applied if specified)
+pub async fn convert_xlm_fee_to_token<D>(
+    dex_service: &D,
+    policy: &RelayerStellarPolicy,
+    xlm_fee: u64,
+    fee_token: &str,
+    fee_margin_percentage: Option<f32>,
+) -> Result<(FeeQuote, u64), RelayerError>
+where
+    D: StellarDexServiceTrait + Send + Sync,
+{
+    // Handle native XLM - no conversion needed
+    if fee_token == "native" || fee_token.is_empty() {
+        debug!("Converting XLM fee to native XLM: {}", xlm_fee);
+        let buffered_fee = if let Some(margin) = fee_margin_percentage {
+            (xlm_fee as f64 * (1.0 + margin as f64 / 100.0)) as u64
+        } else {
+            xlm_fee
+        };
+
+        return Ok((
+            FeeQuote {
+                fee_in_token: buffered_fee,
+                fee_in_token_ui: amount_to_ui_amount(buffered_fee, 7),
+                fee_in_stroops: buffered_fee,
+                conversion_rate: 1.0,
+            },
+            buffered_fee,
+        ));
+    }
+
+    debug!("Converting XLM fee to token: {}", fee_token);
+
+    // Apply fee margin if specified
+    let buffered_xlm_fee = if let Some(margin) = fee_margin_percentage {
+        (xlm_fee as f64 * (1.0 + margin as f64 / 100.0)) as u64
+    } else {
+        xlm_fee
+    };
+
+    // Get slippage from policy or use default
+    let slippage = policy
+        .get_allowed_token_entry(fee_token)
+        .and_then(|token| {
+            token
+                .swap_config
+                .as_ref()
+                .and_then(|config| config.slippage_percentage)
+        })
+        .or(policy.slippage_percentage)
+        .unwrap_or(DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE);
+
+    // Get quote from DEX service
+    let quote = dex_service
+        .get_xlm_to_token_quote(fee_token, buffered_xlm_fee, slippage)
+        .await
+        .map_err(|e| RelayerError::Internal(format!("Failed to get quote: {}", e)))?;
+
+    debug!(
+        "Quote from DEX: input={} stroops XLM, output={} stroops token, input_asset={}, output_asset={}",
+        quote.in_amount, quote.out_amount, quote.input_asset, quote.output_asset
+    );
+
+    // Get token decimals from policy or default to 7
+    let decimals = policy.get_allowed_token_decimals(fee_token).unwrap_or(7);
+    debug!("Token decimals: {} for token: {}", decimals, fee_token);
+
+    // Calculate conversion rate
+    let conversion_rate = if buffered_xlm_fee > 0 {
+        quote.out_amount as f64 / buffered_xlm_fee as f64
+    } else {
+        0.0
+    };
+
+    let fee_quote = FeeQuote {
+        fee_in_token: quote.out_amount,
+        fee_in_token_ui: amount_to_ui_amount(quote.out_amount, decimals),
+        fee_in_stroops: buffered_xlm_fee,
+        conversion_rate,
+    };
+
+    debug!(
+        "Final fee quote: fee_in_token={} stroops ({} {}), fee_in_stroops={} stroops XLM, conversion_rate={}",
+        fee_quote.fee_in_token, fee_quote.fee_in_token_ui, fee_token, fee_quote.fee_in_stroops, fee_quote.conversion_rate
+    );
+
+    Ok((fee_quote, buffered_xlm_fee))
 }
 
 /// Parse transaction envelope from JSON value

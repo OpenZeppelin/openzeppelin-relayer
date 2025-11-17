@@ -27,10 +27,7 @@ use crate::models::{GaslessTransactionBuildResponse, GaslessTransactionQuoteResp
 /// To use the `StellarRelayer`, create an instance using the `new` method, providing the necessary
 /// components. Then, call the appropriate methods to process transactions and manage the relayer's state.
 use crate::{
-    constants::{
-        DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, STELLAR_SMALLEST_UNIT_NAME,
-        STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS,
-    },
+    constants::{STELLAR_SMALLEST_UNIT_NAME, STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS},
     domain::relayer::SwapResult,
     domain::{
         create_success_response, transaction::stellar::fetch_next_sequence_from_chain,
@@ -58,7 +55,7 @@ use crate::{
     utils::calculate_scheduled_timestamp,
 };
 use async_trait::async_trait;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{Duration, Utc};
 use eyre::Result;
 use futures::future::try_join_all;
 use soroban_rs::xdr::{Limits, Operation, ReadXdr, TransactionEnvelope, WriteXdr};
@@ -66,21 +63,12 @@ use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 use crate::domain::relayer::{GasAbstractionTrait, Relayer, RelayerError};
-use crate::domain::transaction::stellar::token::{get_token_balance, get_token_metadata};
+use crate::domain::transaction::stellar::token::get_token_metadata;
 use crate::domain::transaction::stellar::utils::{
-    add_operation_to_envelope, amount_to_ui_amount, count_operations_from_xdr,
-    create_fee_payment_operation, estimate_base_fee, set_time_bounds,
+    add_operation_to_envelope, convert_xlm_fee_to_token, count_operations_from_xdr,
+    create_fee_payment_operation, estimate_base_fee, set_time_bounds, FeeQuote,
 };
 use crate::domain::transaction::stellar::StellarTransactionValidator;
-
-/// Fee quote structure containing fee estimates in both tokens and stroops
-#[derive(Debug)]
-struct FeeQuote {
-    fee_in_token: u64,
-    fee_in_token_ui: String,
-    fee_in_stroops: u64,
-    conversion_rate: f64,
-}
 
 /// Dependencies container for `StellarRelayer` construction.
 pub struct StellarRelayerDependencies<RR, NR, TR, J, TCS>
@@ -306,122 +294,6 @@ where
         Ok(policy)
     }
 
-    /// Estimate fee and convert to token amount using DEX service
-    async fn estimate_and_convert_fee(
-        &self,
-        xlm_fee: u64,
-        fee_token: &str,
-        fee_margin_percentage: Option<f32>,
-    ) -> Result<(FeeQuote, u64), RelayerError> {
-        // Handle native XLM - no conversion needed
-        if fee_token == "native" || fee_token.is_empty() {
-            debug!("Estimating fee for native XLM: {}", xlm_fee);
-            let buffered_fee = if let Some(margin) = fee_margin_percentage {
-                (xlm_fee as f64 * (1.0 + margin as f64 / 100.0)) as u64
-            } else {
-                xlm_fee
-            };
-
-            return Ok((
-                FeeQuote {
-                    fee_in_token: buffered_fee,
-                    fee_in_token_ui: amount_to_ui_amount(buffered_fee, 7),
-                    fee_in_stroops: buffered_fee,
-                    conversion_rate: 1.0,
-                },
-                buffered_fee,
-            ));
-        }
-
-        debug!("Estimating fee for token: {}", fee_token);
-
-        // Apply fee margin if specified
-        let buffered_xlm_fee = if let Some(margin) = fee_margin_percentage {
-            (xlm_fee as f64 * (1.0 + margin as f64 / 100.0)) as u64
-        } else {
-            xlm_fee
-        };
-
-        // Get slippage from policy or use default
-        let policy = self.relayer.policies.get_stellar_policy();
-        let slippage = policy
-            .get_allowed_token_entry(fee_token)
-            .and_then(|token| {
-                token
-                    .swap_config
-                    .as_ref()
-                    .and_then(|config| config.slippage_percentage)
-            })
-            .or(policy.slippage_percentage)
-            .unwrap_or(DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE);
-
-        // Get quote from DEX service
-        let quote = self
-            .dex_service
-            .get_xlm_to_token_quote(fee_token, buffered_xlm_fee, slippage)
-            .await
-            .map_err(|e| RelayerError::Internal(format!("Failed to get quote: {}", e)))?;
-
-        debug!(
-            "Quote from DEX: input={} stroops XLM, output={} stroops token, input_asset={}, output_asset={}",
-            quote.in_amount, quote.out_amount, quote.input_asset, quote.output_asset
-        );
-
-        // Get token decimals from policy or default to 7
-        let decimals = policy.get_allowed_token_decimals(fee_token).unwrap_or(7);
-        debug!("Token decimals: {} for token: {}", decimals, fee_token);
-
-        // Calculate conversion rate
-        let conversion_rate = if buffered_xlm_fee > 0 {
-            quote.out_amount as f64 / buffered_xlm_fee as f64
-        } else {
-            0.0
-        };
-
-        let fee_quote = FeeQuote {
-            fee_in_token: quote.out_amount,
-            fee_in_token_ui: amount_to_ui_amount(quote.out_amount, decimals),
-            fee_in_stroops: buffered_xlm_fee,
-            conversion_rate,
-        };
-
-        debug!(
-            "Final fee quote: fee_in_token={} stroops ({} {}), fee_in_stroops={} stroops XLM, conversion_rate={}",
-            fee_quote.fee_in_token, fee_quote.fee_in_token_ui, fee_token, fee_quote.fee_in_stroops, fee_quote.conversion_rate
-        );
-
-        Ok((fee_quote, buffered_xlm_fee))
-    }
-
-    /// Check if source account has sufficient balance for fee payment
-    async fn check_source_account_balance(
-        &self,
-        source_account: &str,
-        fee_token: &str,
-        required_amount: u64,
-    ) -> Result<(), RelayerError> {
-        // Use utility function to fetch token balance (supports native, assets, and contract tokens)
-        let balance = get_token_balance(&self.provider, source_account, fee_token)
-            .await
-            .map_err(RelayerError::from)?;
-
-        debug!("Source account balance: {}", balance);
-
-        if balance < required_amount {
-            let token_name = if fee_token == "native" || fee_token.is_empty() {
-                "XLM"
-            } else {
-                fee_token
-            };
-            return Err(RelayerError::ValidationError(format!(
-                "Insufficient {} balance: required {} but account has {}",
-                token_name, required_amount, balance
-            )));
-        }
-
-        Ok(())
-    }
-
     /// Create and add fee payment operation to transaction envelope
     ///
     /// This utility function encapsulates the logic for creating a payment operation
@@ -480,13 +352,19 @@ where
         fee_margin_percentage: Option<f32>,
         relayer_address: &str,
     ) -> Result<(FeeQuote, u64, TransactionEnvelope), RelayerError> {
-        // Estimate and convert fee to token amount
-        let (fee_quote, buffered_xlm_fee) = self
-            .estimate_and_convert_fee(xlm_fee, fee_token, fee_margin_percentage)
-            .await
-            .map_err(|e| {
-                RelayerError::Internal(format!("Failed to estimate and convert fee: {}", e))
-            })?;
+        // Convert XLM fee to token amount
+        let policy = self.relayer.policies.get_stellar_policy();
+        let (fee_quote, buffered_xlm_fee) = convert_xlm_fee_to_token(
+            self.dex_service.as_ref(),
+            &policy,
+            xlm_fee,
+            fee_token,
+            fee_margin_percentage,
+        )
+        .await
+        .map_err(|e| {
+            RelayerError::Internal(format!("Failed to estimate and convert fee: {}", e))
+        })?;
 
         // Convert fee amount to i64 for payment operation
         let fee_amount = i64::try_from(fee_quote.fee_in_token).map_err(|_| {
@@ -791,6 +669,17 @@ where
             }
         };
 
+        // Check fee payment strategy - reject if User (user pays fees directly, relayer should not sign)
+        let policy = self.relayer.policies.get_stellar_policy();
+        if matches!(
+            policy.fee_payment_strategy,
+            Some(crate::models::StellarFeePaymentStrategy::User)
+        ) {
+            return Err(RelayerError::NotSupported(
+                "sign_transaction is not supported when fee_payment_strategy is 'User'".to_string(),
+            ));
+        }
+
         // Use the signer's sign_xdr_transaction method
         let response = self
             .signer
@@ -880,12 +769,17 @@ where
         };
 
         // Convert to token amount via DEX service
-        let (fee_quote, _) = self
-            .estimate_and_convert_fee(xlm_fee, &params.fee_token, policy.fee_margin_percentage)
-            .await
-            .map_err(|e| {
-                RelayerError::Internal(format!("Failed to estimate and convert fee: {}", e))
-            })?;
+        let (fee_quote, _) = convert_xlm_fee_to_token(
+            self.dex_service.as_ref(),
+            &policy,
+            xlm_fee,
+            &params.fee_token,
+            policy.fee_margin_percentage,
+        )
+        .await
+        .map_err(|e| {
+            RelayerError::Internal(format!("Failed to estimate and convert fee: {}", e))
+        })?;
 
         // Validate max fee
         StellarTransactionValidator::validate_max_fee(fee_quote.fee_in_stroops, &policy)
