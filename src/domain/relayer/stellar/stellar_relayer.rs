@@ -60,15 +60,16 @@ use eyre::Result;
 use futures::future::try_join_all;
 use soroban_rs::xdr::{Limits, Operation, ReadXdr, TransactionEnvelope, WriteXdr};
 use std::sync::Arc;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::domain::relayer::{GasAbstractionTrait, Relayer, RelayerError};
-use crate::domain::transaction::stellar::token::get_token_metadata;
+use crate::domain::transaction::stellar::token::{get_token_balance, get_token_metadata};
 use crate::domain::transaction::stellar::utils::{
     add_operation_to_envelope, convert_xlm_fee_to_token, count_operations_from_xdr,
     create_fee_payment_operation, estimate_base_fee, set_time_bounds, FeeQuote,
 };
 use crate::domain::transaction::stellar::StellarTransactionValidator;
+use crate::models::produce_solana_dex_webhook_payload;
 
 /// Dependencies container for `StellarRelayer` construction.
 pub struct StellarRelayerDependencies<RR, NR, TR, J, TCS>
@@ -156,7 +157,7 @@ pub type DefaultStellarRelayer<J, TR, NR, RR, TCR> = StellarRelayer<
     J,
     TransactionCounterService<TCR>,
     StellarSigner,
-    OrderBookService,
+    OrderBookService<StellarProvider, StellarSigner>,
 >;
 
 impl<P, RR, NR, TR, J, TCS, S, D> StellarRelayer<P, RR, NR, TR, J, TCS, S, D>
@@ -292,6 +293,46 @@ where
             .await?;
 
         Ok(policy)
+    }
+
+    /// Calculate swap amount based on current balance and swap configuration
+    ///
+    /// This function determines how much of a token should be swapped based on:
+    /// - Maximum swap amount (caps the swap)
+    /// - Retain minimum amount (ensures minimum balance is retained)
+    /// - Minimum swap amount (ensures swap meets minimum requirement)
+    ///
+    /// Returns 0 if swap should not be performed (e.g., balance too low, below minimum)
+    fn calculate_swap_amount(
+        &self,
+        current_balance: u64,
+        min_amount: Option<u64>,
+        max_amount: Option<u64>,
+        retain_min: Option<u64>,
+    ) -> Result<u64, RelayerError> {
+        // Cap the swap amount at the maximum if specified
+        let mut amount = max_amount
+            .map(|max| std::cmp::min(current_balance, max))
+            .unwrap_or(current_balance);
+
+        // Adjust for retain minimum if specified
+        if let Some(retain) = retain_min {
+            if current_balance > retain {
+                amount = std::cmp::min(amount, current_balance - retain);
+            } else {
+                // Not enough to retain the minimum after swap
+                return Ok(0);
+            }
+        }
+
+        // Check if we have enough tokens to meet minimum swap requirement
+        if let Some(min) = min_amount {
+            if amount < min {
+                return Ok(0); // Not enough tokens to swap
+            }
+        }
+
+        Ok(amount)
     }
 
     /// Create and add fee payment operation to transaction envelope
@@ -995,14 +1036,12 @@ where
         };
 
         match swap_config.strategy {
-            Some(_strategy) => {
-                // Strategy is set, proceed with swap
-            }
+            Some(strategy) => strategy,
             None => {
                 debug!(%relayer_id, "No swap strategy specified for relayer; Exiting.");
                 return Ok(vec![]);
             }
-        }
+        };
 
         // Check XLM balance
         let account_entry = self
@@ -1032,27 +1071,142 @@ where
             "XLM balance below threshold, checking tokens for swap"
         );
 
-        // Get allowed tokens
-        let allowed_tokens = policy.get_allowed_tokens();
-        if allowed_tokens.is_empty() {
-            debug!(%relayer_id, "No allowed tokens configured for swap");
-            return Ok(vec![]);
+        // Get allowed tokens and calculate swap amounts
+        let tokens_to_swap = {
+            let mut eligible_tokens = Vec::new();
+
+            let allowed_tokens = policy.get_allowed_tokens();
+            if allowed_tokens.is_empty() {
+                debug!(%relayer_id, "No allowed tokens configured for swap");
+                return Ok(vec![]);
+            }
+
+            for token in &allowed_tokens {
+                // Fetch token balance
+                let token_balance =
+                    get_token_balance(&self.provider, &relayer.address, &token.asset)
+                        .await
+                        .map_err(|e| {
+                            RelayerError::ProviderError(format!(
+                                "Failed to get token balance for {}: {}",
+                                token.asset, e
+                            ))
+                        })?;
+
+                // Calculate swap amount based on configuration
+                let swap_amount = self
+                    .calculate_swap_amount(
+                        token_balance,
+                        token
+                            .swap_config
+                            .as_ref()
+                            .and_then(|config| config.min_amount),
+                        token
+                            .swap_config
+                            .as_ref()
+                            .and_then(|config| config.max_amount),
+                        token
+                            .swap_config
+                            .as_ref()
+                            .and_then(|config| config.retain_min_amount),
+                    )
+                    .unwrap_or(0);
+
+                if swap_amount > 0 {
+                    debug!(%relayer_id, token = ?token.asset, "token swap eligible for token");
+
+                    // Store token asset and swap amount (clone necessary data)
+                    eligible_tokens.push((
+                        token.asset.clone(),
+                        swap_amount,
+                        token
+                            .swap_config
+                            .as_ref()
+                            .and_then(|config| config.slippage_percentage)
+                            .unwrap_or(crate::constants::DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE),
+                    ));
+                }
+            }
+
+            eligible_tokens
+        };
+
+        // Execute swap for every eligible token
+        let swap_futures =
+            tokens_to_swap
+                .iter()
+                .map(|(token_asset, swap_amount, slippage_percent)| {
+                    let token_asset = token_asset.clone();
+                    let _dex = &self.dex_service;
+                    let _relayer_address = relayer.address.clone();
+                    let relayer_id_clone = relayer_id.clone();
+                    let _slippage_percent = *slippage_percent as f64;
+
+                    async move {
+                        info!(
+                            "Swapping {} tokens of type {} for relayer: {}",
+                            swap_amount, token_asset, relayer_id_clone
+                        );
+
+                        // TODO: Implement swap execution using DEX service
+                        // For now, return an error result indicating swap is not yet implemented
+                        warn!(
+                            %relayer_id_clone,
+                            token = %token_asset,
+                            "Swap execution not yet implemented for Stellar"
+                        );
+
+                        Ok::<SwapResult, RelayerError>(SwapResult {
+                            mint: token_asset,
+                            source_amount: *swap_amount,
+                            destination_amount: 0,
+                            transaction_signature: "".to_string(),
+                            error: Some(
+                                "Swap execution not yet implemented for Stellar".to_string(),
+                            ),
+                        })
+                    }
+                });
+
+        let swap_results = try_join_all(swap_futures).await?;
+
+        if !swap_results.is_empty() {
+            let total_xlm_received: u64 = swap_results
+                .iter()
+                .map(|result| result.destination_amount)
+                .sum();
+
+            info!(
+                "Completed {} token swaps for relayer {}, total XLM received: {}",
+                swap_results.len(),
+                relayer_id,
+                total_xlm_received
+            );
+
+            if let Some(notification_id) = &relayer.notification_id {
+                // Note: Using Solana DEX webhook payload structure for now
+                // TODO: Create Stellar-specific DEX webhook payload structure
+                let webhook_result = self
+                    .job_producer
+                    .produce_send_notification_job(
+                        produce_solana_dex_webhook_payload(
+                            notification_id,
+                            "stellar_dex".to_string(),
+                            crate::models::SolanaDexPayload {
+                                swap_results: swap_results.clone(),
+                            },
+                        ),
+                        None,
+                    )
+                    .await;
+
+                if let Err(e) = webhook_result {
+                    error!(error = %e, "failed to produce notification job");
+                }
+            }
         }
 
-        // Note: For Stellar, token balances are stored in account trustlines
-        // This requires Horizon API integration to fetch balances for each asset
-        // For now, we'll create a placeholder implementation that can be extended
-        // TODO: Implement token balance fetching from Horizon API
-        // TODO: Calculate swap amounts based on min/max/retain settings
-        // TODO: Execute swaps using DEX service
-
-        warn!(
-            %relayer_id,
-            "Token swap implementation requires Horizon API integration for balance fetching"
-        );
-
-        // Return empty results for now - implementation can be extended later
-        Ok(vec![])
+        Ok(swap_results)
     }
 }
 

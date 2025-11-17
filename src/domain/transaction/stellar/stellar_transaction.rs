@@ -347,7 +347,7 @@ pub type DefaultStellarTransaction = StellarRelayerTransaction<
     StellarSigner,
     StellarProvider,
     TransactionCounterRepositoryStorage,
-    OrderBookService,
+    OrderBookService<StellarProvider, StellarSigner>,
 >;
 
 #[cfg(test)]

@@ -12,7 +12,7 @@ use soroban_rs::xdr::{
     Limits, MuxedAccount, Operation, OperationBody, ReadXdr, TransactionEnvelope,
     TransactionV1Envelope, Uint256, VecM, WriteXdr,
 };
-use stellar_strkey::ed25519::PublicKey;
+use stellar_strkey::ed25519::{MuxedAccount as StrkeyMuxedAccount, PublicKey};
 
 /// Parse a transaction XDR string into a TransactionEnvelope
 pub fn parse_transaction_xdr(xdr: &str, expect_signed: bool) -> Result<TransactionEnvelope> {
@@ -170,7 +170,19 @@ pub fn muxed_account_to_string(muxed: &MuxedAccount) -> Result<String> {
 }
 
 /// Convert a string address to a MuxedAccount
+/// Supports both Ed25519 (G...) and MuxedEd25519 (M...) account formats
 pub fn string_to_muxed_account(address: &str) -> Result<MuxedAccount> {
+    // Try to parse as muxed account first (M... format)
+    if let Ok(muxed) = StrkeyMuxedAccount::from_string(address) {
+        return Ok(MuxedAccount::MuxedEd25519(
+            soroban_rs::xdr::MuxedAccountMed25519 {
+                id: muxed.id,
+                ed25519: Uint256(muxed.ed25519),
+            },
+        ));
+    }
+
+    // Fall back to Ed25519 (G... format)
     let pk =
         PublicKey::from_string(address).map_err(|e| eyre!("Failed to decode account ID: {}", e))?;
 

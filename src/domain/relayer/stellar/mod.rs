@@ -54,7 +54,12 @@ pub async fn create_stellar_relayer<
     let network = StellarNetwork::try_from(network_repo.clone())?;
     let provider = get_network_provider(&network, relayer.custom_rpc_urls.clone())
         .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
-    let signer_service = StellarSignerFactory::create_stellar_signer(&signer.into())?;
+
+    // Create signers - one for relayer, one for DEX service
+    // Since StellarSigner doesn't implement Clone, we create them separately from the same source
+    let stellar_signer = StellarSignerFactory::create_stellar_signer(&signer.clone().into())?;
+    let stellar_signer_for_dex = StellarSignerFactory::create_stellar_signer(&signer.into())?;
+
     let transaction_counter_service = Arc::new(TransactionCounterService::new(
         relayer.id.clone(),
         relayer.address.clone(),
@@ -69,13 +74,17 @@ pub async fn create_stellar_relayer<
             STELLAR_HORIZON_MAINNET_URL.to_string()
         }
     });
-    let dex_service = Arc::new(OrderBookService::new(horizon_url).map_err(|e| {
-        RelayerError::NetworkConfiguration(format!("Failed to create DEX service: {}", e))
-    })?);
+    let provider_arc = Arc::new(provider.clone());
+    let signer_arc = Arc::new(stellar_signer_for_dex);
+    let dex_service = Arc::new(
+        OrderBookService::new(horizon_url, provider_arc, signer_arc).map_err(|e| {
+            RelayerError::NetworkConfiguration(format!("Failed to create DEX service: {}", e))
+        })?,
+    );
 
     let relayer = DefaultStellarRelayer::<J, TR, NR, RR, TCR>::new(
         relayer,
-        signer_service,
+        stellar_signer,
         provider,
         StellarRelayerDependencies::new(
             relayer_repository,

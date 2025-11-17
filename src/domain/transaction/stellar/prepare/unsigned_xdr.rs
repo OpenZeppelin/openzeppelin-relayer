@@ -569,7 +569,7 @@ mod tests {
             })
         }
 
-        async fn prepare_swap_transaction(
+        async fn execute_swap(
             &self,
             _params: crate::services::stellar_dex::SwapTransactionParams,
         ) -> Result<String, crate::services::stellar_dex::StellarDexServiceError> {

@@ -2,12 +2,27 @@
 //! Uses Stellar Horizon API `/order_book` endpoint for quote conversion
 
 use super::{StellarDexServiceError, StellarQuoteResponse, SwapTransactionParams};
-use crate::services::stellar_dex::StellarDexServiceTrait;
+use crate::domain::relayer::string_to_muxed_account;
+use crate::models::transaction::stellar::asset::AssetSpec;
+use crate::services::{
+    provider::StellarProviderTrait, signer::StellarSignTrait, stellar_dex::StellarDexServiceTrait,
+};
 use async_trait::async_trait;
+use chrono::{Duration as ChronoDuration, Utc};
 use reqwest::Client;
 use serde::Deserialize;
+use soroban_rs::xdr::{
+    Asset, Limits, Memo, Operation, OperationBody, PathPaymentStrictReceiveOp, Preconditions,
+    ReadXdr, SequenceNumber, TimeBounds, TimePoint, Transaction, TransactionEnvelope,
+    TransactionExt, TransactionV1Envelope, VecM, WriteXdr,
+};
+use std::convert::TryFrom;
+use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, warn};
+use tracing::{debug, info};
+
+// hex is used for encoding transaction hash
+use hex;
 
 /// Stellar Horizon API order book response
 #[derive(Debug, Deserialize)]
@@ -43,18 +58,34 @@ struct AssetInfo {
 }
 
 /// Service for getting quotes from Stellar Horizon Order Book API
-pub struct OrderBookService {
+pub struct OrderBookService<P, S>
+where
+    P: StellarProviderTrait + Send + Sync + 'static,
+    S: StellarSignTrait + Send + Sync + 'static,
+{
     horizon_base_url: String,
     client: Client,
+    provider: Arc<P>,
+    signer: Arc<S>,
 }
 
-impl OrderBookService {
+impl<P, S> OrderBookService<P, S>
+where
+    P: StellarProviderTrait + Send + Sync + 'static,
+    S: StellarSignTrait + Send + Sync + 'static,
+{
     /// Create a new OrderBookService instance
     ///
     /// # Arguments
     ///
     /// * `horizon_base_url` - Base URL for Stellar Horizon API (e.g., "https://horizon.stellar.org")
-    pub fn new(horizon_base_url: String) -> Result<Self, StellarDexServiceError> {
+    /// * `provider` - Stellar provider for sending transactions
+    /// * `signer` - Stellar signer for signing transactions
+    pub fn new(
+        horizon_base_url: String,
+        provider: Arc<P>,
+        signer: Arc<S>,
+    ) -> Result<Self, StellarDexServiceError> {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
@@ -63,6 +94,8 @@ impl OrderBookService {
         Ok(Self {
             horizon_base_url,
             client,
+            provider,
+            signer,
         })
     }
 
@@ -317,7 +350,11 @@ impl OrderBookService {
 }
 
 #[async_trait]
-impl StellarDexServiceTrait for OrderBookService {
+impl<P, S> StellarDexServiceTrait for OrderBookService<P, S>
+where
+    P: StellarProviderTrait + Send + Sync + 'static,
+    S: StellarSignTrait + Send + Sync + 'static,
+{
     async fn get_token_to_xlm_quote(
         &self,
         asset_id: &str,
@@ -455,7 +492,7 @@ impl StellarDexServiceTrait for OrderBookService {
         })
     }
 
-    async fn prepare_swap_transaction(
+    async fn execute_swap(
         &self,
         params: SwapTransactionParams,
     ) -> Result<String, StellarDexServiceError> {
@@ -468,45 +505,197 @@ impl StellarDexServiceTrait for OrderBookService {
             )
             .await?
         } else {
-            self.get_xlm_to_token_quote(
-                &params.destination_asset,
-                params.amount,
-                params.slippage_percent,
-            )
-            .await?
+            return Err(StellarDexServiceError::UnknownError(
+                "Only swapping tokens to XLM (native) is currently supported".to_string(),
+            ));
         };
 
-        // TODO: Build actual Stellar transaction envelope with path payment operation
-        // This requires:
-        // 1. Parse source_account to AccountId
-        // 2. Parse source_asset and destination_asset to Asset
-        // 3. Create PathPaymentStrictReceive operation
-        // 4. Build Transaction with sequence number
-        // 5. Create TransactionEnvelope
-        // 6. Serialize to XDR base64
-        //
-        // For now, return an error indicating this needs to be implemented
-        warn!(
-            "prepare_swap_transaction not yet fully implemented. Quote: {:?}, Params: {:?}",
-            quote, params
+        info!(
+            "Preparing swap transaction: {} {} -> {} XLM (min receive: {})",
+            params.amount, params.source_asset, quote.out_amount, quote.out_amount
         );
-        Err(StellarDexServiceError::UnknownError(
-            "Transaction preparation not yet implemented. Use quote methods and build transaction manually.".to_string(),
-        ))
+
+        // Parse source account to MuxedAccount
+        let source_account = string_to_muxed_account(&params.source_account).map_err(|e| {
+            StellarDexServiceError::InvalidAssetIdentifier(format!("Invalid source account: {}", e))
+        })?;
+
+        // Parse source asset to Asset
+        let send_asset = if params.source_asset == "native" || params.source_asset.is_empty() {
+            return Err(StellarDexServiceError::InvalidAssetIdentifier(
+                "Source asset cannot be native when swapping to XLM".to_string(),
+            ));
+        } else {
+            // Parse "CODE:ISSUER" format
+            let (code, issuer) = params.source_asset.split_once(':').ok_or_else(|| {
+                StellarDexServiceError::InvalidAssetIdentifier(format!(
+                    "Invalid source asset format. Expected 'CODE:ISSUER', got: {}",
+                    params.source_asset
+                ))
+            })?;
+
+            let asset_spec = if code.len() <= 4 {
+                AssetSpec::Credit4 {
+                    code: code.to_string(),
+                    issuer: issuer.to_string(),
+                }
+            } else if code.len() <= 12 {
+                AssetSpec::Credit12 {
+                    code: code.to_string(),
+                    issuer: issuer.to_string(),
+                }
+            } else {
+                return Err(StellarDexServiceError::InvalidAssetIdentifier(format!(
+                    "Asset code too long (max 12 characters): {}",
+                    code
+                )));
+            };
+
+            Asset::try_from(asset_spec).map_err(|e| {
+                StellarDexServiceError::InvalidAssetIdentifier(format!(
+                    "Failed to convert asset: {}",
+                    e
+                ))
+            })?
+        };
+
+        // Destination asset is always native XLM
+        let dest_asset = Asset::Native;
+
+        // Convert amounts to i64 (Stellar amounts are signed)
+        let send_max = i64::try_from(params.amount).map_err(|_| {
+            StellarDexServiceError::UnknownError("Amount too large for i64".to_string())
+        })?;
+        let dest_amount = i64::try_from(quote.out_amount).map_err(|_| {
+            StellarDexServiceError::UnknownError("Destination amount too large for i64".to_string())
+        })?;
+
+        // Create PathPaymentStrictReceive operation
+        // We're swapping tokens to XLM, so we want to receive a specific amount of XLM
+        // The destination is the source account (swapping to ourselves)
+        let path_payment_op = Operation {
+            source_account: None,
+            body: OperationBody::PathPaymentStrictReceive(PathPaymentStrictReceiveOp {
+                send_asset,
+                send_max,
+                destination: source_account.clone(),
+                dest_asset,
+                dest_amount,
+                path: VecM::default(), // Empty path for direct swap
+            }),
+        };
+
+        // Set time bounds: valid from now until 1 minute from now
+        let now = Utc::now();
+        let valid_until = now + ChronoDuration::minutes(1);
+        let time_bounds = TimeBounds {
+            min_time: TimePoint(now.timestamp() as u64),
+            max_time: TimePoint(valid_until.timestamp() as u64),
+        };
+
+        // Build Transaction
+        let transaction = Transaction {
+            source_account,
+            fee: 100,
+            seq_num: SequenceNumber(params.sequence_number),
+            cond: Preconditions::Time(time_bounds),
+            memo: Memo::None,
+            operations: vec![path_payment_op].try_into().map_err(|_| {
+                StellarDexServiceError::UnknownError(
+                    "Failed to create operations vector".to_string(),
+                )
+            })?,
+            ext: TransactionExt::V0,
+        };
+
+        // Create TransactionEnvelope
+        let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx: transaction,
+            signatures: VecM::default(), // Unsigned transaction
+        });
+
+        // Serialize to XDR base64
+        let xdr = envelope.to_xdr_base64(Limits::none()).map_err(|e| {
+            StellarDexServiceError::UnknownError(format!(
+                "Failed to serialize transaction to XDR: {}",
+                e
+            ))
+        })?;
+
+        info!(
+            "Successfully prepared swap transaction XDR ({} bytes), signing and submitting",
+            xdr.len()
+        );
+
+        // Sign the transaction
+        let signed_response = self
+            .signer
+            .sign_xdr_transaction(&xdr, &params.network_passphrase)
+            .await
+            .map_err(|e| {
+                StellarDexServiceError::UnknownError(format!("Failed to sign transaction: {}", e))
+            })?;
+
+        debug!("Transaction signed successfully, submitting to network");
+
+        // Parse the signed XDR to get the envelope
+        let signed_envelope =
+            TransactionEnvelope::from_xdr_base64(&signed_response.signed_xdr, Limits::none())
+                .map_err(|e| {
+                    StellarDexServiceError::UnknownError(format!(
+                        "Failed to parse signed XDR: {}",
+                        e
+                    ))
+                })?;
+
+        // Send the transaction
+        let tx_hash = self
+            .provider
+            .send_transaction(&signed_envelope)
+            .await
+            .map_err(|e| {
+                StellarDexServiceError::UnknownError(format!("Failed to send transaction: {}", e))
+            })?;
+
+        info!(
+            "Swap transaction submitted successfully with hash: {}",
+            hex::encode(tx_hash.0)
+        );
+
+        Ok(hex::encode(tx_hash.0))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use tracing::debug;
+    use crate::services::provider::MockStellarProviderTrait;
+    use crate::services::signer::StellarSignTrait;
+    use std::sync::Arc;
 
     use super::*;
 
     const HORIZON_MAINNET_URL: &str = "https://horizon.stellar.org";
     const USDC_ASSET_ID: &str = "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
 
-    fn create_test_service() -> OrderBookService {
-        OrderBookService::new(HORIZON_MAINNET_URL.to_string()).unwrap()
+    // Mock signer for tests (only quote methods are tested, so this doesn't need to work)
+    struct MockSigner;
+
+    #[async_trait::async_trait]
+    impl StellarSignTrait for MockSigner {
+        async fn sign_xdr_transaction(
+            &self,
+            _unsigned_xdr: &str,
+            _network_passphrase: &str,
+        ) -> Result<crate::domain::SignXdrTransactionResponseStellar, crate::models::SignerError>
+        {
+            unimplemented!("Not used in quote tests")
+        }
+    }
+
+    fn create_test_service() -> OrderBookService<MockStellarProviderTrait, MockSigner> {
+        let provider = Arc::new(MockStellarProviderTrait::new());
+        let signer = Arc::new(MockSigner);
+        OrderBookService::new(HORIZON_MAINNET_URL.to_string(), provider, signer).unwrap()
     }
 
     #[tokio::test]

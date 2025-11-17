@@ -57,7 +57,7 @@ pub struct PathStep {
     pub amount: u64,
 }
 
-/// Parameters for preparing a swap transaction
+/// Parameters for executing a swap transaction
 #[derive(Debug, Clone)]
 pub struct SwapTransactionParams {
     /// Source account address (the account that will sign the transaction)
@@ -72,6 +72,8 @@ pub struct SwapTransactionParams {
     pub slippage_percent: f32,
     /// Sequence number for the transaction
     pub sequence_number: i64,
+    /// Network passphrase for signing the transaction
+    pub network_passphrase: String,
 }
 
 /// Trait for Stellar DEX services
@@ -114,24 +116,25 @@ pub trait StellarDexServiceTrait: Send + Sync {
         slippage: f32,
     ) -> Result<StellarQuoteResponse, StellarDexServiceError>;
 
-    /// Prepare a swap transaction based on a quote
+    /// Execute a swap transaction
     ///
-    /// This method creates an unsigned Stellar transaction envelope (XDR) that can be
-    /// signed and executed by the relayer. The transaction will include a path payment
+    /// This method creates, signs, and submits a Stellar transaction with a path payment
     /// operation based on the quote from `get_token_to_xlm_quote` or `get_xlm_to_token_quote`.
     ///
     /// # Arguments
     ///
-    /// * `params` - Swap transaction parameters including source account, assets, amounts, and sequence number
+    /// * `params` - Swap transaction parameters including source account, assets, amounts, sequence number, and network passphrase
     ///
     /// # Returns
     ///
-    /// An unsigned transaction envelope as XDR base64 string, ready to be signed and submitted
-    async fn prepare_swap_transaction(
+    /// The transaction hash of the submitted transaction
+    async fn execute_swap(
         &self,
         params: SwapTransactionParams,
     ) -> Result<String, StellarDexServiceError>;
 }
 
 /// Default implementation using Stellar Order Book service
-pub type DefaultStellarDexService = OrderBookService;
+/// Note: This type alias cannot be used directly due to generic parameters.
+/// Use `OrderBookService<P, S>` where P implements `StellarProviderTrait` and S implements `StellarSignTrait`.
+pub type DefaultStellarDexService<P, S> = OrderBookService<P, S>;

@@ -491,8 +491,10 @@ impl RelayerTransactionFactory {
                 )?))
             }
             NetworkType::Stellar => {
-                let signer_service =
-                    Arc::new(StellarSignerFactory::create_stellar_signer(&signer.into())?);
+                // Create signer once and wrap in Arc, then clone Arc for both uses
+                // Arc implements Clone (cheap reference count increment)
+                let stellar_signer = StellarSignerFactory::create_stellar_signer(&signer.into())?;
+                let signer_service = Arc::new(stellar_signer);
 
                 let network_repo = network_repository
                     .get_by_name(NetworkType::Stellar, &relayer.network)
@@ -521,12 +523,17 @@ impl RelayerTransactionFactory {
                         STELLAR_HORIZON_MAINNET_URL.to_string()
                     }
                 });
-                let dex_service = Arc::new(OrderBookService::new(horizon_url).map_err(|e| {
-                    TransactionError::NetworkConfiguration(format!(
-                        "Failed to create DEX service: {}",
-                        e
-                    ))
-                })?);
+                let provider_arc = Arc::new(stellar_provider.clone());
+                // Clone Arc for DEX service (cheap - just increments reference count)
+                let signer_arc = signer_service.clone();
+                let dex_service = Arc::new(
+                    OrderBookService::new(horizon_url, provider_arc, signer_arc).map_err(|e| {
+                        TransactionError::NetworkConfiguration(format!(
+                            "Failed to create DEX service: {}",
+                            e
+                        ))
+                    })?,
+                );
 
                 Ok(NetworkTransaction::Stellar(DefaultStellarTransaction::new(
                     relayer,
