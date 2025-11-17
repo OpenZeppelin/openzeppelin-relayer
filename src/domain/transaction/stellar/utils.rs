@@ -1,4 +1,5 @@
 //! Utility functions for Stellar transaction domain logic.
+use crate::constants::STELLAR_MAX_OPERATIONS;
 use crate::domain::relayer::xdr_utils::extract_operations;
 use crate::models::{AssetSpec, OperationSpec, RelayerError};
 use crate::services::provider::StellarProviderTrait;
@@ -158,6 +159,19 @@ pub fn amount_to_ui_amount(amount: u64, decimals: u8) -> String {
     }
 }
 
+/// Count operations in a transaction envelope from XDR base64 string
+///
+/// Parses the XDR string, extracts operations, and returns the count.
+pub fn count_operations_from_xdr(xdr: &str) -> Result<usize, RelayerError> {
+    let envelope = TransactionEnvelope::from_xdr_base64(xdr, Limits::none())
+        .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {}", e)))?;
+
+    let operations = extract_operations(&envelope)
+        .map_err(|e| RelayerError::Internal(format!("Failed to extract operations: {}", e)))?;
+
+    Ok(operations.len())
+}
+
 /// Parse transaction and count operations
 ///
 /// Supports both XDR (base64 string) and operations array formats
@@ -290,9 +304,12 @@ pub fn add_operation_to_envelope(
             ops.push(operation);
 
             // Convert back to VecM
-            let operations: VecM<Operation, 100> = ops
-                .try_into()
-                .map_err(|_| RelayerError::Internal("Too many operations (max 100)".to_string()))?;
+            let operations: VecM<Operation, 100> = ops.try_into().map_err(|_| {
+                RelayerError::Internal(format!(
+                    "Too many operations (max {})",
+                    STELLAR_MAX_OPERATIONS
+                ))
+            })?;
 
             e.tx.operations = operations;
 
@@ -305,9 +322,12 @@ pub fn add_operation_to_envelope(
             ops.push(operation);
 
             // Convert back to VecM
-            let operations: VecM<Operation, 100> = ops
-                .try_into()
-                .map_err(|_| RelayerError::Internal("Too many operations (max 100)".to_string()))?;
+            let operations: VecM<Operation, 100> = ops.try_into().map_err(|_| {
+                RelayerError::Internal(format!(
+                    "Too many operations (max {})",
+                    STELLAR_MAX_OPERATIONS
+                ))
+            })?;
 
             e.tx.operations = operations;
 

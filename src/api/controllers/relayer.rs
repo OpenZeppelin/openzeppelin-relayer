@@ -842,7 +842,7 @@ where
 /// The fee estimate result.
 pub async fn get_gasless_transaction_quote<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     relayer_id: String,
-    params: GaslessTransactionQuoteRequest,
+    request: GaslessTransactionQuoteRequest,
     state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
@@ -859,10 +859,12 @@ where
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
     relayer.validate_active_state()?;
 
+    request.validate()?;
+
     let network_relayer = get_network_relayer_by_model(relayer, &state).await?;
 
     let result = network_relayer
-        .get_gasless_transaction_quote(params)
+        .get_gasless_transaction_quote(request)
         .await?;
     Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
 }
@@ -880,7 +882,7 @@ where
 /// The prepare transaction result.
 pub async fn build_gasless_transaction<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     relayer_id: String,
-    params: GaslessTransactionBuildRequest,
+    request: GaslessTransactionBuildRequest,
     state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
@@ -897,9 +899,11 @@ where
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
     relayer.validate_active_state()?;
 
+    request.validate()?;
+
     let network_relayer = get_network_relayer_by_model(relayer, &state).await?;
 
-    let result = network_relayer.build_gasless_transaction(params).await?;
+    let result = network_relayer.build_gasless_transaction(request).await?;
     Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
 }
 

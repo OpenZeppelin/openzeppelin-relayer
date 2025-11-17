@@ -1,11 +1,12 @@
 //! Utility functions for Stellar transaction domain logic.
 use crate::models::{RelayerError, StellarTokenKind, StellarTokenMetadata};
 use crate::services::provider::StellarProviderTrait;
+use base64::{engine::general_purpose, Engine};
 use soroban_rs::xdr::{
     AccountId, AlphaNum12, AlphaNum4, Asset, AssetCode12, AssetCode4, ContractDataEntry,
-    ContractId, Hash, LedgerEntry, LedgerEntryData, LedgerKey, LedgerKeyContractData, Limits,
+    ContractId, Hash, LedgerEntryData, LedgerKey, LedgerKeyContractData, Limits,
     PublicKey as XdrPublicKey, ReadXdr, ScAddress, ScSymbol, ScVal, TrustLineEntry,
-    TrustLineEntryExt, Uint256, VecM,
+    TrustLineEntryExt, TrustLineEntryV1, Uint256, VecM,
 };
 use std::str::FromStr;
 use stellar_strkey::ed25519::PublicKey;
@@ -340,6 +341,9 @@ where
 
 /// Parse a ledger entry from base64 XDR string.
 ///
+/// Handles both LedgerEntry and LedgerEntryChange formats. If the XDR is a
+/// LedgerEntryChange, extracts the LedgerEntry from it.
+///
 /// # Arguments
 ///
 /// * `xdr_string` - Base64-encoded XDR string
@@ -351,9 +355,25 @@ where
 fn parse_ledger_entry_from_xdr(
     xdr_string: &str,
     context: &str,
-) -> Result<LedgerEntry, StellarTokenError> {
-    LedgerEntry::from_xdr_base64(xdr_string, Limits::none())
-        .map_err(|e| StellarTokenError::LedgerEntryParseFailed(context.to_string(), e.to_string()))
+) -> Result<LedgerEntryData, StellarTokenError> {
+    let trimmed_xdr = xdr_string.trim();
+
+    // Ensure valid base64
+    if general_purpose::STANDARD.decode(trimmed_xdr).is_err() {
+        return Err(StellarTokenError::LedgerEntryParseFailed(
+            context.to_string(),
+            "Invalid base64".to_string(),
+        ));
+    }
+
+    // Parse as LedgerEntryData (what Soroban RPC actually returns)
+    match LedgerEntryData::from_xdr_base64(trimmed_xdr, Limits::none()) {
+        Ok(data) => Ok(data),
+        Err(e) => Err(StellarTokenError::LedgerEntryParseFailed(
+            context.to_string(),
+            format!("Failed to parse LedgerEntryData: {}", e),
+        )),
+    }
 }
 
 /// Extract ScVal from contract data entry.
@@ -376,20 +396,19 @@ fn extract_scval_from_contract_data(
     let entries = ledger_entries
         .entries
         .as_ref()
-        .ok_or_else(|| StellarTokenError::NoEntriesFound(context.to_string()))?;
+        .ok_or_else(|| StellarTokenError::NoEntriesFound(context.into()))?;
 
     if entries.is_empty() {
-        return Err(StellarTokenError::EmptyEntries(context.to_string()));
+        return Err(StellarTokenError::EmptyEntries(context.into()));
     }
 
-    let entry_result = &entries[0];
-    let entry = parse_ledger_entry_from_xdr(&entry_result.xdr, context)?;
+    let entry_xdr = &entries[0].xdr;
+    let entry = parse_ledger_entry_from_xdr(entry_xdr, context)?;
 
-    match &entry.data {
+    match entry {
         LedgerEntryData::ContractData(ContractDataEntry { val, .. }) => Ok(val.clone()),
-        _ => Err(StellarTokenError::UnexpectedLedgerEntryType(
-            context.to_string(),
-        )),
+
+        _ => Err(StellarTokenError::UnexpectedLedgerEntryType(context.into())),
     }
 }
 
@@ -397,11 +416,12 @@ fn extract_scval_from_contract_data(
 // Public API Functions
 // ============================================================================
 
-/// Fetch token balance for a given account and asset identifier.
+/// Fetch available token balance for a given account and asset identifier.
 ///
 /// Supports:
 /// - Native XLM: Returns account balance directly
 /// - Traditional assets (Credit4/Credit12): Queries trustline balance via LedgerKey::Trustline
+///   and excludes funds locked in pending offers (selling_liabilities)
 /// - Contract tokens: Queries contract data balance via LedgerKey::ContractData
 ///
 /// # Arguments
@@ -415,7 +435,8 @@ fn extract_scval_from_contract_data(
 ///
 /// # Returns
 ///
-/// Balance in stroops (or token's smallest unit) as u64, or error if balance cannot be fetched
+/// Available balance in stroops (or token's smallest unit) as u64, excluding funds locked
+/// in pending offers/orders, or error if balance cannot be fetched
 pub async fn get_token_balance<P>(
     provider: &P,
     account_id: &str,
@@ -442,7 +463,11 @@ where
     get_asset_trustline_balance(provider, account_id, asset_id).await
 }
 
-/// Fetch balance for a traditional Stellar asset (Credit4/Credit12) via trustline
+/// Fetch available balance for a traditional Stellar asset (Credit4/Credit12) via trustline
+///
+/// Returns the available balance excluding funds locked in pending offers/orders.
+/// For TrustLineEntry V1 (with liabilities), subtracts selling_liabilities from balance.
+/// For TrustLineEntry V0 (no liabilities), returns the total balance.
 async fn get_asset_trustline_balance<P>(
     provider: &P,
     account_id: &str,
@@ -451,88 +476,92 @@ async fn get_asset_trustline_balance<P>(
 where
     P: StellarProviderTrait + Send + Sync,
 {
-    // Parse asset identifier (format: "CODE:ISSUER")
     let (code, issuer) = parse_asset_identifier(asset_id)?;
 
-    // Parse issuer and account IDs
-    let issuer_account_id = parse_account_id(issuer)?;
-    let account_xdr_id = parse_account_id(account_id)?;
+    let issuer_id = parse_account_id(issuer)?;
+    let account_xdr = parse_account_id(account_id)?;
 
-    // Create Asset XDR based on code length
     let asset = if code.len() <= 4 {
         let mut buf = [0u8; 4];
         buf[..code.len()].copy_from_slice(code.as_bytes());
         Asset::CreditAlphanum4(AlphaNum4 {
             asset_code: AssetCode4(buf),
-            issuer: issuer_account_id,
+            issuer: issuer_id,
         })
-    } else if code.len() <= 12 {
+    } else {
         let mut buf = [0u8; 12];
         buf[..code.len()].copy_from_slice(code.as_bytes());
         Asset::CreditAlphanum12(AlphaNum12 {
             asset_code: AssetCode12(buf),
-            issuer: issuer_account_id,
+            issuer: issuer_id,
         })
-    } else {
-        return Err(StellarTokenError::AssetCodeTooLong(
-            MAX_ASSET_CODE_LENGTH,
-            code.to_string(),
-        ));
     };
 
-    // Construct LedgerKey::Trustline
-    // Note: LedgerKeyTrustLine uses TrustLineAsset which wraps Asset
-    // Native assets are already handled above, so this is unreachable for Native
     let ledger_key = LedgerKey::Trustline(soroban_rs::xdr::LedgerKeyTrustLine {
-        account_id: account_xdr_id,
+        account_id: account_xdr,
         asset: match asset {
-            Asset::CreditAlphanum4(alpha4) => {
-                soroban_rs::xdr::TrustLineAsset::CreditAlphanum4(alpha4)
-            }
-            Asset::CreditAlphanum12(alpha12) => {
-                soroban_rs::xdr::TrustLineAsset::CreditAlphanum12(alpha12)
-            }
-            Asset::Native => {
-                // This should never happen as native is handled earlier
-                return Err(StellarTokenError::NativeAssetInTrustlineQuery);
-            }
+            Asset::CreditAlphanum4(a) => soroban_rs::xdr::TrustLineAsset::CreditAlphanum4(a),
+            Asset::CreditAlphanum12(a) => soroban_rs::xdr::TrustLineAsset::CreditAlphanum12(a),
+            Asset::Native => return Err(StellarTokenError::NativeAssetInTrustlineQuery),
         },
     });
 
-    // Query ledger entry
-    let ledger_entries = provider
+    let resp = provider
         .get_ledger_entries(&[ledger_key])
         .await
-        .map_err(|e| {
-            StellarTokenError::TrustlineQueryFailed(asset_id.to_string(), e.to_string())
-        })?;
+        .map_err(|e| StellarTokenError::TrustlineQueryFailed(asset_id.into(), e.to_string()))?;
 
-    // Extract balance from trustline entry
-    let entries = ledger_entries.entries.ok_or_else(|| {
-        StellarTokenError::NoTrustlineFound(asset_id.to_string(), account_id.to_string())
-    })?;
+    let entries = resp
+        .entries
+        .ok_or_else(|| StellarTokenError::NoTrustlineFound(asset_id.into(), account_id.into()))?;
 
     if entries.is_empty() {
         return Err(StellarTokenError::NoTrustlineFound(
-            asset_id.to_string(),
-            account_id.to_string(),
+            asset_id.into(),
+            account_id.into(),
         ));
     }
 
-    let entry_result = &entries[0];
-    // Parse XDR string to LedgerEntry
-    let entry = parse_ledger_entry_from_xdr(
-        &entry_result.xdr,
-        &format!("trustline for asset {}", asset_id),
-    )?;
+    let entry = parse_ledger_entry_from_xdr(&entries[0].xdr, asset_id)?;
 
-    match &entry.data {
+    match entry {
+        LedgerEntryData::Trustline(TrustLineEntry {
+            balance,
+            ext: TrustLineEntryExt::V1(TrustLineEntryV1 { liabilities, .. }),
+            ..
+        }) => {
+            // V1 has liabilities - calculate available balance by subtracting selling_liabilities
+            // selling_liabilities represents funds locked in sell offers for this asset
+            let available_balance = balance.saturating_sub(liabilities.selling);
+            debug!(
+                account_id = %account_id,
+                asset_id = %asset_id,
+                total_balance = balance,
+                selling_liabilities = liabilities.selling,
+                buying_liabilities = liabilities.buying,
+                available_balance = available_balance,
+                "Trustline balance retrieved (V1 with liabilities)"
+            );
+            Ok(available_balance.max(0) as u64)
+        }
         LedgerEntryData::Trustline(TrustLineEntry {
             balance,
             ext: TrustLineEntryExt::V0,
             ..
-        }) => Ok(*balance as u64),
+        }) => {
+            // V0 has no liabilities - return total balance
+            debug!(
+                account_id = %account_id,
+                asset_id = %asset_id,
+                balance_raw = balance,
+                balance_u64 = balance as u64,
+                "Trustline balance retrieved (V0, no liabilities)"
+            );
+            Ok(balance.max(0) as u64)
+        }
+
         LedgerEntryData::Trustline(_) => Err(StellarTokenError::UnsupportedTrustlineVersion),
+
         _ => Err(StellarTokenError::UnexpectedTrustlineEntryType),
     }
 }
@@ -579,35 +608,29 @@ where
     let entry_result = &entries[0];
     let entry = parse_ledger_entry_from_xdr(&entry_result.xdr, &error_context)?;
 
-    match &entry.data {
-        LedgerEntryData::ContractData(ContractDataEntry { val, .. }) => {
-            // Extract balance from ScVal - support multiple types for robustness
-            match val {
-                ScVal::I128(parts) => {
-                    // Most tokens use i128, check if it fits in u64
-                    if parts.hi != 0 {
-                        return Err(StellarTokenError::BalanceTooLarge(parts.hi, parts.lo));
-                    }
-                    let lo = parts.lo as i64;
-                    if lo < 0 {
-                        return Err(StellarTokenError::NegativeBalanceI128(parts.lo));
-                    }
-                    Ok(lo as u64)
+    match entry {
+        LedgerEntryData::ContractData(ContractDataEntry { val, .. }) => match val {
+            ScVal::I128(parts) => {
+                if parts.hi != 0 {
+                    return Err(StellarTokenError::BalanceTooLarge(parts.hi, parts.lo));
                 }
-                ScVal::U64(n) => Ok(*n),
-                ScVal::I64(n) => {
-                    if *n < 0 {
-                        Err(StellarTokenError::NegativeBalanceI64(*n))
-                    } else {
-                        Ok(*n as u64)
-                    }
+                if (parts.lo as i64) < 0 {
+                    return Err(StellarTokenError::NegativeBalanceI128(parts.lo));
                 }
-                _ => Err(StellarTokenError::UnexpectedBalanceType(format!(
-                    "{:?}",
-                    val
-                ))),
+                Ok(parts.lo as u64)
             }
-        }
+            ScVal::U64(n) => Ok(n),
+            ScVal::I64(n) => {
+                if n < 0 {
+                    return Err(StellarTokenError::NegativeBalanceI64(n));
+                }
+                Ok(n as u64)
+            }
+            other => Err(StellarTokenError::UnexpectedBalanceType(format!(
+                "{:?}",
+                other
+            ))),
+        },
         _ => Err(StellarTokenError::UnexpectedContractDataEntryType),
     }
 }

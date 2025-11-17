@@ -58,24 +58,23 @@ use crate::{
     utils::calculate_scheduled_timestamp,
 };
 use async_trait::async_trait;
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use eyre::Result;
 use futures::future::try_join_all;
-use soroban_rs::xdr::{Limits, Operation, WriteXdr};
+use soroban_rs::xdr::{Limits, Operation, ReadXdr, TransactionEnvelope, WriteXdr};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
-use crate::domain::relayer::xdr_utils::extract_source_account;
 use crate::domain::relayer::{GasAbstractionTrait, Relayer, RelayerError};
 use crate::domain::transaction::stellar::token::{get_token_balance, get_token_metadata};
 use crate::domain::transaction::stellar::utils::{
-    add_operation_to_envelope, amount_to_ui_amount, create_fee_payment_operation,
-    estimate_base_fee, parse_transaction_and_count_operations, parse_transaction_envelope,
-    set_time_bounds,
+    add_operation_to_envelope, amount_to_ui_amount, count_operations_from_xdr,
+    create_fee_payment_operation, estimate_base_fee, set_time_bounds,
 };
 use crate::domain::transaction::stellar::StellarTransactionValidator;
 
 /// Fee quote structure containing fee estimates in both tokens and stroops
+#[derive(Debug)]
 struct FeeQuote {
     fee_in_token: u64,
     fee_in_token_ui: String,
@@ -305,6 +304,7 @@ where
     ) -> Result<(FeeQuote, u64), RelayerError> {
         // Handle native XLM - no conversion needed
         if fee_token == "native" || fee_token.is_empty() {
+            debug!("Estimating fee for native XLM: {}", xlm_fee);
             let buffered_fee = if let Some(margin) = fee_margin_percentage {
                 (xlm_fee as f64 * (1.0 + margin as f64 / 100.0)) as u64
             } else {
@@ -321,6 +321,8 @@ where
                 buffered_fee,
             ));
         }
+
+        debug!("Estimating fee for token: {}", fee_token);
 
         // Apply fee margin if specified
         let buffered_xlm_fee = if let Some(margin) = fee_margin_percentage {
@@ -349,8 +351,14 @@ where
             .await
             .map_err(|e| RelayerError::Internal(format!("Failed to get quote: {}", e)))?;
 
+        debug!(
+            "Quote from DEX: input={} stroops XLM, output={} stroops token, input_asset={}, output_asset={}",
+            quote.in_amount, quote.out_amount, quote.input_asset, quote.output_asset
+        );
+
         // Get token decimals from policy or default to 7
         let decimals = policy.get_allowed_token_decimals(fee_token).unwrap_or(7);
+        debug!("Token decimals: {} for token: {}", decimals, fee_token);
 
         // Calculate conversion rate
         let conversion_rate = if buffered_xlm_fee > 0 {
@@ -359,15 +367,19 @@ where
             0.0
         };
 
-        Ok((
-            FeeQuote {
-                fee_in_token: quote.out_amount,
-                fee_in_token_ui: amount_to_ui_amount(quote.out_amount, decimals),
-                fee_in_stroops: buffered_xlm_fee,
-                conversion_rate,
-            },
-            buffered_xlm_fee,
-        ))
+        let fee_quote = FeeQuote {
+            fee_in_token: quote.out_amount,
+            fee_in_token_ui: amount_to_ui_amount(quote.out_amount, decimals),
+            fee_in_stroops: buffered_xlm_fee,
+            conversion_rate,
+        };
+
+        debug!(
+            "Final fee quote: fee_in_token={} stroops ({} {}), fee_in_stroops={} stroops XLM, conversion_rate={}",
+            fee_quote.fee_in_token, fee_quote.fee_in_token_ui, fee_token, fee_quote.fee_in_stroops, fee_quote.conversion_rate
+        );
+
+        Ok((fee_quote, buffered_xlm_fee))
     }
 
     /// Check if source account has sufficient balance for fee payment
@@ -382,6 +394,8 @@ where
             .await
             .map_err(RelayerError::from)?;
 
+        debug!("Source account balance: {}", balance);
+
         if balance < required_amount {
             let token_name = if fee_token == "native" || fee_token.is_empty() {
                 "XLM"
@@ -395,6 +409,85 @@ where
         }
 
         Ok(())
+    }
+
+    /// Create and add fee payment operation to transaction envelope
+    ///
+    /// This utility function encapsulates the logic for creating a payment operation
+    /// for fee payment and adding it to the transaction envelope.
+    ///
+    /// # Arguments
+    ///
+    /// * `envelope` - Mutable reference to the transaction envelope
+    /// * `fee_token` - Token identifier for fee payment (e.g., "native" or "USDC:ISSUER")
+    /// * `fee_amount` - Fee amount in token units (as i64 for payment operation)
+    /// * `relayer_address` - Address of the relayer receiving the fee payment
+    ///
+    /// # Returns
+    ///
+    /// Result indicating success or failure
+    fn add_fee_payment_operation(
+        &self,
+        envelope: &mut TransactionEnvelope,
+        fee_token: &str,
+        fee_amount: i64,
+        relayer_address: &str,
+    ) -> Result<(), RelayerError> {
+        let payment_op_spec = create_fee_payment_operation(relayer_address, fee_token, fee_amount)
+            .map_err(|e| {
+                RelayerError::Internal(format!("Failed to create fee payment operation: {}", e))
+            })?;
+
+        // Convert OperationSpec to XDR Operation
+        let payment_op = Operation::try_from(payment_op_spec).map_err(|e| {
+            RelayerError::Internal(format!("Failed to convert payment operation: {}", e))
+        })?;
+
+        // Add payment operation to transaction
+        add_operation_to_envelope(envelope, payment_op)
+            .map_err(|e| RelayerError::Internal(format!("Failed to add operation: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Estimate fee, convert to token amount, and add payment operation to envelope
+    ///
+    /// This utility function combines fee estimation, conversion, and payment operation
+    /// creation into a single operation. It:
+    /// 1. Estimates and converts XLM fee to token amount
+    /// 2. Adds fee payment operation to the envelope
+    ///
+    /// Note: Time bounds should be set separately just before returning the transaction
+    /// to give the user maximum time to review and submit.
+    ///
+    /// Returns the fee quote, buffered XLM fee, and the updated envelope.
+    async fn estimate_fee_and_add_payment_operation(
+        &self,
+        mut envelope: TransactionEnvelope,
+        xlm_fee: u64,
+        fee_token: &str,
+        fee_margin_percentage: Option<f32>,
+        relayer_address: &str,
+    ) -> Result<(FeeQuote, u64, TransactionEnvelope), RelayerError> {
+        // Estimate and convert fee to token amount
+        let (fee_quote, buffered_xlm_fee) = self
+            .estimate_and_convert_fee(xlm_fee, fee_token, fee_margin_percentage)
+            .await
+            .map_err(|e| {
+                RelayerError::Internal(format!("Failed to estimate and convert fee: {}", e))
+            })?;
+
+        // Convert fee amount to i64 for payment operation
+        let fee_amount = i64::try_from(fee_quote.fee_in_token).map_err(|_| {
+            RelayerError::Internal(
+                "Fee amount too large for payment operation (exceeds i64::MAX)".to_string(),
+            )
+        })?;
+
+        // Add fee payment operation to envelope
+        self.add_fee_payment_operation(&mut envelope, fee_token, fee_amount, relayer_address)?;
+
+        Ok((fee_quote, buffered_xlm_fee, envelope))
     }
 }
 
@@ -741,17 +834,27 @@ where
             |e| RelayerError::Internal(format!("Failed to validate allowed token: {}", e)),
         )?;
 
-        // Parse transaction and count operations
-        let num_operations =
-            parse_transaction_and_count_operations(&params.transaction).map_err(|e| {
-                RelayerError::Internal(format!(
-                    "Failed to parse transaction and count operations: {}",
-                    e
-                ))
+        // Count operations from the appropriate source
+        let num_operations = if let Some(ref xdr) = params.transaction_xdr {
+            // Parse XDR and count operations
+            use crate::domain::relayer::xdr_utils::extract_operations;
+            let envelope = TransactionEnvelope::from_xdr_base64(xdr, Limits::none())
+                .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {}", e)))?;
+            let operations = extract_operations(&envelope).map_err(|e| {
+                RelayerError::Internal(format!("Failed to extract operations: {}", e))
             })?;
+            operations.len()
+        } else if let Some(ref operations) = params.operations {
+            // Count operations directly
+            operations.len()
+        } else {
+            return Err(RelayerError::ValidationError(
+                "Must provide either transaction_xdr or operations in the request".to_string(),
+            ));
+        };
 
-        // Estimate base XLM fee
-        let xlm_fee = estimate_base_fee(num_operations);
+        // Estimate base XLM fee + 1 for the fee payment operation
+        let xlm_fee = estimate_base_fee(num_operations + 1);
 
         // Convert to token amount via DEX service
         let (fee_quote, _) = self
@@ -774,6 +877,8 @@ where
         .map_err(|e| {
             RelayerError::Internal(format!("Failed to validate token-specific max fee: {}", e))
         })?;
+
+        debug!("Fee estimate result: {:?}", fee_quote);
 
         let result = StellarFeeEstimateResult {
             estimated_fee: fee_quote.fee_in_token_ui,
@@ -805,101 +910,162 @@ where
             |e| RelayerError::Internal(format!("Failed to validate allowed token: {}", e)),
         )?;
 
-        // Parse transaction and count operations
-        let num_operations =
-            parse_transaction_and_count_operations(&params.transaction).map_err(|e| {
-                RelayerError::Internal(format!(
-                    "Failed to parse transaction and count operations: {}",
-                    e
-                ))
-            })?;
+        // Count operations to get initial fee estimate for payment operation
+        let num_operations = if let Some(ref xdr) = params.transaction_xdr {
+            count_operations_from_xdr(xdr)?
+        } else if let Some(ref operations) = params.operations {
+            // Count operations directly
+            operations.len()
+        } else {
+            unreachable!("Validation above ensures one is set");
+        };
 
-        // Estimate base XLM fee (include +1 for the payment operation we'll add)
-        let xlm_fee = estimate_base_fee(num_operations + 1);
+        // Parse transaction to prepare for building
+        let envelope = if let Some(ref xdr) = params.transaction_xdr {
+            TransactionEnvelope::from_xdr_base64(xdr, Limits::none())
+                .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {}", e)))?
+        } else {
+            return Err(RelayerError::NotSupported(
+                "Operations mode not yet supported for build_gasless_transaction. Please use transaction_xdr instead.".to_string(),
+            ));
+        };
 
-        // Convert to token amount via DEX service
-        let (fee_quote, buffered_xlm_fee) = self
-            .estimate_and_convert_fee(xlm_fee, &params.fee_token, policy.fee_margin_percentage)
+        // Store original envelope before adding payment operation
+        let original_envelope = envelope.clone();
+
+        StellarTransactionValidator::gasless_transaction_validation(
+            &envelope,
+            &self.relayer.address,
+            &policy,
+            &self.provider,
+        )
+        .await
+        .map_err(|e| {
+            RelayerError::ValidationError(format!("Failed to validate gasless transaction: {}", e))
+        })?;
+
+        // Get initial fee estimate for creating payment operation
+        let initial_xlm_fee = estimate_base_fee(num_operations + 1); // +1 for fee payment operation
+
+        // Estimate fee, convert to token, and add payment operation
+        let (initial_fee_quote, _, mut envelope) = self
+            .estimate_fee_and_add_payment_operation(
+                envelope,
+                initial_xlm_fee,
+                &params.fee_token,
+                policy.fee_margin_percentage,
+                &self.relayer.address,
+            )
+            .await?;
+
+        // Set temporary time bounds for simulation (simulation needs valid time bounds)
+        let temp_valid_until = Utc::now() + Duration::minutes(1);
+        set_time_bounds(&mut envelope, temp_valid_until)
+            .map_err(|e| RelayerError::Internal(format!("Failed to set time bounds: {}", e)))?;
+
+        // Single simulation: get actual fee requirement for complete transaction
+        debug!("Simulating complete transaction with fee payment to get actual fee requirement");
+        let simulation_result = self
+            .provider
+            .simulate_transaction_envelope(&envelope)
             .await
-            .map_err(|e| {
-                RelayerError::Internal(format!("Failed to estimate and convert fee: {}", e))
-            })?;
+            .map_err(|e| RelayerError::Internal(format!("Transaction simulation failed: {}", e)))?;
 
-        // Validate max fee
-        StellarTransactionValidator::validate_max_fee(fee_quote.fee_in_stroops, &policy)
+        // Check simulation success
+        if simulation_result.results.is_empty() {
+            return Err(RelayerError::Internal(
+                "Transaction simulation failed: no results returned".to_string(),
+            ));
+        }
+
+        // Use actual fee from simulation
+        let actual_xlm_fee = simulation_result.min_resource_fee as u64;
+        debug!(
+            initial_estimate = initial_xlm_fee,
+            simulated_min_resource_fee = actual_xlm_fee,
+            "Simulation provided actual fee requirement"
+        );
+
+        // Only recreate transaction if actual fee is higher than initial estimate
+        // This ensures the transaction has sufficient fee to succeed
+        // If actual fee is lower, we keep the initial estimate (transaction will succeed, user pays slightly more)
+        let (final_fee_quote, buffered_xlm_fee, mut final_envelope) = if actual_xlm_fee
+            > initial_xlm_fee
+        {
+            debug!(
+                "Actual fee ({}) is higher than initial estimate ({}), recreating transaction with correct fee to ensure success",
+                actual_xlm_fee, initial_xlm_fee
+            );
+
+            // Recreate transaction from original envelope with higher fee amount
+            // Note: Final time bounds will be set just before returning
+            let (actual_fee_quote, actual_buffered_fee, updated_envelope) = self
+                .estimate_fee_and_add_payment_operation(
+                    original_envelope,
+                    actual_xlm_fee,
+                    &params.fee_token,
+                    policy.fee_margin_percentage,
+                    &self.relayer.address,
+                )
+                .await?;
+
+            (actual_fee_quote, actual_buffered_fee, updated_envelope)
+        } else {
+            // Keep initial estimate (actual <= initial)
+            // Transaction will succeed with initial estimate, user pays slightly more if actual is lower
+            if actual_xlm_fee < initial_xlm_fee {
+                debug!(
+                    "Actual fee ({}) is lower than initial estimate ({}), keeping initial estimate. Transaction will succeed.",
+                    actual_xlm_fee, initial_xlm_fee
+                );
+            } else {
+                debug!("Simulated fee matches initial estimate, reusing initial fee quote");
+            }
+            (initial_fee_quote, initial_xlm_fee, envelope)
+        };
+
+        // Validate max fee with actual amount
+        StellarTransactionValidator::validate_max_fee(final_fee_quote.fee_in_stroops, &policy)
             .map_err(|e| RelayerError::Internal(format!("Failed to validate max fee: {}", e)))?;
 
         // Validate token-specific max fee
         StellarTransactionValidator::validate_token_max_fee(
             &params.fee_token,
-            fee_quote.fee_in_token,
+            final_fee_quote.fee_in_token,
             &policy,
         )
         .map_err(|e| {
             RelayerError::Internal(format!("Failed to validate token-specific max fee: {}", e))
         })?;
 
-        // Parse transaction to add payment operation
-        let mut envelope = parse_transaction_envelope(&params.transaction).map_err(|e| {
-            RelayerError::Internal(format!("Failed to parse transaction envelope: {}", e))
-        })?;
+        // Note: Balance check is not needed here because simulation already validated
+        // that the transaction (including the payment operation) will execute successfully.
+        // If simulation succeeded, the account has sufficient balance.
 
-        // Extract source account from envelope
-        let source_account = extract_source_account(&envelope).map_err(|e| {
-            RelayerError::Internal(format!(
-                "Failed to extract source account from envelope: {}",
-                e
-            ))
-        })?;
+        debug!(
+            operations_count = num_operations,
+            initial_fee_estimate = initial_xlm_fee,
+            actual_fee_from_simulation = actual_xlm_fee,
+            final_fee_in_token = final_fee_quote.fee_in_token_ui,
+            "Transaction simulation completed successfully"
+        );
 
-        // Validate source account has sufficient balance for fee payment
-        self.check_source_account_balance(
-            &source_account,
-            &params.fee_token,
-            fee_quote.fee_in_token,
-        )
-        .await
-        .map_err(|e| {
-            RelayerError::Internal(format!("Failed to validate source account balance: {}", e))
-        })?;
-
-        // Convert fee amount safely from u64 to i64
-        let fee_amount = i64::try_from(fee_quote.fee_in_token).map_err(|_| {
-            RelayerError::Internal(
-                "Fee amount too large for payment operation (exceeds i64::MAX)".to_string(),
-            )
-        })?;
-
-        // Create payment operation for fee payment
-        let payment_op_spec =
-            create_fee_payment_operation(&self.relayer.address, &params.fee_token, fee_amount)
-                .map_err(|e| {
-                    RelayerError::Internal(format!("Failed to create fee payment operation: {}", e))
-                })?;
-
-        // Convert OperationSpec to XDR Operation
-        let payment_op = Operation::try_from(payment_op_spec).map_err(|e| {
-            RelayerError::Internal(format!("Failed to convert payment operation: {}", e))
-        })?;
-
-        // Add payment operation to transaction
-        add_operation_to_envelope(&mut envelope, payment_op)
-            .map_err(|e| RelayerError::Internal(format!("Failed to add operation: {}", e)))?;
-
-        // Set time bounds (valid for 1 minute due to quote volatility)
+        // Set final time bounds just before returning to give user maximum time to review and submit
+        // Using 1 minute to provide reasonable time while ensuring transaction doesn't expire too quickly
         let valid_until = Utc::now() + Duration::minutes(1);
-        set_time_bounds(&mut envelope, valid_until)
-            .map_err(|e| RelayerError::Internal(format!("Failed to set time bounds: {}", e)))?;
+        set_time_bounds(&mut final_envelope, valid_until).map_err(|e| {
+            RelayerError::Internal(format!("Failed to set final time bounds: {}", e))
+        })?;
 
-        // Serialize extended transaction
-        let extended_xdr = envelope
+        // Serialize final transaction
+        let extended_xdr = final_envelope
             .to_xdr_base64(Limits::none())
             .map_err(|e| RelayerError::Internal(format!("Failed to serialize XDR: {}", e)))?;
 
         Ok(GaslessTransactionBuildResponse::Stellar(
             StellarPrepareTransactionResult {
                 transaction: extended_xdr,
-                fee_in_token: fee_quote.fee_in_token_ui,
+                fee_in_token: final_fee_quote.fee_in_token_ui,
                 fee_in_stroops: buffered_xlm_fee.to_string(),
                 fee_token: params.fee_token,
                 valid_until: valid_until.to_rfc3339(),

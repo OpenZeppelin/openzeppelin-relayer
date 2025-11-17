@@ -3,10 +3,17 @@
 //! This module focuses on business logic validations that aren't
 //! already handled by XDR parsing or the type system.
 
-use crate::domain::relayer::xdr_utils::{extract_operations, muxed_account_to_string};
+use crate::constants::STELLAR_MAX_OPERATIONS;
+use crate::domain::relayer::xdr_utils::{
+    extract_operations, extract_source_account, muxed_account_to_string,
+};
 use crate::models::RelayerStellarPolicy;
 use crate::models::{MemoSpec, OperationSpec, StellarValidationError, TransactionError};
-use soroban_rs::xdr::{Asset, OperationBody, PaymentOp, TransactionEnvelope};
+use crate::services::provider::StellarProviderTrait;
+use soroban_rs::xdr::{
+    AccountId, Asset, HostFunction, InvokeHostFunctionOp, LedgerKey, OperationBody, PaymentOp,
+    PublicKey as XdrPublicKey, ScAddress, SorobanCredentials, TransactionEnvelope,
+};
 use stellar_strkey::ed25519::PublicKey;
 use thiserror::Error;
 
@@ -33,10 +40,10 @@ pub fn validate_operations(ops: &[OperationSpec]) -> Result<(), TransactionError
         return Err(StellarValidationError::EmptyOperations.into());
     }
 
-    if ops.len() > 100 {
+    if ops.len() > STELLAR_MAX_OPERATIONS {
         return Err(StellarValidationError::TooManyOperations {
             count: ops.len(),
-            max: 100,
+            max: STELLAR_MAX_OPERATIONS,
         }
         .into());
     }
@@ -90,6 +97,90 @@ pub fn validate_soroban_memo_restriction(
 pub struct StellarTransactionValidator;
 
 impl StellarTransactionValidator {
+    /// Validate fee_token structure
+    ///
+    /// Validates that the fee_token is in a valid format:
+    /// - "native" or "XLM" for native XLM
+    /// - "CODE:ISSUER" for classic assets (CODE: 1-12 chars, ISSUER: 56 chars starting with 'G')
+    /// - Contract address starting with "C" (56 chars) for Soroban contract tokens
+    pub fn validate_fee_token_structure(
+        fee_token: &str,
+    ) -> Result<(), StellarTransactionValidationError> {
+        // Handle native XLM
+        if fee_token == "native" || fee_token == "XLM" || fee_token.is_empty() {
+            return Ok(());
+        }
+
+        // Check if it's a contract address (starts with 'C', 56 chars)
+        if fee_token.starts_with('C') {
+            if fee_token.len() == 56 {
+                // Validate it's a valid contract address using StrKey
+                if stellar_strkey::Contract::from_string(fee_token).is_ok() {
+                    return Ok(());
+                }
+            }
+            return Err(StellarTransactionValidationError::InvalidAssetIdentifier(
+                format!(
+                    "Invalid contract address format: {} (must be 56 characters and valid StrKey)",
+                    fee_token
+                ),
+            ));
+        }
+
+        // Otherwise, must be CODE:ISSUER format
+        let parts: Vec<&str> = fee_token.split(':').collect();
+        if parts.len() != 2 {
+            return Err(StellarTransactionValidationError::InvalidAssetIdentifier(format!(
+                "Invalid fee_token format: {}. Expected 'native', 'CODE:ISSUER', or contract address (C...)",
+                fee_token
+            )));
+        }
+
+        let code = parts[0];
+        let issuer = parts[1];
+
+        // Validate CODE length (1-12 characters)
+        if code.is_empty() || code.len() > 12 {
+            return Err(StellarTransactionValidationError::InvalidAssetIdentifier(
+                format!(
+                    "Invalid asset code length: {} (must be 1-12 characters)",
+                    code
+                ),
+            ));
+        }
+
+        // Validate ISSUER format (56 chars, starts with 'G')
+        if issuer.len() != 56 {
+            return Err(StellarTransactionValidationError::InvalidAssetIdentifier(
+                format!(
+                    "Invalid issuer address length: {} (must be 56 characters)",
+                    issuer
+                ),
+            ));
+        }
+
+        if !issuer.starts_with('G') {
+            return Err(StellarTransactionValidationError::InvalidAssetIdentifier(
+                format!(
+                    "Invalid issuer address prefix: {} (must start with 'G')",
+                    issuer
+                ),
+            ));
+        }
+
+        // Validate issuer is a valid Stellar public key
+        if stellar_strkey::ed25519::PublicKey::from_string(issuer).is_err() {
+            return Err(StellarTransactionValidationError::InvalidAssetIdentifier(
+                format!(
+                    "Invalid issuer address format: {} (must be a valid Stellar public key)",
+                    issuer
+                ),
+            ));
+        }
+
+        Ok(())
+    }
+
     /// Validate that an asset identifier is in the allowed tokens list
     pub fn validate_allowed_token(
         asset: &str,
@@ -255,6 +346,459 @@ impl StellarTransactionValidator {
                 expected_fee_token, payments
             ))),
         }
+    }
+
+    /// Validate that the source account is not the relayer address
+    ///
+    /// This prevents malicious attempts to drain the relayer's funds by
+    /// using the relayer as the transaction source.
+    fn validate_source_account_not_relayer(
+        envelope: &TransactionEnvelope,
+        relayer_address: &str,
+    ) -> Result<(), StellarTransactionValidationError> {
+        let source_account = extract_source_account(envelope).map_err(|e| {
+            StellarTransactionValidationError::ValidationError(format!(
+                "Failed to extract source account: {}",
+                e
+            ))
+        })?;
+
+        if source_account == relayer_address {
+            return Err(StellarTransactionValidationError::ValidationError(
+                "Transaction source account cannot be the relayer address. This is a security measure to prevent relayer fund drainage.".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Validate transaction type
+    ///
+    /// Rejects fee-bump transactions as they are not suitable for gasless transactions.
+    fn validate_transaction_type(
+        envelope: &TransactionEnvelope,
+    ) -> Result<(), StellarTransactionValidationError> {
+        match envelope {
+            soroban_rs::xdr::TransactionEnvelope::TxFeeBump(_) => {
+                Err(StellarTransactionValidationError::ValidationError(
+                    "Fee-bump transactions are not supported for gasless transactions".to_string(),
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Validate that operations don't target the relayer (except for fee payment)
+    ///
+    /// This prevents operations that could drain the relayer's funds or manipulate
+    /// the relayer's account state. Fee payment operations are expected and allowed.
+    fn validate_operations_not_targeting_relayer(
+        envelope: &TransactionEnvelope,
+        relayer_address: &str,
+    ) -> Result<(), StellarTransactionValidationError> {
+        let operations = extract_operations(envelope).map_err(|e| {
+            StellarTransactionValidationError::ValidationError(format!(
+                "Failed to extract operations: {}",
+                e
+            ))
+        })?;
+
+        for op in operations.iter() {
+            match &op.body {
+                OperationBody::Payment(PaymentOp { destination, .. }) => {
+                    let dest_str = muxed_account_to_string(destination).map_err(|e| {
+                        StellarTransactionValidationError::ValidationError(format!(
+                            "Failed to parse destination: {}",
+                            e
+                        ))
+                    })?;
+
+                    // Payment to relayer is allowed (for fee payment), but we log it
+                    if dest_str == relayer_address {
+                        // This is expected for fee payment, but we should ensure
+                        // it's the last operation added by the relayer
+                        continue;
+                    }
+                }
+                OperationBody::AccountMerge(destination) => {
+                    let dest_str = muxed_account_to_string(destination).map_err(|e| {
+                        StellarTransactionValidationError::ValidationError(format!(
+                            "Failed to parse merge destination: {}",
+                            e
+                        ))
+                    })?;
+
+                    if dest_str == relayer_address {
+                        return Err(StellarTransactionValidationError::ValidationError(
+                            "Account merge operations targeting the relayer are not allowed"
+                                .to_string(),
+                        ));
+                    }
+                }
+                OperationBody::SetOptions(_) => {
+                    // SetOptions operations could potentially modify account settings
+                    // We should reject them if they target relayer, but SetOptions doesn't have a target
+                    // However, SetOptions on the source account could be problematic
+                    // For now, we allow SetOptions but could add more specific checks
+                }
+                _ => {
+                    // Other operation types are checked in validate_operation_types
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate operations count
+    ///
+    /// Ensures the transaction has a reasonable number of operations.
+    fn validate_operations_count(
+        envelope: &TransactionEnvelope,
+    ) -> Result<(), StellarTransactionValidationError> {
+        let operations = extract_operations(envelope).map_err(|e| {
+            StellarTransactionValidationError::ValidationError(format!(
+                "Failed to extract operations: {}",
+                e
+            ))
+        })?;
+
+        if operations.is_empty() {
+            return Err(StellarTransactionValidationError::ValidationError(
+                "Transaction must contain at least one operation".to_string(),
+            ));
+        }
+
+        if operations.len() > STELLAR_MAX_OPERATIONS {
+            return Err(StellarTransactionValidationError::ValidationError(format!(
+                "Transaction contains too many operations: {} (maximum is {})",
+                operations.len(),
+                STELLAR_MAX_OPERATIONS
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Convert AccountId to string representation
+    fn account_id_to_string(
+        account_id: &AccountId,
+    ) -> Result<String, StellarTransactionValidationError> {
+        match &account_id.0 {
+            XdrPublicKey::PublicKeyTypeEd25519(uint256) => {
+                let bytes: [u8; 32] = uint256.0;
+                let pk = PublicKey(bytes);
+                Ok(pk.to_string())
+            }
+            _ => Err(StellarTransactionValidationError::ValidationError(
+                "Unsupported public key type".to_string(),
+            )),
+        }
+    }
+
+    /// Check if a footprint key targets relayer-owned storage
+    fn footprint_key_targets_relayer(
+        key: &LedgerKey,
+        relayer_address: &str,
+    ) -> Result<bool, StellarTransactionValidationError> {
+        match key {
+            LedgerKey::Account(account_key) => {
+                // Extract account ID from the key
+                let account_str = Self::account_id_to_string(&account_key.account_id)?;
+                Ok(account_str == relayer_address)
+            }
+            LedgerKey::Trustline(trustline_key) => {
+                // Check if trustline belongs to relayer
+                let account_str = Self::account_id_to_string(&trustline_key.account_id)?;
+                Ok(account_str == relayer_address)
+            }
+            LedgerKey::ContractData(contract_data_key) => {
+                // Check if contract data key references relayer account
+                match &contract_data_key.contract {
+                    ScAddress::Account(acc_id) => {
+                        let account_str = Self::account_id_to_string(acc_id)?;
+                        Ok(account_str == relayer_address)
+                    }
+                    ScAddress::Contract(_) => {
+                        // Contract storage keys are allowed
+                        Ok(false)
+                    }
+                    ScAddress::MuxedAccount(_)
+                    | ScAddress::ClaimableBalance(_)
+                    | ScAddress::LiquidityPool(_) => {
+                        // These are not account addresses, so they're safe
+                        Ok(false)
+                    }
+                }
+            }
+            LedgerKey::ContractCode(_) => {
+                // Contract code keys are allowed
+                Ok(false)
+            }
+            _ => {
+                // Other ledger key types are allowed
+                Ok(false)
+            }
+        }
+    }
+
+    /// Validate contract invocation operation
+    ///
+    /// Performs comprehensive security validation for Soroban contract invocations:
+    /// 1. Validates host function type is allowed
+    /// 2. Validates Soroban auth entries don't require relayer
+    fn validate_contract_invocation(
+        invoke: &InvokeHostFunctionOp,
+        op_idx: usize,
+        relayer_address: &str,
+        _policy: &RelayerStellarPolicy,
+    ) -> Result<(), StellarTransactionValidationError> {
+        // 1. Validate host function type
+        match &invoke.host_function {
+            HostFunction::InvokeContract(_) => {
+                // Contract invocations are allowed by default
+            }
+            HostFunction::CreateContract(_) => {
+                return Err(StellarTransactionValidationError::ValidationError(format!(
+                    "Op {}: CreateContract not allowed for gasless transactions",
+                    op_idx
+                )));
+            }
+            HostFunction::UploadContractWasm(_) => {
+                return Err(StellarTransactionValidationError::ValidationError(format!(
+                    "Op {}: UploadContractWasm not allowed for gasless transactions",
+                    op_idx
+                )));
+            }
+            _ => {
+                return Err(StellarTransactionValidationError::ValidationError(format!(
+                    "Op {}: Unsupported host function",
+                    op_idx
+                )));
+            }
+        }
+
+        // Validate Soroban auth entries
+        for (i, entry) in invoke.auth.iter().enumerate() {
+            // Validate that relayer is NOT required signer
+            match &entry.credentials {
+                SorobanCredentials::SourceAccount => {
+                    // We've already validated that the source account is not the relayer,
+                    // so SourceAccount credentials are safe.
+                }
+                SorobanCredentials::Address(address_creds) => {
+                    // Check if the address is the relayer
+                    match &address_creds.address {
+                        ScAddress::Account(acc_id) => {
+                            // Convert account ID to string for comparison
+                            let account_str = Self::account_id_to_string(acc_id)?;
+                            if account_str == relayer_address {
+                                return Err(StellarTransactionValidationError::ValidationError(
+                                    format!(
+                                        "Op {}: Soroban auth entry {} requires relayer ({}). Forbidden.",
+                                        op_idx, i, relayer_address
+                                    ),
+                                ));
+                            }
+                        }
+                        ScAddress::Contract(_) => {
+                            // Contract addresses in auth are allowed
+                        }
+                        ScAddress::MuxedAccount(_) => {
+                            // Muxed accounts are allowed
+                        }
+                        ScAddress::ClaimableBalance(_) | ScAddress::LiquidityPool(_) => {
+                            // These are not account addresses, so they're safe
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate operation types
+    ///
+    /// Ensures only allowed operation types are present in the transaction.
+    /// Currently allows common operation types but can be extended based on policy.
+    fn validate_operation_types(
+        envelope: &TransactionEnvelope,
+        relayer_address: &str,
+        policy: &RelayerStellarPolicy,
+    ) -> Result<(), StellarTransactionValidationError> {
+        let operations = extract_operations(envelope).map_err(|e| {
+            StellarTransactionValidationError::ValidationError(format!(
+                "Failed to extract operations: {}",
+                e
+            ))
+        })?;
+
+        for (idx, op) in operations.iter().enumerate() {
+            match &op.body {
+                // Prevent account merges (could drain account before payment executes)
+                OperationBody::AccountMerge(_) => {
+                    return Err(StellarTransactionValidationError::ValidationError(format!(
+                        "Operation {}: AccountMerge operations are not allowed",
+                        idx
+                    )));
+                }
+
+                // Prevent SetOptions that could lock out the account
+                OperationBody::SetOptions(set_opts) => {
+                    // Check if trying to add/remove signers
+                    if set_opts.signer.is_some() {
+                        return Err(StellarTransactionValidationError::ValidationError(format!(
+                            "Operation {}: SetOptions with signer changes not allowed",
+                            idx
+                        )));
+                    }
+
+                    // Check if trying to set master weight to 0 (locks account)
+                    if let Some(master_weight) = set_opts.master_weight {
+                        if master_weight == 0 {
+                            return Err(StellarTransactionValidationError::ValidationError(
+                                format!("Operation {}: Cannot set master weight to 0", idx),
+                            ));
+                        }
+                    }
+
+                    // Check if trying to set thresholds that could lock account
+                    if set_opts.low_threshold.is_some()
+                        || set_opts.med_threshold.is_some()
+                        || set_opts.high_threshold.is_some()
+                    {
+                        return Err(StellarTransactionValidationError::ValidationError(format!(
+                            "Operation {}: Threshold changes not allowed",
+                            idx
+                        )));
+                    }
+                }
+
+                // Validate smart contract invocations
+                OperationBody::InvokeHostFunction(invoke) => {
+                    Self::validate_contract_invocation(invoke, idx, relayer_address, policy)?;
+                }
+
+                // Allow common operations
+                OperationBody::Payment(_)
+                | OperationBody::PathPaymentStrictReceive(_)
+                | OperationBody::PathPaymentStrictSend(_)
+                | OperationBody::ManageSellOffer(_)
+                | OperationBody::ManageBuyOffer(_)
+                | OperationBody::CreatePassiveSellOffer(_)
+                | OperationBody::ChangeTrust(_)
+                | OperationBody::ManageData(_)
+                | OperationBody::BumpSequence(_)
+                | OperationBody::CreateClaimableBalance(_)
+                | OperationBody::ClaimClaimableBalance(_)
+                | OperationBody::BeginSponsoringFutureReserves(_)
+                | OperationBody::EndSponsoringFutureReserves
+                | OperationBody::RevokeSponsorship(_)
+                | OperationBody::Clawback(_)
+                | OperationBody::ClawbackClaimableBalance(_)
+                | OperationBody::SetTrustLineFlags(_)
+                | OperationBody::LiquidityPoolDeposit(_)
+                | OperationBody::LiquidityPoolWithdraw(_) => {
+                    // These are generally safe
+                }
+
+                // Deprecated operations
+                OperationBody::CreateAccount(_) | OperationBody::AllowTrust(_) => {
+                    return Err(StellarTransactionValidationError::ValidationError(format!(
+                        "Operation {}: Deprecated operation type not allowed",
+                        idx
+                    )));
+                }
+
+                // Other operations
+                OperationBody::Inflation
+                | OperationBody::ExtendFootprintTtl(_)
+                | OperationBody::RestoreFootprint(_) => {
+                    // These are allowed
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate sequence number
+    ///
+    /// Validates that the transaction sequence number is valid for the source account.
+    /// Note: The relayer will fee-bump this transaction, so the relayer's sequence will be consumed.
+    /// However, the inner transaction (user's tx) must still have a valid sequence number.
+    ///
+    /// The transaction sequence must be >= the account's current sequence number.
+    /// Future sequence numbers are allowed (user can queue transactions).
+    pub async fn validate_sequence_number<P>(
+        envelope: &TransactionEnvelope,
+        provider: &P,
+    ) -> Result<(), StellarTransactionValidationError>
+    where
+        P: StellarProviderTrait + Send + Sync,
+    {
+        // Extract source account
+        let source_account = extract_source_account(envelope).map_err(|e| {
+            StellarTransactionValidationError::ValidationError(format!(
+                "Failed to extract source account: {}",
+                e
+            ))
+        })?;
+
+        // Get account's current sequence number from chain
+        let account_entry = provider.get_account(&source_account).await.map_err(|e| {
+            StellarTransactionValidationError::ValidationError(format!(
+                "Failed to get account sequence: {}",
+                e
+            ))
+        })?;
+        let account_seq_num = account_entry.seq_num.0;
+
+        // Extract transaction sequence number
+        let tx_seq_num = match envelope {
+            TransactionEnvelope::TxV0(e) => e.tx.seq_num.0,
+            TransactionEnvelope::Tx(e) => e.tx.seq_num.0,
+            TransactionEnvelope::TxFeeBump(_) => {
+                return Err(StellarTransactionValidationError::ValidationError(
+                    "Fee-bump transactions are not supported for gasless transactions".to_string(),
+                ));
+            }
+        };
+
+        // Validate that transaction sequence number is valid (>= account's current sequence)
+        // The user can set a future sequence number, but not a past one
+        if tx_seq_num < account_seq_num {
+            return Err(StellarTransactionValidationError::ValidationError(format!(
+                "Transaction sequence number {} is too old. Account's current sequence is {}. \
+                The transaction sequence must be >= the account's current sequence.",
+                tx_seq_num, account_seq_num
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Comprehensive validation for gasless transactions
+    ///
+    /// Performs all security and policy validations on a transaction envelope
+    /// before it's processed for gasless execution.
+    pub async fn gasless_transaction_validation<P>(
+        envelope: &TransactionEnvelope,
+        relayer_address: &str,
+        policy: &RelayerStellarPolicy,
+        provider: &P,
+    ) -> Result<(), StellarTransactionValidationError>
+    where
+        P: StellarProviderTrait + Send + Sync,
+    {
+        Self::validate_source_account_not_relayer(envelope, relayer_address)?;
+        Self::validate_transaction_type(envelope)?;
+        Self::validate_operations_not_targeting_relayer(envelope, relayer_address)?;
+        Self::validate_operations_count(envelope)?;
+        Self::validate_operation_types(envelope, relayer_address, policy)?;
+        Self::validate_sequence_number(envelope, provider).await?;
+        Ok(())
     }
 }
 

@@ -8,6 +8,8 @@ use chrono::Duration;
 pub const STELLAR_DEFAULT_TRANSACTION_FEE: u32 = 100;
 /// Default maximum fee for fee-bump transactions (0.1 XLM = 1,000,000 stroops)
 pub const STELLAR_DEFAULT_MAX_FEE: i64 = 1_000_000;
+/// Maximum number of operations allowed in a Stellar transaction
+pub const STELLAR_MAX_OPERATIONS: usize = 100;
 
 /// Horizon API base URL for Stellar mainnet
 pub const STELLAR_HORIZON_MAINNET_URL: &str = "https://horizon.stellar.org";

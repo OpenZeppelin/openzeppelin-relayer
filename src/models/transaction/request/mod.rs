@@ -62,6 +62,15 @@ pub enum GaslessTransactionQuoteRequest {
     Stellar(StellarFeeEstimateRequestParams),
 }
 
+impl GaslessTransactionQuoteRequest {
+    pub fn validate(&self) -> Result<(), ApiError> {
+        match self {
+            GaslessTransactionQuoteRequest::Stellar(request) => request.validate(),
+            _ => Err(ApiError::BadRequest("Invalid request type".to_string())),
+        }
+    }
+}
+
 /// Network-agnostic prepare transaction request parameters for gasless transactions.
 /// Contains network-specific request parameters for preparing transactions with fee payments.
 /// The network type is inferred from the relayer's network configuration.
@@ -73,4 +82,13 @@ pub enum GaslessTransactionBuildRequest {
     Solana(SolanaPrepareTransactionRequestParams),
     /// Stellar-specific prepare transaction request parameters
     Stellar(StellarPrepareTransactionRequestParams),
+}
+
+impl GaslessTransactionBuildRequest {
+    pub fn validate(&self) -> Result<(), ApiError> {
+        match self {
+            GaslessTransactionBuildRequest::Stellar(request) => request.validate(),
+            _ => Err(ApiError::BadRequest("Invalid request type".to_string())),
+        }
+    }
 }

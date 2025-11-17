@@ -1,15 +1,61 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::models::transaction::stellar::OperationSpec;
+
 // feeEstimate
 #[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
 #[serde(deny_unknown_fields)]
 #[derive(Clone)]
 pub struct FeeEstimateRequestParams {
-    /// Transaction XDR (base64 encoded) or operations array
-    pub transaction: serde_json::Value,
+    /// Pre-built transaction XDR (base64 encoded, signed or unsigned)
+    /// Mutually exclusive with operations field
+    #[schema(nullable = true)]
+    pub transaction_xdr: Option<String>,
+    /// Operations array to build transaction from
+    /// Mutually exclusive with transaction_xdr field
+    #[schema(nullable = true)]
+    pub operations: Option<Vec<OperationSpec>>,
     /// Asset identifier for fee token (e.g., "native" or "USDC:GA5Z...")
     pub fee_token: String,
+}
+
+impl FeeEstimateRequestParams {
+    /// Validate the fee estimate request according to the rules:
+    /// - Only one input type allowed (operations XOR transaction_xdr)
+    /// - fee_token must be in valid format
+    pub fn validate(&self) -> Result<(), crate::models::ApiError> {
+        use crate::domain::transaction::stellar::StellarTransactionValidator;
+        use crate::models::ApiError;
+
+        // Validate fee_token structure
+        StellarTransactionValidator::validate_fee_token_structure(&self.fee_token)
+            .map_err(|e| ApiError::BadRequest(format!("Invalid fee_token structure: {}", e)))?;
+
+        // Check that exactly one input type is provided
+        let has_operations = self
+            .operations
+            .as_ref()
+            .map(|ops| !ops.is_empty())
+            .unwrap_or(false);
+        let has_xdr = self.transaction_xdr.is_some();
+
+        match (has_operations, has_xdr) {
+            (true, true) => {
+                return Err(ApiError::BadRequest(
+                    "Cannot provide both transaction_xdr and operations".to_string(),
+                ));
+            }
+            (false, false) => {
+                return Err(ApiError::BadRequest(
+                    "Must provide either transaction_xdr or operations".to_string(),
+                ));
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Clone, ToSchema)]
@@ -25,10 +71,54 @@ pub struct FeeEstimateResult {
 #[serde(deny_unknown_fields)]
 #[derive(Clone)]
 pub struct PrepareTransactionRequestParams {
-    /// Transaction XDR (base64 encoded) or operations array
-    pub transaction: serde_json::Value,
+    /// Pre-built transaction XDR (base64 encoded, signed or unsigned)
+    /// Mutually exclusive with operations field
+    #[schema(nullable = true)]
+    pub transaction_xdr: Option<String>,
+    /// Operations array to build transaction from
+    /// Mutually exclusive with transaction_xdr field
+    #[schema(nullable = true)]
+    pub operations: Option<Vec<OperationSpec>>,
     /// Asset identifier for fee token
     pub fee_token: String,
+}
+
+impl PrepareTransactionRequestParams {
+    /// Validate the prepare transaction request according to the rules:
+    /// - Only one input type allowed (operations XOR transaction_xdr)
+    /// - fee_token must be in valid format
+    pub fn validate(&self) -> Result<(), crate::models::ApiError> {
+        use crate::domain::transaction::stellar::StellarTransactionValidator;
+        use crate::models::ApiError;
+
+        // Validate fee_token structure
+        StellarTransactionValidator::validate_fee_token_structure(&self.fee_token)
+            .map_err(|e| ApiError::BadRequest(format!("Invalid fee_token structure: {}", e)))?;
+
+        // Check that exactly one input type is provided
+        let has_operations = self
+            .operations
+            .as_ref()
+            .map(|ops| !ops.is_empty())
+            .unwrap_or(false);
+        let has_xdr = self.transaction_xdr.is_some();
+
+        match (has_operations, has_xdr) {
+            (true, true) => {
+                return Err(ApiError::BadRequest(
+                    "Cannot provide both transaction_xdr and operations".to_string(),
+                ));
+            }
+            (false, false) => {
+                return Err(ApiError::BadRequest(
+                    "Must provide either transaction_xdr or operations".to_string(),
+                ));
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Clone, ToSchema)]

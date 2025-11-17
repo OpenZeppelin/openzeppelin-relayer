@@ -11,6 +11,7 @@
 use actix_web::web::ThinData;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tracing::info;
 use utoipa::ToSchema;
 
 #[cfg(test)]
@@ -388,23 +389,37 @@ impl<
         &self,
         params: GaslessTransactionQuoteRequest,
     ) -> Result<GaslessTransactionQuoteResponse, RelayerError> {
-        match (self, params) {
-            (NetworkRelayer::Solana(relayer), GaslessTransactionQuoteRequest::Solana(params)) => {
-                Ok(relayer
-                    .get_gasless_transaction_quote(GaslessTransactionQuoteRequest::Solana(params))
-                    .await?)
-            }
-            (NetworkRelayer::Stellar(relayer), GaslessTransactionQuoteRequest::Stellar(params)) => {
-                Ok(relayer
-                    .get_gasless_transaction_quote(GaslessTransactionQuoteRequest::Stellar(params))
-                    .await?)
-            }
-            (NetworkRelayer::Evm(_), _) => Err(RelayerError::NotSupported(
-                "Gas abstraction not supported for EVM relayers".to_string(),
-            )),
-            _ => Err(RelayerError::ValidationError(
-                "Network type mismatch between relayer and request parameters".to_string(),
-            )),
+        match params {
+            GaslessTransactionQuoteRequest::Solana(params) => match self {
+                NetworkRelayer::Solana(relayer) => {
+                    relayer
+                        .get_gasless_transaction_quote(GaslessTransactionQuoteRequest::Solana(
+                            params,
+                        ))
+                        .await
+                }
+                NetworkRelayer::Stellar(_) => Err(RelayerError::ValidationError(
+                    "Solana request type does not match Stellar relayer type".to_string(),
+                )),
+                NetworkRelayer::Evm(_) => Err(RelayerError::NotSupported(
+                    "Gas abstraction not supported for EVM relayers".to_string(),
+                )),
+            },
+            GaslessTransactionQuoteRequest::Stellar(params) => match self {
+                NetworkRelayer::Stellar(relayer) => {
+                    relayer
+                        .get_gasless_transaction_quote(GaslessTransactionQuoteRequest::Stellar(
+                            params,
+                        ))
+                        .await
+                }
+                NetworkRelayer::Solana(_) => Err(RelayerError::ValidationError(
+                    "Stellar request type does not match Solana relayer type".to_string(),
+                )),
+                NetworkRelayer::Evm(_) => Err(RelayerError::NotSupported(
+                    "Gas abstraction not supported for EVM relayers".to_string(),
+                )),
+            },
         }
     }
 
@@ -412,23 +427,33 @@ impl<
         &self,
         params: GaslessTransactionBuildRequest,
     ) -> Result<GaslessTransactionBuildResponse, RelayerError> {
-        match (self, params) {
-            (NetworkRelayer::Solana(relayer), GaslessTransactionBuildRequest::Solana(params)) => {
-                Ok(relayer
-                    .build_gasless_transaction(GaslessTransactionBuildRequest::Solana(params))
-                    .await?)
-            }
-            (NetworkRelayer::Stellar(relayer), GaslessTransactionBuildRequest::Stellar(params)) => {
-                Ok(relayer
-                    .build_gasless_transaction(GaslessTransactionBuildRequest::Stellar(params))
-                    .await?)
-            }
-            (NetworkRelayer::Evm(_), _) => Err(RelayerError::NotSupported(
-                "Gas abstraction not supported for EVM relayers".to_string(),
-            )),
-            _ => Err(RelayerError::ValidationError(
-                "Network type mismatch between relayer and request parameters".to_string(),
-            )),
+        match params {
+            GaslessTransactionBuildRequest::Solana(params) => match self {
+                NetworkRelayer::Solana(relayer) => {
+                    relayer
+                        .build_gasless_transaction(GaslessTransactionBuildRequest::Solana(params))
+                        .await
+                }
+                NetworkRelayer::Stellar(_) => Err(RelayerError::ValidationError(
+                    "Solana request type does not match Stellar relayer type".to_string(),
+                )),
+                NetworkRelayer::Evm(_) => Err(RelayerError::NotSupported(
+                    "Gas abstraction not supported for EVM relayers".to_string(),
+                )),
+            },
+            GaslessTransactionBuildRequest::Stellar(params) => match self {
+                NetworkRelayer::Stellar(relayer) => {
+                    relayer
+                        .build_gasless_transaction(GaslessTransactionBuildRequest::Stellar(params))
+                        .await
+                }
+                NetworkRelayer::Solana(_) => Err(RelayerError::ValidationError(
+                    "Stellar request type does not match Solana relayer type".to_string(),
+                )),
+                NetworkRelayer::Evm(_) => Err(RelayerError::NotSupported(
+                    "Gas abstraction not supported for EVM relayers".to_string(),
+                )),
+            },
         }
     }
 }

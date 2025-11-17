@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;
 use std::time::Duration;
+use tracing::debug;
 
 /// Stellar Horizon API order book response
 #[derive(Debug, Deserialize)]
@@ -163,6 +164,8 @@ impl OrderBookService {
             buying_asset_issuer,
         );
 
+        debug!("Fetching order book from Horizon: {}", url);
+
         let response = self
             .client
             .get(&url)
@@ -228,12 +231,18 @@ impl OrderBookService {
                 StellarDexServiceError::UnknownError(format!("Failed to parse amount: {}", e))
             })?;
 
-            // Convert to stroops
+            // Convert to stroops (assuming 7 decimals for Stellar assets)
+            // Note: This assumes all assets use 7 decimals, which is standard for Stellar
             let amount_stroops = (amount * 10_000_000.0) as i128;
 
             // Use rational price for precise calculation
             let price_n = order.price_r.n as i128;
             let price_d = order.price_r.d as i128;
+
+            debug!(
+                "Order: amount={} ({} stroops), price={} (rational: {}/{})",
+                order.amount, amount_stroops, order.price, price_n, price_d
+            );
 
             if is_ask {
                 // Selling base asset to get counter asset
@@ -259,16 +268,29 @@ impl OrderBookService {
 
                 let counter_cost = (amount_stroops * price_n) / price_d;
 
+                debug!(
+                    "Buying: remaining={} stroops, order_amount={} stroops base, counter_cost={} stroops",
+                    remaining_stroops, amount_stroops, counter_cost
+                );
+
                 if remaining_stroops <= counter_cost {
                     // Partially fill this order
                     // Solve: base * (price_n / price_d) = remaining_stroops
                     // base = remaining_stroops * price_d / price_n
                     let base_received = (remaining_stroops * price_d) / price_n;
+                    debug!(
+                        "Partially filling: base_received={} stroops for {} stroops counter",
+                        base_received, remaining_stroops
+                    );
                     total_output_stroops += base_received;
                     total_input_stroops_used += remaining_stroops;
                     remaining_stroops = 0;
                 } else {
                     // Use entire order
+                    debug!(
+                        "Using entire order: base_received={} stroops, counter_paid={} stroops",
+                        amount_stroops, counter_cost
+                    );
                     total_output_stroops += amount_stroops;
                     total_input_stroops_used += counter_cost;
                     remaining_stroops -= counter_cost;
@@ -364,6 +386,7 @@ impl StellarDexServiceTrait for OrderBookService {
         slippage: f32,
     ) -> Result<StellarQuoteResponse, StellarDexServiceError> {
         if asset_id == "native" || asset_id.is_empty() {
+            debug!("Getting quote for native to native: {}", amount);
             return Ok(StellarQuoteResponse {
                 input_asset: "native".to_string(),
                 output_asset: "native".to_string(),
@@ -390,14 +413,28 @@ impl StellarDexServiceTrait for OrderBookService {
             )
             .await?;
 
+        debug!("Order book: {:?}", order_book);
+
         if order_book.bids.is_empty() {
             return Err(StellarDexServiceError::NoPathFound);
         }
+
+        let first_bid = order_book.bids.first();
+        debug!(
+            "Order book: base={:?}, counter={:?}, bids_count={}, first_bid_price={:?}, first_bid_amount={:?}",
+            order_book.base, order_book.counter, order_book.bids.len(),
+            first_bid.map(|o| o.price.as_str()),
+            first_bid.map(|o| o.amount.as_str())
+        );
 
         // Use bids: people buying token (we're taking the other side, paying XLM)
         let (out_amount, avg_price, best_price) =
             self.calculate_quote_from_orders(&order_book.bids, amount, false)?;
 
+        debug!(
+            "Calculated quote: out_amount={} stroops, avg_price={}, best_price={}, input_amount={} stroops",
+            out_amount, avg_price, best_price, amount
+        );
         // Calculate price impact
         // When buying, we pay MORE as we go deeper (worse price)
         // avg_price > best_price, so (avg - best) / best is positive
