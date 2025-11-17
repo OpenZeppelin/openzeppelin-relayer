@@ -5,12 +5,18 @@ use eyre::Result;
 use soroban_rs::xdr::{Limits, ReadXdr, TransactionEnvelope, WriteXdr};
 use tracing::info;
 
+use crate::domain::transaction::stellar::{utils::estimate_base_fee, StellarTransactionValidator};
 use crate::{
     constants::STELLAR_DEFAULT_TRANSACTION_FEE,
     domain::{extract_operations, extract_source_account},
-    models::{StellarTransactionData, StellarValidationError, TransactionError, TransactionInput},
+    models::{
+        RelayerStellarPolicy, StellarTransactionData, StellarValidationError, TransactionError,
+        TransactionInput,
+    },
     repositories::TransactionCounterTrait,
-    services::{provider::StellarProviderTrait, signer::Signer},
+    services::{
+        provider::StellarProviderTrait, signer::Signer, stellar_dex::StellarDexServiceTrait,
+    },
 };
 
 use super::common::{
@@ -18,27 +24,141 @@ use super::common::{
     simulate_if_needed,
 };
 
+/// Validate gasless transaction (User fee payment strategy) for unsigned_xdr flow
+///
+/// This function performs comprehensive validation for gasless transactions:
+/// 1. Validates source account is user's account (not relayer)
+/// 2. Validates transaction structure, operations, and sequence number
+/// 3. Validates fee payment operation exists and is valid
+/// 4. Validates fee payment amount is sufficient by comparing with DEX quote
+///
+/// # Arguments
+/// * `envelope` - The transaction envelope to validate
+/// * `relayer_address` - The relayer's Stellar address
+/// * `policy` - The relayer policy containing fee payment strategy
+/// * `provider` - Provider for Stellar RPC operations
+/// * `dex_service` - DEX service for fetching quotes to validate payment amounts
+///
+/// # Returns
+/// Ok(()) if validation passes, TransactionError if validation fails
+async fn validate_gasless_transaction<P, D>(
+    envelope: &TransactionEnvelope,
+    relayer_address: &str,
+    policy: &RelayerStellarPolicy,
+    provider: &P,
+    dex_service: &D,
+) -> Result<(), TransactionError>
+where
+    P: StellarProviderTrait + Send + Sync,
+    D: StellarDexServiceTrait + Send + Sync,
+{
+    // Comprehensive security validation for gasless transactions
+    // This validates source account (not relayer), operations, sequence number, etc.
+    StellarTransactionValidator::gasless_transaction_validation(
+        envelope,
+        relayer_address,
+        policy,
+        provider,
+    )
+    .await
+    .map_err(|e| {
+        TransactionError::ValidationError(format!("Gasless transaction validation failed: {}", e))
+    })?;
+
+    // Validate that transaction includes fee payment operation to relayer
+    let payments = StellarTransactionValidator::extract_relayer_payments(envelope, relayer_address)
+        .map_err(|e| {
+            TransactionError::ValidationError(format!("Failed to extract relayer payments: {}", e))
+        })?;
+
+    if payments.is_empty() {
+        return Err(TransactionError::ValidationError(
+            "Gasless transactions must include a fee payment operation to the relayer".to_string(),
+        ));
+    }
+
+    // Calculate required XLM fee based on operations
+    let operations = extract_operations(envelope).map_err(|e| {
+        TransactionError::ValidationError(format!("Failed to extract operations: {}", e))
+    })?;
+    let num_operations = operations.len();
+    // Calculate fee for all operations (excluding fee payment operation itself)
+    let required_xlm_fee = estimate_base_fee(num_operations);
+
+    // Validate fee payment token, amount, and compare with DEX quote
+    for (asset_id, amount) in &payments {
+        StellarTransactionValidator::validate_allowed_token(asset_id, policy).map_err(|e| {
+            TransactionError::ValidationError(format!("Fee payment token validation failed: {}", e))
+        })?;
+
+        StellarTransactionValidator::validate_token_max_fee(asset_id, *amount, policy).map_err(
+            |e| {
+                TransactionError::ValidationError(format!(
+                    "Fee payment amount validation failed: {}",
+                    e
+                ))
+            },
+        )?;
+
+        // Get quote from DEX service to convert required XLM fee to token amount
+        // Use default slippage of 1% for quote validation
+        // This matches the flow used when building the transaction (estimate_and_convert_fee)
+        let quote = dex_service
+            .get_xlm_to_token_quote(asset_id, required_xlm_fee, 1.0)
+            .await
+            .map_err(|e| {
+                TransactionError::ValidationError(format!(
+                    "Failed to get DEX quote for token {}: {}",
+                    asset_id, e
+                ))
+            })?;
+
+        // Compare payment amount with required token amount
+        // The payment amount must be at least equal to the required token amount for the fee
+        if *amount < quote.out_amount {
+            return Err(TransactionError::ValidationError(format!(
+                "Insufficient fee payment: payment of {} {} is less than required {} {} (for {} stroops XLM fee)",
+                amount, asset_id, quote.out_amount, asset_id, required_xlm_fee
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 /// Process an unsigned XDR transaction.
 ///
 /// This function:
 /// 1. Parses the unsigned XDR from the transaction input
-/// 2. Validates that the source account matches the relayer address
+/// 2. Validates source account and gasless transaction (if User fee payment strategy)
 /// 3. Gets the next sequence number and updates the envelope
 /// 4. Ensures the transaction has at least the minimum required fee
 /// 5. Simulates the transaction if it contains Soroban operations
 /// 6. Signs the transaction and returns the updated stellar data
-pub async fn process_unsigned_xdr<C, P, S>(
+///
+/// For gasless transactions (User fee payment strategy):
+/// - Source account must be user's account (not relayer)
+/// - Transaction must include fee payment operation to relayer
+/// - Uses user's sequence number from envelope
+///
+/// For relayer-paid transactions:
+/// - Source account must be relayer's account
+/// - Uses relayer's sequence number from counter
+pub async fn process_unsigned_xdr<C, P, S, D>(
     counter_service: &C,
     relayer_id: &str,
     relayer_address: &str,
     stellar_data: StellarTransactionData,
     provider: &P,
     signer: &S,
+    relayer_policy: Option<&RelayerStellarPolicy>,
+    dex_service: &D,
 ) -> Result<StellarTransactionData, TransactionError>
 where
     C: TransactionCounterTrait + Send + Sync,
     P: StellarProviderTrait + Send + Sync,
     S: Signer + Send + Sync,
+    D: StellarDexServiceTrait + Send + Sync,
 {
     // Step 1: Parse the XDR
     let xdr = match &stellar_data.transaction_input {
@@ -53,28 +173,83 @@ where
     let mut envelope = TransactionEnvelope::from_xdr_base64(xdr, Limits::none())
         .map_err(|e| StellarValidationError::InvalidXdr(e.to_string()))?;
 
-    // Step 2: Validate source account matches relayer
+    // Step 2: Validate source account based on fee payment strategy
     let source_account = extract_source_account(&envelope).map_err(|e| {
         TransactionError::ValidationError(format!("Failed to extract source account: {}", e))
     })?;
 
-    if source_account != relayer_address {
-        return Err(StellarValidationError::SourceAccountMismatch {
-            expected: relayer_address.to_string(),
-            actual: source_account,
+    // Check if this is a gasless transaction (User fee payment strategy)
+    let is_gasless = relayer_policy
+        .map(|p| {
+            matches!(
+                p.fee_payment_strategy,
+                Some(crate::models::StellarFeePaymentStrategy::User)
+            )
+        })
+        .unwrap_or(false); // TODO double check this
+
+    if is_gasless {
+        // For gasless transactions, validate using dedicated function
+        validate_gasless_transaction(
+            &envelope,
+            relayer_address,
+            relayer_policy.unwrap(), // Safe because we checked is_gasless
+            provider,
+            dex_service,
+        )
+        .await?;
+    } else {
+        // For relayer-paid transactions, source must be relayer
+        if source_account != relayer_address {
+            return Err(StellarValidationError::SourceAccountMismatch {
+                expected: relayer_address.to_string(),
+                actual: source_account,
+            }
+            .into());
         }
-        .into());
     }
 
     // Step 3: Get the next sequence number and update the envelope
-    let sequence = get_next_sequence(counter_service, relayer_id, relayer_address).await?;
+    // For gasless transactions, use user's sequence number (from envelope or fetch from chain)
+    // For relayer-paid transactions, use relayer's sequence number
+    let sequence = if is_gasless {
+        // For gasless transactions, sequence should already be set in the envelope by the user
+        // If not set or invalid, we'll need to fetch from chain
+        match &envelope {
+            soroban_rs::xdr::TransactionEnvelope::TxV0(e) => e.tx.seq_num.0 as i64,
+            soroban_rs::xdr::TransactionEnvelope::Tx(e) => e.tx.seq_num.0 as i64,
+            _ => {
+                return Err(TransactionError::ValidationError(
+                    "Invalid transaction envelope type for gasless transaction".to_string(),
+                ))
+            }
+        }
+    } else {
+        // For relayer-paid transactions, use relayer's sequence number
+        get_next_sequence(counter_service, relayer_id, relayer_address).await?
+    };
+
     info!(
-        "Using sequence number {} for unsigned XDR transaction",
-        sequence
+        "Using sequence number {} for {} transaction",
+        sequence,
+        if is_gasless {
+            "gasless"
+        } else {
+            "relayer-paid"
+        }
     );
 
     // Apply sequence updates the envelope in-place and returns the XDR
-    let _updated_xdr = apply_sequence(&mut envelope, sequence).await?;
+    // For gasless transactions, sequence is already set by user, so this is a no-op
+    // For relayer-paid transactions, this updates the sequence
+    let _updated_xdr = if is_gasless {
+        // Sequence is already set by user, no need to update
+        envelope.to_xdr_base64(Limits::none()).map_err(|e| {
+            TransactionError::ValidationError(format!("Failed to serialize envelope: {}", e))
+        })?
+    } else {
+        apply_sequence(&mut envelope, sequence).await?
+    };
 
     // Update stellar data with sequence number
     let mut stellar_data = stellar_data.with_sequence_number(sequence);
@@ -304,6 +479,74 @@ mod tests {
         }
     }
 
+    struct MockDexService;
+
+    #[async_trait::async_trait]
+    impl StellarDexServiceTrait for MockDexService {
+        async fn get_token_to_xlm_quote(
+            &self,
+            _asset_id: &str,
+            amount: u64,
+            _slippage: f32,
+        ) -> Result<
+            crate::services::stellar_dex::StellarQuoteResponse,
+            crate::services::stellar_dex::StellarDexServiceError,
+        > {
+            // Return a quote that converts 1:1 for native, or 1:100 for other tokens
+            // This is a simple mock - in real tests you'd want more control
+            let out_amount = if _asset_id == "native" {
+                amount
+            } else {
+                amount * 100 // Assume token is worth 100x XLM
+            };
+
+            Ok(crate::services::stellar_dex::StellarQuoteResponse {
+                input_asset: _asset_id.to_string(),
+                output_asset: "native".to_string(),
+                in_amount: amount,
+                out_amount,
+                price_impact_pct: 0.0,
+                slippage_bps: 100,
+                path: None,
+            })
+        }
+
+        async fn get_xlm_to_token_quote(
+            &self,
+            asset_id: &str,
+            amount: u64,
+            _slippage: f32,
+        ) -> Result<
+            crate::services::stellar_dex::StellarQuoteResponse,
+            crate::services::stellar_dex::StellarDexServiceError,
+        > {
+            // Return a quote that converts 1:1 for native, or 100:1 for other tokens (XLM to token)
+            // This is a simple mock - in real tests you'd want more control
+            let out_amount = if asset_id == "native" {
+                amount
+            } else {
+                amount / 100 // Assume 100 XLM = 1 token
+            };
+
+            Ok(crate::services::stellar_dex::StellarQuoteResponse {
+                input_asset: "native".to_string(),
+                output_asset: asset_id.to_string(),
+                in_amount: amount,
+                out_amount,
+                price_impact_pct: 0.0,
+                slippage_bps: 100,
+                path: None,
+            })
+        }
+
+        async fn prepare_swap_transaction(
+            &self,
+            _params: crate::services::stellar_dex::SwapTransactionParams,
+        ) -> Result<String, crate::services::stellar_dex::StellarDexServiceError> {
+            unimplemented!()
+        }
+    }
+
     fn create_test_envelope(source_account: &str) -> TransactionEnvelope {
         let pk = PublicKey::from_string(source_account).unwrap();
         let source = MuxedAccount::Ed25519(Uint256(pk.0));
@@ -374,6 +617,7 @@ mod tests {
             signed_envelope_xdr: None,
         };
 
+        let dex_service = MockDexService;
         let result = process_unsigned_xdr(
             &counter,
             relayer_id,
@@ -381,6 +625,8 @@ mod tests {
             stellar_data,
             &provider,
             &signer,
+            None,
+            &dex_service,
         )
         .await;
 
@@ -421,6 +667,7 @@ mod tests {
             signed_envelope_xdr: None,
         };
 
+        let dex_service = MockDexService;
         let result = process_unsigned_xdr(
             &counter,
             relayer_id,
@@ -428,6 +675,8 @@ mod tests {
             stellar_data,
             &provider,
             &signer,
+            None,
+            &dex_service,
         )
         .await;
 
@@ -472,6 +721,7 @@ mod tests {
             signed_envelope_xdr: None,
         };
 
+        let dex_service = MockDexService;
         let result = process_unsigned_xdr(
             &counter,
             relayer_id,
@@ -479,6 +729,8 @@ mod tests {
             stellar_data,
             &provider,
             &signer,
+            None,
+            &dex_service,
         )
         .await;
 
@@ -525,6 +777,7 @@ mod tests {
             signed_envelope_xdr: None,
         };
 
+        let dex_service = MockDexService;
         let result = process_unsigned_xdr(
             &counter,
             relayer_id,
@@ -532,6 +785,8 @@ mod tests {
             stellar_data,
             &provider,
             &signer,
+            None,
+            &dex_service,
         )
         .await;
 

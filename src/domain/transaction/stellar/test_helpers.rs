@@ -8,7 +8,10 @@ use crate::{
         TransactionRepoModel, TransactionStatus,
     },
     repositories::{MockRepository, MockTransactionCounterTrait, MockTransactionRepository},
-    services::{provider::MockStellarProviderTrait, signer::MockSigner},
+    services::{
+        provider::MockStellarProviderTrait, signer::MockSigner,
+        stellar_dex::MockStellarDexServiceTrait,
+    },
 };
 use chrono::Utc;
 use soroban_rs::xdr::{Signature, SignatureHint};
@@ -90,6 +93,7 @@ pub struct TestMocks {
     pub job_producer: MockJobProducerTrait,
     pub signer: MockSigner,
     pub counter: MockTransactionCounterTrait,
+    pub dex_service: MockStellarDexServiceTrait,
 }
 
 pub fn default_test_mocks() -> TestMocks {
@@ -100,6 +104,7 @@ pub fn default_test_mocks() -> TestMocks {
         job_producer: MockJobProducerTrait::new(),
         signer: MockSigner::new(),
         counter: MockTransactionCounterTrait::new(),
+        dex_service: MockStellarDexServiceTrait::new(),
     }
 }
 
@@ -114,6 +119,7 @@ pub fn make_stellar_tx_handler(
     MockSigner,
     MockStellarProviderTrait,
     MockTransactionCounterTrait,
+    MockStellarDexServiceTrait,
 > {
     use std::sync::Arc;
     StellarRelayerTransaction::new(
@@ -124,6 +130,7 @@ pub fn make_stellar_tx_handler(
         Arc::new(mocks.signer),
         mocks.provider,
         Arc::new(mocks.counter),
+        Arc::new(mocks.dex_service),
     )
     .expect("handler construction should succeed")
 }

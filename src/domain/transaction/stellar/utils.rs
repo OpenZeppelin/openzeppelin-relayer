@@ -1,13 +1,13 @@
 //! Utility functions for Stellar transaction domain logic.
-use crate::constants::STELLAR_MAX_OPERATIONS;
-use crate::domain::relayer::xdr_utils::extract_operations;
+use crate::constants::{STELLAR_DEFAULT_TRANSACTION_FEE, STELLAR_MAX_OPERATIONS};
+use crate::domain::relayer::xdr_utils::{extract_operations, xdr_needs_simulation};
 use crate::models::{AssetSpec, OperationSpec, RelayerError};
 use crate::services::provider::StellarProviderTrait;
 use chrono::{DateTime, Utc};
 use soroban_rs::xdr::{
     Limits, Operation, Preconditions, ReadXdr, TimeBounds, TimePoint, TransactionEnvelope, VecM,
 };
-use tracing::info;
+use tracing::{debug, info};
 
 /// Returns true if any operation needs simulation (contract invocation, creation, or wasm upload).
 pub fn needs_simulation(operations: &[OperationSpec]) -> bool {
@@ -222,10 +222,80 @@ pub fn parse_transaction_and_count_operations(
 ///
 /// For Stellar, the base fee is typically 100 stroops per operation.
 pub fn estimate_base_fee(num_operations: usize) -> u64 {
-    // Stellar base fee is 100 stroops per operation
-    // Minimum transaction fee is 100 stroops
-    const BASE_FEE_PER_OPERATION: u64 = 100;
-    (num_operations.max(1) as u64) * BASE_FEE_PER_OPERATION
+    (num_operations.max(1) as u64) * STELLAR_DEFAULT_TRANSACTION_FEE as u64
+}
+
+/// Estimate transaction fee in XLM (stroops) based on envelope content
+///
+/// This function intelligently estimates fees by:
+/// 1. Checking if the transaction needs simulation (contains Soroban operations)
+/// 2. If simulation is needed, performs simulation and uses `min_resource_fee` from the response
+/// 3. If simulation is not needed, counts operations and uses `estimate_base_fee`
+///
+/// # Arguments
+/// * `envelope` - The transaction envelope to estimate fees for
+/// * `provider` - Stellar provider for simulation (required if simulation is needed)
+/// * `operations_override` - Optional override for operations count (useful when operations will be added, e.g., +1 for fee payment)
+///
+/// # Returns
+/// Estimated fee in stroops (XLM)
+pub async fn estimate_fee<P>(
+    envelope: &TransactionEnvelope,
+    provider: &P,
+    operations_override: Option<usize>,
+) -> Result<u64, RelayerError>
+where
+    P: StellarProviderTrait + Send + Sync,
+{
+    // Check if simulation is needed
+    let needs_sim = xdr_needs_simulation(envelope).map_err(|e| {
+        RelayerError::Internal(format!("Failed to check if simulation is needed: {}", e))
+    })?;
+
+    if needs_sim {
+        debug!("Transaction contains Soroban operations, simulating to get accurate fee");
+
+        // For simulation, we simulate the envelope as-is
+        let simulation_result = provider
+            .simulate_transaction_envelope(envelope)
+            .await
+            .map_err(|e| {
+                RelayerError::Internal(format!("Failed to simulate transaction: {}", e))
+            })?;
+
+        // Check simulation success
+        if simulation_result.results.is_empty() {
+            return Err(RelayerError::Internal(
+                "Transaction simulation failed: no results returned".to_string(),
+            ));
+        }
+
+        // Use min_resource_fee from simulation (this includes all fees for Soroban operations)
+        // If operations_override is provided, we add the base fee for additional operations
+        let resource_fee = simulation_result.min_resource_fee as u64;
+        let inclusion_fee = STELLAR_DEFAULT_TRANSACTION_FEE as u64;
+        let required_fee = inclusion_fee + resource_fee;
+
+        debug!("Simulation returned fee: {} stroops", required_fee);
+        Ok(required_fee)
+    } else {
+        // No simulation needed, count operations and estimate base fee
+        let num_operations = if let Some(override_count) = operations_override {
+            override_count
+        } else {
+            let operations = extract_operations(envelope).map_err(|e| {
+                RelayerError::Internal(format!("Failed to extract operations: {}", e))
+            })?;
+            operations.len()
+        };
+
+        let fee = estimate_base_fee(num_operations);
+        debug!(
+            "No simulation needed, estimated fee from {} operations: {} stroops",
+            num_operations, fee
+        );
+        Ok(fee)
+    }
 }
 
 /// Parse transaction envelope from JSON value

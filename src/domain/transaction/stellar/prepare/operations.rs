@@ -7,7 +7,9 @@ use super::common::{get_next_sequence, sign_stellar_transaction, simulate_if_nee
 use crate::{
     constants::STELLAR_DEFAULT_TRANSACTION_FEE,
     domain::extract_operations,
-    models::{StellarTransactionData, TransactionError, TransactionRepoModel},
+    models::{
+        RelayerStellarPolicy, StellarTransactionData, TransactionError, TransactionRepoModel,
+    },
     repositories::TransactionCounterTrait,
     services::{provider::StellarProviderTrait, signer::Signer},
 };
@@ -18,8 +20,9 @@ use crate::{
 /// 1. Gets the next sequence number for the relayer
 /// 2. Updates the stellar data with the sequence number
 /// 3. Builds the unsigned envelope from operations
-/// 4. Simulates the transaction if needed (for Soroban operations)
-/// 5. Signs the transaction envelope
+/// 4. Rejects gasless transactions (User fee payment strategy) - these should use unsigned_xdr path
+/// 5. Simulates the transaction if needed (for Soroban operations)
+/// 6. Signs the transaction envelope
 ///
 /// # Arguments
 /// * `counter_service` - Service for managing transaction sequence numbers
@@ -29,6 +32,7 @@ use crate::{
 /// * `stellar_data` - The stellar-specific transaction data containing operations
 /// * `provider` - Provider for Stellar RPC operations
 /// * `signer` - Service for signing transactions
+/// * `relayer_policy` - Optional relayer policy for validation
 ///
 /// # Returns
 /// The updated stellar data with simulation results (if applicable) and signature
@@ -40,12 +44,26 @@ pub async fn process_operations<C, P, S>(
     stellar_data: StellarTransactionData,
     provider: &P,
     signer: &S,
+    relayer_policy: Option<&RelayerStellarPolicy>,
 ) -> Result<StellarTransactionData, TransactionError>
 where
     C: TransactionCounterTrait + Send + Sync,
     P: StellarProviderTrait + Send + Sync,
     S: Signer + Send + Sync,
 {
+    // Reject gasless transactions (User fee payment strategy) in operations path
+    // Gasless transactions should be processed via unsigned_xdr path only
+    if let Some(policy) = relayer_policy {
+        if matches!(
+            policy.fee_payment_strategy,
+            Some(crate::models::StellarFeePaymentStrategy::User)
+        ) {
+            return Err(TransactionError::ValidationError(
+                "Gasless transactions (User fee payment strategy) are not supported via operations path. \
+                 Please use unsigned_xdr path for gasless transactions.".to_string(),
+            ));
+        }
+    }
     // Get the next sequence number
     let sequence_i64 = get_next_sequence(counter_service, relayer_id, relayer_address).await?;
 
@@ -191,6 +209,7 @@ mod tests {
             stellar_data,
             &provider,
             &signer,
+            None,
         )
         .await;
 
@@ -258,6 +277,7 @@ mod tests {
             stellar_data,
             &provider,
             &signer,
+            None,
         )
         .await;
 
@@ -295,6 +315,7 @@ mod tests {
             stellar_data,
             &provider,
             &signer,
+            None,
         )
         .await;
 
@@ -340,6 +361,7 @@ mod tests {
             stellar_data,
             &provider,
             &signer,
+            None,
         )
         .await;
 
@@ -380,6 +402,7 @@ mod tests {
             stellar_data,
             &provider,
             &signer,
+            None,
         )
         .await;
 
@@ -434,6 +457,7 @@ mod tests {
             stellar_data,
             &provider,
             &signer,
+            None,
         )
         .await;
 

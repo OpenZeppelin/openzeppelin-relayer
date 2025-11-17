@@ -17,7 +17,7 @@ use crate::{
     services::{provider::StellarProviderTrait, signer::Signer},
 };
 
-impl<R, T, J, S, P, C> StellarRelayerTransaction<R, T, J, S, P, C>
+impl<R, T, J, S, P, C, D> StellarRelayerTransaction<R, T, J, S, P, C, D>
 where
     R: Repository<RelayerRepoModel, String> + Send + Sync,
     T: TransactionRepository + Send + Sync,
@@ -25,6 +25,7 @@ where
     S: Signer + Send + Sync,
     P: StellarProviderTrait + Send + Sync,
     C: TransactionCounterTrait + Send + Sync,
+    D: crate::services::stellar_dex::StellarDexServiceTrait + Send + Sync + 'static,
 {
     /// Main status handling method with robust error handling.
     /// This method checks transaction status and handles lane cleanup for finalized transactions.

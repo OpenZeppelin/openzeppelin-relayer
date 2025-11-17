@@ -1,13 +1,13 @@
 //! Stellar Order Book Service implementation
 //! Uses Stellar Horizon API `/order_book` endpoint for quote conversion
 
-use super::{StellarDexServiceError, StellarQuoteResponse};
+use super::{StellarDexServiceError, StellarQuoteResponse, SwapTransactionParams};
 use crate::services::stellar_dex::StellarDexServiceTrait;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;
 use std::time::Duration;
-use tracing::debug;
+use tracing::{debug, warn};
 
 /// Stellar Horizon API order book response
 #[derive(Debug, Deserialize)]
@@ -453,6 +453,46 @@ impl StellarDexServiceTrait for OrderBookService {
             slippage_bps: (slippage * 100.0) as u32,
             path: None,
         })
+    }
+
+    async fn prepare_swap_transaction(
+        &self,
+        params: SwapTransactionParams,
+    ) -> Result<String, StellarDexServiceError> {
+        // Get a quote first
+        let quote = if params.destination_asset == "native" {
+            self.get_token_to_xlm_quote(
+                &params.source_asset,
+                params.amount,
+                params.slippage_percent,
+            )
+            .await?
+        } else {
+            self.get_xlm_to_token_quote(
+                &params.destination_asset,
+                params.amount,
+                params.slippage_percent,
+            )
+            .await?
+        };
+
+        // TODO: Build actual Stellar transaction envelope with path payment operation
+        // This requires:
+        // 1. Parse source_account to AccountId
+        // 2. Parse source_asset and destination_asset to Asset
+        // 3. Create PathPaymentStrictReceive operation
+        // 4. Build Transaction with sequence number
+        // 5. Create TransactionEnvelope
+        // 6. Serialize to XDR base64
+        //
+        // For now, return an error indicating this needs to be implemented
+        warn!(
+            "prepare_swap_transaction not yet fully implemented. Quote: {:?}, Params: {:?}",
+            quote, params
+        );
+        Err(StellarDexServiceError::UnknownError(
+            "Transaction preparation not yet implemented. Use quote methods and build transaction manually.".to_string(),
+        ))
     }
 }
 

@@ -52,7 +52,7 @@ use crate::{
     services::{
         provider::{StellarProvider, StellarProviderTrait},
         signer::{StellarSignTrait, StellarSigner},
-        stellar_dex::StellarDexServiceTrait,
+        stellar_dex::{OrderBookService, StellarDexServiceTrait},
         TransactionCounterService, TransactionCounterServiceTrait,
     },
     utils::calculate_scheduled_timestamp,
@@ -137,7 +137,7 @@ where
 }
 
 #[allow(dead_code)]
-pub struct StellarRelayer<P, RR, NR, TR, J, TCS, S>
+pub struct StellarRelayer<P, RR, NR, TR, J, TCS, S, D>
 where
     P: StellarProviderTrait + Send + Sync + 'static,
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
@@ -146,6 +146,7 @@ where
     J: JobProducerTrait + Send + Sync + 'static,
     TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
     S: StellarSignTrait + Send + Sync + 'static,
+    D: StellarDexServiceTrait + Send + Sync + 'static,
 {
     relayer: RelayerRepoModel,
     signer: S,
@@ -156,13 +157,21 @@ where
     transaction_repository: Arc<TR>,
     transaction_counter_service: Arc<TCS>,
     job_producer: Arc<J>,
-    dex_service: Arc<dyn StellarDexServiceTrait + Send + Sync>,
+    dex_service: Arc<D>,
 }
 
-pub type DefaultStellarRelayer<J, TR, NR, RR, TCR> =
-    StellarRelayer<StellarProvider, RR, NR, TR, J, TransactionCounterService<TCR>, StellarSigner>;
+pub type DefaultStellarRelayer<J, TR, NR, RR, TCR> = StellarRelayer<
+    StellarProvider,
+    RR,
+    NR,
+    TR,
+    J,
+    TransactionCounterService<TCR>,
+    StellarSigner,
+    OrderBookService,
+>;
 
-impl<P, RR, NR, TR, J, TCS, S> StellarRelayer<P, RR, NR, TR, J, TCS, S>
+impl<P, RR, NR, TR, J, TCS, S, D> StellarRelayer<P, RR, NR, TR, J, TCS, S, D>
 where
     P: StellarProviderTrait + Send + Sync,
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
@@ -171,6 +180,7 @@ where
     J: JobProducerTrait + Send + Sync + 'static,
     TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
     S: StellarSignTrait + Send + Sync + 'static,
+    D: StellarDexServiceTrait + Send + Sync + 'static,
 {
     /// Creates a new `StellarRelayer` instance.
     ///
@@ -184,6 +194,7 @@ where
     /// * `signer` - The Stellar signer for signing transactions
     /// * `provider` - The Stellar provider implementation for blockchain interactions (account queries, transaction submission)
     /// * `dependencies` - Container with all required repositories and services (see [`StellarRelayerDependencies`])
+    /// * `dex_service` - The DEX service implementation for swap operations
     ///
     /// # Returns
     ///
@@ -195,7 +206,7 @@ where
         signer: S,
         provider: P,
         dependencies: StellarRelayerDependencies<RR, NR, TR, J, TCS>,
-        dex_service: Arc<dyn StellarDexServiceTrait + Send + Sync>,
+        dex_service: Arc<D>,
     ) -> Result<Self, RelayerError> {
         let network_repo = dependencies
             .network_repository
@@ -492,9 +503,10 @@ where
 }
 
 #[async_trait]
-impl<P, RR, NR, TR, J, TCS, S> Relayer for StellarRelayer<P, RR, NR, TR, J, TCS, S>
+impl<P, RR, NR, TR, J, TCS, S, D> Relayer for StellarRelayer<P, RR, NR, TR, J, TCS, S, D>
 where
     P: StellarProviderTrait + Send + Sync + 'static,
+    D: StellarDexServiceTrait + Send + Sync + 'static,
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
     TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
@@ -801,9 +813,11 @@ where
 }
 
 #[async_trait]
-impl<P, RR, NR, TR, J, TCS, S> GasAbstractionTrait for StellarRelayer<P, RR, NR, TR, J, TCS, S>
+impl<P, RR, NR, TR, J, TCS, S, D> GasAbstractionTrait
+    for StellarRelayer<P, RR, NR, TR, J, TCS, S, D>
 where
     P: StellarProviderTrait + Send + Sync,
+    D: StellarDexServiceTrait + Send + Sync + 'static,
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
     TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
@@ -834,27 +848,36 @@ where
             |e| RelayerError::Internal(format!("Failed to validate allowed token: {}", e)),
         )?;
 
-        // Count operations from the appropriate source
-        let num_operations = if let Some(ref xdr) = params.transaction_xdr {
-            // Parse XDR and count operations
-            use crate::domain::relayer::xdr_utils::extract_operations;
+        // Estimate fee from envelope or operations
+        let xlm_fee: u64 = if let Some(ref xdr) = params.transaction_xdr {
+            // Parse XDR and use estimate_fee utility which handles simulation if needed
             let envelope = TransactionEnvelope::from_xdr_base64(xdr, Limits::none())
                 .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {}", e)))?;
+
+            // Count operations for override (+1 for fee payment operation)
+            use crate::domain::relayer::xdr_utils::extract_operations;
             let operations = extract_operations(&envelope).map_err(|e| {
                 RelayerError::Internal(format!("Failed to extract operations: {}", e))
             })?;
-            operations.len()
+            let num_operations = operations.len();
+
+            crate::domain::transaction::stellar::utils::estimate_fee(
+                &envelope,
+                &self.provider,
+                Some(num_operations + 1), // +1 for fee payment operation
+            )
+            .await
+            .map_err(|e| RelayerError::Internal(format!("Failed to estimate fee: {}", e)))?
         } else if let Some(ref operations) = params.operations {
-            // Count operations directly
-            operations.len()
+            // For operations-only requests, use base fee estimation
+            // (estimate_fee requires an envelope, so we fall back to estimate_base_fee)
+            let num_operations = operations.len();
+            estimate_base_fee(num_operations + 1) // +1 for fee payment operation
         } else {
             return Err(RelayerError::ValidationError(
                 "Must provide either transaction_xdr or operations in the request".to_string(),
             ));
         };
-
-        // Estimate base XLM fee + 1 for the fee payment operation
-        let xlm_fee = estimate_base_fee(num_operations + 1);
 
         // Convert to token amount via DEX service
         let (fee_quote, _) = self
@@ -910,28 +933,47 @@ where
             |e| RelayerError::Internal(format!("Failed to validate allowed token: {}", e)),
         )?;
 
-        // Count operations to get initial fee estimate for payment operation
-        let num_operations = if let Some(ref xdr) = params.transaction_xdr {
-            count_operations_from_xdr(xdr)?
+        // Build envelope from XDR or operations
+        let (envelope, num_operations) = if let Some(ref xdr) = params.transaction_xdr {
+            use crate::domain::relayer::stellar::xdr_utils::parse_transaction_xdr;
+            let envelope = parse_transaction_xdr(xdr, false)
+                .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {}", e)))?;
+            let num_operations = count_operations_from_xdr(xdr)?;
+            (envelope, num_operations)
         } else if let Some(ref operations) = params.operations {
-            // Count operations directly
-            operations.len()
+            // Build envelope from operations
+            let source_account = params.source_account.as_ref().ok_or_else(|| {
+                RelayerError::ValidationError(
+                    "source_account is required when providing operations".to_string(),
+                )
+            })?;
+
+            // Create StellarTransactionData from operations
+            use crate::models::{StellarTransactionData, TransactionInput};
+            let stellar_data = StellarTransactionData {
+                source_account: source_account.clone(),
+                fee: None,
+                sequence_number: None,
+                memo: None,
+                valid_until: None,
+                network_passphrase: self.network.passphrase.clone(),
+                signatures: vec![],
+                hash: None,
+                simulation_transaction_data: None,
+                transaction_input: TransactionInput::Operations(operations.clone()),
+                signed_envelope_xdr: None,
+            };
+
+            // Build unsigned envelope from operations
+            let envelope = stellar_data.build_unsigned_envelope().map_err(|e| {
+                RelayerError::Internal(format!("Failed to build envelope from operations: {}", e))
+            })?;
+
+            let num_operations = operations.len();
+            (envelope, num_operations)
         } else {
             unreachable!("Validation above ensures one is set");
         };
-
-        // Parse transaction to prepare for building
-        let envelope = if let Some(ref xdr) = params.transaction_xdr {
-            TransactionEnvelope::from_xdr_base64(xdr, Limits::none())
-                .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {}", e)))?
-        } else {
-            return Err(RelayerError::NotSupported(
-                "Operations mode not yet supported for build_gasless_transaction. Please use transaction_xdr instead.".to_string(),
-            ));
-        };
-
-        // Store original envelope before adding payment operation
-        let original_envelope = envelope.clone();
 
         StellarTransactionValidator::gasless_transaction_validation(
             &envelope,
@@ -944,110 +986,52 @@ where
             RelayerError::ValidationError(format!("Failed to validate gasless transaction: {}", e))
         })?;
 
-        // Get initial fee estimate for creating payment operation
-        let initial_xlm_fee = estimate_base_fee(num_operations + 1); // +1 for fee payment operation
+        // Get fee estimate using estimate_fee utility which handles simulation if needed
+        // Override operations count to include fee payment operation (+1)
+        let xlm_fee = crate::domain::transaction::stellar::utils::estimate_fee(
+            &envelope,
+            &self.provider,
+            Some(num_operations + 1), // +1 for fee payment operation
+        )
+        .await
+        .map_err(|e| RelayerError::Internal(format!("Failed to estimate fee: {}", e)))?;
+
+        debug!(
+            operations_count = num_operations,
+            estimated_fee = xlm_fee,
+            "Fee estimated using estimate_fee utility (simulation handled automatically if needed)"
+        );
 
         // Estimate fee, convert to token, and add payment operation
-        let (initial_fee_quote, _, mut envelope) = self
+        let (fee_quote, buffered_xlm_fee, mut final_envelope) = self
             .estimate_fee_and_add_payment_operation(
                 envelope,
-                initial_xlm_fee,
+                xlm_fee,
                 &params.fee_token,
                 policy.fee_margin_percentage,
                 &self.relayer.address,
             )
             .await?;
 
-        // Set temporary time bounds for simulation (simulation needs valid time bounds)
-        let temp_valid_until = Utc::now() + Duration::minutes(1);
-        set_time_bounds(&mut envelope, temp_valid_until)
-            .map_err(|e| RelayerError::Internal(format!("Failed to set time bounds: {}", e)))?;
-
-        // Single simulation: get actual fee requirement for complete transaction
-        debug!("Simulating complete transaction with fee payment to get actual fee requirement");
-        let simulation_result = self
-            .provider
-            .simulate_transaction_envelope(&envelope)
-            .await
-            .map_err(|e| RelayerError::Internal(format!("Transaction simulation failed: {}", e)))?;
-
-        // Check simulation success
-        if simulation_result.results.is_empty() {
-            return Err(RelayerError::Internal(
-                "Transaction simulation failed: no results returned".to_string(),
-            ));
-        }
-
-        // Use actual fee from simulation
-        let actual_xlm_fee = simulation_result.min_resource_fee as u64;
-        debug!(
-            initial_estimate = initial_xlm_fee,
-            simulated_min_resource_fee = actual_xlm_fee,
-            "Simulation provided actual fee requirement"
-        );
-
-        // Only recreate transaction if actual fee is higher than initial estimate
-        // This ensures the transaction has sufficient fee to succeed
-        // If actual fee is lower, we keep the initial estimate (transaction will succeed, user pays slightly more)
-        let (final_fee_quote, buffered_xlm_fee, mut final_envelope) = if actual_xlm_fee
-            > initial_xlm_fee
-        {
-            debug!(
-                "Actual fee ({}) is higher than initial estimate ({}), recreating transaction with correct fee to ensure success",
-                actual_xlm_fee, initial_xlm_fee
-            );
-
-            // Recreate transaction from original envelope with higher fee amount
-            // Note: Final time bounds will be set just before returning
-            let (actual_fee_quote, actual_buffered_fee, updated_envelope) = self
-                .estimate_fee_and_add_payment_operation(
-                    original_envelope,
-                    actual_xlm_fee,
-                    &params.fee_token,
-                    policy.fee_margin_percentage,
-                    &self.relayer.address,
-                )
-                .await?;
-
-            (actual_fee_quote, actual_buffered_fee, updated_envelope)
-        } else {
-            // Keep initial estimate (actual <= initial)
-            // Transaction will succeed with initial estimate, user pays slightly more if actual is lower
-            if actual_xlm_fee < initial_xlm_fee {
-                debug!(
-                    "Actual fee ({}) is lower than initial estimate ({}), keeping initial estimate. Transaction will succeed.",
-                    actual_xlm_fee, initial_xlm_fee
-                );
-            } else {
-                debug!("Simulated fee matches initial estimate, reusing initial fee quote");
-            }
-            (initial_fee_quote, initial_xlm_fee, envelope)
-        };
-
-        // Validate max fee with actual amount
-        StellarTransactionValidator::validate_max_fee(final_fee_quote.fee_in_stroops, &policy)
+        // Validate max fee
+        StellarTransactionValidator::validate_max_fee(fee_quote.fee_in_stroops, &policy)
             .map_err(|e| RelayerError::Internal(format!("Failed to validate max fee: {}", e)))?;
 
         // Validate token-specific max fee
         StellarTransactionValidator::validate_token_max_fee(
             &params.fee_token,
-            final_fee_quote.fee_in_token,
+            fee_quote.fee_in_token,
             &policy,
         )
         .map_err(|e| {
             RelayerError::Internal(format!("Failed to validate token-specific max fee: {}", e))
         })?;
 
-        // Note: Balance check is not needed here because simulation already validated
-        // that the transaction (including the payment operation) will execute successfully.
-        // If simulation succeeded, the account has sufficient balance.
-
         debug!(
             operations_count = num_operations,
-            initial_fee_estimate = initial_xlm_fee,
-            actual_fee_from_simulation = actual_xlm_fee,
-            final_fee_in_token = final_fee_quote.fee_in_token_ui,
-            "Transaction simulation completed successfully"
+            estimated_fee = xlm_fee,
+            final_fee_in_token = fee_quote.fee_in_token_ui,
+            "Transaction prepared successfully"
         );
 
         // Set final time bounds just before returning to give user maximum time to review and submit
@@ -1065,7 +1049,7 @@ where
         Ok(GaslessTransactionBuildResponse::Stellar(
             StellarPrepareTransactionResult {
                 transaction: extended_xdr,
-                fee_in_token: final_fee_quote.fee_in_token_ui,
+                fee_in_token: fee_quote.fee_in_token_ui,
                 fee_in_stroops: buffered_xlm_fee.to_string(),
                 fee_token: params.fee_token,
                 valid_until: valid_until.to_rfc3339(),
@@ -1075,9 +1059,11 @@ where
 }
 
 #[async_trait]
-impl<P, RR, NR, TR, J, TCS, S> StellarRelayerDexTrait for StellarRelayer<P, RR, NR, TR, J, TCS, S>
+impl<P, RR, NR, TR, J, TCS, S, D> StellarRelayerDexTrait
+    for StellarRelayer<P, RR, NR, TR, J, TCS, S, D>
 where
     P: StellarProviderTrait + Send + Sync,
+    D: StellarDexServiceTrait + Send + Sync + 'static,
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
     TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,

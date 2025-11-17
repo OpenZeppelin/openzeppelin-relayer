@@ -57,6 +57,23 @@ pub struct PathStep {
     pub amount: u64,
 }
 
+/// Parameters for preparing a swap transaction
+#[derive(Debug, Clone)]
+pub struct SwapTransactionParams {
+    /// Source account address (the account that will sign the transaction)
+    pub source_account: String,
+    /// Source asset identifier (e.g., "native" or "USDC:GA5Z...")
+    pub source_asset: String,
+    /// Destination asset identifier (typically "native" for XLM)
+    pub destination_asset: String,
+    /// Amount in stroops to swap
+    pub amount: u64,
+    /// Slippage percentage (e.g., 1.0 for 1%)
+    pub slippage_percent: f32,
+    /// Sequence number for the transaction
+    pub sequence_number: i64,
+}
+
 /// Trait for Stellar DEX services
 #[async_trait]
 #[cfg_attr(test, automock)]
@@ -96,6 +113,24 @@ pub trait StellarDexServiceTrait: Send + Sync {
         amount: u64,
         slippage: f32,
     ) -> Result<StellarQuoteResponse, StellarDexServiceError>;
+
+    /// Prepare a swap transaction based on a quote
+    ///
+    /// This method creates an unsigned Stellar transaction envelope (XDR) that can be
+    /// signed and executed by the relayer. The transaction will include a path payment
+    /// operation based on the quote from `get_token_to_xlm_quote` or `get_xlm_to_token_quote`.
+    ///
+    /// # Arguments
+    ///
+    /// * `params` - Swap transaction parameters including source account, assets, amounts, and sequence number
+    ///
+    /// # Returns
+    ///
+    /// An unsigned transaction envelope as XDR base64 string, ready to be signed and submitted
+    async fn prepare_swap_transaction(
+        &self,
+        params: SwapTransactionParams,
+    ) -> Result<String, StellarDexServiceError>;
 }
 
 /// Default implementation using Stellar Order Book service

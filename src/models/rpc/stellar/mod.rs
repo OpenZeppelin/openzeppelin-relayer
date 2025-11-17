@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::models::transaction::stellar::OperationSpec;
+use crate::{
+    domain::stellar::validation::validate_operations, models::transaction::stellar::OperationSpec,
+};
 
 // feeEstimate
 #[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
@@ -39,6 +41,11 @@ impl FeeEstimateRequestParams {
             .map(|ops| !ops.is_empty())
             .unwrap_or(false);
         let has_xdr = self.transaction_xdr.is_some();
+
+        if has_operations {
+            validate_operations(self.operations.as_ref().unwrap())
+                .map_err(|e| ApiError::BadRequest(format!("Invalid operations: {}", e)))?;
+        }
 
         match (has_operations, has_xdr) {
             (true, true) => {
@@ -79,6 +86,10 @@ pub struct PrepareTransactionRequestParams {
     /// Mutually exclusive with transaction_xdr field
     #[schema(nullable = true)]
     pub operations: Option<Vec<OperationSpec>>,
+    /// Source account address (required when operations are provided)
+    /// For gasless transactions, this should be the user's account address
+    #[schema(nullable = true)]
+    pub source_account: Option<String>,
     /// Asset identifier for fee token
     pub fee_token: String,
 }
@@ -87,6 +98,7 @@ impl PrepareTransactionRequestParams {
     /// Validate the prepare transaction request according to the rules:
     /// - Only one input type allowed (operations XOR transaction_xdr)
     /// - fee_token must be in valid format
+    /// - source_account is required when operations are provided
     pub fn validate(&self) -> Result<(), crate::models::ApiError> {
         use crate::domain::transaction::stellar::StellarTransactionValidator;
         use crate::models::ApiError;
@@ -115,6 +127,17 @@ impl PrepareTransactionRequestParams {
                 ));
             }
             _ => {}
+        }
+
+        // Validate source_account is provided when operations are used
+        if has_operations {
+            validate_operations(self.operations.as_ref().unwrap())
+                .map_err(|e| ApiError::BadRequest(format!("Invalid operations: {}", e)))?;
+            if self.source_account.is_none() || self.source_account.as_ref().unwrap().is_empty() {
+                return Err(ApiError::BadRequest(
+                    "source_account is required when providing operations".to_string(),
+                ));
+            }
         }
 
         Ok(())

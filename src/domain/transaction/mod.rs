@@ -12,6 +12,7 @@
 //! The module leverages async traits to handle asynchronous operations and uses the `eyre` crate
 //! for error handling.
 use crate::{
+    constants::{STELLAR_HORIZON_MAINNET_URL, STELLAR_HORIZON_TESTNET_URL},
     jobs::JobProducer,
     models::{
         EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerRepoModel, SignerRepoModel,
@@ -28,6 +29,7 @@ use crate::{
         },
         provider::get_network_provider,
         signer::{EvmSignerFactory, SolanaSignerFactory, StellarSignerFactory},
+        stellar_dex::OrderBookService,
     },
 };
 use async_trait::async_trait;
@@ -511,6 +513,21 @@ impl RelayerTransactionFactory {
                     get_network_provider(&network, relayer.custom_rpc_urls.clone())
                         .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
+                // Create DEX service for swap operations and validations using Horizon API
+                let horizon_url = network.horizon_url.clone().unwrap_or_else(|| {
+                    if network.is_testnet() {
+                        STELLAR_HORIZON_TESTNET_URL.to_string()
+                    } else {
+                        STELLAR_HORIZON_MAINNET_URL.to_string()
+                    }
+                });
+                let dex_service = Arc::new(OrderBookService::new(horizon_url).map_err(|e| {
+                    TransactionError::NetworkConfiguration(format!(
+                        "Failed to create DEX service: {}",
+                        e
+                    ))
+                })?);
+
                 Ok(NetworkTransaction::Stellar(DefaultStellarTransaction::new(
                     relayer,
                     relayer_repository,
@@ -519,6 +536,7 @@ impl RelayerTransactionFactory {
                     signer_service,
                     stellar_provider,
                     transaction_counter_store,
+                    dex_service,
                 )?))
             }
         }

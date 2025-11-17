@@ -4,8 +4,8 @@ pub use stellar_relayer::*;
 pub mod xdr_utils;
 pub use xdr_utils::*;
 
-mod dex;
-pub use dex::*;
+// DEX functionality moved to services/stellar_dex
+pub use crate::services::stellar_dex::StellarDexServiceTrait;
 
 use std::sync::Arc;
 
@@ -21,8 +21,8 @@ use crate::{
         TransactionRepository,
     },
     services::{
-        provider::get_network_provider, signer::StellarSignerFactory, OrderBookService,
-        TransactionCounterService,
+        provider::get_network_provider, signer::StellarSignerFactory,
+        stellar_dex::OrderBookService, TransactionCounterService,
     },
 };
 
@@ -69,12 +69,9 @@ pub async fn create_stellar_relayer<
             STELLAR_HORIZON_MAINNET_URL.to_string()
         }
     });
-    let order_book_service = Arc::new(OrderBookService::new(horizon_url).map_err(|e| {
+    let dex_service = Arc::new(OrderBookService::new(horizon_url).map_err(|e| {
         RelayerError::NetworkConfiguration(format!("Failed to create DEX service: {}", e))
     })?);
-
-    // Create network DEX strategy based on relayer configuration
-    let dex_service = create_stellar_network_dex(&relayer, order_book_service.clone())?;
 
     let relayer = DefaultStellarRelayer::<J, TR, NR, RR, TCR>::new(
         relayer,
@@ -87,7 +84,7 @@ pub async fn create_stellar_relayer<
             transaction_counter_service,
             job_producer,
         ),
-        Arc::new(dex_service),
+        dex_service,
     )
     .await?;
 
