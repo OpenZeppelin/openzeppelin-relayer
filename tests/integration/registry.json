@@ -1,0 +1,22 @@
+{
+  "networks": {
+    "sepolia": {
+      "network_name": "sepolia",
+      "network_type": "evm",
+      "signer": {
+        "id": "local-signer",
+        "address": "0x0a427c6ffdc5588f9dc155c4e89ad0c15daa2655"
+      },
+      "contracts": {
+        "simple_storage": "0x5379E27d181a94550318d4A44124eCd056678879",
+        "test_erc20": "0x0000000000000000000000000000000000000000"
+      },
+      "min_balance": "0.1"
+    }
+  },
+  "_metadata": {
+    "description": "Integration test registry for OpenZeppelin Relayer",
+    "version": "1.0.0",
+    "last_updated": "2025-11-11"
+  }
+}
