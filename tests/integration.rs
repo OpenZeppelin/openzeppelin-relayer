@@ -3,6 +3,7 @@
 //! Contains tests for relayer functionality
 
 mod integration {
+    pub mod common;
+    mod authorization;
     mod logging;
-    mod metrics;
 }
