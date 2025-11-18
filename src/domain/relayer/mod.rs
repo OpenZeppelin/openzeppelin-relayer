@@ -11,7 +11,6 @@
 use actix_web::web::ThinData;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tracing::info;
 use utoipa::ToSchema;
 
 #[cfg(test)]

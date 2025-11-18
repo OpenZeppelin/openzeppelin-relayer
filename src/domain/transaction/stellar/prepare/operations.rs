@@ -8,7 +8,8 @@ use crate::{
     constants::STELLAR_DEFAULT_TRANSACTION_FEE,
     domain::extract_operations,
     models::{
-        RelayerStellarPolicy, StellarTransactionData, TransactionError, TransactionRepoModel,
+        RelayerStellarPolicy, StellarFeePaymentStrategy, StellarTransactionData, TransactionError,
+        TransactionRepoModel,
     },
     repositories::TransactionCounterTrait,
     services::{provider::StellarProviderTrait, signer::Signer},
@@ -36,6 +37,7 @@ use crate::{
 ///
 /// # Returns
 /// The updated stellar data with simulation results (if applicable) and signature
+#[allow(clippy::too_many_arguments)]
 pub async fn process_operations<C, P, S>(
     counter_service: &C,
     relayer_id: &str,
@@ -54,10 +56,7 @@ where
     // Reject gasless transactions (User fee payment strategy) in operations path
     // Gasless transactions should be processed via unsigned_xdr path only
     if let Some(policy) = relayer_policy {
-        if matches!(
-            policy.fee_payment_strategy,
-            crate::models::StellarFeePaymentStrategy::User
-        ) {
+        if matches!(policy.fee_payment_strategy, StellarFeePaymentStrategy::User) {
             return Err(TransactionError::ValidationError(
                 "Gasless transactions (User fee payment strategy) are not supported via operations path. \
                  Please use unsigned_xdr path for gasless transactions.".to_string(),

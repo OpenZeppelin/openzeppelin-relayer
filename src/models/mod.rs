@@ -12,9 +12,11 @@ mod api_response;
 pub use api_response::*;
 
 pub mod transaction;
+#[allow(ambiguous_glob_reexports)]
 pub use transaction::*;
 
 pub mod relayer;
+#[allow(ambiguous_glob_reexports)]
 pub use relayer::*;
 
 // Type aliases for backward compatibility with domain logic

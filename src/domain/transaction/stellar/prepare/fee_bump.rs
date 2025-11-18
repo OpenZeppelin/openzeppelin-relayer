@@ -6,14 +6,13 @@ use soroban_rs::xdr::{Limits, ReadXdr, TransactionEnvelope, WriteXdr};
 use crate::{
     domain::{attach_signatures_to_envelope, build_fee_bump_envelope, parse_transaction_xdr},
     models::{
-        NetworkTransactionData, StellarTransactionData, StellarValidationError, TransactionError,
-        TransactionInput,
+        NetworkTransactionData, RelayerStellarPolicy, StellarFeePaymentStrategy,
+        StellarTransactionData, StellarValidationError, TransactionError, TransactionInput,
     },
     services::{provider::StellarProviderTrait, signer::Signer},
 };
 
 use super::common::{calculate_fee_bump_required_fee, create_signing_data};
-use crate::models::RelayerStellarPolicy;
 
 /// Process a fee-bump transaction from signed XDR input.
 ///
@@ -42,10 +41,7 @@ where
     // Reject gasless transactions (User fee payment strategy) in fee_bump path
     // Gasless transactions should be processed via unsigned_xdr path only
     if let Some(policy) = relayer_policy {
-        if matches!(
-            policy.fee_payment_strategy,
-            crate::models::StellarFeePaymentStrategy::User
-        ) {
+        if matches!(policy.fee_payment_strategy, StellarFeePaymentStrategy::User) {
             return Err(TransactionError::ValidationError(
                 "Gasless transactions (User fee payment strategy) are not supported via fee_bump path. \
                  Please use unsigned_xdr path for gasless transactions.".to_string(),

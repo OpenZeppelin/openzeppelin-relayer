@@ -1,7 +1,10 @@
 //! Stellar Order Book Service implementation
 //! Uses Stellar Horizon API `/order_book` endpoint for quote conversion
 
-use super::{StellarDexServiceError, StellarQuoteResponse, SwapTransactionParams};
+use super::{
+    AssetType, StellarDexServiceError, StellarQuoteResponse, SwapExecutionResult,
+    SwapTransactionParams,
+};
 use crate::constants::STELLAR_DEFAULT_TRANSACTION_FEE;
 use crate::domain::relayer::string_to_muxed_account;
 use crate::models::transaction::stellar::asset::AssetSpec;
@@ -70,6 +73,7 @@ struct RationalPrice {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct AssetInfo {
     #[serde(rename = "asset_type")]
     asset_type: String,
@@ -111,7 +115,7 @@ where
         let client = Client::builder()
             .timeout(Duration::from_secs(HTTP_REQUEST_TIMEOUT_SECONDS))
             .build()
-            .map_err(|e| StellarDexServiceError::HttpRequestError(e))?;
+            .map_err(StellarDexServiceError::HttpRequestError)?;
 
         Ok(Self {
             horizon_base_url,
@@ -610,7 +614,7 @@ where
         // when processing the transaction through the gate mechanism
         let transaction = Transaction {
             source_account,
-            fee: STELLAR_DEFAULT_TRANSACTION_FEE as u32,
+            fee: STELLAR_DEFAULT_TRANSACTION_FEE,
             seq_num: SequenceNumber(0), // Placeholder - will be updated by transaction pipeline
             cond: Preconditions::Time(time_bounds),
             memo: Memo::None,
@@ -679,10 +683,7 @@ where
     P: StellarProviderTrait + Send + Sync + 'static,
     S: StellarSignTrait + Send + Sync + 'static,
 {
-    fn supported_asset_types(
-        &self,
-    ) -> std::collections::HashSet<crate::services::stellar_dex::AssetType> {
-        use crate::services::stellar_dex::AssetType;
+    fn supported_asset_types(&self) -> std::collections::HashSet<AssetType> {
         use std::collections::HashSet;
         let mut types = HashSet::new();
         types.insert(AssetType::Native);
@@ -860,7 +861,7 @@ where
     async fn execute_swap(
         &self,
         params: SwapTransactionParams,
-    ) -> Result<crate::services::stellar_dex::SwapExecutionResult, StellarDexServiceError> {
+    ) -> Result<SwapExecutionResult, StellarDexServiceError> {
         // Note: execute_swap is kept for backward compatibility but should generally not be used
         // Swaps should go through the transaction pipeline via prepare_swap_transaction + process_transaction_request
         // which properly manages sequence numbers through the gate mechanism
@@ -886,7 +887,7 @@ where
             transaction_hash, quote.out_amount
         );
 
-        Ok(crate::services::stellar_dex::SwapExecutionResult {
+        Ok(SwapExecutionResult {
             transaction_hash,
             destination_amount: quote.out_amount,
         })
@@ -895,6 +896,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::domain::SignXdrTransactionResponseStellar;
+    use crate::models::SignerError;
     use crate::services::provider::MockStellarProviderTrait;
     use crate::services::signer::StellarSignTrait;
     use std::sync::Arc;
@@ -913,8 +916,7 @@ mod tests {
             &self,
             _unsigned_xdr: &str,
             _network_passphrase: &str,
-        ) -> Result<crate::domain::SignXdrTransactionResponseStellar, crate::models::SignerError>
-        {
+        ) -> Result<SignXdrTransactionResponseStellar, SignerError> {
             unimplemented!("Not used in quote tests")
         }
     }

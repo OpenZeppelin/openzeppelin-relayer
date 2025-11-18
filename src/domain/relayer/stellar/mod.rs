@@ -7,7 +7,6 @@ mod token_swap;
 pub mod xdr_utils;
 pub use xdr_utils::*;
 
-// DEX functionality moved to services/stellar_dex
 pub use crate::services::stellar_dex::StellarDexServiceTrait;
 
 use std::sync::Arc;
@@ -24,8 +23,8 @@ use crate::{
         TransactionRepository,
     },
     services::{
-        provider::{get_network_provider, StellarProvider},
-        signer::{StellarSigner, StellarSignerFactory},
+        provider::get_network_provider,
+        signer::StellarSignerFactory,
         stellar_dex::{DexServiceWrapper, OrderBookService, StellarDexService},
         TransactionCounterService,
     },
@@ -60,10 +59,8 @@ pub async fn create_stellar_relayer<
     let provider = get_network_provider(&network, relayer.custom_rpc_urls.clone())
         .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
 
-    // Create signers - one for relayer, one for DEX service
-    // Since StellarSigner doesn't implement Clone, we create them separately from the same source
-    let stellar_signer = StellarSignerFactory::create_stellar_signer(&signer.clone().into())?;
-    let stellar_signer_for_dex = StellarSignerFactory::create_stellar_signer(&signer.into())?;
+    // Create signer once and wrap in Arc for shared use
+    let stellar_signer = Arc::new(StellarSignerFactory::create_stellar_signer(&signer.into())?);
 
     let transaction_counter_service = Arc::new(TransactionCounterService::new(
         relayer.id.clone(),
@@ -80,7 +77,7 @@ pub async fn create_stellar_relayer<
         }
     });
     let provider_arc = Arc::new(provider.clone());
-    let signer_arc = Arc::new(stellar_signer_for_dex);
+    let signer_arc = stellar_signer.clone();
 
     // Get strategies from policy (default to OrderBook if none specified)
     let strategies = relayer
@@ -130,7 +127,7 @@ pub async fn create_stellar_relayer<
 
     let relayer = DefaultStellarRelayer::<J, TR, NR, RR, TCR>::new(
         relayer,
-        stellar_signer,
+        stellar_signer.clone(),
         provider,
         StellarRelayerDependencies::new(
             relayer_repository,

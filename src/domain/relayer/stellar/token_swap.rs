@@ -7,7 +7,10 @@ use async_trait::async_trait;
 use futures::future::try_join_all;
 use tracing::{debug, error, info};
 
-use crate::domain::relayer::{Relayer, RelayerError, StellarRelayer, SwapResult};
+use crate::constants::DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE;
+use crate::domain::relayer::{
+    Relayer, RelayerError, StellarRelayer, StellarRelayerDexTrait, SwapResult,
+};
 use crate::domain::transaction::stellar::token::get_token_balance;
 use crate::jobs::JobProducerTrait;
 use crate::models::transaction::request::StellarTransactionRequest;
@@ -21,11 +24,11 @@ use crate::repositories::{
 };
 use crate::services::provider::StellarProviderTrait;
 use crate::services::signer::StellarSignTrait;
-use crate::services::stellar_dex::StellarDexServiceTrait;
+use crate::services::stellar_dex::{StellarDexServiceTrait, SwapTransactionParams};
 use crate::services::TransactionCounterServiceTrait;
 
 #[async_trait]
-impl<P, RR, NR, TR, J, TCS, S, D> crate::domain::relayer::StellarRelayerDexTrait
+impl<P, RR, NR, TR, J, TCS, S, D> StellarRelayerDexTrait
     for StellarRelayer<P, RR, NR, TR, J, TCS, S, D>
 where
     P: StellarProviderTrait + Send + Sync,
@@ -138,7 +141,7 @@ where
                             .swap_config
                             .as_ref()
                             .and_then(|config| config.slippage_percentage)
-                            .unwrap_or(crate::constants::DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE),
+                            .unwrap_or(DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE),
                     ));
                 }
             }
@@ -184,7 +187,6 @@ where
                     // Prepare swap transaction parameters
                     // Note: Sequence number is not set here - it will be managed by the transaction pipeline
                     // when the transaction goes through the prepare phase via the gate mechanism
-                    use crate::services::stellar_dex::SwapTransactionParams;
                     let swap_params = SwapTransactionParams {
                         source_account: relayer_address.clone(),
                         source_asset: token_asset.clone(),

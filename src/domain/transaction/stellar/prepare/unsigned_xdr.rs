@@ -13,8 +13,8 @@ use crate::{
     constants::STELLAR_DEFAULT_TRANSACTION_FEE,
     domain::{extract_operations, extract_source_account},
     models::{
-        RelayerStellarPolicy, StellarTransactionData, StellarValidationError, TransactionError,
-        TransactionInput,
+        RelayerError, RelayerStellarPolicy, StellarFeePaymentStrategy, StellarTransactionData,
+        StellarValidationError, TransactionError, TransactionInput,
     },
     repositories::TransactionCounterTrait,
     services::{
@@ -111,10 +111,10 @@ where
     let required_xlm_fee = estimate_fee(envelope, provider, None)
         .await
         .map_err(|e| match e {
-            crate::models::RelayerError::ValidationError(msg) => {
+            RelayerError::ValidationError(msg) => {
                 TransactionError::ValidationError(format!("Failed to estimate fee: {}", msg))
             }
-            crate::models::RelayerError::Internal(msg) => {
+            RelayerError::Internal(msg) => {
                 TransactionError::ValidationError(format!("Failed to estimate fee: {}", msg))
             }
             _ => TransactionError::ValidationError(format!("Failed to estimate fee: {}", e)),
@@ -131,10 +131,11 @@ where
     )
     .await
     .map_err(|e| match e {
-        crate::models::RelayerError::ValidationError(msg) => TransactionError::ValidationError(
-            format!("Failed to convert XLM fee to token {}: {}", asset_id, msg),
-        ),
-        crate::models::RelayerError::Internal(msg) => TransactionError::ValidationError(format!(
+        RelayerError::ValidationError(msg) => TransactionError::ValidationError(format!(
+            "Failed to convert XLM fee to token {}: {}",
+            asset_id, msg
+        )),
+        RelayerError::Internal(msg) => TransactionError::ValidationError(format!(
             "Failed to convert XLM fee to token {}: {}",
             asset_id, msg
         )),
@@ -174,6 +175,7 @@ where
 /// For relayer-paid transactions:
 /// - Source account must be relayer's account
 /// - Uses relayer's sequence number from counter
+#[allow(clippy::too_many_arguments)]
 pub async fn process_unsigned_xdr<C, P, S, D>(
     counter_service: &C,
     relayer_id: &str,
@@ -210,7 +212,7 @@ where
 
     // Check if this is a gasless transaction (User fee payment strategy)
     let is_gasless = relayer_policy
-        .map(|p| p.fee_payment_strategy == crate::models::StellarFeePaymentStrategy::User)
+        .map(|p| p.fee_payment_strategy == StellarFeePaymentStrategy::User)
         .unwrap_or(false);
 
     if is_gasless {
@@ -241,8 +243,8 @@ where
         // For gasless transactions, sequence should already be set in the envelope by the user
         // If not set or invalid, we'll need to fetch from chain
         match &envelope {
-            soroban_rs::xdr::TransactionEnvelope::TxV0(e) => e.tx.seq_num.0 as i64,
-            soroban_rs::xdr::TransactionEnvelope::Tx(e) => e.tx.seq_num.0 as i64,
+            soroban_rs::xdr::TransactionEnvelope::TxV0(e) => e.tx.seq_num.0,
+            soroban_rs::xdr::TransactionEnvelope::Tx(e) => e.tx.seq_num.0,
             _ => {
                 return Err(TransactionError::ValidationError(
                     "Invalid transaction envelope type for gasless transaction".to_string(),

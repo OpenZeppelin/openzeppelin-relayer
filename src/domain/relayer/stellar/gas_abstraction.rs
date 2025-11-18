@@ -8,7 +8,10 @@ use chrono::{Duration, Utc};
 use soroban_rs::xdr::{Limits, Operation, ReadXdr, TransactionEnvelope, WriteXdr};
 use tracing::debug;
 
-use crate::domain::relayer::{GasAbstractionTrait, RelayerError, StellarRelayer};
+use crate::domain::relayer::{
+    stellar::xdr_utils::parse_transaction_xdr, xdr_utils::extract_operations, GasAbstractionTrait,
+    RelayerError, StellarRelayer,
+};
 use crate::domain::transaction::stellar::{
     utils::{
         add_operation_to_envelope, convert_xlm_fee_to_token, count_operations_from_xdr,
@@ -20,7 +23,7 @@ use crate::jobs::JobProducerTrait;
 use crate::models::{
     GaslessTransactionBuildRequest, GaslessTransactionBuildResponse,
     GaslessTransactionQuoteRequest, GaslessTransactionQuoteResponse, StellarFeeEstimateResult,
-    StellarPrepareTransactionResult,
+    StellarPrepareTransactionResult, StellarTransactionData, TransactionInput,
 };
 use crate::models::{NetworkRepoModel, RelayerRepoModel, TransactionRepoModel};
 use crate::repositories::{
@@ -74,7 +77,6 @@ where
                 .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {}", e)))?;
 
             // Count operations for override (+1 for fee payment operation)
-            use crate::domain::relayer::xdr_utils::extract_operations;
             let operations = extract_operations(&envelope).map_err(|e| {
                 RelayerError::Internal(format!("Failed to extract operations: {}", e))
             })?;
@@ -159,7 +161,6 @@ where
 
         // Build envelope from XDR or operations
         let (envelope, num_operations) = if let Some(ref xdr) = params.transaction_xdr {
-            use crate::domain::relayer::stellar::xdr_utils::parse_transaction_xdr;
             let envelope = parse_transaction_xdr(xdr, false)
                 .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {}", e)))?;
             let num_operations = count_operations_from_xdr(xdr)?;
@@ -173,7 +174,6 @@ where
             })?;
 
             // Create StellarTransactionData from operations
-            use crate::models::{StellarTransactionData, TransactionInput};
             let stellar_data = StellarTransactionData {
                 source_account: source_account.clone(),
                 fee: None,

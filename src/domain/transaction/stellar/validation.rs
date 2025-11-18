@@ -490,13 +490,11 @@ impl StellarTransactionValidator {
                 let pk = PublicKey(bytes);
                 Ok(pk.to_string())
             }
-            _ => Err(StellarTransactionValidationError::ValidationError(
-                "Unsupported public key type".to_string(),
-            )),
         }
     }
 
     /// Check if a footprint key targets relayer-owned storage
+    #[allow(dead_code)]
     fn footprint_key_targets_relayer(
         key: &LedgerKey,
         relayer_address: &str,

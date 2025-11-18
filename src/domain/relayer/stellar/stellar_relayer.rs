@@ -1,5 +1,6 @@
 use crate::domain::map_provider_error;
 use crate::domain::relayer::evm::create_error_response;
+use crate::services::stellar_dex::StellarDexService;
 /// This module defines the `StellarRelayer` struct and its associated functionality for
 /// interacting with Stellar networks. The `StellarRelayer` is responsible for managing
 /// transactions, synchronizing sequence numbers, and ensuring the relayer's state is
@@ -38,8 +39,8 @@ use crate::{
         HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest,
         NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerNetworkPolicy,
         RelayerRepoModel, RelayerStatus, RelayerStellarPolicy, RepositoryError, RpcErrorCodes,
-        StellarAllowedTokensPolicy, StellarNetwork, StellarRpcRequest, TransactionRepoModel,
-        TransactionStatus,
+        StellarAllowedTokensPolicy, StellarFeePaymentStrategy, StellarNetwork, StellarRpcRequest,
+        TransactionRepoModel, TransactionStatus,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
@@ -126,7 +127,7 @@ where
     D: StellarDexServiceTrait + Send + Sync + 'static,
 {
     pub(crate) relayer: RelayerRepoModel,
-    signer: S,
+    signer: Arc<S>,
     pub(crate) network: StellarNetwork,
     pub(crate) provider: P,
     pub(crate) relayer_repository: Arc<RR>,
@@ -136,8 +137,6 @@ where
     pub(crate) job_producer: Arc<J>,
     pub(crate) dex_service: Arc<D>,
 }
-
-use crate::services::stellar_dex::StellarDexService;
 
 pub type DefaultStellarRelayer<J, TR, NR, RR, TCR> = StellarRelayer<
     StellarProvider,
@@ -182,7 +181,7 @@ where
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
         relayer: RelayerRepoModel,
-        signer: S,
+        signer: Arc<S>,
         provider: P,
         dependencies: StellarRelayerDependencies<RR, NR, TR, J, TCS>,
         dex_service: Arc<D>,
@@ -391,7 +390,7 @@ where
                 TransactionStatusCheck::new(
                     transaction.id.clone(),
                     transaction.relayer_id.clone(),
-                    crate::models::NetworkType::Stellar,
+                    NetworkType::Stellar,
                 ),
                 Some(calculate_scheduled_timestamp(
                     STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS,
@@ -637,7 +636,7 @@ where
 
         // Check fee payment strategy - reject if User (user pays fees directly, relayer should not sign)
         let policy = self.relayer.policies.get_stellar_policy();
-        if policy.fee_payment_strategy == crate::models::StellarFeePaymentStrategy::User {
+        if policy.fee_payment_strategy == StellarFeePaymentStrategy::User {
             return Err(RelayerError::NotSupported(
                 "sign_transaction is not supported when fee_payment_strategy is 'User'".to_string(),
             ));

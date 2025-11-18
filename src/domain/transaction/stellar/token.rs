@@ -560,8 +560,6 @@ where
             Ok(balance.max(0) as u64)
         }
 
-        LedgerEntryData::Trustline(_) => Err(StellarTokenError::UnsupportedTrustlineVersion),
-
         _ => Err(StellarTokenError::UnexpectedTrustlineEntryType),
     }
 }
@@ -617,7 +615,7 @@ where
                 if (parts.lo as i64) < 0 {
                     return Err(StellarTokenError::NegativeBalanceI128(parts.lo));
                 }
-                Ok(parts.lo as u64)
+                Ok(parts.lo)
             }
             ScVal::U64(n) => Ok(n),
             ScVal::I64(n) => {

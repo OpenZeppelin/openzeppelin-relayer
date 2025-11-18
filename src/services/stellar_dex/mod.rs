@@ -129,12 +129,12 @@ pub trait StellarDexServiceTrait: Send + Sync {
         }
 
         // Check contract (C... format, 56 chars)
-        if asset_id.starts_with('C') && asset_id.len() == 56 {
-            if stellar_strkey::Contract::from_string(asset_id).is_ok()
-                && supported.contains(&AssetType::Contract)
-            {
-                return true;
-            }
+        if asset_id.starts_with('C')
+            && asset_id.len() == 56
+            && stellar_strkey::Contract::from_string(asset_id).is_ok()
+            && supported.contains(&AssetType::Contract)
+        {
+            return true;
         }
 
         // Check classic (CODE:ISSUER format)
