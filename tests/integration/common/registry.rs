@@ -26,6 +26,22 @@ pub struct NetworkConfig {
     pub signer: SignerConfig,
     pub contracts: HashMap<String, String>,
     pub min_balance: String,
+
+    /// Tags for selection (e.g., ["quick", "ci", "evm", "rollup"])
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    /// Whether this network is enabled for testing
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Average test duration in seconds (for estimation)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avg_test_duration_secs: Option<u32>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Signer configuration
@@ -148,6 +164,83 @@ impl TestRegistry {
 
         Ok(!is_placeholder)
     }
+
+    /// Get networks filtered by tags
+    ///
+    /// Returns networks that have ALL of the specified tags and are enabled
+    pub fn networks_by_tags(&self, tags: &[String]) -> Vec<String> {
+        self.networks
+            .iter()
+            .filter(|(_, config)| {
+                config.enabled
+                    && tags.iter().all(|tag| config.tags.contains(tag))
+            })
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
+    /// Get all enabled networks
+    pub fn enabled_networks(&self) -> Vec<String> {
+        self.networks
+            .iter()
+            .filter(|(_, config)| config.enabled)
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
+    /// Validate if a network is ready for testing
+    ///
+    /// A network is ready if:
+    /// - It's enabled
+    /// - It has a real (non-placeholder) signer address
+    /// - It has at least one deployed contract (optional for non-EVM networks)
+    pub fn validate_readiness(&self, network: &str) -> Result<ReadinessStatus> {
+        let config = self.get_network(network)?;
+
+        let has_real_signer = self.has_real_signer(network).unwrap_or(false);
+
+        // Check which contracts are deployed
+        let mut missing_contracts = Vec::new();
+        let mut has_any_contract = false;
+
+        for (name, address) in &config.contracts {
+            if address.starts_with("0x0000000000000000") {
+                missing_contracts.push(name.clone());
+            } else {
+                has_any_contract = true;
+            }
+        }
+
+        // For non-EVM networks without contracts (Solana, Stellar), just check signer
+        let requires_contracts = !config.contracts.is_empty();
+        let has_contracts = if requires_contracts {
+            has_any_contract
+        } else {
+            true // Non-contract networks are OK
+        };
+
+        let ready = config.enabled && has_real_signer && has_contracts;
+
+        Ok(ReadinessStatus {
+            network: network.to_string(),
+            ready,
+            enabled: config.enabled,
+            has_signer: has_real_signer,
+            has_contracts,
+            missing_contracts,
+        })
+    }
+}
+
+/// Status of a network's readiness for testing
+#[derive(Debug, Clone)]
+pub struct ReadinessStatus {
+    pub network: String,
+    pub ready: bool,
+    pub enabled: bool,
+    pub has_signer: bool,
+    pub has_contracts: bool,
+    pub missing_contracts: Vec<String>,
 }
 
 #[cfg(test)]
@@ -228,8 +321,12 @@ mod tests {
     fn test_has_real_contract() {
         let registry = TestRegistry::load().unwrap();
 
-        // With placeholder addresses, this should return false
+        // simple_storage has a real deployed contract
         let has_real = registry.has_real_contract("sepolia", "simple_storage").unwrap();
-        assert!(!has_real, "Placeholder contract should not be detected as real");
+        assert!(has_real, "simple_storage should be detected as real");
+
+        // test_erc20 is still a placeholder
+        let has_placeholder = registry.has_real_contract("sepolia", "test_erc20").unwrap();
+        assert!(!has_placeholder, "test_erc20 should not be detected as real");
     }
 }
