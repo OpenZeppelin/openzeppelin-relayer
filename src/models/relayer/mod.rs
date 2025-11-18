@@ -602,7 +602,7 @@ pub struct RelayerStellarSwapConfig {
 }
 
 /// Stellar-specific relayer policy configuration
-#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RelayerStellarPolicy {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -615,9 +615,9 @@ pub struct RelayerStellarPolicy {
     pub concurrent_transactions: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_tokens: Option<Vec<StellarAllowedTokensPolicy>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Fee payment strategy - determines who pays transaction fees (required)
     #[schema(nullable = false)]
-    pub fee_payment_strategy: Option<StellarFeePaymentStrategy>,
+    pub fee_payment_strategy: StellarFeePaymentStrategy,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slippage_percentage: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -625,6 +625,22 @@ pub struct RelayerStellarPolicy {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub swap_config: Option<RelayerStellarSwapConfig>,
+}
+
+impl Default for RelayerStellarPolicy {
+    fn default() -> Self {
+        Self {
+            min_balance: None,
+            max_fee: None,
+            timeout_seconds: None,
+            concurrent_transactions: None,
+            allowed_tokens: None,
+            fee_payment_strategy: StellarFeePaymentStrategy::User,
+            slippage_percentage: None,
+            fee_margin_percentage: None,
+            swap_config: None,
+        }
+    }
 }
 
 impl RelayerStellarPolicy {
@@ -1549,7 +1565,7 @@ mod tests {
             timeout_seconds: Some(30),
             concurrent_transactions: None,
             allowed_tokens: None,
-            fee_payment_strategy: None,
+            fee_payment_strategy: StellarFeePaymentStrategy::Relayer,
             slippage_percentage: None,
             fee_margin_percentage: None,
             swap_config: None,

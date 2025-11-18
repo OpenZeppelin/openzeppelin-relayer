@@ -637,10 +637,7 @@ where
 
         // Check fee payment strategy - reject if User (user pays fees directly, relayer should not sign)
         let policy = self.relayer.policies.get_stellar_policy();
-        if matches!(
-            policy.fee_payment_strategy,
-            Some(crate::models::StellarFeePaymentStrategy::User)
-        ) {
+        if policy.fee_payment_strategy == crate::models::StellarFeePaymentStrategy::User {
             return Err(RelayerError::NotSupported(
                 "sign_transaction is not supported when fee_payment_strategy is 'User'".to_string(),
             ));

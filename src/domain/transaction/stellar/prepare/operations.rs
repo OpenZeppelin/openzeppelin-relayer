@@ -56,7 +56,7 @@ where
     if let Some(policy) = relayer_policy {
         if matches!(
             policy.fee_payment_strategy,
-            Some(crate::models::StellarFeePaymentStrategy::User)
+            crate::models::StellarFeePaymentStrategy::User
         ) {
             return Err(TransactionError::ValidationError(
                 "Gasless transactions (User fee payment strategy) are not supported via operations path. \

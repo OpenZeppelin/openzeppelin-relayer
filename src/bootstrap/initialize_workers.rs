@@ -499,7 +499,7 @@ mod tests {
     use crate::models::{
         NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy,
         RelayerSolanaSwapConfig, RelayerStellarPolicy, RelayerStellarSwapConfig,
-        StellarSwapStrategy,
+        StellarFeePaymentStrategy, StellarSwapStrategy,
     };
 
     fn create_test_evm_relayer(id: &str) -> RelayerRepoModel {
@@ -568,7 +568,7 @@ mod tests {
                 timeout_seconds: None,
                 concurrent_transactions: None,
                 allowed_tokens: None,
-                fee_payment_strategy: None,
+                fee_payment_strategy: StellarFeePaymentStrategy::User,
                 slippage_percentage: None,
                 fee_margin_percentage: None,
                 swap_config: Some(RelayerStellarSwapConfig {

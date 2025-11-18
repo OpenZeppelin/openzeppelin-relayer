@@ -350,7 +350,7 @@ fn is_empty_policy(policy: &RelayerNetworkPolicy) -> bool {
                 && stellar_policy.timeout_seconds.is_none()
                 && stellar_policy.concurrent_transactions.is_none()
                 && stellar_policy.allowed_tokens.is_none()
-                && stellar_policy.fee_payment_strategy.is_none()
+                && stellar_policy.fee_payment_strategy == StellarFeePaymentStrategy::User
                 && stellar_policy.slippage_percentage.is_none()
                 && stellar_policy.fee_margin_percentage.is_none()
                 && stellar_policy.swap_config.is_none()
@@ -536,7 +536,7 @@ impl From<RelayerStellarPolicy> for StellarPolicyResponse {
             timeout_seconds: policy.timeout_seconds,
             concurrent_transactions: policy.concurrent_transactions,
             allowed_tokens: policy.allowed_tokens,
-            fee_payment_strategy: policy.fee_payment_strategy,
+            fee_payment_strategy: Some(policy.fee_payment_strategy),
             slippage_percentage: policy.slippage_percentage,
             fee_margin_percentage: policy.fee_margin_percentage,
             swap_config: policy.swap_config,
@@ -663,7 +663,7 @@ mod tests {
                 timeout_seconds: Some(30),
                 concurrent_transactions: None,
                 allowed_tokens: None,
-                fee_payment_strategy: None,
+                fee_payment_strategy: StellarFeePaymentStrategy::Relayer,
                 slippage_percentage: None,
                 fee_margin_percentage: None,
                 swap_config: None,
@@ -1165,7 +1165,7 @@ mod tests {
                     None,
                     None,
                 )]),
-                fee_payment_strategy: Some(StellarFeePaymentStrategy::Relayer),
+                fee_payment_strategy: StellarFeePaymentStrategy::Relayer,
                 slippage_percentage: Some(0.5),
                 fee_margin_percentage: Some(2.0),
                 swap_config: Some(RelayerStellarSwapConfig {

@@ -915,7 +915,7 @@ mod tests {
         models::{
             ApiResponse, CreateRelayerPolicyRequest, CreateRelayerRequest, RelayerEvmPolicy,
             RelayerNetworkPolicyResponse, RelayerNetworkType, RelayerResponse, RelayerSolanaPolicy,
-            RelayerStellarPolicy, SolanaFeePaymentStrategy,
+            RelayerStellarPolicy, SolanaFeePaymentStrategy, StellarFeePaymentStrategy,
         },
         utils::mocks::mockutils::{
             create_mock_app_state, create_mock_network, create_mock_notification,
@@ -1267,7 +1267,7 @@ mod tests {
             timeout_seconds: Some(30),
             concurrent_transactions: None,
             allowed_tokens: None,
-            fee_payment_strategy: None,
+            fee_payment_strategy: StellarFeePaymentStrategy::Relayer,
             slippage_percentage: None,
             fee_margin_percentage: None,
             swap_config: None,

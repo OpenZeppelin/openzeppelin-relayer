@@ -137,7 +137,7 @@ impl From<Relayer> for RelayerRepoModel {
 mod tests {
     use crate::models::{
         RelayerEvmPolicy, RelayerSolanaPolicy, RelayerStellarPolicy, SolanaAllowedTokensPolicy,
-        SolanaFeePaymentStrategy,
+        SolanaFeePaymentStrategy, StellarFeePaymentStrategy,
     };
 
     use super::*;
@@ -203,7 +203,7 @@ mod tests {
                 timeout_seconds: Some(30),
                 concurrent_transactions: None,
                 allowed_tokens: None,
-                fee_payment_strategy: None,
+                fee_payment_strategy: StellarFeePaymentStrategy::Relayer,
                 slippage_percentage: None,
                 fee_margin_percentage: None,
                 swap_config: None,
@@ -461,7 +461,7 @@ mod tests {
                 timeout_seconds: Some(60),
                 concurrent_transactions: None,
                 allowed_tokens: None,
-                fee_payment_strategy: None,
+                fee_payment_strategy: StellarFeePaymentStrategy::Relayer,
                 slippage_percentage: None,
                 fee_margin_percentage: None,
                 swap_config: None,
@@ -734,7 +734,7 @@ mod tests {
                 timeout_seconds: Some(120),  // Changed
                 concurrent_transactions: None,
                 allowed_tokens: None,
-                fee_payment_strategy: None,
+                fee_payment_strategy: StellarFeePaymentStrategy::Relayer,
                 slippage_percentage: None,
                 fee_margin_percentage: None,
                 swap_config: None,
@@ -957,7 +957,7 @@ mod tests {
                 timeout_seconds: Some(180),
                 concurrent_transactions: None,
                 allowed_tokens: None,
-                fee_payment_strategy: None,
+                fee_payment_strategy: StellarFeePaymentStrategy::Relayer,
                 slippage_percentage: None,
                 fee_margin_percentage: None,
                 swap_config: None,

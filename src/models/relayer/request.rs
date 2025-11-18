@@ -259,8 +259,11 @@ impl TryFrom<CreateRelayerRequest> for Relayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::relayer::{
-        RelayerEvmPolicy, RelayerSolanaPolicy, RelayerStellarPolicy, SolanaFeePaymentStrategy,
+    use crate::models::{
+        relayer::{
+            RelayerEvmPolicy, RelayerSolanaPolicy, RelayerStellarPolicy, SolanaFeePaymentStrategy,
+        },
+        StellarFeePaymentStrategy,
     };
 
     #[test]
@@ -303,7 +306,7 @@ mod tests {
                 timeout_seconds: Some(30),
                 concurrent_transactions: None,
                 allowed_tokens: None,
-                fee_payment_strategy: None,
+                fee_payment_strategy: StellarFeePaymentStrategy::Relayer,
                 slippage_percentage: None,
                 fee_margin_percentage: None,
                 swap_config: None,
@@ -456,7 +459,7 @@ mod tests {
                 timeout_seconds: Some(60),
                 concurrent_transactions: None,
                 allowed_tokens: None,
-                fee_payment_strategy: None,
+                fee_payment_strategy: StellarFeePaymentStrategy::Relayer,
                 slippage_percentage: None,
                 fee_margin_percentage: None,
                 swap_config: None,

@@ -210,13 +210,8 @@ where
 
     // Check if this is a gasless transaction (User fee payment strategy)
     let is_gasless = relayer_policy
-        .map(|p| {
-            matches!(
-                p.fee_payment_strategy,
-                Some(crate::models::StellarFeePaymentStrategy::User)
-            )
-        })
-        .unwrap_or(false); // TODO double check this
+        .map(|p| p.fee_payment_strategy == crate::models::StellarFeePaymentStrategy::User)
+        .unwrap_or(false);
 
     if is_gasless {
         // For gasless transactions, validate using dedicated function

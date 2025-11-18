@@ -187,15 +187,15 @@ pub struct ConfigFileRelayerStellarSwapConfig {
     pub min_balance_threshold: Option<u64>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigFileRelayerStellarPolicy {
     pub max_fee: Option<u32>,
     pub timeout_seconds: Option<u64>,
     pub min_balance: Option<u64>,
     pub concurrent_transactions: Option<bool>,
-    /// Determines if the relayer pays the transaction fee or the user. Optional.
-    pub fee_payment_strategy: Option<ConfigFileStellarFeePaymentStrategy>,
+    /// Determines if the relayer pays the transaction fee or the user (required).
+    pub fee_payment_strategy: ConfigFileStellarFeePaymentStrategy,
     /// Default slippage percentage for token conversions. Optional.
     pub slippage_percentage: Option<f32>,
     /// Fee margin percentage for the relayer. Optional.
@@ -510,14 +510,14 @@ fn convert_config_policies_to_domain(
                         })
                         .collect()
                 }),
-                fee_payment_strategy: stellar_policy.fee_payment_strategy.map(|s| match s {
+                fee_payment_strategy: match stellar_policy.fee_payment_strategy {
                     ConfigFileStellarFeePaymentStrategy::User => {
                         super::StellarFeePaymentStrategy::User
                     }
                     ConfigFileStellarFeePaymentStrategy::Relayer => {
                         super::StellarFeePaymentStrategy::Relayer
                     }
-                }),
+                },
                 slippage_percentage: stellar_policy.slippage_percentage,
                 fee_margin_percentage: stellar_policy.fee_margin_percentage,
                 swap_config,
@@ -985,7 +985,7 @@ mod tests {
                 timeout_seconds: Some(60),
                 concurrent_transactions: None,
                 allowed_tokens: None,
-                fee_payment_strategy: None,
+                fee_payment_strategy: ConfigFileStellarFeePaymentStrategy::User,
                 slippage_percentage: None,
                 fee_margin_percentage: None,
                 swap_config: None,
@@ -1116,7 +1116,7 @@ mod tests {
                     timeout_seconds: Some(90),
                     concurrent_transactions: None,
                     allowed_tokens: None,
-                    fee_payment_strategy: None,
+                    fee_payment_strategy: ConfigFileStellarFeePaymentStrategy::User,
                     slippage_percentage: None,
                     fee_margin_percentage: None,
                     swap_config: None,
@@ -1344,7 +1344,7 @@ mod tests {
             timeout_seconds: Some(120),
             concurrent_transactions: None,
             allowed_tokens: None,
-            fee_payment_strategy: None,
+            fee_payment_strategy: ConfigFileStellarFeePaymentStrategy::Relayer,
             slippage_percentage: None,
             fee_margin_percentage: None,
             swap_config: None,
