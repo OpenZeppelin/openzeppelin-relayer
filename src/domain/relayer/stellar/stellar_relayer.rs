@@ -1050,20 +1050,8 @@ where
             .await
             .map_err(|e| RelayerError::ProviderError(format!("Failed to get account: {}", e)))?;
 
-        let xlm_balance = account_entry.balance as u64;
-
-        // Check if balance is below threshold
-        if let Some(threshold) = swap_config.min_balance_threshold {
-            if xlm_balance >= threshold {
-                debug!(
-                    %relayer_id,
-                    balance = xlm_balance,
-                    threshold = threshold,
-                    "XLM balance above threshold, no swap needed"
-                );
-                return Ok(vec![]);
-            }
-        }
+        let xlm_balance = account_entry.balance;
+        let sequence_number = account_entry.seq_num.0 as i64;
 
         info!(
             %relayer_id,
@@ -1130,6 +1118,7 @@ where
 
             eligible_tokens
         };
+        let network_passphrase = self.network.passphrase.clone();
 
         // Execute swap for every eligible token
         let swap_futures =
@@ -1137,10 +1126,13 @@ where
                 .iter()
                 .map(|(token_asset, swap_amount, slippage_percent)| {
                     let token_asset = token_asset.clone();
-                    let _dex = &self.dex_service;
-                    let _relayer_address = relayer.address.clone();
+                    let dex_service = self.dex_service.clone();
+                    let relayer_address = relayer.address.clone();
                     let relayer_id_clone = relayer_id.clone();
-                    let _slippage_percent = *slippage_percent as f64;
+                    let slippage_percent = *slippage_percent;
+                    let sequence_number = sequence_number;
+                    let network_passphrase = network_passphrase.clone();
+                    let token_decimals = policy.get_allowed_token_decimals(&token_asset);
 
                     async move {
                         info!(
@@ -1148,23 +1140,52 @@ where
                             swap_amount, token_asset, relayer_id_clone
                         );
 
-                        // TODO: Implement swap execution using DEX service
-                        // For now, return an error result indicating swap is not yet implemented
-                        warn!(
-                            %relayer_id_clone,
-                            token = %token_asset,
-                            "Swap execution not yet implemented for Stellar"
-                        );
+                        // Prepare swap transaction parameters
+                        use crate::services::stellar_dex::SwapTransactionParams;
+                        let swap_params = SwapTransactionParams {
+                            source_account: relayer_address.clone(),
+                            source_asset: token_asset.clone(),
+                            destination_asset: "native".to_string(), // Always swap to XLM
+                            amount: *swap_amount,
+                            slippage_percent,
+                            sequence_number,
+                            network_passphrase: network_passphrase.clone(),
+                            source_asset_decimals: token_decimals,
+                            destination_asset_decimals: Some(7), // XLM always has 7 decimals
+                        };
 
-                        Ok::<SwapResult, RelayerError>(SwapResult {
-                            mint: token_asset,
-                            source_amount: *swap_amount,
-                            destination_amount: 0,
-                            transaction_signature: "".to_string(),
-                            error: Some(
-                                "Swap execution not yet implemented for Stellar".to_string(),
-                            ),
-                        })
+                        // Execute swap via DEX service
+                        let swap_result = dex_service.execute_swap(swap_params).await;
+
+                        match swap_result {
+                            Ok(execution_result) => {
+                                info!(
+                                    "Swap successful for relayer: {}. Token: {}, Amount: {}, Destination: {}, Transaction: {}",
+                                    relayer_id_clone, token_asset, swap_amount, execution_result.destination_amount, execution_result.transaction_hash
+                                );
+
+                                Ok::<SwapResult, RelayerError>(SwapResult {
+                                    mint: token_asset,
+                                    source_amount: *swap_amount,
+                                    destination_amount: execution_result.destination_amount,
+                                    transaction_signature: execution_result.transaction_hash,
+                                    error: None,
+                                })
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Error during token swap for relayer: {}. Token: {}, Error: {}",
+                                    relayer_id_clone, token_asset, e
+                                );
+                                Ok::<SwapResult, RelayerError>(SwapResult {
+                                    mint: token_asset,
+                                    source_amount: *swap_amount,
+                                    destination_amount: 0,
+                                    transaction_signature: "".to_string(),
+                                    error: Some(e.to_string()),
+                                })
+                            }
+                        }
                     }
                 });
 

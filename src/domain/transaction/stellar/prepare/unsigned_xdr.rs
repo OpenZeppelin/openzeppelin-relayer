@@ -518,6 +518,7 @@ mod tests {
             _asset_id: &str,
             amount: u64,
             _slippage: f32,
+            _asset_decimals: Option<u8>,
         ) -> Result<
             crate::services::stellar_dex::StellarQuoteResponse,
             crate::services::stellar_dex::StellarDexServiceError,
@@ -546,6 +547,7 @@ mod tests {
             asset_id: &str,
             amount: u64,
             _slippage: f32,
+            _asset_decimals: Option<u8>,
         ) -> Result<
             crate::services::stellar_dex::StellarQuoteResponse,
             crate::services::stellar_dex::StellarDexServiceError,
@@ -571,9 +573,23 @@ mod tests {
 
         async fn execute_swap(
             &self,
-            _params: crate::services::stellar_dex::SwapTransactionParams,
-        ) -> Result<String, crate::services::stellar_dex::StellarDexServiceError> {
-            unimplemented!()
+            params: crate::services::stellar_dex::SwapTransactionParams,
+        ) -> Result<
+            crate::services::stellar_dex::SwapExecutionResult,
+            crate::services::stellar_dex::StellarDexServiceError,
+        > {
+            // Mock implementation - return a fake transaction hash and destination amount
+            // For testing, assume 1:1 conversion for native, or use a simple multiplier
+            let destination_amount = if params.source_asset == "native" {
+                params.amount
+            } else {
+                params.amount * 100 // Assume token is worth 100x XLM for testing
+            };
+
+            Ok(crate::services::stellar_dex::SwapExecutionResult {
+                transaction_hash: "mock_tx_hash".to_string(),
+                destination_amount,
+            })
         }
     }
 

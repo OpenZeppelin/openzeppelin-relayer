@@ -379,8 +379,10 @@ where
         .unwrap_or(DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE);
 
     // Get quote from DEX service
+    // Get token decimals from policy or default to 7
+    let token_decimals = policy.get_allowed_token_decimals(fee_token);
     let quote = dex_service
-        .get_xlm_to_token_quote(fee_token, buffered_xlm_fee, slippage)
+        .get_xlm_to_token_quote(fee_token, buffered_xlm_fee, slippage, token_decimals)
         .await
         .map_err(|e| RelayerError::Internal(format!("Failed to get quote: {}", e)))?;
 

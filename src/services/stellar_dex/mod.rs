@@ -74,6 +74,19 @@ pub struct SwapTransactionParams {
     pub sequence_number: i64,
     /// Network passphrase for signing the transaction
     pub network_passphrase: String,
+    /// Source asset decimals (defaults to 7 for native XLM)
+    pub source_asset_decimals: Option<u8>,
+    /// Destination asset decimals (defaults to 7 for native XLM)
+    pub destination_asset_decimals: Option<u8>,
+}
+
+/// Result of executing a swap transaction
+#[derive(Debug, Clone)]
+pub struct SwapExecutionResult {
+    /// Transaction hash of the submitted swap transaction
+    pub transaction_hash: String,
+    /// Destination amount received (in stroops)
+    pub destination_amount: u64,
 }
 
 /// Trait for Stellar DEX services
@@ -87,6 +100,7 @@ pub trait StellarDexServiceTrait: Send + Sync {
     /// * `asset_id` - Asset identifier (e.g., "native" for XLM, or "USDC:GA5Z..." for credit assets)
     /// * `amount` - Amount in stroops to convert
     /// * `slippage` - Slippage percentage (e.g., 1.0 for 1%)
+    /// * `asset_decimals` - Number of decimal places for the asset (defaults to 7 if None)
     ///
     /// # Returns
     ///
@@ -96,6 +110,7 @@ pub trait StellarDexServiceTrait: Send + Sync {
         asset_id: &str,
         amount: u64,
         slippage: f32,
+        asset_decimals: Option<u8>,
     ) -> Result<StellarQuoteResponse, StellarDexServiceError>;
 
     /// Get a quote for converting XLM to a token
@@ -105,6 +120,7 @@ pub trait StellarDexServiceTrait: Send + Sync {
     /// * `asset_id` - Target asset identifier
     /// * `amount` - Amount in stroops of XLM to convert
     /// * `slippage` - Slippage percentage
+    /// * `asset_decimals` - Number of decimal places for the asset (defaults to 7 if None)
     ///
     /// # Returns
     ///
@@ -114,6 +130,7 @@ pub trait StellarDexServiceTrait: Send + Sync {
         asset_id: &str,
         amount: u64,
         slippage: f32,
+        asset_decimals: Option<u8>,
     ) -> Result<StellarQuoteResponse, StellarDexServiceError>;
 
     /// Execute a swap transaction
@@ -127,11 +144,11 @@ pub trait StellarDexServiceTrait: Send + Sync {
     ///
     /// # Returns
     ///
-    /// The transaction hash of the submitted transaction
+    /// A `SwapExecutionResult` containing the transaction hash and destination amount received
     async fn execute_swap(
         &self,
         params: SwapTransactionParams,
-    ) -> Result<String, StellarDexServiceError>;
+    ) -> Result<SwapExecutionResult, StellarDexServiceError>;
 }
 
 /// Default implementation using Stellar Order Book service
