@@ -1,5 +1,6 @@
-//! Stellar Order Book Service implementation
-//! Uses Stellar Horizon API `/order_book` endpoint for quote conversion
+//! Stellar DEX Service implementation
+//! Uses Stellar Horizon API `/paths/strict-send` endpoint for path finding and quote conversion
+//! This provides better rates by considering liquidity pools (AMMs) and multi-hop paths
 
 use super::{
     AssetType, StellarDexServiceError, StellarQuoteResponse, SwapExecutionResult,
@@ -8,15 +9,17 @@ use super::{
 use crate::constants::STELLAR_DEFAULT_TRANSACTION_FEE;
 use crate::domain::relayer::string_to_muxed_account;
 use crate::models::transaction::stellar::asset::AssetSpec;
+use crate::models::Address;
 use crate::services::{
-    provider::StellarProviderTrait, signer::StellarSignTrait, stellar_dex::StellarDexServiceTrait,
+    provider::StellarProviderTrait, signer::Signer, signer::StellarSignTrait,
+    stellar_dex::StellarDexServiceTrait,
 };
 use async_trait::async_trait;
 use chrono::{Duration as ChronoDuration, Utc};
 use reqwest::Client;
 use serde::Deserialize;
 use soroban_rs::xdr::{
-    Asset, Limits, Memo, Operation, OperationBody, PathPaymentStrictReceiveOp, Preconditions,
+    Asset, Limits, Memo, Operation, OperationBody, PathPaymentStrictSendOp, Preconditions,
     ReadXdr, SequenceNumber, TimeBounds, TimePoint, Transaction, TransactionEnvelope,
     TransactionExt, TransactionV1Envelope, VecM, WriteXdr,
 };
@@ -35,7 +38,7 @@ const MIN_PRICE_THRESHOLD: f64 = 1e-10;
 const TRANSACTION_VALIDITY_MINUTES: i64 = 1;
 
 /// HTTP request timeout in seconds
-const HTTP_REQUEST_TIMEOUT_SECONDS: u64 = 30;
+const HTTP_REQUEST_TIMEOUT_SECONDS: u64 = 7;
 
 /// Slippage percentage multiplier for basis points conversion
 const SLIPPAGE_TO_BPS_MULTIPLIER: f32 = 100.0;
@@ -83,11 +86,40 @@ struct AssetInfo {
     asset_issuer: Option<String>,
 }
 
+/// Stellar Horizon API path finding response
+#[derive(Debug, Deserialize)]
+struct PathResponse {
+    #[serde(rename = "_embedded")]
+    embedded: PathEmbedded,
+}
+
+#[derive(Debug, Deserialize)]
+struct PathEmbedded {
+    records: Vec<PathRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PathRecord {
+    source_amount: String,
+    destination_amount: String,
+    path: Vec<PathAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PathAsset {
+    #[serde(rename = "asset_type")]
+    asset_type: String,
+    #[serde(rename = "asset_code")]
+    asset_code: Option<String>,
+    #[serde(rename = "asset_issuer")]
+    asset_issuer: Option<String>,
+}
+
 /// Service for getting quotes from Stellar Horizon Order Book API
 pub struct OrderBookService<P, S>
 where
     P: StellarProviderTrait + Send + Sync + 'static,
-    S: StellarSignTrait + Send + Sync + 'static,
+    S: StellarSignTrait + Signer + Send + Sync + 'static,
 {
     horizon_base_url: String,
     client: Client,
@@ -98,7 +130,7 @@ where
 impl<P, S> OrderBookService<P, S>
 where
     P: StellarProviderTrait + Send + Sync + 'static,
-    S: StellarSignTrait + Send + Sync + 'static,
+    S: StellarSignTrait + Signer + Send + Sync + 'static,
 {
     /// Create a new OrderBookService instance
     ///
@@ -233,6 +265,236 @@ where
                 code
             )))
         }
+    }
+
+    /// Helper to convert stroops to decimal string
+    /// e.g. 10000000 stroops -> "1.0000000"
+    fn to_decimal_string(&self, stroops: u64, decimals: u8) -> String {
+        let s = stroops.to_string();
+        let decimals_usize = decimals as usize;
+        
+        if s.len() <= decimals_usize {
+            // e.g. 100 stroops, 7 decimals -> "0.0000100"
+            format!("0.{:0>width$}", s, width = decimals_usize)
+        } else {
+            // e.g. 12345678 stroops, 7 decimals -> "1.2345678"
+            let split = s.len() - decimals_usize;
+            format!("{}.{}", &s[..split], &s[split..])
+        }
+    }
+
+    /// Fetch strict-send paths from Horizon
+    /// strict-send = "I am sending exactly X source asset, how much Y dest can I get?"
+    async fn fetch_strict_send_paths(
+        &self,
+        source_asset: &AssetSpec,
+        source_amount_stroops: u64,
+        destination_asset: &AssetSpec,
+        destination_account: &str,
+    ) -> Result<Vec<PathRecord>, StellarDexServiceError> {
+        let mut url = format!("{}/paths/strict-send", self.horizon_base_url);
+
+        // Convert stroops to decimal string for the API
+        let amount_decimal = self.to_decimal_string(source_amount_stroops, 7);
+
+        let mut params = vec![
+            format!("destination_account={}", destination_account),
+            format!("source_amount={}", amount_decimal),
+        ];
+
+        // Add Source Asset Params
+        match source_asset {
+            AssetSpec::Native => {
+                params.push("source_asset_type=native".to_string());
+            }
+            AssetSpec::Credit4 { code, issuer } => {
+                params.push("source_asset_type=credit_alphanum4".to_string());
+                params.push(format!("source_asset_code={}", code));
+                params.push(format!("source_asset_issuer={}", issuer));
+            }
+            AssetSpec::Credit12 { code, issuer } => {
+                params.push("source_asset_type=credit_alphanum12".to_string());
+                params.push(format!("source_asset_code={}", code));
+                params.push(format!("source_asset_issuer={}", issuer));
+            }
+        }
+
+        // Add Destination Asset Params
+        match destination_asset {
+            AssetSpec::Native => {
+                params.push("destination_assets=native".to_string());
+            }
+            AssetSpec::Credit4 { code, issuer } => {
+                params.push(format!("destination_assets={}:{}", code, issuer));
+            }
+            AssetSpec::Credit12 { code, issuer } => {
+                params.push(format!("destination_assets={}:{}", code, issuer));
+            }
+        }
+
+        url.push('?');
+        url.push_str(&params.join("&"));
+
+        debug!("Fetching paths from Horizon: {}", url);
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(StellarDexServiceError::HttpRequestError)?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unable to read error response".to_string());
+            return Err(StellarDexServiceError::ApiError {
+                message: format!("Horizon API returned error {}: {}", status, error_text),
+            });
+        }
+
+        let path_response: PathResponse = response.json().await.map_err(|e| {
+            StellarDexServiceError::UnknownError(format!("Failed to deserialize paths: {}", e))
+        })?;
+
+        Ok(path_response.embedded.records)
+    }
+
+    /// Fetch strict-receive paths from Horizon
+    /// strict-receive = "I want to receive exactly X dest asset, how much Y source do I need to send?"
+    async fn fetch_strict_receive_paths(
+        &self,
+        source_asset: &AssetSpec,
+        destination_asset: &AssetSpec,
+        destination_amount_stroops: u64,
+        destination_account: &str,
+        destination_decimals: u8,
+    ) -> Result<Vec<PathRecord>, StellarDexServiceError> {
+        let mut url = format!("{}/paths/strict-receive", self.horizon_base_url);
+
+        // Convert destination amount stroops to decimal string for the API
+        let dest_amount_decimal = self.to_decimal_string(destination_amount_stroops, destination_decimals);
+
+        let mut params = vec![
+            format!("destination_account={}", destination_account),
+            format!("destination_amount={}", dest_amount_decimal),
+        ];
+
+        // Add Source Asset Params
+        match source_asset {
+            AssetSpec::Native => {
+                params.push("source_assets=native".to_string());
+            }
+            AssetSpec::Credit4 { code, issuer } => {
+                params.push(format!("source_assets={}:{}", code, issuer));
+            }
+            AssetSpec::Credit12 { code, issuer } => {
+                params.push(format!("source_assets={}:{}", code, issuer));
+            }
+        }
+
+        // Add Destination Asset Params
+        match destination_asset {
+            AssetSpec::Native => {
+                params.push("destination_asset_type=native".to_string());
+            }
+            AssetSpec::Credit4 { code, issuer } => {
+                params.push("destination_asset_type=credit_alphanum4".to_string());
+                params.push(format!("destination_asset_code={}", code));
+                params.push(format!("destination_asset_issuer={}", issuer));
+            }
+            AssetSpec::Credit12 { code, issuer } => {
+                params.push("destination_asset_type=credit_alphanum12".to_string());
+                params.push(format!("destination_asset_code={}", code));
+                params.push(format!("destination_asset_issuer={}", issuer));
+            }
+        }
+
+        url.push('?');
+        url.push_str(&params.join("&"));
+
+        debug!("Fetching strict-receive paths from Horizon: {}", url);
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(StellarDexServiceError::HttpRequestError)?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unable to read error response".to_string());
+            return Err(StellarDexServiceError::ApiError {
+                message: format!("Horizon API returned error {}: {}", status, error_text),
+            });
+        }
+
+        let path_response: PathResponse = response.json().await.map_err(|e| {
+            StellarDexServiceError::UnknownError(format!("Failed to deserialize paths: {}", e))
+        })?;
+
+        Ok(path_response.embedded.records)
+    }
+
+    /// Convert PathAsset to XDR Asset
+    fn xdr_asset_from_path_asset(
+        &self,
+        path_asset: &PathAsset,
+    ) -> Result<Asset, StellarDexServiceError> {
+        match path_asset.asset_type.as_str() {
+            "native" => Ok(Asset::Native),
+            "credit_alphanum4" | "credit_alphanum12" => {
+                let code = path_asset.asset_code.as_ref().ok_or_else(|| {
+                    StellarDexServiceError::InvalidAssetIdentifier(
+                        "Path asset missing code".to_string(),
+                    )
+                })?;
+                let issuer = path_asset.asset_issuer.as_ref().ok_or_else(|| {
+                    StellarDexServiceError::InvalidAssetIdentifier(
+                        "Path asset missing issuer".to_string(),
+                    )
+                })?;
+
+                let asset_spec = if code.len() <= 4 {
+                    AssetSpec::Credit4 {
+                        code: code.clone(),
+                        issuer: issuer.clone(),
+                    }
+                } else {
+                    AssetSpec::Credit12 {
+                        code: code.clone(),
+                        issuer: issuer.clone(),
+                    }
+                };
+
+                Asset::try_from(asset_spec).map_err(|e| {
+                    StellarDexServiceError::InvalidAssetIdentifier(format!(
+                        "Failed to convert path asset to XDR: {}",
+                        e
+                    ))
+                })
+            }
+            _ => Err(StellarDexServiceError::InvalidAssetIdentifier(format!(
+                "Unknown asset type in path: {}",
+                path_asset.asset_type
+            ))),
+        }
+    }
+
+    /// Convert path from quote to XDR format
+    fn convert_path_to_xdr(
+        &self,
+        path: &[PathAsset],
+    ) -> Result<Vec<Asset>, StellarDexServiceError> {
+        path.iter()
+            .map(|p| self.xdr_asset_from_path_asset(p))
+            .collect()
     }
 
     /// Build Horizon API URL for order_book endpoint
@@ -574,29 +836,86 @@ where
         // Destination asset is always native XLM
         let dest_asset = Asset::Native;
 
-        // Convert amounts to i64 (Stellar amounts are signed)
-        let send_max = i64::try_from(params.amount).map_err(|_| {
+        // 1. Define exact amount to SEND
+        let send_amount = i64::try_from(params.amount).map_err(|_| {
             StellarDexServiceError::UnknownError("Amount too large for i64".to_string())
         })?;
 
-        let slippage_factor = 1.0 - (quote.slippage_bps as f64 / 10000.0);
-        let min_dest_amount_f64 = quote.out_amount as f64 * slippage_factor;
-        let min_dest_amount = min_dest_amount_f64.floor() as u64;
+        // 2. Define minimum amount to RECEIVE (Integer Math)
+        // Formula: out_amount * (10000 - bps) / 10000
+        // Cast to u128 to prevent overflow during multiplication
+        let out_amount = quote.out_amount as u128;
+        let slippage_bps = quote.slippage_bps as u128;
+        let basis = 10000u128;
 
-        let dest_amount = i64::try_from(min_dest_amount).map_err(|_| {
+        // Calculate minimum acceptable amount
+        // e.g., If slippage is 100bps (1%), we want 99% of the output
+        let dest_min_u128 = out_amount
+            .checked_mul(basis.saturating_sub(slippage_bps))
+            .ok_or_else(|| StellarDexServiceError::UnknownError("Overflow calculating min amount".into()))?
+            .checked_div(basis)
+            .ok_or_else(|| StellarDexServiceError::UnknownError("Division error".into()))?;
+
+        // Ensure we don't request 0 (unless the quote was actually 0)
+        // Note: Asking for 0 min receive is technically valid (accept anything), but risky.
+        let dest_min_final = if dest_min_u128 == 0 && out_amount > 0 {
+            1 // Require at least 1 stroop if the quote wasn't zero
+        } else {
+            dest_min_u128
+        };
+
+        let dest_min = i64::try_from(dest_min_final).map_err(|_| {
             StellarDexServiceError::UnknownError("Destination amount too large for i64".to_string())
         })?;
 
-        // Create PathPaymentStrictReceive operation
+        // 3. Extract Path from Quote (if it exists)
+        let path_assets: Vec<Asset> = if let Some(quote_path) = &quote.path {
+            quote_path
+                .iter()
+                .map(|p| {
+                    // Convert PathStep to AssetSpec, then to Asset
+                    let asset_spec = if let (Some(code), Some(issuer)) = (&p.asset_code, &p.asset_issuer) {
+                        if code.len() <= 4 {
+                            AssetSpec::Credit4 {
+                                code: code.clone(),
+                                issuer: issuer.clone(),
+                            }
+                        } else {
+                            AssetSpec::Credit12 {
+                                code: code.clone(),
+                                issuer: issuer.clone(),
+                            }
+                        }
+                    } else {
+                        AssetSpec::Native
+                    };
+                    Asset::try_from(asset_spec).map_err(|e| {
+                        StellarDexServiceError::InvalidAssetIdentifier(format!(
+                            "Failed to convert path step to XDR asset: {}",
+                            e
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            Vec::new()
+        };
+
+        // Convert Vec<Asset> to VecM<Asset, 5> (Stellar supports up to 5 intermediate assets in a path)
+        let path_vecm: VecM<Asset, 5> = path_assets.try_into().map_err(|_| {
+            StellarDexServiceError::UnknownError("Failed to convert path to VecM (path too long, max 5 assets)".to_string())
+        })?;
+
+        // Create PathPaymentStrictSend operation
         let path_payment_op = Operation {
             source_account: None,
-            body: OperationBody::PathPaymentStrictReceive(PathPaymentStrictReceiveOp {
+            body: OperationBody::PathPaymentStrictSend(PathPaymentStrictSendOp {
                 send_asset,
-                send_max,
+                send_amount, // We strictly send this amount
                 destination: source_account.clone(),
                 dest_asset,
-                dest_amount,
-                path: VecM::default(), // Empty path for direct swap
+                dest_min, // We accept at least this much
+                path: path_vecm, // Populate the path here!
             }),
         };
 
@@ -681,7 +1000,7 @@ where
 impl<P, S> StellarDexServiceTrait for OrderBookService<P, S>
 where
     P: StellarProviderTrait + Send + Sync + 'static,
-    S: StellarSignTrait + Send + Sync + 'static,
+    S: StellarSignTrait + Signer + Send + Sync + 'static,
 {
     fn supported_asset_types(&self) -> std::collections::HashSet<AssetType> {
         use std::collections::HashSet;
@@ -696,9 +1015,8 @@ where
         asset_id: &str,
         amount: u64,
         slippage: f32,
-        asset_decimals: Option<u8>,
+        _asset_decimals: Option<u8>,
     ) -> Result<StellarQuoteResponse, StellarDexServiceError> {
-        let decimals = asset_decimals.unwrap_or(7); // Default to 7 for Stellar standard
         if asset_id == "native" || asset_id.is_empty() {
             return Ok(StellarQuoteResponse {
                 input_asset: "native".to_string(),
@@ -711,37 +1029,66 @@ where
             });
         }
 
-        let (token_type, token_code, token_issuer) = self.parse_asset_id(asset_id)?;
+        // Parse source asset
+        let source_spec = self.parse_asset_to_spec(asset_id)?;
+        let dest_spec = AssetSpec::Native;
 
-        // Fetch order book: base=TOKEN, counter=XLM
-        // We want to SELL token (base), so we use ASKS
-        let order_book = self
-            .fetch_order_book(
-                &token_type,
-                token_code.as_deref(),
-                token_issuer.as_deref(),
-                "native",
-                None,
-                None,
-            )
+        // Use signer's address as destination account for path finding
+        // This ensures the path finder checks trustlines
+        let signer_address = match self
+            .signer
+            .address()
+            .await
+            .map_err(|e| {
+                StellarDexServiceError::UnknownError(format!(
+                    "Failed to get signer address: {}",
+                    e
+                ))
+            })? {
+            Address::Stellar(addr) => addr,
+            _ => {
+                return Err(StellarDexServiceError::UnknownError(
+                    "Signer address is not a Stellar address".to_string(),
+                ))
+            }
+        };
+
+        // Fetch paths using strict-send path finding
+        let paths = self
+            .fetch_strict_send_paths(&source_spec, amount, &dest_spec, &signer_address)
             .await?;
 
-        if order_book.asks.is_empty() {
+        if paths.is_empty() {
             return Err(StellarDexServiceError::NoPathFound);
         }
 
-        // Use asks: people selling token for XLM
-        let (out_amount, avg_price, best_price) =
-            self.calculate_quote_from_orders(&order_book.asks, amount, true, decimals)?;
+        // The paths are typically sorted by best price (highest destination_amount)
+        let best_path = &paths[0];
 
-        // Calculate price impact
-        // When selling, we get LESS as we go deeper (worse price)
-        // avg_price < best_price, so (best - avg) / best is positive
-        let price_impact_pct = if best_price > MIN_PRICE_THRESHOLD {
-            ((best_price - avg_price) / best_price * 100.0).max(0.0)
-        } else {
-            0.0
-        };
+        // Parse destination amount from string to stroops
+        // Horizon returns strings like "123.456"
+        let out_amount_f64: f64 = best_path.destination_amount.parse().map_err(|e| {
+            StellarDexServiceError::UnknownError(format!(
+                "Failed to parse destination amount: {}",
+                e
+            ))
+        })?;
+        let out_amount = (out_amount_f64 * 10_000_000.0) as u64;
+
+        // Convert path to PathStep format for the response
+        let path_steps: Vec<super::PathStep> = best_path
+            .path
+            .iter()
+            .map(|p| super::PathStep {
+                asset_code: p.asset_code.clone(),
+                asset_issuer: p.asset_issuer.clone(),
+                amount: 0, // Path steps don't include amounts in Horizon response
+            })
+            .collect();
+
+        // Calculate price impact (simplified - could be improved with more data)
+        // For now, set to 0 as path finding already finds the best path
+        let price_impact_pct = 0.0;
 
         Ok(StellarQuoteResponse {
             input_asset: asset_id.to_string(),
@@ -750,7 +1097,7 @@ where
             out_amount,
             price_impact_pct,
             slippage_bps: (slippage * 100.0) as u32,
-            path: None,
+            path: Some(path_steps),
         })
     }
 
@@ -775,60 +1122,76 @@ where
             });
         }
 
-        let (token_type, token_code, token_issuer) = self.parse_asset_id(asset_id)?;
+        // Parse destination asset (token we want to receive)
+        let dest_spec = self.parse_asset_to_spec(asset_id)?;
+        let source_spec = AssetSpec::Native;
 
-        // Fetch order book: base=TOKEN, counter=XLM
-        // We want to BUY token with XLM, so we use BIDS
-        let order_book = self
-            .fetch_order_book(
-                &token_type,
-                token_code.as_deref(),
-                token_issuer.as_deref(),
-                "native",
-                None,
-                None,
-            )
+        // Use signer's address as destination account for path finding
+        // This ensures the path finder checks trustlines
+        let signer_address = match self
+            .signer
+            .address()
+            .await
+            .map_err(|e| {
+                StellarDexServiceError::UnknownError(format!(
+                    "Failed to get signer address: {}",
+                    e
+                ))
+            })? {
+            Address::Stellar(addr) => addr,
+            _ => {
+                return Err(StellarDexServiceError::UnknownError(
+                    "Signer address is not a Stellar address".to_string(),
+                ))
+            }
+        };
+
+        // Fetch paths using strict-receive path finding
+        // We want to receive exactly `amount` tokens, so we pass that as destination_amount
+        let paths = self
+            .fetch_strict_receive_paths(&source_spec, &dest_spec, amount, &signer_address, decimals)
             .await?;
 
-        debug!("Order book: {:?}", order_book);
-
-        if order_book.bids.is_empty() {
+        if paths.is_empty() {
             return Err(StellarDexServiceError::NoPathFound);
         }
 
-        let first_bid = order_book.bids.first();
-        debug!(
-            "Order book: base={:?}, counter={:?}, bids_count={}, first_bid_price={:?}, first_bid_amount={:?}",
-            order_book.base, order_book.counter, order_book.bids.len(),
-            first_bid.map(|o| o.price.as_str()),
-            first_bid.map(|o| o.amount.as_str())
-        );
+        // The paths are typically sorted by best price (lowest source_amount)
+        let best_path = &paths[0];
 
-        // Use bids: people buying token (we're taking the other side, paying XLM)
-        let (out_amount, avg_price, best_price) =
-            self.calculate_quote_from_orders(&order_book.bids, amount, false, decimals)?;
+        // Parse source amount from string to stroops (how much XLM we need to send)
+        // Horizon returns strings like "123.456"
+        let in_amount_f64: f64 = best_path.source_amount.parse().map_err(|e| {
+            StellarDexServiceError::UnknownError(format!(
+                "Failed to parse source amount: {}",
+                e
+            ))
+        })?;
+        let in_amount = (in_amount_f64 * 10_000_000.0) as u64;
 
-        debug!(
-            "Calculated quote: out_amount={} stroops, avg_price={}, best_price={}, input_amount={} stroops",
-            out_amount, avg_price, best_price, amount
-        );
-        // Calculate price impact
-        // When buying, we pay MORE as we go deeper (worse price)
-        // avg_price > best_price, so (avg - best) / best is positive
-        let price_impact_pct = if best_price > MIN_PRICE_THRESHOLD {
-            ((avg_price - best_price) / best_price * 100.0).max(0.0)
-        } else {
-            0.0
-        };
+        // Convert path to PathStep format for the response
+        let path_steps: Vec<super::PathStep> = best_path
+            .path
+            .iter()
+            .map(|p| super::PathStep {
+                asset_code: p.asset_code.clone(),
+                asset_issuer: p.asset_issuer.clone(),
+                amount: 0, // Path steps don't include amounts in Horizon response
+            })
+            .collect();
+
+        // Calculate price impact (simplified - could be improved with more data)
+        // For now, set to 0 as path finding already finds the best path
+        let price_impact_pct = 0.0;
 
         Ok(StellarQuoteResponse {
             input_asset: "native".to_string(),
             output_asset: asset_id.to_string(),
-            in_amount: amount,
-            out_amount,
+            in_amount,
+            out_amount: amount, // We want to receive exactly this amount
             price_impact_pct,
             slippage_bps: (slippage * 100.0) as u32,
-            path: None,
+            path: Some(path_steps),
         })
     }
 

@@ -8,7 +8,7 @@ use super::{
     AssetType, OrderBookService, StellarDexServiceError, StellarDexServiceTrait,
     StellarQuoteResponse, SwapExecutionResult, SwapTransactionParams,
 };
-use crate::services::{provider::StellarProviderTrait, signer::StellarSignTrait};
+use crate::services::{provider::StellarProviderTrait, signer::Signer, signer::StellarSignTrait};
 use async_trait::async_trait;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -22,7 +22,7 @@ use tracing::debug;
 pub enum DexServiceWrapper<P, S>
 where
     P: StellarProviderTrait + Send + Sync + 'static,
-    S: StellarSignTrait + Send + Sync + 'static,
+    S: StellarSignTrait + Signer + Send + Sync + 'static,
 {
     /// Order Book DEX service
     OrderBook(Arc<OrderBookService<P, S>>),
@@ -33,7 +33,7 @@ where
 impl<P, S> DexServiceWrapper<P, S>
 where
     P: StellarProviderTrait + Send + Sync + 'static,
-    S: StellarSignTrait + Send + Sync + 'static,
+    S: StellarSignTrait + Signer + Send + Sync + 'static,
 {
     fn can_handle_asset(&self, asset_id: &str) -> bool {
         match self {
@@ -60,7 +60,7 @@ where
 pub struct StellarDexService<P, S>
 where
     P: StellarProviderTrait + Send + Sync + 'static,
-    S: StellarSignTrait + Send + Sync + 'static,
+    S: StellarSignTrait + Signer + Send + Sync + 'static,
 {
     /// List of DEX strategy implementations in priority order (matching the configured strategies)
     strategies: Vec<DexServiceWrapper<P, S>>,
@@ -69,7 +69,7 @@ where
 impl<P, S> StellarDexService<P, S>
 where
     P: StellarProviderTrait + Send + Sync + 'static,
-    S: StellarSignTrait + Send + Sync + 'static,
+    S: StellarSignTrait + Signer + Send + Sync + 'static,
 {
     /// Create a new multi-strategy DEX service with the given strategy implementations
     ///
@@ -104,7 +104,7 @@ where
 impl<P, S> StellarDexServiceTrait for StellarDexService<P, S>
 where
     P: StellarProviderTrait + Send + Sync + 'static,
-    S: StellarSignTrait + Send + Sync + 'static,
+    S: StellarSignTrait + Signer + Send + Sync + 'static,
 {
     fn supported_asset_types(&self) -> HashSet<AssetType> {
         // Return the union of all supported asset types from all strategies
