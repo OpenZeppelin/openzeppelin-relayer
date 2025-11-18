@@ -4,6 +4,10 @@
 //! This client handles authentication, request/response serialization, and basic error handling.
 
 use eyre::{Context, Result};
+use openzeppelin_relayer::models::{
+    relayer::{DisabledReason, RelayerNetworkType, RpcConfig},
+    ApiResponse,
+};
 use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -239,14 +243,6 @@ impl RelayerClient {
 // Request/Response Models
 // ============================================================================
 
-/// Generic API response wrapper
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ApiResponse<T> {
-    pub success: bool,
-    pub data: Option<T>,
-    pub error: Option<String>,
-}
-
 /// Request to create a new relayer
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CreateRelayerRequest {
@@ -255,7 +251,7 @@ pub struct CreateRelayerRequest {
     pub name: String,
     pub network: String,
     pub paused: bool,
-    pub network_type: String,
+    pub network_type: RelayerNetworkType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub policies: Option<serde_json::Value>,
     pub signer_id: String,
@@ -265,20 +261,13 @@ pub struct CreateRelayerRequest {
     pub custom_rpc_urls: Option<Vec<RpcConfig>>,
 }
 
-/// RPC configuration
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct RpcConfig {
-    pub url: String,
-    pub weight: u32,
-}
-
 /// Relayer response from API
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RelayerResponse {
     pub id: String,
     pub name: String,
     pub network: String,
-    pub network_type: String,
+    pub network_type: RelayerNetworkType,
     pub paused: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub policies: Option<serde_json::Value>,
@@ -293,15 +282,6 @@ pub struct RelayerResponse {
     pub system_disabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disabled_reason: Option<DisabledReason>,
-}
-
-/// Reason for disabled relayer
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "snake_case")]
-pub enum DisabledReason {
-    SignerNotFound,
-    SignerDisabled,
-    SignerBalanceTooLow,
 }
 
 /// Transaction response from API
