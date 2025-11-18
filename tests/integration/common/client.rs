@@ -29,8 +29,8 @@ impl RelayerClient {
     pub fn from_env() -> Result<Self> {
         let base_url = env::var("RELAYER_BASE_URL")
             .wrap_err("RELAYER_BASE_URL environment variable not set")?;
-        let api_key = env::var("RELAYER_API_KEY")
-            .wrap_err("RELAYER_API_KEY environment variable not set")?;
+        let api_key =
+            env::var("RELAYER_API_KEY").wrap_err("RELAYER_API_KEY environment variable not set")?;
 
         Ok(Self {
             base_url: base_url.trim_end_matches('/').to_string(),
@@ -55,7 +55,10 @@ impl RelayerClient {
             .wrap_err_with(|| format!("Failed to send request to {}", url))?;
 
         let status = response.status();
-        let body = response.text().await.wrap_err("Failed to read response body")?;
+        let body = response
+            .text()
+            .await
+            .wrap_err("Failed to read response body")?;
 
         if !status.is_success() {
             return Err(eyre::eyre!(
@@ -89,7 +92,10 @@ impl RelayerClient {
             .wrap_err_with(|| format!("Failed to send request to {}", url))?;
 
         let status = response.status();
-        let body = response.text().await.wrap_err("Failed to read response body")?;
+        let body = response
+            .text()
+            .await
+            .wrap_err("Failed to read response body")?;
 
         if !status.is_success() {
             return Err(eyre::eyre!(
@@ -131,7 +137,10 @@ impl RelayerClient {
             .wrap_err_with(|| format!("Failed to send request to {}", url))?;
 
         let status = response.status();
-        let body = response.text().await.wrap_err("Failed to read response body")?;
+        let body = response
+            .text()
+            .await
+            .wrap_err("Failed to read response body")?;
 
         if !status.is_success() {
             return Err(eyre::eyre!(
@@ -172,7 +181,10 @@ impl RelayerClient {
             .wrap_err_with(|| format!("Failed to send request to {}", url))?;
 
         let status = response.status();
-        let body = response.text().await.wrap_err("Failed to read response body")?;
+        let body = response
+            .text()
+            .await
+            .wrap_err("Failed to read response body")?;
 
         if !status.is_success() {
             return Err(eyre::eyre!(
@@ -208,7 +220,10 @@ impl RelayerClient {
         let status = response.status();
 
         if !status.is_success() {
-            let body = response.text().await.wrap_err("Failed to read response body")?;
+            let body = response
+                .text()
+                .await
+                .wrap_err("Failed to read response body")?;
             return Err(eyre::eyre!(
                 "API request failed with status {}: {}",
                 status,

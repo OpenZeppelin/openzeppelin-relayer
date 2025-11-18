@@ -113,16 +113,13 @@ impl TestRegistry {
     /// Returns an error if the network or contract is not found
     pub fn get_contract(&self, network: &str, contract_name: &str) -> Result<&String> {
         let network_config = self.get_network(network)?;
-        network_config
-            .contracts
-            .get(contract_name)
-            .ok_or_else(|| {
-                eyre::eyre!(
-                    "Contract '{}' not found for network '{}'",
-                    contract_name,
-                    network
-                )
-            })
+        network_config.contracts.get(contract_name).ok_or_else(|| {
+            eyre::eyre!(
+                "Contract '{}' not found for network '{}'",
+                contract_name,
+                network
+            )
+        })
     }
 
     /// Get all network names in the registry
@@ -172,8 +169,7 @@ impl TestRegistry {
         self.networks
             .iter()
             .filter(|(_, config)| {
-                config.enabled
-                    && tags.iter().all(|tag| config.tags.contains(tag))
+                config.enabled && tags.iter().all(|tag| config.tags.contains(tag))
             })
             .map(|(name, _)| name.clone())
             .collect()
@@ -250,7 +246,11 @@ mod tests {
     #[test]
     fn test_load_registry() {
         let result = TestRegistry::load();
-        assert!(result.is_ok(), "Failed to load registry: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to load registry: {:?}",
+            result.err()
+        );
 
         let registry = result.unwrap();
         assert!(!registry.networks.is_empty(), "Registry has no networks");
@@ -322,11 +322,16 @@ mod tests {
         let registry = TestRegistry::load().unwrap();
 
         // simple_storage has a real deployed contract
-        let has_real = registry.has_real_contract("sepolia", "simple_storage").unwrap();
+        let has_real = registry
+            .has_real_contract("sepolia", "simple_storage")
+            .unwrap();
         assert!(has_real, "simple_storage should be detected as real");
 
         // test_erc20 is still a placeholder
         let has_placeholder = registry.has_real_contract("sepolia", "test_erc20").unwrap();
-        assert!(!has_placeholder, "test_erc20 should not be detected as real");
+        assert!(
+            !has_placeholder,
+            "test_erc20 should not be detected as real"
+        );
     }
 }
