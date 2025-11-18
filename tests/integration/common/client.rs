@@ -31,8 +31,7 @@ impl RelayerClient {
     ///
     /// Returns an error if environment variables are not set or if the HTTP client fails to initialize
     pub fn from_env() -> Result<Self> {
-        let base_url = env::var("RELAYER_BASE_URL")
-            .wrap_err("RELAYER_BASE_URL environment variable not set")?;
+        let base_url = env::var("RELAYER_BASE_URL").unwrap_or("http://localhost:8080".to_string());
         let api_key =
             env::var("RELAYER_API_KEY").wrap_err("RELAYER_API_KEY environment variable not set")?;
 
@@ -40,6 +39,40 @@ impl RelayerClient {
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key,
             client: HttpClient::new(),
+        })
+    }
+
+    /// Checks the health of the relayer service
+    ///
+    /// GET /api/v1/health
+    pub async fn health(&self) -> Result<HealthResponse> {
+        let url = format!("{}/api/v1/health", self.base_url);
+
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .send()
+            .await
+            .wrap_err_with(|| format!("Failed to send request to {}", url))?;
+
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .wrap_err("Failed to read response body")?;
+
+        if !status.is_success() {
+            return Err(eyre::eyre!(
+                "Health check failed with status {}: {}",
+                status,
+                body
+            ));
+        }
+
+        // Health endpoint returns plain text "OK"
+        Ok(HealthResponse {
+            status: body.trim().to_lowercase(),
         })
     }
 
@@ -242,6 +275,12 @@ impl RelayerClient {
 // ============================================================================
 // Request/Response Models
 // ============================================================================
+
+/// Health check response
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct HealthResponse {
+    pub status: String,
+}
 
 /// Request to create a new relayer
 #[derive(Debug, Serialize, Deserialize)]
