@@ -564,12 +564,9 @@ impl StellarAllowedTokensPolicy {
 /// Determines who pays transaction fees:
 /// - `User`: User must include fee payment to relayer in transaction (for custom RPC methods)
 /// - `Relayer`: Relayer pays all transaction fees (recommended for send transaction endpoint)
-///
-/// Default is `User`.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum StellarFeePaymentStrategy {
-    #[default]
     User,
     Relayer,
 }
@@ -602,7 +599,7 @@ pub struct RelayerStellarSwapConfig {
 }
 
 /// Stellar-specific relayer policy configuration
-#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub struct RelayerStellarPolicy {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -615,9 +612,10 @@ pub struct RelayerStellarPolicy {
     pub concurrent_transactions: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_tokens: Option<Vec<StellarAllowedTokensPolicy>>,
-    /// Fee payment strategy - determines who pays transaction fees (required)
+    /// Fee payment strategy - determines who pays transaction fees (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
-    pub fee_payment_strategy: StellarFeePaymentStrategy,
+    pub fee_payment_strategy: Option<StellarFeePaymentStrategy>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slippage_percentage: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -625,22 +623,6 @@ pub struct RelayerStellarPolicy {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub swap_config: Option<RelayerStellarSwapConfig>,
-}
-
-impl Default for RelayerStellarPolicy {
-    fn default() -> Self {
-        Self {
-            min_balance: None,
-            max_fee: None,
-            timeout_seconds: None,
-            concurrent_transactions: None,
-            allowed_tokens: None,
-            fee_payment_strategy: StellarFeePaymentStrategy::User,
-            slippage_percentage: None,
-            fee_margin_percentage: None,
-            swap_config: None,
-        }
-    }
 }
 
 impl RelayerStellarPolicy {
@@ -1565,7 +1547,7 @@ mod tests {
             timeout_seconds: Some(30),
             concurrent_transactions: None,
             allowed_tokens: None,
-            fee_payment_strategy: StellarFeePaymentStrategy::Relayer,
+            fee_payment_strategy: Some(StellarFeePaymentStrategy::Relayer),
             slippage_percentage: None,
             fee_margin_percentage: None,
             swap_config: None,

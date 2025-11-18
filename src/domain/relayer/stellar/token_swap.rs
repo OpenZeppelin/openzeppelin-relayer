@@ -82,13 +82,40 @@ where
             .await
             .map_err(|e| RelayerError::ProviderError(format!("Failed to get account: {}", e)))?;
 
-        let xlm_balance = account_entry.balance;
+        // Convert balance from i64 to u64 for comparison (Stellar balances are i64 but always positive)
+        let xlm_balance = if account_entry.balance < 0 {
+            return Err(RelayerError::ProviderError(
+                "Account balance is negative".to_string(),
+            ));
+        } else {
+            account_entry.balance as u64
+        };
 
-        info!(
-            %relayer_id,
-            balance = xlm_balance,
-            "XLM balance below threshold, checking tokens for swap"
-        );
+        // Check if XLM balance is below threshold (if threshold is configured)
+        if let Some(threshold) = swap_config.min_balance_threshold {
+            if xlm_balance > threshold {
+                debug!(
+                    %relayer_id,
+                    balance = xlm_balance,
+                    threshold = threshold,
+                    "XLM balance above threshold, skipping token swap"
+                );
+                return Ok(vec![]);
+            }
+
+            info!(
+                %relayer_id,
+                balance = xlm_balance,
+                threshold = threshold,
+                "XLM balance below threshold, checking tokens for swap"
+            );
+        } else {
+            info!(
+                %relayer_id,
+                balance = xlm_balance,
+                "Checking tokens for swap; current XLM balance"
+            );
+        }
 
         // Get allowed tokens and calculate swap amounts
         let tokens_to_swap = {

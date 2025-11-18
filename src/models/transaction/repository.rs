@@ -2130,7 +2130,7 @@ mod tests {
                 min_balance: Some(DEFAULT_STELLAR_MIN_BALANCE),
                 concurrent_transactions: None,
                 allowed_tokens: None,
-                fee_payment_strategy: StellarFeePaymentStrategy::Relayer,
+                fee_payment_strategy: Some(StellarFeePaymentStrategy::Relayer),
                 slippage_percentage: None,
                 fee_margin_percentage: None,
                 swap_config: None,

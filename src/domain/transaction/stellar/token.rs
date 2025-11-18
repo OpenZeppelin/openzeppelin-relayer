@@ -1077,8 +1077,7 @@ mod integration_tests {
         // Test with "native"
         let result = get_token_balance(&provider, TESTNET_TEST_ACCOUNT, "native").await;
         assert!(result.is_ok(), "Should fetch native XLM balance");
-        let balance = result.unwrap();
-        assert!(balance >= 0, "Balance should be non-negative");
+        let _balance = result.unwrap();
 
         // Test with "XLM"
         let result = get_token_balance(&provider, TESTNET_TEST_ACCOUNT, "XLM").await;
@@ -1088,7 +1087,7 @@ mod integration_tests {
         );
         let balance_xlm = result.unwrap();
         assert_eq!(
-            balance, balance_xlm,
+            _balance, balance_xlm,
             "Both 'native' and 'XLM' should return same balance"
         );
     }
@@ -1104,8 +1103,8 @@ mod integration_tests {
 
         // Either the balance is fetched successfully, or we get a validation error (no trustline)
         match result {
-            Ok(balance) => {
-                assert!(balance >= 0, "Balance should be non-negative");
+            Ok(_balance) => {
+                // Balance is u64, so it's always non-negative by type
             }
             Err(StellarTokenError::NoTrustlineFound(_, _)) => {
                 // This is expected if the account doesn't have a trustline
@@ -1130,8 +1129,8 @@ mod integration_tests {
         let result = get_token_balance(&provider, TESTNET_TEST_ACCOUNT, test_contract).await;
 
         match result {
-            Ok(balance) => {
-                assert!(balance >= 0, "Balance should be non-negative");
+            Ok(_balance) => {
+                // Balance is u64, so it's always non-negative by type
             }
             Err(StellarTokenError::InvalidContractAddress(_, _)) => {
                 // Contract address might be invalid - this is okay for testing

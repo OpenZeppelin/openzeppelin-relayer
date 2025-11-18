@@ -212,7 +212,12 @@ where
 
     // Check if this is a gasless transaction (User fee payment strategy)
     let is_gasless = relayer_policy
-        .map(|p| p.fee_payment_strategy == StellarFeePaymentStrategy::User)
+        .map(|p| {
+            matches!(
+                p.fee_payment_strategy,
+                Some(StellarFeePaymentStrategy::User)
+            )
+        })
         .unwrap_or(false);
 
     if is_gasless {
@@ -591,7 +596,7 @@ mod tests {
 
         async fn prepare_swap_transaction(
             &self,
-            params: crate::services::stellar_dex::SwapTransactionParams,
+            _params: crate::services::stellar_dex::SwapTransactionParams,
         ) -> Result<
             (String, crate::services::stellar_dex::StellarQuoteResponse),
             crate::services::stellar_dex::StellarDexServiceError,
@@ -605,7 +610,7 @@ mod tests {
             std::collections::HashSet::new()
         }
 
-        fn can_handle_asset(&self, asset_id: &str) -> bool {
+        fn can_handle_asset(&self, _asset_id: &str) -> bool {
             true
         }
     }

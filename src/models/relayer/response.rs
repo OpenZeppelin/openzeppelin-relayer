@@ -350,7 +350,7 @@ fn is_empty_policy(policy: &RelayerNetworkPolicy) -> bool {
                 && stellar_policy.timeout_seconds.is_none()
                 && stellar_policy.concurrent_transactions.is_none()
                 && stellar_policy.allowed_tokens.is_none()
-                && stellar_policy.fee_payment_strategy == StellarFeePaymentStrategy::User
+                && stellar_policy.fee_payment_strategy.is_none()
                 && stellar_policy.slippage_percentage.is_none()
                 && stellar_policy.fee_margin_percentage.is_none()
                 && stellar_policy.swap_config.is_none()
@@ -536,7 +536,7 @@ impl From<RelayerStellarPolicy> for StellarPolicyResponse {
             timeout_seconds: policy.timeout_seconds,
             concurrent_transactions: policy.concurrent_transactions,
             allowed_tokens: policy.allowed_tokens,
-            fee_payment_strategy: Some(policy.fee_payment_strategy),
+            fee_payment_strategy: policy.fee_payment_strategy,
             slippage_percentage: policy.slippage_percentage,
             fee_margin_percentage: policy.fee_margin_percentage,
             swap_config: policy.swap_config,
@@ -663,7 +663,7 @@ mod tests {
                 timeout_seconds: Some(30),
                 concurrent_transactions: None,
                 allowed_tokens: None,
-                fee_payment_strategy: StellarFeePaymentStrategy::Relayer,
+                fee_payment_strategy: Some(StellarFeePaymentStrategy::Relayer),
                 slippage_percentage: None,
                 fee_margin_percentage: None,
                 swap_config: None,
@@ -1165,7 +1165,7 @@ mod tests {
                     None,
                     None,
                 )]),
-                fee_payment_strategy: StellarFeePaymentStrategy::Relayer,
+                fee_payment_strategy: Some(StellarFeePaymentStrategy::Relayer),
                 slippage_percentage: Some(0.5),
                 fee_margin_percentage: Some(2.0),
                 swap_config: Some(RelayerStellarSwapConfig {
@@ -1221,6 +1221,94 @@ mod tests {
         assert!(
             serialized.contains("swap_config"),
             "User-provided Stellar policy values should appear in JSON response"
+        );
+    }
+
+    #[test]
+    fn test_stellar_fee_payment_strategy_explicitly_set_vs_omitted() {
+        // Test 1: Explicitly set to User - should appear in serialization
+        let policy_with_user = RelayerStellarPolicy {
+            min_balance: Some(20000000),
+            max_fee: Some(100000),
+            timeout_seconds: Some(30),
+            concurrent_transactions: None,
+            allowed_tokens: None,
+            fee_payment_strategy: Some(StellarFeePaymentStrategy::User),
+            slippage_percentage: None,
+            fee_margin_percentage: None,
+            swap_config: None,
+        };
+
+        let response_with_user = StellarPolicyResponse::from(policy_with_user);
+        let serialized_with_user = serde_json::to_string(&response_with_user).unwrap();
+        assert!(
+            serialized_with_user.contains(r#""fee_payment_strategy":"user""#),
+            "Explicitly set User fee_payment_strategy should appear in JSON response"
+        );
+
+        // Test 2: Explicitly set to Relayer - should appear in serialization
+        let policy_with_relayer = RelayerStellarPolicy {
+            min_balance: Some(20000000),
+            max_fee: Some(100000),
+            timeout_seconds: Some(30),
+            concurrent_transactions: None,
+            allowed_tokens: None,
+            fee_payment_strategy: Some(StellarFeePaymentStrategy::Relayer),
+            slippage_percentage: None,
+            fee_margin_percentage: None,
+            swap_config: None,
+        };
+
+        let response_with_relayer = StellarPolicyResponse::from(policy_with_relayer);
+        let serialized_with_relayer = serde_json::to_string(&response_with_relayer).unwrap();
+        assert!(
+            serialized_with_relayer.contains(r#""fee_payment_strategy":"relayer""#),
+            "Explicitly set Relayer fee_payment_strategy should appear in JSON response"
+        );
+
+        // Test 3: Not set (None) - should NOT appear in serialization due to skip_serializing_if
+        let policy_omitted = RelayerStellarPolicy {
+            min_balance: Some(20000000),
+            max_fee: Some(100000),
+            timeout_seconds: Some(30),
+            concurrent_transactions: None,
+            allowed_tokens: None,
+            fee_payment_strategy: None,
+            slippage_percentage: None,
+            fee_margin_percentage: None,
+            swap_config: None,
+        };
+
+        let response_omitted = StellarPolicyResponse::from(policy_omitted);
+        let serialized_omitted = serde_json::to_string(&response_omitted).unwrap();
+        assert!(
+            !serialized_omitted.contains("fee_payment_strategy"),
+            "Omitted fee_payment_strategy (None) should NOT appear in JSON response"
+        );
+
+        // Test 4: Verify is_empty_policy correctly identifies None vs Some(User)
+        let empty_policy = RelayerStellarPolicy::default();
+        assert!(
+            is_empty_policy(&RelayerNetworkPolicy::Stellar(empty_policy)),
+            "Policy with all None values should be considered empty"
+        );
+
+        let policy_with_user_only = RelayerStellarPolicy {
+            fee_payment_strategy: Some(StellarFeePaymentStrategy::User),
+            ..Default::default()
+        };
+        assert!(
+            !is_empty_policy(&RelayerNetworkPolicy::Stellar(policy_with_user_only)),
+            "Policy with explicitly set User fee_payment_strategy should NOT be considered empty"
+        );
+
+        let policy_with_relayer_only = RelayerStellarPolicy {
+            fee_payment_strategy: Some(StellarFeePaymentStrategy::Relayer),
+            ..Default::default()
+        };
+        assert!(
+            !is_empty_policy(&RelayerNetworkPolicy::Stellar(policy_with_relayer_only)),
+            "Policy with explicitly set Relayer fee_payment_strategy should NOT be considered empty"
         );
     }
 

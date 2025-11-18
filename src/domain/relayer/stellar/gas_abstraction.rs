@@ -159,6 +159,13 @@ where
             |e| RelayerError::Internal(format!("Failed to validate allowed token: {}", e)),
         )?;
 
+        // Validate that either transaction_xdr or operations is provided
+        if params.transaction_xdr.is_none() && params.operations.is_none() {
+            return Err(RelayerError::ValidationError(
+                "Must provide either transaction_xdr or operations in the request".to_string(),
+            ));
+        }
+
         // Build envelope from XDR or operations
         let (envelope, num_operations) = if let Some(ref xdr) = params.transaction_xdr {
             let envelope = parse_transaction_xdr(xdr, false)
@@ -196,7 +203,9 @@ where
             let num_operations = operations.len();
             (envelope, num_operations)
         } else {
-            unreachable!("Validation above ensures one is set");
+            return Err(RelayerError::ValidationError(
+                "Must provide either transaction_xdr or operations in the request".to_string(),
+            ));
         };
 
         StellarTransactionValidator::gasless_transaction_validation(

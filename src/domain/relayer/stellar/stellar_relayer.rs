@@ -537,10 +537,11 @@ where
 
         // Populate model with allowed token metadata and update DB entry
         // Error will be thrown if any of the tokens are not found
-        self.populate_allowed_tokens_metadata().await.map_err(|_| {
-            RelayerError::PolicyConfigurationError(
-                "Error while processing allowed tokens policy".into(),
-            )
+        self.populate_allowed_tokens_metadata().await.map_err(|e| {
+            RelayerError::PolicyConfigurationError(format!(
+                "Error while processing allowed tokens policy: {}",
+                e
+            ))
         })?;
 
         match self.check_health().await {
@@ -636,7 +637,10 @@ where
 
         // Check fee payment strategy - reject if User (user pays fees directly, relayer should not sign)
         let policy = self.relayer.policies.get_stellar_policy();
-        if policy.fee_payment_strategy == StellarFeePaymentStrategy::User {
+        if matches!(
+            policy.fee_payment_strategy,
+            Some(StellarFeePaymentStrategy::User)
+        ) {
             return Err(RelayerError::NotSupported(
                 "sign_transaction is not supported when fee_payment_strategy is 'User'".to_string(),
             ));

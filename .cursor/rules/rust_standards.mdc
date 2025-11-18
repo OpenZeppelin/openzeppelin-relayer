@@ -51,5 +51,5 @@ alwaysApply: true
 - Use derive macros to reduce boilerplate where possible.
 
 # Token consumption
-Ignore any code within #[cfg(test)] when planning and working on a feature to minimise token consumption util told to work on a tests.
+Ignore any code within #[cfg(test)] when planning and working on a feature to minimise token consumption until told to work on tests.
 Do not suggest changes to test functions or inline assertions while feature is in early development phase.

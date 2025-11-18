@@ -56,7 +56,10 @@ where
     // Reject gasless transactions (User fee payment strategy) in operations path
     // Gasless transactions should be processed via unsigned_xdr path only
     if let Some(policy) = relayer_policy {
-        if matches!(policy.fee_payment_strategy, StellarFeePaymentStrategy::User) {
+        if matches!(
+            policy.fee_payment_strategy,
+            Some(StellarFeePaymentStrategy::User)
+        ) {
             return Err(TransactionError::ValidationError(
                 "Gasless transactions (User fee payment strategy) are not supported via operations path. \
                  Please use unsigned_xdr path for gasless transactions.".to_string(),

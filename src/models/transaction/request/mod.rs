@@ -66,7 +66,9 @@ impl GaslessTransactionQuoteRequest {
     pub fn validate(&self) -> Result<(), ApiError> {
         match self {
             GaslessTransactionQuoteRequest::Stellar(request) => request.validate(),
-            _ => Err(ApiError::BadRequest("Invalid request type".to_string())),
+            GaslessTransactionQuoteRequest::Solana(_) => Err(ApiError::BadRequest(
+                "Gasless quotes not yet supported for Solana".to_string(),
+            )),
         }
     }
 }
@@ -88,7 +90,9 @@ impl GaslessTransactionBuildRequest {
     pub fn validate(&self) -> Result<(), ApiError> {
         match self {
             GaslessTransactionBuildRequest::Stellar(request) => request.validate(),
-            _ => Err(ApiError::BadRequest("Invalid request type".to_string())),
+            GaslessTransactionBuildRequest::Solana(_) => Err(ApiError::BadRequest(
+                "Unsupported network variant: Solana".to_string(),
+            )),
         }
     }
 }

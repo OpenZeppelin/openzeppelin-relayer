@@ -568,7 +568,7 @@ mod tests {
                 timeout_seconds: None,
                 concurrent_transactions: None,
                 allowed_tokens: None,
-                fee_payment_strategy: StellarFeePaymentStrategy::User,
+                fee_payment_strategy: Some(StellarFeePaymentStrategy::User),
                 slippage_percentage: None,
                 fee_margin_percentage: None,
                 swap_config: Some(RelayerStellarSwapConfig {
