@@ -146,10 +146,7 @@ async fn run_basic_transfer_test(network: &str) -> eyre::Result<()> {
     }
 
     // Get final transaction status
-    let final_tx = match client
-        .get_transaction(&relayer.id, &tx_response.id)
-        .await
-    {
+    let final_tx = match client.get_transaction(&relayer.id, &tx_response.id).await {
         Ok(tx) => tx,
         Err(e) => {
             let _ = client.delete_relayer(&relayer.id).await;
@@ -229,7 +226,11 @@ async fn test_evm_basic_transfer() {
         return;
     }
 
-    println!("Testing {} EVM networks: {:?}", evm_networks.len(), evm_networks);
+    println!(
+        "Testing {} EVM networks: {:?}",
+        evm_networks.len(),
+        evm_networks
+    );
 
     let mut failures = Vec::new();
 
