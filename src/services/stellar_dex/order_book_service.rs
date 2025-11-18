@@ -605,10 +605,13 @@ where
         };
 
         // Build Transaction
+        // Note: Sequence number is set to 0 as a placeholder
+        // The transaction pipeline will update it with the correct sequence number
+        // when processing the transaction through the gate mechanism
         let transaction = Transaction {
             source_account,
             fee: STELLAR_DEFAULT_TRANSACTION_FEE as u32,
-            seq_num: SequenceNumber(params.sequence_number),
+            seq_num: SequenceNumber(0), // Placeholder - will be updated by transaction pipeline
             cond: Preconditions::Time(time_bounds),
             memo: Memo::None,
             operations: vec![path_payment_op].try_into().map_err(|_| {
@@ -676,6 +679,17 @@ where
     P: StellarProviderTrait + Send + Sync + 'static,
     S: StellarSignTrait + Send + Sync + 'static,
 {
+    fn supported_asset_types(
+        &self,
+    ) -> std::collections::HashSet<crate::services::stellar_dex::AssetType> {
+        use crate::services::stellar_dex::AssetType;
+        use std::collections::HashSet;
+        let mut types = HashSet::new();
+        types.insert(AssetType::Native);
+        types.insert(AssetType::Classic);
+        types
+    }
+
     async fn get_token_to_xlm_quote(
         &self,
         asset_id: &str,
@@ -817,10 +831,10 @@ where
         })
     }
 
-    async fn execute_swap(
+    async fn prepare_swap_transaction(
         &self,
         params: SwapTransactionParams,
-    ) -> Result<crate::services::stellar_dex::SwapExecutionResult, StellarDexServiceError> {
+    ) -> Result<(String, StellarQuoteResponse), StellarDexServiceError> {
         // Validate parameters upfront
         self.validate_swap_params(&params)?;
 
@@ -832,11 +846,31 @@ where
             params.amount, params.source_asset, quote.out_amount, quote.out_amount
         );
 
-        // Build and execute the transaction
+        // Build the transaction XDR (unsigned)
         let xdr = self.build_swap_transaction_xdr(&params, &quote).await?;
 
         info!(
-            "Successfully prepared swap transaction XDR ({} bytes), signing and submitting",
+            "Successfully prepared swap transaction XDR ({} bytes)",
+            xdr.len()
+        );
+
+        Ok((xdr, quote))
+    }
+
+    async fn execute_swap(
+        &self,
+        params: SwapTransactionParams,
+    ) -> Result<crate::services::stellar_dex::SwapExecutionResult, StellarDexServiceError> {
+        // Note: execute_swap is kept for backward compatibility but should generally not be used
+        // Swaps should go through the transaction pipeline via prepare_swap_transaction + process_transaction_request
+        // which properly manages sequence numbers through the gate mechanism
+
+        // Prepare the swap transaction (get quote and build XDR)
+        // Sequence number will be 0 (placeholder) - caller should use pipeline instead
+        let (xdr, quote) = self.prepare_swap_transaction(params.clone()).await?;
+
+        info!(
+            "Signing and submitting swap transaction XDR ({} bytes)",
             xdr.len()
         );
 

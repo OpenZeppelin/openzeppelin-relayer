@@ -1169,7 +1169,7 @@ mod tests {
                 slippage_percentage: Some(0.5),
                 fee_margin_percentage: Some(2.0),
                 swap_config: Some(RelayerStellarSwapConfig {
-                    strategy: Some(StellarSwapStrategy::Soroswap),
+                    strategies: vec![StellarSwapStrategy::Soroswap],
                     cron_schedule: Some("0 0 * * *".to_string()),
                     min_balance_threshold: Some(10000000),
                 }),

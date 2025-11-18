@@ -177,8 +177,10 @@ pub enum ConfigFileRelayerStellarSwapStrategy {
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigFileRelayerStellarSwapConfig {
-    /// DEX strategy to use for token swaps.
-    pub strategy: Option<ConfigFileRelayerStellarSwapStrategy>,
+    /// DEX strategies to use for token swaps, in priority order.
+    /// Strategies are tried sequentially until one can handle the asset.
+    #[serde(default)]
+    pub strategies: Vec<ConfigFileRelayerStellarSwapStrategy>,
     /// Cron schedule for executing token swap logic to keep relayer funded. Optional.
     pub cron_schedule: Option<String>,
     /// Min XLM balance (in stroops) to execute token swap logic to keep relayer funded. Optional.
@@ -466,14 +468,18 @@ fn convert_config_policies_to_domain(
         ConfigFileRelayerNetworkPolicy::Stellar(stellar_policy) => {
             let swap_config = if let Some(config_swap) = stellar_policy.swap_config {
                 Some(super::RelayerStellarSwapConfig {
-                    strategy: config_swap.strategy.map(|s| match s {
-                        ConfigFileRelayerStellarSwapStrategy::OrderBook => {
-                            super::StellarSwapStrategy::OrderBook
-                        }
-                        ConfigFileRelayerStellarSwapStrategy::Soroswap => {
-                            super::StellarSwapStrategy::Soroswap
-                        }
-                    }),
+                    strategies: config_swap
+                        .strategies
+                        .into_iter()
+                        .map(|s| match s {
+                            ConfigFileRelayerStellarSwapStrategy::OrderBook => {
+                                super::StellarSwapStrategy::OrderBook
+                            }
+                            ConfigFileRelayerStellarSwapStrategy::Soroswap => {
+                                super::StellarSwapStrategy::Soroswap
+                            }
+                        })
+                        .collect(),
                     cron_schedule: config_swap.cron_schedule,
                     min_balance_threshold: config_swap.min_balance_threshold,
                 })

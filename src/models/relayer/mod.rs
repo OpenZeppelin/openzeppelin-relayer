@@ -588,9 +588,11 @@ pub enum StellarSwapStrategy {
 #[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub struct RelayerStellarSwapConfig {
-    /// DEX strategy to use for token swaps.
+    /// DEX strategies to use for token swaps, in priority order.
+    /// Strategies are tried sequentially until one can handle the asset.
     #[schema(nullable = false)]
-    pub strategy: Option<StellarSwapStrategy>,
+    #[serde(default)]
+    pub strategies: Vec<StellarSwapStrategy>,
     /// Cron schedule for executing token swap logic to keep relayer funded. Optional.
     #[schema(nullable = false)]
     pub cron_schedule: Option<String>,

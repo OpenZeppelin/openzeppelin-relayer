@@ -53,6 +53,11 @@ pub struct SolanaDexPayload {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct StellarDexPayload {
+    pub swap_results: Vec<SwapResult>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
 #[serde(tag = "payload_type")]
 pub enum WebhookPayload {
@@ -67,6 +72,8 @@ pub enum WebhookPayload {
     SolanaRpc(SolanaWebhookRpcPayload),
     #[serde(rename = "solana_dex")]
     SolanaDex(SolanaDexPayload),
+    #[serde(rename = "stellar_dex")]
+    StellarDex(StellarDexPayload),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -156,6 +163,17 @@ pub fn produce_solana_dex_webhook_payload(
     NotificationSend::new(
         notification_id.to_string(),
         WebhookNotification::new(event, WebhookPayload::SolanaDex(payload)),
+    )
+}
+
+pub fn produce_stellar_dex_webhook_payload(
+    notification_id: &str,
+    event: String,
+    payload: StellarDexPayload,
+) -> NotificationSend {
+    NotificationSend::new(
+        notification_id.to_string(),
+        WebhookNotification::new(event, WebhookPayload::StellarDex(payload)),
     )
 }
 
@@ -362,6 +380,34 @@ mod tests {
                 assert_eq!(payload.swap_results.len(), 0);
             }
             _ => panic!("Expected SolanaDex payload"),
+        }
+    }
+
+    #[test]
+    fn test_produce_stellar_dex_webhook_payload() {
+        let notification_id = "test-notification-id";
+        let event = "stellar_dex_queued".to_string();
+        let swap_results = vec![];
+        let dex_payload = StellarDexPayload { swap_results };
+
+        let result = produce_stellar_dex_webhook_payload(
+            notification_id,
+            event.clone(),
+            dex_payload.clone(),
+        );
+
+        // Verify notification_id
+        assert_eq!(result.notification_id, notification_id);
+
+        // Verify webhook structure
+        assert_eq!(result.notification.event, event);
+
+        // Verify payload type
+        match result.notification.payload {
+            WebhookPayload::StellarDex(payload) => {
+                assert_eq!(payload.swap_results.len(), 0);
+            }
+            _ => panic!("Expected StellarDex payload"),
         }
     }
 

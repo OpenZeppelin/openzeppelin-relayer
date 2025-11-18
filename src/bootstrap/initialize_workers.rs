@@ -499,6 +499,7 @@ mod tests {
     use crate::models::{
         NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy,
         RelayerSolanaSwapConfig, RelayerStellarPolicy, RelayerStellarSwapConfig,
+        StellarSwapStrategy,
     };
 
     fn create_test_evm_relayer(id: &str) -> RelayerRepoModel {
@@ -571,7 +572,7 @@ mod tests {
                 slippage_percentage: None,
                 fee_margin_percentage: None,
                 swap_config: Some(RelayerStellarSwapConfig {
-                    strategy: None,
+                    strategies: vec![StellarSwapStrategy::OrderBook],
                     cron_schedule,
                     min_balance_threshold: Some(5000000000),
                 }),

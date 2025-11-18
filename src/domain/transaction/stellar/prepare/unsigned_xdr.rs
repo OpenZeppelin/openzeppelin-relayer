@@ -591,6 +591,26 @@ mod tests {
                 destination_amount,
             })
         }
+
+        async fn prepare_swap_transaction(
+            &self,
+            params: crate::services::stellar_dex::SwapTransactionParams,
+        ) -> Result<
+            (String, crate::services::stellar_dex::StellarQuoteResponse),
+            crate::services::stellar_dex::StellarDexServiceError,
+        > {
+            unimplemented!()
+        }
+
+        fn supported_asset_types(
+            &self,
+        ) -> std::collections::HashSet<crate::services::stellar_dex::AssetType> {
+            std::collections::HashSet::new()
+        }
+
+        fn can_handle_asset(&self, asset_id: &str) -> bool {
+            true
+        }
     }
 
     fn create_test_envelope(source_account: &str) -> TransactionEnvelope {

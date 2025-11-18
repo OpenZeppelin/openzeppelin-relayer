@@ -3,7 +3,10 @@
 //! Supports native Stellar paths API and optional Soroswap integration
 
 mod order_book_service;
+mod stellar_dex_service;
+
 pub use order_book_service::OrderBookService;
+pub use stellar_dex_service::{DexServiceWrapper, StellarDexService};
 
 use async_trait::async_trait;
 #[cfg(test)]
@@ -70,8 +73,6 @@ pub struct SwapTransactionParams {
     pub amount: u64,
     /// Slippage percentage (e.g., 1.0 for 1%)
     pub slippage_percent: f32,
-    /// Sequence number for the transaction
-    pub sequence_number: i64,
     /// Network passphrase for signing the transaction
     pub network_passphrase: String,
     /// Source asset decimals (defaults to 7 for native XLM)
@@ -89,10 +90,61 @@ pub struct SwapExecutionResult {
     pub destination_amount: u64,
 }
 
+/// Asset types supported by DEX services
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AssetType {
+    /// Native XLM
+    Native,
+    /// Classic assets (CODE:ISSUER format)
+    Classic,
+    /// Soroban contract tokens (C... format)
+    Contract,
+}
+
 /// Trait for Stellar DEX services
 #[async_trait]
 #[cfg_attr(test, automock)]
 pub trait StellarDexServiceTrait: Send + Sync {
+    /// Returns the asset types this DEX service can handle
+    ///
+    /// # Returns
+    /// A set of supported asset types (Native, Classic, Contract, or combinations)
+    fn supported_asset_types(&self) -> std::collections::HashSet<AssetType>;
+
+    /// Checks if this service can handle a specific asset
+    ///
+    /// # Arguments
+    /// * `asset_id` - Asset identifier (e.g., "native", "USDC:GA5Z...", "C...")
+    ///
+    /// # Returns
+    /// True if this service can process swaps for this asset
+    fn can_handle_asset(&self, asset_id: &str) -> bool {
+        let supported = self.supported_asset_types();
+
+        // Check native
+        if (asset_id == "native" || asset_id == "XLM" || asset_id.is_empty())
+            && supported.contains(&AssetType::Native)
+        {
+            return true;
+        }
+
+        // Check contract (C... format, 56 chars)
+        if asset_id.starts_with('C') && asset_id.len() == 56 {
+            if stellar_strkey::Contract::from_string(asset_id).is_ok()
+                && supported.contains(&AssetType::Contract)
+            {
+                return true;
+            }
+        }
+
+        // Check classic (CODE:ISSUER format)
+        if asset_id.contains(':') && supported.contains(&AssetType::Classic) {
+            return true;
+        }
+
+        false
+    }
+
     /// Get a quote for converting a token to XLM
     ///
     /// # Arguments
@@ -132,6 +184,25 @@ pub trait StellarDexServiceTrait: Send + Sync {
         slippage: f32,
         asset_decimals: Option<u8>,
     ) -> Result<StellarQuoteResponse, StellarDexServiceError>;
+
+    /// Prepare a swap transaction (get quote and build XDR) without executing it
+    ///
+    /// This method creates an unsigned transaction XDR for a swap operation.
+    /// The transaction can then be queued for background processing.
+    ///
+    /// # Arguments
+    ///
+    /// * `params` - Swap transaction parameters including source account, assets, amounts, sequence number, and network passphrase
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing:
+    /// * `String` - Unsigned transaction XDR (base64 encoded)
+    /// * `StellarQuoteResponse` - Quote information including destination amount
+    async fn prepare_swap_transaction(
+        &self,
+        params: SwapTransactionParams,
+    ) -> Result<(String, StellarQuoteResponse), StellarDexServiceError>;
 
     /// Execute a swap transaction
     ///
