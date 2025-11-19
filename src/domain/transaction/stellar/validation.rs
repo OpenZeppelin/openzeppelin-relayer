@@ -10,6 +10,7 @@ use crate::domain::relayer::xdr_utils::{
 use crate::models::RelayerStellarPolicy;
 use crate::models::{MemoSpec, OperationSpec, StellarValidationError, TransactionError};
 use crate::services::provider::StellarProviderTrait;
+use serde::Serialize;
 use soroban_rs::xdr::{
     AccountId, Asset, HostFunction, InvokeHostFunctionOp, LedgerKey, OperationBody, PaymentOp,
     PublicKey as XdrPublicKey, ScAddress, SorobanCredentials, TransactionEnvelope,
@@ -17,7 +18,7 @@ use soroban_rs::xdr::{
 use stellar_strkey::ed25519::PublicKey;
 use thiserror::Error;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Serialize)]
 pub enum StellarTransactionValidationError {
     #[error("Validation error: {0}")]
     ValidationError(String),
@@ -781,6 +782,14 @@ impl StellarTransactionValidator {
     ///
     /// Performs all security and policy validations on a transaction envelope
     /// before it's processed for gasless execution.
+    ///
+    /// This includes:
+    /// - Validating source account is not relayer
+    /// - Validating transaction type
+    /// - Validating operations don't target relayer (except fee payment)
+    /// - Validating operations count
+    /// - Validating operation types
+    /// - Validating sequence number
     pub async fn gasless_transaction_validation<P>(
         envelope: &TransactionEnvelope,
         relayer_address: &str,

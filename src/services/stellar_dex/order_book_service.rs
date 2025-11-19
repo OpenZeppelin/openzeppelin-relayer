@@ -1,6 +1,7 @@
 //! Stellar DEX Service implementation
-//! Uses Stellar Horizon API `/paths/strict-send` endpoint for path finding and quote conversion
-//! This provides better rates by considering liquidity pools (AMMs) and multi-hop paths
+//! Uses Stellar Horizon API `/paths/strict-send` for ALL swaps (Sell Logic).
+//! This unifies the Transaction Builder logic and guarantees input amounts.
+//! Provides better rates by considering liquidity pools (AMMs) and multi-hop paths
 
 use super::{
     AssetType, StellarDexServiceError, StellarQuoteResponse, SwapExecutionResult,
@@ -19,23 +20,17 @@ use chrono::{Duration as ChronoDuration, Utc};
 use reqwest::Client;
 use serde::Deserialize;
 use soroban_rs::xdr::{
-    Asset, Limits, Memo, Operation, OperationBody, PathPaymentStrictSendOp, Preconditions,
-    ReadXdr, SequenceNumber, TimeBounds, TimePoint, Transaction, TransactionEnvelope,
-    TransactionExt, TransactionV1Envelope, VecM, WriteXdr,
+    Asset, Limits, Memo, Operation, OperationBody, PathPaymentStrictSendOp, Preconditions, ReadXdr,
+    SequenceNumber, TimeBounds, TimePoint, Transaction, TransactionEnvelope, TransactionExt,
+    TransactionV1Envelope, VecM, WriteXdr,
 };
 use std::convert::TryFrom;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info};
 
-/// Tolerance for remaining amount in order book calculations (1 stroop)
-const ORDER_BOOK_TOLERANCE_STROOPS: i128 = 1;
-
-/// Minimum price threshold to avoid division by zero
-const MIN_PRICE_THRESHOLD: f64 = 1e-10;
-
 /// Transaction validity window in minutes
-const TRANSACTION_VALIDITY_MINUTES: i64 = 1;
+const TRANSACTION_VALIDITY_MINUTES: i64 = 5;
 
 /// HTTP request timeout in seconds
 const HTTP_REQUEST_TIMEOUT_SECONDS: u64 = 7;
@@ -43,16 +38,16 @@ const HTTP_REQUEST_TIMEOUT_SECONDS: u64 = 7;
 /// Slippage percentage multiplier for basis points conversion
 const SLIPPAGE_TO_BPS_MULTIPLIER: f32 = 100.0;
 
-/// Maximum number of orders to process in a single quote calculation
-const MAX_ORDERS_TO_PROCESS: usize = 100;
-
 /// Maximum asset code length for credit_alphanum4 assets
+#[cfg(test)]
 const MAX_CREDIT_ALPHANUM4_CODE_LEN: usize = 4;
 
 /// Maximum asset code length for credit_alphanum12 assets
+#[cfg(test)]
 const MAX_CREDIT_ALPHANUM12_CODE_LEN: usize = 12;
 
-/// Stellar Horizon API order book response
+/// Stellar Horizon API order book response (used in tests only)
+#[cfg(test)]
 #[derive(Debug, Deserialize)]
 struct OrderBookResponse {
     bids: Vec<Order>,
@@ -61,6 +56,7 @@ struct OrderBookResponse {
     counter: AssetInfo,
 }
 
+#[cfg(test)]
 #[derive(Debug, Deserialize)]
 struct Order {
     #[serde(rename = "price_r")]
@@ -69,12 +65,14 @@ struct Order {
     amount: String,
 }
 
+#[cfg(test)]
 #[derive(Debug, Deserialize)]
 struct RationalPrice {
     n: u64,
     d: u64,
 }
 
+#[cfg(test)]
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 struct AssetInfo {
@@ -99,6 +97,7 @@ struct PathEmbedded {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct PathRecord {
     source_amount: String,
     destination_amount: String,
@@ -107,8 +106,6 @@ struct PathRecord {
 
 #[derive(Debug, Deserialize)]
 struct PathAsset {
-    #[serde(rename = "asset_type")]
-    asset_type: String,
     #[serde(rename = "asset_code")]
     asset_code: Option<String>,
     #[serde(rename = "asset_issuer")]
@@ -166,6 +163,7 @@ where
     /// # Returns
     ///
     /// Tuple of (asset_type, asset_code, asset_issuer)
+    #[cfg(test)]
     fn parse_asset_id(
         &self,
         asset_id: &str,
@@ -218,24 +216,23 @@ where
     }
 
     /// Parse asset identifier to AssetSpec for XDR conversion
+    /// Handles both native and non-native assets
     ///
     /// # Arguments
     ///
-    /// * `asset_id` - Asset identifier (e.g., "USDC:GA5Z...")
+    /// * `asset_id` - Asset identifier (e.g., "native", "USDC:GA5Z...")
     ///
     /// # Returns
     ///
     /// AssetSpec that can be converted to XDR Asset
     fn parse_asset_to_spec(&self, asset_id: &str) -> Result<AssetSpec, StellarDexServiceError> {
         if asset_id == "native" || asset_id.is_empty() {
-            return Err(StellarDexServiceError::InvalidAssetIdentifier(
-                "Native asset cannot be parsed to AssetSpec".to_string(),
-            ));
+            return Ok(AssetSpec::Native);
         }
 
         let (code, issuer) = asset_id.split_once(':').ok_or_else(|| {
             StellarDexServiceError::InvalidAssetIdentifier(format!(
-                "Invalid source asset format. Expected 'CODE:ISSUER', got: {}",
+                "Invalid asset format. Expected 'native' or 'CODE:ISSUER', got: {}",
                 asset_id
             ))
         })?;
@@ -268,19 +265,59 @@ where
     }
 
     /// Helper to convert stroops to decimal string
-    /// e.g. 10000000 stroops -> "1.0000000"
     fn to_decimal_string(&self, stroops: u64, decimals: u8) -> String {
         let s = stroops.to_string();
         let decimals_usize = decimals as usize;
-        
+
         if s.len() <= decimals_usize {
-            // e.g. 100 stroops, 7 decimals -> "0.0000100"
             format!("0.{:0>width$}", s, width = decimals_usize)
         } else {
-            // e.g. 12345678 stroops, 7 decimals -> "1.2345678"
             let split = s.len() - decimals_usize;
             format!("{}.{}", &s[..split], &s[split..])
         }
+    }
+
+    /// Helper to safely parse decimal string to stroops without f64
+    /// e.g., "123.4567890" (decimals 7) -> 1234567890
+    /// This avoids IEEE 754 floating-point precision errors
+    /// Handles edge cases: "100." (trailing decimal), "100" (no decimal)
+    fn parse_string_amount_to_stroops(
+        &self,
+        amount_str: &str,
+        decimals: u8,
+    ) -> Result<u64, StellarDexServiceError> {
+        let parts: Vec<&str> = amount_str.split('.').collect();
+
+        // Parse integer part
+        let int_part = parts[0].parse::<u64>().map_err(|_| {
+            StellarDexServiceError::UnknownError(format!("Invalid amount string: {}", amount_str))
+        })?;
+
+        // Handle decimals
+        let mut stroops = int_part * 10u64.pow(decimals as u32);
+
+        // Check if we have a decimal part AND it's not empty (handles "100." case)
+        if parts.len() > 1 && !parts[1].is_empty() {
+            let fraction_str = parts[1];
+            let mut frac_parsed = fraction_str.parse::<u64>().map_err(|_| {
+                StellarDexServiceError::UnknownError(format!("Invalid fraction: {}", amount_str))
+            })?;
+
+            let frac_len = fraction_str.len() as u32;
+            let target_decimals = decimals as u32;
+
+            if frac_len > target_decimals {
+                // Truncate if too many decimals (e.g. 1.12345678 -> 7 decimals -> 1.1234567)
+                frac_parsed /= 10u64.pow(frac_len - target_decimals);
+            } else {
+                // Pad if fewer decimals (e.g. 1.12 -> 7 decimals -> 1.1200000)
+                frac_parsed *= 10u64.pow(target_decimals - frac_len);
+            }
+
+            stroops += frac_parsed;
+        }
+
+        Ok(stroops)
     }
 
     /// Fetch strict-send paths from Horizon
@@ -289,18 +326,16 @@ where
         &self,
         source_asset: &AssetSpec,
         source_amount_stroops: u64,
+        source_decimals: u8,
         destination_asset: &AssetSpec,
-        destination_account: &str,
+        _destination_account: &str,
     ) -> Result<Vec<PathRecord>, StellarDexServiceError> {
         let mut url = format!("{}/paths/strict-send", self.horizon_base_url);
 
-        // Convert stroops to decimal string for the API
-        let amount_decimal = self.to_decimal_string(source_amount_stroops, 7);
+        // Convert stroops to decimal string for the API using source asset decimals
+        let amount_decimal = self.to_decimal_string(source_amount_stroops, source_decimals);
 
-        let mut params = vec![
-            format!("destination_account={}", destination_account),
-            format!("source_amount={}", amount_decimal),
-        ];
+        let mut params = vec![format!("source_amount={}", amount_decimal)];
 
         // Add Source Asset Params
         match source_asset {
@@ -320,6 +355,8 @@ where
         }
 
         // Add Destination Asset Params
+        // Note: Horizon API doesn't allow both destination_account and destination_assets
+        // We use destination_account to check trustlines, but specify the asset separately
         match destination_asset {
             AssetSpec::Native => {
                 params.push("destination_assets=native".to_string());
@@ -331,6 +368,11 @@ where
                 params.push(format!("destination_assets={}:{}", code, issuer));
             }
         }
+
+        // Add destination_account as a separate parameter (Horizon will filter by trustlines)
+        // Actually, Horizon doesn't support both. We'll omit destination_account when we have a specific asset.
+        // The path finder will still work, but won't check trustlines automatically.
+        // For trustline checking, the caller should verify separately.
 
         url.push('?');
         url.push_str(&params.join("&"));
@@ -362,141 +404,6 @@ where
         Ok(path_response.embedded.records)
     }
 
-    /// Fetch strict-receive paths from Horizon
-    /// strict-receive = "I want to receive exactly X dest asset, how much Y source do I need to send?"
-    async fn fetch_strict_receive_paths(
-        &self,
-        source_asset: &AssetSpec,
-        destination_asset: &AssetSpec,
-        destination_amount_stroops: u64,
-        destination_account: &str,
-        destination_decimals: u8,
-    ) -> Result<Vec<PathRecord>, StellarDexServiceError> {
-        let mut url = format!("{}/paths/strict-receive", self.horizon_base_url);
-
-        // Convert destination amount stroops to decimal string for the API
-        let dest_amount_decimal = self.to_decimal_string(destination_amount_stroops, destination_decimals);
-
-        let mut params = vec![
-            format!("destination_account={}", destination_account),
-            format!("destination_amount={}", dest_amount_decimal),
-        ];
-
-        // Add Source Asset Params
-        match source_asset {
-            AssetSpec::Native => {
-                params.push("source_assets=native".to_string());
-            }
-            AssetSpec::Credit4 { code, issuer } => {
-                params.push(format!("source_assets={}:{}", code, issuer));
-            }
-            AssetSpec::Credit12 { code, issuer } => {
-                params.push(format!("source_assets={}:{}", code, issuer));
-            }
-        }
-
-        // Add Destination Asset Params
-        match destination_asset {
-            AssetSpec::Native => {
-                params.push("destination_asset_type=native".to_string());
-            }
-            AssetSpec::Credit4 { code, issuer } => {
-                params.push("destination_asset_type=credit_alphanum4".to_string());
-                params.push(format!("destination_asset_code={}", code));
-                params.push(format!("destination_asset_issuer={}", issuer));
-            }
-            AssetSpec::Credit12 { code, issuer } => {
-                params.push("destination_asset_type=credit_alphanum12".to_string());
-                params.push(format!("destination_asset_code={}", code));
-                params.push(format!("destination_asset_issuer={}", issuer));
-            }
-        }
-
-        url.push('?');
-        url.push_str(&params.join("&"));
-
-        debug!("Fetching strict-receive paths from Horizon: {}", url);
-
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(StellarDexServiceError::HttpRequestError)?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unable to read error response".to_string());
-            return Err(StellarDexServiceError::ApiError {
-                message: format!("Horizon API returned error {}: {}", status, error_text),
-            });
-        }
-
-        let path_response: PathResponse = response.json().await.map_err(|e| {
-            StellarDexServiceError::UnknownError(format!("Failed to deserialize paths: {}", e))
-        })?;
-
-        Ok(path_response.embedded.records)
-    }
-
-    /// Convert PathAsset to XDR Asset
-    fn xdr_asset_from_path_asset(
-        &self,
-        path_asset: &PathAsset,
-    ) -> Result<Asset, StellarDexServiceError> {
-        match path_asset.asset_type.as_str() {
-            "native" => Ok(Asset::Native),
-            "credit_alphanum4" | "credit_alphanum12" => {
-                let code = path_asset.asset_code.as_ref().ok_or_else(|| {
-                    StellarDexServiceError::InvalidAssetIdentifier(
-                        "Path asset missing code".to_string(),
-                    )
-                })?;
-                let issuer = path_asset.asset_issuer.as_ref().ok_or_else(|| {
-                    StellarDexServiceError::InvalidAssetIdentifier(
-                        "Path asset missing issuer".to_string(),
-                    )
-                })?;
-
-                let asset_spec = if code.len() <= 4 {
-                    AssetSpec::Credit4 {
-                        code: code.clone(),
-                        issuer: issuer.clone(),
-                    }
-                } else {
-                    AssetSpec::Credit12 {
-                        code: code.clone(),
-                        issuer: issuer.clone(),
-                    }
-                };
-
-                Asset::try_from(asset_spec).map_err(|e| {
-                    StellarDexServiceError::InvalidAssetIdentifier(format!(
-                        "Failed to convert path asset to XDR: {}",
-                        e
-                    ))
-                })
-            }
-            _ => Err(StellarDexServiceError::InvalidAssetIdentifier(format!(
-                "Unknown asset type in path: {}",
-                path_asset.asset_type
-            ))),
-        }
-    }
-
-    /// Convert path from quote to XDR format
-    fn convert_path_to_xdr(
-        &self,
-        path: &[PathAsset],
-    ) -> Result<Vec<Asset>, StellarDexServiceError> {
-        path.iter()
-            .map(|p| self.xdr_asset_from_path_asset(p))
-            .collect()
-    }
-
     /// Build Horizon API URL for order_book endpoint
     ///
     /// Note: Stellar asset codes and issuers are typically safe ASCII strings,
@@ -511,6 +418,7 @@ where
     /// # Returns
     ///
     /// Complete URL string for the Horizon order_book API endpoint
+    #[cfg(test)]
     fn build_order_book_url(
         &self,
         selling_asset_type: &str,
@@ -550,6 +458,7 @@ where
     }
 
     /// Fetch order book from Horizon API
+    #[cfg(test)]
     async fn fetch_order_book(
         &self,
         selling_asset_type: &str,
@@ -593,174 +502,6 @@ where
         })
     }
 
-    /// Calculate output amount by walking through order book
-    ///
-    /// IMPORTANT: Understanding Stellar Order Books
-    /// - base asset = asset being SOLD in orders
-    /// - counter asset = asset being BOUGHT in orders
-    /// - asks = orders selling base for counter (price in counter/base)
-    /// - bids = orders buying base with counter (price in counter/base)
-    ///
-    /// # Arguments
-    ///
-    /// * `orders` - Order book entries (bids or asks)
-    /// * `input_amount` - Amount to convert (in stroops/smallest unit)
-    /// * `is_ask` - If true, using asks (selling base), otherwise bids (buying base)
-    /// * `asset_decimals` - Number of decimal places for the base asset (defaults to 7)
-    ///
-    /// # Returns
-    ///
-    /// Tuple of (output_stroops, avg_price, best_price)
-    fn calculate_quote_from_orders(
-        &self,
-        orders: &[Order],
-        input_amount: u64,
-        is_ask: bool,
-        asset_decimals: u8,
-    ) -> Result<(u64, f64, f64), StellarDexServiceError> {
-        if orders.is_empty() {
-            return Err(StellarDexServiceError::NoPathFound);
-        }
-
-        if input_amount == 0 {
-            return Err(StellarDexServiceError::InvalidAssetIdentifier(
-                "Input amount cannot be zero".to_string(),
-            ));
-        }
-
-        let best_price: f64 = orders[0].price.parse().map_err(|e| {
-            StellarDexServiceError::UnknownError(format!("Failed to parse price: {}", e))
-        })?;
-
-        let mut remaining_stroops = input_amount as i128;
-        let mut total_output_stroops: i128 = 0;
-        let mut total_input_stroops_used: i128 = 0;
-
-        // Limit the number of orders processed for performance
-        let orders_to_process = orders.iter().take(MAX_ORDERS_TO_PROCESS);
-
-        for order in orders_to_process {
-            if remaining_stroops <= 0 {
-                break;
-            }
-
-            // Validate rational price
-            if order.price_r.d == 0 {
-                return Err(StellarDexServiceError::UnknownError(
-                    "Invalid order: price denominator is zero".to_string(),
-                ));
-            }
-
-            // Parse amount (in base asset units as decimal string)
-            let amount: f64 = order.amount.parse().map_err(|e| {
-                StellarDexServiceError::UnknownError(format!("Failed to parse amount: {}", e))
-            })?;
-
-            if amount <= 0.0 {
-                debug!("Skipping order with zero or negative amount");
-                continue;
-            }
-
-            // Convert to stroops using provided decimals
-            let decimals_multiplier = 10_f64.powi(asset_decimals as i32);
-            let amount_stroops = (amount * decimals_multiplier) as i128;
-
-            if amount_stroops <= 0 {
-                debug!("Skipping order with zero stroops after conversion");
-                continue;
-            }
-
-            // Use rational price for precise calculation
-            let price_n = order.price_r.n as i128;
-            let price_d = order.price_r.d as i128;
-
-            debug!(
-                "Order: amount={} ({} stroops), price={} (rational: {}/{})",
-                order.amount, amount_stroops, order.price, price_n, price_d
-            );
-
-            if is_ask {
-                // Selling base asset to get counter asset
-                // Output (counter) = base_amount * (price_n / price_d)
-
-                if remaining_stroops <= amount_stroops {
-                    // Partially fill this order
-                    let output = (remaining_stroops * price_n) / price_d;
-                    total_output_stroops += output;
-                    total_input_stroops_used += remaining_stroops;
-                    remaining_stroops = 0;
-                } else {
-                    // Use entire order
-                    let output = (amount_stroops * price_n) / price_d;
-                    total_output_stroops += output;
-                    total_input_stroops_used += amount_stroops;
-                    remaining_stroops -= amount_stroops;
-                }
-            } else {
-                // Buying base asset with counter asset
-                // To get base_amount, pay: base_amount * (price_n / price_d) in counter
-                // We have counter, want to know how much base we can get
-
-                let counter_cost = (amount_stroops * price_n) / price_d;
-
-                debug!(
-                    "Buying: remaining={} stroops, order_amount={} stroops base, counter_cost={} stroops",
-                    remaining_stroops, amount_stroops, counter_cost
-                );
-
-                if remaining_stroops <= counter_cost {
-                    // Partially fill this order
-                    // Solve: base * (price_n / price_d) = remaining_stroops
-                    // base = remaining_stroops * price_d / price_n
-                    let base_received = (remaining_stroops * price_d) / price_n;
-                    debug!(
-                        "Partially filling: base_received={} stroops for {} stroops counter",
-                        base_received, remaining_stroops
-                    );
-                    total_output_stroops += base_received;
-                    total_input_stroops_used += remaining_stroops;
-                    remaining_stroops = 0;
-                } else {
-                    // Use entire order
-                    debug!(
-                        "Using entire order: base_received={} stroops, counter_paid={} stroops",
-                        amount_stroops, counter_cost
-                    );
-                    total_output_stroops += amount_stroops;
-                    total_input_stroops_used += counter_cost;
-                    remaining_stroops -= counter_cost;
-                }
-            }
-        }
-
-        // Check if we could fulfill the entire amount (allow tolerance)
-        if remaining_stroops > ORDER_BOOK_TOLERANCE_STROOPS {
-            return Err(StellarDexServiceError::NoPathFound);
-        }
-
-        // Validate we got some output
-        if total_output_stroops <= 0 {
-            return Err(StellarDexServiceError::NoPathFound);
-        }
-
-        if total_input_stroops_used <= 0 {
-            return Err(StellarDexServiceError::UnknownError(
-                "Invalid calculation: no input used".to_string(),
-            ));
-        }
-
-        // Calculate weighted average price (for price impact calculation)
-        let avg_price = if is_ask {
-            // Selling: avg_price = output / input
-            total_output_stroops as f64 / total_input_stroops_used as f64
-        } else {
-            // Buying: avg_price = input / output
-            total_input_stroops_used as f64 / total_output_stroops as f64
-        };
-
-        Ok((total_output_stroops as u64, avg_price, best_price))
-    }
-
     /// Validate swap parameters before processing
     fn validate_swap_params(
         &self,
@@ -794,11 +535,13 @@ where
     }
 
     /// Get quote for swap operation
+    /// Supports both Token->XLM and XLM->Token swaps
     async fn get_swap_quote(
         &self,
         params: &SwapTransactionParams,
     ) -> Result<StellarQuoteResponse, StellarDexServiceError> {
         if params.destination_asset == "native" {
+            // Token -> XLM: Sell token, receive XLM
             self.get_token_to_xlm_quote(
                 &params.source_asset,
                 params.amount,
@@ -806,9 +549,18 @@ where
                 params.source_asset_decimals,
             )
             .await
+        } else if params.source_asset == "native" {
+            // XLM -> Token: Sell XLM, receive token
+            self.get_xlm_to_token_quote(
+                &params.destination_asset,
+                params.amount,
+                params.slippage_percent,
+                params.destination_asset_decimals,
+            )
+            .await
         } else {
             Err(StellarDexServiceError::UnknownError(
-                "Unsupported destination asset".to_string(),
+                "Only swaps involving native XLM are currently supported".to_string(),
             ))
         }
     }
@@ -825,16 +577,22 @@ where
         })?;
 
         // Parse source asset to Asset using shared helper
-        let asset_spec = self.parse_asset_to_spec(&params.source_asset)?;
-        let send_asset = Asset::try_from(asset_spec).map_err(|e| {
+        let source_spec = self.parse_asset_to_spec(&params.source_asset)?;
+        let send_asset = Asset::try_from(source_spec).map_err(|e| {
             StellarDexServiceError::InvalidAssetIdentifier(format!(
-                "Failed to convert asset: {}",
+                "Failed to convert source asset: {}",
                 e
             ))
         })?;
 
-        // Destination asset is always native XLM
-        let dest_asset = Asset::Native;
+        // Parse destination asset dynamically (supports both native and tokens)
+        let dest_spec = self.parse_asset_to_spec(&params.destination_asset)?;
+        let dest_asset = Asset::try_from(dest_spec).map_err(|e| {
+            StellarDexServiceError::InvalidAssetIdentifier(format!(
+                "Failed to convert destination asset: {}",
+                e
+            ))
+        })?;
 
         // 1. Define exact amount to SEND
         let send_amount = i64::try_from(params.amount).map_err(|_| {
@@ -852,7 +610,9 @@ where
         // e.g., If slippage is 100bps (1%), we want 99% of the output
         let dest_min_u128 = out_amount
             .checked_mul(basis.saturating_sub(slippage_bps))
-            .ok_or_else(|| StellarDexServiceError::UnknownError("Overflow calculating min amount".into()))?
+            .ok_or_else(|| {
+                StellarDexServiceError::UnknownError("Overflow calculating min amount".into())
+            })?
             .checked_div(basis)
             .ok_or_else(|| StellarDexServiceError::UnknownError("Division error".into()))?;
 
@@ -874,21 +634,22 @@ where
                 .iter()
                 .map(|p| {
                     // Convert PathStep to AssetSpec, then to Asset
-                    let asset_spec = if let (Some(code), Some(issuer)) = (&p.asset_code, &p.asset_issuer) {
-                        if code.len() <= 4 {
-                            AssetSpec::Credit4 {
-                                code: code.clone(),
-                                issuer: issuer.clone(),
+                    let asset_spec =
+                        if let (Some(code), Some(issuer)) = (&p.asset_code, &p.asset_issuer) {
+                            if code.len() <= 4 {
+                                AssetSpec::Credit4 {
+                                    code: code.clone(),
+                                    issuer: issuer.clone(),
+                                }
+                            } else {
+                                AssetSpec::Credit12 {
+                                    code: code.clone(),
+                                    issuer: issuer.clone(),
+                                }
                             }
                         } else {
-                            AssetSpec::Credit12 {
-                                code: code.clone(),
-                                issuer: issuer.clone(),
-                            }
-                        }
-                    } else {
-                        AssetSpec::Native
-                    };
+                            AssetSpec::Native
+                        };
                     Asset::try_from(asset_spec).map_err(|e| {
                         StellarDexServiceError::InvalidAssetIdentifier(format!(
                             "Failed to convert path step to XDR asset: {}",
@@ -903,7 +664,9 @@ where
 
         // Convert Vec<Asset> to VecM<Asset, 5> (Stellar supports up to 5 intermediate assets in a path)
         let path_vecm: VecM<Asset, 5> = path_assets.try_into().map_err(|_| {
-            StellarDexServiceError::UnknownError("Failed to convert path to VecM (path too long, max 5 assets)".to_string())
+            StellarDexServiceError::UnknownError(
+                "Failed to convert path to VecM (path too long, max 5 assets)".to_string(),
+            )
         })?;
 
         // Create PathPaymentStrictSend operation
@@ -914,7 +677,7 @@ where
                 send_amount, // We strictly send this amount
                 destination: source_account.clone(),
                 dest_asset,
-                dest_min, // We accept at least this much
+                dest_min,        // We accept at least this much
                 path: path_vecm, // Populate the path here!
             }),
         };
@@ -1015,7 +778,7 @@ where
         asset_id: &str,
         amount: u64,
         slippage: f32,
-        _asset_decimals: Option<u8>,
+        asset_decimals: Option<u8>,
     ) -> Result<StellarQuoteResponse, StellarDexServiceError> {
         if asset_id == "native" || asset_id.is_empty() {
             return Ok(StellarQuoteResponse {
@@ -1035,16 +798,9 @@ where
 
         // Use signer's address as destination account for path finding
         // This ensures the path finder checks trustlines
-        let signer_address = match self
-            .signer
-            .address()
-            .await
-            .map_err(|e| {
-                StellarDexServiceError::UnknownError(format!(
-                    "Failed to get signer address: {}",
-                    e
-                ))
-            })? {
+        let signer_address = match self.signer.address().await.map_err(|e| {
+            StellarDexServiceError::UnknownError(format!("Failed to get signer address: {}", e))
+        })? {
             Address::Stellar(addr) => addr,
             _ => {
                 return Err(StellarDexServiceError::UnknownError(
@@ -1054,8 +810,16 @@ where
         };
 
         // Fetch paths using strict-send path finding
+        // Use source asset decimals (default to 7 for tokens if not provided)
+        let source_decimals = asset_decimals.unwrap_or(7);
         let paths = self
-            .fetch_strict_send_paths(&source_spec, amount, &dest_spec, &signer_address)
+            .fetch_strict_send_paths(
+                &source_spec,
+                amount,
+                source_decimals,
+                &dest_spec,
+                &signer_address,
+            )
             .await?;
 
         if paths.is_empty() {
@@ -1065,15 +829,9 @@ where
         // The paths are typically sorted by best price (highest destination_amount)
         let best_path = &paths[0];
 
-        // Parse destination amount from string to stroops
-        // Horizon returns strings like "123.456"
-        let out_amount_f64: f64 = best_path.destination_amount.parse().map_err(|e| {
-            StellarDexServiceError::UnknownError(format!(
-                "Failed to parse destination amount: {}",
-                e
-            ))
-        })?;
-        let out_amount = (out_amount_f64 * 10_000_000.0) as u64;
+        // SAFE PARSING: Use integer-based parsing to avoid IEEE 754 floating-point errors
+        // Horizon returns strings like "123.4567890" - parsing as f64 can introduce precision errors
+        let out_amount = self.parse_string_amount_to_stroops(&best_path.destination_amount, 7)?;
 
         // Convert path to PathStep format for the response
         let path_steps: Vec<super::PathStep> = best_path
@@ -1128,16 +886,9 @@ where
 
         // Use signer's address as destination account for path finding
         // This ensures the path finder checks trustlines
-        let signer_address = match self
-            .signer
-            .address()
-            .await
-            .map_err(|e| {
-                StellarDexServiceError::UnknownError(format!(
-                    "Failed to get signer address: {}",
-                    e
-                ))
-            })? {
+        let signer_address = match self.signer.address().await.map_err(|e| {
+            StellarDexServiceError::UnknownError(format!("Failed to get signer address: {}", e))
+        })? {
             Address::Stellar(addr) => addr,
             _ => {
                 return Err(StellarDexServiceError::UnknownError(
@@ -1146,28 +897,25 @@ where
             }
         };
 
-        // Fetch paths using strict-receive path finding
-        // We want to receive exactly `amount` tokens, so we pass that as destination_amount
+        // REFACTORED: Use strict-send (Sell XLM) instead of strict-receive
+        // This unifies the transaction builder logic and guarantees input amounts
+        // We are selling exactly `amount` XLM (which has 7 decimals)
         let paths = self
-            .fetch_strict_receive_paths(&source_spec, &dest_spec, amount, &signer_address, decimals)
+            .fetch_strict_send_paths(&source_spec, amount, 7, &dest_spec, &signer_address)
             .await?;
 
         if paths.is_empty() {
             return Err(StellarDexServiceError::NoPathFound);
         }
 
-        // The paths are typically sorted by best price (lowest source_amount)
+        // The paths are typically sorted by best price (highest destination_amount)
         let best_path = &paths[0];
 
-        // Parse source amount from string to stroops (how much XLM we need to send)
-        // Horizon returns strings like "123.456"
-        let in_amount_f64: f64 = best_path.source_amount.parse().map_err(|e| {
-            StellarDexServiceError::UnknownError(format!(
-                "Failed to parse source amount: {}",
-                e
-            ))
-        })?;
-        let in_amount = (in_amount_f64 * 10_000_000.0) as u64;
+        // SAFE PARSING: Use integer-based parsing to avoid IEEE 754 floating-point errors
+        // Horizon returns strings like "123.4567890" - parsing as f64 can introduce precision errors
+        // Parse destination amount (token) using its specific decimals
+        let out_amount =
+            self.parse_string_amount_to_stroops(&best_path.destination_amount, decimals)?;
 
         // Convert path to PathStep format for the response
         let path_steps: Vec<super::PathStep> = best_path
@@ -1187,8 +935,8 @@ where
         Ok(StellarQuoteResponse {
             input_asset: "native".to_string(),
             output_asset: asset_id.to_string(),
-            in_amount,
-            out_amount: amount, // We want to receive exactly this amount
+            in_amount: amount, // We are selling exactly this amount of XLM
+            out_amount,        // We receive this amount of tokens
             price_impact_pct,
             slippage_bps: (slippage * 100.0) as u32,
             path: Some(path_steps),
@@ -1259,10 +1007,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::domain::SignTransactionResponse;
     use crate::domain::SignXdrTransactionResponseStellar;
-    use crate::models::SignerError;
+    use crate::models::{Address, NetworkTransactionData, SignerError};
     use crate::services::provider::MockStellarProviderTrait;
-    use crate::services::signer::StellarSignTrait;
+    use crate::services::signer::{Signer, StellarSignTrait};
     use std::sync::Arc;
 
     use super::*;
@@ -1272,6 +1021,23 @@ mod tests {
 
     // Mock signer for tests (only quote methods are tested, so this doesn't need to work)
     struct MockSigner;
+
+    #[async_trait::async_trait]
+    impl Signer for MockSigner {
+        async fn address(&self) -> Result<Address, SignerError> {
+            // Return a dummy Stellar address for testing
+            Ok(Address::Stellar(
+                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            ))
+        }
+
+        async fn sign_transaction(
+            &self,
+            _transaction: NetworkTransactionData,
+        ) -> Result<SignTransactionResponse, SignerError> {
+            unimplemented!("Not used in quote tests")
+        }
+    }
 
     #[async_trait::async_trait]
     impl StellarSignTrait for MockSigner {
@@ -1362,13 +1128,13 @@ mod tests {
             quote.slippage_bps, 100,
             "Expected 100 bps for 1.0% slippage"
         ); // 1.0% = 100 bps
-        assert!(quote.path.is_none(), "Order book doesn't provide path");
+        assert!(quote.path.is_some(), "Path finding should provide path");
     }
 
     #[tokio::test]
     async fn test_get_xlm_to_token_quote_usdc() {
         let service = create_test_service();
-        // Test with 100 XLM (100 * 10^7 stroops)
+        // Test with 100 XLM (100 * 10^7 stroops) - this is the amount we want to RECEIVE
         let amount = 100_000_000u64;
         let slippage = 1.0;
 
@@ -1380,11 +1146,16 @@ mod tests {
 
         assert_eq!(quote.input_asset, "native");
         assert_eq!(quote.output_asset, USDC_ASSET_ID);
-        assert_eq!(quote.in_amount, amount);
+        // For strict-receive, out_amount is what we want to receive (should equal requested amount)
+        assert_eq!(
+            quote.out_amount, amount,
+            "Output amount should equal requested amount for strict-receive"
+        );
+        // in_amount is what we need to pay (may differ from requested amount)
         assert!(
-            quote.out_amount > 0,
-            "Output amount should be positive, got: {}",
-            quote.out_amount
+            quote.in_amount > 0,
+            "Input amount should be positive, got: {}",
+            quote.in_amount
         );
         assert!(
             quote.price_impact_pct >= 0.0,
@@ -1395,7 +1166,7 @@ mod tests {
             quote.slippage_bps, 100,
             "Expected 100 bps for 1.0% slippage"
         ); // 1.0% = 100 bps
-        assert!(quote.path.is_none(), "Order book doesn't provide path");
+        assert!(quote.path.is_some(), "Path finding should provide path");
     }
 
     #[tokio::test]

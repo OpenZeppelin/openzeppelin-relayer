@@ -130,6 +130,7 @@ where
                     self.provider(),
                     self.signer(),
                     Some(&policy),
+                    self.dex_service(),
                 )
                 .await?;
                 update_and_notify_transaction(

@@ -1,5 +1,7 @@
 use crate::{
-    domain::solana::SolanaTransactionValidationError,
+    domain::{
+        solana::SolanaTransactionValidationError, stellar::StellarTransactionValidationError,
+    },
     jobs::JobProducerError,
     models::{SignerError, SignerFactoryError},
     services::provider::{ProviderError, SolanaProviderError},
@@ -33,6 +35,9 @@ pub enum TransactionError {
 
     #[error("Underlying Solana provider error: {0}")]
     UnderlyingSolanaProvider(#[from] SolanaProviderError),
+
+    #[error("Stellar validation error: {0}")]
+    StellarTransactionValidationError(#[from] StellarTransactionValidationError),
 
     #[error("Unexpected error: {0}")]
     UnexpectedError(String),
@@ -87,6 +92,7 @@ impl TransactionError {
             TransactionError::NotSupported(_) => false,
             TransactionError::SignerError(_) => false,
             TransactionError::SimulationFailed(_) => false,
+            TransactionError::StellarTransactionValidationError(_) => false,
         }
     }
 }
@@ -95,6 +101,9 @@ impl From<TransactionError> for ApiError {
     fn from(error: TransactionError) -> Self {
         match error {
             TransactionError::ValidationError(msg) => ApiError::BadRequest(msg),
+            TransactionError::StellarTransactionValidationError(err) => {
+                ApiError::BadRequest(err.to_string())
+            }
             TransactionError::SolanaValidation(err) => ApiError::BadRequest(err.to_string()),
             TransactionError::NetworkConfiguration(msg) => ApiError::InternalError(msg),
             TransactionError::JobProducerError(msg) => ApiError::InternalError(msg.to_string()),

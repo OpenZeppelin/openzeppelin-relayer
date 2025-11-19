@@ -8,17 +8,18 @@ use chrono::{Duration, Utc};
 use soroban_rs::xdr::{Limits, Operation, ReadXdr, TransactionEnvelope, WriteXdr};
 use tracing::debug;
 
+use crate::constants::STELLAR_DEFAULT_TRANSACTION_FEE;
 use crate::domain::relayer::{
-    stellar::xdr_utils::parse_transaction_xdr, xdr_utils::extract_operations, GasAbstractionTrait,
-    RelayerError, StellarRelayer,
+    stellar::xdr_utils::parse_transaction_xdr, GasAbstractionTrait, RelayerError, StellarRelayer,
 };
 use crate::domain::transaction::stellar::{
     utils::{
-        add_operation_to_envelope, convert_xlm_fee_to_token, count_operations_from_xdr,
-        create_fee_payment_operation, estimate_base_fee, estimate_fee, set_time_bounds, FeeQuote,
+        add_operation_to_envelope, convert_xlm_fee_to_token, create_fee_payment_operation,
+        estimate_base_fee, estimate_fee, set_time_bounds, FeeQuote,
     },
     StellarTransactionValidator,
 };
+use crate::domain::xdr_needs_simulation;
 use crate::jobs::JobProducerTrait;
 use crate::models::{
     GaslessTransactionBuildRequest, GaslessTransactionBuildResponse,
@@ -71,34 +72,37 @@ where
         )?;
 
         // Estimate fee from envelope or operations
-        let xlm_fee: u64 = if let Some(ref xdr) = params.transaction_xdr {
+        // For non-Soroban transactions, we'll add 200 stroops (100 for fee payment op + 100 for fee-bump)
+        let inner_tx_fee: u64 = if let Some(ref xdr) = params.transaction_xdr {
             // Parse XDR and use estimate_fee utility which handles simulation if needed
             let envelope = TransactionEnvelope::from_xdr_base64(xdr, Limits::none())
                 .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {}", e)))?;
 
-            // Count operations for override (+1 for fee payment operation)
-            let operations = extract_operations(&envelope).map_err(|e| {
-                RelayerError::Internal(format!("Failed to extract operations: {}", e))
-            })?;
-            let num_operations = operations.len();
-
-            estimate_fee(
-                &envelope,
-                &self.provider,
-                Some(num_operations + 1), // +1 for fee payment operation
-            )
-            .await
-            .map_err(|e| RelayerError::Internal(format!("Failed to estimate fee: {}", e)))?
+            estimate_fee(&envelope, &self.provider, None)
+                .await
+                .map_err(|e| RelayerError::Internal(format!("Failed to estimate fee: {}", e)))?
         } else if let Some(ref operations) = params.operations {
             // For operations-only requests, use base fee estimation
             // (estimate_fee requires an envelope, so we fall back to estimate_base_fee)
             let num_operations = operations.len();
-            estimate_base_fee(num_operations + 1) // +1 for fee payment operation
+            estimate_base_fee(num_operations)
         } else {
             return Err(RelayerError::ValidationError(
                 "Must provide either transaction_xdr or operations in the request".to_string(),
             ));
         };
+
+        // Add fees for fee payment operation (100 stroops) and fee-bump transaction (100 stroops)
+        // For Soroban transactions, the simulation already accounts for resource fees,
+        // we just need to add the inclusion fees for the additional operations
+        let envelope = parse_transaction_xdr(params.transaction_xdr.as_ref().unwrap(), false)
+            .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {}", e)))?;
+        let is_soroban = xdr_needs_simulation(&envelope).unwrap_or(false);
+        let mut additional_fees = 0;
+        if !is_soroban {
+            additional_fees = 2 * STELLAR_DEFAULT_TRANSACTION_FEE as u64; // 200 stroops total
+        }
+        let xlm_fee = inner_tx_fee + additional_fees;
 
         // Convert to token amount via DEX service
         let (fee_quote, _) = convert_xlm_fee_to_token(
@@ -167,11 +171,9 @@ where
         }
 
         // Build envelope from XDR or operations
-        let (envelope, num_operations) = if let Some(ref xdr) = params.transaction_xdr {
-            let envelope = parse_transaction_xdr(xdr, false)
-                .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {}", e)))?;
-            let num_operations = count_operations_from_xdr(xdr)?;
-            (envelope, num_operations)
+        let envelope = if let Some(ref xdr) = params.transaction_xdr {
+            parse_transaction_xdr(xdr, false)
+                .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {}", e)))?
         } else if let Some(ref operations) = params.operations {
             // Build envelope from operations
             let source_account = params.source_account.as_ref().ok_or_else(|| {
@@ -196,12 +198,9 @@ where
             };
 
             // Build unsigned envelope from operations
-            let envelope = stellar_data.build_unsigned_envelope().map_err(|e| {
+            stellar_data.build_unsigned_envelope().map_err(|e| {
                 RelayerError::Internal(format!("Failed to build envelope from operations: {}", e))
-            })?;
-
-            let num_operations = operations.len();
-            (envelope, num_operations)
+            })?
         } else {
             return Err(RelayerError::ValidationError(
                 "Must provide either transaction_xdr or operations in the request".to_string(),
@@ -220,19 +219,26 @@ where
         })?;
 
         // Get fee estimate using estimate_fee utility which handles simulation if needed
-        // Override operations count to include fee payment operation (+1)
-        let xlm_fee = estimate_fee(
-            &envelope,
-            &self.provider,
-            Some(num_operations + 1), // +1 for fee payment operation
-        )
-        .await
-        .map_err(|e| RelayerError::Internal(format!("Failed to estimate fee: {}", e)))?;
+        // For non-Soroban transactions, we'll add 200 stroops (100 for fee payment op + 100 for fee-bump)
+        let inner_tx_fee = estimate_fee(&envelope, &self.provider, None)
+            .await
+            .map_err(|e| RelayerError::Internal(format!("Failed to estimate fee: {}", e)))?;
+
+        // Add fees for fee payment operation (100 stroops) and fee-bump transaction (100 stroops)
+        // For Soroban transactions, the simulation already accounts for resource fees,
+        // we just need to add the inclusion fees for the additional operations
+        let is_soroban = xdr_needs_simulation(&envelope).unwrap_or(false);
+        let mut additional_fees = 0;
+        if !is_soroban {
+            additional_fees = 2 * STELLAR_DEFAULT_TRANSACTION_FEE as u64; // 200 stroops total
+        }
+        let xlm_fee = inner_tx_fee + additional_fees;
 
         debug!(
-            operations_count = num_operations,
-            estimated_fee = xlm_fee,
-            "Fee estimated using estimate_fee utility (simulation handled automatically if needed)"
+            inner_tx_fee = inner_tx_fee,
+            additional_fees = additional_fees,
+            total_fee = xlm_fee,
+            "Fee estimated: inner transaction + fee payment op + fee-bump transaction fee"
         );
 
         // Estimate fee, convert to token, and add payment operation
@@ -262,7 +268,6 @@ where
         })?;
 
         debug!(
-            operations_count = num_operations,
             estimated_fee = xlm_fee,
             final_fee_in_token = fee_quote.fee_in_token_ui,
             "Transaction prepared successfully"

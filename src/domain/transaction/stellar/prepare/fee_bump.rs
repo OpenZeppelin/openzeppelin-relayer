@@ -1,16 +1,28 @@
 //! Fee-bump transaction preparation logic.
 
-use eyre::Result;
-use soroban_rs::xdr::{Limits, ReadXdr, TransactionEnvelope, WriteXdr};
-
+use crate::constants::STELLAR_DEFAULT_TRANSACTION_FEE;
+use crate::domain::{
+    transaction::stellar::{
+        utils::{convert_xlm_fee_to_token, estimate_fee},
+        StellarTransactionValidator,
+    },
+    xdr_needs_simulation,
+};
 use crate::{
-    domain::{attach_signatures_to_envelope, build_fee_bump_envelope, parse_transaction_xdr},
+    domain::{
+        attach_signatures_to_envelope, build_fee_bump_envelope, parse_transaction_xdr,
+        SignTransactionResponse,
+    },
     models::{
-        NetworkTransactionData, RelayerStellarPolicy, StellarFeePaymentStrategy,
+        NetworkTransactionData, RelayerError, RelayerStellarPolicy, StellarFeePaymentStrategy,
         StellarTransactionData, StellarValidationError, TransactionError, TransactionInput,
     },
-    services::{provider::StellarProviderTrait, signer::Signer},
+    services::{
+        provider::StellarProviderTrait, signer::Signer, stellar_dex::StellarDexServiceTrait,
+    },
 };
+use eyre::Result;
+use soroban_rs::xdr::{Limits, TransactionEnvelope, WriteXdr};
 
 use super::common::{calculate_fee_bump_required_fee, create_signing_data};
 
@@ -18,58 +30,189 @@ use super::common::{calculate_fee_bump_required_fee, create_signing_data};
 ///
 /// This function:
 /// 1. Extracts and validates the inner transaction from the signed XDR
-/// 2. Rejects gasless transactions (User fee payment strategy) - these should use unsigned_xdr path
+/// 2. For User fee payment strategy: validates gasless transaction requirements (fee payment operations, etc.)
 /// 3. Simulates the transaction if needed (for Soroban operations)
 /// 4. Calculates the required fee based on simulation results or max_fee
 /// 5. Builds the fee-bump envelope
 /// 6. Signs the fee-bump transaction
 /// 7. Returns the updated stellar data with the signed fee-bump envelope
-pub async fn process_fee_bump<S, P>(
+pub async fn process_fee_bump<S, P, D>(
     relayer_address: &str,
     stellar_data: StellarTransactionData,
     provider: &P,
     signer: &S,
     relayer_policy: Option<&RelayerStellarPolicy>,
+    dex_service: &D,
 ) -> Result<StellarTransactionData, TransactionError>
 where
     S: Signer + Send + Sync,
     P: StellarProviderTrait + Send + Sync,
+    D: StellarDexServiceTrait + Send + Sync,
 {
     // Step 1: Extract and validate the inner transaction
     let (inner_envelope, max_fee) = extract_inner_transaction(&stellar_data)?;
 
-    // Reject gasless transactions (User fee payment strategy) in fee_bump path
-    // Gasless transactions should be processed via unsigned_xdr path only
+    // Step 2: Validate User fee payment strategy transactions (gasless transactions)
+    // When fee payment strategy is User, the transaction must include fee payment operations
+    // and meet gasless transaction requirements since the user signs and submits it
     if let Some(policy) = relayer_policy {
         if matches!(
             policy.fee_payment_strategy,
             Some(StellarFeePaymentStrategy::User)
         ) {
-            return Err(TransactionError::ValidationError(
-                "Gasless transactions (User fee payment strategy) are not supported via fee_bump path. \
-                 Please use unsigned_xdr path for gasless transactions.".to_string(),
-            ));
+            validate_user_fee_payment_transaction(
+                &inner_envelope,
+                relayer_address,
+                policy,
+                provider,
+                dex_service,
+            )
+            .await?;
         }
     }
 
-    // Step 2: Calculate the required fee (may include simulation for Soroban)
+    // Step 3: Calculate the required fee (may include simulation for Soroban)
     let required_fee = calculate_fee_bump_required_fee(&inner_envelope, max_fee, provider).await?;
 
-    // Step 3: Build the fee-bump envelope (relayer pays XLM fee)
+    // Step 4: Build the fee-bump envelope (relayer pays XLM fee)
     let fee_bump_envelope =
         build_fee_bump_envelope(inner_envelope.clone(), relayer_address, required_fee as i64)
             .map_err(|e| {
                 TransactionError::ValidationError(format!("Cannot create fee-bump envelope: {}", e))
             })?;
 
-    // Step 4: Sign the fee-bump transaction
+    // Step 5: Sign the fee-bump transaction
     let signed_stellar_data =
         sign_fee_bump_transaction(stellar_data, fee_bump_envelope, relayer_address, signer).await?;
 
-    // Step 5: Update the fee in stellar data
+    // Step 6: Update the fee in stellar data
     let signed_stellar_data = signed_stellar_data.with_fee(required_fee);
 
     Ok(signed_stellar_data)
+}
+
+/// Validate User fee payment strategy transaction (gasless transaction) for fee_bump flow
+///
+/// This function performs comprehensive validation for gasless transactions:
+/// 1. Validates source account is user's account (not relayer)
+/// 2. Validates transaction structure, operations, and sequence number
+/// 3. Validates fee payment operation exists and is valid
+/// 4. Validates fee payment amount is sufficient by comparing with DEX quote
+///
+/// # Arguments
+/// * `envelope` - The inner transaction envelope to validate
+/// * `relayer_address` - The relayer's Stellar address
+/// * `policy` - The relayer policy containing fee payment strategy
+/// * `provider` - Provider for Stellar RPC operations
+/// * `dex_service` - DEX service for fetching quotes to validate payment amounts
+///
+/// # Returns
+/// Ok(()) if validation passes, TransactionError if validation fails
+async fn validate_user_fee_payment_transaction<P, D>(
+    envelope: &TransactionEnvelope,
+    relayer_address: &str,
+    policy: &RelayerStellarPolicy,
+    provider: &P,
+    dex_service: &D,
+) -> Result<(), TransactionError>
+where
+    P: StellarProviderTrait + Send + Sync,
+    D: StellarDexServiceTrait + Send + Sync,
+{
+    // Comprehensive security validation for gasless transactions
+    // This validates source account (not relayer), operations, sequence number, fee payment
+    StellarTransactionValidator::gasless_transaction_validation(
+        envelope,
+        relayer_address,
+        policy,
+        provider,
+    )
+    .await
+    .map_err(|e| {
+        TransactionError::ValidationError(format!("Gasless transaction validation failed: {}", e))
+    })?;
+
+    // Extract the fee payment for amount validation
+    let payments = StellarTransactionValidator::extract_relayer_payments(envelope, relayer_address)
+        .map_err(|e| {
+            TransactionError::ValidationError(format!("Failed to extract relayer payments: {}", e))
+        })?;
+    if payments.is_empty() {
+        return Err(TransactionError::ValidationError(
+            "Gasless transactions must include a fee payment operation to the relayer".to_string(),
+        ));
+    }
+
+    // Validate only one fee payment operation (build transaction flow doesn't support multiple fee tokens)
+    if payments.len() > 1 {
+        return Err(TransactionError::ValidationError(format!(
+                "Gasless transactions must include exactly one fee payment operation to the relayer, found {}",
+                payments.len()
+            )));
+    }
+    // Extract the single payment (we know it exists and is unique from gasless_transaction_validation)
+    let (asset_id, amount) = &payments[0];
+    // Validate fee payment token
+    StellarTransactionValidator::validate_allowed_token(asset_id, policy)?;
+    // Validate max fee
+    StellarTransactionValidator::validate_token_max_fee(asset_id, *amount, policy)?;
+
+    // Calculate required XLM fee using estimate_fee (handles Soroban transactions correctly)
+    // This will simulate if needed for Soroban operations, otherwise count operations
+    let mut required_xlm_fee =
+        estimate_fee(envelope, provider, None)
+            .await
+            .map_err(|e| match e {
+                RelayerError::ValidationError(msg) => {
+                    TransactionError::ValidationError(format!("Failed to estimate fee: {}", msg))
+                }
+                RelayerError::Internal(msg) => {
+                    TransactionError::ValidationError(format!("Failed to estimate fee: {}", msg))
+                }
+                _ => TransactionError::ValidationError(format!("Failed to estimate fee: {}", e)),
+            })?;
+
+    let is_soroban = xdr_needs_simulation(&envelope).unwrap_or(false);
+    if !is_soroban {
+        // For regular transactions, fee-bump needs base fee (100 stroops)
+        required_xlm_fee = required_xlm_fee + STELLAR_DEFAULT_TRANSACTION_FEE as u64;
+    }
+
+    // Use convert_xlm_fee_to_token to get the required token amount (includes fee margin from policy)
+    // This matches the flow used when building the transaction
+    let (fee_quote, _buffered_xlm_fee) = convert_xlm_fee_to_token(
+        dex_service,
+        policy,
+        required_xlm_fee,
+        asset_id,
+        policy.fee_margin_percentage,
+    )
+    .await
+    .map_err(|e| match e {
+        RelayerError::ValidationError(msg) => TransactionError::ValidationError(format!(
+            "Failed to convert XLM fee to token {}: {}",
+            asset_id, msg
+        )),
+        RelayerError::Internal(msg) => TransactionError::ValidationError(format!(
+            "Failed to convert XLM fee to token {}: {}",
+            asset_id, msg
+        )),
+        _ => TransactionError::ValidationError(format!(
+            "Failed to convert XLM fee to token {}: {}",
+            asset_id, e
+        )),
+    })?;
+
+    // Compare payment amount with required token amount (from convert_xlm_fee_to_token which includes margin)
+    // The payment amount must be at least equal to the required token amount for the fee
+    if *amount < fee_quote.fee_in_token {
+        return Err(TransactionError::ValidationError(format!(
+            "Insufficient fee payment: payment of {} {} is less than required {} {} (for {} stroops XLM fee with margin)",
+            amount, asset_id, fee_quote.fee_in_token, asset_id, required_xlm_fee
+        )));
+    }
+
+    Ok(())
 }
 
 /// Extract and validate the inner transaction from SignedXdr input.
@@ -108,23 +251,22 @@ fn extract_inner_transaction(
 /// Sign the fee-bump transaction and return the final stellar data.
 ///
 /// This function:
-/// - Serializes the fee-bump envelope
+/// - Serializes the fee-bump envelope for signing
 /// - Creates signing data for the fee-bump transaction
 /// - Signs the transaction using the provided signer
-/// - Attaches the signature to the envelope
+/// - Attaches the signature directly to the envelope (mutates in place, avoiding re-parsing)
+/// - Serializes the signed envelope
 /// - Returns the updated stellar data with the signed envelope XDR
 async fn sign_fee_bump_transaction<S>(
     mut stellar_data: StellarTransactionData,
-    fee_bump_envelope: TransactionEnvelope,
+    mut fee_bump_envelope: TransactionEnvelope,
     relayer_address: &str,
     signer: &S,
 ) -> Result<StellarTransactionData, TransactionError>
 where
     S: Signer + Send + Sync,
 {
-    use crate::domain::SignTransactionResponse;
-
-    // Serialize the fee-bump envelope
+    // Serialize the fee-bump envelope for signing
     let fee_bump_xdr = fee_bump_envelope
         .to_xdr_base64(Limits::none())
         .map_err(|e| {
@@ -137,7 +279,7 @@ where
     // Create signing data for the fee-bump transaction
     let signing_data = create_signing_data(
         relayer_address.to_string(),
-        fee_bump_xdr.clone(),
+        fee_bump_xdr,
         stellar_data.network_passphrase.clone(),
     );
 
@@ -155,27 +297,25 @@ where
         }
     };
 
-    // Parse the envelope to attach the signature
-    let mut signed_envelope = TransactionEnvelope::from_xdr_base64(&fee_bump_xdr, Limits::none())
-        .map_err(|e| {
-        TransactionError::SignerError(format!("Failed to parse fee-bump envelope: {}", e))
-    })?;
-
-    // Attach the signature directly to the fee-bump envelope
-    attach_signatures_to_envelope(&mut signed_envelope, vec![signature.clone()]).map_err(|e| {
-        TransactionError::SignerError(format!(
-            "Failed to attach signature to fee-bump envelope: {}",
-            e
-        ))
-    })?;
+    // Attach the signature directly to the fee-bump envelope (mutate in place)
+    attach_signatures_to_envelope(&mut fee_bump_envelope, vec![signature.clone()]).map_err(
+        |e| {
+            TransactionError::SignerError(format!(
+                "Failed to attach signature to fee-bump envelope: {}",
+                e
+            ))
+        },
+    )?;
 
     // Serialize the signed envelope
-    let signed_xdr = signed_envelope.to_xdr_base64(Limits::none()).map_err(|e| {
-        TransactionError::SignerError(format!(
-            "Failed to serialize signed fee-bump envelope: {}",
-            e
-        ))
-    })?;
+    let signed_xdr = fee_bump_envelope
+        .to_xdr_base64(Limits::none())
+        .map_err(|e| {
+            TransactionError::SignerError(format!(
+                "Failed to serialize signed fee-bump envelope: {}",
+                e
+            ))
+        })?;
 
     // Update stellar data
     stellar_data = stellar_data.attach_signature(signature);
@@ -350,8 +490,7 @@ mod signed_xdr_tests {
     use crate::domain::SignTransactionResponse;
     use crate::models::{NetworkTransactionData, RepositoryError, TransactionStatus};
     use soroban_rs::xdr::{
-        Memo, MuxedAccount, Transaction, TransactionEnvelope, TransactionExt,
-        TransactionV1Envelope, Uint256, VecM,
+        Memo, MuxedAccount, ReadXdr, Transaction, TransactionEnvelope, TransactionExt, TransactionV1Envelope, Uint256, VecM
     };
     use stellar_strkey::ed25519::PublicKey;
 
