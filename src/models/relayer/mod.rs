@@ -798,8 +798,8 @@ impl Relayer {
             (RelayerNetworkType::Evm, Some(RelayerNetworkPolicy::Evm(_))) => {
                 // EVM policies don't need special validation currently
             }
-            (RelayerNetworkType::Stellar, Some(RelayerNetworkPolicy::Stellar(_))) => {
-                // Stellar policies don't need special validation currently
+            (RelayerNetworkType::Stellar, Some(RelayerNetworkPolicy::Stellar(policy))) => {
+                self.validate_stellar_policy(policy)?;
             }
             // Mismatched network type and policy type
             (network_type, Some(policy)) => {
@@ -976,6 +976,155 @@ impl Relayer {
                 }
                 _ => {}
             }
+        }
+
+        Ok(())
+    }
+
+    /// Validates Stellar-specific policies
+    fn validate_stellar_policy(
+        &self,
+        policy: &RelayerStellarPolicy,
+    ) -> Result<(), RelayerValidationError> {
+        // Validate fee margin percentage
+        if let Some(fee_margin) = policy.fee_margin_percentage {
+            if fee_margin < 0.0 {
+                return Err(RelayerValidationError::InvalidPolicy(
+                    "Negative fee margin percentage values are not accepted".into(),
+                ));
+            }
+        }
+
+        // Validate slippage percentage
+        if let Some(slippage) = policy.slippage_percentage {
+            if !(0.0..=100.0).contains(&slippage) {
+                return Err(RelayerValidationError::InvalidPolicy(
+                    "Slippage percentage must be between 0 and 100".into(),
+                ));
+            }
+        }
+
+        // Validate allowed tokens asset identifiers
+        if let Some(tokens) = &policy.allowed_tokens {
+            for token in tokens {
+                self.validate_stellar_asset_identifier(&token.asset)?;
+            }
+        }
+
+        // Validate swap configuration
+        if let Some(swap_config) = &policy.swap_config {
+            self.validate_stellar_swap_config(swap_config, policy)?;
+        }
+
+        Ok(())
+    }
+
+    /// Validates Stellar asset identifier format
+    ///
+    /// Valid formats:
+    /// - "native" or "XLM" for native XLM
+    /// - "CODE:ISSUER" for classic assets (e.g., "USDC:GA5Z...")
+    /// - Contract address (StrKey format starting with 'C')
+    fn validate_stellar_asset_identifier(&self, asset: &str) -> Result<(), RelayerValidationError> {
+        // Native XLM is always valid
+        if asset == "native" || asset == "XLM" || asset.is_empty() {
+            return Ok(());
+        }
+
+        // Check if it's a contract address (StrKey format starting with 'C')
+        if asset.starts_with('C') && asset.len() == 56 {
+            return Err(RelayerValidationError::InvalidPolicy(
+                "Contract addresses are not supported. Soroban will be supported soon.".into(),
+            ));
+            // // Basic validation - contract addresses are 56 characters starting with 'C'
+            // // Full validation would require StrKey decoding, but this catches most invalid formats
+            // return Ok(());
+        }
+
+        // Check if it's a classic asset format "CODE:ISSUER"
+        if let Some(colon_pos) = asset.find(':') {
+            let code = &asset[..colon_pos];
+            let issuer = &asset[colon_pos + 1..];
+
+            // Validate code (1-12 characters, alphanumeric)
+            if code.is_empty() || code.len() > 12 {
+                return Err(RelayerValidationError::InvalidPolicy(
+                    "Asset code must be between 1 and 12 characters".into(),
+                ));
+            }
+
+            if !code.chars().all(|c| c.is_alphanumeric()) {
+                return Err(RelayerValidationError::InvalidPolicy(
+                    "Asset code must contain only alphanumeric characters".into(),
+                ));
+            }
+
+            // Validate issuer (Stellar address format: 56 characters starting with 'G')
+            if issuer.len() != 56 {
+                return Err(RelayerValidationError::InvalidPolicy(
+                    "Issuer address must be 56 characters long".into(),
+                ));
+            }
+
+            if !issuer.starts_with('G') {
+                return Err(RelayerValidationError::InvalidPolicy(
+                    "Issuer address must start with 'G'".into(),
+                ));
+            }
+
+            // Basic format check for Stellar address (base32-like characters)
+            let stellar_address_regex = Regex::new(r"^G[0-9A-Z]{55}$").map_err(|e| {
+                RelayerValidationError::InvalidPolicy(format!("Regex compilation error: {}", e))
+            })?;
+
+            if !stellar_address_regex.is_match(issuer) {
+                return Err(RelayerValidationError::InvalidPolicy(
+                    "Issuer address must be a valid Stellar address".into(),
+                ));
+            }
+
+            return Ok(());
+        }
+
+        // If none of the formats match, it's invalid
+        Err(RelayerValidationError::InvalidPolicy(
+            "Asset identifier must be 'native', 'XLM', 'CODE:ISSUER', or a contract address".into(),
+        ))
+    }
+
+    /// Validates Stellar swap configuration
+    fn validate_stellar_swap_config(
+        &self,
+        swap_config: &RelayerStellarSwapConfig,
+        policy: &RelayerStellarPolicy,
+    ) -> Result<(), RelayerValidationError> {
+        // Swap config only supported for user fee payment strategy
+        if let Some(fee_payment_strategy) = &policy.fee_payment_strategy {
+            if *fee_payment_strategy == StellarFeePaymentStrategy::Relayer {
+                return Err(RelayerValidationError::InvalidPolicy(
+                    "Swap config only supported for user fee payment strategy".into(),
+                ));
+            }
+        }
+
+        // Validate cron schedule
+        if let Some(cron_schedule) = &swap_config.cron_schedule {
+            if cron_schedule.is_empty() {
+                return Err(RelayerValidationError::InvalidPolicy(
+                    "Empty cron schedule is not accepted".into(),
+                ));
+            }
+
+            Schedule::from_str(cron_schedule).map_err(|_| {
+                RelayerValidationError::InvalidPolicy("Invalid cron schedule format".into())
+            })?;
+        }
+
+        // Validate strategies are not empty if swap_config is present
+        if swap_config.strategies.is_empty() {
+            return Err(RelayerValidationError::InvalidPolicy(
+                "Swap config must include at least one strategy".into(),
+            ));
         }
 
         Ok(())
