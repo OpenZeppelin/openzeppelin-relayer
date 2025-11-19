@@ -6,11 +6,229 @@ use crate::domain::relayer::xdr_utils::{extract_operations, xdr_needs_simulation
 use crate::models::{AssetSpec, OperationSpec, RelayerError, RelayerStellarPolicy};
 use crate::services::provider::StellarProviderTrait;
 use crate::services::stellar_dex::StellarDexServiceTrait;
+use base64::{engine::general_purpose, Engine};
 use chrono::{DateTime, Utc};
+use serde::Serialize;
 use soroban_rs::xdr::{
-    Limits, Operation, Preconditions, ReadXdr, TimeBounds, TimePoint, TransactionEnvelope, VecM,
+    AccountId, ContractDataEntry, ContractId, Hash, LedgerEntryData, LedgerKey,
+    LedgerKeyContractData, Limits, Operation, Preconditions, PublicKey as XdrPublicKey, ReadXdr,
+    ScAddress, ScSymbol, ScVal, TimeBounds, TimePoint, TransactionEnvelope, Uint256, VecM,
 };
-use tracing::{debug, info};
+use std::str::FromStr;
+use stellar_strkey::ed25519::PublicKey;
+use thiserror::Error;
+use tracing::{debug, warn};
+
+// ============================================================================
+// Error Types
+// ============================================================================
+
+/// Errors that can occur during Stellar transaction utility operations.
+///
+/// This error type is specific to Stellar transaction utilities and provides
+/// detailed error information. It can be converted to `RelayerError` using
+/// the `From` trait implementation.
+#[derive(Error, Debug, Serialize)]
+pub enum StellarTransactionUtilsError {
+    #[error("Sequence overflow: {0}")]
+    SequenceOverflow(String),
+
+    #[error("Failed to parse XDR: {0}")]
+    XdrParseFailed(String),
+
+    #[error("Failed to extract operations: {0}")]
+    OperationExtractionFailed(String),
+
+    #[error("Failed to check if simulation is needed: {0}")]
+    SimulationCheckFailed(String),
+
+    #[error("Failed to simulate transaction: {0}")]
+    SimulationFailed(String),
+
+    #[error("Transaction simulation returned no results")]
+    SimulationNoResults,
+
+    #[error("Failed to get DEX quote: {0}")]
+    DexQuoteFailed(String),
+
+    #[error("Invalid asset identifier format: {0}")]
+    InvalidAssetFormat(String),
+
+    #[error("Asset code too long (max {0} characters): {1}")]
+    AssetCodeTooLong(usize, String),
+
+    #[error("Too many operations (max {0})")]
+    TooManyOperations(usize),
+
+    #[error("Cannot add operations to fee-bump transactions")]
+    CannotModifyFeeBump,
+
+    #[error("Cannot set time bounds on fee-bump transactions")]
+    CannotSetTimeBoundsOnFeeBump,
+
+    #[error("Invalid transaction format: {0}")]
+    InvalidTransactionFormat(String),
+
+    #[error("Invalid account address '{0}': {1}")]
+    InvalidAccountAddress(String, String),
+
+    #[error("Invalid contract address '{0}': {1}")]
+    InvalidContractAddress(String, String),
+
+    #[error("Failed to create {0} symbol: {1:?}")]
+    SymbolCreationFailed(String, String),
+
+    #[error("Failed to create {0} key vector: {1:?}")]
+    KeyVectorCreationFailed(String, String),
+
+    #[error("Failed to query contract data (Persistent) for {0}: {1}")]
+    ContractDataQueryPersistentFailed(String, String),
+
+    #[error("Failed to query contract data (Temporary) for {0}: {1}")]
+    ContractDataQueryTemporaryFailed(String, String),
+
+    #[error("Failed to parse ledger entry XDR for {0}: {1}")]
+    LedgerEntryParseFailed(String, String),
+
+    #[error("No entries found for {0}")]
+    NoEntriesFound(String),
+
+    #[error("Empty entries for {0}")]
+    EmptyEntries(String),
+
+    #[error("Unexpected ledger entry type for {0} (expected ContractData)")]
+    UnexpectedLedgerEntryType(String),
+
+    // Token-specific errors
+    #[error("Asset code cannot be empty in asset identifier: {0}")]
+    EmptyAssetCode(String),
+
+    #[error("Issuer address cannot be empty in asset identifier: {0}")]
+    EmptyIssuerAddress(String),
+
+    #[error("Invalid issuer address length (expected {0} characters): {1}")]
+    InvalidIssuerLength(usize, String),
+
+    #[error("Invalid issuer address format (must start with '{0}'): {1}")]
+    InvalidIssuerPrefix(char, String),
+
+    #[error("Failed to fetch account for balance: {0}")]
+    AccountFetchFailed(String),
+
+    #[error("Failed to query trustline for asset {0}: {1}")]
+    TrustlineQueryFailed(String, String),
+
+    #[error("No trustline found for asset {0} on account {1}")]
+    NoTrustlineFound(String, String),
+
+    #[error("Unsupported trustline entry version")]
+    UnsupportedTrustlineVersion,
+
+    #[error("Unexpected ledger entry type for trustline query")]
+    UnexpectedTrustlineEntryType,
+
+    #[error("Balance too large (i128 hi={0}, lo={1}) to fit in u64")]
+    BalanceTooLarge(i64, u64),
+
+    #[error("Negative balance not allowed: i128 lo={0}")]
+    NegativeBalanceI128(u64),
+
+    #[error("Negative balance not allowed: i64={0}")]
+    NegativeBalanceI64(i64),
+
+    #[error("Unexpected balance value type in contract data: {0:?}. Expected I128, U64, or I64")]
+    UnexpectedBalanceType(String),
+
+    #[error("Unexpected ledger entry type for contract data query")]
+    UnexpectedContractDataEntryType,
+
+    #[error("Native asset should be handled before trustline query")]
+    NativeAssetInTrustlineQuery,
+
+    #[error("Failed to invoke contract function '{0}': {1}")]
+    ContractInvocationFailed(String, String),
+}
+
+impl From<StellarTransactionUtilsError> for RelayerError {
+    fn from(error: StellarTransactionUtilsError) -> Self {
+        match &error {
+            StellarTransactionUtilsError::SequenceOverflow(msg)
+            | StellarTransactionUtilsError::SimulationCheckFailed(msg)
+            | StellarTransactionUtilsError::SimulationFailed(msg)
+            | StellarTransactionUtilsError::XdrParseFailed(msg)
+            | StellarTransactionUtilsError::OperationExtractionFailed(msg)
+            | StellarTransactionUtilsError::DexQuoteFailed(msg) => {
+                RelayerError::Internal(msg.clone())
+            }
+            StellarTransactionUtilsError::SimulationNoResults => RelayerError::Internal(
+                "Transaction simulation failed: no results returned".to_string(),
+            ),
+            StellarTransactionUtilsError::InvalidAssetFormat(msg)
+            | StellarTransactionUtilsError::InvalidTransactionFormat(msg) => {
+                RelayerError::ValidationError(msg.clone())
+            }
+            StellarTransactionUtilsError::AssetCodeTooLong(max_len, code) => {
+                RelayerError::ValidationError(format!(
+                    "Asset code too long (max {} characters): {}",
+                    max_len, code
+                ))
+            }
+            StellarTransactionUtilsError::TooManyOperations(max) => {
+                RelayerError::ValidationError(format!("Too many operations (max {})", max))
+            }
+            StellarTransactionUtilsError::CannotModifyFeeBump => RelayerError::ValidationError(
+                "Cannot add operations to fee-bump transactions".to_string(),
+            ),
+            StellarTransactionUtilsError::CannotSetTimeBoundsOnFeeBump => {
+                RelayerError::ValidationError(
+                    "Cannot set time bounds on fee-bump transactions".to_string(),
+                )
+            }
+            StellarTransactionUtilsError::InvalidAccountAddress(_, msg)
+            | StellarTransactionUtilsError::InvalidContractAddress(_, msg)
+            | StellarTransactionUtilsError::SymbolCreationFailed(_, msg)
+            | StellarTransactionUtilsError::KeyVectorCreationFailed(_, msg)
+            | StellarTransactionUtilsError::ContractDataQueryPersistentFailed(_, msg)
+            | StellarTransactionUtilsError::ContractDataQueryTemporaryFailed(_, msg)
+            | StellarTransactionUtilsError::LedgerEntryParseFailed(_, msg) => {
+                RelayerError::Internal(msg.clone())
+            }
+            StellarTransactionUtilsError::NoEntriesFound(_)
+            | StellarTransactionUtilsError::EmptyEntries(_)
+            | StellarTransactionUtilsError::UnexpectedLedgerEntryType(_)
+            | StellarTransactionUtilsError::EmptyAssetCode(_)
+            | StellarTransactionUtilsError::EmptyIssuerAddress(_)
+            | StellarTransactionUtilsError::NoTrustlineFound(_, _)
+            | StellarTransactionUtilsError::UnsupportedTrustlineVersion
+            | StellarTransactionUtilsError::UnexpectedTrustlineEntryType
+            | StellarTransactionUtilsError::BalanceTooLarge(_, _)
+            | StellarTransactionUtilsError::NegativeBalanceI128(_)
+            | StellarTransactionUtilsError::NegativeBalanceI64(_)
+            | StellarTransactionUtilsError::UnexpectedBalanceType(_)
+            | StellarTransactionUtilsError::UnexpectedContractDataEntryType
+            | StellarTransactionUtilsError::NativeAssetInTrustlineQuery => {
+                RelayerError::ValidationError(error.to_string())
+            }
+            StellarTransactionUtilsError::InvalidIssuerLength(expected, actual) => {
+                RelayerError::ValidationError(format!(
+                    "Invalid issuer address length (expected {} characters): {}",
+                    expected, actual
+                ))
+            }
+            StellarTransactionUtilsError::InvalidIssuerPrefix(prefix, addr) => {
+                RelayerError::ValidationError(format!(
+                    "Invalid issuer address format (must start with '{}'): {}",
+                    prefix, addr
+                ))
+            }
+            StellarTransactionUtilsError::AccountFetchFailed(msg)
+            | StellarTransactionUtilsError::TrustlineQueryFailed(_, msg)
+            | StellarTransactionUtilsError::ContractInvocationFailed(_, msg) => {
+                RelayerError::ProviderError(msg.clone())
+            }
+        }
+    }
+}
 
 /// Returns true if any operation needs simulation (contract invocation, creation, or wasm upload).
 pub fn needs_simulation(operations: &[OperationSpec]) -> bool {
@@ -55,7 +273,7 @@ pub async fn fetch_next_sequence_from_chain<P>(
 where
     P: StellarProviderTrait,
 {
-    info!(
+    debug!(
         "Fetching sequence from chain for address: {}",
         relayer_address
     );
@@ -64,13 +282,13 @@ where
     let account = provider
         .get_account(relayer_address)
         .await
-        .map_err(|e| format!("Failed to fetch account from chain: {}", e))?;
+        .map_err(|e| format!("Failed to fetch account from chain: {e}"))?;
 
     let on_chain_seq = account.seq_num.0; // Extract the i64 value
     let next_usable = next_sequence_u64(on_chain_seq)
-        .map_err(|e| format!("Failed to calculate next sequence: {}", e))?;
+        .map_err(|e| format!("Failed to calculate next sequence: {e}"))?;
 
-    info!(
+    debug!(
         "Fetched sequence from chain: on-chain={}, next usable={}",
         on_chain_seq, next_usable
     );
@@ -137,40 +355,347 @@ pub fn create_transaction_signature_payload(
 }
 
 // ============================================================================
+// Account and Contract Address Utilities
+// ============================================================================
+
+/// Parse a Stellar account address string into an AccountId XDR type.
+///
+/// # Arguments
+///
+/// * `account_id` - Stellar account address (must be valid PublicKey)
+///
+/// # Returns
+///
+/// AccountId XDR type or error if address is invalid
+pub fn parse_account_id(account_id: &str) -> Result<AccountId, StellarTransactionUtilsError> {
+    let account_pk = PublicKey::from_str(account_id).map_err(|e| {
+        StellarTransactionUtilsError::InvalidAccountAddress(account_id.to_string(), e.to_string())
+    })?;
+    let account_uint256 = Uint256(account_pk.0);
+    let account_xdr_pk = XdrPublicKey::PublicKeyTypeEd25519(account_uint256);
+    Ok(AccountId(account_xdr_pk))
+}
+
+/// Parse a contract address string into a ContractId and extract the hash.
+///
+/// # Arguments
+///
+/// * `contract_address` - Contract address in StrKey format
+///
+/// # Returns
+///
+/// Contract hash (Hash) or error if address is invalid
+pub fn parse_contract_address(
+    contract_address: &str,
+) -> Result<Hash, StellarTransactionUtilsError> {
+    let contract_id = ContractId::from_str(contract_address).map_err(|e| {
+        StellarTransactionUtilsError::InvalidContractAddress(
+            contract_address.to_string(),
+            e.to_string(),
+        )
+    })?;
+    Ok(contract_id.0)
+}
+
+// ============================================================================
+// Contract Data Utilities
+// ============================================================================
+
+/// Create an ScVal key for contract data queries.
+///
+/// Creates a ScVal::Vec containing a symbol and optional address.
+/// Used for SEP-41 token interface keys like "Balance" and "Decimals".
+///
+/// # Arguments
+///
+/// * `symbol` - Symbol name (e.g., "Balance", "Decimals")
+/// * `address` - Optional ScAddress to include in the key
+///
+/// # Returns
+///
+/// ScVal::Vec key or error if creation fails
+pub fn create_contract_data_key(
+    symbol: &str,
+    address: Option<ScAddress>,
+) -> Result<ScVal, StellarTransactionUtilsError> {
+    if address.is_none() {
+        let sym = ScSymbol::try_from(symbol).map_err(|e| {
+            StellarTransactionUtilsError::SymbolCreationFailed(
+                symbol.to_string(),
+                format!("{:?}", e),
+            )
+        })?;
+        return Ok(ScVal::Symbol(sym));
+    }
+
+    let mut key_items: Vec<ScVal> =
+        vec![ScVal::Symbol(ScSymbol::try_from(symbol).map_err(|e| {
+            StellarTransactionUtilsError::SymbolCreationFailed(
+                symbol.to_string(),
+                format!("{:?}", e),
+            )
+        })?)];
+
+    if let Some(addr) = address {
+        key_items.push(ScVal::Address(addr));
+    }
+
+    let key_vec: VecM<ScVal, { u32::MAX }> = VecM::try_from(key_items).map_err(|e| {
+        StellarTransactionUtilsError::KeyVectorCreationFailed(
+            symbol.to_string(),
+            format!("{:?}", e),
+        )
+    })?;
+
+    Ok(ScVal::Vec(Some(soroban_rs::xdr::ScVec(key_vec))))
+}
+
+/// Query contract data with Persistent/Temporary durability fallback.
+///
+/// Queries contract data storage, trying Persistent durability first,
+/// then falling back to Temporary if not found. This handles both
+/// production tokens (Persistent) and test tokens (Temporary).
+///
+/// # Arguments
+///
+/// * `provider` - Stellar provider for querying ledger entries
+/// * `contract_hash` - Contract hash (Hash)
+/// * `key` - ScVal key to query
+/// * `error_context` - Context string for error messages
+///
+/// # Returns
+///
+/// GetLedgerEntriesResponse or error if query fails
+pub async fn query_contract_data_with_fallback<P>(
+    provider: &P,
+    contract_hash: Hash,
+    key: ScVal,
+    error_context: &str,
+) -> Result<soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse, StellarTransactionUtilsError>
+where
+    P: StellarProviderTrait + Send + Sync,
+{
+    let contract_address_sc =
+        soroban_rs::xdr::ScAddress::Contract(soroban_rs::xdr::ContractId(contract_hash));
+
+    let mut ledger_key = LedgerKey::ContractData(LedgerKeyContractData {
+        contract: contract_address_sc.clone(),
+        key: key.clone(),
+        durability: soroban_rs::xdr::ContractDataDurability::Persistent,
+    });
+
+    // Query ledger entry with Persistent durability
+    let mut ledger_entries = provider
+        .get_ledger_entries(&[ledger_key.clone()])
+        .await
+        .map_err(|e| {
+            StellarTransactionUtilsError::ContractDataQueryPersistentFailed(
+                error_context.to_string(),
+                e.to_string(),
+            )
+        })?;
+
+    // If not found, try Temporary durability
+    if ledger_entries
+        .entries
+        .as_ref()
+        .map(|e| e.is_empty())
+        .unwrap_or(true)
+    {
+        ledger_key = LedgerKey::ContractData(LedgerKeyContractData {
+            contract: contract_address_sc,
+            key,
+            durability: soroban_rs::xdr::ContractDataDurability::Temporary,
+        });
+        ledger_entries = provider
+            .get_ledger_entries(&[ledger_key])
+            .await
+            .map_err(|e| {
+                StellarTransactionUtilsError::ContractDataQueryTemporaryFailed(
+                    error_context.to_string(),
+                    e.to_string(),
+                )
+            })?;
+    }
+
+    Ok(ledger_entries)
+}
+
+/// Parse a ledger entry from base64 XDR string.
+///
+/// Handles both LedgerEntry and LedgerEntryChange formats. If the XDR is a
+/// LedgerEntryChange, extracts the LedgerEntry from it.
+///
+/// # Arguments
+///
+/// * `xdr_string` - Base64-encoded XDR string
+/// * `context` - Context string for error messages
+///
+/// # Returns
+///
+/// Parsed LedgerEntry or error if parsing fails
+pub fn parse_ledger_entry_from_xdr(
+    xdr_string: &str,
+    context: &str,
+) -> Result<LedgerEntryData, StellarTransactionUtilsError> {
+    let trimmed_xdr = xdr_string.trim();
+
+    // Ensure valid base64
+    if general_purpose::STANDARD.decode(trimmed_xdr).is_err() {
+        return Err(StellarTransactionUtilsError::LedgerEntryParseFailed(
+            context.to_string(),
+            "Invalid base64".to_string(),
+        ));
+    }
+
+    // Parse as LedgerEntryData (what Soroban RPC actually returns)
+    match LedgerEntryData::from_xdr_base64(trimmed_xdr, Limits::none()) {
+        Ok(data) => Ok(data),
+        Err(e) => Err(StellarTransactionUtilsError::LedgerEntryParseFailed(
+            context.to_string(),
+            format!("Failed to parse LedgerEntryData: {}", e),
+        )),
+    }
+}
+
+/// Extract ScVal from contract data entry.
+///
+/// Parses the first entry from GetLedgerEntriesResponse and extracts
+/// the ScVal from ContractDataEntry.
+///
+/// # Arguments
+///
+/// * `ledger_entries` - Response from get_ledger_entries
+/// * `context` - Context string for error messages and logging
+///
+/// # Returns
+///
+/// ScVal from contract data or error if extraction fails
+pub fn extract_scval_from_contract_data(
+    ledger_entries: &soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse,
+    context: &str,
+) -> Result<ScVal, StellarTransactionUtilsError> {
+    let entries = ledger_entries
+        .entries
+        .as_ref()
+        .ok_or_else(|| StellarTransactionUtilsError::NoEntriesFound(context.into()))?;
+
+    if entries.is_empty() {
+        return Err(StellarTransactionUtilsError::EmptyEntries(context.into()));
+    }
+
+    let entry_xdr = &entries[0].xdr;
+    let entry = parse_ledger_entry_from_xdr(entry_xdr, context)?;
+
+    match entry {
+        LedgerEntryData::ContractData(ContractDataEntry { val, .. }) => Ok(val.clone()),
+
+        _ => Err(StellarTransactionUtilsError::UnexpectedLedgerEntryType(
+            context.into(),
+        )),
+    }
+}
+
+/// Extract a u32 value from an ScVal.
+///
+/// Handles multiple ScVal types that can represent numeric values.
+///
+/// # Arguments
+///
+/// * `val` - ScVal to extract from
+/// * `context` - Context string (for logging)
+///
+/// # Returns
+///
+/// Some(u32) if extraction succeeds, None otherwise
+pub fn extract_u32_from_scval(val: &ScVal, context: &str) -> Option<u32> {
+    let result = match val {
+        ScVal::U32(n) => Ok(*n),
+        ScVal::I32(n) => (*n).try_into().map_err(|_| "Negative I32"),
+        ScVal::U64(n) => (*n).try_into().map_err(|_| "U64 overflow"),
+        ScVal::I64(n) => (*n).try_into().map_err(|_| "I64 overflow/negative"),
+        ScVal::U128(n) => {
+            if n.hi == 0 {
+                n.lo.try_into().map_err(|_| "U128 lo overflow")
+            } else {
+                Err("U128 hi set")
+            }
+        }
+        ScVal::I128(n) => {
+            if n.hi == 0 {
+                n.lo.try_into().map_err(|_| "I128 lo overflow")
+            } else {
+                Err("I128 hi set/negative")
+            }
+        }
+        _ => Err("Unsupported ScVal type"),
+    };
+
+    match result {
+        Ok(v) => Some(v),
+        Err(msg) => {
+            warn!(context = %context, val = ?val, "Failed to extract u32: {}", msg);
+            None
+        }
+    }
+}
+
+// ============================================================================
 // Gas Abstraction Utility Functions
 // ============================================================================
 
 /// Convert raw token amount to UI amount based on decimals
+///
+/// Uses pure integer arithmetic to avoid floating-point precision errors.
+/// This is safer for financial calculations where precision is critical.
 pub fn amount_to_ui_amount(amount: u64, decimals: u8) -> String {
-    let divisor = 10_f64.powi(decimals as i32);
-    let ui_amount = amount as f64 / divisor;
+    if decimals == 0 {
+        return amount.to_string();
+    }
 
-    // Format to avoid scientific notation and unnecessary decimals
-    if ui_amount.fract() == 0.0 {
-        format!("{:.0}", ui_amount)
+    let amount_str = amount.to_string();
+    let len = amount_str.len();
+    let decimals_usize = decimals as usize;
+
+    let combined = if len > decimals_usize {
+        let split_idx = len - decimals_usize;
+        let whole = &amount_str[..split_idx];
+        let frac = &amount_str[split_idx..];
+        format!("{}.{}", whole, frac)
     } else {
-        // Find the number of significant decimal places
-        let mut formatted = format!("{:.7}", ui_amount);
-        // Trim trailing zeros
-        while formatted.ends_with('0') {
-            formatted.pop();
-        }
-        if formatted.ends_with('.') {
-            formatted.pop();
-        }
-        formatted
+        // Need to pad with leading zeros
+        let zeros = "0".repeat(decimals_usize - len);
+        format!("0.{}{}", zeros, amount_str)
+    };
+
+    // Trim trailing zeros
+    let mut trimmed = combined.trim_end_matches('0').to_string();
+    if trimmed.ends_with('.') {
+        trimmed.pop();
+    }
+
+    // If we stripped everything (e.g. amount 0), return "0"
+    if trimmed.is_empty() {
+        "0".to_string()
+    } else {
+        trimmed
     }
 }
 
 /// Count operations in a transaction envelope from XDR base64 string
 ///
 /// Parses the XDR string, extracts operations, and returns the count.
-pub fn count_operations_from_xdr(xdr: &str) -> Result<usize, RelayerError> {
-    let envelope = TransactionEnvelope::from_xdr_base64(xdr, Limits::none())
-        .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {}", e)))?;
+pub fn count_operations_from_xdr(xdr: &str) -> Result<usize, StellarTransactionUtilsError> {
+    let envelope = TransactionEnvelope::from_xdr_base64(xdr, Limits::none()).map_err(|e| {
+        StellarTransactionUtilsError::XdrParseFailed(format!("Failed to parse XDR: {}", e))
+    })?;
 
-    let operations = extract_operations(&envelope)
-        .map_err(|e| RelayerError::Internal(format!("Failed to extract operations: {}", e)))?;
+    let operations = extract_operations(&envelope).map_err(|e| {
+        StellarTransactionUtilsError::OperationExtractionFailed(format!(
+            "Failed to extract operations: {}",
+            e
+        ))
+    })?;
 
     Ok(operations.len())
 }
@@ -180,14 +705,20 @@ pub fn count_operations_from_xdr(xdr: &str) -> Result<usize, RelayerError> {
 /// Supports both XDR (base64 string) and operations array formats
 pub fn parse_transaction_and_count_operations(
     transaction_json: &serde_json::Value,
-) -> Result<usize, RelayerError> {
+) -> Result<usize, StellarTransactionUtilsError> {
     // Try to parse as XDR string first
     if let Some(xdr_str) = transaction_json.as_str() {
-        let envelope = TransactionEnvelope::from_xdr_base64(xdr_str, Limits::none())
-            .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {}", e)))?;
+        let envelope =
+            TransactionEnvelope::from_xdr_base64(xdr_str, Limits::none()).map_err(|e| {
+                StellarTransactionUtilsError::XdrParseFailed(format!("Failed to parse XDR: {}", e))
+            })?;
 
-        let operations = extract_operations(&envelope)
-            .map_err(|e| RelayerError::Internal(format!("Failed to extract operations: {}", e)))?;
+        let operations = extract_operations(&envelope).map_err(|e| {
+            StellarTransactionUtilsError::OperationExtractionFailed(format!(
+                "Failed to extract operations: {}",
+                e
+            ))
+        })?;
 
         return Ok(operations.len());
     }
@@ -205,18 +736,26 @@ pub fn parse_transaction_and_count_operations(
             }
         }
         if let Some(xdr_str) = obj.get("transaction_xdr").and_then(|v| v.as_str()) {
-            let envelope = TransactionEnvelope::from_xdr_base64(xdr_str, Limits::none())
-                .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {}", e)))?;
+            let envelope =
+                TransactionEnvelope::from_xdr_base64(xdr_str, Limits::none()).map_err(|e| {
+                    StellarTransactionUtilsError::XdrParseFailed(format!(
+                        "Failed to parse XDR: {}",
+                        e
+                    ))
+                })?;
 
             let operations = extract_operations(&envelope).map_err(|e| {
-                RelayerError::Internal(format!("Failed to extract operations: {}", e))
+                StellarTransactionUtilsError::OperationExtractionFailed(format!(
+                    "Failed to extract operations: {}",
+                    e
+                ))
             })?;
 
             return Ok(operations.len());
         }
     }
 
-    Err(RelayerError::Internal(
+    Err(StellarTransactionUtilsError::InvalidTransactionFormat(
         "Transaction must be either XDR string or operations array".to_string(),
     ))
 }
@@ -255,13 +794,16 @@ pub async fn estimate_fee<P>(
     envelope: &TransactionEnvelope,
     provider: &P,
     operations_override: Option<usize>,
-) -> Result<u64, RelayerError>
+) -> Result<u64, StellarTransactionUtilsError>
 where
     P: StellarProviderTrait + Send + Sync,
 {
     // Check if simulation is needed
     let needs_sim = xdr_needs_simulation(envelope).map_err(|e| {
-        RelayerError::Internal(format!("Failed to check if simulation is needed: {}", e))
+        StellarTransactionUtilsError::SimulationCheckFailed(format!(
+            "Failed to check if simulation is needed: {}",
+            e
+        ))
     })?;
 
     if needs_sim {
@@ -272,14 +814,15 @@ where
             .simulate_transaction_envelope(envelope)
             .await
             .map_err(|e| {
-                RelayerError::Internal(format!("Failed to simulate transaction: {}", e))
+                StellarTransactionUtilsError::SimulationFailed(format!(
+                    "Failed to simulate transaction: {}",
+                    e
+                ))
             })?;
 
         // Check simulation success
         if simulation_result.results.is_empty() {
-            return Err(RelayerError::Internal(
-                "Transaction simulation failed: no results returned".to_string(),
-            ));
+            return Err(StellarTransactionUtilsError::SimulationNoResults);
         }
 
         // Use min_resource_fee from simulation (this includes all fees for Soroban operations)
@@ -296,7 +839,10 @@ where
             override_count
         } else {
             let operations = extract_operations(envelope).map_err(|e| {
-                RelayerError::Internal(format!("Failed to extract operations: {}", e))
+                StellarTransactionUtilsError::OperationExtractionFailed(format!(
+                    "Failed to extract operations: {}",
+                    e
+                ))
             })?;
             operations.len()
         };
@@ -333,7 +879,7 @@ pub async fn convert_xlm_fee_to_token<D>(
     xlm_fee: u64,
     fee_token: &str,
     fee_margin_percentage: Option<f32>,
-) -> Result<(FeeQuote, u64), RelayerError>
+) -> Result<(FeeQuote, u64), StellarTransactionUtilsError>
 where
     D: StellarDexServiceTrait + Send + Sync,
 {
@@ -384,7 +930,9 @@ where
     let quote = dex_service
         .get_xlm_to_token_quote(fee_token, buffered_xlm_fee, slippage, token_decimals)
         .await
-        .map_err(|e| RelayerError::Internal(format!("Failed to get quote: {}", e)))?;
+        .map_err(|e| {
+            StellarTransactionUtilsError::DexQuoteFailed(format!("Failed to get quote: {}", e))
+        })?;
 
     debug!(
         "Quote from DEX: input={} stroops XLM, output={} stroops token, input_asset={}, output_asset={}",
@@ -420,22 +968,24 @@ where
 /// Parse transaction envelope from JSON value
 pub fn parse_transaction_envelope(
     transaction_json: &serde_json::Value,
-) -> Result<TransactionEnvelope, RelayerError> {
+) -> Result<TransactionEnvelope, StellarTransactionUtilsError> {
     // Try to parse as XDR string first
     if let Some(xdr_str) = transaction_json.as_str() {
-        return TransactionEnvelope::from_xdr_base64(xdr_str, Limits::none())
-            .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {}", e)));
+        return TransactionEnvelope::from_xdr_base64(xdr_str, Limits::none()).map_err(|e| {
+            StellarTransactionUtilsError::XdrParseFailed(format!("Failed to parse XDR: {}", e))
+        });
     }
 
     // Try to parse as object with transaction_xdr field
     if let Some(obj) = transaction_json.as_object() {
         if let Some(xdr_str) = obj.get("transaction_xdr").and_then(|v| v.as_str()) {
-            return TransactionEnvelope::from_xdr_base64(xdr_str, Limits::none())
-                .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {}", e)));
+            return TransactionEnvelope::from_xdr_base64(xdr_str, Limits::none()).map_err(|e| {
+                StellarTransactionUtilsError::XdrParseFailed(format!("Failed to parse XDR: {}", e))
+            });
         }
     }
 
-    Err(RelayerError::Internal(
+    Err(StellarTransactionUtilsError::InvalidTransactionFormat(
         "Transaction must be XDR string or object with transaction_xdr field".to_string(),
     ))
 }
@@ -445,7 +995,7 @@ pub fn create_fee_payment_operation(
     destination: &str,
     asset_id: &str,
     amount: i64,
-) -> Result<OperationSpec, RelayerError> {
+) -> Result<OperationSpec, StellarTransactionUtilsError> {
     // Parse asset identifier
     let asset = if asset_id == "native" || asset_id.is_empty() {
         AssetSpec::Native
@@ -461,13 +1011,13 @@ pub fn create_fee_payment_operation(
             } else if code.len() <= 12 {
                 AssetSpec::Credit12 { code, issuer }
             } else {
-                return Err(RelayerError::Internal(format!(
-                    "Asset code too long (max 12 characters): {}",
-                    code
-                )));
+                return Err(StellarTransactionUtilsError::AssetCodeTooLong(
+                    12, // Stellar max asset code length
+                    code,
+                ));
             }
         } else {
-            return Err(RelayerError::Internal(format!(
+            return Err(StellarTransactionUtilsError::InvalidAssetFormat(format!(
                 "Invalid asset identifier format. Expected 'native' or 'CODE:ISSUER', got: {}",
                 asset_id
             )));
@@ -485,7 +1035,7 @@ pub fn create_fee_payment_operation(
 pub fn add_operation_to_envelope(
     envelope: &mut TransactionEnvelope,
     operation: Operation,
-) -> Result<(), RelayerError> {
+) -> Result<(), StellarTransactionUtilsError> {
     match envelope {
         TransactionEnvelope::TxV0(ref mut e) => {
             // Extract existing operations
@@ -494,10 +1044,7 @@ pub fn add_operation_to_envelope(
 
             // Convert back to VecM
             let operations: VecM<Operation, 100> = ops.try_into().map_err(|_| {
-                RelayerError::Internal(format!(
-                    "Too many operations (max {})",
-                    STELLAR_MAX_OPERATIONS
-                ))
+                StellarTransactionUtilsError::TooManyOperations(STELLAR_MAX_OPERATIONS)
             })?;
 
             e.tx.operations = operations;
@@ -512,10 +1059,7 @@ pub fn add_operation_to_envelope(
 
             // Convert back to VecM
             let operations: VecM<Operation, 100> = ops.try_into().map_err(|_| {
-                RelayerError::Internal(format!(
-                    "Too many operations (max {})",
-                    STELLAR_MAX_OPERATIONS
-                ))
+                StellarTransactionUtilsError::TooManyOperations(STELLAR_MAX_OPERATIONS)
             })?;
 
             e.tx.operations = operations;
@@ -524,9 +1068,7 @@ pub fn add_operation_to_envelope(
             e.tx.fee = (e.tx.operations.len() as u32) * 100; // 100 stroops per operation
         }
         TransactionEnvelope::TxFeeBump(_) => {
-            return Err(RelayerError::Internal(
-                "Cannot add operations to fee-bump transactions".to_string(),
-            ));
+            return Err(StellarTransactionUtilsError::CannotModifyFeeBump);
         }
     }
     Ok(())
@@ -536,7 +1078,7 @@ pub fn add_operation_to_envelope(
 pub fn set_time_bounds(
     envelope: &mut TransactionEnvelope,
     valid_until: DateTime<Utc>,
-) -> Result<(), RelayerError> {
+) -> Result<(), StellarTransactionUtilsError> {
     let max_time = valid_until.timestamp() as u64;
     let time_bounds = TimeBounds {
         min_time: TimePoint(0),
@@ -551,17 +1093,11 @@ pub fn set_time_bounds(
             e.tx.cond = Preconditions::Time(time_bounds);
         }
         TransactionEnvelope::TxFeeBump(_) => {
-            return Err(RelayerError::Internal(
-                "Cannot set time bounds on fee-bump transactions".to_string(),
-            ));
+            return Err(StellarTransactionUtilsError::CannotSetTimeBoundsOnFeeBump);
         }
     }
     Ok(())
 }
-
-// ============================================================================
-// Status Check Utility Functions
-// ============================================================================
 
 #[cfg(test)]
 mod tests {

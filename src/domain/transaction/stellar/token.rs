@@ -1,135 +1,18 @@
 //! Utility functions for Stellar transaction domain logic.
-use crate::models::{RelayerError, StellarTokenKind, StellarTokenMetadata};
+use crate::domain::transaction::stellar::utils::{
+    create_contract_data_key, extract_scval_from_contract_data, extract_u32_from_scval,
+    parse_account_id, parse_contract_address, parse_ledger_entry_from_xdr,
+    query_contract_data_with_fallback, StellarTransactionUtilsError,
+};
+use crate::models::{StellarTokenKind, StellarTokenMetadata};
 use crate::services::provider::StellarProviderTrait;
-use base64::{engine::general_purpose, Engine};
 use soroban_rs::xdr::{
     AccountId, AlphaNum12, AlphaNum4, Asset, AssetCode12, AssetCode4, ContractDataEntry,
-    ContractId, Hash, LedgerEntryData, LedgerKey, LedgerKeyContractData, Limits,
-    PublicKey as XdrPublicKey, ReadXdr, ScAddress, ScSymbol, ScVal, TrustLineEntry,
-    TrustLineEntryExt, TrustLineEntryV1, Uint256, VecM,
+    ContractId, Hash, LedgerEntryData, LedgerKey, ScAddress, ScSymbol, ScVal, TrustLineEntry,
+    TrustLineEntryExt, TrustLineEntryV1,
 };
 use std::str::FromStr;
-use stellar_strkey::ed25519::PublicKey;
-use thiserror::Error;
 use tracing::{debug, trace, warn};
-
-// ============================================================================
-// Error Types
-// ============================================================================
-
-/// Errors that can occur during Stellar token operations.
-///
-/// This error type is specific to Stellar token operations and provides
-/// detailed error information. It can be converted to `RelayerError` using
-/// the `From` trait implementation.
-#[derive(Error, Debug)]
-pub enum StellarTokenError {
-    #[error("Invalid account address '{0}': {1}")]
-    InvalidAccountAddress(String, String),
-
-    #[error("Invalid contract address '{0}': {1}")]
-    InvalidContractAddress(String, String),
-
-    #[error("Invalid asset identifier format. Expected 'CODE:ISSUER', got: {0}")]
-    InvalidAssetFormat(String),
-
-    #[error("Asset code cannot be empty in asset identifier: {0}")]
-    EmptyAssetCode(String),
-
-    #[error("Asset code too long (max {0} characters): {1}")]
-    AssetCodeTooLong(usize, String),
-
-    #[error("Issuer address cannot be empty in asset identifier: {0}")]
-    EmptyIssuerAddress(String),
-
-    #[error("Invalid issuer address length (expected {0} characters): {1}")]
-    InvalidIssuerLength(usize, String),
-
-    #[error("Invalid issuer address format (must start with '{0}'): {1}")]
-    InvalidIssuerPrefix(char, String),
-
-    #[error("Failed to create {0} symbol: {1:?}")]
-    SymbolCreationFailed(String, String),
-
-    #[error("Failed to create {0} key vector: {1:?}")]
-    KeyVectorCreationFailed(String, String),
-
-    #[error("Failed to query contract data (Persistent) for {0}: {1}")]
-    ContractDataQueryPersistentFailed(String, String),
-
-    #[error("Failed to query contract data (Temporary) for {0}: {1}")]
-    ContractDataQueryTemporaryFailed(String, String),
-
-    #[error("Failed to parse ledger entry XDR for {0}: {1}")]
-    LedgerEntryParseFailed(String, String),
-
-    #[error("No entries found for {0}")]
-    NoEntriesFound(String),
-
-    #[error("Empty entries for {0}")]
-    EmptyEntries(String),
-
-    #[error("Unexpected ledger entry type for {0} (expected ContractData)")]
-    UnexpectedLedgerEntryType(String),
-
-    #[error("Failed to fetch account for balance: {0}")]
-    AccountFetchFailed(String),
-
-    #[error("Failed to query trustline for asset {0}: {1}")]
-    TrustlineQueryFailed(String, String),
-
-    #[error("No trustline found for asset {0} on account {1}")]
-    NoTrustlineFound(String, String),
-
-    #[error("Unsupported trustline entry version")]
-    UnsupportedTrustlineVersion,
-
-    #[error("Unexpected ledger entry type for trustline query")]
-    UnexpectedTrustlineEntryType,
-
-    #[error("Balance too large (i128 hi={0}, lo={1}) to fit in u64")]
-    BalanceTooLarge(i64, u64),
-
-    #[error("Negative balance not allowed: i128 lo={0}")]
-    NegativeBalanceI128(u64),
-
-    #[error("Negative balance not allowed: i64={0}")]
-    NegativeBalanceI64(i64),
-
-    #[error("Unexpected balance value type in contract data: {0:?}. Expected I128, U64, or I64")]
-    UnexpectedBalanceType(String),
-
-    #[error("Unexpected ledger entry type for contract data query")]
-    UnexpectedContractDataEntryType,
-
-    #[error("Native asset should be handled before trustline query")]
-    NativeAssetInTrustlineQuery,
-
-    #[error("Failed to invoke contract function '{0}': {1}")]
-    ContractInvocationFailed(String, String),
-
-    #[error("Failed to simulate contract transaction: {0}")]
-    ContractSimulationFailed(String),
-}
-
-impl From<StellarTokenError> for RelayerError {
-    fn from(error: StellarTokenError) -> Self {
-        match error {
-            StellarTokenError::AccountFetchFailed(msg)
-            | StellarTokenError::ContractDataQueryPersistentFailed(_, msg)
-            | StellarTokenError::ContractDataQueryTemporaryFailed(_, msg)
-            | StellarTokenError::TrustlineQueryFailed(_, msg)
-            | StellarTokenError::ContractInvocationFailed(_, msg)
-            | StellarTokenError::ContractSimulationFailed(msg) => RelayerError::ProviderError(msg),
-            StellarTokenError::NoTrustlineFound(_, _)
-            | StellarTokenError::NoEntriesFound(_)
-            | StellarTokenError::EmptyEntries(_) => {
-                RelayerError::ValidationError(error.to_string())
-            }
-            _ => RelayerError::Internal(error.to_string()),
-        }
-    }
-}
 
 // Constants for Stellar address and asset validation
 const STELLAR_ADDRESS_LENGTH: usize = 56;
@@ -141,40 +24,6 @@ const STELLAR_ACCOUNT_PREFIX: char = 'G';
 // Helper Functions for Common Operations
 // ============================================================================
 
-/// Parse a Stellar account address string into an AccountId XDR type.
-///
-/// # Arguments
-///
-/// * `account_id` - Stellar account address (must be valid PublicKey)
-///
-/// # Returns
-///
-/// AccountId XDR type or error if address is invalid
-fn parse_account_id(account_id: &str) -> Result<AccountId, StellarTokenError> {
-    let account_pk = PublicKey::from_str(account_id).map_err(|e| {
-        StellarTokenError::InvalidAccountAddress(account_id.to_string(), e.to_string())
-    })?;
-    let account_uint256 = Uint256(account_pk.0);
-    let account_xdr_pk = XdrPublicKey::PublicKeyTypeEd25519(account_uint256);
-    Ok(AccountId(account_xdr_pk))
-}
-
-/// Parse a contract address string into a ContractId and extract the hash.
-///
-/// # Arguments
-///
-/// * `contract_address` - Contract address in StrKey format
-///
-/// # Returns
-///
-/// Contract hash (Hash) or error if address is invalid
-fn parse_contract_address(contract_address: &str) -> Result<Hash, StellarTokenError> {
-    let contract_id = ContractId::from_str(contract_address).map_err(|e| {
-        StellarTokenError::InvalidContractAddress(contract_address.to_string(), e.to_string())
-    })?;
-    Ok(contract_id.0)
-}
-
 /// Parse an asset identifier in CODE:ISSUER format.
 ///
 /// # Arguments
@@ -184,10 +33,10 @@ fn parse_contract_address(contract_address: &str) -> Result<Hash, StellarTokenEr
 /// # Returns
 ///
 /// Tuple of (code, issuer) or error if format is invalid
-fn parse_asset_identifier(asset_id: &str) -> Result<(&str, &str), StellarTokenError> {
+fn parse_asset_identifier(asset_id: &str) -> Result<(&str, &str), StellarTransactionUtilsError> {
     asset_id
         .split_once(':')
-        .ok_or_else(|| StellarTokenError::InvalidAssetFormat(asset_id.to_string()))
+        .ok_or_else(|| StellarTransactionUtilsError::InvalidAssetFormat(asset_id.to_string()))
 }
 
 /// Validate and parse a classic asset issuer address.
@@ -206,20 +55,25 @@ fn parse_asset_identifier(asset_id: &str) -> Result<(&str, &str), StellarTokenEr
 /// # Returns
 ///
 /// AccountId XDR type or error if validation fails
-fn validate_and_parse_issuer(issuer: &str, asset_id: &str) -> Result<AccountId, StellarTokenError> {
+fn validate_and_parse_issuer(
+    issuer: &str,
+    asset_id: &str,
+) -> Result<AccountId, StellarTransactionUtilsError> {
     if issuer.is_empty() {
-        return Err(StellarTokenError::EmptyIssuerAddress(asset_id.to_string()));
+        return Err(StellarTransactionUtilsError::EmptyIssuerAddress(
+            asset_id.to_string(),
+        ));
     }
 
     if issuer.len() != STELLAR_ADDRESS_LENGTH {
-        return Err(StellarTokenError::InvalidIssuerLength(
+        return Err(StellarTransactionUtilsError::InvalidIssuerLength(
             STELLAR_ADDRESS_LENGTH,
             issuer.to_string(),
         ));
     }
 
     if !issuer.starts_with(STELLAR_ACCOUNT_PREFIX) {
-        return Err(StellarTokenError::InvalidIssuerPrefix(
+        return Err(StellarTransactionUtilsError::InvalidIssuerPrefix(
             STELLAR_ACCOUNT_PREFIX,
             issuer.to_string(),
         ));
@@ -227,189 +81,6 @@ fn validate_and_parse_issuer(issuer: &str, asset_id: &str) -> Result<AccountId, 
 
     // Validate issuer is a valid Stellar public key (not a contract address)
     parse_account_id(issuer)
-}
-
-/// Create an ScVal key for contract data queries.
-///
-/// Creates a ScVal::Vec containing a symbol and optional address.
-/// Used for SEP-41 token interface keys like "Balance" and "Decimals".
-///
-/// # Arguments
-///
-/// * `symbol` - Symbol name (e.g., "Balance", "Decimals")
-/// * `address` - Optional ScAddress to include in the key
-///
-/// # Returns
-///
-/// ScVal::Vec key or error if creation fails
-fn create_contract_data_key(
-    symbol: &str,
-    address: Option<ScAddress>,
-) -> Result<ScVal, StellarTokenError> {
-    if address.is_none() {
-        let sym = symbol.try_into().map_err(|e| {
-            StellarTokenError::SymbolCreationFailed(symbol.to_string(), format!("{:?}", e))
-        })?;
-        return Ok(ScVal::Symbol(sym));
-    }
-
-    let mut key_items: Vec<ScVal> = vec![ScVal::Symbol(symbol.try_into().map_err(|e| {
-        StellarTokenError::SymbolCreationFailed(symbol.to_string(), format!("{:?}", e))
-    })?)];
-
-    if let Some(addr) = address {
-        key_items.push(ScVal::Address(addr));
-    }
-
-    let key_vec: VecM<ScVal, { u32::MAX }> = VecM::try_from(key_items).map_err(|e| {
-        StellarTokenError::KeyVectorCreationFailed(symbol.to_string(), format!("{:?}", e))
-    })?;
-
-    Ok(ScVal::Vec(Some(soroban_rs::xdr::ScVec(key_vec))))
-}
-
-/// Query contract data with Persistent/Temporary durability fallback.
-///
-/// Queries contract data storage, trying Persistent durability first,
-/// then falling back to Temporary if not found. This handles both
-/// production tokens (Persistent) and test tokens (Temporary).
-///
-/// # Arguments
-///
-/// * `provider` - Stellar provider for querying ledger entries
-/// * `contract_hash` - Contract hash (Hash)
-/// * `key` - ScVal key to query
-/// * `error_context` - Context string for error messages
-///
-/// # Returns
-///
-/// GetLedgerEntriesResponse or error if query fails
-async fn query_contract_data_with_fallback<P>(
-    provider: &P,
-    contract_hash: Hash,
-    key: ScVal,
-    error_context: &str,
-) -> Result<soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse, StellarTokenError>
-where
-    P: StellarProviderTrait + Send + Sync,
-{
-    let contract_address_sc =
-        soroban_rs::xdr::ScAddress::Contract(soroban_rs::xdr::ContractId(contract_hash));
-
-    let mut ledger_key = LedgerKey::ContractData(LedgerKeyContractData {
-        contract: contract_address_sc.clone(),
-        key: key.clone(),
-        durability: soroban_rs::xdr::ContractDataDurability::Persistent,
-    });
-
-    // Query ledger entry with Persistent durability
-    let mut ledger_entries = provider
-        .get_ledger_entries(&[ledger_key.clone()])
-        .await
-        .map_err(|e| {
-            StellarTokenError::ContractDataQueryPersistentFailed(
-                error_context.to_string(),
-                e.to_string(),
-            )
-        })?;
-
-    // If not found, try Temporary durability
-    if ledger_entries
-        .entries
-        .as_ref()
-        .map(|e| e.is_empty())
-        .unwrap_or(true)
-    {
-        ledger_key = LedgerKey::ContractData(LedgerKeyContractData {
-            contract: contract_address_sc,
-            key,
-            durability: soroban_rs::xdr::ContractDataDurability::Temporary,
-        });
-        ledger_entries = provider
-            .get_ledger_entries(&[ledger_key])
-            .await
-            .map_err(|e| {
-                StellarTokenError::ContractDataQueryTemporaryFailed(
-                    error_context.to_string(),
-                    e.to_string(),
-                )
-            })?;
-    }
-
-    Ok(ledger_entries)
-}
-
-/// Parse a ledger entry from base64 XDR string.
-///
-/// Handles both LedgerEntry and LedgerEntryChange formats. If the XDR is a
-/// LedgerEntryChange, extracts the LedgerEntry from it.
-///
-/// # Arguments
-///
-/// * `xdr_string` - Base64-encoded XDR string
-/// * `context` - Context string for error messages
-///
-/// # Returns
-///
-/// Parsed LedgerEntry or error if parsing fails
-fn parse_ledger_entry_from_xdr(
-    xdr_string: &str,
-    context: &str,
-) -> Result<LedgerEntryData, StellarTokenError> {
-    let trimmed_xdr = xdr_string.trim();
-
-    // Ensure valid base64
-    if general_purpose::STANDARD.decode(trimmed_xdr).is_err() {
-        return Err(StellarTokenError::LedgerEntryParseFailed(
-            context.to_string(),
-            "Invalid base64".to_string(),
-        ));
-    }
-
-    // Parse as LedgerEntryData (what Soroban RPC actually returns)
-    match LedgerEntryData::from_xdr_base64(trimmed_xdr, Limits::none()) {
-        Ok(data) => Ok(data),
-        Err(e) => Err(StellarTokenError::LedgerEntryParseFailed(
-            context.to_string(),
-            format!("Failed to parse LedgerEntryData: {}", e),
-        )),
-    }
-}
-
-/// Extract ScVal from contract data entry.
-///
-/// Parses the first entry from GetLedgerEntriesResponse and extracts
-/// the ScVal from ContractDataEntry.
-///
-/// # Arguments
-///
-/// * `ledger_entries` - Response from get_ledger_entries
-/// * `context` - Context string for error messages and logging
-///
-/// # Returns
-///
-/// ScVal from contract data or error if extraction fails
-fn extract_scval_from_contract_data(
-    ledger_entries: &soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse,
-    context: &str,
-) -> Result<ScVal, StellarTokenError> {
-    let entries = ledger_entries
-        .entries
-        .as_ref()
-        .ok_or_else(|| StellarTokenError::NoEntriesFound(context.into()))?;
-
-    if entries.is_empty() {
-        return Err(StellarTokenError::EmptyEntries(context.into()));
-    }
-
-    let entry_xdr = &entries[0].xdr;
-    let entry = parse_ledger_entry_from_xdr(entry_xdr, context)?;
-
-    match entry {
-        LedgerEntryData::ContractData(ContractDataEntry { val, .. }) => Ok(val.clone()),
-
-        _ => Err(StellarTokenError::UnexpectedLedgerEntryType(context.into())),
-    }
 }
 
 // ============================================================================
@@ -441,7 +112,7 @@ pub async fn get_token_balance<P>(
     provider: &P,
     account_id: &str,
     asset_id: &str,
-) -> Result<u64, StellarTokenError>
+) -> Result<u64, StellarTransactionUtilsError>
 where
     P: StellarProviderTrait + Send + Sync,
 {
@@ -450,7 +121,7 @@ where
         let account_entry = provider
             .get_account(account_id)
             .await
-            .map_err(|e| StellarTokenError::AccountFetchFailed(e.to_string()))?;
+            .map_err(|e| StellarTransactionUtilsError::AccountFetchFailed(e.to_string()))?;
         return Ok(account_entry.balance as u64);
     }
 
@@ -472,7 +143,7 @@ async fn get_asset_trustline_balance<P>(
     provider: &P,
     account_id: &str,
     asset_id: &str,
-) -> Result<u64, StellarTokenError>
+) -> Result<u64, StellarTransactionUtilsError>
 where
     P: StellarProviderTrait + Send + Sync,
 {
@@ -502,21 +173,23 @@ where
         asset: match asset {
             Asset::CreditAlphanum4(a) => soroban_rs::xdr::TrustLineAsset::CreditAlphanum4(a),
             Asset::CreditAlphanum12(a) => soroban_rs::xdr::TrustLineAsset::CreditAlphanum12(a),
-            Asset::Native => return Err(StellarTokenError::NativeAssetInTrustlineQuery),
+            Asset::Native => return Err(StellarTransactionUtilsError::NativeAssetInTrustlineQuery),
         },
     });
 
     let resp = provider
         .get_ledger_entries(&[ledger_key])
         .await
-        .map_err(|e| StellarTokenError::TrustlineQueryFailed(asset_id.into(), e.to_string()))?;
+        .map_err(|e| {
+            StellarTransactionUtilsError::TrustlineQueryFailed(asset_id.into(), e.to_string())
+        })?;
 
-    let entries = resp
-        .entries
-        .ok_or_else(|| StellarTokenError::NoTrustlineFound(asset_id.into(), account_id.into()))?;
+    let entries = resp.entries.ok_or_else(|| {
+        StellarTransactionUtilsError::NoTrustlineFound(asset_id.into(), account_id.into())
+    })?;
 
     if entries.is_empty() {
-        return Err(StellarTokenError::NoTrustlineFound(
+        return Err(StellarTransactionUtilsError::NoTrustlineFound(
             asset_id.into(),
             account_id.into(),
         ));
@@ -560,7 +233,7 @@ where
             Ok(balance.max(0) as u64)
         }
 
-        _ => Err(StellarTokenError::UnexpectedTrustlineEntryType),
+        _ => Err(StellarTransactionUtilsError::UnexpectedTrustlineEntryType),
     }
 }
 
@@ -569,7 +242,7 @@ async fn get_contract_token_balance<P>(
     provider: &P,
     account_id: &str,
     contract_address: &str,
-) -> Result<u64, StellarTokenError>
+) -> Result<u64, StellarTransactionUtilsError>
 where
     P: StellarProviderTrait + Send + Sync,
 {
@@ -610,26 +283,27 @@ where
         LedgerEntryData::ContractData(ContractDataEntry { val, .. }) => match val {
             ScVal::I128(parts) => {
                 if parts.hi != 0 {
-                    return Err(StellarTokenError::BalanceTooLarge(parts.hi, parts.lo));
+                    return Err(StellarTransactionUtilsError::BalanceTooLarge(
+                        parts.hi, parts.lo,
+                    ));
                 }
                 if (parts.lo as i64) < 0 {
-                    return Err(StellarTokenError::NegativeBalanceI128(parts.lo));
+                    return Err(StellarTransactionUtilsError::NegativeBalanceI128(parts.lo));
                 }
                 Ok(parts.lo)
             }
             ScVal::U64(n) => Ok(n),
             ScVal::I64(n) => {
                 if n < 0 {
-                    return Err(StellarTokenError::NegativeBalanceI64(n));
+                    return Err(StellarTransactionUtilsError::NegativeBalanceI64(n));
                 }
                 Ok(n as u64)
             }
-            other => Err(StellarTokenError::UnexpectedBalanceType(format!(
-                "{:?}",
-                other
-            ))),
+            other => Err(StellarTransactionUtilsError::UnexpectedBalanceType(
+                format!("{:?}", other),
+            )),
         },
-        _ => Err(StellarTokenError::UnexpectedContractDataEntryType),
+        _ => Err(StellarTransactionUtilsError::UnexpectedContractDataEntryType),
     }
 }
 
@@ -665,7 +339,7 @@ where
 pub async fn get_token_metadata<P>(
     provider: &P,
     asset_id: &str,
-) -> Result<StellarTokenMetadata, StellarTokenError>
+) -> Result<StellarTokenMetadata, StellarTransactionUtilsError>
 where
     P: StellarProviderTrait + Send + Sync,
 {
@@ -706,11 +380,13 @@ where
 
     // Validate asset code
     if code.is_empty() {
-        return Err(StellarTokenError::EmptyAssetCode(asset_id.to_string()));
+        return Err(StellarTransactionUtilsError::EmptyAssetCode(
+            asset_id.to_string(),
+        ));
     }
 
     if code.len() > MAX_ASSET_CODE_LENGTH {
-        return Err(StellarTokenError::AssetCodeTooLong(
+        return Err(StellarTransactionUtilsError::AssetCodeTooLong(
             MAX_ASSET_CODE_LENGTH,
             code.to_string(),
         ));
@@ -826,7 +502,7 @@ where
         .call_contract(contract_address, &function_name, args)
         .await
     {
-        Ok(result) => extract_u32_from_scval(&result, contract_address, "decimals() result"),
+        Ok(result) => extract_u32_from_scval(&result, "decimals() result"),
         Err(e) => {
             debug!(contract_address = %contract_address, error = %e, "Failed to invoke decimals() function");
             None
@@ -903,137 +579,9 @@ where
     };
 
     // Extract decimals value from ScVal
-    extract_u32_from_scval(&val, contract_address, "decimals storage value")
+    extract_u32_from_scval(&val, "decimals storage value")
 }
 
-/// Extract a u32 value from an ScVal.
-///
-/// Handles multiple ScVal types that can represent decimal values.
-///
-/// # Arguments
-///
-/// * `val` - ScVal to extract from
-/// * `contract_address` - Contract address (for logging)
-/// * `context` - Context string (for logging)
-///
-/// # Returns
-///
-/// Some(u32) if extraction succeeds, None otherwise
-fn extract_u32_from_scval(val: &ScVal, contract_address: &str, context: &str) -> Option<u32> {
-    match val {
-        ScVal::U32(n) => Some(*n),
-        ScVal::U64(n) => {
-            // Safe conversion with overflow check
-            u32::try_from(*n).ok().or_else(|| {
-                warn!(
-                    contract_address = %contract_address,
-                    decimals_value = %n,
-                    context = %context,
-                    "Decimals value too large for u32"
-                );
-                None
-            })
-        }
-        ScVal::I32(n) if *n >= 0 => u32::try_from(*n).ok().or_else(|| {
-            warn!(
-                contract_address = %contract_address,
-                decimals_value = %n,
-                context = %context,
-                "Invalid decimals value (negative or overflow)"
-            );
-            None
-        }),
-        ScVal::I32(n) => {
-            warn!(
-                contract_address = %contract_address,
-                decimals_value = %n,
-                context = %context,
-                "Negative decimals value not allowed (I32)"
-            );
-            None
-        }
-        ScVal::I64(n) if *n >= 0 => u32::try_from(*n).ok().or_else(|| {
-            warn!(
-                contract_address = %contract_address,
-                decimals_value = %n,
-                context = %context,
-                "Invalid decimals value (negative or overflow)"
-            );
-            None
-        }),
-        ScVal::I64(n) => {
-            warn!(
-                contract_address = %contract_address,
-                decimals_value = %n,
-                context = %context,
-                "Negative decimals value not allowed (I64)"
-            );
-            None
-        }
-        ScVal::I128(parts) => {
-            // Check if value is negative (hi < 0) or too large (hi != 0)
-            if parts.hi != 0 {
-                if parts.hi < 0 {
-                    warn!(
-                        contract_address = %contract_address,
-                        decimals_value = ?parts,
-                        context = %context,
-                        "Negative decimals value not allowed (I128)"
-                    );
-                } else {
-                    warn!(
-                        contract_address = %contract_address,
-                        decimals_value = ?parts,
-                        context = %context,
-                        "Decimals value too large for u32 (I128)"
-                    );
-                }
-                return None;
-            }
-            // hi == 0, so value fits in u64, now check if it fits in u32
-            u32::try_from(parts.lo).ok().or_else(|| {
-                warn!(
-                    contract_address = %contract_address,
-                    decimals_value = ?parts,
-                    context = %context,
-                    "Decimals value too large for u32 (I128 lo overflow)"
-                );
-                None
-            })
-        }
-        ScVal::U128(parts) => {
-            // Check if hi is non-zero (too large)
-            if parts.hi != 0 {
-                warn!(
-                    contract_address = %contract_address,
-                    decimals_value = ?parts,
-                    context = %context,
-                    "Decimals value too large for u32 (U128)"
-                );
-                return None;
-            }
-            // hi == 0, so value fits in u64, now check if it fits in u32
-            u32::try_from(parts.lo).ok().or_else(|| {
-                warn!(
-                    contract_address = %contract_address,
-                    decimals_value = ?parts,
-                    context = %context,
-                    "Decimals value too large for u32 (U128 lo overflow)"
-                );
-                None
-            })
-        }
-        _ => {
-            warn!(
-                contract_address = %contract_address,
-                decimals_value = ?val,
-                context = %context,
-                "Unexpected ScVal type for decimals (expected U32, U64, I32, I64, I128, or U128)"
-            );
-            None
-        }
-    }
-}
 #[cfg(test)]
 mod integration_tests {
     use tracing::debug;
@@ -1106,7 +654,7 @@ mod integration_tests {
             Ok(_balance) => {
                 // Balance is u64, so it's always non-negative by type
             }
-            Err(StellarTokenError::NoTrustlineFound(_, _)) => {
+            Err(StellarTransactionUtilsError::NoTrustlineFound(_, _)) => {
                 // This is expected if the account doesn't have a trustline
             }
             Err(e) => {
@@ -1132,7 +680,7 @@ mod integration_tests {
             Ok(_balance) => {
                 // Balance is u64, so it's always non-negative by type
             }
-            Err(StellarTokenError::InvalidContractAddress(_, _)) => {
+            Err(StellarTransactionUtilsError::InvalidContractAddress(_, _)) => {
                 // Contract address might be invalid - this is okay for testing
             }
             Err(e) => {
@@ -1222,7 +770,7 @@ mod integration_tests {
                 // Decimals should be fetched from contract or default to 7
                 assert!(metadata.decimals > 0 && metadata.decimals <= 18);
             }
-            Err(StellarTokenError::InvalidContractAddress(_, _)) => {
+            Err(StellarTransactionUtilsError::InvalidContractAddress(_, _)) => {
                 // Contract address might be invalid - this is okay for testing
             }
             Err(e) => {
@@ -1242,7 +790,7 @@ mod integration_tests {
         let result = get_token_metadata(&provider, "INVALID_FORMAT").await;
         assert!(result.is_err(), "Should reject invalid asset format");
         match result.unwrap_err() {
-            StellarTokenError::InvalidAssetFormat(_) => {}
+            StellarTransactionUtilsError::InvalidAssetFormat(_) => {}
             e => panic!("Expected InvalidAssetFormat error, got: {:?}", e),
         }
     }
@@ -1261,7 +809,7 @@ mod integration_tests {
         .await;
         assert!(result.is_err(), "Should reject empty asset code");
         match result.unwrap_err() {
-            StellarTokenError::EmptyAssetCode(_) => {}
+            StellarTransactionUtilsError::EmptyAssetCode(_) => {}
             e => panic!("Expected EmptyAssetCode error, got: {:?}", e),
         }
     }
@@ -1276,9 +824,9 @@ mod integration_tests {
         let result = get_token_metadata(&provider, "USDC:INVALID").await;
         assert!(result.is_err(), "Should reject invalid issuer");
         match result.unwrap_err() {
-            StellarTokenError::InvalidIssuerLength(_, _)
-            | StellarTokenError::InvalidIssuerPrefix(_, _)
-            | StellarTokenError::InvalidAccountAddress(_, _) => {}
+            StellarTransactionUtilsError::InvalidIssuerLength(_, _)
+            | StellarTransactionUtilsError::InvalidIssuerPrefix(_, _)
+            | StellarTransactionUtilsError::InvalidAccountAddress(_, _) => {}
             e => panic!("Expected issuer validation error, got: {:?}", e),
         }
     }

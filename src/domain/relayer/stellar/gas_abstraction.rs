@@ -80,7 +80,7 @@ where
 
             estimate_fee(&envelope, &self.provider, None)
                 .await
-                .map_err(|e| RelayerError::Internal(format!("Failed to estimate fee: {}", e)))?
+                .map_err(crate::models::RelayerError::from)?
         } else if let Some(ref operations) = params.operations {
             // For operations-only requests, use base fee estimation
             // (estimate_fee requires an envelope, so we fall back to estimate_base_fee)
@@ -113,9 +113,7 @@ where
             policy.fee_margin_percentage,
         )
         .await
-        .map_err(|e| {
-            RelayerError::Internal(format!("Failed to estimate and convert fee: {}", e))
-        })?;
+        .map_err(crate::models::RelayerError::from)?;
 
         // Validate max fee
         StellarTransactionValidator::validate_max_fee(fee_quote.fee_in_stroops, &policy)
@@ -222,7 +220,7 @@ where
         // For non-Soroban transactions, we'll add 200 stroops (100 for fee payment op + 100 for fee-bump)
         let inner_tx_fee = estimate_fee(&envelope, &self.provider, None)
             .await
-            .map_err(|e| RelayerError::Internal(format!("Failed to estimate fee: {}", e)))?;
+            .map_err(crate::models::RelayerError::from)?;
 
         // Add fees for fee payment operation (100 stroops) and fee-bump transaction (100 stroops)
         // For Soroban transactions, the simulation already accounts for resource fees,
@@ -276,9 +274,8 @@ where
         // Set final time bounds just before returning to give user maximum time to review and submit
         // Using 1 minute to provide reasonable time while ensuring transaction doesn't expire too quickly
         let valid_until = Utc::now() + Duration::minutes(1);
-        set_time_bounds(&mut final_envelope, valid_until).map_err(|e| {
-            RelayerError::Internal(format!("Failed to set final time bounds: {}", e))
-        })?;
+        set_time_bounds(&mut final_envelope, valid_until)
+            .map_err(crate::models::RelayerError::from)?;
 
         // Serialize final transaction
         let extended_xdr = final_envelope
@@ -305,9 +302,7 @@ fn add_fee_payment_operation(
     relayer_address: &str,
 ) -> Result<(), RelayerError> {
     let payment_op_spec = create_fee_payment_operation(relayer_address, fee_token, fee_amount)
-        .map_err(|e| {
-            RelayerError::Internal(format!("Failed to create fee payment operation: {}", e))
-        })?;
+        .map_err(crate::models::RelayerError::from)?;
 
     // Convert OperationSpec to XDR Operation
     let payment_op = Operation::try_from(payment_op_spec).map_err(|e| {
@@ -315,8 +310,7 @@ fn add_fee_payment_operation(
     })?;
 
     // Add payment operation to transaction
-    add_operation_to_envelope(envelope, payment_op)
-        .map_err(|e| RelayerError::Internal(format!("Failed to add operation: {}", e)))?;
+    add_operation_to_envelope(envelope, payment_op).map_err(crate::models::RelayerError::from)?;
 
     Ok(())
 }
@@ -360,7 +354,7 @@ where
         fee_margin_percentage,
     )
     .await
-    .map_err(|e| RelayerError::Internal(format!("Failed to estimate and convert fee: {}", e)))?;
+    .map_err(crate::models::RelayerError::from)?;
 
     // Convert fee amount to i64 for payment operation
     let fee_amount = i64::try_from(fee_quote.fee_in_token).map_err(|_| {

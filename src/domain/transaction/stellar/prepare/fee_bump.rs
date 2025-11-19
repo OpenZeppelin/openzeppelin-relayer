@@ -14,7 +14,7 @@ use crate::{
         SignTransactionResponse,
     },
     models::{
-        NetworkTransactionData, RelayerError, RelayerStellarPolicy, StellarFeePaymentStrategy,
+        NetworkTransactionData, RelayerStellarPolicy, StellarFeePaymentStrategy,
         StellarTransactionData, StellarValidationError, TransactionError, TransactionInput,
     },
     services::{
@@ -159,23 +159,14 @@ where
 
     // Calculate required XLM fee using estimate_fee (handles Soroban transactions correctly)
     // This will simulate if needed for Soroban operations, otherwise count operations
-    let mut required_xlm_fee =
-        estimate_fee(envelope, provider, None)
-            .await
-            .map_err(|e| match e {
-                RelayerError::ValidationError(msg) => {
-                    TransactionError::ValidationError(format!("Failed to estimate fee: {}", msg))
-                }
-                RelayerError::Internal(msg) => {
-                    TransactionError::ValidationError(format!("Failed to estimate fee: {}", msg))
-                }
-                _ => TransactionError::ValidationError(format!("Failed to estimate fee: {}", e)),
-            })?;
+    let mut required_xlm_fee = estimate_fee(envelope, provider, None)
+        .await
+        .map_err(|e| TransactionError::ValidationError(format!("Failed to estimate fee: {}", e)))?;
 
-    let is_soroban = xdr_needs_simulation(&envelope).unwrap_or(false);
+    let is_soroban = xdr_needs_simulation(envelope).unwrap_or(false);
     if !is_soroban {
         // For regular transactions, fee-bump needs base fee (100 stroops)
-        required_xlm_fee = required_xlm_fee + STELLAR_DEFAULT_TRANSACTION_FEE as u64;
+        required_xlm_fee += STELLAR_DEFAULT_TRANSACTION_FEE as u64
     }
 
     // Use convert_xlm_fee_to_token to get the required token amount (includes fee margin from policy)
@@ -188,19 +179,11 @@ where
         policy.fee_margin_percentage,
     )
     .await
-    .map_err(|e| match e {
-        RelayerError::ValidationError(msg) => TransactionError::ValidationError(format!(
-            "Failed to convert XLM fee to token {}: {}",
-            asset_id, msg
-        )),
-        RelayerError::Internal(msg) => TransactionError::ValidationError(format!(
-            "Failed to convert XLM fee to token {}: {}",
-            asset_id, msg
-        )),
-        _ => TransactionError::ValidationError(format!(
+    .map_err(|e| {
+        TransactionError::ValidationError(format!(
             "Failed to convert XLM fee to token {}: {}",
             asset_id, e
-        )),
+        ))
     })?;
 
     // Compare payment amount with required token amount (from convert_xlm_fee_to_token which includes margin)
@@ -490,7 +473,8 @@ mod signed_xdr_tests {
     use crate::domain::SignTransactionResponse;
     use crate::models::{NetworkTransactionData, RepositoryError, TransactionStatus};
     use soroban_rs::xdr::{
-        Memo, MuxedAccount, ReadXdr, Transaction, TransactionEnvelope, TransactionExt, TransactionV1Envelope, Uint256, VecM
+        Memo, MuxedAccount, ReadXdr, Transaction, TransactionEnvelope, TransactionExt,
+        TransactionV1Envelope, Uint256, VecM,
     };
     use stellar_strkey::ed25519::PublicKey;
 
