@@ -157,7 +157,7 @@ impl<T: TurnkeyServiceTrait> TurnkeySigner<T> {
 }
 
 #[async_trait]
-impl<T: TurnkeyServiceTrait + Clone> StellarSignTrait for TurnkeySigner<T> {
+impl<T: TurnkeyServiceTrait> StellarSignTrait for TurnkeySigner<T> {
     async fn sign_xdr_transaction(
         &self,
         unsigned_xdr: &str,
@@ -258,258 +258,258 @@ impl<T: TurnkeyServiceTrait> Signer for TurnkeySigner<T> {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use crate::{
-//         models::{AssetSpec, OperationSpec},
-//         services::{MockTurnkeyServiceTrait, TurnkeyError},
-//     };
-//     use mockall::predicate::*;
-//     use soroban_rs::xdr::{SequenceNumber, Uint256};
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        models::{AssetSpec, OperationSpec},
+        services::{MockTurnkeyServiceTrait, TurnkeyError},
+    };
+    use mockall::predicate::*;
+    use soroban_rs::xdr::{SequenceNumber, Uint256};
 
-//     fn create_test_address() -> String {
-//         // Generate a valid Stellar address using stellar_strkey
-//         let test_key_bytes = [1u8; 32];
-//         stellar_strkey::ed25519::PublicKey::from_payload(&test_key_bytes)
-//             .unwrap()
-//             .to_string()
-//     }
+    fn create_test_address() -> String {
+        // Generate a valid Stellar address using stellar_strkey
+        let test_key_bytes = [1u8; 32];
+        stellar_strkey::ed25519::PublicKey::from_payload(&test_key_bytes)
+            .unwrap()
+            .to_string()
+    }
 
-//     fn create_test_operations() -> Vec<OperationSpec> {
-//         vec![OperationSpec::Payment {
-//             destination: create_test_address(),
-//             amount: 1000,
-//             asset: AssetSpec::Native,
-//         }]
-//     }
+    fn create_test_operations() -> Vec<OperationSpec> {
+        vec![OperationSpec::Payment {
+            destination: create_test_address(),
+            amount: 1000,
+            asset: AssetSpec::Native,
+        }]
+    }
 
-//     fn create_test_stellar_data_with_operations() -> crate::models::StellarTransactionData {
-//         crate::models::StellarTransactionData {
-//             source_account: create_test_address(),
-//             fee: Some(100),
-//             sequence_number: Some(123),
-//             memo: None,
-//             valid_until: None,
-//             network_passphrase: "Test SDF Network ; September 2015".to_string(),
-//             signatures: vec![],
-//             hash: Some("test_hash".to_string()),
-//             simulation_transaction_data: None,
-//             transaction_input: TransactionInput::Operations(create_test_operations()),
-//             signed_envelope_xdr: None,
-//         }
-//     }
+    fn create_test_stellar_data_with_operations() -> crate::models::StellarTransactionData {
+        crate::models::StellarTransactionData {
+            source_account: create_test_address(),
+            fee: Some(100),
+            sequence_number: Some(123),
+            memo: None,
+            valid_until: None,
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            signatures: vec![],
+            hash: Some("test_hash".to_string()),
+            simulation_transaction_data: None,
+            transaction_input: TransactionInput::Operations(create_test_operations()),
+            signed_envelope_xdr: None,
+        }
+    }
 
-//     fn create_test_stellar_data_with_xdr() -> crate::models::StellarTransactionData {
-//         // Create a minimal valid XDR transaction
-//         let tx = xdr::Transaction {
-//             source_account: xdr::MuxedAccount::Ed25519(Uint256([1u8; 32])),
-//             fee: 100,
-//             seq_num: SequenceNumber(123),
-//             cond: xdr::Preconditions::None,
-//             memo: xdr::Memo::None,
-//             operations: vec![].try_into().unwrap(),
-//             ext: xdr::TransactionExt::V0,
-//         };
+    fn create_test_stellar_data_with_xdr() -> crate::models::StellarTransactionData {
+        // Create a minimal valid XDR transaction
+        let tx = xdr::Transaction {
+            source_account: xdr::MuxedAccount::Ed25519(Uint256([1u8; 32])),
+            fee: 100,
+            seq_num: SequenceNumber(123),
+            cond: xdr::Preconditions::None,
+            memo: xdr::Memo::None,
+            operations: vec![].try_into().unwrap(),
+            ext: xdr::TransactionExt::V0,
+        };
 
-//         let envelope = xdr::TransactionEnvelope::Tx(xdr::TransactionV1Envelope {
-//             tx,
-//             signatures: vec![].try_into().unwrap(),
-//         });
+        let envelope = xdr::TransactionEnvelope::Tx(xdr::TransactionV1Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        });
 
-//         let xdr_string = envelope.to_xdr_base64(Limits::none()).unwrap();
+        let xdr_string = envelope.to_xdr_base64(Limits::none()).unwrap();
 
-//         crate::models::StellarTransactionData {
-//             source_account: create_test_address(),
-//             fee: Some(100),
-//             sequence_number: Some(123),
-//             memo: None,
-//             valid_until: None,
-//             network_passphrase: "Test SDF Network ; September 2015".to_string(),
-//             signatures: vec![],
-//             hash: Some("test_hash".to_string()),
-//             simulation_transaction_data: None,
-//             transaction_input: TransactionInput::UnsignedXdr(xdr_string),
-//             signed_envelope_xdr: None,
-//         }
-//     }
+        crate::models::StellarTransactionData {
+            source_account: create_test_address(),
+            fee: Some(100),
+            sequence_number: Some(123),
+            memo: None,
+            valid_until: None,
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            signatures: vec![],
+            hash: Some("test_hash".to_string()),
+            simulation_transaction_data: None,
+            transaction_input: TransactionInput::UnsignedXdr(xdr_string),
+            signed_envelope_xdr: None,
+        }
+    }
 
-//     #[tokio::test]
-//     async fn test_address() {
-//         let mut mock_service = MockTurnkeyServiceTrait::new();
-//         let test_address = create_test_address();
+    #[tokio::test]
+    async fn test_address() {
+        let mut mock_service = MockTurnkeyServiceTrait::new();
+        let test_address = create_test_address();
 
-//         mock_service
-//             .expect_address_stellar()
-//             .times(1)
-//             .returning(move || Ok(Address::Stellar(test_address.clone())));
+        mock_service
+            .expect_address_stellar()
+            .times(1)
+            .returning(move || Ok(Address::Stellar(test_address.clone())));
 
-//         let signer = TurnkeySigner::new_for_testing(mock_service);
-//         let result = signer.address().await.unwrap();
+        let signer = TurnkeySigner::new_for_testing(mock_service);
+        let result = signer.address().await.unwrap();
 
-//         match result {
-//             Address::Stellar(addr) => {
-//                 assert!(addr.starts_with('G'));
-//                 assert_eq!(addr.len(), 56); // Standard Stellar address length
-//             }
-//             _ => panic!("Expected Stellar address"),
-//         }
-//     }
+        match result {
+            Address::Stellar(addr) => {
+                assert!(addr.starts_with('G'));
+                assert_eq!(addr.len(), 56); // Standard Stellar address length
+            }
+            _ => panic!("Expected Stellar address"),
+        }
+    }
 
-//     #[tokio::test]
-//     async fn test_sign_transaction_with_operations() {
-//         let mut mock_service = MockTurnkeyServiceTrait::new();
-//         let test_address = create_test_address();
+    #[tokio::test]
+    async fn test_sign_transaction_with_operations() {
+        let mut mock_service = MockTurnkeyServiceTrait::new();
+        let test_address = create_test_address();
 
-//         // Mock signature (64 bytes for Ed25519)
-//         let mock_signature = vec![1u8; 64];
+        // Mock signature (64 bytes for Ed25519)
+        let mock_signature = vec![1u8; 64];
 
-//         mock_service
-//             .expect_address_stellar()
-//             .times(1)
-//             .returning(move || Ok(Address::Stellar(test_address.clone())));
+        mock_service
+            .expect_address_stellar()
+            .times(1)
+            .returning(move || Ok(Address::Stellar(test_address.clone())));
 
-//         mock_service
-//             .expect_sign_stellar()
-//             .times(1)
-//             .returning(move |_| {
-//                 let sig_clone = mock_signature.clone();
-//                 Box::pin(async move { Ok(sig_clone) })
-//             });
+        mock_service
+            .expect_sign_stellar()
+            .times(1)
+            .returning(move |_| {
+                let sig_clone = mock_signature.clone();
+                Box::pin(async move { Ok(sig_clone) })
+            });
 
-//         let signer = TurnkeySigner::new_for_testing(mock_service);
-//         let tx_data = create_test_stellar_data_with_operations();
+        let signer = TurnkeySigner::new_for_testing(mock_service);
+        let tx_data = create_test_stellar_data_with_operations();
 
-//         let result = signer
-//             .sign_transaction(NetworkTransactionData::Stellar(tx_data))
-//             .await;
+        let result = signer
+            .sign_transaction(NetworkTransactionData::Stellar(tx_data))
+            .await;
 
-//         assert!(result.is_ok());
-//         if let Ok(SignTransactionResponse::Stellar(signed_data)) = result {
-//             // Check that the signature was created
-//             assert_eq!(signed_data.signature.signature.0.len(), 64);
-//         } else {
-//             panic!("Expected Stellar transaction response");
-//         }
-//     }
+        assert!(result.is_ok());
+        if let Ok(SignTransactionResponse::Stellar(signed_data)) = result {
+            // Check that the signature was created
+            assert_eq!(signed_data.signature.signature.0.len(), 64);
+        } else {
+            panic!("Expected Stellar transaction response");
+        }
+    }
 
-//     #[tokio::test]
-//     async fn test_sign_transaction_with_xdr() {
-//         let mut mock_service = MockTurnkeyServiceTrait::new();
-//         let test_address = create_test_address();
+    #[tokio::test]
+    async fn test_sign_transaction_with_xdr() {
+        let mut mock_service = MockTurnkeyServiceTrait::new();
+        let test_address = create_test_address();
 
-//         // Mock signature (64 bytes for Ed25519)
-//         let mock_signature = vec![2u8; 64];
+        // Mock signature (64 bytes for Ed25519)
+        let mock_signature = vec![2u8; 64];
 
-//         mock_service
-//             .expect_address_stellar()
-//             .times(1)
-//             .returning(move || Ok(Address::Stellar(test_address.clone())));
+        mock_service
+            .expect_address_stellar()
+            .times(1)
+            .returning(move || Ok(Address::Stellar(test_address.clone())));
 
-//         mock_service
-//             .expect_sign_stellar()
-//             .times(1)
-//             .returning(move |_| {
-//                 let sig_clone = mock_signature.clone();
-//                 Box::pin(async move { Ok(sig_clone) })
-//             });
+        mock_service
+            .expect_sign_stellar()
+            .times(1)
+            .returning(move |_| {
+                let sig_clone = mock_signature.clone();
+                Box::pin(async move { Ok(sig_clone) })
+            });
 
-//         let signer = TurnkeySigner::new_for_testing(mock_service);
-//         let tx_data = create_test_stellar_data_with_xdr();
+        let signer = TurnkeySigner::new_for_testing(mock_service);
+        let tx_data = create_test_stellar_data_with_xdr();
 
-//         let result = signer
-//             .sign_transaction(NetworkTransactionData::Stellar(tx_data))
-//             .await;
+        let result = signer
+            .sign_transaction(NetworkTransactionData::Stellar(tx_data))
+            .await;
 
-//         assert!(result.is_ok());
-//         if let Ok(SignTransactionResponse::Stellar(signed_data)) = result {
-//             // Check that the signature was created
-//             assert_eq!(signed_data.signature.signature.0.len(), 64);
-//         } else {
-//             panic!("Expected Stellar transaction response");
-//         }
-//     }
+        assert!(result.is_ok());
+        if let Ok(SignTransactionResponse::Stellar(signed_data)) = result {
+            // Check that the signature was created
+            assert_eq!(signed_data.signature.signature.0.len(), 64);
+        } else {
+            panic!("Expected Stellar transaction response");
+        }
+    }
 
-//     #[tokio::test]
-//     async fn test_sign_xdr_transaction() {
-//         let mut mock_service = MockTurnkeyServiceTrait::new();
-//         let test_address = create_test_address();
+    #[tokio::test]
+    async fn test_sign_xdr_transaction() {
+        let mut mock_service = MockTurnkeyServiceTrait::new();
+        let test_address = create_test_address();
 
-//         // Mock signature (64 bytes for Ed25519)
-//         let mock_signature = vec![3u8; 64];
+        // Mock signature (64 bytes for Ed25519)
+        let mock_signature = vec![3u8; 64];
 
-//         mock_service
-//             .expect_address_stellar()
-//             .times(1)
-//             .returning(move || Ok(Address::Stellar(test_address.clone())));
+        mock_service
+            .expect_address_stellar()
+            .times(1)
+            .returning(move || Ok(Address::Stellar(test_address.clone())));
 
-//         mock_service
-//             .expect_sign_stellar()
-//             .times(1)
-//             .returning(move |_| {
-//                 let sig_clone = mock_signature.clone();
-//                 Box::pin(async move { Ok(sig_clone) })
-//             });
+        mock_service
+            .expect_sign_stellar()
+            .times(1)
+            .returning(move |_| {
+                let sig_clone = mock_signature.clone();
+                Box::pin(async move { Ok(sig_clone) })
+            });
 
-//         let signer = TurnkeySigner::new_for_testing(mock_service);
-//         let test_data = create_test_stellar_data_with_xdr();
+        let signer = TurnkeySigner::new_for_testing(mock_service);
+        let test_data = create_test_stellar_data_with_xdr();
 
-//         let unsigned_xdr = match &test_data.transaction_input {
-//             TransactionInput::UnsignedXdr(xdr) => xdr,
-//             _ => panic!("Expected unsigned XDR"),
-//         };
+        let unsigned_xdr = match &test_data.transaction_input {
+            TransactionInput::UnsignedXdr(xdr) => xdr,
+            _ => panic!("Expected unsigned XDR"),
+        };
 
-//         let result = signer
-//             .sign_xdr_transaction(unsigned_xdr, &test_data.network_passphrase)
-//             .await;
+        let result = signer
+            .sign_xdr_transaction(unsigned_xdr, &test_data.network_passphrase)
+            .await;
 
-//         assert!(result.is_ok());
-//         let response = result.unwrap();
-//         assert!(!response.signed_xdr.is_empty());
-//     }
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert!(!response.signed_xdr.is_empty());
+    }
 
-//     #[tokio::test]
-//     async fn test_sign_error_handling() {
-//         let mut mock_service = MockTurnkeyServiceTrait::new();
+    #[tokio::test]
+    async fn test_sign_error_handling() {
+        let mut mock_service = MockTurnkeyServiceTrait::new();
 
-//         mock_service
-//             .expect_address_stellar()
-//             .times(1)
-//             .returning(|| Err(TurnkeyError::SigningError("Mock signing error".into())));
+        mock_service
+            .expect_address_stellar()
+            .times(1)
+            .returning(|| Err(TurnkeyError::SigningError("Mock signing error".into())));
 
-//         let signer = TurnkeySigner::new_for_testing(mock_service);
+        let signer = TurnkeySigner::new_for_testing(mock_service);
 
-//         let result = signer.address().await;
-//         assert!(result.is_err());
-//         match result {
-//             Err(SignerError::TurnkeyError(err)) => {
-//                 assert_eq!(err.to_string(), "Signing error: Mock signing error");
-//             }
-//             _ => panic!("Expected TurnkeyError error variant"),
-//         }
-//     }
+        let result = signer.address().await;
+        assert!(result.is_err());
+        match result {
+            Err(SignerError::TurnkeyError(err)) => {
+                assert_eq!(err.to_string(), "Signing error: Mock signing error");
+            }
+            _ => panic!("Expected TurnkeyError error variant"),
+        }
+    }
 
-//     #[tokio::test]
-//     async fn test_invalid_signature_length() {
-//         let mut mock_service = MockTurnkeyServiceTrait::new();
-//         mock_service
-//             .expect_sign_stellar()
-//             .times(1)
-//             .returning(|_| Box::pin(async { Ok(vec![1u8; 32]) })); // Invalid length
+    #[tokio::test]
+    async fn test_invalid_signature_length() {
+        let mut mock_service = MockTurnkeyServiceTrait::new();
+        mock_service
+            .expect_sign_stellar()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(vec![1u8; 32]) })); // Invalid length
 
-//         let signer = TurnkeySigner::new_for_testing(mock_service);
-//         let tx_data = create_test_stellar_data_with_operations();
+        let signer = TurnkeySigner::new_for_testing(mock_service);
+        let tx_data = create_test_stellar_data_with_operations();
 
-//         let result = signer
-//             .sign_transaction(NetworkTransactionData::Stellar(tx_data))
-//             .await;
+        let result = signer
+            .sign_transaction(NetworkTransactionData::Stellar(tx_data))
+            .await;
 
-//         assert!(result.is_err());
-//         match result {
-//             Err(SignerError::SigningError(msg)) => {
-//                 assert!(msg.contains("Invalid signature length"));
-//             }
-//             _ => panic!("Expected SigningError error variant"),
-//         }
-//     }
-// }
+        assert!(result.is_err());
+        match result {
+            Err(SignerError::SigningError(msg)) => {
+                assert!(msg.contains("Invalid signature length"));
+            }
+            _ => panic!("Expected SigningError error variant"),
+        }
+    }
+}

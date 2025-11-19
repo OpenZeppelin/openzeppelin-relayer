@@ -14,10 +14,6 @@ debug = true
 opt-level = 0
 overflow-checks = true
 panic = "unwind"
-incremental = true
-
-[profile.dev]
-incremental = true
 
 [dependencies]
 aws-config = { version = "1.6.3", features = ["behavior-version-latest"] }
