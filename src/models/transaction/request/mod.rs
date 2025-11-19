@@ -54,19 +54,19 @@ impl NetworkTransactionRequest {
 /// The network type is inferred from the relayer's network configuration.
 #[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema, Clone)]
 #[serde(untagged)]
-#[schema(as = GaslessTransactionQuoteRequest)]
-pub enum GaslessTransactionQuoteRequest {
+#[schema(as = SponsoredTransactionQuoteRequest)]
+pub enum SponsoredTransactionQuoteRequest {
     /// Solana-specific fee estimate request parameters
     Solana(SolanaFeeEstimateRequestParams),
     /// Stellar-specific fee estimate request parameters
     Stellar(StellarFeeEstimateRequestParams),
 }
 
-impl GaslessTransactionQuoteRequest {
+impl SponsoredTransactionQuoteRequest {
     pub fn validate(&self) -> Result<(), ApiError> {
         match self {
-            GaslessTransactionQuoteRequest::Stellar(request) => request.validate(),
-            GaslessTransactionQuoteRequest::Solana(_) => Err(ApiError::BadRequest(
+            SponsoredTransactionQuoteRequest::Stellar(request) => request.validate(),
+            SponsoredTransactionQuoteRequest::Solana(_) => Err(ApiError::BadRequest(
                 "Gasless quotes not yet supported for Solana".to_string(),
             )),
         }
@@ -78,19 +78,19 @@ impl GaslessTransactionQuoteRequest {
 /// The network type is inferred from the relayer's network configuration.
 #[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema, Clone)]
 #[serde(untagged)]
-#[schema(as = GaslessTransactionBuildRequest)]
-pub enum GaslessTransactionBuildRequest {
+#[schema(as = SponsoredTransactionBuildRequest)]
+pub enum SponsoredTransactionBuildRequest {
     /// Solana-specific prepare transaction request parameters
     Solana(SolanaPrepareTransactionRequestParams),
     /// Stellar-specific prepare transaction request parameters
     Stellar(StellarPrepareTransactionRequestParams),
 }
 
-impl GaslessTransactionBuildRequest {
+impl SponsoredTransactionBuildRequest {
     pub fn validate(&self) -> Result<(), ApiError> {
         match self {
-            GaslessTransactionBuildRequest::Stellar(request) => request.validate(),
-            GaslessTransactionBuildRequest::Solana(_) => Err(ApiError::BadRequest(
+            SponsoredTransactionBuildRequest::Stellar(request) => request.validate(),
+            SponsoredTransactionBuildRequest::Solana(_) => Err(ApiError::BadRequest(
                 "Unsupported network variant: Solana".to_string(),
             )),
         }

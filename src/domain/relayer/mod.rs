@@ -19,13 +19,15 @@ use mockall::automock;
 use crate::{
     jobs::JobProducerTrait,
     models::{
-        transaction::request::{GaslessTransactionBuildRequest, GaslessTransactionQuoteRequest},
+        transaction::request::{
+            SponsoredTransactionBuildRequest, SponsoredTransactionQuoteRequest,
+        },
         AppState, DecoratedSignature, DeletePendingTransactionsResponse,
-        EncodedSerializedTransaction, EvmNetwork, EvmTransactionDataSignature,
-        GaslessTransactionBuildResponse, GaslessTransactionQuoteResponse, JsonRpcRequest,
+        EncodedSerializedTransaction, EvmNetwork, EvmTransactionDataSignature, JsonRpcRequest,
         JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest, NetworkRpcResult,
         NetworkTransactionRequest, NetworkType, NotificationRepoModel, RelayerError,
-        RelayerRepoModel, RelayerStatus, SignerRepoModel, TransactionError, TransactionRepoModel,
+        RelayerRepoModel, RelayerStatus, SignerRepoModel, SponsoredTransactionBuildResponse,
+        SponsoredTransactionQuoteResponse, TransactionError, TransactionRepoModel,
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
@@ -225,10 +227,10 @@ pub trait GasAbstractionTrait {
     /// # Returns
     ///
     /// A `Result` containing a fee estimate result on success, or a `RelayerError` on failure.
-    async fn get_gasless_transaction_quote(
+    async fn get_sponsored_transaction_quote(
         &self,
-        params: GaslessTransactionQuoteRequest,
-    ) -> Result<GaslessTransactionQuoteResponse, RelayerError>;
+        params: SponsoredTransactionQuoteRequest,
+    ) -> Result<SponsoredTransactionQuoteResponse, RelayerError>;
 
     /// Prepares a transaction with fee payments.
     ///
@@ -239,10 +241,10 @@ pub trait GasAbstractionTrait {
     /// # Returns
     ///
     /// A `Result` containing a prepare transaction result on success, or a `RelayerError` on failure.
-    async fn build_gasless_transaction(
+    async fn build_sponsored_transaction(
         &self,
-        params: GaslessTransactionBuildRequest,
-    ) -> Result<GaslessTransactionBuildResponse, RelayerError>;
+        params: SponsoredTransactionBuildRequest,
+    ) -> Result<SponsoredTransactionBuildResponse, RelayerError>;
 }
 
 pub enum NetworkRelayer<
@@ -384,15 +386,15 @@ impl<
         TCR: TransactionCounterTrait + Send + Sync + 'static,
     > GasAbstractionTrait for NetworkRelayer<J, T, RR, NR, TCR>
 {
-    async fn get_gasless_transaction_quote(
+    async fn get_sponsored_transaction_quote(
         &self,
-        params: GaslessTransactionQuoteRequest,
-    ) -> Result<GaslessTransactionQuoteResponse, RelayerError> {
+        params: SponsoredTransactionQuoteRequest,
+    ) -> Result<SponsoredTransactionQuoteResponse, RelayerError> {
         match params {
-            GaslessTransactionQuoteRequest::Solana(params) => match self {
+            SponsoredTransactionQuoteRequest::Solana(params) => match self {
                 NetworkRelayer::Solana(relayer) => {
                     relayer
-                        .get_gasless_transaction_quote(GaslessTransactionQuoteRequest::Solana(
+                        .get_sponsored_transaction_quote(SponsoredTransactionQuoteRequest::Solana(
                             params,
                         ))
                         .await
@@ -404,10 +406,10 @@ impl<
                     "Gas abstraction not supported for EVM relayers".to_string(),
                 )),
             },
-            GaslessTransactionQuoteRequest::Stellar(params) => match self {
+            SponsoredTransactionQuoteRequest::Stellar(params) => match self {
                 NetworkRelayer::Stellar(relayer) => {
                     relayer
-                        .get_gasless_transaction_quote(GaslessTransactionQuoteRequest::Stellar(
+                        .get_sponsored_transaction_quote(SponsoredTransactionQuoteRequest::Stellar(
                             params,
                         ))
                         .await
@@ -422,15 +424,17 @@ impl<
         }
     }
 
-    async fn build_gasless_transaction(
+    async fn build_sponsored_transaction(
         &self,
-        params: GaslessTransactionBuildRequest,
-    ) -> Result<GaslessTransactionBuildResponse, RelayerError> {
+        params: SponsoredTransactionBuildRequest,
+    ) -> Result<SponsoredTransactionBuildResponse, RelayerError> {
         match params {
-            GaslessTransactionBuildRequest::Solana(params) => match self {
+            SponsoredTransactionBuildRequest::Solana(params) => match self {
                 NetworkRelayer::Solana(relayer) => {
                     relayer
-                        .build_gasless_transaction(GaslessTransactionBuildRequest::Solana(params))
+                        .build_sponsored_transaction(SponsoredTransactionBuildRequest::Solana(
+                            params,
+                        ))
                         .await
                 }
                 NetworkRelayer::Stellar(_) => Err(RelayerError::ValidationError(
@@ -440,10 +444,12 @@ impl<
                     "Gas abstraction not supported for EVM relayers".to_string(),
                 )),
             },
-            GaslessTransactionBuildRequest::Stellar(params) => match self {
+            SponsoredTransactionBuildRequest::Stellar(params) => match self {
                 NetworkRelayer::Stellar(relayer) => {
                     relayer
-                        .build_gasless_transaction(GaslessTransactionBuildRequest::Stellar(params))
+                        .build_sponsored_transaction(SponsoredTransactionBuildRequest::Stellar(
+                            params,
+                        ))
                         .await
                 }
                 NetworkRelayer::Solana(_) => Err(RelayerError::ValidationError(

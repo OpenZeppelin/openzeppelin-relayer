@@ -18,13 +18,12 @@ use crate::domain::{
 };
 use crate::jobs::{TransactionRequest, TransactionStatusCheck};
 use crate::models::transaction::request::{
-    GaslessTransactionBuildRequest, GaslessTransactionQuoteRequest,
+    SponsoredTransactionBuildRequest, SponsoredTransactionQuoteRequest,
 };
 use crate::models::{
-    DeletePendingTransactionsResponse, GaslessTransactionBuildResponse,
-    GaslessTransactionQuoteResponse, JsonRpcRequest, JsonRpcResponse, NetworkRpcRequest,
+    DeletePendingTransactionsResponse, JsonRpcRequest, JsonRpcResponse, NetworkRpcRequest,
     NetworkRpcResult, RelayerStatus, RepositoryError, RpcErrorCodes, SolanaRpcRequest,
-    SolanaRpcResult,
+    SolanaRpcResult, SponsoredTransactionBuildResponse, SponsoredTransactionQuoteResponse,
 };
 use crate::utils::calculate_scheduled_timestamp;
 use crate::{
@@ -1037,12 +1036,12 @@ where
     SP: SolanaProviderTrait + Send + Sync + 'static,
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
 {
-    async fn get_gasless_transaction_quote(
+    async fn get_sponsored_transaction_quote(
         &self,
-        params: GaslessTransactionQuoteRequest,
-    ) -> Result<GaslessTransactionQuoteResponse, RelayerError> {
+        params: SponsoredTransactionQuoteRequest,
+    ) -> Result<SponsoredTransactionQuoteResponse, RelayerError> {
         let params = match params {
-            GaslessTransactionQuoteRequest::Solana(p) => p,
+            SponsoredTransactionQuoteRequest::Solana(p) => p,
             _ => {
                 return Err(RelayerError::ValidationError(
                     "Expected Solana fee estimate request parameters".to_string(),
@@ -1057,15 +1056,15 @@ where
             .await
             .map_err(|e| RelayerError::Internal(e.to_string()))?;
 
-        Ok(GaslessTransactionQuoteResponse::Solana(result))
+        Ok(SponsoredTransactionQuoteResponse::Solana(result))
     }
 
-    async fn build_gasless_transaction(
+    async fn build_sponsored_transaction(
         &self,
-        params: GaslessTransactionBuildRequest,
-    ) -> Result<GaslessTransactionBuildResponse, RelayerError> {
+        params: SponsoredTransactionBuildRequest,
+    ) -> Result<SponsoredTransactionBuildResponse, RelayerError> {
         let params = match params {
-            GaslessTransactionBuildRequest::Solana(p) => p,
+            SponsoredTransactionBuildRequest::Solana(p) => p,
             _ => {
                 return Err(RelayerError::ValidationError(
                     "Expected Solana prepare transaction request parameters".to_string(),
@@ -1083,7 +1082,7 @@ where
                 RelayerError::Internal(error_msg)
             })?;
 
-        Ok(GaslessTransactionBuildResponse::Solana(result))
+        Ok(SponsoredTransactionBuildResponse::Solana(result))
     }
 }
 

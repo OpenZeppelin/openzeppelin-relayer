@@ -2402,6 +2402,271 @@
         ]
       }
     },
+    "/api/v1/relayers/{relayer_id}/transactions/sponsored/build": {
+      "post": {
+        "tags": [
+          "Relayers"
+        ],
+        "summary": "Prepares a sponsored (gasless) transaction with fee payments.",
+        "description": "This endpoint builds a transaction where the relayer will pay the network fees on behalf of the user.\nThe user pays fees in a token of their choice (e.g., USDC) instead of the native network currency.\n\nThe endpoint accepts either a pre-built transaction XDR or a set of operations to build a transaction from.\nIt returns a prepared transaction that includes:\n- The transaction XDR (base64 encoded) ready for signing\n- The fee amount in both the fee token and native currency (stroops for Stellar)\n- The fee token identifier\n- The transaction validity timestamp\n\nAfter receiving the prepared transaction, the user must sign it and submit it through the standard\ntransaction submission endpoint. For Stellar, the transaction will be wrapped in a fee-bump transaction\nwhere the relayer pays the network fees.",
+        "operationId": "buildSponsoredTransaction",
+        "parameters": [
+          {
+            "name": "relayer_id",
+            "in": "path",
+            "description": "The unique identifier of the relayer",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SponsoredTransactionBuildRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Sponsored transaction built successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_SponsoredTransactionBuildResponse"
+                },
+                "example": {
+                  "data": {
+                    "fee_in_stroops": "100000",
+                    "fee_in_token": "1.5",
+                    "fee_token": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+                    "transaction": "AAAAAgAAAAD...",
+                    "valid_until": "2024-01-01T00:00:00Z"
+                  },
+                  "message": "Sponsored transaction built successfully",
+                  "success": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request - Invalid request parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Bad Request",
+                  "success": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Unauthorized",
+                  "success": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Relayer with ID relayer_id not found",
+                  "success": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Too Many Requests",
+                  "success": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Internal Server Error",
+                  "success": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/relayers/{relayer_id}/transactions/sponsored/quote": {
+      "post": {
+        "tags": [
+          "Relayers"
+        ],
+        "summary": "Estimates fees for a sponsored (gasless) transaction.",
+        "description": "This endpoint provides fee estimation for transactions where the relayer will pay the network fees\non behalf of the user. The user pays fees in a token of their choice (e.g., USDC) instead of the\nnative network currency (e.g., XLM for Stellar).\n\nThe endpoint accepts either a pre-built transaction XDR or a set of operations to build a transaction from.\nIt returns the estimated fee amount in the specified fee token and the conversion rate from the native currency.",
+        "operationId": "getSponsoredTransactionQuote",
+        "parameters": [
+          {
+            "name": "relayer_id",
+            "in": "path",
+            "description": "The unique identifier of the relayer",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SponsoredTransactionQuoteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Fee estimate retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_SponsoredTransactionQuoteResponse"
+                },
+                "example": {
+                  "data": {
+                    "conversion_rate": "0.15",
+                    "estimated_fee": "1.5"
+                  },
+                  "message": "Fee estimate retrieved successfully",
+                  "success": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request - Invalid request parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Bad Request",
+                  "success": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Unauthorized",
+                  "success": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Relayer with ID relayer_id not found",
+                  "success": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Too Many Requests",
+                  "success": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Internal Server Error",
+                  "success": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/api/v1/relayers/{relayer_id}/transactions/{transaction_id}": {
       "get": {
         "tags": [
@@ -3894,6 +4159,72 @@
           }
         }
       },
+      "ApiResponse_SponsoredTransactionBuildResponse": {
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PrepareTransactionResult",
+                "description": "Solana-specific prepare transaction result"
+              },
+              {
+                "$ref": "#/components/schemas/PrepareTransactionResult",
+                "description": "Stellar-specific prepare transaction result"
+              }
+            ],
+            "description": "Network-agnostic prepare transaction response for gasless transactions.\nContains network-specific prepare transaction results."
+          },
+          "error": {
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMeta"
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_SponsoredTransactionQuoteResponse": {
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FeeEstimateResult",
+                "description": "Solana-specific fee estimate result"
+              },
+              {
+                "$ref": "#/components/schemas/FeeEstimateResult",
+                "description": "Stellar-specific fee estimate result"
+              }
+            ],
+            "description": "Network-agnostic fee estimate response for gasless transactions.\nContains network-specific fee estimate results."
+          },
+          "error": {
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMeta"
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
       "ApiResponse_String": {
         "type": "object",
         "required": [
@@ -4862,15 +5193,29 @@
       "FeeEstimateRequestParams": {
         "type": "object",
         "required": [
-          "transaction",
           "fee_token"
         ],
         "properties": {
           "fee_token": {
-            "type": "string"
+            "type": "string",
+            "description": "Asset identifier for fee token (e.g., \"native\" or \"USDC:GA5Z...\")"
           },
-          "transaction": {
-            "$ref": "#/components/schemas/EncodedSerializedTransaction"
+          "operations": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/OperationSpec"
+            },
+            "description": "Operations array to build transaction from\nMutually exclusive with transaction_xdr field"
+          },
+          "transaction_xdr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pre-built transaction XDR (base64 encoded, signed or unsigned)\nMutually exclusive with operations field"
           }
         },
         "additionalProperties": false
@@ -4883,10 +5228,12 @@
         ],
         "properties": {
           "conversion_rate": {
-            "type": "string"
+            "type": "string",
+            "description": "Conversion rate from XLM to token (as string)"
           },
           "estimated_fee": {
-            "type": "string"
+            "type": "string",
+            "description": "Estimated fee in token amount (as string for precision)"
           }
         }
       },
@@ -5710,15 +6057,36 @@
       "PrepareTransactionRequestParams": {
         "type": "object",
         "required": [
-          "transaction",
           "fee_token"
         ],
         "properties": {
           "fee_token": {
-            "type": "string"
+            "type": "string",
+            "description": "Asset identifier for fee token"
           },
-          "transaction": {
-            "$ref": "#/components/schemas/EncodedSerializedTransaction"
+          "operations": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/OperationSpec"
+            },
+            "description": "Operations array to build transaction from\nMutually exclusive with transaction_xdr field"
+          },
+          "source_account": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Source account address (required when operations are provided)\nFor gasless transactions, this should be the user's account address"
+          },
+          "transaction_xdr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pre-built transaction XDR (base64 encoded, signed or unsigned)\nMutually exclusive with operations field"
           }
         },
         "additionalProperties": false
@@ -5727,28 +6095,31 @@
         "type": "object",
         "required": [
           "transaction",
-          "fee_in_spl",
-          "fee_in_lamports",
+          "fee_in_token",
+          "fee_in_stroops",
           "fee_token",
-          "valid_until_blockheight"
+          "valid_until"
         ],
         "properties": {
-          "fee_in_lamports": {
-            "type": "string"
+          "fee_in_stroops": {
+            "type": "string",
+            "description": "Fee amount in stroops (as string)"
           },
-          "fee_in_spl": {
-            "type": "string"
+          "fee_in_token": {
+            "type": "string",
+            "description": "Fee amount in token (as string)"
           },
           "fee_token": {
-            "type": "string"
+            "type": "string",
+            "description": "Asset identifier for fee token"
           },
           "transaction": {
-            "$ref": "#/components/schemas/EncodedSerializedTransaction"
+            "type": "string",
+            "description": "Extended transaction XDR (base64 encoded)"
           },
-          "valid_until_blockheight": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
+          "valid_until": {
+            "type": "string",
+            "description": "Transaction validity timestamp (ISO 8601 format)"
           }
         }
       },
@@ -6189,11 +6560,31 @@
         "type": "object",
         "description": "Stellar-specific relayer policy configuration",
         "properties": {
+          "allowed_tokens": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/StellarAllowedTokensPolicy"
+            }
+          },
           "concurrent_transactions": {
             "type": [
               "boolean",
               "null"
             ]
+          },
+          "fee_margin_percentage": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "fee_payment_strategy": {
+            "$ref": "#/components/schemas/StellarFeePaymentStrategy",
+            "description": "Fee payment strategy - determines who pays transaction fees (optional)"
           },
           "max_fee": {
             "type": [
@@ -6211,6 +6602,16 @@
             "format": "int64",
             "minimum": 0
           },
+          "slippage_percentage": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "swap_config": {
+            "$ref": "#/components/schemas/RelayerStellarSwapConfig"
+          },
           "timeout_seconds": {
             "type": [
               "integer",
@@ -6218,6 +6619,30 @@
             ],
             "format": "int64",
             "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "RelayerStellarSwapConfig": {
+        "type": "object",
+        "description": "Stellar swap policy configuration",
+        "properties": {
+          "cron_schedule": {
+            "type": "string",
+            "description": "Cron schedule for executing token swap logic to keep relayer funded. Optional."
+          },
+          "min_balance_threshold": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Min XLM balance (in stroops) to execute token swap logic to keep relayer funded. Optional.",
+            "minimum": 0
+          },
+          "strategies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StellarSwapStrategy"
+            },
+            "description": "DEX strategies to use for token swaps, in priority order.\nStrategies are tried sequentially until one can handle the asset."
           }
         },
         "additionalProperties": false
@@ -7301,12 +7726,139 @@
           "safeLow"
         ]
       },
+      "SponsoredTransactionBuildRequest": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/PrepareTransactionRequestParams",
+            "description": "Solana-specific prepare transaction request parameters"
+          },
+          {
+            "$ref": "#/components/schemas/PrepareTransactionRequestParams",
+            "description": "Stellar-specific prepare transaction request parameters"
+          }
+        ],
+        "description": "Network-agnostic prepare transaction request parameters for gasless transactions.\nContains network-specific request parameters for preparing transactions with fee payments.\nThe network type is inferred from the relayer's network configuration."
+      },
+      "SponsoredTransactionBuildResponse": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/PrepareTransactionResult",
+            "description": "Solana-specific prepare transaction result"
+          },
+          {
+            "$ref": "#/components/schemas/PrepareTransactionResult",
+            "description": "Stellar-specific prepare transaction result"
+          }
+        ],
+        "description": "Network-agnostic prepare transaction response for gasless transactions.\nContains network-specific prepare transaction results."
+      },
+      "SponsoredTransactionQuoteRequest": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/FeeEstimateRequestParams",
+            "description": "Solana-specific fee estimate request parameters"
+          },
+          {
+            "$ref": "#/components/schemas/FeeEstimateRequestParams",
+            "description": "Stellar-specific fee estimate request parameters"
+          }
+        ],
+        "description": "Network-agnostic fee estimate request parameters for gasless transactions.\nContains network-specific request parameters for fee estimation.\nThe network type is inferred from the relayer's network configuration."
+      },
+      "SponsoredTransactionQuoteResponse": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/FeeEstimateResult",
+            "description": "Solana-specific fee estimate result"
+          },
+          {
+            "$ref": "#/components/schemas/FeeEstimateResult",
+            "description": "Stellar-specific fee estimate result"
+          }
+        ],
+        "description": "Network-agnostic fee estimate response for gasless transactions.\nContains network-specific fee estimate results."
+      },
+      "StellarAllowedTokensPolicy": {
+        "type": "object",
+        "description": "Configuration for allowed token handling on Stellar",
+        "required": [
+          "asset"
+        ],
+        "properties": {
+          "asset": {
+            "type": "string"
+          },
+          "max_allowed_fee": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/StellarTokenMetadata"
+          },
+          "swap_config": {
+            "$ref": "#/components/schemas/StellarAllowedTokensSwapConfig"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StellarAllowedTokensSwapConfig": {
+        "type": "object",
+        "description": "Stellar token swap configuration",
+        "properties": {
+          "max_amount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Maximum amount of tokens to swap. Optional.",
+            "minimum": 0
+          },
+          "min_amount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Minimum amount of tokens to swap. Optional.",
+            "minimum": 0
+          },
+          "retain_min_amount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Minimum amount of tokens to retain after swap. Optional.",
+            "minimum": 0
+          },
+          "slippage_percentage": {
+            "type": "number",
+            "format": "float",
+            "description": "Conversion slippage percentage for token. Optional."
+          }
+        },
+        "additionalProperties": false
+      },
+      "StellarFeePaymentStrategy": {
+        "type": "string",
+        "description": "Stellar fee payment strategy\n\nDetermines who pays transaction fees:\n- `User`: User must include fee payment to relayer in transaction (for custom RPC methods)\n- `Relayer`: Relayer pays all transaction fees (recommended for send transaction endpoint)",
+        "enum": [
+          "user",
+          "relayer"
+        ]
+      },
       "StellarPolicyResponse": {
         "type": "object",
         "description": "Stellar policy response model for OpenAPI documentation",
         "properties": {
+          "allowed_tokens": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StellarAllowedTokensPolicy"
+            }
+          },
           "concurrent_transactions": {
             "type": "boolean"
+          },
+          "fee_margin_percentage": {
+            "type": "number",
+            "format": "float"
+          },
+          "fee_payment_strategy": {
+            "$ref": "#/components/schemas/StellarFeePaymentStrategy"
           },
           "max_fee": {
             "type": "integer",
@@ -7317,6 +7869,13 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          },
+          "slippage_percentage": {
+            "type": "number",
+            "format": "float"
+          },
+          "swap_config": {
+            "$ref": "#/components/schemas/RelayerStellarSwapConfig"
           },
           "timeout_seconds": {
             "type": "integer",
@@ -7330,7 +7889,6 @@
         "oneOf": [
           {
             "type": "object",
-            "description": "Raw request where params can be any JSON value (string or structured).",
             "required": [
               "method",
               "params"
@@ -7340,7 +7898,8 @@
                 "type": "string"
               },
               "params": {}
-            }
+            },
+            "example": "rawRpcRequest"
           }
         ]
       },
@@ -7350,6 +7909,88 @@
             "description": "Raw JSON-RPC response value. Covers string or structured JSON values."
           }
         ]
+      },
+      "StellarSwapStrategy": {
+        "type": "string",
+        "description": "Stellar swap strategy",
+        "enum": [
+          "order-book",
+          "soroswap"
+        ]
+      },
+      "StellarTokenKind": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "native"
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "classic"
+            ],
+            "properties": {
+              "classic": {
+                "type": "object",
+                "required": [
+                  "code",
+                  "issuer"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "issuer": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "contract"
+            ],
+            "properties": {
+              "contract": {
+                "type": "object",
+                "required": [
+                  "contract_id"
+                ],
+                "properties": {
+                  "contract_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "StellarTokenMetadata": {
+        "type": "object",
+        "required": [
+          "kind",
+          "decimals",
+          "canonical_asset_id"
+        ],
+        "properties": {
+          "canonical_asset_id": {
+            "type": "string"
+          },
+          "decimals": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "kind": {
+            "$ref": "#/components/schemas/StellarTokenKind"
+          }
+        },
+        "additionalProperties": false
       },
       "StellarTransactionRequest": {
         "type": "object",

@@ -173,8 +173,8 @@ impl From<TransactionRepoModel> for TransactionResponse {
 /// Contains network-specific fee estimate results.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 #[serde(untagged)]
-#[schema(as = GaslessTransactionQuoteResponse)]
-pub enum GaslessTransactionQuoteResponse {
+#[schema(as = SponsoredTransactionQuoteResponse)]
+pub enum SponsoredTransactionQuoteResponse {
     /// Solana-specific fee estimate result
     Solana(SolanaFeeEstimateResult),
     /// Stellar-specific fee estimate result
@@ -185,8 +185,8 @@ pub enum GaslessTransactionQuoteResponse {
 /// Contains network-specific prepare transaction results.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 #[serde(untagged)]
-#[schema(as = GaslessTransactionBuildResponse)]
-pub enum GaslessTransactionBuildResponse {
+#[schema(as = SponsoredTransactionBuildResponse)]
+pub enum SponsoredTransactionBuildResponse {
     /// Solana-specific prepare transaction result
     Solana(SolanaPrepareTransactionResult),
     /// Stellar-specific prepare transaction result

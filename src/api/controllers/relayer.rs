@@ -19,7 +19,9 @@ use crate::{
     jobs::JobProducerTrait,
     models::{
         convert_to_internal_rpc_request, deserialize_policy_for_network_type,
-        transaction::request::{GaslessTransactionBuildRequest, GaslessTransactionQuoteRequest},
+        transaction::request::{
+            SponsoredTransactionBuildRequest, SponsoredTransactionQuoteRequest,
+        },
         ApiError, ApiResponse, CreateRelayerRequest, DefaultAppState, NetworkRepoModel,
         NetworkTransactionRequest, NetworkType, NotificationRepoModel, PaginationMeta,
         PaginationQuery, Relayer as RelayerDomainModel, RelayerRepoModel, RelayerRepoUpdater,
@@ -840,9 +842,9 @@ where
 /// # Returns
 ///
 /// The fee estimate result.
-pub async fn get_gasless_transaction_quote<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn get_sponsored_transaction_quote<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     relayer_id: String,
-    request: GaslessTransactionQuoteRequest,
+    request: SponsoredTransactionQuoteRequest,
     state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
@@ -864,7 +866,7 @@ where
     let network_relayer = get_network_relayer_by_model(relayer, &state).await?;
 
     let result = network_relayer
-        .get_gasless_transaction_quote(request)
+        .get_sponsored_transaction_quote(request)
         .await?;
     Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
 }
@@ -880,9 +882,9 @@ where
 /// # Returns
 ///
 /// The prepare transaction result.
-pub async fn build_gasless_transaction<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn build_sponsored_transaction<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     relayer_id: String,
-    request: GaslessTransactionBuildRequest,
+    request: SponsoredTransactionBuildRequest,
     state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
@@ -903,7 +905,7 @@ where
 
     let network_relayer = get_network_relayer_by_model(relayer, &state).await?;
 
-    let result = network_relayer.build_gasless_transaction(request).await?;
+    let result = network_relayer.build_sponsored_transaction(request).await?;
     Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
 }
 

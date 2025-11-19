@@ -21,12 +21,12 @@ use crate::domain::transaction::stellar::{
 };
 use crate::domain::xdr_needs_simulation;
 use crate::jobs::JobProducerTrait;
+use crate::models::{NetworkRepoModel, RelayerRepoModel, TransactionRepoModel};
 use crate::models::{
-    GaslessTransactionBuildRequest, GaslessTransactionBuildResponse,
-    GaslessTransactionQuoteRequest, GaslessTransactionQuoteResponse, StellarFeeEstimateResult,
+    SponsoredTransactionBuildRequest, SponsoredTransactionBuildResponse,
+    SponsoredTransactionQuoteRequest, SponsoredTransactionQuoteResponse, StellarFeeEstimateResult,
     StellarPrepareTransactionResult, StellarTransactionData, TransactionInput,
 };
-use crate::models::{NetworkRepoModel, RelayerRepoModel, TransactionRepoModel};
 use crate::repositories::{
     NetworkRepository, RelayerRepository, Repository, TransactionRepository,
 };
@@ -48,12 +48,12 @@ where
     TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
     S: StellarSignTrait + Send + Sync + 'static,
 {
-    async fn get_gasless_transaction_quote(
+    async fn get_sponsored_transaction_quote(
         &self,
-        params: GaslessTransactionQuoteRequest,
-    ) -> Result<GaslessTransactionQuoteResponse, RelayerError> {
+        params: SponsoredTransactionQuoteRequest,
+    ) -> Result<SponsoredTransactionQuoteResponse, RelayerError> {
         let params = match params {
-            GaslessTransactionQuoteRequest::Stellar(p) => p,
+            SponsoredTransactionQuoteRequest::Stellar(p) => p,
             _ => {
                 return Err(RelayerError::ValidationError(
                     "Expected Stellar fee estimate request parameters".to_string(),
@@ -135,15 +135,15 @@ where
             estimated_fee: fee_quote.fee_in_token_ui,
             conversion_rate: fee_quote.conversion_rate.to_string(),
         };
-        Ok(GaslessTransactionQuoteResponse::Stellar(result))
+        Ok(SponsoredTransactionQuoteResponse::Stellar(result))
     }
 
-    async fn build_gasless_transaction(
+    async fn build_sponsored_transaction(
         &self,
-        params: GaslessTransactionBuildRequest,
-    ) -> Result<GaslessTransactionBuildResponse, RelayerError> {
+        params: SponsoredTransactionBuildRequest,
+    ) -> Result<SponsoredTransactionBuildResponse, RelayerError> {
         let params = match params {
-            GaslessTransactionBuildRequest::Stellar(p) => p,
+            SponsoredTransactionBuildRequest::Stellar(p) => p,
             _ => {
                 return Err(RelayerError::ValidationError(
                     "Expected Stellar prepare transaction request parameters".to_string(),
@@ -282,7 +282,7 @@ where
             .to_xdr_base64(Limits::none())
             .map_err(|e| RelayerError::Internal(format!("Failed to serialize XDR: {}", e)))?;
 
-        Ok(GaslessTransactionBuildResponse::Stellar(
+        Ok(SponsoredTransactionBuildResponse::Stellar(
             StellarPrepareTransactionResult {
                 transaction: extended_xdr,
                 fee_in_token: fee_quote.fee_in_token_ui,
