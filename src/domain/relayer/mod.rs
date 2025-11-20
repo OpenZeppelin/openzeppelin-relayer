@@ -227,7 +227,7 @@ pub trait GasAbstractionTrait {
     /// # Returns
     ///
     /// A `Result` containing a fee estimate result on success, or a `RelayerError` on failure.
-    async fn get_sponsored_transaction_quote(
+    async fn quote_sponsored_transaction(
         &self,
         params: SponsoredTransactionQuoteRequest,
     ) -> Result<SponsoredTransactionQuoteResponse, RelayerError>;
@@ -386,7 +386,7 @@ impl<
         TCR: TransactionCounterTrait + Send + Sync + 'static,
     > GasAbstractionTrait for NetworkRelayer<J, T, RR, NR, TCR>
 {
-    async fn get_sponsored_transaction_quote(
+    async fn quote_sponsored_transaction(
         &self,
         params: SponsoredTransactionQuoteRequest,
     ) -> Result<SponsoredTransactionQuoteResponse, RelayerError> {
@@ -394,7 +394,7 @@ impl<
             SponsoredTransactionQuoteRequest::Solana(params) => match self {
                 NetworkRelayer::Solana(relayer) => {
                     relayer
-                        .get_sponsored_transaction_quote(SponsoredTransactionQuoteRequest::Solana(
+                        .quote_sponsored_transaction(SponsoredTransactionQuoteRequest::Solana(
                             params,
                         ))
                         .await
@@ -409,7 +409,7 @@ impl<
             SponsoredTransactionQuoteRequest::Stellar(params) => match self {
                 NetworkRelayer::Stellar(relayer) => {
                     relayer
-                        .get_sponsored_transaction_quote(SponsoredTransactionQuoteRequest::Stellar(
+                        .quote_sponsored_transaction(SponsoredTransactionQuoteRequest::Stellar(
                             params,
                         ))
                         .await

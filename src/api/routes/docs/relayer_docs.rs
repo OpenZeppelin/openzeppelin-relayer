@@ -1294,7 +1294,7 @@ fn doc_rpc() {}
     post,
     path = "/api/v1/relayers/{relayer_id}/transactions/sponsored/quote",
     tag = "Relayers",
-    operation_id = "getSponsoredTransactionQuote",
+    operation_id = "quoteSponsoredTransaction",
     security(
         ("bearer_auth" = [])
     ),
@@ -1369,7 +1369,7 @@ fn doc_rpc() {}
     )
 )]
 #[allow(dead_code)]
-fn doc_get_sponsored_transaction_quote() {}
+fn doc_quote_sponsored_transaction() {}
 
 /// Prepares a sponsored (gasless) transaction with fee payments.
 ///

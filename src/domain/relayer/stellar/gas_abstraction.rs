@@ -23,12 +23,13 @@ use crate::domain::transaction::stellar::{
 };
 use crate::domain::xdr_needs_simulation;
 use crate::jobs::JobProducerTrait;
-use crate::models::{NetworkRepoModel, RelayerRepoModel, TransactionRepoModel};
 use crate::models::{
-    SponsoredTransactionBuildRequest, SponsoredTransactionBuildResponse,
-    SponsoredTransactionQuoteRequest, SponsoredTransactionQuoteResponse, StellarFeeEstimateResult,
-    StellarPrepareTransactionResult, StellarTransactionData, TransactionInput,
+    transaction::stellar::OperationSpec, SponsoredTransactionBuildRequest,
+    SponsoredTransactionBuildResponse, SponsoredTransactionQuoteRequest,
+    SponsoredTransactionQuoteResponse, StellarFeeEstimateResult, StellarPrepareTransactionResult,
+    StellarTransactionData, TransactionInput,
 };
+use crate::models::{NetworkRepoModel, RelayerRepoModel, TransactionRepoModel};
 use crate::repositories::{
     NetworkRepository, RelayerRepository, Repository, TransactionRepository,
 };
@@ -50,7 +51,7 @@ where
     TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
     S: StellarSignTrait + Send + Sync + 'static,
 {
-    async fn get_sponsored_transaction_quote(
+    async fn quote_sponsored_transaction(
         &self,
         params: SponsoredTransactionQuoteRequest,
     ) -> Result<SponsoredTransactionQuoteResponse, RelayerError> {
@@ -63,7 +64,7 @@ where
             }
         };
         debug!(
-            "Processing fee estimate request for token: {}",
+            "Processing quote sponsored transaction request for token: {}",
             params.fee_token
         );
 
@@ -80,25 +81,13 @@ where
             ));
         }
 
-        // Build envelope from XDR or operations (similar to build method for validation)
-        // Note: For operations-based quotes, we can't fully validate without source_account,
-        // but FeeEstimateRequestParams doesn't include source_account. For better DX,
-        // we'll parse XDR if provided, otherwise return a helpful error.
-        let envelope = if let Some(ref xdr) = params.transaction_xdr {
-            parse_transaction_xdr(xdr, false)
-                .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {}", e)))?
-        } else if let Some(ref _operations) = params.operations {
-            // For operations-based quotes, we can't build envelope without source_account
-            // Return helpful error suggesting to use transaction_xdr or prepareTransaction endpoint
-            return Err(RelayerError::ValidationError(
-                "Operations-based fee estimation requires source_account to build and validate transaction. \
-                Please provide transaction_xdr instead, or use the prepareTransaction endpoint which supports operations with source_account.".to_string(),
-            ));
-        } else {
-            return Err(RelayerError::ValidationError(
-                "Must provide either transaction_xdr or operations in the request".to_string(),
-            ));
-        };
+        // Build envelope from XDR or operations (reusing logic from build method)
+        let envelope = build_envelope_from_request(
+            params.transaction_xdr.as_ref(),
+            params.operations.as_ref(),
+            params.source_account.as_ref(),
+            &self.network.passphrase,
+        )?;
 
         // Run comprehensive security validation (similar to build method)
         StellarTransactionValidator::gasless_transaction_validation(
@@ -129,7 +118,7 @@ where
         let xlm_fee = inner_tx_fee + additional_fees;
 
         // Convert to token amount via DEX service
-        let (fee_quote, _) = convert_xlm_fee_to_token(
+        let fee_quote = convert_xlm_fee_to_token(
             self.dex_service.as_ref(),
             &policy,
             xlm_fee,
@@ -202,42 +191,13 @@ where
             ));
         }
 
-        // Build envelope from XDR or operations
-        let envelope = if let Some(ref xdr) = params.transaction_xdr {
-            parse_transaction_xdr(xdr, false)
-                .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {}", e)))?
-        } else if let Some(ref operations) = params.operations {
-            // Build envelope from operations
-            let source_account = params.source_account.as_ref().ok_or_else(|| {
-                RelayerError::ValidationError(
-                    "source_account is required when providing operations".to_string(),
-                )
-            })?;
-
-            // Create StellarTransactionData from operations
-            let stellar_data = StellarTransactionData {
-                source_account: source_account.clone(),
-                fee: None,
-                sequence_number: None,
-                memo: None,
-                valid_until: None,
-                network_passphrase: self.network.passphrase.clone(),
-                signatures: vec![],
-                hash: None,
-                simulation_transaction_data: None,
-                transaction_input: TransactionInput::Operations(operations.clone()),
-                signed_envelope_xdr: None,
-            };
-
-            // Build unsigned envelope from operations
-            stellar_data.build_unsigned_envelope().map_err(|e| {
-                RelayerError::Internal(format!("Failed to build envelope from operations: {}", e))
-            })?
-        } else {
-            return Err(RelayerError::ValidationError(
-                "Must provide either transaction_xdr or operations in the request".to_string(),
-            ));
-        };
+        // Build envelope from XDR or operations (reusing shared helper)
+        let envelope = build_envelope_from_request(
+            params.transaction_xdr.as_ref(),
+            params.operations.as_ref(),
+            params.source_account.as_ref(),
+            &self.network.passphrase,
+        )?;
 
         StellarTransactionValidator::gasless_transaction_validation(
             &envelope,
@@ -275,7 +235,7 @@ where
         );
 
         // Calculate fee quote first to check user balance before modifying envelope
-        let (preliminary_fee_quote, _) = convert_xlm_fee_to_token(
+        let preliminary_fee_quote = convert_xlm_fee_to_token(
             self.dex_service.as_ref(),
             &policy,
             xlm_fee,
@@ -313,16 +273,15 @@ where
         .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
 
         // Estimate fee, convert to token, and add payment operation
-        let (fee_quote, buffered_xlm_fee, mut final_envelope) =
-            estimate_fee_and_add_payment_operation(
-                self,
-                envelope,
-                xlm_fee,
-                &params.fee_token,
-                policy.fee_margin_percentage,
-                &self.relayer.address,
-            )
-            .await?;
+        let (fee_quote, mut final_envelope) = estimate_fee_and_add_payment_operation(
+            self,
+            envelope,
+            xlm_fee,
+            &params.fee_token,
+            policy.fee_margin_percentage,
+            &self.relayer.address,
+        )
+        .await?;
 
         debug!(
             estimated_fee = xlm_fee,
@@ -344,10 +303,58 @@ where
             StellarPrepareTransactionResult {
                 transaction: extended_xdr,
                 fee_in_token: fee_quote.fee_in_token_ui,
-                fee_in_stroops: buffered_xlm_fee.to_string(),
+                fee_in_stroops: fee_quote.fee_in_stroops.to_string(),
                 fee_token: params.fee_token,
                 valid_until: valid_until.to_rfc3339(),
             },
+        ))
+    }
+}
+
+/// Build a transaction envelope from either XDR or operations
+///
+/// This helper function is used by both quote and build methods to construct
+/// a transaction envelope from either a pre-built XDR transaction or from
+/// operations with a source account.
+fn build_envelope_from_request(
+    transaction_xdr: Option<&String>,
+    operations: Option<&Vec<OperationSpec>>,
+    source_account: Option<&String>,
+    network_passphrase: &str,
+) -> Result<TransactionEnvelope, RelayerError> {
+    if let Some(xdr) = transaction_xdr {
+        parse_transaction_xdr(xdr, false)
+            .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {}", e)))
+    } else if let Some(ops) = operations {
+        // Build envelope from operations
+        let source_account = source_account.ok_or_else(|| {
+            RelayerError::ValidationError(
+                "source_account is required when providing operations".to_string(),
+            )
+        })?;
+
+        // Create StellarTransactionData from operations
+        let stellar_data = StellarTransactionData {
+            source_account: source_account.clone(),
+            fee: None,
+            sequence_number: None,
+            memo: None,
+            valid_until: None,
+            network_passphrase: network_passphrase.to_string(),
+            signatures: vec![],
+            hash: None,
+            simulation_transaction_data: None,
+            transaction_input: TransactionInput::Operations(ops.clone()),
+            signed_envelope_xdr: None,
+        };
+
+        // Build unsigned envelope from operations
+        stellar_data.build_unsigned_envelope().map_err(|e| {
+            RelayerError::Internal(format!("Failed to build envelope from operations: {}", e))
+        })
+    } else {
+        Err(RelayerError::ValidationError(
+            "Must provide either transaction_xdr or operations in the request".to_string(),
         ))
     }
 }
@@ -391,7 +398,7 @@ async fn estimate_fee_and_add_payment_operation<P, RR, NR, TR, J, TCS, S, D>(
     fee_token: &str,
     fee_margin_percentage: Option<f32>,
     relayer_address: &str,
-) -> Result<(FeeQuote, u64, TransactionEnvelope), RelayerError>
+) -> Result<(FeeQuote, TransactionEnvelope), RelayerError>
 where
     P: StellarProviderTrait + Send + Sync,
     D: StellarDexServiceTrait + Send + Sync + 'static,
@@ -404,7 +411,7 @@ where
 {
     // Convert XLM fee to token amount
     let policy = relayer.relayer.policies.get_stellar_policy();
-    let (fee_quote, buffered_xlm_fee) = convert_xlm_fee_to_token(
+    let fee_quote = convert_xlm_fee_to_token(
         relayer.dex_service.as_ref(),
         &policy,
         xlm_fee,
@@ -428,5 +435,5 @@ where
         add_fee_payment_operation(&mut envelope, fee_token, fee_amount, relayer_address)?;
     }
 
-    Ok((fee_quote, buffered_xlm_fee, envelope))
+    Ok((fee_quote, envelope))
 }

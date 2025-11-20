@@ -75,7 +75,7 @@ impl Modify for SecurityAddon {
         relayer_docs::doc_rpc,
         relayer_docs::doc_send_transaction,
         relayer_docs::doc_replace_transaction,
-        relayer_docs::doc_get_sponsored_transaction_quote,
+        relayer_docs::doc_quote_sponsored_transaction,
         relayer_docs::doc_build_sponsored_transaction,
         health::health,
         metrics::list_metrics,

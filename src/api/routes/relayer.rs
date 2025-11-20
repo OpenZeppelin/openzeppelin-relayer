@@ -197,12 +197,12 @@ async fn rpc(
 
 /// Estimates fees for a transaction (gas abstraction endpoint).
 #[post("/relayers/{relayer_id}/transactions/sponsored/quote")]
-async fn get_sponsored_transaction_quote(
+async fn quote_sponsored_transaction(
     relayer_id: web::Path<String>,
     req: web::Json<SponsoredTransactionQuoteRequest>,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
-    relayer::get_sponsored_transaction_quote(relayer_id.into_inner(), req.into_inner(), data).await
+    relayer::quote_sponsored_transaction(relayer_id.into_inner(), req.into_inner(), data).await
 }
 
 /// Prepares a transaction with fee payments (gas abstraction endpoint).
@@ -219,7 +219,7 @@ async fn build_sponsored_transaction(
 pub fn init(cfg: &mut web::ServiceConfig) {
     // Register routes with literal segments before routes with path parameters
     cfg.service(delete_pending_transactions); // /relayers/{id}/transactions/pending
-    cfg.service(get_sponsored_transaction_quote); // /relayers/{id}/transactions/sponsored/quote
+    cfg.service(quote_sponsored_transaction); // /relayers/{id}/transactions/sponsored/quote
     cfg.service(build_sponsored_transaction); // /relayers/{id}/transactions/sponsored/build
 
     // Then register other routes

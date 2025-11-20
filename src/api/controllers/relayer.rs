@@ -842,7 +842,7 @@ where
 /// # Returns
 ///
 /// The fee estimate result.
-pub async fn get_sponsored_transaction_quote<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+pub async fn quote_sponsored_transaction<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     relayer_id: String,
     request: SponsoredTransactionQuoteRequest,
     state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
@@ -865,9 +865,7 @@ where
 
     let network_relayer = get_network_relayer_by_model(relayer, &state).await?;
 
-    let result = network_relayer
-        .get_sponsored_transaction_quote(request)
-        .await?;
+    let result = network_relayer.quote_sponsored_transaction(request).await?;
     Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
 }
 

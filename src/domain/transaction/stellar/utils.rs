@@ -879,7 +879,7 @@ pub async fn convert_xlm_fee_to_token<D>(
     xlm_fee: u64,
     fee_token: &str,
     fee_margin_percentage: Option<f32>,
-) -> Result<(FeeQuote, u64), StellarTransactionUtilsError>
+) -> Result<FeeQuote, StellarTransactionUtilsError>
 where
     D: StellarDexServiceTrait + Send + Sync,
 {
@@ -892,15 +892,12 @@ where
             xlm_fee
         };
 
-        return Ok((
-            FeeQuote {
-                fee_in_token: buffered_fee,
-                fee_in_token_ui: amount_to_ui_amount(buffered_fee, 7),
-                fee_in_stroops: buffered_fee,
-                conversion_rate: 1.0,
-            },
-            buffered_fee,
-        ));
+        return Ok(FeeQuote {
+            fee_in_token: buffered_fee,
+            fee_in_token_ui: amount_to_ui_amount(buffered_fee, 7),
+            fee_in_stroops: buffered_fee,
+            conversion_rate: 1.0,
+        });
     }
 
     debug!("Converting XLM fee to token: {}", fee_token);
@@ -939,10 +936,6 @@ where
         quote.in_amount, quote.out_amount, quote.input_asset, quote.output_asset
     );
 
-    // Get token decimals from policy or default to 7
-    let decimals = policy.get_allowed_token_decimals(fee_token).unwrap_or(7);
-    debug!("Token decimals: {} for token: {}", decimals, fee_token);
-
     // Calculate conversion rate
     let conversion_rate = if buffered_xlm_fee > 0 {
         quote.out_amount as f64 / buffered_xlm_fee as f64
@@ -952,7 +945,7 @@ where
 
     let fee_quote = FeeQuote {
         fee_in_token: quote.out_amount,
-        fee_in_token_ui: amount_to_ui_amount(quote.out_amount, decimals),
+        fee_in_token_ui: amount_to_ui_amount(quote.out_amount, token_decimals.unwrap_or(7)),
         fee_in_stroops: buffered_xlm_fee,
         conversion_rate,
     };
@@ -962,7 +955,7 @@ where
         fee_quote.fee_in_token, fee_quote.fee_in_token_ui, fee_token, fee_quote.fee_in_stroops, fee_quote.conversion_rate
     );
 
-    Ok((fee_quote, buffered_xlm_fee))
+    Ok(fee_quote)
 }
 
 /// Parse transaction envelope from JSON value

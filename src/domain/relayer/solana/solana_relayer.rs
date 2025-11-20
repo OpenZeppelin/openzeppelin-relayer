@@ -1098,7 +1098,7 @@ where
     SP: SolanaProviderTrait + Send + Sync + 'static,
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
 {
-    async fn get_sponsored_transaction_quote(
+    async fn quote_sponsored_transaction(
         &self,
         params: SponsoredTransactionQuoteRequest,
     ) -> Result<SponsoredTransactionQuoteResponse, RelayerError> {

@@ -14,6 +14,10 @@ pub struct FeeEstimateRequestParams {
     /// Mutually exclusive with operations field
     #[schema(nullable = true)]
     pub transaction_xdr: Option<String>,
+    /// Source account address (required when operations are provided)
+    /// For sponsored transactions, this should be the user's account address
+    #[schema(nullable = true)]
+    pub source_account: Option<String>,
     /// Operations array to build transaction from
     /// Mutually exclusive with transaction_xdr field
     #[schema(nullable = true)]

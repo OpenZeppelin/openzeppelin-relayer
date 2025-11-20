@@ -1030,7 +1030,7 @@ impl StellarTransactionValidator {
             required_xlm_fee += STELLAR_DEFAULT_TRANSACTION_FEE as u64;
         }
 
-        let (fee_quote, _buffered_xlm_fee) = convert_xlm_fee_to_token(
+        let fee_quote = convert_xlm_fee_to_token(
             dex_service,
             policy,
             required_xlm_fee,

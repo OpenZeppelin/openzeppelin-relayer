@@ -2543,7 +2543,7 @@
         ],
         "summary": "Estimates fees for a sponsored (gasless) transaction.",
         "description": "This endpoint provides fee estimation for transactions where the relayer will pay the network fees\non behalf of the user. The user pays fees in a token of their choice (e.g., USDC) instead of the\nnative network currency (e.g., XLM for Stellar).\n\nThe endpoint accepts either a pre-built transaction XDR or a set of operations to build a transaction from.\nIt returns the estimated fee amount in the specified fee token and the conversion rate from the native currency.",
-        "operationId": "getSponsoredTransactionQuote",
+        "operationId": "quoteSponsoredTransaction",
         "parameters": [
           {
             "name": "relayer_id",
@@ -5209,6 +5209,13 @@
               "$ref": "#/components/schemas/OperationSpec"
             },
             "description": "Operations array to build transaction from\nMutually exclusive with transaction_xdr field"
+          },
+          "source_account": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Source account address (required when operations are provided)\nFor sponsored transactions, this should be the user's account address"
           },
           "transaction_xdr": {
             "type": [
