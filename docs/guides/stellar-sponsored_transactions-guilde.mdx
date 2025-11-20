@@ -1,0 +1,632 @@
+---
+title: Stellar Sponsored Transactions Guide
+---
+
+## Overview
+
+Stellar Sponsored Transactions (also known as gasless transactions) allow users to pay transaction fees using tokens instead of the native XLM currency. This enables a better user experience where users can pay fees in stablecoins like USDC or other tokens they already hold, without needing to maintain XLM balances.
+
+**How it works:**
+
+1. **Quote**: Estimate the fee cost in your preferred token
+2. **Build**: Prepare a transaction that includes fee payment in the token
+3. **Send**: Sign and submit the transaction (relayer pays XLM fees, user pays token fees)
+
+The relayer handles the complexity of fee conversion, token swaps, and XLM fee payment, while users simply pay in their preferred token.
+
+## Prerequisites
+
+- A running OpenZeppelin Relayer instance
+- A Stellar relayer configured with sponsored transaction support
+- Trustlines enabled for the fee tokens you want to accept
+- Sufficient XLM balance in the relayer account for network fees
+
+## Configuration
+
+### 1. Basic Relayer Setup
+
+First, configure a Stellar relayer in your `config.json`:
+
+```json
+{
+  "relayers": [
+    {
+      "id": "stellar-sponsored",
+      "name": "Stellar Sponsored Transactions",
+      "network": "testnet",
+      "paused": false,
+      "signer_id": "local-signer",
+      "network_type": "stellar",
+      "policies": {
+        "fee_payment_strategy": "relayer",
+        "min_balance": 100000000,
+        "max_fee": 100000,
+        "allowed_tokens": [
+          {
+            "asset": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+            "max_allowed_fee": 1000000000,
+            "swap_config": {
+              "slippage_percentage": 1.0,
+              "min_amount": 1000000,
+              "max_amount": 10000000000,
+              "retain_min_amount": 5000000
+            }
+          },
+          {
+            "asset": "native"
+          }
+        ],
+        "slippage_percentage": 1.0,
+        "fee_margin_percentage": 10.0,
+        "swap_config": {
+          "strategies": ["order-book"],
+          "cron_schedule": "0 */6 * * *",
+          "min_balance_threshold": 50000000
+        }
+      }
+    }
+  ]
+}
+```
+
+### 2. Policy Configuration Explained
+
+#### `fee_payment_strategy`
+- **`relayer`** (recommended): Relayer pays all network fees. Users pay fees in tokens.
+- **`user`**: User must include fee payment in the transaction (for custom RPC methods).
+
+#### `allowed_tokens`
+List of tokens that can be used for fee payment. Each token can have:
+
+- **`asset`**: Asset identifier in format `"native"` or `"CODE:ISSUER"` (e.g., `"USDC:GA5Z..."`)
+- **`max_allowed_fee`**: Maximum fee amount in token's smallest unit (stroops for native, token decimals for others)
+- **`swap_config`**: Token-specific swap configuration:
+  - `slippage_percentage`: Maximum acceptable slippage (default: 1.0%)
+  - `min_amount`: Minimum swap amount
+  - `max_amount`: Maximum swap amount
+  - `retain_min_amount`: Minimum amount to retain after swap
+
+#### `swap_config` (Global)
+Configuration for converting collected tokens back to XLM:
+
+- **`strategies`**: DEX strategies to use (currently supports `"order-book"`)
+- **`cron_schedule`**: Schedule for automatic token swaps (e.g., `"0 */6 * * *"` = every 6 hours)
+- **`min_balance_threshold`**: Minimum XLM balance (in stroops) before triggering swaps
+
+#### `slippage_percentage`
+Default slippage tolerance for token conversions (default: 1.0%)
+
+#### `fee_margin_percentage`
+Additional fee margin added to estimated fees to account for price fluctuations (default: 10.0%)
+
+### 3. Enabling Trustlines
+
+Before users can pay fees in tokens, the relayer account must establish trustlines to those tokens. This is a one-time setup per token.
+
+#### Using Stellar SDK
+
+```typescript
+import { Keypair, Networks, Server, TransactionBuilder, Operation } from '@stellar/stellar-sdk';
+
+const relayerKeypair = Keypair.fromSecret('S...'); // Your relayer secret key
+const server = new Server('https://soroban-testnet.stellar.org');
+
+// Get relayer account
+const relayerAccount = await server.loadAccount(relayerKeypair.publicKey());
+
+// USDC asset (example)
+const usdcAsset = new Asset(
+  'USDC',
+  'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN'
+);
+
+// Build change trust transaction
+const transaction = new TransactionBuilder(relayerAccount, {
+  fee: '100',
+  networkPassphrase: Networks.TESTNET,
+})
+  .addOperation(
+    Operation.changeTrust({
+      asset: usdcAsset,
+      limit: '922337203685.4775807', // Maximum limit
+    })
+  )
+  .setTimeout(30)
+  .build();
+
+// Sign and submit
+transaction.sign(relayerKeypair);
+const result = await server.submitTransaction(transaction);
+console.log('Trustline established:', result.hash);
+```
+
+#### Using Horizon API
+
+```bash
+# Build the transaction
+curl -X POST "https://soroban-testnet.stellar.org/transactions" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tx": "AAAAAgAAAAD..." # Base64 XDR of signed transaction
+  }'
+```
+
+#### Verification
+
+Verify the trustline was created:
+
+```bash
+curl "https://soroban-testnet.stellar.org/accounts/{RELAYER_ADDRESS}"
+```
+
+Look for the trustline in the `balances` array:
+
+```json
+{
+  "balances": [
+    {
+      "asset_type": "credit_alphanum4",
+      "asset_code": "USDC",
+      "asset_issuer": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+      "limit": "922337203685.4775807",
+      "balance": "0.0000000"
+    }
+  ]
+}
+```
+
+## Using the API
+
+The sponsored transaction flow consists of three steps: **Quote**, **Build**, and **Send**.
+
+### Step 1: Get Fee Quote
+
+Estimate the transaction fee in your preferred token.
+
+**Endpoint:** `POST /api/v1/relayers/{relayer_id}/transactions/sponsored/quote`
+
+**Request Body:**
+
+```json
+{
+  "transaction_xdr": "AAAAAgAAAAD...",
+  "fee_token": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+}
+```
+
+Or with operations:
+
+```json
+{
+  "operations": [
+    {
+      "type": "payment",
+      "destination": "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "amount": 1000000,
+      "asset": "native"
+    }
+  ],
+  "fee_token": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4K4KZVN"
+}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Fee estimate retrieved successfully",
+  "data": {
+    "estimated_fee": "1.5",
+    "conversion_rate": "0.15"
+  }
+}
+```
+
+**Example Request:**
+
+```bash
+curl -X POST "http://localhost:3000/api/v1/relayers/stellar-sponsored/transactions/sponsored/quote" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{
+    "transaction_xdr": "AAAAAgAAAAD...",
+    "fee_token": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+  }'
+```
+
+**Example with JavaScript:**
+
+```typescript
+const response = await fetch(
+  'http://localhost:3000/api/v1/relayers/stellar-sponsored/transactions/sponsored/quote',
+  {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer YOUR_API_KEY',
+    },
+    body: JSON.stringify({
+      transaction_xdr: transactionXdr,
+      fee_token: 'USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+    }),
+  }
+);
+
+const result = await response.json();
+console.log('Estimated fee:', result.data.estimated_fee);
+console.log('Conversion rate:', result.data.conversion_rate);
+```
+
+### Step 2: Build Sponsored Transaction
+
+Prepare a transaction that includes fee payment in the specified token.
+
+**Endpoint:** `POST /api/v1/relayers/{relayer_id}/transactions/sponsored/build`
+
+**Request Body:**
+
+```json
+{
+  "transaction_xdr": "AAAAAgAAAAD...",
+  "fee_token": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+}
+```
+
+Or with operations:
+
+```json
+{
+  "operations": [
+    {
+      "type": "payment",
+      "destination": "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "amount": 1000000,
+      "asset": "native"
+    }
+  ],
+  "source_account": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+  "fee_token": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Sponsored transaction built successfully",
+  "data": {
+    "transaction": "AAAAAgAAAAD...",
+    "fee_in_token": "1.5",
+    "fee_in_stroops": "100000",
+    "fee_token": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+    "valid_until": "2024-01-01T00:01:00Z"
+  }
+}
+```
+
+**Example Request:**
+
+```bash
+curl -X POST "http://localhost:3000/api/v1/relayers/stellar-sponsored/transactions/sponsored/build" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{
+    "operations": [
+      {
+        "type": "payment",
+        "destination": "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        "amount": 1000000,
+        "asset": "native"
+      }
+    ],
+    "source_account": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    "fee_token": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+  }'
+```
+
+**Example with JavaScript:**
+
+```typescript
+const response = await fetch(
+  'http://localhost:3000/api/v1/relayers/stellar-sponsored/transactions/sponsored/build',
+  {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer YOUR_API_KEY',
+    },
+    body: JSON.stringify({
+      operations: [
+        {
+          type: 'payment',
+          destination: 'GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+          amount: 1000000,
+          asset: 'native',
+        },
+      ],
+      source_account: userAccountAddress,
+      fee_token: 'USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+    }),
+  }
+);
+
+const result = await response.json();
+const preparedTx = result.data.transaction;
+const feeAmount = result.data.fee_in_token;
+const validUntil = result.data.valid_until;
+```
+
+### Step 3: Sign and Send Transaction
+
+Sign the prepared transaction and submit it. The relayer will wrap it in a fee-bump transaction and pay the XLM fees.
+
+**Endpoint:** `POST /api/v1/relayers/{relayer_id}/transactions`
+
+**Request Body:**
+
+```json
+{
+  "transaction_xdr": "AAAAAgAAAAD...",
+  "network": "testnet",
+  "fee_bump": true
+}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Transaction submitted successfully",
+  "data": {
+    "id": "tx-123456",
+    "status": "pending",
+    "network_data": {
+      "signature": "abc123...",
+      "transaction": "AAAAAgAAAAD..."
+    }
+  }
+}
+```
+
+**Complete Example Flow:**
+
+```typescript
+import { Keypair, Networks, Transaction, xdr } from '@stellar/stellar-sdk';
+
+// 1. Get fee quote
+const quoteResponse = await fetch(
+  'http://localhost:3000/api/v1/relayers/stellar-sponsored/transactions/sponsored/quote',
+  {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer YOUR_API_KEY',
+    },
+    body: JSON.stringify({
+      operations: [
+        {
+          type: 'payment',
+          destination: recipientAddress,
+          amount: paymentAmount,
+          asset: 'native',
+        },
+      ],
+      fee_token: 'USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+    }),
+  }
+);
+
+const quote = await quoteResponse.json();
+console.log('Fee estimate:', quote.data.estimated_fee);
+
+// 2. Build sponsored transaction
+const buildResponse = await fetch(
+  'http://localhost:3000/api/v1/relayers/stellar-sponsored/transactions/sponsored/build',
+  {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer YOUR_API_KEY',
+    },
+    body: JSON.stringify({
+      operations: [
+        {
+          type: 'payment',
+          destination: recipientAddress,
+          amount: paymentAmount,
+          asset: 'native',
+        },
+      ],
+      source_account: userKeypair.publicKey(),
+      fee_token: 'USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+    }),
+  }
+);
+
+const build = await buildResponse.json();
+const preparedTxXdr = build.data.transaction;
+
+// 3. Parse and sign the transaction
+const preparedTx = new Transaction(preparedTxXdr, Networks.TESTNET);
+preparedTx.sign(userKeypair);
+
+// 4. Send the signed transaction
+const sendResponse = await fetch(
+  `http://localhost:3000/api/v1/relayers/stellar-sponsored/transactions`,
+  {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer YOUR_API_KEY',
+    },
+    body: JSON.stringify({
+      transaction_xdr: preparedTx.toXDR(),
+      network: 'testnet',
+    }),
+  }
+);
+
+const sendResult = await sendResponse.json();
+console.log('Transaction ID:', sendResult.data.id);
+console.log('Status:', sendResult.data.status);
+```
+
+## Request/Response Formats
+
+### Fee Token Format
+
+Fee tokens are specified using Stellar asset identifiers:
+
+- **Native XLM**: `"native"`
+- **Token**: `"CODE:ISSUER"` (e.g., `"USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"`)
+
+### Operations Format
+
+When building transactions from operations, use the following format:
+
+```json
+{
+  "operations": [
+    {
+      "type": "payment",
+      "destination": "G...",
+      "amount": 1000000,
+      "asset": "native"
+    },
+    {
+      "type": "payment",
+      "destination": "G...",
+      "amount": 5000000,
+      "asset": "USDC:GA5Z..."
+    }
+  ]
+}
+```
+
+Supported operation types:
+- `payment`: Standard payment operation
+- `createAccount`: Account creation
+- `changeTrust`: Trustline management
+- `manageData`: Data entry management
+- `bumpSequence`: Sequence number bump
+- `setOptions`: Account options
+- `allowTrust`: Trustline authorization
+- `accountMerge`: Account merge
+- `manageBuyOffer`: Create buy offer
+- `manageSellOffer`: Create sell offer
+- `createPassiveSellOffer`: Create passive offer
+- `pathPaymentStrictSend`: Path payment strict send
+- `pathPaymentStrictReceive`: Path payment strict receive
+- `createClaimableBalance`: Create claimable balance
+- `claimClaimableBalance`: Claim claimable balance
+- `beginSponsoringFutureReserves`: Begin sponsoring reserves
+- `endSponsoringFutureReserves`: End sponsoring reserves
+- `revokeSponsorship`: Revoke sponsorship
+- `clawback`: Clawback operation
+- `clawbackClaimableBalance`: Clawback claimable balance
+- `setTrustLineFlags`: Set trustline flags
+- `liquidityPoolDeposit`: Deposit to liquidity pool
+- `liquidityPoolWithdraw`: Withdraw from liquidity pool
+- `invokeHostFunction`: Soroban contract invocation
+- `extendFootprintTtl`: Extend footprint TTL
+- `restoreFootprint`: Restore footprint
+
+## Error Handling
+
+Common error scenarios and how to handle them:
+
+### Invalid Fee Token
+
+```json
+{
+  "success": false,
+  "message": "Bad Request",
+  "data": "Invalid fee_token structure: Token not in allowed_tokens list"
+}
+```
+
+**Resolution**: Ensure the token is configured in `allowed_tokens` and the relayer has a trustline.
+
+### Insufficient Balance
+
+```json
+{
+  "success": false,
+  "message": "Bad Request",
+  "data": "Insufficient balance for fee payment"
+}
+```
+
+**Resolution**: Ensure the user's account has sufficient token balance for the fee.
+
+### Transaction Expired
+
+```json
+{
+  "success": false,
+  "message": "Bad Request",
+  "data": "Transaction has expired"
+}
+```
+
+**Resolution**: Rebuild the transaction. The `valid_until` timestamp in the build response indicates when the transaction expires.
+
+### Max Fee Exceeded
+
+```json
+{
+  "success": false,
+  "message": "Bad Request",
+  "data": "Fee exceeds maximum allowed fee for token"
+}
+```
+
+**Resolution**: The transaction fee exceeds the `max_allowed_fee` configured for the token. Consider using a different token or adjusting the configuration.
+
+## Best Practices
+
+1. **Always Quote First**: Get a fee quote before building to show users the expected cost
+2. **Handle Expiration**: Transactions expire after 1 minute. Rebuild if needed
+3. **Monitor Relayer Balance**: Ensure the relayer has sufficient XLM for network fees
+4. **Configure Swap Schedule**: Set up automatic token swaps to maintain XLM balance
+5. **Set Appropriate Limits**: Configure `max_allowed_fee` to prevent excessive fees
+6. **Use Fee Margins**: The `fee_margin_percentage` helps account for price fluctuations
+7. **Monitor Trustlines**: Ensure trustlines are established before users attempt transactions
+
+## Troubleshooting
+
+### Trustline Not Found
+
+If you receive errors about missing trustlines:
+
+1. Verify the trustline exists: `curl "https://soroban-testnet.stellar.org/accounts/{RELAYER_ADDRESS}"`
+2. Check the asset identifier format matches exactly
+3. Ensure the trustline was created successfully
+
+### Token Swap Failures
+
+If token swaps fail:
+
+1. Check DEX liquidity for the token pair
+2. Verify slippage settings are appropriate
+3. Ensure minimum swap amounts are met
+4. Check relayer XLM balance is sufficient
+
+### Transaction Build Failures
+
+If transaction building fails:
+
+1. Verify operations are valid
+2. Check source account exists and has sufficient balance
+3. Ensure fee token is in allowed list
+4. Verify transaction XDR is valid (if using XDR mode)
+
+## Additional Resources
+
+- [Stellar Documentation](https://developers.stellar.org/)
+- [Stellar SDK for JavaScript](https://stellar.github.io/js-stellar-sdk/)
+- [OpenZeppelin Relayer API Reference](/relayer/api_reference)
+- [Network Configuration Guide](/relayer/network_configuration)

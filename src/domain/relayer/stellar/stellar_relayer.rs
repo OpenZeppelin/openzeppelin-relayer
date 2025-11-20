@@ -1,3 +1,4 @@
+use crate::constants::get_stellar_sponsored_transaction_validity_duration;
 use crate::domain::map_provider_error;
 use crate::domain::relayer::evm::create_error_response;
 use crate::services::stellar_dex::StellarDexService;
@@ -57,8 +58,10 @@ use futures::future::try_join_all;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
+use crate::domain::relayer::stellar::xdr_utils::parse_transaction_xdr;
 use crate::domain::relayer::{Relayer, RelayerError};
 use crate::domain::transaction::stellar::token::get_token_metadata;
+use crate::domain::transaction::stellar::StellarTransactionValidator;
 
 /// Dependencies container for `StellarRelayer` construction.
 pub struct StellarRelayerDependencies<RR, NR, TR, J, TCS>
@@ -635,15 +638,34 @@ where
             }
         };
 
-        // Check fee payment strategy - reject if User (user pays fees directly, relayer should not sign)
         let policy = self.relayer.policies.get_stellar_policy();
-        if matches!(
+        let user_pays_fee = matches!(
             policy.fee_payment_strategy,
             Some(StellarFeePaymentStrategy::User)
-        ) {
-            return Err(RelayerError::NotSupported(
-                "sign_transaction is not supported when fee_payment_strategy is 'User'".to_string(),
-            ));
+        );
+
+        // For user-paid fees, validate transaction before signing
+        if user_pays_fee {
+            // Parse the transaction XDR
+            let envelope =
+                parse_transaction_xdr(&stellar_req.unsigned_xdr, false).map_err(|e| {
+                    RelayerError::ValidationError(format!("Failed to parse XDR: {}", e))
+                })?;
+
+            // Comprehensive validation for user fee payment transactions when signing
+            // This validates: transaction structure, fee payments, allowed tokens, payment amounts, and time bounds
+            StellarTransactionValidator::validate_user_fee_payment_transaction(
+                &envelope,
+                &self.relayer.address,
+                &policy,
+                &self.provider,
+                self.dex_service.as_ref(),
+                Some(get_stellar_sponsored_transaction_validity_duration()), // Enforce 1 minute max validity for signing flow
+            )
+            .await
+            .map_err(|e| {
+                RelayerError::ValidationError(format!("Failed to validate transaction: {}", e))
+            })?;
         }
 
         // Use the signer's sign_xdr_transaction method

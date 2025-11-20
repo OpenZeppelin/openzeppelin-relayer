@@ -3,13 +3,21 @@
 //! This module focuses on business logic validations that aren't
 //! already handled by XDR parsing or the type system.
 
+use crate::constants::STELLAR_DEFAULT_TRANSACTION_FEE;
 use crate::constants::STELLAR_MAX_OPERATIONS;
 use crate::domain::relayer::xdr_utils::{
     extract_operations, extract_source_account, muxed_account_to_string,
 };
+use crate::domain::transaction::stellar::token::get_token_balance;
+use crate::domain::transaction::stellar::utils::{
+    convert_xlm_fee_to_token, estimate_fee, extract_time_bounds,
+};
+use crate::domain::xdr_needs_simulation;
 use crate::models::RelayerStellarPolicy;
 use crate::models::{MemoSpec, OperationSpec, StellarValidationError, TransactionError};
 use crate::services::provider::StellarProviderTrait;
+use crate::services::stellar_dex::StellarDexServiceTrait;
+use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
 use soroban_rs::xdr::{
     AccountId, Asset, HostFunction, InvokeHostFunctionOp, LedgerKey, OperationBody, PaymentOp,
@@ -17,7 +25,6 @@ use soroban_rs::xdr::{
 };
 use stellar_strkey::ed25519::PublicKey;
 use thiserror::Error;
-
 #[derive(Debug, Error, Serialize)]
 pub enum StellarTransactionValidationError {
     #[error("Validation error: {0}")]
@@ -644,34 +651,11 @@ impl StellarTransactionValidator {
                 }
 
                 // Prevent SetOptions that could lock out the account
-                OperationBody::SetOptions(set_opts) => {
-                    // Check if trying to add/remove signers
-                    if set_opts.signer.is_some() {
-                        return Err(StellarTransactionValidationError::ValidationError(format!(
-                            "Operation {}: SetOptions with signer changes not allowed",
-                            idx
-                        )));
-                    }
-
-                    // Check if trying to set master weight to 0 (locks account)
-                    if let Some(master_weight) = set_opts.master_weight {
-                        if master_weight == 0 {
-                            return Err(StellarTransactionValidationError::ValidationError(
-                                format!("Operation {}: Cannot set master weight to 0", idx),
-                            ));
-                        }
-                    }
-
-                    // Check if trying to set thresholds that could lock account
-                    if set_opts.low_threshold.is_some()
-                        || set_opts.med_threshold.is_some()
-                        || set_opts.high_threshold.is_some()
-                    {
-                        return Err(StellarTransactionValidationError::ValidationError(format!(
-                            "Operation {}: Threshold changes not allowed",
-                            idx
-                        )));
-                    }
+                OperationBody::SetOptions(_set_opts) => {
+                    return Err(StellarTransactionValidationError::ValidationError(format!(
+                        "Operation {}: SetOptions operations are not allowed",
+                        idx
+                    )));
                 }
 
                 // Validate smart contract invocations
@@ -790,11 +774,22 @@ impl StellarTransactionValidator {
     /// - Validating operations count
     /// - Validating operation types
     /// - Validating sequence number
+    /// - Validating transaction validity duration (if max_validity_duration is provided)
+    ///
+    /// # Arguments
+    /// * `envelope` - The transaction envelope to validate
+    /// * `relayer_address` - The relayer's Stellar address
+    /// * `policy` - The relayer policy
+    /// * `provider` - Provider for Stellar RPC operations
+    /// * `max_validity_duration` - Optional maximum allowed transaction validity duration. If provided,
+    ///   validates that the transaction's time bounds don't exceed this duration. This protects against
+    ///   price fluctuations for user-paid fee transactions.
     pub async fn gasless_transaction_validation<P>(
         envelope: &TransactionEnvelope,
         relayer_address: &str,
         policy: &RelayerStellarPolicy,
         provider: &P,
+        max_validity_duration: Option<Duration>,
     ) -> Result<(), StellarTransactionValidationError>
     where
         P: StellarProviderTrait + Send + Sync,
@@ -805,6 +800,315 @@ impl StellarTransactionValidator {
         Self::validate_operations_count(envelope)?;
         Self::validate_operation_types(envelope, relayer_address, policy)?;
         Self::validate_sequence_number(envelope, provider).await?;
+
+        // Validate that transaction time bounds are not expired
+        Self::validate_time_bounds_not_expired(envelope)?;
+
+        // Validate transaction validity duration if max_validity_duration is provided
+        if let Some(max_duration) = max_validity_duration {
+            Self::validate_transaction_validity_duration(envelope, max_duration)?;
+        }
+
+        Ok(())
+    }
+
+    /// Validate that transaction time bounds are valid and not expired
+    ///
+    /// Checks that:
+    /// 1. Time bounds exist (if envelope has them)
+    /// 2. Current time is within the bounds (min_time <= now <= max_time)
+    /// 3. Transaction has not expired (now <= max_time)
+    ///
+    /// # Arguments
+    /// * `envelope` - The transaction envelope to validate
+    ///
+    /// # Returns
+    /// Ok(()) if validation passes, StellarTransactionValidationError if validation fails
+    pub fn validate_time_bounds_not_expired(
+        envelope: &TransactionEnvelope,
+    ) -> Result<(), StellarTransactionValidationError> {
+        let time_bounds = extract_time_bounds(envelope);
+
+        if let Some(bounds) = time_bounds {
+            let now = Utc::now().timestamp() as u64;
+            let min_time = bounds.min_time.0;
+            let max_time = bounds.max_time.0;
+
+            // Check if transaction has expired
+            if now > max_time {
+                return Err(StellarTransactionValidationError::ValidationError(format!(
+                    "Transaction has expired: max_time={}, current_time={}",
+                    max_time, now
+                )));
+            }
+
+            // Check if transaction is not yet valid (optional check, but good to have)
+            if min_time > 0 && now < min_time {
+                return Err(StellarTransactionValidationError::ValidationError(format!(
+                    "Transaction is not yet valid: min_time={}, current_time={}",
+                    min_time, now
+                )));
+            }
+        }
+        // If no time bounds are set, we don't fail here (some transactions may not have them)
+        // The caller can decide if time bounds are required
+
+        Ok(())
+    }
+
+    /// Validate that transaction validity duration is within the maximum allowed time
+    ///
+    /// This prevents price fluctuations and protects the relayer from losses.
+    /// The transaction must have time bounds set and the validity duration must not exceed
+    /// the maximum allowed duration.
+    ///
+    /// # Arguments
+    /// * `envelope` - The transaction envelope to validate
+    /// * `max_duration` - Maximum allowed validity duration
+    ///
+    /// # Returns
+    /// Ok(()) if validation passes, StellarTransactionValidationError if validation fails
+    pub fn validate_transaction_validity_duration(
+        envelope: &TransactionEnvelope,
+        max_duration: Duration,
+    ) -> Result<(), StellarTransactionValidationError> {
+        let time_bounds = extract_time_bounds(envelope);
+
+        if let Some(bounds) = time_bounds {
+            let max_time =
+                DateTime::from_timestamp(bounds.max_time.0 as i64, 0).ok_or_else(|| {
+                    StellarTransactionValidationError::ValidationError(
+                        "Invalid max_time in time bounds".to_string(),
+                    )
+                })?;
+            let now = Utc::now();
+            let duration = max_time - now;
+
+            if duration > max_duration {
+                return Err(StellarTransactionValidationError::ValidationError(format!(
+                    "Transaction validity duration ({:?}) exceeds maximum allowed duration ({:?})",
+                    duration, max_duration
+                )));
+            }
+        } else {
+            return Err(StellarTransactionValidationError::ValidationError(
+                "Transaction must have time bounds set".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Comprehensive validation for user fee payment transactions
+    ///
+    /// This function performs all validations required for user-paid fee transactions.
+    /// It validates:
+    /// 1. Transaction structure and operations (via gasless_transaction_validation)
+    /// 2. Fee payment operations exist and are valid
+    /// 3. Allowed token validation
+    /// 4. Token max fee validation
+    /// 5. Payment amount is sufficient (compares with required fee including margin)
+    /// 6. Transaction validity duration (if max_validity_duration is provided)
+    ///
+    /// This function is used by both fee-bump and sign-transaction flows.
+    /// For sign-transaction flows, pass `max_validity_duration` to enforce time bounds.
+    /// For fee-bump flows, pass `None` as transactions may not have time bounds set yet.
+    ///
+    /// # Arguments
+    /// * `envelope` - The transaction envelope to validate
+    /// * `relayer_address` - The relayer's Stellar address
+    /// * `policy` - The relayer policy containing fee payment strategy and token settings
+    /// * `provider` - Provider for Stellar RPC operations
+    /// * `dex_service` - DEX service for fetching quotes to validate payment amounts
+    /// * `max_validity_duration` - Optional maximum allowed transaction validity duration.
+    ///   If provided, validates that the transaction's time bounds don't exceed this duration.
+    ///   This protects against price fluctuations for user-paid fee transactions when signing.
+    ///   Pass `None` for fee-bump flows where time bounds may not be set yet.
+    ///
+    /// # Returns
+    /// Ok(()) if validation passes, StellarTransactionValidationError if validation fails
+    pub async fn validate_user_fee_payment_transaction<P, D>(
+        envelope: &TransactionEnvelope,
+        relayer_address: &str,
+        policy: &RelayerStellarPolicy,
+        provider: &P,
+        dex_service: &D,
+        max_validity_duration: Option<Duration>,
+    ) -> Result<(), StellarTransactionValidationError>
+    where
+        P: StellarProviderTrait + Send + Sync,
+        D: StellarDexServiceTrait + Send + Sync,
+    {
+        // Step 1: Comprehensive security validation for gasless transactions
+        // Include duration validation if max_validity_duration is provided
+        Self::gasless_transaction_validation(
+            envelope,
+            relayer_address,
+            policy,
+            provider,
+            max_validity_duration,
+        )
+        .await?;
+
+        // Step 2: Validate fee payment amounts
+        Self::validate_user_fee_payment_amounts(
+            envelope,
+            relayer_address,
+            policy,
+            provider,
+            dex_service,
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    /// Validate fee payment amounts for user-paid fee transactions
+    ///
+    /// This function validates that the fee payment operation exists, is valid,
+    /// and the payment amount is sufficient. It's separated from the core validation
+    /// to allow reuse in different flows.
+    ///
+    /// # Arguments
+    /// * `envelope` - The transaction envelope to validate
+    /// * `relayer_address` - The relayer's Stellar address
+    /// * `policy` - The relayer policy containing fee payment strategy and token settings
+    /// * `provider` - Provider for Stellar RPC operations
+    /// * `dex_service` - DEX service for fetching quotes to validate payment amounts
+    ///
+    /// # Returns
+    /// Ok(()) if validation passes, StellarTransactionValidationError if validation fails
+    async fn validate_user_fee_payment_amounts<P, D>(
+        envelope: &TransactionEnvelope,
+        relayer_address: &str,
+        policy: &RelayerStellarPolicy,
+        provider: &P,
+        dex_service: &D,
+    ) -> Result<(), StellarTransactionValidationError>
+    where
+        P: StellarProviderTrait + Send + Sync,
+        D: StellarDexServiceTrait + Send + Sync,
+    {
+        // Extract the fee payment for amount validation
+        let payments = Self::extract_relayer_payments(envelope, relayer_address)?;
+        if payments.is_empty() {
+            return Err(StellarTransactionValidationError::ValidationError(
+                "Gasless transactions must include a fee payment operation to the relayer"
+                    .to_string(),
+            ));
+        }
+
+        // Validate only one fee payment operation
+        if payments.len() > 1 {
+            return Err(StellarTransactionValidationError::ValidationError(format!(
+                "Gasless transactions must include exactly one fee payment operation to the relayer, found {}",
+                payments.len()
+            )));
+        }
+
+        // Extract the single payment
+        let (asset_id, amount) = &payments[0];
+
+        // Validate fee payment token
+        Self::validate_allowed_token(asset_id, policy)?;
+
+        // Validate max fee
+        Self::validate_token_max_fee(asset_id, *amount, policy)?;
+
+        // Calculate required XLM fee using estimate_fee (handles Soroban transactions correctly)
+
+        let mut required_xlm_fee = estimate_fee(envelope, provider, None).await.map_err(|e| {
+            StellarTransactionValidationError::ValidationError(format!(
+                "Failed to estimate fee: {}",
+                e
+            ))
+        })?;
+
+        let is_soroban = xdr_needs_simulation(envelope).unwrap_or(false);
+        if !is_soroban {
+            // For regular transactions, fee-bump needs base fee (100 stroops)
+            required_xlm_fee += STELLAR_DEFAULT_TRANSACTION_FEE as u64;
+        }
+
+        let (fee_quote, _buffered_xlm_fee) = convert_xlm_fee_to_token(
+            dex_service,
+            policy,
+            required_xlm_fee,
+            asset_id,
+            policy.fee_margin_percentage,
+        )
+        .await
+        .map_err(|e| {
+            StellarTransactionValidationError::ValidationError(format!(
+                "Failed to convert XLM fee to token {}: {}",
+                asset_id, e
+            ))
+        })?;
+
+        // Compare payment amount with required token amount (from convert_xlm_fee_to_token which includes margin)
+        if *amount < fee_quote.fee_in_token {
+            return Err(StellarTransactionValidationError::InsufficientTokenPayment(
+                fee_quote.fee_in_token,
+                *amount,
+            ));
+        }
+
+        // Validate user token balance
+        Self::validate_user_token_balance(envelope, asset_id, fee_quote.fee_in_token, provider)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Validate that user has sufficient token balance to pay the transaction fee
+    ///
+    /// This function checks that the user's account has enough balance of the specified
+    /// fee token to cover the required transaction fee. This prevents users from getting
+    /// quotes or building transactions they cannot afford.
+    ///
+    /// # Arguments
+    /// * `envelope` - The transaction envelope to extract source account from
+    /// * `fee_token` - The token identifier (e.g., "native" or "USDC:GA5Z...")
+    /// * `required_fee_amount` - The required fee amount in token's smallest unit (stroops)
+    /// * `provider` - Provider for Stellar RPC operations to fetch balance
+    ///
+    /// # Returns
+    /// Ok(()) if validation passes, StellarTransactionValidationError if validation fails
+    pub async fn validate_user_token_balance<P>(
+        envelope: &TransactionEnvelope,
+        fee_token: &str,
+        required_fee_amount: u64,
+        provider: &P,
+    ) -> Result<(), StellarTransactionValidationError>
+    where
+        P: StellarProviderTrait + Send + Sync,
+    {
+        // Extract source account from envelope
+        let source_account = extract_source_account(envelope).map_err(|e| {
+            StellarTransactionValidationError::ValidationError(format!(
+                "Failed to extract source account: {}",
+                e
+            ))
+        })?;
+
+        // Fetch user's token balance
+        let user_balance = get_token_balance(provider, &source_account, fee_token)
+            .await
+            .map_err(|e| {
+                StellarTransactionValidationError::ValidationError(format!(
+                    "Failed to fetch user balance for token {}: {}",
+                    fee_token, e
+                ))
+            })?;
+
+        // Check if balance is sufficient
+        if user_balance < required_fee_amount {
+            return Err(StellarTransactionValidationError::ValidationError(format!(
+                "Insufficient balance: user has {} {} but needs {} {} for transaction fee",
+                user_balance, fee_token, required_fee_amount, fee_token
+            )));
+        }
+
         Ok(())
     }
 }

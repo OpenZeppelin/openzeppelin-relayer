@@ -1074,6 +1074,37 @@ pub fn add_operation_to_envelope(
     Ok(())
 }
 
+/// Extract time bounds from a transaction envelope
+///
+/// Handles both regular transactions (TxV0, Tx) and fee-bump transactions
+/// (extracts from inner transaction).
+///
+/// # Arguments
+/// * `envelope` - The transaction envelope to extract time bounds from
+///
+/// # Returns
+/// Some(TimeBounds) if present, None otherwise
+pub fn extract_time_bounds(envelope: &TransactionEnvelope) -> Option<&TimeBounds> {
+    match envelope {
+        TransactionEnvelope::TxV0(e) => e.tx.time_bounds.as_ref(),
+        TransactionEnvelope::Tx(e) => match &e.tx.cond {
+            Preconditions::Time(tb) => Some(tb),
+            _ => None,
+        },
+        TransactionEnvelope::TxFeeBump(fb) => {
+            // Extract from inner transaction
+            match &fb.tx.inner_tx {
+                soroban_rs::xdr::FeeBumpTransactionInnerTx::Tx(inner_tx) => {
+                    match &inner_tx.tx.cond {
+                        Preconditions::Time(tb) => Some(tb),
+                        _ => None,
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Set time bounds on transaction envelope
 pub fn set_time_bounds(
     envelope: &mut TransactionEnvelope,

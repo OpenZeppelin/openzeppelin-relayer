@@ -66,9 +66,7 @@ impl SponsoredTransactionQuoteRequest {
     pub fn validate(&self) -> Result<(), ApiError> {
         match self {
             SponsoredTransactionQuoteRequest::Stellar(request) => request.validate(),
-            SponsoredTransactionQuoteRequest::Solana(_) => Err(ApiError::BadRequest(
-                "Gasless quotes not yet supported for Solana".to_string(),
-            )),
+            SponsoredTransactionQuoteRequest::Solana(_) => Ok(()),
         }
     }
 }
@@ -90,9 +88,7 @@ impl SponsoredTransactionBuildRequest {
     pub fn validate(&self) -> Result<(), ApiError> {
         match self {
             SponsoredTransactionBuildRequest::Stellar(request) => request.validate(),
-            SponsoredTransactionBuildRequest::Solana(_) => Err(ApiError::BadRequest(
-                "Unsupported network variant: Solana".to_string(),
-            )),
+            SponsoredTransactionBuildRequest::Solana(_) => Ok(()),
         }
     }
 }

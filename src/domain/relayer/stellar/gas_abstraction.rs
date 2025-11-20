@@ -4,18 +4,20 @@
 //! gas abstraction functionality including fee estimation and transaction preparation.
 
 use async_trait::async_trait;
-use chrono::{Duration, Utc};
-use soroban_rs::xdr::{Limits, Operation, ReadXdr, TransactionEnvelope, WriteXdr};
+use chrono::Utc;
+use soroban_rs::xdr::{Limits, Operation, TransactionEnvelope, WriteXdr};
 use tracing::debug;
 
-use crate::constants::STELLAR_DEFAULT_TRANSACTION_FEE;
+use crate::constants::{
+    get_stellar_sponsored_transaction_validity_duration, STELLAR_DEFAULT_TRANSACTION_FEE,
+};
 use crate::domain::relayer::{
     stellar::xdr_utils::parse_transaction_xdr, GasAbstractionTrait, RelayerError, StellarRelayer,
 };
 use crate::domain::transaction::stellar::{
     utils::{
         add_operation_to_envelope, convert_xlm_fee_to_token, create_fee_payment_operation,
-        estimate_base_fee, estimate_fee, set_time_bounds, FeeQuote,
+        estimate_fee, set_time_bounds, FeeQuote,
     },
     StellarTransactionValidator,
 };
@@ -71,32 +73,54 @@ where
             |e| RelayerError::Internal(format!("Failed to validate allowed token: {}", e)),
         )?;
 
-        // Estimate fee from envelope or operations
-        // For non-Soroban transactions, we'll add 200 stroops (100 for fee payment op + 100 for fee-bump)
-        let inner_tx_fee: u64 = if let Some(ref xdr) = params.transaction_xdr {
-            // Parse XDR and use estimate_fee utility which handles simulation if needed
-            let envelope = TransactionEnvelope::from_xdr_base64(xdr, Limits::none())
-                .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {}", e)))?;
+        // Validate that either transaction_xdr or operations is provided
+        if params.transaction_xdr.is_none() && params.operations.is_none() {
+            return Err(RelayerError::ValidationError(
+                "Must provide either transaction_xdr or operations in the request".to_string(),
+            ));
+        }
 
-            estimate_fee(&envelope, &self.provider, None)
-                .await
-                .map_err(crate::models::RelayerError::from)?
-        } else if let Some(ref operations) = params.operations {
-            // For operations-only requests, use base fee estimation
-            // (estimate_fee requires an envelope, so we fall back to estimate_base_fee)
-            let num_operations = operations.len();
-            estimate_base_fee(num_operations)
+        // Build envelope from XDR or operations (similar to build method for validation)
+        // Note: For operations-based quotes, we can't fully validate without source_account,
+        // but FeeEstimateRequestParams doesn't include source_account. For better DX,
+        // we'll parse XDR if provided, otherwise return a helpful error.
+        let envelope = if let Some(ref xdr) = params.transaction_xdr {
+            parse_transaction_xdr(xdr, false)
+                .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {}", e)))?
+        } else if let Some(ref _operations) = params.operations {
+            // For operations-based quotes, we can't build envelope without source_account
+            // Return helpful error suggesting to use transaction_xdr or prepareTransaction endpoint
+            return Err(RelayerError::ValidationError(
+                "Operations-based fee estimation requires source_account to build and validate transaction. \
+                Please provide transaction_xdr instead, or use the prepareTransaction endpoint which supports operations with source_account.".to_string(),
+            ));
         } else {
             return Err(RelayerError::ValidationError(
                 "Must provide either transaction_xdr or operations in the request".to_string(),
             ));
         };
 
+        // Run comprehensive security validation (similar to build method)
+        StellarTransactionValidator::gasless_transaction_validation(
+            &envelope,
+            &self.relayer.address,
+            &policy,
+            &self.provider,
+            None, // Duration validation not needed for quote
+        )
+        .await
+        .map_err(|e| {
+            RelayerError::ValidationError(format!("Failed to validate gasless transaction: {}", e))
+        })?;
+
+        // Estimate fee using estimate_fee utility which handles simulation if needed
+        let inner_tx_fee = estimate_fee(&envelope, &self.provider, None)
+            .await
+            .map_err(crate::models::RelayerError::from)?;
+
         // Add fees for fee payment operation (100 stroops) and fee-bump transaction (100 stroops)
         // For Soroban transactions, the simulation already accounts for resource fees,
         // we just need to add the inclusion fees for the additional operations
-        let envelope = parse_transaction_xdr(params.transaction_xdr.as_ref().unwrap(), false)
-            .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {}", e)))?;
         let is_soroban = xdr_needs_simulation(&envelope).unwrap_or(false);
         let mut additional_fees = 0;
         if !is_soroban {
@@ -128,6 +152,16 @@ where
         .map_err(|e| {
             RelayerError::Internal(format!("Failed to validate token-specific max fee: {}", e))
         })?;
+
+        // Check user token balance to ensure they have enough to pay the fee
+        StellarTransactionValidator::validate_user_token_balance(
+            &envelope,
+            &params.fee_token,
+            fee_quote.fee_in_token,
+            &self.provider,
+        )
+        .await
+        .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
 
         debug!("Fee estimate result: {:?}", fee_quote);
 
@@ -210,6 +244,7 @@ where
             &self.relayer.address,
             &policy,
             &self.provider,
+            None, // Duration validation not needed here as time bounds are set during build
         )
         .await
         .map_err(|e| {
@@ -239,6 +274,44 @@ where
             "Fee estimated: inner transaction + fee payment op + fee-bump transaction fee"
         );
 
+        // Calculate fee quote first to check user balance before modifying envelope
+        let (preliminary_fee_quote, _) = convert_xlm_fee_to_token(
+            self.dex_service.as_ref(),
+            &policy,
+            xlm_fee,
+            &params.fee_token,
+            policy.fee_margin_percentage,
+        )
+        .await
+        .map_err(crate::models::RelayerError::from)?;
+
+        // Validate max fee
+        StellarTransactionValidator::validate_max_fee(
+            preliminary_fee_quote.fee_in_stroops,
+            &policy,
+        )
+        .map_err(|e| RelayerError::Internal(format!("Failed to validate max fee: {}", e)))?;
+
+        // Validate token-specific max fee
+        StellarTransactionValidator::validate_token_max_fee(
+            &params.fee_token,
+            preliminary_fee_quote.fee_in_token,
+            &policy,
+        )
+        .map_err(|e| {
+            RelayerError::Internal(format!("Failed to validate token-specific max fee: {}", e))
+        })?;
+
+        // Check user token balance to ensure they have enough to pay the fee
+        StellarTransactionValidator::validate_user_token_balance(
+            &envelope,
+            &params.fee_token,
+            preliminary_fee_quote.fee_in_token,
+            &self.provider,
+        )
+        .await
+        .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
+
         // Estimate fee, convert to token, and add payment operation
         let (fee_quote, buffered_xlm_fee, mut final_envelope) =
             estimate_fee_and_add_payment_operation(
@@ -251,20 +324,6 @@ where
             )
             .await?;
 
-        // Validate max fee
-        StellarTransactionValidator::validate_max_fee(fee_quote.fee_in_stroops, &policy)
-            .map_err(|e| RelayerError::Internal(format!("Failed to validate max fee: {}", e)))?;
-
-        // Validate token-specific max fee
-        StellarTransactionValidator::validate_token_max_fee(
-            &params.fee_token,
-            fee_quote.fee_in_token,
-            &policy,
-        )
-        .map_err(|e| {
-            RelayerError::Internal(format!("Failed to validate token-specific max fee: {}", e))
-        })?;
-
         debug!(
             estimated_fee = xlm_fee,
             final_fee_in_token = fee_quote.fee_in_token_ui,
@@ -272,8 +331,7 @@ where
         );
 
         // Set final time bounds just before returning to give user maximum time to review and submit
-        // Using 1 minute to provide reasonable time while ensuring transaction doesn't expire too quickly
-        let valid_until = Utc::now() + Duration::minutes(1);
+        let valid_until = Utc::now() + get_stellar_sponsored_transaction_validity_duration();
         set_time_bounds(&mut final_envelope, valid_until)
             .map_err(crate::models::RelayerError::from)?;
 
@@ -363,8 +421,12 @@ where
         )
     })?;
 
-    // Add fee payment operation to envelope
-    add_fee_payment_operation(&mut envelope, fee_token, fee_amount, relayer_address)?;
+    let is_soroban = xdr_needs_simulation(&envelope).unwrap_or(false);
+    // For Soroban we don't add the fee payment operation because of Soroban limitation to allow just single operation in the transaction
+    if !is_soroban {
+        // Add fee payment operation to envelope
+        add_fee_payment_operation(&mut envelope, fee_token, fee_amount, relayer_address)?;
+    }
 
     Ok((fee_quote, buffered_xlm_fee, envelope))
 }

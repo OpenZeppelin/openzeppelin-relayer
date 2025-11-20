@@ -1,13 +1,6 @@
 //! Fee-bump transaction preparation logic.
 
-use crate::constants::STELLAR_DEFAULT_TRANSACTION_FEE;
-use crate::domain::{
-    transaction::stellar::{
-        utils::{convert_xlm_fee_to_token, estimate_fee},
-        StellarTransactionValidator,
-    },
-    xdr_needs_simulation,
-};
+use crate::domain::transaction::stellar::StellarTransactionValidator;
 use crate::{
     domain::{
         attach_signatures_to_envelope, build_fee_bump_envelope, parse_transaction_xdr,
@@ -60,14 +53,16 @@ where
             policy.fee_payment_strategy,
             Some(StellarFeePaymentStrategy::User)
         ) {
-            validate_user_fee_payment_transaction(
+            StellarTransactionValidator::validate_user_fee_payment_transaction(
                 &inner_envelope,
                 relayer_address,
                 policy,
                 provider,
                 dex_service,
+                None, // Don't validate duration for fee-bump flow as time bounds may not be set yet
             )
-            .await?;
+            .await
+            .map_err(|e| TransactionError::ValidationError(e.to_string()))?;
         }
     }
 
@@ -89,113 +84,6 @@ where
     let signed_stellar_data = signed_stellar_data.with_fee(required_fee);
 
     Ok(signed_stellar_data)
-}
-
-/// Validate User fee payment strategy transaction (gasless transaction) for fee_bump flow
-///
-/// This function performs comprehensive validation for gasless transactions:
-/// 1. Validates source account is user's account (not relayer)
-/// 2. Validates transaction structure, operations, and sequence number
-/// 3. Validates fee payment operation exists and is valid
-/// 4. Validates fee payment amount is sufficient by comparing with DEX quote
-///
-/// # Arguments
-/// * `envelope` - The inner transaction envelope to validate
-/// * `relayer_address` - The relayer's Stellar address
-/// * `policy` - The relayer policy containing fee payment strategy
-/// * `provider` - Provider for Stellar RPC operations
-/// * `dex_service` - DEX service for fetching quotes to validate payment amounts
-///
-/// # Returns
-/// Ok(()) if validation passes, TransactionError if validation fails
-async fn validate_user_fee_payment_transaction<P, D>(
-    envelope: &TransactionEnvelope,
-    relayer_address: &str,
-    policy: &RelayerStellarPolicy,
-    provider: &P,
-    dex_service: &D,
-) -> Result<(), TransactionError>
-where
-    P: StellarProviderTrait + Send + Sync,
-    D: StellarDexServiceTrait + Send + Sync,
-{
-    // Comprehensive security validation for gasless transactions
-    // This validates source account (not relayer), operations, sequence number, fee payment
-    StellarTransactionValidator::gasless_transaction_validation(
-        envelope,
-        relayer_address,
-        policy,
-        provider,
-    )
-    .await
-    .map_err(|e| {
-        TransactionError::ValidationError(format!("Gasless transaction validation failed: {}", e))
-    })?;
-
-    // Extract the fee payment for amount validation
-    let payments = StellarTransactionValidator::extract_relayer_payments(envelope, relayer_address)
-        .map_err(|e| {
-            TransactionError::ValidationError(format!("Failed to extract relayer payments: {}", e))
-        })?;
-    if payments.is_empty() {
-        return Err(TransactionError::ValidationError(
-            "Gasless transactions must include a fee payment operation to the relayer".to_string(),
-        ));
-    }
-
-    // Validate only one fee payment operation (build transaction flow doesn't support multiple fee tokens)
-    if payments.len() > 1 {
-        return Err(TransactionError::ValidationError(format!(
-                "Gasless transactions must include exactly one fee payment operation to the relayer, found {}",
-                payments.len()
-            )));
-    }
-    // Extract the single payment (we know it exists and is unique from gasless_transaction_validation)
-    let (asset_id, amount) = &payments[0];
-    // Validate fee payment token
-    StellarTransactionValidator::validate_allowed_token(asset_id, policy)?;
-    // Validate max fee
-    StellarTransactionValidator::validate_token_max_fee(asset_id, *amount, policy)?;
-
-    // Calculate required XLM fee using estimate_fee (handles Soroban transactions correctly)
-    // This will simulate if needed for Soroban operations, otherwise count operations
-    let mut required_xlm_fee = estimate_fee(envelope, provider, None)
-        .await
-        .map_err(|e| TransactionError::ValidationError(format!("Failed to estimate fee: {}", e)))?;
-
-    let is_soroban = xdr_needs_simulation(envelope).unwrap_or(false);
-    if !is_soroban {
-        // For regular transactions, fee-bump needs base fee (100 stroops)
-        required_xlm_fee += STELLAR_DEFAULT_TRANSACTION_FEE as u64
-    }
-
-    // Use convert_xlm_fee_to_token to get the required token amount (includes fee margin from policy)
-    // This matches the flow used when building the transaction
-    let (fee_quote, _buffered_xlm_fee) = convert_xlm_fee_to_token(
-        dex_service,
-        policy,
-        required_xlm_fee,
-        asset_id,
-        policy.fee_margin_percentage,
-    )
-    .await
-    .map_err(|e| {
-        TransactionError::ValidationError(format!(
-            "Failed to convert XLM fee to token {}: {}",
-            asset_id, e
-        ))
-    })?;
-
-    // Compare payment amount with required token amount (from convert_xlm_fee_to_token which includes margin)
-    // The payment amount must be at least equal to the required token amount for the fee
-    if *amount < fee_quote.fee_in_token {
-        return Err(TransactionError::ValidationError(format!(
-            "Insufficient fee payment: payment of {} {} is less than required {} {} (for {} stroops XLM fee with margin)",
-            amount, asset_id, fee_quote.fee_in_token, asset_id, required_xlm_fee
-        )));
-    }
-
-    Ok(())
 }
 
 /// Extract and validate the inner transaction from SignedXdr input.
