@@ -457,7 +457,7 @@ fn format_validation_errors(errors: &validator::ValidationErrors) -> String {
     for (struct_field, kind) in errors.errors().iter() {
         if let validator::ValidationErrorsKind::Struct(nested) = kind {
             let nested_msgs = format_validation_errors(nested);
-            messages.push(format!("{}.{}", struct_field, nested_msgs));
+            messages.push(format!("{struct_field}.{nested_msgs}"));
         }
     }
 
@@ -553,7 +553,7 @@ impl From<SignerValidationError> for crate::models::ApiError {
             SignerValidationError::InvalidIdFormat => {
                 "ID must contain only letters, numbers, dashes and underscores and must be at most 36 characters long".to_string()
             }
-            SignerValidationError::InvalidConfig(msg) => format!("Invalid signer configuration: {}", msg),
+            SignerValidationError::InvalidConfig(msg) => format!("Invalid signer configuration: {msg}"),
         })
     }
 }

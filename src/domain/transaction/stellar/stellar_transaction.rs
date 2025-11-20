@@ -239,10 +239,7 @@ where
             .set(&self.relayer().id, relayer_address, next_usable_seq)
             .await
             .map_err(|e| {
-                TransactionError::UnexpectedError(format!(
-                    "Failed to update sequence counter: {}",
-                    e
-                ))
+                TransactionError::UnexpectedError(format!("Failed to update sequence counter: {e}"))
             })?;
 
         info!(sequence = %next_usable_seq, "updated local sequence counter");

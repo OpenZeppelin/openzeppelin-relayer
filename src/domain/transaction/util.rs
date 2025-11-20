@@ -143,7 +143,7 @@ pub fn solana_not_supported_transaction<T>() -> Result<T, TransactionError> {
 pub fn get_age_since_created(tx: &TransactionRepoModel) -> Result<Duration, TransactionError> {
     let created = DateTime::parse_from_rfc3339(&tx.created_at)
         .map_err(|e| {
-            TransactionError::UnexpectedError(format!("Invalid created_at timestamp: {}", e))
+            TransactionError::UnexpectedError(format!("Invalid created_at timestamp: {e}"))
         })?
         .with_timezone(&Utc);
     Ok(Utc::now().signed_duration_since(created))

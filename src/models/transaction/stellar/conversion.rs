@@ -73,7 +73,7 @@ impl TryFrom<StellarTransactionData> for Transaction {
 
                 let source_account =
                     string_to_muxed_account(&data.source_account).map_err(|e| {
-                        SignerError::ConversionError(format!("Invalid source account: {}", e))
+                        SignerError::ConversionError(format!("Invalid source account: {e}"))
                     })?;
 
                 // Apply transaction extension data from simulation if available

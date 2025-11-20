@@ -80,7 +80,7 @@ where
             .provider
             .get_account(&relayer.address)
             .await
-            .map_err(|e| RelayerError::ProviderError(format!("Failed to get account: {}", e)))?;
+            .map_err(|e| RelayerError::ProviderError(format!("Failed to get account: {e}")))?;
 
         // Convert balance from i64 to u64 for comparison (Stellar balances are i64 but always positive)
         let xlm_balance = if account_entry.balance < 0 {
@@ -233,8 +233,7 @@ where
                         .map(|(xdr, quote)| (token_asset, *swap_amount, quote, xdr))
                         .map_err(|e| {
                             RelayerError::Internal(format!(
-                                "Failed to prepare swap transaction: {}",
-                                e
+                                "Failed to prepare swap transaction: {e}"
                             ))
                         })
                 })
@@ -289,7 +288,7 @@ where
                         source_amount: swap_amount,
                         destination_amount: 0,
                         transaction_signature: "".to_string(),
-                        error: Some(format!("Failed to queue transaction: {}", e)),
+                        error: Some(format!("Failed to queue transaction: {e}")),
                     });
                 }
             }

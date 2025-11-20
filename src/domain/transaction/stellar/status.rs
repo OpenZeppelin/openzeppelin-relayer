@@ -68,7 +68,7 @@ where
                             "validation error detected - marking transaction as failed"
                         );
 
-                        self.mark_as_failed(tx, format!("Validation error: {}", msg))
+                        self.mark_as_failed(tx, format!("Validation error: {msg}"))
                             .await
                     }
                     _ => {
@@ -210,7 +210,7 @@ where
                 tx_result_xdr.result.name()
             )
         } else {
-            format!("{} No detailed XDR result available.", base_reason)
+            format!("{base_reason} No detailed XDR result available.")
         };
 
         warn!(reason = %detailed_reason, "stellar transaction failed");

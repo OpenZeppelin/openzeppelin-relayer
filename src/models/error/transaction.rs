@@ -162,7 +162,7 @@ impl From<StellarProviderError> for TransactionError {
 
 impl From<xdr::Error> for TransactionError {
     fn from(error: xdr::Error) -> Self {
-        TransactionError::ValidationError(format!("XDR error: {}", error))
+        TransactionError::ValidationError(format!("XDR error: {error}"))
     }
 }
 

@@ -36,7 +36,7 @@ impl FeeEstimateRequestParams {
 
         // Validate fee_token structure
         StellarTransactionValidator::validate_fee_token_structure(&self.fee_token)
-            .map_err(|e| ApiError::BadRequest(format!("Invalid fee_token structure: {}", e)))?;
+            .map_err(|e| ApiError::BadRequest(format!("Invalid fee_token structure: {e}")))?;
 
         // Check that exactly one input type is provided
         let has_operations = self
@@ -48,7 +48,7 @@ impl FeeEstimateRequestParams {
 
         if has_operations {
             validate_operations(self.operations.as_ref().unwrap())
-                .map_err(|e| ApiError::BadRequest(format!("Invalid operations: {}", e)))?;
+                .map_err(|e| ApiError::BadRequest(format!("Invalid operations: {e}")))?;
         }
 
         match (has_operations, has_xdr) {
@@ -109,7 +109,7 @@ impl PrepareTransactionRequestParams {
 
         // Validate fee_token structure
         StellarTransactionValidator::validate_fee_token_structure(&self.fee_token)
-            .map_err(|e| ApiError::BadRequest(format!("Invalid fee_token structure: {}", e)))?;
+            .map_err(|e| ApiError::BadRequest(format!("Invalid fee_token structure: {e}")))?;
 
         // Check that exactly one input type is provided
         let has_operations = self
@@ -136,7 +136,7 @@ impl PrepareTransactionRequestParams {
         // Validate source_account is provided when operations are used
         if has_operations {
             validate_operations(self.operations.as_ref().unwrap())
-                .map_err(|e| ApiError::BadRequest(format!("Invalid operations: {}", e)))?;
+                .map_err(|e| ApiError::BadRequest(format!("Invalid operations: {e}")))?;
             if self.source_account.is_none() || self.source_account.as_ref().unwrap().is_empty() {
                 return Err(ApiError::BadRequest(
                     "source_account is required when providing operations".to_string(),

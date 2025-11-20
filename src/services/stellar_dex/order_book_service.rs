@@ -203,14 +203,12 @@ where
                 ))
             } else {
                 Err(StellarDexServiceError::InvalidAssetIdentifier(format!(
-                    "Asset code too long (max {} characters): {}",
-                    MAX_CREDIT_ALPHANUM12_CODE_LEN, code
+                    "Asset code too long (max {MAX_CREDIT_ALPHANUM12_CODE_LEN} characters): {code}",
                 )))
             }
         } else {
             Err(StellarDexServiceError::InvalidAssetIdentifier(format!(
-                "Invalid asset format. Expected 'native' or 'CODE:ISSUER', got: {}",
-                asset_id
+                "Invalid asset format. Expected 'native' or 'CODE:ISSUER', got: {asset_id}",
             )))
         }
     }
@@ -232,8 +230,7 @@ where
 
         let (code, issuer) = asset_id.split_once(':').ok_or_else(|| {
             StellarDexServiceError::InvalidAssetIdentifier(format!(
-                "Invalid asset format. Expected 'native' or 'CODE:ISSUER', got: {}",
-                asset_id
+                "Invalid asset format. Expected 'native' or 'CODE:ISSUER', got: {asset_id}"
             ))
         })?;
 
@@ -258,8 +255,7 @@ where
             })
         } else {
             Err(StellarDexServiceError::InvalidAssetIdentifier(format!(
-                "Asset code too long (max 12 characters): {}",
-                code
+                "Asset code too long (max 12 characters): {code}",
             )))
         }
     }
@@ -270,7 +266,7 @@ where
         let decimals_usize = decimals as usize;
 
         if s.len() <= decimals_usize {
-            format!("0.{:0>width$}", s, width = decimals_usize)
+            format!("0.{s:0>decimals_usize$}")
         } else {
             let split = s.len() - decimals_usize;
             format!("{}.{}", &s[..split], &s[split..])
@@ -290,7 +286,7 @@ where
 
         // Parse integer part
         let int_part = parts[0].parse::<u64>().map_err(|_| {
-            StellarDexServiceError::UnknownError(format!("Invalid amount string: {}", amount_str))
+            StellarDexServiceError::UnknownError(format!("Invalid amount string: {amount_str}"))
         })?;
 
         // Handle decimals
@@ -300,7 +296,7 @@ where
         if parts.len() > 1 && !parts[1].is_empty() {
             let fraction_str = parts[1];
             let mut frac_parsed = fraction_str.parse::<u64>().map_err(|_| {
-                StellarDexServiceError::UnknownError(format!("Invalid fraction: {}", amount_str))
+                StellarDexServiceError::UnknownError(format!("Invalid fraction: {amount_str}"))
             })?;
 
             let frac_len = fraction_str.len() as u32;
@@ -344,13 +340,13 @@ where
             }
             AssetSpec::Credit4 { code, issuer } => {
                 params.push("source_asset_type=credit_alphanum4".to_string());
-                params.push(format!("source_asset_code={}", code));
-                params.push(format!("source_asset_issuer={}", issuer));
+                params.push(format!("source_asset_code={code}"));
+                params.push(format!("source_asset_issuer={issuer}"));
             }
             AssetSpec::Credit12 { code, issuer } => {
                 params.push("source_asset_type=credit_alphanum12".to_string());
-                params.push(format!("source_asset_code={}", code));
-                params.push(format!("source_asset_issuer={}", issuer));
+                params.push(format!("source_asset_code={code}"));
+                params.push(format!("source_asset_issuer={issuer}"));
             }
         }
 
@@ -362,10 +358,10 @@ where
                 params.push("destination_assets=native".to_string());
             }
             AssetSpec::Credit4 { code, issuer } => {
-                params.push(format!("destination_assets={}:{}", code, issuer));
+                params.push(format!("destination_assets={code}:{issuer}"));
             }
             AssetSpec::Credit12 { code, issuer } => {
-                params.push(format!("destination_assets={}:{}", code, issuer));
+                params.push(format!("destination_assets={code}:{issuer}"));
             }
         }
 
@@ -393,12 +389,12 @@ where
                 .await
                 .unwrap_or_else(|_| "Unable to read error response".to_string());
             return Err(StellarDexServiceError::ApiError {
-                message: format!("Horizon API returned error {}: {}", status, error_text),
+                message: format!("Horizon API returned error {status}: {error_text}"),
             });
         }
 
         let path_response: PathResponse = response.json().await.map_err(|e| {
-            StellarDexServiceError::UnknownError(format!("Failed to deserialize paths: {}", e))
+            StellarDexServiceError::UnknownError(format!("Failed to deserialize paths: {e}"))
         })?;
 
         Ok(path_response.embedded.records)
@@ -493,12 +489,12 @@ where
                 .await
                 .unwrap_or_else(|_| "Unable to read error response".to_string());
             return Err(StellarDexServiceError::ApiError {
-                message: format!("Horizon API returned error {}: {}", status, error_text),
+                message: format!("Horizon API returned error {status}: {error_text}"),
             });
         }
 
         response.json().await.map_err(|e| {
-            StellarDexServiceError::UnknownError(format!("Failed to deserialize response: {}", e))
+            StellarDexServiceError::UnknownError(format!("Failed to deserialize response: {e}"))
         })
     }
 
@@ -573,15 +569,14 @@ where
     ) -> Result<String, StellarDexServiceError> {
         // Parse source account to MuxedAccount
         let source_account = string_to_muxed_account(&params.source_account).map_err(|e| {
-            StellarDexServiceError::InvalidAssetIdentifier(format!("Invalid source account: {}", e))
+            StellarDexServiceError::InvalidAssetIdentifier(format!("Invalid source account: {e}"))
         })?;
 
         // Parse source asset to Asset using shared helper
         let source_spec = self.parse_asset_to_spec(&params.source_asset)?;
         let send_asset = Asset::try_from(source_spec).map_err(|e| {
             StellarDexServiceError::InvalidAssetIdentifier(format!(
-                "Failed to convert source asset: {}",
-                e
+                "Failed to convert source asset: {e}",
             ))
         })?;
 
@@ -589,8 +584,7 @@ where
         let dest_spec = self.parse_asset_to_spec(&params.destination_asset)?;
         let dest_asset = Asset::try_from(dest_spec).map_err(|e| {
             StellarDexServiceError::InvalidAssetIdentifier(format!(
-                "Failed to convert destination asset: {}",
-                e
+                "Failed to convert destination asset: {e}",
             ))
         })?;
 
@@ -652,8 +646,7 @@ where
                         };
                     Asset::try_from(asset_spec).map_err(|e| {
                         StellarDexServiceError::InvalidAssetIdentifier(format!(
-                            "Failed to convert path step to XDR asset: {}",
-                            e
+                            "Failed to convert path step to XDR asset: {e}",
                         ))
                     })
                 })
@@ -716,8 +709,7 @@ where
 
         envelope.to_xdr_base64(Limits::none()).map_err(|e| {
             StellarDexServiceError::UnknownError(format!(
-                "Failed to serialize transaction to XDR: {}",
-                e
+                "Failed to serialize transaction to XDR: {e}"
             ))
         })
     }
@@ -734,7 +726,7 @@ where
             .sign_xdr_transaction(xdr, network_passphrase)
             .await
             .map_err(|e| {
-                StellarDexServiceError::UnknownError(format!("Failed to sign transaction: {}", e))
+                StellarDexServiceError::UnknownError(format!("Failed to sign transaction: {e}"))
             })?;
 
         debug!("Transaction signed successfully, submitting to network");
@@ -743,10 +735,7 @@ where
         let signed_envelope =
             TransactionEnvelope::from_xdr_base64(&signed_response.signed_xdr, Limits::none())
                 .map_err(|e| {
-                    StellarDexServiceError::UnknownError(format!(
-                        "Failed to parse signed XDR: {}",
-                        e
-                    ))
+                    StellarDexServiceError::UnknownError(format!("Failed to parse signed XDR: {e}"))
                 })?;
 
         // Send the transaction
@@ -754,7 +743,7 @@ where
             .send_transaction(&signed_envelope)
             .await
             .map_err(|e| {
-                StellarDexServiceError::UnknownError(format!("Failed to send transaction: {}", e))
+                StellarDexServiceError::UnknownError(format!("Failed to send transaction: {e}"))
             })
     }
 }
@@ -799,7 +788,7 @@ where
         // Use signer's address as destination account for path finding
         // This ensures the path finder checks trustlines
         let signer_address = match self.signer.address().await.map_err(|e| {
-            StellarDexServiceError::UnknownError(format!("Failed to get signer address: {}", e))
+            StellarDexServiceError::UnknownError(format!("Failed to get signer address: {e}"))
         })? {
             Address::Stellar(addr) => addr,
             _ => {
@@ -887,7 +876,7 @@ where
         // Use signer's address as destination account for path finding
         // This ensures the path finder checks trustlines
         let signer_address = match self.signer.address().await.map_err(|e| {
-            StellarDexServiceError::UnknownError(format!("Failed to get signer address: {}", e))
+            StellarDexServiceError::UnknownError(format!("Failed to get signer address: {e}"))
         })? {
             Address::Stellar(addr) => addr,
             _ => {

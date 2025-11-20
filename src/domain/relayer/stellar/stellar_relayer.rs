@@ -316,7 +316,7 @@ where
             .provider
             .get_account(&self.relayer.address)
             .await
-            .map_err(|e| RelayerError::ProviderError(format!("Failed to get account: {}", e)))?;
+            .map_err(|e| RelayerError::ProviderError(format!("Failed to get account: {e}")))?;
 
         // Convert balance from i64 to u64 for comparison (Stellar balances are i64 but always positive)
         let balance = if account_entry.balance < 0 {
@@ -410,7 +410,7 @@ where
             .get_account(&self.relayer.address)
             .await
             .map_err(|e| {
-                RelayerError::ProviderError(format!("Failed to fetch account for balance: {}", e))
+                RelayerError::ProviderError(format!("Failed to fetch account for balance: {e}"))
             })?;
 
         Ok(BalanceResponse {
@@ -427,7 +427,7 @@ where
             .get_account(&relayer_model.address)
             .await
             .map_err(|e| {
-                RelayerError::ProviderError(format!("Failed to get account details: {}", e))
+                RelayerError::ProviderError(format!("Failed to get account details: {e}"))
             })?;
 
         let sequence_number_str = account_entry.seq_num.0.to_string();
@@ -542,8 +542,7 @@ where
         // Error will be thrown if any of the tokens are not found
         self.populate_allowed_tokens_metadata().await.map_err(|e| {
             RelayerError::PolicyConfigurationError(format!(
-                "Error while processing allowed tokens policy: {}",
-                e
+                "Error while processing allowed tokens policy: {e}"
             ))
         })?;
 
@@ -647,10 +646,8 @@ where
         // For user-paid fees, validate transaction before signing
         if user_pays_fee {
             // Parse the transaction XDR
-            let envelope =
-                parse_transaction_xdr(&stellar_req.unsigned_xdr, false).map_err(|e| {
-                    RelayerError::ValidationError(format!("Failed to parse XDR: {}", e))
-                })?;
+            let envelope = parse_transaction_xdr(&stellar_req.unsigned_xdr, false)
+                .map_err(|e| RelayerError::ValidationError(format!("Failed to parse XDR: {e}")))?;
 
             // Comprehensive validation for user fee payment transactions when signing
             // This validates: transaction structure, fee payments, allowed tokens, payment amounts, and time bounds
@@ -664,7 +661,7 @@ where
             )
             .await
             .map_err(|e| {
-                RelayerError::ValidationError(format!("Failed to validate transaction: {}", e))
+                RelayerError::ValidationError(format!("Failed to validate transaction: {e}"))
             })?;
         }
 

@@ -92,8 +92,7 @@ where
                 .with_simulation_data(sim_resp, op_count)
                 .map_err(|e| {
                     TransactionError::ValidationError(format!(
-                        "Failed to apply simulation data: {}",
-                        e
+                        "Failed to apply simulation data: {e}"
                     ))
                 })?
         }

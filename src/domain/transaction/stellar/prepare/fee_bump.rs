@@ -73,7 +73,7 @@ where
     let fee_bump_envelope =
         build_fee_bump_envelope(inner_envelope.clone(), relayer_address, required_fee as i64)
             .map_err(|e| {
-                TransactionError::ValidationError(format!("Cannot create fee-bump envelope: {}", e))
+                TransactionError::ValidationError(format!("Cannot create fee-bump envelope: {e}"))
             })?;
 
     // Step 5: Sign the fee-bump transaction
@@ -113,7 +113,7 @@ fn extract_inner_transaction(
 
     // Parse the inner transaction envelope
     let inner_envelope = parse_transaction_xdr(&inner_xdr, true).map_err(|e| {
-        StellarValidationError::InvalidXdr(format!("Invalid inner transaction: {}", e))
+        StellarValidationError::InvalidXdr(format!("Invalid inner transaction: {e}"))
     })?;
 
     Ok((inner_envelope, max_fee))
@@ -141,10 +141,7 @@ where
     let fee_bump_xdr = fee_bump_envelope
         .to_xdr_base64(Limits::none())
         .map_err(|e| {
-            TransactionError::ValidationError(format!(
-                "Failed to serialize fee-bump envelope: {}",
-                e
-            ))
+            TransactionError::ValidationError(format!("Failed to serialize fee-bump envelope: {e}"))
         })?;
 
     // Create signing data for the fee-bump transaction
@@ -172,8 +169,7 @@ where
     attach_signatures_to_envelope(&mut fee_bump_envelope, vec![signature.clone()]).map_err(
         |e| {
             TransactionError::SignerError(format!(
-                "Failed to attach signature to fee-bump envelope: {}",
-                e
+                "Failed to attach signature to fee-bump envelope: {e}"
             ))
         },
     )?;
@@ -183,8 +179,7 @@ where
         .to_xdr_base64(Limits::none())
         .map_err(|e| {
             TransactionError::SignerError(format!(
-                "Failed to serialize signed fee-bump envelope: {}",
-                e
+                "Failed to serialize signed fee-bump envelope: {e}"
             ))
         })?;
 

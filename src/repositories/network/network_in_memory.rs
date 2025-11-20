@@ -85,8 +85,7 @@ impl Repository<NetworkRepoModel, String> for InMemoryNetworkRepository {
         match store.get(&id) {
             Some(network) => Ok(network.clone()),
             None => Err(RepositoryError::NotFound(format!(
-                "Network with ID {} not found",
-                id
+                "Network with ID {id} not found"
             ))),
         }
     }

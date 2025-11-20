@@ -156,7 +156,7 @@ impl StellarSignTrait for LocalSigner {
     ) -> Result<SignXdrTransactionResponseStellar, SignerError> {
         // Parse the unsigned XDR
         let mut envelope = parse_transaction_xdr(unsigned_xdr, false)
-            .map_err(|e| SignerError::SigningError(format!("Invalid XDR: {}", e)))?;
+            .map_err(|e| SignerError::SigningError(format!("Invalid XDR: {e}")))?;
 
         // Create network ID from passphrase
         let hash_bytes: [u8; 32] = sha2::Sha256::digest(network_passphrase.as_bytes()).into();
@@ -167,11 +167,11 @@ impl StellarSignTrait for LocalSigner {
 
         // Attach the signature to the envelope
         attach_signatures_to_envelope(&mut envelope, vec![signature.clone()])
-            .map_err(|e| SignerError::SigningError(format!("Failed to attach signature: {}", e)))?;
+            .map_err(|e| SignerError::SigningError(format!("Failed to attach signature: {e}")))?;
 
         // Serialize the signed envelope
         let signed_xdr = envelope.to_xdr_base64(Limits::none()).map_err(|e| {
-            SignerError::SigningError(format!("Failed to serialize signed XDR: {}", e))
+            SignerError::SigningError(format!("Failed to serialize signed XDR: {e}"))
         })?;
 
         Ok(SignXdrTransactionResponseStellar {

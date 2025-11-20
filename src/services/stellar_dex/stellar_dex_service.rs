@@ -129,8 +129,7 @@ where
     ) -> Result<StellarQuoteResponse, StellarDexServiceError> {
         let strategy = self.find_strategy_for_asset(asset_id).ok_or_else(|| {
             StellarDexServiceError::InvalidAssetIdentifier(format!(
-                "No configured strategy can handle asset: {}",
-                asset_id
+                "No configured strategy can handle asset: {asset_id}"
             ))
         })?;
 
@@ -154,8 +153,7 @@ where
     ) -> Result<StellarQuoteResponse, StellarDexServiceError> {
         let strategy = self.find_strategy_for_asset(asset_id).ok_or_else(|| {
             StellarDexServiceError::InvalidAssetIdentifier(format!(
-                "No configured strategy can handle asset: {}",
-                asset_id
+                "No configured strategy can handle asset: {asset_id}"
             ))
         })?;
 

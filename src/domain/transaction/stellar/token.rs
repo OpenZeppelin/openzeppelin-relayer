@@ -255,10 +255,7 @@ where
     let balance_key = create_contract_data_key("Balance", Some(account_sc_address))?;
 
     // Query contract data with durability fallback
-    let error_context = format!(
-        "contract {} balance for account {}",
-        contract_address, account_id
-    );
+    let error_context = format!("contract {contract_address} balance for account {account_id}");
     let ledger_entries =
         query_contract_data_with_fallback(provider, contract_hash, balance_key, &error_context)
             .await?;
@@ -300,7 +297,7 @@ where
                 Ok(n as u64)
             }
             other => Err(StellarTransactionUtilsError::UnexpectedBalanceType(
-                format!("{:?}", other),
+                format!("{other:?}"),
             )),
         },
         _ => Err(StellarTransactionUtilsError::UnexpectedContractDataEntryType),
@@ -546,7 +543,7 @@ where
     };
 
     // Query contract data with durability fallback
-    let error_context = format!("contract {} decimals", contract_address);
+    let error_context = format!("contract {contract_address} decimals");
     let ledger_entries = match query_contract_data_with_fallback(
         provider,
         contract_hash,

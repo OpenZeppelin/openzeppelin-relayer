@@ -186,7 +186,7 @@ pub fn get_age_since_status_change(
     if let Some(sent_at) = &tx.sent_at {
         let sent = DateTime::parse_from_rfc3339(sent_at)
             .map_err(|e| {
-                TransactionError::UnexpectedError(format!("Error parsing sent_at time: {}", e))
+                TransactionError::UnexpectedError(format!("Error parsing sent_at time: {e}"))
             })?
             .with_timezone(&Utc);
         return Ok(Utc::now().signed_duration_since(sent));

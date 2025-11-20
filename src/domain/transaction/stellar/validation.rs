@@ -129,8 +129,7 @@ impl StellarTransactionValidator {
             }
             return Err(StellarTransactionValidationError::InvalidAssetIdentifier(
                 format!(
-                    "Invalid contract address format: {} (must be 56 characters and valid StrKey)",
-                    fee_token
+                    "Invalid contract address format: {fee_token} (must be 56 characters and valid StrKey)"
                 ),
             ));
         }
@@ -139,8 +138,7 @@ impl StellarTransactionValidator {
         let parts: Vec<&str> = fee_token.split(':').collect();
         if parts.len() != 2 {
             return Err(StellarTransactionValidationError::InvalidAssetIdentifier(format!(
-                "Invalid fee_token format: {}. Expected 'native', 'CODE:ISSUER', or contract address (C...)",
-                fee_token
+                "Invalid fee_token format: {fee_token}. Expected 'native', 'CODE:ISSUER', or contract address (C...)"
             )));
         }
 
@@ -150,29 +148,20 @@ impl StellarTransactionValidator {
         // Validate CODE length (1-12 characters)
         if code.is_empty() || code.len() > 12 {
             return Err(StellarTransactionValidationError::InvalidAssetIdentifier(
-                format!(
-                    "Invalid asset code length: {} (must be 1-12 characters)",
-                    code
-                ),
+                format!("Invalid asset code length: {code} (must be 1-12 characters)"),
             ));
         }
 
         // Validate ISSUER format (56 chars, starts with 'G')
         if issuer.len() != 56 {
             return Err(StellarTransactionValidationError::InvalidAssetIdentifier(
-                format!(
-                    "Invalid issuer address length: {} (must be 56 characters)",
-                    issuer
-                ),
+                format!("Invalid issuer address length: {issuer} (must be 56 characters)"),
             ));
         }
 
         if !issuer.starts_with('G') {
             return Err(StellarTransactionValidationError::InvalidAssetIdentifier(
-                format!(
-                    "Invalid issuer address prefix: {} (must start with 'G')",
-                    issuer
-                ),
+                format!("Invalid issuer address prefix: {issuer} (must start with 'G')"),
             ));
         }
 
@@ -180,8 +169,7 @@ impl StellarTransactionValidator {
         if stellar_strkey::ed25519::PublicKey::from_string(issuer).is_err() {
             return Err(StellarTransactionValidationError::InvalidAssetIdentifier(
                 format!(
-                    "Invalid issuer address format: {} (must be a valid Stellar public key)",
-                    issuer
+                    "Invalid issuer address format: {issuer} (must be a valid Stellar public key)"
                 ),
             ));
         }
@@ -219,8 +207,7 @@ impl StellarTransactionValidator {
 
         if !is_allowed {
             return Err(StellarTransactionValidationError::TokenNotAllowed(format!(
-                "Token {} not in allowed tokens list",
-                asset
+                "Token {asset} not in allowed tokens list"
             )));
         }
 
@@ -267,8 +254,7 @@ impl StellarTransactionValidator {
     ) -> Result<Vec<(String, u64)>, StellarTransactionValidationError> {
         let operations = extract_operations(envelope).map_err(|e| {
             StellarTransactionValidationError::ValidationError(format!(
-                "Failed to extract operations: {}",
-                e
+                "Failed to extract operations: {e}"
             ))
         })?;
 
@@ -284,8 +270,7 @@ impl StellarTransactionValidator {
                 // Convert destination to string
                 let dest_str = muxed_account_to_string(destination).map_err(|e| {
                     StellarTransactionValidationError::ValidationError(format!(
-                        "Failed to parse destination: {}",
-                        e
+                        "Failed to parse destination: {e}"
                     ))
                 })?;
 
@@ -350,8 +335,7 @@ impl StellarTransactionValidator {
                 Ok(())
             }
             None => Err(StellarTransactionValidationError::ValidationError(format!(
-                "No payment found for expected token: {}. Found payments: {:?}",
-                expected_fee_token, payments
+                "No payment found for expected token: {expected_fee_token}. Found payments: {payments:?}"
             ))),
         }
     }
@@ -366,8 +350,7 @@ impl StellarTransactionValidator {
     ) -> Result<(), StellarTransactionValidationError> {
         let source_account = extract_source_account(envelope).map_err(|e| {
             StellarTransactionValidationError::ValidationError(format!(
-                "Failed to extract source account: {}",
-                e
+                "Failed to extract source account: {e}"
             ))
         })?;
 
@@ -406,8 +389,7 @@ impl StellarTransactionValidator {
     ) -> Result<(), StellarTransactionValidationError> {
         let operations = extract_operations(envelope).map_err(|e| {
             StellarTransactionValidationError::ValidationError(format!(
-                "Failed to extract operations: {}",
-                e
+                "Failed to extract operations: {e}"
             ))
         })?;
 
@@ -416,8 +398,7 @@ impl StellarTransactionValidator {
                 OperationBody::Payment(PaymentOp { destination, .. }) => {
                     let dest_str = muxed_account_to_string(destination).map_err(|e| {
                         StellarTransactionValidationError::ValidationError(format!(
-                            "Failed to parse destination: {}",
-                            e
+                            "Failed to parse destination: {e}"
                         ))
                     })?;
 
@@ -431,8 +412,7 @@ impl StellarTransactionValidator {
                 OperationBody::AccountMerge(destination) => {
                     let dest_str = muxed_account_to_string(destination).map_err(|e| {
                         StellarTransactionValidationError::ValidationError(format!(
-                            "Failed to parse merge destination: {}",
-                            e
+                            "Failed to parse merge destination: {e}"
                         ))
                     })?;
 
@@ -466,8 +446,7 @@ impl StellarTransactionValidator {
     ) -> Result<(), StellarTransactionValidationError> {
         let operations = extract_operations(envelope).map_err(|e| {
             StellarTransactionValidationError::ValidationError(format!(
-                "Failed to extract operations: {}",
-                e
+                "Failed to extract operations: {e}"
             ))
         })?;
 
@@ -566,20 +545,17 @@ impl StellarTransactionValidator {
             }
             HostFunction::CreateContract(_) => {
                 return Err(StellarTransactionValidationError::ValidationError(format!(
-                    "Op {}: CreateContract not allowed for gasless transactions",
-                    op_idx
+                    "Op {op_idx}: CreateContract not allowed for gasless transactions"
                 )));
             }
             HostFunction::UploadContractWasm(_) => {
                 return Err(StellarTransactionValidationError::ValidationError(format!(
-                    "Op {}: UploadContractWasm not allowed for gasless transactions",
-                    op_idx
+                    "Op {op_idx}: UploadContractWasm not allowed for gasless transactions"
                 )));
             }
             _ => {
                 return Err(StellarTransactionValidationError::ValidationError(format!(
-                    "Op {}: Unsupported host function",
-                    op_idx
+                    "Op {op_idx}: Unsupported host function"
                 )));
             }
         }
@@ -601,8 +577,7 @@ impl StellarTransactionValidator {
                             if account_str == relayer_address {
                                 return Err(StellarTransactionValidationError::ValidationError(
                                     format!(
-                                        "Op {}: Soroban auth entry {} requires relayer ({}). Forbidden.",
-                                        op_idx, i, relayer_address
+                                        "Op {op_idx}: Soroban auth entry {i} requires relayer ({relayer_address}). Forbidden."
                                     ),
                                 ));
                             }
@@ -635,8 +610,7 @@ impl StellarTransactionValidator {
     ) -> Result<(), StellarTransactionValidationError> {
         let operations = extract_operations(envelope).map_err(|e| {
             StellarTransactionValidationError::ValidationError(format!(
-                "Failed to extract operations: {}",
-                e
+                "Failed to extract operations: {e}"
             ))
         })?;
 
@@ -645,16 +619,14 @@ impl StellarTransactionValidator {
                 // Prevent account merges (could drain account before payment executes)
                 OperationBody::AccountMerge(_) => {
                     return Err(StellarTransactionValidationError::ValidationError(format!(
-                        "Operation {}: AccountMerge operations are not allowed",
-                        idx
+                        "Operation {idx}: AccountMerge operations are not allowed"
                     )));
                 }
 
                 // Prevent SetOptions that could lock out the account
                 OperationBody::SetOptions(_set_opts) => {
                     return Err(StellarTransactionValidationError::ValidationError(format!(
-                        "Operation {}: SetOptions operations are not allowed",
-                        idx
+                        "Operation {idx}: SetOptions operations are not allowed"
                     )));
                 }
 
@@ -689,8 +661,7 @@ impl StellarTransactionValidator {
                 // Deprecated operations
                 OperationBody::CreateAccount(_) | OperationBody::AllowTrust(_) => {
                     return Err(StellarTransactionValidationError::ValidationError(format!(
-                        "Operation {}: Deprecated operation type not allowed",
-                        idx
+                        "Operation {idx}: Deprecated operation type not allowed"
                     )));
                 }
 
@@ -724,16 +695,14 @@ impl StellarTransactionValidator {
         // Extract source account
         let source_account = extract_source_account(envelope).map_err(|e| {
             StellarTransactionValidationError::ValidationError(format!(
-                "Failed to extract source account: {}",
-                e
+                "Failed to extract source account: {e}"
             ))
         })?;
 
         // Get account's current sequence number from chain
         let account_entry = provider.get_account(&source_account).await.map_err(|e| {
             StellarTransactionValidationError::ValidationError(format!(
-                "Failed to get account sequence: {}",
-                e
+                "Failed to get account sequence: {e}"
             ))
         })?;
         let account_seq_num = account_entry.seq_num.0;
@@ -753,9 +722,8 @@ impl StellarTransactionValidator {
         // The user can set a future sequence number, but not a past one
         if tx_seq_num < account_seq_num {
             return Err(StellarTransactionValidationError::ValidationError(format!(
-                "Transaction sequence number {} is too old. Account's current sequence is {}. \
-                The transaction sequence must be >= the account's current sequence.",
-                tx_seq_num, account_seq_num
+                "Transaction sequence number {tx_seq_num} is too old. Account's current sequence is {account_seq_num}. \
+                The transaction sequence must be >= the account's current sequence."
             )));
         }
 
@@ -837,16 +805,14 @@ impl StellarTransactionValidator {
             // Check if transaction has expired
             if now > max_time {
                 return Err(StellarTransactionValidationError::ValidationError(format!(
-                    "Transaction has expired: max_time={}, current_time={}",
-                    max_time, now
+                    "Transaction has expired: max_time={max_time}, current_time={now}"
                 )));
             }
 
             // Check if transaction is not yet valid (optional check, but good to have)
             if min_time > 0 && now < min_time {
                 return Err(StellarTransactionValidationError::ValidationError(format!(
-                    "Transaction is not yet valid: min_time={}, current_time={}",
-                    min_time, now
+                    "Transaction is not yet valid: min_time={min_time}, current_time={now}"
                 )));
             }
         }
@@ -886,8 +852,7 @@ impl StellarTransactionValidator {
 
             if duration > max_duration {
                 return Err(StellarTransactionValidationError::ValidationError(format!(
-                    "Transaction validity duration ({:?}) exceeds maximum allowed duration ({:?})",
-                    duration, max_duration
+                    "Transaction validity duration ({duration:?}) exceeds maximum allowed duration ({max_duration:?})"
                 )));
             }
         } else {
@@ -1019,8 +984,7 @@ impl StellarTransactionValidator {
 
         let mut required_xlm_fee = estimate_fee(envelope, provider, None).await.map_err(|e| {
             StellarTransactionValidationError::ValidationError(format!(
-                "Failed to estimate fee: {}",
-                e
+                "Failed to estimate fee: {e}",
             ))
         })?;
 
@@ -1040,8 +1004,7 @@ impl StellarTransactionValidator {
         .await
         .map_err(|e| {
             StellarTransactionValidationError::ValidationError(format!(
-                "Failed to convert XLM fee to token {}: {}",
-                asset_id, e
+                "Failed to convert XLM fee to token {asset_id}: {e}",
             ))
         })?;
 
@@ -1086,8 +1049,7 @@ impl StellarTransactionValidator {
         // Extract source account from envelope
         let source_account = extract_source_account(envelope).map_err(|e| {
             StellarTransactionValidationError::ValidationError(format!(
-                "Failed to extract source account: {}",
-                e
+                "Failed to extract source account: {e}"
             ))
         })?;
 
@@ -1096,16 +1058,14 @@ impl StellarTransactionValidator {
             .await
             .map_err(|e| {
                 StellarTransactionValidationError::ValidationError(format!(
-                    "Failed to fetch user balance for token {}: {}",
-                    fee_token, e
+                    "Failed to fetch user balance for token {fee_token}: {e}",
                 ))
             })?;
 
         // Check if balance is sufficient
         if user_balance < required_fee_amount {
             return Err(StellarTransactionValidationError::ValidationError(format!(
-                "Insufficient balance: user has {} {} but needs {} {} for transaction fee",
-                user_balance, fee_token, required_fee_amount, fee_token
+                "Insufficient balance: user has {user_balance} {fee_token} but needs {required_fee_amount} {fee_token} for transaction fee"
             )));
         }
 
@@ -1123,8 +1083,7 @@ fn asset_to_asset_id(asset: &Asset) -> Result<String, StellarTransactionValidati
             let code_len = code_bytes.iter().position(|&b| b == 0).unwrap_or(4);
             let code = String::from_utf8(code_bytes[..code_len].to_vec()).map_err(|e| {
                 StellarTransactionValidationError::InvalidAssetIdentifier(format!(
-                    "Invalid asset code: {}",
-                    e
+                    "Invalid asset code: {e}"
                 ))
             })?;
 
@@ -1137,7 +1096,7 @@ fn asset_to_asset_id(asset: &Asset) -> Result<String, StellarTransactionValidati
                 }
             };
 
-            Ok(format!("{}:{}", code, issuer))
+            Ok(format!("{code}:{issuer}"))
         }
         Asset::CreditAlphanum12(alpha12) => {
             // Extract code (trim null bytes)
@@ -1145,8 +1104,7 @@ fn asset_to_asset_id(asset: &Asset) -> Result<String, StellarTransactionValidati
             let code_len = code_bytes.iter().position(|&b| b == 0).unwrap_or(12);
             let code = String::from_utf8(code_bytes[..code_len].to_vec()).map_err(|e| {
                 StellarTransactionValidationError::InvalidAssetIdentifier(format!(
-                    "Invalid asset code: {}",
-                    e
+                    "Invalid asset code: {e}"
                 ))
             })?;
 
@@ -1159,7 +1117,7 @@ fn asset_to_asset_id(asset: &Asset) -> Result<String, StellarTransactionValidati
                 }
             };
 
-            Ok(format!("{}:{}", code, issuer))
+            Ok(format!("{code}:{issuer}"))
         }
     }
 }

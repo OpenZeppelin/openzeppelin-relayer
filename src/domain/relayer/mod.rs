@@ -254,7 +254,7 @@ pub enum NetworkRelayer<
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
 > {
-    Evm(DefaultEvmRelayer<J, T, RR, NR, TCR>),
+    Evm(Box<DefaultEvmRelayer<J, T, RR, NR, TCR>>),
     Solana(DefaultSolanaRelayer<J, T, RR, NR>),
     Stellar(DefaultStellarRelayer<J, T, NR, RR, TCR>),
 }
@@ -567,7 +567,7 @@ impl<
                     state.job_producer(),
                 )?;
 
-                Ok(NetworkRelayer::Evm(relayer))
+                Ok(NetworkRelayer::Evm(Box::new(relayer)))
             }
             NetworkType::Solana => {
                 let solana_relayer = create_solana_relayer(

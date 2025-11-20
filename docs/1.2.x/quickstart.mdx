@@ -1,0 +1,167 @@
+---
+title: Quick Start Guide
+---
+
+This guide provides step-by-step instructions for setting up OpenZeppelin Relayer. It includes prerequisites, installation, and configuration examples.
+
+## Prerequisites
+
+* Rust 2021, version `1.88` or later.
+* Redis
+* Docker (optional, for containerized deployment)
+* Node.js, typescript and ts-node (optional, for plugins)
+
+## Configuration
+
+### Step 1: Clone the Repository
+
+Clone the repository and navigate to the project directory:
+
+```bash
+git clone https://github.com/OpenZeppelin/openzeppelin-relayer
+cd openzeppelin-relayer
+```
+
+### Step 2: Create Configuration Files
+
+Create environment configuration:
+
+```bash
+cp .env.example .env
+```
+
+These files are already partially configured. We will add missing data in next steps.
+
+Ready-to-Use Example Configurations
+
+For quick setup with various configurations, check the [examples directory](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples) in our GitHub repository:
+
+### Step 3: Create a Signer
+
+Generate a new signer keystore for the basic example:
+
+```bash
+cargo run --example create_key -- \
+  --password <DEFINE_YOUR_PASSWORD> \
+  --output-dir examples/basic-example/config/keys \
+  --filename local-signer.json
+```
+Replace `<DEFINE_YOUR_PASSWORD>` with a strong password.
+
+<Callout type='warn'>
+
+
+Your password must contain at least:
+
+* 12 characters
+* One uppercase letter
+* One lowercase letter
+* One number
+* One special character
+
+</Callout>
+
+Next, update the `KEYSTORE_PASSPHRASE` in `.env` with the password you used above.
+
+### Step 4: Configure Notifications
+
+#### Configure Webhook URL
+
+Edit the file `config/config.json` and update the `notifications[0].url` field with your webhook URL. For a quick test, you can use a temporary URL from [Webhook.site](https://webhook.site).
+
+#### Configure Webhook Signing Key
+
+Generate a webhook signing key:
+
+```bash
+cargo run --example generate_uuid
+```
+
+<Callout>
+
+
+Alternatively, you can use any online UUID generator tool if you don’t want to run the included command.
+
+</Callout>
+
+Copy the generated UUID and update the `WEBHOOK_SIGNING_KEY` entry in `.env`.
+
+### Step 5: Configure API Key
+
+Generate an API key signing key for development:
+
+```bash
+cargo run --example generate_uuid
+```
+
+<Callout>
+
+
+You can also use UUID generator with a simple command on your terminal.
+
+```bash
+uuidgen
+```
+
+Alternatively, you can use any online UUID generator tool.
+
+</Callout>
+
+Copy the generated UUID and update the `API_KEY` entry in `.env`.
+
+### Step 6: Run the Service
+
+#### Local
+
+Run Redis container:
+
+```sh
+docker run --name openzeppelin-redis \
+  -p 6379:6379 \
+  -d redis:latest
+```
+
+Run Relayer service:
+
+```bash
+cargo run
+```
+
+#### Docker
+
+Building and Running the docker image:
+
+```bash
+docker compose up -d
+```
+
+By default docker compose command uses `Dockerfile.development` to build the image. If you want to use `Dockerfile.production`, you can use the following command:
+
+```bash
+DOCKERFILE=Dockerfile.production docker compose up -d
+```
+
+### Step 7: Test the Relayer
+
+Verify the service by sending a GET request:
+
+```bash
+curl -X GET http://localhost:8080/api/v1/relayers \
+  -H "Content-Type: application/json" \
+  -H "AUTHORIZATION: Bearer YOUR_API_KEY"
+```
+Replace `YOUR_API_KEY` with the API key you configured in your `.env` file.
+
+Expected Result: A successful request should return an HTTP 200 status code along with the list of relayers.
+
+## Using the relayer through the API
+
+For detailed API usage, refer to the [API Reference](https://release-v1-0-0%2D%2Dopenzeppelin-relayer.netlify.app/api_docs.html) page.
+
+## Using the relayer through the SDK
+
+For documentation and examples on how to consume Relayer service via SDK check [SDK documentation](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk).
+
+## Additional Resources and Troubleshooting
+
+Troubleshooting: If you encounter issues during setup or deployment, verify your environment variables, check container logs, and review your configuration files for syntax errors.

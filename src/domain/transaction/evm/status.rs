@@ -97,8 +97,7 @@ where
 
             let network = EvmNetwork::try_from(network_model).map_err(|e| {
                 TransactionError::UnexpectedError(format!(
-                    "Error converting network model to EvmNetwork: {}",
-                    e
+                    "Error converting network model to EvmNetwork: {e}"
                 ))
             })?;
 
@@ -154,8 +153,7 @@ where
 
         let network = EvmNetwork::try_from(network_model).map_err(|e| {
             TransactionError::UnexpectedError(format!(
-                "Error converting network model to EvmNetwork: {}",
-                e
+                "Error converting network model to EvmNetwork: {e}"
             ))
         })?;
 
@@ -202,8 +200,7 @@ where
 
         let network = EvmNetwork::try_from(network_model).map_err(|e| {
             TransactionError::UnexpectedError(format!(
-                "Error converting network model to EvmNetwork: {}",
-                e
+                "Error converting network model to EvmNetwork: {e}"
             ))
         })?;
 
@@ -221,10 +218,7 @@ where
             let created_at = &tx.created_at;
             let created_time = DateTime::parse_from_rfc3339(created_at)
                 .map_err(|e| {
-                    TransactionError::UnexpectedError(format!(
-                        "Invalid created_at timestamp: {}",
-                        e
-                    ))
+                    TransactionError::UnexpectedError(format!("Invalid created_at timestamp: {e}"))
                 })?
                 .with_timezone(&Utc);
             let age = Utc::now().signed_duration_since(created_time);
@@ -266,8 +260,7 @@ where
 
         let network = EvmNetwork::try_from(network_model).map_err(|e| {
             TransactionError::UnexpectedError(format!(
-                "Error converting network model to EvmNetwork: {}",
-                e
+                "Error converting network model to EvmNetwork: {e}"
             ))
         })?;
 

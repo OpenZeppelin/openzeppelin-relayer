@@ -98,15 +98,15 @@ pub enum HealthCheckFailure {
 impl Display for HealthCheckFailure {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            HealthCheckFailure::NonceSyncFailed(msg) => write!(f, "Nonce sync failed: {}", msg),
+            HealthCheckFailure::NonceSyncFailed(msg) => write!(f, "Nonce sync failed: {msg}"),
             HealthCheckFailure::RpcValidationFailed(msg) => {
-                write!(f, "RPC validation failed: {}", msg)
+                write!(f, "RPC validation failed: {msg}")
             }
             HealthCheckFailure::BalanceCheckFailed(msg) => {
-                write!(f, "Balance check failed: {}", msg)
+                write!(f, "Balance check failed: {msg}")
             }
             HealthCheckFailure::SequenceSyncFailed(msg) => {
-                write!(f, "Sequence sync failed: {}", msg)
+                write!(f, "Sequence sync failed: {msg}")
             }
         }
     }
@@ -218,10 +218,10 @@ impl DisabledReason {
     /// Get a human-readable description of the disabled reason
     pub fn description(&self) -> String {
         match self {
-            DisabledReason::NonceSyncFailed(e) => format!("Nonce sync failed: {}", e),
-            DisabledReason::RpcValidationFailed(e) => format!("RPC validation failed: {}", e),
-            DisabledReason::BalanceCheckFailed(e) => format!("Balance check failed: {}", e),
-            DisabledReason::SequenceSyncFailed(e) => format!("Sequence sync failed: {}", e),
+            DisabledReason::NonceSyncFailed(e) => format!("Nonce sync failed: {e}"),
+            DisabledReason::RpcValidationFailed(e) => format!("RPC validation failed: {e}"),
+            DisabledReason::BalanceCheckFailed(e) => format!("Balance check failed: {e}"),
+            DisabledReason::SequenceSyncFailed(e) => format!("Sequence sync failed: {e}"),
             DisabledReason::Multiple(reasons) => reasons
                 .iter()
                 .map(|r| r.description())
@@ -808,10 +808,9 @@ impl Relayer {
                     RelayerNetworkPolicy::Solana(_) => "Solana",
                     RelayerNetworkPolicy::Stellar(_) => "Stellar",
                 };
-                let network_type_str = format!("{:?}", network_type);
+                let network_type_str = format!("{network_type:?}");
                 return Err(RelayerValidationError::InvalidPolicy(format!(
-                    "Network type {} does not match policy type {}",
-                    network_type_str, policy_type
+                    "Network type {network_type_str} does not match policy type {policy_type}"
                 )));
             }
             // No policies is fine
@@ -868,7 +867,7 @@ impl Relayer {
         if let Some(keys) = keys {
             let solana_pub_key_regex =
                 Regex::new(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$").map_err(|e| {
-                    RelayerValidationError::InvalidPolicy(format!("Regex compilation error: {}", e))
+                    RelayerValidationError::InvalidPolicy(format!("Regex compilation error: {e}"))
                 })?;
 
             for key in keys {
@@ -903,8 +902,7 @@ impl Relayer {
                 SolanaSwapStrategy::JupiterSwap | SolanaSwapStrategy::JupiterUltra => {
                     if self.network != "mainnet-beta" {
                         return Err(RelayerValidationError::InvalidPolicy(format!(
-                            "{:?} strategy is only supported on mainnet-beta",
-                            strategy
+                            "{strategy:?} strategy is only supported on mainnet-beta"
                         )));
                     }
                 }
@@ -1074,7 +1072,7 @@ impl Relayer {
 
             // Basic format check for Stellar address (base32-like characters)
             let stellar_address_regex = Regex::new(r"^G[0-9A-Z]{55}$").map_err(|e| {
-                RelayerValidationError::InvalidPolicy(format!("Regex compilation error: {}", e))
+                RelayerValidationError::InvalidPolicy(format!("Regex compilation error: {e}"))
             })?;
 
             if !stellar_address_regex.is_match(issuer) {
@@ -1160,7 +1158,7 @@ impl Relayer {
     ) -> Result<Self, RelayerValidationError> {
         // 1. Convert current domain object to JSON
         let mut domain_json = serde_json::to_value(self).map_err(|e| {
-            RelayerValidationError::InvalidField(format!("Serialization error: {}", e))
+            RelayerValidationError::InvalidField(format!("Serialization error: {e}"))
         })?;
 
         // 2. Apply JSON Merge Patch
@@ -1168,7 +1166,7 @@ impl Relayer {
 
         // 3. Convert back to domain object
         let updated: Relayer = serde_json::from_value(domain_json).map_err(|e| {
-            RelayerValidationError::InvalidField(format!("Invalid result after patch: {}", e))
+            RelayerValidationError::InvalidField(format!("Invalid result after patch: {e}"))
         })?;
 
         // 4. Validate the final result
@@ -1217,10 +1215,10 @@ impl From<RelayerValidationError> for crate::models::ApiError {
             RelayerValidationError::EmptyName => "Name cannot be empty".to_string(),
             RelayerValidationError::EmptyNetwork => "Network cannot be empty".to_string(),
             RelayerValidationError::InvalidPolicy(msg) => {
-                format!("Invalid relayer policy: {}", msg)
+                format!("Invalid relayer policy: {msg}")
             }
             RelayerValidationError::InvalidRpcUrl(url) => {
-                format!("Invalid RPC URL: {}", url)
+                format!("Invalid RPC URL: {url}")
             }
             RelayerValidationError::InvalidRpcWeight => {
                 "RPC URL weight must be in range 0-100".to_string()

@@ -139,8 +139,7 @@ impl SolanaTokenProgram {
     ) -> Result<Instruction, TokenError> {
         if !Self::is_token_program(program_id) {
             return Err(TokenError::InvalidTokenProgram(format!(
-                "Unknown token program: {}",
-                program_id
+                "Unknown token program: {program_id}"
             )));
         }
         if program_id == &spl_token_interface::id() {
@@ -169,8 +168,7 @@ impl SolanaTokenProgram {
             .map_err(|e| TokenError::Instruction(e.to_string()));
         }
         Err(TokenError::InvalidTokenProgram(format!(
-            "Unknown token program: {}",
-            program_id
+            "Unknown token program: {program_id}"
         )))
     }
 
@@ -190,13 +188,12 @@ impl SolanaTokenProgram {
     ) -> Result<TokenAccount, TokenError> {
         if !Self::is_token_program(program_id) {
             return Err(TokenError::InvalidTokenProgram(format!(
-                "Unknown token program: {}",
-                program_id
+                "Unknown token program: {program_id}"
             )));
         }
         if program_id == &spl_token_interface::id() {
             let account = SplTokenAccount::unpack(&account.data)
-                .map_err(|e| TokenError::AccountError(format!("Invalid token account1: {}", e)))?;
+                .map_err(|e| TokenError::AccountError(format!("Invalid token account1: {e}")))?;
 
             return Ok(TokenAccount {
                 mint: account.mint,
@@ -208,7 +205,7 @@ impl SolanaTokenProgram {
             let state_with_extensions = spl_token_2022_interface::extension::StateWithExtensions::<
                 spl_token_2022_interface::state::Account,
             >::unpack(&account.data)
-            .map_err(|e| TokenError::AccountError(format!("Invalid token account2: {}", e)))?;
+            .map_err(|e| TokenError::AccountError(format!("Invalid token account2: {e}")))?;
 
             let base_account = state_with_extensions.base;
 
@@ -220,8 +217,7 @@ impl SolanaTokenProgram {
             });
         }
         Err(TokenError::InvalidTokenProgram(format!(
-            "Unknown token program: {}",
-            program_id
+            "Unknown token program: {program_id}"
         )))
     }
 
@@ -281,8 +277,7 @@ impl SolanaTokenProgram {
     ) -> Result<TokenInstruction, TokenError> {
         if !Self::is_token_program(program_id) {
             return Err(TokenError::InvalidTokenProgram(format!(
-                "Unknown token program: {}",
-                program_id
+                "Unknown token program: {program_id}"
             )));
         }
         if program_id == &spl_token_interface::id() {
@@ -316,8 +311,7 @@ impl SolanaTokenProgram {
             }
         } else {
             Err(TokenError::InvalidTokenProgram(format!(
-                "Unknown token program: {}",
-                program_id
+                "Unknown token program: {program_id}"
             )))
         }
     }
@@ -356,8 +350,7 @@ impl SolanaTokenProgram {
             .await
             .map_err(|e| {
                 TokenError::AccountError(format!(
-                    "Failed to fetch token account for owner {} and mint {}: {}",
-                    owner, mint, e
+                    "Failed to fetch token account for owner {owner} and mint {mint}: {e}"
                 ))
             })?;
 

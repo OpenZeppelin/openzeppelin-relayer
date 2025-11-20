@@ -167,7 +167,7 @@ pub fn convert_to_internal_rpc_request(
                     let json = serde_json::json!({"method": method, "params": params});
                     let solana_request: crate::models::SolanaRpcRequest =
                         serde_json::from_value(json).map_err(|e| {
-                            ApiError::BadRequest(format!("Invalid Solana RPC request: {}", e))
+                            ApiError::BadRequest(format!("Invalid Solana RPC request: {e}"))
                         })?;
 
                     Ok(JsonRpcRequest {

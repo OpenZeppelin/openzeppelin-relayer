@@ -370,7 +370,7 @@ impl EvmSignerFactory {
             }
             SignerConfig::AwsKms(config) => {
                 let aws_service = AwsKmsService::new(config.clone()).await.map_err(|e| {
-                    SignerFactoryError::CreationFailed(format!("AWS KMS service error: {}", e))
+                    SignerFactoryError::CreationFailed(format!("AWS KMS service error: {e}"))
                 })?;
                 EvmSigner::AwsKms(AwsKmsSigner::new(aws_service))
             }
@@ -379,21 +379,20 @@ impl EvmSignerFactory {
             }
             SignerConfig::Turnkey(config) => {
                 let turnkey_service = TurnkeyService::new(config.clone()).map_err(|e| {
-                    SignerFactoryError::CreationFailed(format!("Turnkey service error: {}", e))
+                    SignerFactoryError::CreationFailed(format!("Turnkey service error: {e}"))
                 })?;
                 EvmSigner::Turnkey(TurnkeySigner::new(turnkey_service))
             }
             SignerConfig::Cdp(config) => {
                 let cdp_signer = CdpSigner::new(config.clone()).map_err(|e| {
-                    SignerFactoryError::CreationFailed(format!("CDP service error: {}", e))
+                    SignerFactoryError::CreationFailed(format!("CDP service error: {e}"))
                 })?;
                 EvmSigner::Cdp(cdp_signer)
             }
             SignerConfig::GoogleCloudKms(config) => {
                 let gcp_service = GoogleCloudKmsService::new(config).map_err(|e| {
                     SignerFactoryError::CreationFailed(format!(
-                        "Google Cloud KMS service error: {}",
-                        e
+                        "Google Cloud KMS service error: {e}"
                     ))
                 })?;
                 EvmSigner::GoogleCloudKms(GoogleCloudKmsSigner::new(gcp_service))

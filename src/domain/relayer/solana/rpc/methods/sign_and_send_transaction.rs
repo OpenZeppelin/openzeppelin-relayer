@@ -124,7 +124,7 @@ where
 
                 // Mark transaction as failed in the database
                 // Most RPC errors at this point are simulation failures or invalid transaction body
-                let failure_reason = format!("Transaction send failed: {}", e);
+                let failure_reason = format!("Transaction send failed: {e}");
                 let update = TransactionUpdateRequest {
                     status: Some(TransactionStatus::Failed),
                     status_reason: Some(failure_reason),
@@ -223,7 +223,7 @@ async fn validate_sign_and_send_transaction<P: SolanaProviderTrait + Send + Sync
 
     let policy = &relayer.policies.get_solana_policy();
     let relayer_pubkey = Pubkey::from_str(&relayer.address).map_err(|e| {
-        SolanaTransactionValidationError::ValidationError(format!("Invalid relayer address: {}", e))
+        SolanaTransactionValidationError::ValidationError(format!("Invalid relayer address: {e}"))
     })?;
 
     // Group all synchronous policy validations together

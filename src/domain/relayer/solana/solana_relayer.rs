@@ -371,7 +371,7 @@ where
         };
 
         let relayer_pubkey = Pubkey::from_str(&relayer.address)
-            .map_err(|e| RelayerError::ProviderError(format!("Invalid relayer address: {}", e)))?;
+            .map_err(|e| RelayerError::ProviderError(format!("Invalid relayer address: {e}")))?;
 
         let tokens_to_swap = {
             let mut eligible_tokens = Vec::<TokenSwapCandidate>::new();
@@ -379,7 +379,7 @@ where
             if let Some(allowed_tokens) = policy.allowed_tokens.as_ref() {
                 for token in allowed_tokens {
                     let token_mint = Pubkey::from_str(&token.mint).map_err(|e| {
-                        RelayerError::ProviderError(format!("Invalid token mint: {}", e))
+                        RelayerError::ProviderError(format!("Invalid token mint: {e}"))
                     })?;
                     let token_account = SolanaTokenProgram::get_and_unpack_token_account(
                         &*self.provider,
@@ -388,7 +388,7 @@ where
                     )
                     .await
                     .map_err(|e| {
-                        RelayerError::ProviderError(format!("Failed to get token account: {}", e))
+                        RelayerError::ProviderError(format!("Failed to get token account: {e}"))
                     })?;
 
                     let swap_amount = self
@@ -581,8 +581,7 @@ where
                 .await
                 .map_err(|e| {
                     RelayerError::Internal(format!(
-                        "Failed to fetch transaction after sign and send: {}",
-                        e
+                        "Failed to fetch transaction after sign and send: {e}"
                     ))
                 })?;
 
@@ -821,7 +820,7 @@ where
                             SolanaRpcError::FeatureFetch(msg) => JsonRpcResponse::error(
                                 -32008,
                                 "FEATURE_FETCH_ERROR",
-                                &format!("Failed to retrieve the list of enabled features: {}", msg),
+                                &format!("Failed to retrieve the list of enabled features: {msg}"),
                             ),
                             SolanaRpcError::InvalidParams(msg) => {
                                 JsonRpcResponse::error(-32602, "INVALID_PARAMS", &msg)
@@ -830,16 +829,14 @@ where
                                 -32000,
                                 "UNSUPPORTED_FEE_TOKEN",
                                 &format!(
-                                    "The provided fee_token is not supported by the relayer: {}",
-                                    msg
+                                    "The provided fee_token is not supported by the relayer: {msg}"
                                 ),
                             ),
                             SolanaRpcError::Estimation(msg) => JsonRpcResponse::error(
                                 -32001,
                                 "ESTIMATION_ERROR",
                                 &format!(
-                                    "Failed to estimate the fee due to internal or network issues: {}",
-                                    msg
+                                    "Failed to estimate the fee due to internal or network issues: {msg}"
                                 ),
                             ),
                             SolanaRpcError::InsufficientFunds(msg) => {
@@ -851,73 +848,71 @@ where
                                     -32002,
                                     "INSUFFICIENT_FUNDS",
                                     &format!(
-                                        "The sender does not have enough funds for the transfer: {}",
-                                        msg
+                                        "The sender does not have enough funds for the transfer: {msg}"
                                     ),
                                 )
                             }
                             SolanaRpcError::TransactionPreparation(msg) => JsonRpcResponse::error(
                                 -32003,
                                 "TRANSACTION_PREPARATION_ERROR",
-                                &format!("Failed to prepare the transfer transaction: {}", msg),
+                                &format!("Failed to prepare the transfer transaction: {msg}"),
                             ),
                             SolanaRpcError::Preparation(msg) => JsonRpcResponse::error(
                                 -32013,
                                 "PREPARATION_ERROR",
-                                &format!("Failed to prepare the transfer transaction: {}", msg),
+                                &format!("Failed to prepare the transfer transaction: {msg}"),
                             ),
                             SolanaRpcError::Signature(msg) => JsonRpcResponse::error(
                                 -32005,
                                 "SIGNATURE_ERROR",
-                                &format!("Failed to sign the transaction: {}", msg),
+                                &format!("Failed to sign the transaction: {msg}"),
                             ),
                             SolanaRpcError::Signing(msg) => JsonRpcResponse::error(
                                 -32005,
                                 "SIGNATURE_ERROR",
-                                &format!("Failed to sign the transaction: {}", msg),
+                                &format!("Failed to sign the transaction: {msg}"),
                             ),
                             SolanaRpcError::TokenFetch(msg) => JsonRpcResponse::error(
                                 -32007,
                                 "TOKEN_FETCH_ERROR",
-                                &format!("Failed to retrieve the list of supported tokens: {}", msg),
+                                &format!("Failed to retrieve the list of supported tokens: {msg}"),
                             ),
                             SolanaRpcError::BadRequest(msg) => JsonRpcResponse::error(
                                 -32007,
                                 "BAD_REQUEST",
-                                &format!("Bad request: {}", msg),
+                                &format!("Bad request: {msg}"),
                             ),
                             SolanaRpcError::Send(msg) => JsonRpcResponse::error(
                                 -32006,
                                 "SEND_ERROR",
                                 &format!(
-                                    "Failed to submit the transaction to the blockchain: {}",
-                                    msg
+                                    "Failed to submit the transaction to the blockchain: {msg}"
                                 ),
                             ),
                             SolanaRpcError::SolanaTransactionValidation(msg) => JsonRpcResponse::error(
                                 -32013,
                                 "PREPARATION_ERROR",
-                                &format!("Failed to prepare the transfer transaction: {}", msg),
+                                &format!("Failed to prepare the transfer transaction: {msg}"),
                             ),
                             SolanaRpcError::Encoding(msg) => JsonRpcResponse::error(
                                 -32601,
                                 "INVALID_PARAMS",
-                                &format!("The transaction parameter is invalid or missing: {}", msg),
+                                &format!("The transaction parameter is invalid or missing: {msg}"),
                             ),
                             SolanaRpcError::TokenAccount(msg) => JsonRpcResponse::error(
                                 -32601,
                                 "PREPARATION_ERROR",
-                                &format!("Invalid Token Account: {}", msg),
+                                &format!("Invalid Token Account: {msg}"),
                             ),
                             SolanaRpcError::Token(msg) => JsonRpcResponse::error(
                                 -32601,
                                 "PREPARATION_ERROR",
-                                &format!("Invalid Token Account: {}", msg),
+                                &format!("Invalid Token Account: {msg}"),
                             ),
                             SolanaRpcError::Provider(msg) => JsonRpcResponse::error(
                                 -32006,
                                 "PREPARATION_ERROR",
-                                &format!("Failed to prepare the transfer transaction: {}", msg),
+                                &format!("Failed to prepare the transfer transaction: {msg}"),
                             ),
                             SolanaRpcError::Internal(_) => {
                                 JsonRpcResponse::error(-32000, "INTERNAL_ERROR", "Internal error")
@@ -1140,7 +1135,7 @@ where
             .prepare_transaction(params)
             .await
             .map_err(|e| {
-                let error_msg = format!("{}", e);
+                let error_msg = format!("{e}");
                 RelayerError::Internal(error_msg)
             })?;
 

@@ -529,8 +529,7 @@ impl RelayerTransactionFactory {
                 let dex_service = Arc::new(
                     OrderBookService::new(horizon_url, provider_arc, signer_arc).map_err(|e| {
                         TransactionError::NetworkConfiguration(format!(
-                            "Failed to create DEX service: {}",
-                            e
+                            "Failed to create DEX service: {e}",
                         ))
                     })?,
                 );

@@ -212,7 +212,7 @@ async fn validate_prepare_transaction<P: SolanaProviderTrait + Send + Sync>(
 ) -> Result<(), SolanaTransactionValidationError> {
     let policy = &relayer.policies.get_solana_policy();
     let relayer_pubkey = Pubkey::from_str(&relayer.address).map_err(|e| {
-        SolanaTransactionValidationError::ValidationError(format!("Invalid relayer address: {}", e))
+        SolanaTransactionValidationError::ValidationError(format!("Invalid relayer address: {e}"))
     })?;
 
     let sync_validations = async {

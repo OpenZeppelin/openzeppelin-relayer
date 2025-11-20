@@ -71,7 +71,7 @@ where
         // Validate allowed token
         let policy = self.relayer.policies.get_stellar_policy();
         StellarTransactionValidator::validate_allowed_token(&params.fee_token, &policy).map_err(
-            |e| RelayerError::Internal(format!("Failed to validate allowed token: {}", e)),
+            |e| RelayerError::Internal(format!("Failed to validate allowed token: {e}")),
         )?;
 
         // Validate that either transaction_xdr or operations is provided
@@ -99,7 +99,7 @@ where
         )
         .await
         .map_err(|e| {
-            RelayerError::ValidationError(format!("Failed to validate gasless transaction: {}", e))
+            RelayerError::ValidationError(format!("Failed to validate gasless transaction: {e}"))
         })?;
 
         // Estimate fee using estimate_fee utility which handles simulation if needed
@@ -130,7 +130,7 @@ where
 
         // Validate max fee
         StellarTransactionValidator::validate_max_fee(fee_quote.fee_in_stroops, &policy)
-            .map_err(|e| RelayerError::Internal(format!("Failed to validate max fee: {}", e)))?;
+            .map_err(|e| RelayerError::Internal(format!("Failed to validate max fee: {e}")))?;
 
         // Validate token-specific max fee
         StellarTransactionValidator::validate_token_max_fee(
@@ -139,7 +139,7 @@ where
             &policy,
         )
         .map_err(|e| {
-            RelayerError::Internal(format!("Failed to validate token-specific max fee: {}", e))
+            RelayerError::Internal(format!("Failed to validate token-specific max fee: {e}"))
         })?;
 
         // Check user token balance to ensure they have enough to pay the fee
@@ -181,7 +181,7 @@ where
         // Validate allowed token
         let policy = self.relayer.policies.get_stellar_policy();
         StellarTransactionValidator::validate_allowed_token(&params.fee_token, &policy).map_err(
-            |e| RelayerError::Internal(format!("Failed to validate allowed token: {}", e)),
+            |e| RelayerError::Internal(format!("Failed to validate allowed token: {e}")),
         )?;
 
         // Validate that either transaction_xdr or operations is provided
@@ -208,7 +208,7 @@ where
         )
         .await
         .map_err(|e| {
-            RelayerError::ValidationError(format!("Failed to validate gasless transaction: {}", e))
+            RelayerError::ValidationError(format!("Failed to validate gasless transaction: {e}"))
         })?;
 
         // Get fee estimate using estimate_fee utility which handles simulation if needed
@@ -250,7 +250,7 @@ where
             preliminary_fee_quote.fee_in_stroops,
             &policy,
         )
-        .map_err(|e| RelayerError::Internal(format!("Failed to validate max fee: {}", e)))?;
+        .map_err(|e| RelayerError::Internal(format!("Failed to validate max fee: {e}")))?;
 
         // Validate token-specific max fee
         StellarTransactionValidator::validate_token_max_fee(
@@ -259,7 +259,7 @@ where
             &policy,
         )
         .map_err(|e| {
-            RelayerError::Internal(format!("Failed to validate token-specific max fee: {}", e))
+            RelayerError::Internal(format!("Failed to validate token-specific max fee: {e}"))
         })?;
 
         // Check user token balance to ensure they have enough to pay the fee
@@ -297,7 +297,7 @@ where
         // Serialize final transaction
         let extended_xdr = final_envelope
             .to_xdr_base64(Limits::none())
-            .map_err(|e| RelayerError::Internal(format!("Failed to serialize XDR: {}", e)))?;
+            .map_err(|e| RelayerError::Internal(format!("Failed to serialize XDR: {e}")))?;
 
         Ok(SponsoredTransactionBuildResponse::Stellar(
             StellarPrepareTransactionResult {
@@ -324,7 +324,7 @@ fn build_envelope_from_request(
 ) -> Result<TransactionEnvelope, RelayerError> {
     if let Some(xdr) = transaction_xdr {
         parse_transaction_xdr(xdr, false)
-            .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {}", e)))
+            .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {e}")))
     } else if let Some(ops) = operations {
         // Build envelope from operations
         let source_account = source_account.ok_or_else(|| {
@@ -350,7 +350,7 @@ fn build_envelope_from_request(
 
         // Build unsigned envelope from operations
         stellar_data.build_unsigned_envelope().map_err(|e| {
-            RelayerError::Internal(format!("Failed to build envelope from operations: {}", e))
+            RelayerError::Internal(format!("Failed to build envelope from operations: {e}"))
         })
     } else {
         Err(RelayerError::ValidationError(
@@ -370,9 +370,8 @@ fn add_fee_payment_operation(
         .map_err(crate::models::RelayerError::from)?;
 
     // Convert OperationSpec to XDR Operation
-    let payment_op = Operation::try_from(payment_op_spec).map_err(|e| {
-        RelayerError::Internal(format!("Failed to convert payment operation: {}", e))
-    })?;
+    let payment_op = Operation::try_from(payment_op_spec)
+        .map_err(|e| RelayerError::Internal(format!("Failed to convert payment operation: {e}")))?;
 
     // Add payment operation to transaction
     add_operation_to_envelope(envelope, payment_op).map_err(crate::models::RelayerError::from)?;

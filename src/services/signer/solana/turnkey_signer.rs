@@ -72,7 +72,7 @@ impl<T: TurnkeyServiceTrait> SolanaSignTrait for TurnkeySigner<T> {
         let sig_bytes = self.turnkey_service.sign_solana(message).await?;
 
         Ok(Signature::try_from(sig_bytes.as_slice()).map_err(|e| {
-            SignerError::SigningError(format!("Failed to create signature from bytes: {}", e))
+            SignerError::SigningError(format!("Failed to create signature from bytes: {e}"))
         })?)
     }
 }

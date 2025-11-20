@@ -30,19 +30,25 @@ Example Solana network configurations:
   "networks": [
     {
       "type": "solana",
-      "network": "mainnet-beta",
+      "network": "solana-mainnet",
       "rpc_urls": ["https://api.mainnet-beta.solana.com"],
       "explorer_urls": ["https://explorer.solana.com"],
-      "average_blocktime_ms": 400,
-      "is_testnet": false
+      "is_testnet": false,
+      "tags": ["mainnet", "solana"]
     },
     {
-      "from": "mainnet-beta",
       "type": "solana",
-      "network": "testnet",
-      "rpc_urls": ["https://api.testnet.solana.com"],
-      "explorer_urls": ["https://explorer.solana.com?cluster=testnet"],
-      "is_testnet": true
+      "network": "solana-devnet",
+      "rpc_urls": ["https://api.devnet.solana.com"],
+      "explorer_urls": ["https://explorer.solana.com?cluster=devnet"],
+      "is_testnet": true,
+      "tags": ["devnet", "solana"]
+    },
+    {
+      "type": "solana",
+      "network": "solana-custom",
+      "rpc_urls": ["https://your-custom-solana-rpc.example.com"],
+      "tags": ["custom", "solana"]
     }
   ]
 }
@@ -75,11 +81,11 @@ Key prerequisites:
 * Redis
 * Docker (optional)
 
-Example configuration for a Solana relayer with **user fee payment** (default):
+Example configuration for a Solana relayer:
 ```json
 {
-  "id": "solana-user-pays",
-  "name": "Solana User Pays Fees",
+  "id": "solana-example",
+  "name": "Solana Example",
   "network": "devnet",
   "paused": false,
   "notification_id": "notification-example",
@@ -93,7 +99,7 @@ Example configuration for a Solana relayer with **user fee payment** (default):
     "fee_payment_strategy": "user",
     "min_balance": 0,
     "allowed_tokens": [
-      { "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "max_allowed_fee": 100000000 }
+      { "mint": "So111...", "max_allowed_fee": 100000000 }
     ],
     "swap_config": {
       "strategy": "jupiter-swap",
@@ -109,34 +115,13 @@ Example configuration for a Solana relayer with **user fee payment** (default):
 }
 ```
 
-Example configuration for a Solana relayer with **relayer fee payment**:
-```json
-{
-  "id": "solana-relayer-pays",
-  "name": "Solana Relayer Pays Fees",
-  "network": "devnet",
-  "paused": false,
-  "notification_id": "notification-example",
-  "signer_id": "local-signer",
-  "network_type": "solana",
-  "custom_rpc_urls": [
-    { "url": "https://primary-solana-rpc.example.com", "weight": 100 },
-    { "url": "https://backup-solana-rpc.example.com", "weight": 100 }
-  ],
-  "policies": {
-    "fee_payment_strategy": "relayer",
-    "min_balance": 100000000
-  }
-}
-```
-
-For more configuration examples, visit the [OpenZeppelin Relayer examples repository](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples).
+For more configuration examples, visit the [OpenZeppelin Relayer examples repository, window=_blank](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples).
 
 ## Configuration
 
-### Fee Payment Strategies
+### Relayer Policies
 
-Solana relayers support two distinct fee payment strategies that determine who pays for transaction fees and how transactions are processed.
+In addition to standard relayer configuration and policies, Solana relayers support additional options:
 
 | Feature | User Pays (Default) | Relayer Pays |
 |---------|---------------------|--------------|
@@ -205,7 +190,7 @@ You can check all options in [User Documentation - Relayers](/relayer#3_relayers
 
 ## Automated Token Swaps
 
-The relayer can perform automated token swaps on Solana when `user` fee_payment_strategy is set for relayer using:
+The relayer can perform automated token swaps on Solana when user fee_payment_strategy is used for relayer using:
 
 * ***jupiter-swap*** – via the Jupiter Swap API
 * ***jupiter-ultra*** – via the Jupiter Ultra API
@@ -231,7 +216,7 @@ The Solana relayer provides two API interfaces that support fee estimation, tran
    * **Sign Transaction**: `POST /api/v1/relayers/<relayer_id>/sign-transaction`
    * **Send Transaction**: `POST /api/v1/relayers/<relayer_id>/transactions`
 
-### RPC Endpoint (JSON-RPC 2.0)
+<Callout>
 
 **Base URL**: `POST /api/v1/relayers/<relayer_id>/rpc`
 
@@ -254,15 +239,9 @@ For complete RPC examples, see the [SDK Solana examples](https://github.com/Open
 
 ***Fee Token Parameter Behavior:***
 
-**In `fee_payment_strategy: "relayer"` mode:**
-* The `fee_token` parameter in RPC methods becomes ***informational only***
-* The relayer pays all transaction fees in SOL regardless of the specified fee token
-* You can use either `"So11111111111111111111111111111112"` (WSOL) or `"11111111111111111111111111111111"` (native SOL) as the fee_token value
+When using `fee_payment_strategy: "relayer"`, the `fee_token` parameter in RPC methods becomes ***informational only***. The relayer pays all transaction fees in SOL regardless of the specified fee token. In this mode, you can use either `"So11111111111111111111111111111112"` (WSOL) or `"11111111111111111111111111111111"` (native SOL) as the fee_token value.
 
-**In `fee_payment_strategy: "user"` mode:**
-* The `fee_token` parameter determines which token the user will pay fees in
-* Must be a supported token from the `allowed_tokens` list (if configured)
-* The relayer validates and processes fee payments in the specified token
+When using `fee_payment_strategy: "user"`, the `fee_token` parameter determines which token the user will pay fees in, and must be a supported token from the `allowed_tokens` list (if configured).
 
 </Callout>
 

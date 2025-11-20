@@ -107,8 +107,7 @@ pub async fn create_stellar_relayer<
                     )
                     .map_err(|e| {
                         RelayerError::NetworkConfiguration(format!(
-                            "Failed to create OrderBook DEX service: {}",
-                            e
+                            "Failed to create OrderBook DEX service: {e}"
                         ))
                     })?,
                 );

@@ -23,10 +23,7 @@ pub trait RedisRepository {
         serde_json::to_string(entity).map_err(|e| {
             let id = id_extractor(entity);
             error!(entity_type = %entity_type, id = %id, error = %e, "serialization failed");
-            RepositoryError::InvalidData(format!(
-                "Failed to serialize {} {}: {}",
-                entity_type, id, e
-            ))
+            RepositoryError::InvalidData(format!("Failed to serialize {entity_type} {id}: {e}"))
         })
     }
 
@@ -59,34 +56,28 @@ pub trait RedisRepository {
 
         match error.kind() {
             redis::ErrorKind::TypeError => RepositoryError::InvalidData(format!(
-                "Redis data type error in operation '{}': {}",
-                context, error
+                "Redis data type error in operation '{context}': {error}"
             )),
             redis::ErrorKind::AuthenticationFailed => {
                 RepositoryError::InvalidData("Redis authentication failed".to_string())
             }
             redis::ErrorKind::NoScriptError => RepositoryError::InvalidData(format!(
-                "Redis script error in operation '{}': {}",
-                context, error
+                "Redis script error in operation '{context}': {error}"
             )),
             redis::ErrorKind::ReadOnly => RepositoryError::InvalidData(format!(
-                "Redis is read-only in operation '{}': {}",
-                context, error
+                "Redis is read-only in operation '{context}': {error}"
             )),
             redis::ErrorKind::ExecAbortError => RepositoryError::InvalidData(format!(
-                "Redis transaction aborted in operation '{}': {}",
-                context, error
+                "Redis transaction aborted in operation '{context}': {error}"
             )),
             redis::ErrorKind::BusyLoadingError => RepositoryError::InvalidData(format!(
-                "Redis is busy in operation '{}': {}",
-                context, error
+                "Redis is busy in operation '{context}': {error}"
             )),
             redis::ErrorKind::ExtensionError => RepositoryError::InvalidData(format!(
-                "Redis extension error in operation '{}': {}",
-                context, error
+                "Redis extension error in operation '{context}': {error}"
             )),
             // Default to Other for connection errors and other issues
-            _ => RepositoryError::Other(format!("Redis operation '{}' failed: {}", context, error)),
+            _ => RepositoryError::Other(format!("Redis operation '{context}' failed: {error}")),
         }
     }
 }

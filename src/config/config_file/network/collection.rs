@@ -56,16 +56,13 @@ impl<'de> Deserialize<'de> for NetworksFileConfig {
         // First, create an instance with unflattened networks.
         // This will perform initial validations like duplicate name checks.
         let unflattened_config = NetworksFileConfig::new(final_networks).map_err(|e| {
-            de::Error::custom(format!(
-                "Error creating initial NetworksFileConfig: {:?}",
-                e
-            ))
+            de::Error::custom(format!("Error creating initial NetworksFileConfig: {e:?}"))
         })?;
 
         // Now, flatten the configuration. (Resolve inheritance)
         unflattened_config
             .flatten()
-            .map_err(|e| de::Error::custom(format!("Error flattening NetworksFileConfig: {:?}", e)))
+            .map_err(|e| de::Error::custom(format!("Error flattening NetworksFileConfig: {e:?}")))
     }
 }
 
@@ -87,8 +84,7 @@ impl NetworksFileConfig {
             if network_map.insert(key, index).is_some() {
                 // Return an error if we find a duplicate within the same network type
                 return Err(ConfigFileError::DuplicateId(format!(
-                    "{:?} network '{}'",
-                    network_type, name
+                    "{network_type:?} network '{name}'"
                 )));
             }
         }
@@ -227,8 +223,7 @@ impl NetworksFileConfig {
             if current_path_names.contains(&current_name) {
                 let cycle_path_str = current_path_names.join(" -> ");
                 return Err(ConfigFileError::CircularInheritance(format!(
-                    "Circular inheritance detected: {} -> {}",
-                    cycle_path_str, current_name
+                    "Circular inheritance detected: {cycle_path_str} -> {current_name}"
                 )));
             }
 
@@ -238,8 +233,7 @@ impl NetworksFileConfig {
                 self.get_network(network_type, current_name)
                     .ok_or_else(|| {
                         ConfigFileError::InvalidReference(format!(
-                            "{:?} network '{}' not found in configuration",
-                            network_type, current_name
+                            "{network_type:?} network '{current_name}' not found in configuration"
                         ))
                     })?;
 
@@ -248,16 +242,14 @@ impl NetworksFileConfig {
 
                 if source_name == current_name {
                     return Err(ConfigFileError::InvalidReference(format!(
-                        "Network '{}' cannot inherit from itself",
-                        current_name
+                        "Network '{current_name}' cannot inherit from itself"
                     )));
                 }
 
                 let source_network =
                     self.get_network(network_type, source_name).ok_or_else(|| {
                         ConfigFileError::InvalidReference(format!(
-                            "{:?} network '{}' inherits from non-existent network '{}'",
-                            network_type, current_name, source_name
+                            "{network_type:?} network '{current_name}' inherits from non-existent network '{source_name}'"
                         ))
                     })?;
 
@@ -265,8 +257,7 @@ impl NetworksFileConfig {
 
                 if derived_type != source_type {
                     return Err(ConfigFileError::IncompatibleInheritanceType(format!(
-                        "Network '{}' (type {:?}) tries to inherit from '{}' (type {:?})",
-                        current_name, derived_type, source_name, source_type
+                        "Network '{current_name}' (type {derived_type:?}) tries to inherit from '{source_name}' (type {source_type:?})"
                     )));
                 }
                 current_name = source_name;

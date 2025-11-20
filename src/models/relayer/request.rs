@@ -142,18 +142,18 @@ pub fn deserialize_policy_for_network_type(
     match network_type {
         RelayerNetworkType::Evm => {
             let evm_policy: RelayerEvmPolicy = serde_json::from_value(policies_value.clone())
-                .map_err(|e| ApiError::BadRequest(format!("Invalid EVM policy: {}", e)))?;
+                .map_err(|e| ApiError::BadRequest(format!("Invalid EVM policy: {e}")))?;
             Ok(RelayerNetworkPolicy::Evm(evm_policy))
         }
         RelayerNetworkType::Solana => {
             let solana_policy: RelayerSolanaPolicy = serde_json::from_value(policies_value.clone())
-                .map_err(|e| ApiError::BadRequest(format!("Invalid Solana policy: {}", e)))?;
+                .map_err(|e| ApiError::BadRequest(format!("Invalid Solana policy: {e}")))?;
             Ok(RelayerNetworkPolicy::Solana(solana_policy))
         }
         RelayerNetworkType::Stellar => {
             let stellar_policy: RelayerStellarPolicy =
                 serde_json::from_value(policies_value.clone())
-                    .map_err(|e| ApiError::BadRequest(format!("Invalid Stellar policy: {}", e)))?;
+                    .map_err(|e| ApiError::BadRequest(format!("Invalid Stellar policy: {e}")))?;
             Ok(RelayerNetworkPolicy::Stellar(stellar_policy))
         }
     }
