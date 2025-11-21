@@ -10,9 +10,10 @@ use base64::{engine::general_purpose, Engine};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use soroban_rs::xdr::{
-    AccountId, ContractDataEntry, ContractId, Hash, LedgerEntryData, LedgerKey,
-    LedgerKeyContractData, Limits, Operation, Preconditions, PublicKey as XdrPublicKey, ReadXdr,
-    ScAddress, ScSymbol, ScVal, TimeBounds, TimePoint, TransactionEnvelope, Uint256, VecM,
+    AccountId, AlphaNum12, AlphaNum4, Asset, ChangeTrustAsset, ContractDataEntry, ContractId, Hash,
+    LedgerEntryData, LedgerKey, LedgerKeyContractData, Limits, Operation, Preconditions,
+    PublicKey as XdrPublicKey, ReadXdr, ScAddress, ScSymbol, ScVal, TimeBounds, TimePoint,
+    TransactionEnvelope, Uint256, VecM,
 };
 use std::str::FromStr;
 use stellar_strkey::ed25519::PublicKey;
@@ -1485,5 +1486,98 @@ mod tests {
                 _ => panic!("Expected Time preconditions"),
             }
         }
+    }
+}
+
+/// Extract asset identifier from CreditAlphanum4
+fn credit_alphanum4_to_asset_id(
+    alpha4: &AlphaNum4,
+) -> Result<String, StellarTransactionUtilsError> {
+    // Extract code (trim null bytes)
+    let code_bytes = alpha4.asset_code.0;
+    let code_len = code_bytes.iter().position(|&b| b == 0).unwrap_or(4);
+    let code = String::from_utf8(code_bytes[..code_len].to_vec()).map_err(|e| {
+        StellarTransactionUtilsError::InvalidAssetFormat(format!("Invalid asset code: {e}"))
+    })?;
+
+    // Extract issuer
+    let issuer = match &alpha4.issuer.0 {
+        XdrPublicKey::PublicKeyTypeEd25519(uint256) => {
+            let bytes: [u8; 32] = uint256.0;
+            let pk = PublicKey(bytes);
+            pk.to_string()
+        }
+    };
+
+    Ok(format!("{code}:{issuer}"))
+}
+
+/// Extract asset identifier from CreditAlphanum12
+fn credit_alphanum12_to_asset_id(
+    alpha12: &AlphaNum12,
+) -> Result<String, StellarTransactionUtilsError> {
+    // Extract code (trim null bytes)
+    let code_bytes = alpha12.asset_code.0;
+    let code_len = code_bytes.iter().position(|&b| b == 0).unwrap_or(12);
+    let code = String::from_utf8(code_bytes[..code_len].to_vec()).map_err(|e| {
+        StellarTransactionUtilsError::InvalidAssetFormat(format!("Invalid asset code: {e}"))
+    })?;
+
+    // Extract issuer
+    let issuer = match &alpha12.issuer.0 {
+        XdrPublicKey::PublicKeyTypeEd25519(uint256) => {
+            let bytes: [u8; 32] = uint256.0;
+            let pk = PublicKey(bytes);
+            pk.to_string()
+        }
+    };
+
+    Ok(format!("{code}:{issuer}"))
+}
+
+/// Convert ChangeTrustAsset XDR to asset identifier string
+///
+/// Returns `Some(asset_id)` for CreditAlphanum4 and CreditAlphanum12 assets,
+/// or `None` for Native or PoolShare (which don't have asset identifiers).
+///
+/// # Arguments
+///
+/// * `change_trust_asset` - The ChangeTrustAsset to convert
+///
+/// # Returns
+///
+/// Asset identifier string in "CODE:ISSUER" format, or None for Native/PoolShare
+pub fn change_trust_asset_to_asset_id(
+    change_trust_asset: &ChangeTrustAsset,
+) -> Result<Option<String>, StellarTransactionUtilsError> {
+    match change_trust_asset {
+        ChangeTrustAsset::Native | ChangeTrustAsset::PoolShare(_) => Ok(None),
+        ChangeTrustAsset::CreditAlphanum4(alpha4) => {
+            // Convert to Asset and use the unified function
+            let asset = Asset::CreditAlphanum4(alpha4.clone());
+            asset_to_asset_id(&asset).map(Some)
+        }
+        ChangeTrustAsset::CreditAlphanum12(alpha12) => {
+            // Convert to Asset and use the unified function
+            let asset = Asset::CreditAlphanum12(alpha12.clone());
+            asset_to_asset_id(&asset).map(Some)
+        }
+    }
+}
+
+/// Convert Asset XDR to asset identifier string
+///
+/// # Arguments
+///
+/// * `asset` - The Asset to convert
+///
+/// # Returns
+///
+/// Asset identifier string ("native" for Native, or "CODE:ISSUER" for credit assets)
+pub fn asset_to_asset_id(asset: &Asset) -> Result<String, StellarTransactionUtilsError> {
+    match asset {
+        Asset::Native => Ok("native".to_string()),
+        Asset::CreditAlphanum4(alpha4) => credit_alphanum4_to_asset_id(alpha4),
+        Asset::CreditAlphanum12(alpha12) => credit_alphanum12_to_asset_id(alpha12),
     }
 }

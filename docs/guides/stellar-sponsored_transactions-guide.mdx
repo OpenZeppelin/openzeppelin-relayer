@@ -103,77 +103,8 @@ Additional fee margin added to estimated fees to account for price fluctuations 
 
 Before users can pay fees in tokens, the relayer account must establish trustlines to those tokens. This is a one-time setup per token.
 
-#### Using Stellar SDK
+For a complete example of how to create trustlines, see the [Relayer SDK example](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayer/stellar/sponsored/create-trustline.ts).
 
-```typescript
-import { Keypair, Networks, Server, TransactionBuilder, Operation } from '@stellar/stellar-sdk';
-
-const relayerKeypair = Keypair.fromSecret('S...'); // Your relayer secret key
-const server = new Server('https://soroban-testnet.stellar.org');
-
-// Get relayer account
-const relayerAccount = await server.loadAccount(relayerKeypair.publicKey());
-
-// USDC asset (example)
-const usdcAsset = new Asset(
-  'USDC',
-  'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN'
-);
-
-// Build change trust transaction
-const transaction = new TransactionBuilder(relayerAccount, {
-  fee: '100',
-  networkPassphrase: Networks.TESTNET,
-})
-  .addOperation(
-    Operation.changeTrust({
-      asset: usdcAsset,
-      limit: '922337203685.4775807', // Maximum limit
-    })
-  )
-  .setTimeout(30)
-  .build();
-
-// Sign and submit
-transaction.sign(relayerKeypair);
-const result = await server.submitTransaction(transaction);
-console.log('Trustline established:', result.hash);
-```
-
-#### Using Horizon API
-
-```bash
-# Build the transaction
-curl -X POST "https://soroban-testnet.stellar.org/transactions" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "tx": "AAAAAgAAAAD..." # Base64 XDR of signed transaction
-  }'
-```
-
-#### Verification
-
-Verify the trustline was created:
-
-```bash
-curl "https://soroban-testnet.stellar.org/accounts/{RELAYER_ADDRESS}"
-```
-
-Look for the trustline in the `balances` array:
-
-```json
-{
-  "balances": [
-    {
-      "asset_type": "credit_alphanum4",
-      "asset_code": "USDC",
-      "asset_issuer": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
-      "limit": "922337203685.4775807",
-      "balance": "0.0000000"
-    }
-  ]
-}
-```
 
 ## Using the API
 
@@ -223,40 +154,7 @@ Or with operations:
 }
 ```
 
-**Example Request:**
-
-```bash
-curl -X POST "http://localhost:3000/api/v1/relayers/stellar-sponsored/transactions/sponsored/quote" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -d '{
-    "transaction_xdr": "AAAAAgAAAAD...",
-    "fee_token": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
-  }'
-```
-
-**Example with JavaScript:**
-
-```typescript
-const response = await fetch(
-  'http://localhost:3000/api/v1/relayers/stellar-sponsored/transactions/sponsored/quote',
-  {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer YOUR_API_KEY',
-    },
-    body: JSON.stringify({
-      transaction_xdr: transactionXdr,
-      fee_token: 'USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
-    }),
-  }
-);
-
-const result = await response.json();
-console.log('Estimated fee:', result.data.estimated_fee);
-console.log('Conversion rate:', result.data.conversion_rate);
-```
+For complete code examples, see the [Relayer SDK examples](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/stellar/sponsored).
 
 ### Step 2: Build Sponsored Transaction
 
@@ -306,57 +204,7 @@ Or with operations:
 }
 ```
 
-**Example Request:**
-
-```bash
-curl -X POST "http://localhost:3000/api/v1/relayers/stellar-sponsored/transactions/sponsored/build" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -d '{
-    "operations": [
-      {
-        "type": "payment",
-        "destination": "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
-        "amount": 1000000,
-        "asset": "native"
-      }
-    ],
-    "source_account": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-    "fee_token": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
-  }'
-```
-
-**Example with JavaScript:**
-
-```typescript
-const response = await fetch(
-  'http://localhost:3000/api/v1/relayers/stellar-sponsored/transactions/sponsored/build',
-  {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer YOUR_API_KEY',
-    },
-    body: JSON.stringify({
-      operations: [
-        {
-          type: 'payment',
-          destination: 'GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
-          amount: 1000000,
-          asset: 'native',
-        },
-      ],
-      source_account: userAccountAddress,
-      fee_token: 'USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
-    }),
-  }
-);
-
-const result = await response.json();
-const preparedTx = result.data.transaction;
-const feeAmount = result.data.fee_in_token;
-const validUntil = result.data.valid_until;
-```
+For complete code examples, see the [Relayer SDK examples](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/stellar/sponsored).
 
 ### Step 3: Sign and Send Transaction
 
@@ -390,88 +238,7 @@ Sign the prepared transaction and submit it. The relayer will wrap it in a fee-b
 }
 ```
 
-**Complete Example Flow:**
-
-```typescript
-import { Keypair, Networks, Transaction, xdr } from '@stellar/stellar-sdk';
-
-// 1. Get fee quote
-const quoteResponse = await fetch(
-  'http://localhost:3000/api/v1/relayers/stellar-sponsored/transactions/sponsored/quote',
-  {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer YOUR_API_KEY',
-    },
-    body: JSON.stringify({
-      operations: [
-        {
-          type: 'payment',
-          destination: recipientAddress,
-          amount: paymentAmount,
-          asset: 'native',
-        },
-      ],
-      fee_token: 'USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
-    }),
-  }
-);
-
-const quote = await quoteResponse.json();
-console.log('Fee estimate:', quote.data.estimated_fee);
-
-// 2. Build sponsored transaction
-const buildResponse = await fetch(
-  'http://localhost:3000/api/v1/relayers/stellar-sponsored/transactions/sponsored/build',
-  {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer YOUR_API_KEY',
-    },
-    body: JSON.stringify({
-      operations: [
-        {
-          type: 'payment',
-          destination: recipientAddress,
-          amount: paymentAmount,
-          asset: 'native',
-        },
-      ],
-      source_account: userKeypair.publicKey(),
-      fee_token: 'USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
-    }),
-  }
-);
-
-const build = await buildResponse.json();
-const preparedTxXdr = build.data.transaction;
-
-// 3. Parse and sign the transaction
-const preparedTx = new Transaction(preparedTxXdr, Networks.TESTNET);
-preparedTx.sign(userKeypair);
-
-// 4. Send the signed transaction
-const sendResponse = await fetch(
-  `http://localhost:3000/api/v1/relayers/stellar-sponsored/transactions`,
-  {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer YOUR_API_KEY',
-    },
-    body: JSON.stringify({
-      transaction_xdr: preparedTx.toXDR(),
-      network: 'testnet',
-    }),
-  }
-);
-
-const sendResult = await sendResponse.json();
-console.log('Transaction ID:', sendResult.data.id);
-console.log('Status:', sendResult.data.status);
-```
+For complete code examples, see the [Relayer SDK examples](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/stellar/sponsored).
 
 ## Request/Response Formats
 

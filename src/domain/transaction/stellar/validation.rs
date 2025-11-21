@@ -10,7 +10,7 @@ use crate::domain::relayer::xdr_utils::{
 };
 use crate::domain::transaction::stellar::token::get_token_balance;
 use crate::domain::transaction::stellar::utils::{
-    convert_xlm_fee_to_token, estimate_fee, extract_time_bounds,
+    asset_to_asset_id, convert_xlm_fee_to_token, estimate_fee, extract_time_bounds,
 };
 use crate::domain::xdr_needs_simulation;
 use crate::models::RelayerStellarPolicy;
@@ -20,7 +20,7 @@ use crate::services::stellar_dex::StellarDexServiceTrait;
 use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
 use soroban_rs::xdr::{
-    AccountId, Asset, HostFunction, InvokeHostFunctionOp, LedgerKey, OperationBody, PaymentOp,
+    AccountId, HostFunction, InvokeHostFunctionOp, LedgerKey, OperationBody, PaymentOp,
     PublicKey as XdrPublicKey, ScAddress, SorobanCredentials, TransactionEnvelope,
 };
 use stellar_strkey::ed25519::PublicKey;
@@ -277,7 +277,11 @@ impl StellarTransactionValidator {
                 // Check if payment is to relayer
                 if dest_str == relayer_address {
                     // Convert asset to identifier string
-                    let asset_id = asset_to_asset_id(asset)?;
+                    let asset_id = asset_to_asset_id(asset).map_err(|e| {
+                        StellarTransactionValidationError::InvalidAssetIdentifier(format!(
+                            "Failed to convert asset to asset_id: {e}"
+                        ))
+                    })?;
                     // Convert amount from i64 to u64 (amounts are always positive)
                     let amount_u64 = (*amount) as u64;
                     payments.push((asset_id, amount_u64));
@@ -1070,55 +1074,6 @@ impl StellarTransactionValidator {
         }
 
         Ok(())
-    }
-}
-
-/// Convert XDR Asset to asset identifier string
-fn asset_to_asset_id(asset: &Asset) -> Result<String, StellarTransactionValidationError> {
-    match asset {
-        Asset::Native => Ok("native".to_string()),
-        Asset::CreditAlphanum4(alpha4) => {
-            // Extract code (trim null bytes)
-            let code_bytes = alpha4.asset_code.0;
-            let code_len = code_bytes.iter().position(|&b| b == 0).unwrap_or(4);
-            let code = String::from_utf8(code_bytes[..code_len].to_vec()).map_err(|e| {
-                StellarTransactionValidationError::InvalidAssetIdentifier(format!(
-                    "Invalid asset code: {e}"
-                ))
-            })?;
-
-            // Extract issuer
-            let issuer = match &alpha4.issuer.0 {
-                soroban_rs::xdr::PublicKey::PublicKeyTypeEd25519(uint256) => {
-                    let bytes: [u8; 32] = uint256.0;
-                    let pk = PublicKey(bytes);
-                    pk.to_string()
-                }
-            };
-
-            Ok(format!("{code}:{issuer}"))
-        }
-        Asset::CreditAlphanum12(alpha12) => {
-            // Extract code (trim null bytes)
-            let code_bytes = alpha12.asset_code.0;
-            let code_len = code_bytes.iter().position(|&b| b == 0).unwrap_or(12);
-            let code = String::from_utf8(code_bytes[..code_len].to_vec()).map_err(|e| {
-                StellarTransactionValidationError::InvalidAssetIdentifier(format!(
-                    "Invalid asset code: {e}"
-                ))
-            })?;
-
-            // Extract issuer
-            let issuer = match &alpha12.issuer.0 {
-                soroban_rs::xdr::PublicKey::PublicKeyTypeEd25519(uint256) => {
-                    let bytes: [u8; 32] = uint256.0;
-                    let pk = PublicKey(bytes);
-                    pk.to_string()
-                }
-            };
-
-            Ok(format!("{code}:{issuer}"))
-        }
     }
 }
 

@@ -2,11 +2,14 @@
 //! It includes XDR parsing, validation, sequence updating, and fee updating.
 
 use eyre::Result;
-use soroban_rs::xdr::{Limits, ReadXdr, TransactionEnvelope, WriteXdr};
+use soroban_rs::xdr::{Limits, OperationBody, ReadXdr, TransactionEnvelope, WriteXdr};
 use tracing::debug;
 
 use crate::{
     constants::STELLAR_DEFAULT_TRANSACTION_FEE,
+    domain::transaction::stellar::token::get_token_balance,
+    domain::transaction::stellar::utils::change_trust_asset_to_asset_id,
+    domain::transaction::stellar::StellarTransactionValidator,
     domain::{extract_operations, extract_source_account},
     models::{
         RelayerStellarPolicy, StellarFeePaymentStrategy, StellarTransactionData,
@@ -22,6 +25,86 @@ use super::common::{
     apply_sequence, ensure_minimum_fee, get_next_sequence, sign_stellar_transaction,
     simulate_if_needed,
 };
+
+/// Check if a transaction contains only ChangeTrust operations for allowed tokens without existing trustlines
+///
+/// This is an exception that allows certain transactions in user fee payment mode via unsigned_xdr path.
+/// Returns true if:
+/// - All operations are ChangeTrust operations
+/// - Each ChangeTrust is for a token in the allowed_tokens list
+/// - The trustline doesn't already exist for the relayer account
+///
+/// Note: In Stellar, ChangeTrust operations always create trustlines for the transaction source account.
+/// This function only allows trustlines to be created for the relayer account.
+async fn is_change_trust_for_allowed_token_without_trustline<P>(
+    envelope: &TransactionEnvelope,
+    relayer_address: &str,
+    policy: &RelayerStellarPolicy,
+    provider: &P,
+) -> Result<bool, TransactionError>
+where
+    P: StellarProviderTrait + Send + Sync,
+{
+    let operations = extract_operations(envelope).map_err(|e| {
+        TransactionError::ValidationError(format!("Failed to extract operations: {e}"))
+    })?;
+
+    // Must have at least one operation
+    if operations.is_empty() {
+        return Ok(false);
+    }
+
+    // Check if all operations are ChangeTrust
+    for op in operations.iter() {
+        if !matches!(op.body, OperationBody::ChangeTrust(_)) {
+            return Ok(false);
+        }
+    }
+
+    // Extract assets from ChangeTrust operations and validate
+    for op in operations.iter() {
+        if let OperationBody::ChangeTrust(change_trust) = &op.body {
+            // Extract asset from ChangeTrust and convert to asset_id string
+            let asset_id =
+                match change_trust_asset_to_asset_id(&change_trust.line).map_err(|e| {
+                    TransactionError::ValidationError(format!(
+                        "Failed to convert ChangeTrust asset to asset_id: {e}"
+                    ))
+                })? {
+                    None => {
+                        // Native or PoolShare assets don't need trustlines
+                        return Ok(false);
+                    }
+                    Some(asset_id) => asset_id,
+                };
+
+            // Check if asset is in allowed_tokens list
+            StellarTransactionValidator::validate_allowed_token(&asset_id, policy).map_err(
+                |e| {
+                    TransactionError::ValidationError(format!(
+                        "ChangeTrust asset {asset_id} is not in allowed_tokens list: {e}"
+                    ))
+                },
+            )?;
+
+            // Check if trustline already exists for the relayer account
+            // (if get_token_balance succeeds, trustline exists)
+            match get_token_balance(provider, relayer_address, &asset_id).await {
+                Ok(_) => {
+                    // Trustline already exists, this is not allowed
+                    return Ok(false);
+                }
+                Err(_) => {
+                    // Trustline doesn't exist (error is expected), this is allowed
+                    // Continue checking other operations
+                }
+            }
+        }
+    }
+
+    // All operations are ChangeTrust for allowed tokens without trustlines
+    Ok(true)
+}
 
 /// Process an unsigned XDR transaction.
 ///
@@ -57,20 +140,9 @@ where
     S: Signer + Send + Sync,
     D: StellarDexServiceTrait + Send + Sync,
 {
-    // Step 1: Reject User fee payment strategy transactions - these must use fee_bump path (SignedXdr)
-    if let Some(policy) = relayer_policy {
-        if matches!(
-            policy.fee_payment_strategy,
-            Some(StellarFeePaymentStrategy::User)
-        ) {
-            return Err(TransactionError::ValidationError(
-                    "Gasless transactions (User fee payment strategy) are not supported via unsigned_xdr path. \
-                     Please use fee_bump path (SignedXdr) for gasless transactions.".to_string(),
-                ));
-        }
-    }
-
-    // Step 2: Parse the XDR
+    // Step 1: Parse the XDR first (needed for validation)
+    // Step 2: Check if User fee payment strategy transactions should be allowed
+    // (Allow ChangeTrust operations for allowed tokens without existing trustlines)
     let xdr = match &stellar_data.transaction_input {
         TransactionInput::UnsignedXdr(xdr) => xdr,
         _ => {
@@ -83,10 +155,44 @@ where
     let mut envelope = TransactionEnvelope::from_xdr_base64(xdr, Limits::none())
         .map_err(|e| StellarValidationError::InvalidXdr(e.to_string()))?;
 
-    // Step 3: Validate source account - must be relayer for unsigned_xdr path
+    // Step 2: Extract source account (needed for validation)
     let source_account = extract_source_account(&envelope).map_err(|e| {
         TransactionError::ValidationError(format!("Failed to extract source account: {e}"))
     })?;
+
+    // Step 3: Check if User fee payment strategy transactions should be allowed
+    // Allow ChangeTrust operations for allowed tokens without existing trustlines
+    if let Some(policy) = relayer_policy {
+        if matches!(
+            policy.fee_payment_strategy,
+            Some(StellarFeePaymentStrategy::User)
+        ) {
+            // Check if this is an allowed exception: ChangeTrust for allowed tokens without trustlines
+            // Note: This only allows trustlines for the relayer account (source_account must be relayer)
+            let is_allowed_exception = is_change_trust_for_allowed_token_without_trustline(
+                &envelope,
+                relayer_address,
+                policy,
+                provider,
+            )
+            .await
+            .map_err(|e| {
+                TransactionError::ValidationError(format!(
+                    "Failed to validate ChangeTrust exception: {e}"
+                ))
+            })?;
+
+            if !is_allowed_exception {
+                return Err(TransactionError::ValidationError(
+                    "Gasless transactions (User fee payment strategy) are not supported via unsigned_xdr path. \
+                     Please use fee_bump path (SignedXdr) for gasless transactions. \
+                     Exception: ChangeTrust operations for allowed tokens without existing trustlines are allowed.".to_string(),
+                ));
+            }
+        }
+    }
+
+    // Step 4: Validate source account - must be relayer for unsigned_xdr path
 
     if source_account != relayer_address {
         return Err(StellarValidationError::SourceAccountMismatch {
