@@ -16,7 +16,7 @@ use crate::jobs::JobProducerTrait;
 use crate::models::transaction::request::StellarTransactionRequest;
 use crate::models::{
     produce_stellar_dex_webhook_payload, NetworkTransactionRequest, RelayerRepoModel,
-    StellarDexPayload,
+    StellarDexPayload, StellarFeePaymentStrategy,
 };
 use crate::models::{NetworkRepoModel, TransactionRepoModel};
 use crate::repositories::{
@@ -61,6 +61,19 @@ where
 
         let policy = relayer.policies.get_stellar_policy();
 
+        // Token swaps are only supported for user fee payment strategy
+        // This ensures swaps are only performed when users pay fees in tokens
+        if !matches!(
+            policy.fee_payment_strategy,
+            Some(StellarFeePaymentStrategy::User)
+        ) {
+            debug!(
+                %relayer_id,
+                "Token swap is only supported for user fee payment strategy; Exiting."
+            );
+            return Ok(vec![]);
+        }
+
         let swap_config = match policy.get_swap_config() {
             Some(config) => config,
             None => {
@@ -75,48 +88,6 @@ where
             return Ok(vec![]);
         }
 
-        // Check XLM balance
-        let account_entry = self
-            .provider
-            .get_account(&relayer.address)
-            .await
-            .map_err(|e| RelayerError::ProviderError(format!("Failed to get account: {e}")))?;
-
-        // Convert balance from i64 to u64 for comparison (Stellar balances are i64 but always positive)
-        let xlm_balance = if account_entry.balance < 0 {
-            return Err(RelayerError::ProviderError(
-                "Account balance is negative".to_string(),
-            ));
-        } else {
-            account_entry.balance as u64
-        };
-
-        // Check if XLM balance is below threshold (if threshold is configured)
-        if let Some(threshold) = swap_config.min_balance_threshold {
-            if xlm_balance > threshold {
-                debug!(
-                    %relayer_id,
-                    balance = xlm_balance,
-                    threshold = threshold,
-                    "XLM balance above threshold, skipping token swap"
-                );
-                return Ok(vec![]);
-            }
-
-            info!(
-                %relayer_id,
-                balance = xlm_balance,
-                threshold = threshold,
-                "XLM balance below threshold, checking tokens for swap"
-            );
-        } else {
-            info!(
-                %relayer_id,
-                balance = xlm_balance,
-                "Checking tokens for swap; current XLM balance"
-            );
-        }
-
         // Get allowed tokens and calculate swap amounts
         let tokens_to_swap = {
             let mut eligible_tokens = Vec::new();
@@ -128,16 +99,20 @@ where
             }
 
             for token in &allowed_tokens {
-                // Fetch token balance
+                // Fetch token balance - continue on error for individual tokens
                 let token_balance =
-                    get_token_balance(&self.provider, &relayer.address, &token.asset)
-                        .await
-                        .map_err(|e| {
-                            RelayerError::ProviderError(format!(
-                                "Failed to get token balance for {}: {}",
-                                token.asset, e
-                            ))
-                        })?;
+                    match get_token_balance(&self.provider, &relayer.address, &token.asset).await {
+                        Ok(balance) => balance,
+                        Err(e) => {
+                            error!(
+                                %relayer_id,
+                                token = %token.asset,
+                                error = %e,
+                                "Failed to get token balance, skipping this token"
+                            );
+                            continue;
+                        }
+                    };
 
                 // Calculate swap amount based on configuration
                 let swap_amount = calculate_swap_amount(

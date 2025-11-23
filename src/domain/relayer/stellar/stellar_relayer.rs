@@ -31,10 +31,7 @@ use crate::{
         BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
         SignTransactionExternalResponseStellar, SignTransactionRequest, SignTypedDataRequest,
     },
-    jobs::{
-        JobProducerTrait, RelayerHealthCheck, TokenSwapRequest, TransactionRequest,
-        TransactionStatusCheck,
-    },
+    jobs::{JobProducerTrait, RelayerHealthCheck, TransactionRequest, TransactionStatusCheck},
     models::{
         produce_relayer_disabled_payload, DeletePendingTransactionsResponse, DisabledReason,
         HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest,
@@ -59,7 +56,7 @@ use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 use crate::domain::relayer::stellar::xdr_utils::parse_transaction_xdr;
-use crate::domain::relayer::{Relayer, RelayerError};
+use crate::domain::relayer::{Relayer, RelayerError, StellarRelayerDexTrait};
 use crate::domain::transaction::stellar::token::get_token_metadata;
 use crate::domain::transaction::stellar::StellarTransactionValidator;
 
@@ -287,62 +284,14 @@ where
         Ok(policy)
     }
 
-    /// Checks the relayer's XLM balance and triggers a token swap job if it falls below the
-    /// specified threshold.
+    /// Checks the relayer's XLM balance and triggers token swap if it falls below the
+    /// specified threshold. Delegates to `handle_token_swap_request` which handles all
+    /// balance checking and swap logic.
     async fn check_balance_and_trigger_token_swap_if_needed(&self) -> Result<(), RelayerError> {
-        let policy = self.relayer.policies.get_stellar_policy();
-        let swap_config = match policy.get_swap_config() {
-            Some(config) => config,
-            None => {
-                debug!("No swap configuration specified; skipping validation.");
-                return Ok(());
-            }
-        };
-
-        if swap_config.strategies.is_empty() {
-            debug!("No swap strategies specified; skipping validation.");
-            return Ok(());
-        }
-
-        let swap_min_balance_threshold = match swap_config.min_balance_threshold {
-            Some(threshold) => threshold,
-            None => {
-                debug!("No swap min balance threshold specified; skipping validation.");
-                return Ok(());
-            }
-        };
-
-        let account_entry = self
-            .provider
-            .get_account(&self.relayer.address)
-            .await
-            .map_err(|e| RelayerError::ProviderError(format!("Failed to get account: {e}")))?;
-
-        // Convert balance from i64 to u64 for comparison (Stellar balances are i64 but always positive)
-        let balance = if account_entry.balance < 0 {
-            return Err(RelayerError::ProviderError(
-                "Account balance is negative".to_string(),
-            ));
-        } else {
-            account_entry.balance as u64
-        };
-
-        if balance < swap_min_balance_threshold {
-            debug!(
-                "Sending job request for relayer {} swapping tokens due to relayer swap_min_balance_threshold: Balance: {}, swap_min_balance_threshold: {}",
-                self.relayer.id, balance, swap_min_balance_threshold
-            );
-
-            self.job_producer
-                .produce_token_swap_request_job(
-                    TokenSwapRequest {
-                        relayer_id: self.relayer.id.clone(),
-                    },
-                    None,
-                )
-                .await?;
-        }
-
+        // handle_token_swap_request already checks balance and performs swaps if needed
+        let _swap_results = self
+            .handle_token_swap_request(self.relayer.id.clone())
+            .await?;
         Ok(())
     }
 }
@@ -595,7 +544,7 @@ where
         self.check_balance_and_trigger_token_swap_if_needed()
             .await?;
 
-        info!(
+        debug!(
             "Stellar relayer initialized successfully: {}",
             self.relayer.id
         );

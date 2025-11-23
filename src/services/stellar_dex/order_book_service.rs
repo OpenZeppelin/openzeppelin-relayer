@@ -675,11 +675,12 @@ where
             }),
         };
 
-        // Set time bounds: valid from now until configured validity window
+        // Set time bounds: valid immediately (min_time = 0) until configured validity window
+        // Using min_time = 0 prevents TxTooEarly errors when transaction goes through pipeline
         let now = Utc::now();
         let valid_until = now + ChronoDuration::minutes(TRANSACTION_VALIDITY_MINUTES);
         let time_bounds = TimeBounds {
-            min_time: TimePoint(now.timestamp() as u64),
+            min_time: TimePoint(0), // Valid immediately, prevents TxTooEarly errors
             max_time: TimePoint(valid_until.timestamp() as u64),
         };
 

@@ -8,9 +8,9 @@ use tracing::debug;
 use crate::{
     constants::STELLAR_DEFAULT_TRANSACTION_FEE,
     domain::transaction::stellar::token::get_token_balance,
-    domain::transaction::stellar::utils::change_trust_asset_to_asset_id,
+    domain::transaction::stellar::utils::{asset_to_asset_id, change_trust_asset_to_asset_id},
     domain::transaction::stellar::StellarTransactionValidator,
-    domain::{extract_operations, extract_source_account},
+    domain::{extract_operations, extract_source_account, muxed_account_to_string},
     models::{
         RelayerStellarPolicy, StellarFeePaymentStrategy, StellarTransactionData,
         StellarValidationError, TransactionError, TransactionInput,
@@ -106,6 +106,83 @@ where
     Ok(true)
 }
 
+/// Check if a transaction is a valid swap transaction (PathPaymentStrictSend from allowed token to XLM)
+///
+/// This is an exception that allows swap transactions in user fee payment mode via unsigned_xdr path.
+/// Returns true if:
+/// - Transaction contains exactly one PathPaymentStrictSend operation
+/// - Source asset is an allowed token
+/// - Destination asset is native/XLM
+/// - Destination account is the relayer account
+/// - Source account is the relayer account (already validated before this check)
+///
+/// This ensures only legitimate swap transactions initiated by the relayer are allowed,
+/// preventing malicious external requests from swapping arbitrary tokens or sending to other accounts.
+fn is_valid_swap_transaction(
+    envelope: &TransactionEnvelope,
+    relayer_address: &str,
+    policy: &RelayerStellarPolicy,
+) -> Result<bool, TransactionError> {
+    let operations = extract_operations(envelope).map_err(|e| {
+        TransactionError::ValidationError(format!("Failed to extract operations: {e}"))
+    })?;
+
+    // Must have exactly one operation for swap transactions
+    if operations.len() != 1 {
+        return Ok(false);
+    }
+
+    // Check if the operation is PathPaymentStrictSend
+    let op = &operations[0];
+    let path_payment = match &op.body {
+        OperationBody::PathPaymentStrictSend(path_payment_op) => path_payment_op,
+        _ => return Ok(false),
+    };
+
+    // Validate source asset is an allowed token
+    let source_asset_id = asset_to_asset_id(&path_payment.send_asset).map_err(|e| {
+        TransactionError::ValidationError(format!(
+            "Failed to convert source asset to asset_id: {e}"
+        ))
+    })?;
+
+    // Source asset must be in allowed_tokens list (not native/XLM)
+    if source_asset_id == "native" {
+        return Ok(false);
+    }
+
+    StellarTransactionValidator::validate_allowed_token(&source_asset_id, policy).map_err(|e| {
+        TransactionError::ValidationError(format!(
+            "Swap source asset {source_asset_id} is not in allowed_tokens list: {e}"
+        ))
+    })?;
+
+    // Validate destination asset is native/XLM
+    let dest_asset_id = asset_to_asset_id(&path_payment.dest_asset).map_err(|e| {
+        TransactionError::ValidationError(format!(
+            "Failed to convert destination asset to asset_id: {e}"
+        ))
+    })?;
+
+    if dest_asset_id != "native" {
+        return Ok(false);
+    }
+
+    // Validate destination account is the relayer account
+    let dest_account_str = muxed_account_to_string(&path_payment.destination).map_err(|e| {
+        TransactionError::ValidationError(format!(
+            "Failed to convert destination account to string: {e}"
+        ))
+    })?;
+
+    if dest_account_str != relayer_address {
+        return Ok(false);
+    }
+
+    // All validations passed - this is a valid swap transaction
+    Ok(true)
+}
+
 /// Process an unsigned XDR transaction.
 ///
 /// This function:
@@ -162,6 +239,7 @@ where
 
     // Step 3: Check if User fee payment strategy transactions should be allowed
     // Allow ChangeTrust operations for allowed tokens without existing trustlines
+    // Also allow swap transactions (PathPaymentStrictSend from allowed tokens to XLM)
     if let Some(policy) = relayer_policy {
         if matches!(
             policy.fee_payment_strategy,
@@ -169,7 +247,7 @@ where
         ) {
             // Check if this is an allowed exception: ChangeTrust for allowed tokens without trustlines
             // Note: This only allows trustlines for the relayer account (source_account must be relayer)
-            let is_allowed_exception = is_change_trust_for_allowed_token_without_trustline(
+            let is_change_trust_exception = is_change_trust_for_allowed_token_without_trustline(
                 &envelope,
                 relayer_address,
                 policy,
@@ -182,11 +260,18 @@ where
                 ))
             })?;
 
-            if !is_allowed_exception {
+            // Check if this is a valid swap transaction (PathPaymentStrictSend from allowed token to XLM)
+            let is_swap_exception = is_valid_swap_transaction(&envelope, relayer_address, policy)
+                .map_err(|e| {
+                TransactionError::ValidationError(format!(
+                    "Failed to validate swap transaction exception: {e}"
+                ))
+            })?;
+
+            if !is_change_trust_exception && !is_swap_exception {
                 return Err(TransactionError::ValidationError(
                     "Gasless transactions (User fee payment strategy) are not supported via unsigned_xdr path. \
-                     Please use fee_bump path (SignedXdr) for gasless transactions. \
-                     Exception: ChangeTrust operations for allowed tokens without existing trustlines are allowed.".to_string(),
+                     Please use fee_bump path (SignedXdr) for gasless transactions.".to_string(),
                 ));
             }
         }
