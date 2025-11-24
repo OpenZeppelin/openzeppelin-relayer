@@ -528,6 +528,10 @@ impl RelayerRepository for RedisRelayerRepository {
         // Update the relayer
         self.update(id, relayer).await
     }
+
+    fn is_persistent_storage(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

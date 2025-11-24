@@ -64,6 +64,9 @@ pub trait RelayerRepository: Repository<RelayerRepoModel, String> + Send + Sync 
         id: String,
         policy: RelayerNetworkPolicy,
     ) -> Result<RelayerRepoModel, RepositoryError>;
+    /// Returns true if this repository uses persistent storage (e.g., Redis).
+    /// Returns false for in-memory storage.
+    fn is_persistent_storage(&self) -> bool;
 }
 
 /// Enum wrapper for different relayer repository implementations
@@ -243,6 +246,13 @@ impl RelayerRepository for RelayerRepositoryStorage {
         match self {
             RelayerRepositoryStorage::InMemory(repo) => repo.update_policy(id, policy).await,
             RelayerRepositoryStorage::Redis(repo) => repo.update_policy(id, policy).await,
+        }
+    }
+
+    fn is_persistent_storage(&self) -> bool {
+        match self {
+            RelayerRepositoryStorage::InMemory(_) => false,
+            RelayerRepositoryStorage::Redis(_) => true,
         }
     }
 }
@@ -487,5 +497,6 @@ mockall::mock! {
         async fn enable_relayer(&self, relayer_id: String) -> Result<RelayerRepoModel, RepositoryError>;
         async fn disable_relayer(&self, relayer_id: String, reason: DisabledReason) -> Result<RelayerRepoModel, RepositoryError>;
         async fn update_policy(&self, id: String, policy: RelayerNetworkPolicy) -> Result<RelayerRepoModel, RepositoryError>;
+        fn is_persistent_storage(&self) -> bool;
     }
 }

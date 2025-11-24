@@ -284,6 +284,63 @@ where
         Ok(policy)
     }
 
+    /// Migrates fee_payment_strategy policy for older relayers that don't have it set.
+    ///
+    /// This migration is needed for relayers that were created before `fee_payment_strategy`
+    /// became a required policy. For relayers persisted in Redis storage, this ensures
+    /// backward compatibility by setting the policy to `Relayer` (the old default behavior).
+    ///
+    /// In-memory relayers don't need this migration as they are recreated from config.json
+    /// on startup, which would have the policy set if using a newer version.
+    async fn migrate_fee_payment_strategy_if_needed(&self) -> Result<(), RelayerError> {
+        // Only migrate if using persistent storage (Redis)
+        // In-memory relayers are recreated from config.json on startup
+        if !self.relayer_repository.is_persistent_storage() {
+            debug!(
+                relayer_id = %self.relayer.id,
+                "Skipping migration: using in-memory storage"
+            );
+            return Ok(());
+        }
+
+        let policy = self.relayer.policies.get_stellar_policy();
+
+        // If fee_payment_strategy is already set, no migration needed
+        if policy.fee_payment_strategy.is_some() {
+            return Ok(());
+        }
+
+        // Migration needed: fee_payment_strategy is missing
+        info!(
+            relayer_id = %self.relayer.id,
+            "Migrating Stellar relayer: setting fee_payment_strategy to 'Relayer' (old default behavior)"
+        );
+
+        // Create updated policy with fee_payment_strategy set to Relayer
+        let mut updated_policy = policy;
+        updated_policy.fee_payment_strategy = Some(StellarFeePaymentStrategy::Relayer);
+
+        // Update the relayer in the repository
+        self.relayer_repository
+            .update_policy(
+                self.relayer.id.clone(),
+                RelayerNetworkPolicy::Stellar(updated_policy),
+            )
+            .await
+            .map_err(|e| {
+                RelayerError::PolicyConfigurationError(format!(
+                    "Failed to migrate fee_payment_strategy policy: {e}"
+                ))
+            })?;
+
+        debug!(
+            relayer_id = %self.relayer.id,
+            "Successfully migrated fee_payment_strategy policy"
+        );
+
+        Ok(())
+    }
+
     /// Checks the relayer's XLM balance and triggers token swap if it falls below the
     /// specified threshold. Delegates to `handle_token_swap_request` which handles all
     /// balance checking and swap logic.
@@ -486,6 +543,11 @@ where
 
     async fn initialize_relayer(&self) -> Result<(), RelayerError> {
         debug!("initializing Stellar relayer {}", self.relayer.id);
+
+        // Migration: Check if relayer needs fee_payment_strategy migration
+        // Older relayers persisted in Redis may not have this policy set.
+        // We automatically set it to "Relayer" (the old default behavior) for backward compatibility.
+        self.migrate_fee_payment_strategy_if_needed().await?;
 
         // Populate model with allowed token metadata and update DB entry
         // Error will be thrown if any of the tokens are not found
