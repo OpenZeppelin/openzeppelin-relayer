@@ -12,7 +12,7 @@
       "name": "AGPL-3.0 license",
       "url": "https://github.com/OpenZeppelin/openzeppelin-relayer/blob/main/LICENSE"
     },
-    "version": "1.1.0"
+    "version": "1.2.0"
   },
   "paths": {
     "/api/v1/notifications": {
@@ -4752,37 +4752,13 @@
       "CreateRelayerPolicyRequest": {
         "oneOf": [
           {
-            "type": "object",
-            "required": [
-              "Evm"
-            ],
-            "properties": {
-              "Evm": {
-                "$ref": "#/components/schemas/RelayerEvmPolicy"
-              }
-            }
+            "$ref": "#/components/schemas/RelayerEvmPolicy"
           },
           {
-            "type": "object",
-            "required": [
-              "Solana"
-            ],
-            "properties": {
-              "Solana": {
-                "$ref": "#/components/schemas/RelayerSolanaPolicy"
-              }
-            }
+            "$ref": "#/components/schemas/RelayerSolanaPolicy"
           },
           {
-            "type": "object",
-            "required": [
-              "Stellar"
-            ],
-            "properties": {
-              "Stellar": {
-                "$ref": "#/components/schemas/RelayerStellarPolicy"
-              }
-            }
+            "$ref": "#/components/schemas/RelayerStellarPolicy"
           }
         ],
         "description": "Policy types for create requests - deserialized based on network_type from parent request"

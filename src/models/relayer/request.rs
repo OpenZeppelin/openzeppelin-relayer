@@ -103,7 +103,7 @@ impl<'de> serde::Deserialize<'de> for CreateRelayerRequest {
 
 /// Policy types for create requests - deserialized based on network_type from parent request
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, untagged)]
 pub enum CreateRelayerPolicyRequest {
     Evm(RelayerEvmPolicy),
     Solana(RelayerSolanaPolicy),

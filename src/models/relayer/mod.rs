@@ -801,6 +801,11 @@ impl Relayer {
             (RelayerNetworkType::Stellar, Some(RelayerNetworkPolicy::Stellar(policy))) => {
                 self.validate_stellar_policy(policy)?;
             }
+            (RelayerNetworkType::Stellar, None) => {
+                return Err(RelayerValidationError::InvalidPolicy(
+                    "Stellar policy is required. fee_payment_strategy is required".into(),
+                ));
+            }
             // Mismatched network type and policy type
             (network_type, Some(policy)) => {
                 let policy_type = match policy {
@@ -984,6 +989,11 @@ impl Relayer {
         &self,
         policy: &RelayerStellarPolicy,
     ) -> Result<(), RelayerValidationError> {
+        if policy.fee_payment_strategy.is_none() {
+            return Err(RelayerValidationError::InvalidPolicy(
+                "Fee payment strategy is required".into(),
+            ));
+        }
         // Validate fee margin percentage
         if let Some(fee_margin) = policy.fee_margin_percentage {
             if fee_margin < 0.0 {
