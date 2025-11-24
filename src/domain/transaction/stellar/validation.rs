@@ -120,12 +120,10 @@ impl StellarTransactionValidator {
         }
 
         // Check if it's a contract address (starts with 'C', 56 chars)
-        if fee_token.starts_with('C') {
-            if fee_token.len() == 56 {
-                // Validate it's a valid contract address using StrKey
-                if stellar_strkey::Contract::from_string(fee_token).is_ok() {
-                    return Ok(());
-                }
+        if fee_token.starts_with('C') && fee_token.len() == 56 && !fee_token.contains(':') {
+            // Validate it's a valid contract address using StrKey
+            if stellar_strkey::Contract::from_string(fee_token).is_ok() {
+                return Ok(());
             }
             return Err(StellarTransactionValidationError::InvalidAssetIdentifier(
                 format!(
@@ -282,8 +280,13 @@ impl StellarTransactionValidator {
                             "Failed to convert asset to asset_id: {e}"
                         ))
                     })?;
-                    // Convert amount from i64 to u64 (amounts are always positive)
-                    let amount_u64 = (*amount) as u64;
+                    // Validate amount is non-negative before converting from i64 to u64
+                    if *amount < 0 {
+                        return Err(StellarTransactionValidationError::ValidationError(
+                            "Negative payment amount".to_string(),
+                        ));
+                    }
+                    let amount_u64 = *amount as u64;
                     payments.push((asset_id, amount_u64));
                 }
             }

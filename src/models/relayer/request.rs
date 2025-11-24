@@ -593,6 +593,7 @@ mod tests {
             "network_type": "stellar",
             "signer_id": "test-signer",
             "policies": {
+                "fee_payment_strategy": "relayer",
                 "min_balance": 25000000,
                 "max_fee": 200000,
                 "timeout_seconds": 45

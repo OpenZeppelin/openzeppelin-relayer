@@ -4,7 +4,7 @@
 //! token swap functionality for managing relayer token balances.
 
 use async_trait::async_trait;
-use futures::future::try_join_all;
+use futures::future::join_all;
 use tracing::{debug, error, info};
 
 use crate::constants::DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE;
@@ -43,10 +43,9 @@ where
     /// Processes a token swap request for the given relayer ID:
     ///
     /// 1. Loads the relayer's policy (must include swap_config & strategy).
-    /// 2. Checks XLM balance - if below threshold, swaps collected tokens to XLM.
-    /// 3. Iterates allowed tokens, checking balances and calculating swap amounts.
-    /// 4. Executes swaps through the DEX service (Paths service).
-    /// 5. Collects and returns all `SwapResult`s (empty if no swaps were needed).
+    /// 2. Iterates allowed tokens, checking balances and calculating swap amounts.
+    /// 3. Executes swaps through the DEX service (Paths service).
+    /// 4. Collects and returns all `SwapResult`s (empty if no swaps were needed).
     ///
     /// Returns a `RelayerError` on any repository, provider, or swap execution failure.
     async fn handle_token_swap_request(
@@ -179,11 +178,12 @@ where
                 let slippage_percent = *slippage_percent;
                 let network_passphrase = network_passphrase.clone();
                 let token_decimals = policy.get_allowed_token_decimals(&token_asset);
+                let swap_amount_clone = *swap_amount;
 
                 Some(async move {
                     info!(
                         "Preparing swap transaction for {} tokens of type {} for relayer: {}",
-                        swap_amount, token_asset, relayer_id_clone
+                        swap_amount_clone, token_asset, relayer_id_clone
                     );
 
                     // Prepare swap transaction parameters
@@ -193,7 +193,7 @@ where
                         source_account: relayer_address.clone(),
                         source_asset: token_asset.clone(),
                         destination_asset: "native".to_string(), // Always swap to XLM
-                        amount: *swap_amount,
+                        amount: swap_amount_clone,
                         slippage_percent,
                         network_passphrase: network_passphrase.clone(),
                         source_asset_decimals: token_decimals,
@@ -205,10 +205,11 @@ where
                     dex_service
                         .prepare_swap_transaction(swap_params)
                         .await
-                        .map(|(xdr, quote)| (token_asset, *swap_amount, quote, xdr))
+                        .map(|(xdr, quote)| (token_asset.clone(), swap_amount_clone, quote, xdr))
                         .map_err(|e| {
+                            // Convert error and include token info for better error handling
                             RelayerError::Internal(format!(
-                                "Failed to prepare swap transaction: {e}"
+                                "Failed to prepare swap transaction for token {token_asset} (amount {swap_amount_clone}): {e}",
                             ))
                         })
                 })
@@ -216,54 +217,92 @@ where
             .collect();
 
         // Prepare all swap transactions concurrently
-        let swap_prep_results = try_join_all(swap_prep_futures).await?;
+        // Use join_all instead of try_join_all to collect all results (successes and failures)
+        // This allows processing to continue even if some swaps fail
+        let swap_prep_results = join_all(swap_prep_futures).await;
 
         // Queue each prepared swap transaction for background processing
         // This ensures swaps go through the same gate mechanism as regular transactions
         let mut swap_results = Vec::new();
-        for (token_asset, swap_amount, quote, xdr) in swap_prep_results {
-            // Create transaction request and queue for background processing
-            let stellar_request = StellarTransactionRequest {
-                source_account: Some(relayer.address.clone()),
-                network: relayer_network.clone(),
-                operations: None,
-                memo: None,
-                valid_until: None,
-                transaction_xdr: Some(xdr),
-                fee_bump: None,
-                max_fee: None,
-            };
+        for result in swap_prep_results {
+            match result {
+                Ok((token_asset, swap_amount, quote, xdr)) => {
+                    // Create transaction request and queue for background processing
+                    let stellar_request = StellarTransactionRequest {
+                        source_account: Some(relayer.address.clone()),
+                        network: relayer_network.clone(),
+                        operations: None,
+                        memo: None,
+                        valid_until: None,
+                        transaction_xdr: Some(xdr),
+                        fee_bump: None,
+                        max_fee: None,
+                    };
 
-            let network_request = NetworkTransactionRequest::Stellar(stellar_request);
+                    let network_request = NetworkTransactionRequest::Stellar(stellar_request);
 
-            // Queue the swap transaction for background processing
-            // This will go through the gate mechanism and be processed by the transaction handler
-            match self.process_transaction_request(network_request).await {
-                Ok(transaction_model) => {
-                    info!(
-                        "Swap transaction queued for relayer: {}. Token: {}, Amount: {}, Destination: {}, Transaction ID: {}",
-                        relayer_id, token_asset, swap_amount, quote.out_amount, transaction_model.id
-                    );
+                    // Queue the swap transaction for background processing
+                    // This will go through the gate mechanism and be processed by the transaction handler
+                    match self.process_transaction_request(network_request).await {
+                        Ok(transaction_model) => {
+                            info!(
+                                "Swap transaction queued for relayer: {}. Token: {}, Amount: {}, Destination: {}, Transaction ID: {}",
+                                relayer_id, token_asset, swap_amount, quote.out_amount, transaction_model.id
+                            );
 
-                    swap_results.push(SwapResult {
-                        mint: token_asset,
-                        source_amount: swap_amount,
-                        destination_amount: quote.out_amount,
-                        transaction_signature: transaction_model.id, // Use transaction ID instead of hash
-                        error: None,
-                    });
+                            swap_results.push(SwapResult {
+                                mint: token_asset,
+                                source_amount: swap_amount,
+                                destination_amount: quote.out_amount,
+                                transaction_signature: transaction_model.id, // Use transaction ID instead of hash
+                                error: None,
+                            });
+                        }
+                        Err(e) => {
+                            error!(
+                                "Error queueing swap transaction for relayer: {}. Token: {}, Error: {}",
+                                relayer_id, token_asset, e
+                            );
+                            swap_results.push(SwapResult {
+                                mint: token_asset,
+                                source_amount: swap_amount,
+                                destination_amount: 0,
+                                transaction_signature: "".to_string(),
+                                error: Some(format!("Failed to queue transaction: {e}")),
+                            });
+                        }
+                    }
                 }
                 Err(e) => {
+                    // Log error but continue processing other swaps
+                    // The error message already includes token and amount info from map_err above
                     error!(
-                        "Error queueing swap transaction for relayer: {}. Token: {}, Error: {}",
-                        relayer_id, token_asset, e
+                        %relayer_id,
+                        error = %e,
+                        "Failed to prepare swap transaction, skipping this token"
                     );
+                    // Extract token and amount from error message
+                    // Error format: "Failed to prepare swap transaction for token {token} (amount {amount}): {error}"
+                    let error_msg = e.to_string();
+                    let token_asset = error_msg
+                        .split("token ")
+                        .nth(1)
+                        .and_then(|s| s.split(" (amount ").next())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    let swap_amount = error_msg
+                        .split("(amount ")
+                        .nth(1)
+                        .and_then(|s| s.split(")").next())
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .unwrap_or(0);
+
                     swap_results.push(SwapResult {
                         mint: token_asset,
                         source_amount: swap_amount,
                         destination_amount: 0,
-                        transaction_signature: "".to_string(),
-                        error: Some(format!("Failed to queue transaction: {e}")),
+                        transaction_signature: String::new(),
+                        error: Some(error_msg),
                     });
                 }
             }

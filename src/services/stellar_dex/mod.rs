@@ -122,15 +122,14 @@ pub trait StellarDexServiceTrait: Send + Sync {
         let supported = self.supported_asset_types();
 
         // Check native
-        if (asset_id == "native" || asset_id == "XLM" || asset_id.is_empty())
-            && supported.contains(&AssetType::Native)
-        {
+        if (asset_id == "native" || asset_id.is_empty()) && supported.contains(&AssetType::Native) {
             return true;
         }
 
         // Check contract (C... format, 56 chars)
         if asset_id.starts_with('C')
             && asset_id.len() == 56
+            && !asset_id.contains(':')
             && stellar_strkey::Contract::from_string(asset_id).is_ok()
             && supported.contains(&AssetType::Contract)
         {

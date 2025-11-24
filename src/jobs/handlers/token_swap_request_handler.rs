@@ -4,8 +4,8 @@
 //! swap jobs from the queue for all supported networks (Solana and Stellar).
 
 use actix_web::web::ThinData;
-use apalis::prelude::{Attempt, Data, *};
-use eyre::Result;
+use apalis::prelude::{Attempt, Data, Error};
+use eyre::Result as EyreResult;
 use tracing::{debug, info, instrument};
 
 use crate::{
@@ -39,7 +39,7 @@ pub async fn token_swap_request_handler(
     job: Job<TokenSwapRequest>,
     context: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
-) -> Result<(), Error> {
+) -> std::result::Result<(), Error> {
     if let Some(request_id) = job.request_id.clone() {
         set_request_id(request_id);
     }
@@ -74,7 +74,7 @@ pub async fn token_swap_cron_handler(
     relayer_id: Data<String>,
     data: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
-) -> Result<(), Error> {
+) -> std::result::Result<(), Error> {
     info!(
         relayer_id = %*relayer_id,
         "handling token swap cron request"
@@ -99,7 +99,7 @@ pub async fn token_swap_cron_handler(
 async fn handle_request(
     request: TokenSwapRequest,
     context: Data<ThinData<DefaultAppState>>,
-) -> Result<()> {
+) -> EyreResult<()> {
     debug!(relayer_id = %request.relayer_id, "processing token swap");
 
     let relayer = get_network_relayer(request.relayer_id.clone(), &context).await?;

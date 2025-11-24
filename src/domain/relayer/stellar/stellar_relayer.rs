@@ -272,7 +272,7 @@ where
 
         let updated_allowed_tokens = try_join_all(token_metadata_futures).await?;
 
-        policy.allowed_tokens = Some(updated_allowed_tokens);
+        policy.allowed_tokens = Some(updated_allowed_tokens.clone());
 
         self.relayer_repository
             .update_policy(
@@ -1447,6 +1447,10 @@ mod tests {
         let mut relayer_repo = MockRelayerRepository::new();
         let mut job_producer = MockJobProducerTrait::new();
 
+        relayer_repo
+            .expect_is_persistent_storage()
+            .returning(|| false);
+
         // Mock validation failure - sequence sync fails
         provider
             .expect_get_account()
@@ -1507,6 +1511,10 @@ mod tests {
 
         let mut provider = MockStellarProviderTrait::new();
         let mut relayer_repo = MockRelayerRepository::new();
+
+        relayer_repo
+            .expect_is_persistent_storage()
+            .returning(|| false);
 
         // Mock successful validations - sequence sync succeeds
         provider.expect_get_account().returning(|_| {
@@ -1596,7 +1604,11 @@ mod tests {
         let signer = Arc::new(MockStellarSignTrait::new());
         let dex_service = create_mock_dex_service();
         let job_producer = MockJobProducerTrait::new();
-        let relayer_repo = MockRelayerRepository::new();
+        let mut relayer_repo = MockRelayerRepository::new();
+
+        relayer_repo
+            .expect_is_persistent_storage()
+            .returning(|| false);
 
         let relayer = StellarRelayer::new(
             relayer_model.clone(),
@@ -1629,6 +1641,10 @@ mod tests {
         let mut provider = MockStellarProviderTrait::new();
         let mut relayer_repo = MockRelayerRepository::new();
         let mut job_producer = MockJobProducerTrait::new();
+
+        relayer_repo
+            .expect_is_persistent_storage()
+            .returning(|| false);
 
         // Mock validation failure - sequence sync fails
         provider.expect_get_account().returning(|_| {
@@ -1693,6 +1709,9 @@ mod tests {
 
         let mut provider = MockStellarProviderTrait::new();
         let mut relayer_repo = MockRelayerRepository::new();
+        relayer_repo
+            .expect_is_persistent_storage()
+            .returning(|| false);
 
         // Mock validation failure - sequence sync fails
         provider.expect_get_account().returning(|_| {

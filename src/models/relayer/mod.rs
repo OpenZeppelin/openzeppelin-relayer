@@ -1040,7 +1040,7 @@ impl Relayer {
         }
 
         // Check if it's a contract address (StrKey format starting with 'C')
-        if asset.starts_with('C') && asset.len() == 56 {
+        if asset.starts_with('C') && asset.len() == 56 && !asset.contains(':') {
             return Err(RelayerValidationError::InvalidPolicy(
                 "Contract addresses are not supported. Soroban will be supported soon.".into(),
             ));

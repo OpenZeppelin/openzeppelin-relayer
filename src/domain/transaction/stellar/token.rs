@@ -293,10 +293,13 @@ where
                         parts.hi, parts.lo,
                     ));
                 }
-                if (parts.lo as i64) < 0 {
+                // Check if parts.lo represents a negative value when interpreted as i64
+                // Similar to the I64 branch, we check for negative before casting to u64
+                let lo_as_i64 = parts.lo as i64;
+                if lo_as_i64 < 0 {
                     return Err(StellarTransactionUtilsError::NegativeBalanceI128(parts.lo));
                 }
-                Ok(parts.lo)
+                Ok(lo_as_i64 as u64)
             }
             ScVal::U64(n) => Ok(n),
             ScVal::I64(n) => {

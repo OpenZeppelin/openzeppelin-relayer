@@ -1022,7 +1022,8 @@ pub fn add_operation_to_envelope(
             e.tx.operations = operations;
 
             // Update fee to account for new operation
-            e.tx.fee = (e.tx.operations.len() as u32) * 100; // 100 stroops per operation
+            e.tx.fee = (e.tx.operations.len() as u32) * STELLAR_DEFAULT_TRANSACTION_FEE;
+            // 100 stroops per operation
         }
         TransactionEnvelope::Tx(ref mut e) => {
             // Extract existing operations
@@ -1037,7 +1038,8 @@ pub fn add_operation_to_envelope(
             e.tx.operations = operations;
 
             // Update fee to account for new operation
-            e.tx.fee = (e.tx.operations.len() as u32) * 100; // 100 stroops per operation
+            e.tx.fee = (e.tx.operations.len() as u32) * STELLAR_DEFAULT_TRANSACTION_FEE;
+            // 100 stroops per operation
         }
         TransactionEnvelope::TxFeeBump(_) => {
             return Err(StellarTransactionUtilsError::CannotModifyFeeBump);

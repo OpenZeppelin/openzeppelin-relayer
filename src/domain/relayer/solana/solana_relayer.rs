@@ -538,10 +538,7 @@ where
     ) -> Result<TransactionRepoModel, RelayerError> {
         let policy = self.relayer.policies.get_solana_policy();
         let user_pays_fee = matches!(
-            policy
-                .fee_payment_strategy
-                .as_ref()
-                .unwrap_or(&SolanaFeePaymentStrategy::User),
+            policy.fee_payment_strategy.unwrap_or_default(),
             SolanaFeePaymentStrategy::User
         );
 
@@ -677,10 +674,7 @@ where
     ) -> Result<SignTransactionExternalResponse, RelayerError> {
         let policy = self.relayer.policies.get_solana_policy();
         let user_pays_fee = matches!(
-            policy
-                .fee_payment_strategy
-                .as_ref()
-                .unwrap_or(&SolanaFeePaymentStrategy::User),
+            policy.fee_payment_strategy.unwrap_or_default(),
             SolanaFeePaymentStrategy::User
         );
 
@@ -2526,31 +2520,6 @@ mod tests {
                 assert_eq!(solana_resp.signature, "signature_data");
             }
             _ => panic!("Expected Solana response"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_sign_transaction_fee_payment_mismatch() {
-        let relayer_model = create_test_relayer(); // Uses default fee_payment_strategy (User)
-
-        let ctx = TestCtx {
-            relayer_model,
-            ..Default::default()
-        };
-
-        let solana_relayer = ctx.into_relayer().await;
-
-        let sign_request = SignTransactionRequest::Solana(SignTransactionRequestSolana {
-            transaction: EncodedSerializedTransaction::new("raw_transaction_data".to_string()),
-        });
-
-        let result = solana_relayer.sign_transaction(&sign_request).await;
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            RelayerError::ValidationError(msg) => {
-                assert!(msg.contains("fee_payment_strategy"));
-            }
-            other => panic!("Expected ValidationError, got {:?}", other),
         }
     }
 

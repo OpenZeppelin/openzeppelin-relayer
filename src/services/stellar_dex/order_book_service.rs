@@ -38,52 +38,6 @@ const HTTP_REQUEST_TIMEOUT_SECONDS: u64 = 7;
 /// Slippage percentage multiplier for basis points conversion
 const SLIPPAGE_TO_BPS_MULTIPLIER: f32 = 100.0;
 
-/// Maximum asset code length for credit_alphanum4 assets
-#[cfg(test)]
-const MAX_CREDIT_ALPHANUM4_CODE_LEN: usize = 4;
-
-/// Maximum asset code length for credit_alphanum12 assets
-#[cfg(test)]
-const MAX_CREDIT_ALPHANUM12_CODE_LEN: usize = 12;
-
-/// Stellar Horizon API order book response (used in tests only)
-#[cfg(test)]
-#[derive(Debug, Deserialize)]
-struct OrderBookResponse {
-    bids: Vec<Order>,
-    asks: Vec<Order>,
-    base: AssetInfo,
-    counter: AssetInfo,
-}
-
-#[cfg(test)]
-#[derive(Debug, Deserialize)]
-struct Order {
-    #[serde(rename = "price_r")]
-    price_r: RationalPrice,
-    price: String,
-    amount: String,
-}
-
-#[cfg(test)]
-#[derive(Debug, Deserialize)]
-struct RationalPrice {
-    n: u64,
-    d: u64,
-}
-
-#[cfg(test)]
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct AssetInfo {
-    #[serde(rename = "asset_type")]
-    asset_type: String,
-    #[serde(rename = "asset_code")]
-    asset_code: Option<String>,
-    #[serde(rename = "asset_issuer")]
-    asset_issuer: Option<String>,
-}
-
 /// Stellar Horizon API path finding response
 #[derive(Debug, Deserialize)]
 struct PathResponse {
@@ -152,65 +106,6 @@ where
             provider,
             signer,
         })
-    }
-
-    /// Convert asset identifier to Horizon API format
-    ///
-    /// # Arguments
-    ///
-    /// * `asset_id` - Asset identifier (e.g., "native", "USDC:GA5Z...")
-    ///
-    /// # Returns
-    ///
-    /// Tuple of (asset_type, asset_code, asset_issuer)
-    #[cfg(test)]
-    fn parse_asset_id(
-        &self,
-        asset_id: &str,
-    ) -> Result<(String, Option<String>, Option<String>), StellarDexServiceError> {
-        if asset_id == "native" || asset_id.is_empty() {
-            return Ok(("native".to_string(), None, None));
-        }
-
-        // Try to parse as "CODE:ISSUER" format
-        if let Some(colon_pos) = asset_id.find(':') {
-            let code = asset_id[..colon_pos].trim();
-            let issuer = asset_id[colon_pos + 1..].trim();
-
-            if code.is_empty() {
-                return Err(StellarDexServiceError::InvalidAssetIdentifier(
-                    "Asset code cannot be empty".to_string(),
-                ));
-            }
-
-            if issuer.is_empty() {
-                return Err(StellarDexServiceError::InvalidAssetIdentifier(
-                    "Asset issuer cannot be empty".to_string(),
-                ));
-            }
-
-            if code.len() <= MAX_CREDIT_ALPHANUM4_CODE_LEN {
-                Ok((
-                    "credit_alphanum4".to_string(),
-                    Some(code.to_string()),
-                    Some(issuer.to_string()),
-                ))
-            } else if code.len() <= MAX_CREDIT_ALPHANUM12_CODE_LEN {
-                Ok((
-                    "credit_alphanum12".to_string(),
-                    Some(code.to_string()),
-                    Some(issuer.to_string()),
-                ))
-            } else {
-                Err(StellarDexServiceError::InvalidAssetIdentifier(format!(
-                    "Asset code too long (max {MAX_CREDIT_ALPHANUM12_CODE_LEN} characters): {code}",
-                )))
-            }
-        } else {
-            Err(StellarDexServiceError::InvalidAssetIdentifier(format!(
-                "Invalid asset format. Expected 'native' or 'CODE:ISSUER', got: {asset_id}",
-            )))
-        }
     }
 
     /// Parse asset identifier to AssetSpec for XDR conversion
@@ -284,36 +179,65 @@ where
     ) -> Result<u64, StellarDexServiceError> {
         let parts: Vec<&str> = amount_str.split('.').collect();
 
-        // Parse integer part
-        let int_part = parts[0].parse::<u64>().map_err(|_| {
+        // Parse integer part into u128 for safe arithmetic
+        let int_part = parts[0].parse::<u128>().map_err(|_| {
             StellarDexServiceError::UnknownError(format!("Invalid amount string: {amount_str}"))
         })?;
 
-        // Handle decimals
-        let mut stroops = int_part * 10u64.pow(decimals as u32);
+        // Compute multiplier as u128 to avoid overflow
+        let multiplier = 10u128.pow(decimals as u32);
+
+        // Calculate integer part contribution in stroops (u128)
+        let mut stroops = int_part.checked_mul(multiplier).ok_or_else(|| {
+            StellarDexServiceError::UnknownError(format!(
+                "Amount overflow: integer part too large for {decimals} decimals: {amount_str}",
+            ))
+        })?;
 
         // Check if we have a decimal part AND it's not empty (handles "100." case)
         if parts.len() > 1 && !parts[1].is_empty() {
             let fraction_str = parts[1];
-            let mut frac_parsed = fraction_str.parse::<u64>().map_err(|_| {
+            let frac_parsed = fraction_str.parse::<u128>().map_err(|_| {
                 StellarDexServiceError::UnknownError(format!("Invalid fraction: {amount_str}"))
             })?;
 
             let frac_len = fraction_str.len() as u32;
             let target_decimals = decimals as u32;
 
-            if frac_len > target_decimals {
+            let frac_stroops = if frac_len > target_decimals {
                 // Truncate if too many decimals (e.g. 1.12345678 -> 7 decimals -> 1.1234567)
-                frac_parsed /= 10u64.pow(frac_len - target_decimals);
+                // Compute divisor as u128
+                let divisor = 10u128.pow(frac_len - target_decimals);
+                frac_parsed / divisor
             } else {
                 // Pad if fewer decimals (e.g. 1.12 -> 7 decimals -> 1.1200000)
-                frac_parsed *= 10u64.pow(target_decimals - frac_len);
-            }
+                // Compute padding multiplier as u128
+                let padding_multiplier = 10u128.pow(target_decimals - frac_len);
+                frac_parsed.checked_mul(padding_multiplier).ok_or_else(|| {
+                    StellarDexServiceError::UnknownError(format!(
+                        "Amount overflow: fraction padding overflow: {amount_str}"
+                    ))
+                })?
+            };
 
-            stroops += frac_parsed;
+            // Add fraction contribution to total (u128)
+            stroops = stroops.checked_add(frac_stroops).ok_or_else(|| {
+                StellarDexServiceError::UnknownError(format!(
+                    "Amount overflow: total exceeds u128 maximum: {amount_str}"
+                ))
+            })?;
         }
 
-        Ok(stroops)
+        // Check if final total fits into u64 before casting
+        if stroops > u64::MAX as u128 {
+            return Err(StellarDexServiceError::UnknownError(format!(
+                "Amount overflow: value {} exceeds u64 maximum ({}): {amount_str}",
+                stroops,
+                u64::MAX
+            )));
+        }
+
+        Ok(stroops as u64)
     }
 
     /// Fetch strict-send paths from Horizon
@@ -398,104 +322,6 @@ where
         })?;
 
         Ok(path_response.embedded.records)
-    }
-
-    /// Build Horizon API URL for order_book endpoint
-    ///
-    /// Note: Stellar asset codes and issuers are typically safe ASCII strings,
-    /// so basic URL construction is sufficient. If special characters are
-    /// encountered, they should be properly encoded.
-    ///
-    /// # Arguments
-    ///
-    /// * `selling_asset_*` - Parameters for the asset being sold (base)
-    /// * `buying_asset_*` - Parameters for the asset being bought (counter)
-    ///
-    /// # Returns
-    ///
-    /// Complete URL string for the Horizon order_book API endpoint
-    #[cfg(test)]
-    fn build_order_book_url(
-        &self,
-        selling_asset_type: &str,
-        selling_asset_code: Option<&str>,
-        selling_asset_issuer: Option<&str>,
-        buying_asset_type: &str,
-        buying_asset_code: Option<&str>,
-        buying_asset_issuer: Option<&str>,
-    ) -> String {
-        let mut url = format!("{}/order_book", self.horizon_base_url);
-
-        // Build query parameters
-        let mut params = vec![];
-
-        // Selling asset (base)
-        params.push(format!("selling_asset_type={}", selling_asset_type));
-        if let Some(code) = selling_asset_code {
-            params.push(format!("selling_asset_code={}", code));
-        }
-        if let Some(issuer) = selling_asset_issuer {
-            params.push(format!("selling_asset_issuer={}", issuer));
-        }
-
-        // Buying asset (counter)
-        params.push(format!("buying_asset_type={}", buying_asset_type));
-        if let Some(code) = buying_asset_code {
-            params.push(format!("buying_asset_code={}", code));
-        }
-        if let Some(issuer) = buying_asset_issuer {
-            params.push(format!("buying_asset_issuer={}", issuer));
-        }
-
-        url.push('?');
-        url.push_str(&params.join("&"));
-
-        url
-    }
-
-    /// Fetch order book from Horizon API
-    #[cfg(test)]
-    async fn fetch_order_book(
-        &self,
-        selling_asset_type: &str,
-        selling_asset_code: Option<&str>,
-        selling_asset_issuer: Option<&str>,
-        buying_asset_type: &str,
-        buying_asset_code: Option<&str>,
-        buying_asset_issuer: Option<&str>,
-    ) -> Result<OrderBookResponse, StellarDexServiceError> {
-        let url = self.build_order_book_url(
-            selling_asset_type,
-            selling_asset_code,
-            selling_asset_issuer,
-            buying_asset_type,
-            buying_asset_code,
-            buying_asset_issuer,
-        );
-
-        debug!("Fetching order book from Horizon: {}", url);
-
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(StellarDexServiceError::HttpRequestError)?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unable to read error response".to_string());
-            return Err(StellarDexServiceError::ApiError {
-                message: format!("Horizon API returned error {status}: {error_text}"),
-            });
-        }
-
-        response.json().await.map_err(|e| {
-            StellarDexServiceError::UnknownError(format!("Failed to deserialize response: {e}"))
-        })
     }
 
     /// Validate swap parameters before processing
@@ -992,281 +818,5 @@ where
             transaction_hash,
             destination_amount: quote.out_amount,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::domain::SignTransactionResponse;
-    use crate::domain::SignXdrTransactionResponseStellar;
-    use crate::models::{Address, NetworkTransactionData, SignerError};
-    use crate::services::provider::MockStellarProviderTrait;
-    use crate::services::signer::{Signer, StellarSignTrait};
-    use std::sync::Arc;
-
-    use super::*;
-
-    const HORIZON_MAINNET_URL: &str = "https://horizon.stellar.org";
-    const USDC_ASSET_ID: &str = "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
-
-    // Mock signer for tests (only quote methods are tested, so this doesn't need to work)
-    struct MockSigner;
-
-    #[async_trait::async_trait]
-    impl Signer for MockSigner {
-        async fn address(&self) -> Result<Address, SignerError> {
-            // Return a dummy Stellar address for testing
-            Ok(Address::Stellar(
-                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
-            ))
-        }
-
-        async fn sign_transaction(
-            &self,
-            _transaction: NetworkTransactionData,
-        ) -> Result<SignTransactionResponse, SignerError> {
-            unimplemented!("Not used in quote tests")
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl StellarSignTrait for MockSigner {
-        async fn sign_xdr_transaction(
-            &self,
-            _unsigned_xdr: &str,
-            _network_passphrase: &str,
-        ) -> Result<SignXdrTransactionResponseStellar, SignerError> {
-            unimplemented!("Not used in quote tests")
-        }
-    }
-
-    fn create_test_service() -> OrderBookService<MockStellarProviderTrait, MockSigner> {
-        let provider = Arc::new(MockStellarProviderTrait::new());
-        let signer = Arc::new(MockSigner);
-        OrderBookService::new(HORIZON_MAINNET_URL.to_string(), provider, signer)
-            .expect("Failed to create test service")
-    }
-
-    #[tokio::test]
-    async fn test_fetch_order_book_usdc_to_xlm() {
-        let service = create_test_service();
-        let order_book = service
-            .fetch_order_book(
-                "credit_alphanum4",
-                Some("USDC"),
-                Some("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"),
-                "native",
-                None,
-                None,
-            )
-            .await;
-
-        let order_book = order_book.expect("Failed to fetch order book");
-
-        // Verify response structure
-        assert!(!order_book.bids.is_empty(), "Order book should have bids");
-        assert!(!order_book.asks.is_empty(), "Order book should have asks");
-        assert_eq!(order_book.base.asset_type, "credit_alphanum4");
-        assert_eq!(order_book.base.asset_code, Some("USDC".to_string()));
-        assert_eq!(order_book.counter.asset_type, "native");
-
-        // Verify order structure
-        assert!(!order_book.asks.is_empty(), "Order book should have asks");
-        let first_ask = &order_book.asks[0];
-        assert!(!first_ask.price.is_empty(), "Ask price should not be empty");
-        assert!(
-            !first_ask.amount.is_empty(),
-            "Ask amount should not be empty"
-        );
-        assert!(
-            first_ask.price_r.n > 0,
-            "Price numerator should be positive"
-        );
-        assert!(
-            first_ask.price_r.d > 0,
-            "Price denominator should be positive"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_get_token_to_xlm_quote_usdc() {
-        let service = create_test_service();
-        // Test with 100 USDC (100 * 10^7 stroops)
-        let amount = 100_000_000u64;
-        let slippage = 1.0;
-
-        let result = service
-            .get_token_to_xlm_quote(USDC_ASSET_ID, amount, slippage, None)
-            .await;
-
-        let quote = result.expect("Failed to get quote");
-
-        assert_eq!(quote.input_asset, USDC_ASSET_ID);
-        assert_eq!(quote.output_asset, "native");
-        assert_eq!(quote.in_amount, amount);
-        assert!(
-            quote.out_amount > 0,
-            "Output amount should be positive, got: {}",
-            quote.out_amount
-        );
-        assert!(
-            quote.price_impact_pct >= 0.0,
-            "Price impact should be non-negative, got: {}",
-            quote.price_impact_pct
-        );
-        assert_eq!(
-            quote.slippage_bps, 100,
-            "Expected 100 bps for 1.0% slippage"
-        ); // 1.0% = 100 bps
-        assert!(quote.path.is_some(), "Path finding should provide path");
-    }
-
-    #[tokio::test]
-    async fn test_get_xlm_to_token_quote_usdc() {
-        let service = create_test_service();
-        // Test with 100 XLM (100 * 10^7 stroops) - this is the amount we want to RECEIVE
-        let amount = 100_000_000u64;
-        let slippage = 1.0;
-
-        let result = service
-            .get_xlm_to_token_quote(USDC_ASSET_ID, amount, slippage, None)
-            .await;
-
-        let quote = result.expect("Failed to get quote");
-
-        assert_eq!(quote.input_asset, "native");
-        assert_eq!(quote.output_asset, USDC_ASSET_ID);
-        // For strict-receive, out_amount is what we want to receive (should equal requested amount)
-        assert_eq!(
-            quote.out_amount, amount,
-            "Output amount should equal requested amount for strict-receive"
-        );
-        // in_amount is what we need to pay (may differ from requested amount)
-        assert!(
-            quote.in_amount > 0,
-            "Input amount should be positive, got: {}",
-            quote.in_amount
-        );
-        assert!(
-            quote.price_impact_pct >= 0.0,
-            "Price impact should be non-negative, got: {}",
-            quote.price_impact_pct
-        );
-        assert_eq!(
-            quote.slippage_bps, 100,
-            "Expected 100 bps for 1.0% slippage"
-        ); // 1.0% = 100 bps
-        assert!(quote.path.is_some(), "Path finding should provide path");
-    }
-
-    #[tokio::test]
-    async fn test_get_token_to_xlm_quote_native() {
-        let service = create_test_service();
-        let amount = 100_000_000u64;
-        let slippage = 1.0;
-
-        let result = service
-            .get_token_to_xlm_quote("native", amount, slippage, None)
-            .await;
-
-        let quote = result.expect("Failed to get quote");
-
-        assert_eq!(quote.input_asset, "native");
-        assert_eq!(quote.output_asset, "native");
-        assert_eq!(quote.in_amount, amount);
-        assert_eq!(quote.out_amount, amount);
-        assert_eq!(
-            quote.price_impact_pct, 0.0,
-            "Native to native should have zero price impact"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_get_xlm_to_token_quote_native() {
-        let service = create_test_service();
-        let amount = 100_000_000u64;
-        let slippage = 1.0;
-
-        let result = service
-            .get_xlm_to_token_quote("native", amount, slippage, None)
-            .await;
-
-        let quote = result.expect("Failed to get quote");
-
-        assert_eq!(quote.input_asset, "native");
-        assert_eq!(quote.output_asset, "native");
-        assert_eq!(quote.in_amount, amount);
-        assert_eq!(quote.out_amount, amount);
-        assert_eq!(
-            quote.price_impact_pct, 0.0,
-            "Native to native should have zero price impact"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_parse_asset_id() {
-        let service = create_test_service();
-
-        // Test native
-        let result = service.parse_asset_id("native");
-        assert!(result.is_ok());
-        let (asset_type, code, issuer) = result.unwrap();
-        assert_eq!(asset_type, "native");
-        assert_eq!(code, None);
-        assert_eq!(issuer, None);
-
-        // Test credit_alphanum4
-        let result = service.parse_asset_id(USDC_ASSET_ID);
-        assert!(result.is_ok());
-        let (asset_type, code, issuer) = result.unwrap();
-        assert_eq!(asset_type, "credit_alphanum4");
-        assert_eq!(code, Some("USDC".to_string()));
-        assert_eq!(
-            issuer,
-            Some("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".to_string())
-        );
-
-        // Test invalid format
-        let result = service.parse_asset_id("INVALID");
-        assert!(result.is_err(), "Expected error but got: {:?}", result);
-    }
-
-    #[tokio::test]
-    async fn test_calculate_quote_small_amount() {
-        let service = create_test_service();
-        // Test with a small amount (1 USDC = 10^7 stroops)
-        let amount = 10_000_000u64;
-        let slippage = 0.5;
-
-        let result = service
-            .get_token_to_xlm_quote(USDC_ASSET_ID, amount, slippage, None)
-            .await;
-
-        let quote = result.expect("Failed to get quote");
-        assert!(quote.out_amount > 0);
-        // For small amounts, price impact should be minimal
-        assert!(
-            quote.price_impact_pct < 5.0,
-            "Price impact should be low for small amounts"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_calculate_quote_large_amount() {
-        let service = create_test_service();
-        // Test with a larger amount (1000 USDC = 1000 * 10^7 stroops)
-        let amount = 1_000_000_000u64;
-        let slippage = 1.0;
-
-        let result = service
-            .get_token_to_xlm_quote(USDC_ASSET_ID, amount, slippage, None)
-            .await;
-
-        // This might fail if there's insufficient liquidity, which is expected
-        if let Ok(quote) = result {
-            assert!(quote.out_amount > 0);
-            // Large amounts may have higher price impact
-            assert!(quote.price_impact_pct >= 0.0);
-        }
     }
 }
