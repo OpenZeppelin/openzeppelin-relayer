@@ -17,7 +17,7 @@ The relayer handles the complexity of fee conversion, token swaps, and XLM fee p
 ## Prerequisites
 
 - A running OpenZeppelin Relayer instance
-- A Stellar relayer configured with sponsored transaction support
+- A Stellar relayer configured with sponsored transaction support ("fee_payment_strategy" = "user")
 - Trustlines enabled for the fee tokens you want to accept
 - Sufficient XLM balance in the relayer account for network fees
 
@@ -43,7 +43,7 @@ First, configure a Stellar relayer in your `config.json`:
         "max_fee": 100000,
         "allowed_tokens": [
           {
-            "asset": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+            "asset": "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
             "max_allowed_fee": 1000000000,
             "swap_config": {
               "slippage_percentage": 1.0,
@@ -51,9 +51,6 @@ First, configure a Stellar relayer in your `config.json`:
               "max_amount": 10000000000,
               "retain_min_amount": 5000000
             }
-          },
-          {
-            "asset": "native"
           }
         ],
         "slippage_percentage": 1.0,
@@ -72,8 +69,8 @@ First, configure a Stellar relayer in your `config.json`:
 ### 2. Policy Configuration Explained
 
 #### `fee_payment_strategy`
-- **`relayer`** (recommended): Relayer pays all network fees. Users pay fees in tokens.
-- **`user`**: User must include fee payment in the transaction (for custom RPC methods).
+- **`relayer`**: Relayer pays all network fees. Users pay fees in tokens.
+- **`user`**: User must include fee payment in the transaction.
 
 #### `allowed_tokens`
 List of tokens that can be used for fee payment. Each token can have:
@@ -137,6 +134,7 @@ Or with operations:
       "asset": "native"
     }
   ],
+  "source_account": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
   "fee_token": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4K4KZVN"
 }
 ```
@@ -146,7 +144,6 @@ Or with operations:
 ```json
 {
   "success": true,
-  "message": "Fee estimate retrieved successfully",
   "data": {
     "estimated_fee": "1.5",
     "conversion_rate": "0.15"
@@ -193,7 +190,6 @@ Or with operations:
 ```json
 {
   "success": true,
-  "message": "Sponsored transaction built successfully",
   "data": {
     "transaction": "AAAAAgAAAAD...",
     "fee_in_token": "1.5",
@@ -206,9 +202,18 @@ Or with operations:
 
 For complete code examples, see the [Relayer SDK examples](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/stellar/sponsored).
 
-### Step 3: Sign and Send Transaction
+### Step 3: Sign Transaction
 
-Sign the prepared transaction and submit it. The relayer will wrap it in a fee-bump transaction and pay the XLM fees.
+Sign the transaction returned from the Build endpoint. The transaction includes fee payment operations and is ready for signing.
+
+For complete code examples, see the [Relayer SDK examples](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/stellar/sponsored).
+
+### Step 4: Submit to Relayer
+
+Submit the signed transaction to the relayer. The relayer will:
+1. Process it as a fee-bump transaction (wrap it in a fee-bump envelope)
+2. Sign the fee-bump transaction with the relayer's key
+3. Submit it to the Stellar network
 
 **Endpoint:** `POST /api/v1/relayers/{relayer_id}/transactions`
 
@@ -217,7 +222,8 @@ Sign the prepared transaction and submit it. The relayer will wrap it in a fee-b
 ```json
 {
   "transaction_xdr": "AAAAAgAAAAD...",
-  "network": "testnet"
+  "network": "testnet",
+  "fee_bump": true
 }
 ```
 
@@ -226,7 +232,6 @@ Sign the prepared transaction and submit it. The relayer will wrap it in a fee-b
 ```json
 {
   "success": true,
-  "message": "Transaction submitted successfully",
   "data": {
     "id": "tx-123456",
     "status": "pending",
@@ -300,57 +305,6 @@ Supported operation types:
 - `extendFootprintTtl`: Extend footprint TTL
 - `restoreFootprint`: Restore footprint
 
-## Error Handling
-
-Common error scenarios and how to handle them:
-
-### Invalid Fee Token
-
-```json
-{
-  "success": false,
-  "message": "Bad Request",
-  "data": "Invalid fee_token structure: Token not in allowed_tokens list"
-}
-```
-
-**Resolution**: Ensure the token is configured in `allowed_tokens` and the relayer has a trustline.
-
-### Insufficient Balance
-
-```json
-{
-  "success": false,
-  "message": "Bad Request",
-  "data": "Insufficient balance for fee payment"
-}
-```
-
-**Resolution**: Ensure the user's account has sufficient token balance for the fee.
-
-### Transaction Expired
-
-```json
-{
-  "success": false,
-  "message": "Bad Request",
-  "data": "Transaction has expired"
-}
-```
-
-**Resolution**: Rebuild the transaction. The `valid_until` timestamp in the build response indicates when the transaction expires.
-
-### Max Fee Exceeded
-
-```json
-{
-  "success": false,
-  "message": "Bad Request",
-  "data": "Fee exceeds maximum allowed fee for token"
-}
-```
-
-**Resolution**: The transaction fee exceeds the `max_allowed_fee` configured for the token. Consider using a different token or adjusting the configuration.
 
 ## Best Practices
 
@@ -361,34 +315,6 @@ Common error scenarios and how to handle them:
 5. **Set Appropriate Limits**: Configure `max_allowed_fee` to prevent excessive fees
 6. **Use Fee Margins**: The `fee_margin_percentage` helps account for price fluctuations
 7. **Monitor Trustlines**: Ensure trustlines are established before users attempt transactions
-
-## Troubleshooting
-
-### Trustline Not Found
-
-If you receive errors about missing trustlines:
-
-1. Verify the trustline exists: `curl "https://soroban-testnet.stellar.org/accounts/{RELAYER_ADDRESS}"`
-2. Check the asset identifier format matches exactly
-3. Ensure the trustline was created successfully
-
-### Token Swap Failures
-
-If token swaps fail:
-
-1. Check DEX liquidity for the token pair
-2. Verify slippage settings are appropriate
-3. Ensure minimum swap amounts are met
-4. Check relayer XLM balance is sufficient
-
-### Transaction Build Failures
-
-If transaction building fails:
-
-1. Verify operations are valid
-2. Check source account exists and has sufficient balance
-3. Ensure fee token is in allowed list
-4. Verify transaction XDR is valid (if using XDR mode)
 
 ## Additional Resources
 

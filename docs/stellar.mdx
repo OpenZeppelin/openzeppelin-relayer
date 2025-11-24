@@ -111,6 +111,7 @@ Example configuration with policies:
   "network_type": "stellar",
   "signer_id": "local-signer",
   "policies": {
+    "fee_payment_strategy": "relayer",
     "min_balance": 10000000,
     "max_fee": 1000000,
     "timeout_seconds": 30,
@@ -136,6 +137,7 @@ Example swap configuration:
 ```json
 {
   "policies": {
+    "fee_payment_strategy": "user",
     "swap_config": {
       "strategies": ["order-book"],
       "cron_schedule": "0 0 * * * *",
@@ -166,6 +168,7 @@ Example allowed tokens configuration:
 ```json
 {
   "policies": {
+    "fee_payment_strategy": "user",
     "allowed_tokens": [
       {
         "asset": "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
@@ -269,6 +272,8 @@ The Stellar API supports a variety of transaction operations:
 | Send Transaction | `network`, `operations` (or `transaction_xdr`) | Submit a transaction to the Stellar network. Supports payment and Soroban operations directly, or any Stellar operation via pre-built XDR transactions. Also supports fee bump transactions for managing transaction fees. |
 | Get Transaction Details | `transaction_id` | Retrieve a specific transaction by its ID. |
 | List Transactions | (none) | List transactions for the relayer with pagination support. |
+| Quote Sponsored Transaction | `transaction_xdr` (or `operations` with `source_account`), `fee_token` | Estimate the fee in tokens for a transaction. **Available in user fee payment mode only.** |
+| Build Sponsored Transaction | `transaction_xdr` (or `operations` with `source_account`), `fee_token` | Prepare a transaction with fee payment instructions. **Available in user fee payment mode only.** |
 
 ### Supported Operation Types
 
