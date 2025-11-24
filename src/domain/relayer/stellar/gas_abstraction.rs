@@ -70,9 +70,8 @@ where
 
         // Validate allowed token
         let policy = self.relayer.policies.get_stellar_policy();
-        StellarTransactionValidator::validate_allowed_token(&params.fee_token, &policy).map_err(
-            |e| RelayerError::Internal(format!("Failed to validate allowed token: {e}")),
-        )?;
+        StellarTransactionValidator::validate_allowed_token(&params.fee_token, &policy)
+            .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
 
         // Validate that either transaction_xdr or operations is provided
         if params.transaction_xdr.is_none() && params.operations.is_none() {
@@ -129,7 +128,7 @@ where
 
         // Validate max fee
         StellarTransactionValidator::validate_max_fee(fee_quote.fee_in_stroops, &policy)
-            .map_err(|e| RelayerError::Internal(format!("Failed to validate max fee: {e}")))?;
+            .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
 
         // Validate token-specific max fee
         StellarTransactionValidator::validate_token_max_fee(
@@ -137,9 +136,7 @@ where
             fee_quote.fee_in_token,
             &policy,
         )
-        .map_err(|e| {
-            RelayerError::Internal(format!("Failed to validate token-specific max fee: {e}"))
-        })?;
+        .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
 
         // Check user token balance to ensure they have enough to pay the fee
         StellarTransactionValidator::validate_user_token_balance(
@@ -180,9 +177,8 @@ where
 
         // Validate allowed token
         let policy = self.relayer.policies.get_stellar_policy();
-        StellarTransactionValidator::validate_allowed_token(&params.fee_token, &policy).map_err(
-            |e| RelayerError::Internal(format!("Failed to validate allowed token: {e}")),
-        )?;
+        StellarTransactionValidator::validate_allowed_token(&params.fee_token, &policy)
+            .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
 
         // Validate that either transaction_xdr or operations is provided
         if params.transaction_xdr.is_none() && params.operations.is_none() {
@@ -249,7 +245,7 @@ where
             preliminary_fee_quote.fee_in_stroops,
             &policy,
         )
-        .map_err(|e| RelayerError::Internal(format!("Failed to validate max fee: {e}")))?;
+        .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
 
         // Validate token-specific max fee
         StellarTransactionValidator::validate_token_max_fee(
@@ -257,9 +253,7 @@ where
             preliminary_fee_quote.fee_in_token,
             &policy,
         )
-        .map_err(|e| {
-            RelayerError::Internal(format!("Failed to validate token-specific max fee: {e}"))
-        })?;
+        .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
 
         // Check user token balance to ensure they have enough to pay the fee
         StellarTransactionValidator::validate_user_token_balance(
@@ -271,15 +265,16 @@ where
         .await
         .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
 
-        // Estimate fee, convert to token, and add payment operation
-        let (fee_quote, mut final_envelope) = estimate_fee_and_add_payment_operation(
-            self,
+        // Add payment operation using the validated fee quote
+        let mut final_envelope = add_payment_operation_to_envelope(
             envelope,
-            xlm_fee,
+            &preliminary_fee_quote,
             &params.fee_token,
             &self.relayer.address,
-        )
-        .await?;
+        )?;
+
+        // Use the validated fee quote (no duplicate DEX call)
+        let fee_quote = preliminary_fee_quote;
 
         debug!(
             estimated_fee = xlm_fee,
@@ -308,6 +303,46 @@ where
             },
         ))
     }
+}
+
+/// Add payment operation to envelope using a pre-computed fee quote
+///
+/// This function adds a fee payment operation to the transaction envelope using
+/// a pre-computed FeeQuote. This avoids duplicate DEX calls and ensures the
+/// validated fee quote matches the fee amount in the payment operation.
+///
+/// Note: Time bounds should be set separately just before returning the transaction
+/// to give the user maximum time to review and submit.
+///
+/// # Arguments
+/// * `envelope` - The transaction envelope to add the payment operation to
+/// * `fee_quote` - Pre-computed fee quote containing the token amount to charge
+/// * `fee_token` - Asset identifier for the fee token
+/// * `relayer_address` - Address of the relayer receiving the fee payment
+///
+/// # Returns
+/// The updated envelope with the payment operation added (if not Soroban)
+fn add_payment_operation_to_envelope(
+    mut envelope: TransactionEnvelope,
+    fee_quote: &FeeQuote,
+    fee_token: &str,
+    relayer_address: &str,
+) -> Result<TransactionEnvelope, RelayerError> {
+    // Convert fee amount to i64 for payment operation
+    let fee_amount = i64::try_from(fee_quote.fee_in_token).map_err(|_| {
+        RelayerError::Internal(
+            "Fee amount too large for payment operation (exceeds i64::MAX)".to_string(),
+        )
+    })?;
+
+    let is_soroban = xdr_needs_simulation(&envelope).unwrap_or(false);
+    // For Soroban we don't add the fee payment operation because of Soroban limitation to allow just single operation in the transaction
+    if !is_soroban {
+        // Add fee payment operation to envelope
+        add_fee_payment_operation(&mut envelope, fee_token, fee_amount, relayer_address)?;
+    }
+
+    Ok(envelope)
 }
 
 /// Build a transaction envelope from either XDR or operations
@@ -376,56 +411,4 @@ fn add_fee_payment_operation(
     add_operation_to_envelope(envelope, payment_op).map_err(crate::models::RelayerError::from)?;
 
     Ok(())
-}
-
-/// Estimate fee, convert to token amount, and add payment operation to envelope
-///
-/// This utility function combines fee estimation, conversion, and payment operation
-/// creation into a single operation. It:
-/// 1. Estimates and converts XLM fee to token amount
-/// 2. Adds fee payment operation to the envelope
-///
-/// Note: Time bounds should be set separately just before returning the transaction
-/// to give the user maximum time to review and submit.
-///
-/// Returns the fee quote, buffered XLM fee, and the updated envelope.
-async fn estimate_fee_and_add_payment_operation<P, RR, NR, TR, J, TCS, S, D>(
-    relayer: &StellarRelayer<P, RR, NR, TR, J, TCS, S, D>,
-    mut envelope: TransactionEnvelope,
-    xlm_fee: u64,
-    fee_token: &str,
-    relayer_address: &str,
-) -> Result<(FeeQuote, TransactionEnvelope), RelayerError>
-where
-    P: StellarProviderTrait + Send + Sync,
-    D: StellarDexServiceTrait + Send + Sync + 'static,
-    RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
-    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
-    TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
-    J: JobProducerTrait + Send + Sync + 'static,
-    TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
-    S: StellarSignTrait + Send + Sync + 'static,
-{
-    // Convert XLM fee to token amount
-    let policy = relayer.relayer.policies.get_stellar_policy();
-    let fee_quote =
-        convert_xlm_fee_to_token(relayer.dex_service.as_ref(), &policy, xlm_fee, fee_token)
-            .await
-            .map_err(crate::models::RelayerError::from)?;
-
-    // Convert fee amount to i64 for payment operation
-    let fee_amount = i64::try_from(fee_quote.fee_in_token).map_err(|_| {
-        RelayerError::Internal(
-            "Fee amount too large for payment operation (exceeds i64::MAX)".to_string(),
-        )
-    })?;
-
-    let is_soroban = xdr_needs_simulation(&envelope).unwrap_or(false);
-    // For Soroban we don't add the fee payment operation because of Soroban limitation to allow just single operation in the transaction
-    if !is_soroban {
-        // Add fee payment operation to envelope
-        add_fee_payment_operation(&mut envelope, fee_token, fee_amount, relayer_address)?;
-    }
-
-    Ok((fee_quote, envelope))
 }

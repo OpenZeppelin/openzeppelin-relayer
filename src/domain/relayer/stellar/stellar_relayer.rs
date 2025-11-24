@@ -347,7 +347,7 @@ where
     async fn check_balance_and_trigger_token_swap_if_needed(&self) -> Result<(), RelayerError> {
         let policy = self.relayer.policies.get_stellar_policy();
 
-        // Check if swap config exists and has a threshold configured
+        // Check if swap config exists
         let swap_config = match policy.get_swap_config() {
             Some(config) => config,
             None => {
@@ -359,35 +359,45 @@ where
             }
         };
 
-        // Check balance against threshold if configured
-        if let Some(threshold) = swap_config.min_balance_threshold {
-            let balance_response = self.get_balance().await?;
-            let current_balance = u64::try_from(balance_response.balance).map_err(|_| {
-                RelayerError::Internal("Account balance exceeds u64 maximum value".to_string())
-            })?;
-
-            if current_balance >= threshold {
+        // Early return if no threshold is configured (mirrors Solana logic)
+        let threshold = match swap_config.min_balance_threshold {
+            Some(threshold) => threshold,
+            None => {
                 debug!(
                     relayer_id = %self.relayer.id,
-                    balance = current_balance,
-                    threshold = threshold,
-                    "XLM balance is above threshold, no swap needed"
+                    "No swap min balance threshold specified; skipping validation"
                 );
                 return Ok(());
             }
+        };
 
+        // Get balance only when threshold is configured
+        let balance_response = self.get_balance().await?;
+        let current_balance = u64::try_from(balance_response.balance).map_err(|_| {
+            RelayerError::Internal("Account balance exceeds u64 maximum value".to_string())
+        })?;
+
+        // Only trigger swap if balance is below threshold
+        if current_balance < threshold {
             debug!(
                 relayer_id = %self.relayer.id,
                 balance = current_balance,
                 threshold = threshold,
                 "XLM balance is below threshold, triggering token swap"
             );
+
+            let _swap_results = self
+                .handle_token_swap_request(self.relayer.id.clone())
+                .await?;
+        } else {
+            debug!(
+                relayer_id = %self.relayer.id,
+                balance = current_balance,
+                threshold = threshold,
+                "XLM balance is above threshold, no swap needed"
+            );
         }
 
-        // Proceed with token swap
-        let _swap_results = self
-            .handle_token_swap_request(self.relayer.id.clone())
-            .await?;
         Ok(())
     }
 }

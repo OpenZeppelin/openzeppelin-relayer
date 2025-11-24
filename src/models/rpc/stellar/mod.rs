@@ -1,10 +1,11 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::domain::transaction::stellar::StellarTransactionValidator;
+use crate::models::ApiError;
 use crate::{
     domain::stellar::validation::validate_operations, models::transaction::stellar::OperationSpec,
 };
-
 // feeEstimate
 #[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -32,9 +33,6 @@ impl FeeEstimateRequestParams {
     /// - Only one input type allowed (operations XOR transaction_xdr)
     /// - fee_token must be in valid format
     pub fn validate(&self) -> Result<(), crate::models::ApiError> {
-        use crate::domain::transaction::stellar::StellarTransactionValidator;
-        use crate::models::ApiError;
-
         // Validate fee_token structure
         StellarTransactionValidator::validate_fee_token_structure(&self.fee_token)
             .map_err(|e| ApiError::BadRequest(format!("Invalid fee_token structure: {e}")))?;

@@ -149,6 +149,15 @@ where
 {
     let (code, issuer) = parse_asset_identifier(asset_id)?;
 
+    // Validate asset code length before constructing buffer
+    // Stellar asset codes must be between 1 and 12 characters (inclusive)
+    if code.is_empty() || code.len() > MAX_ASSET_CODE_LENGTH {
+        return Err(StellarTransactionUtilsError::AssetCodeTooLong(
+            MAX_ASSET_CODE_LENGTH,
+            code.to_string(),
+        ));
+    }
+
     let issuer_id = parse_account_id(issuer)?;
     let account_xdr = parse_account_id(account_id)?;
 

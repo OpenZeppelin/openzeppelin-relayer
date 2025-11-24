@@ -687,8 +687,8 @@ impl StellarTransactionValidator {
     /// Note: The relayer will fee-bump this transaction, so the relayer's sequence will be consumed.
     /// However, the inner transaction (user's tx) must still have a valid sequence number.
     ///
-    /// The transaction sequence must be >= the account's current sequence number.
-    /// Future sequence numbers are allowed (user can queue transactions).
+    /// The transaction sequence must be strictly greater than the account's current sequence number.
+    /// Future sequence numbers are allowed (user can queue transactions), but equal sequences are rejected.
     pub async fn validate_sequence_number<P>(
         envelope: &TransactionEnvelope,
         provider: &P,
@@ -722,12 +722,13 @@ impl StellarTransactionValidator {
             }
         };
 
-        // Validate that transaction sequence number is valid (>= account's current sequence)
-        // The user can set a future sequence number, but not a past one
-        if tx_seq_num < account_seq_num {
+        // Validate that transaction sequence number is strictly greater than account's current sequence
+        // Stellar requires tx_seq_num > account_seq_num (not >=). Equal sequences are invalid.
+        // The user can set a future sequence number, but not a past or equal one
+        if tx_seq_num <= account_seq_num {
             return Err(StellarTransactionValidationError::ValidationError(format!(
-                "Transaction sequence number {tx_seq_num} is too old. Account's current sequence is {account_seq_num}. \
-                The transaction sequence must be >= the account's current sequence."
+                "Transaction sequence number {tx_seq_num} is invalid. Account's current sequence is {account_seq_num}. \
+                The transaction sequence must be strictly greater than the account's current sequence."
             )));
         }
 

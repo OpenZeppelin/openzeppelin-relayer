@@ -28,7 +28,7 @@ pub const STELLAR_BAD_SEQUENCE_RETRY_DELAY_SECONDS: i64 = 2;
 // Transaction validity
 /// Default transaction validity duration (in minutes) for sponsored transactions
 /// Provides reasonable time for users to review and submit while ensuring transaction doesn't expire too quickly
-pub const STELLAR_SPONSORED_TRANSACTION_VALIDITY_MINUTES: i64 = 1;
+pub const STELLAR_SPONSORED_TRANSACTION_VALIDITY_MINUTES: i64 = 2;
 
 /// Get status check initial delay duration
 pub fn get_stellar_status_check_initial_delay() -> Duration {
