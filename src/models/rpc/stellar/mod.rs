@@ -9,6 +9,7 @@ use crate::{
 #[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
 #[serde(deny_unknown_fields)]
 #[derive(Clone)]
+#[schema(as = StellarFeeEstimateRequestParams)]
 pub struct FeeEstimateRequestParams {
     /// Pre-built transaction XDR (base64 encoded, signed or unsigned)
     /// Mutually exclusive with operations field
@@ -70,6 +71,7 @@ impl FeeEstimateRequestParams {
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Clone, ToSchema)]
+#[schema(as = StellarFeeEstimateResult)]
 pub struct FeeEstimateResult {
     /// Estimated fee in token amount (decimal UI representation as string)
     pub fee_in_token_ui: String,
@@ -83,6 +85,7 @@ pub struct FeeEstimateResult {
 #[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
 #[serde(deny_unknown_fields)]
 #[derive(Clone)]
+#[schema(as = StellarPrepareTransactionRequestParams)]
 pub struct PrepareTransactionRequestParams {
     /// Pre-built transaction XDR (base64 encoded, signed or unsigned)
     /// Mutually exclusive with operations field
@@ -151,6 +154,7 @@ impl PrepareTransactionRequestParams {
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Clone, ToSchema)]
+#[schema(as = StellarPrepareTransactionResult)]
 pub struct PrepareTransactionResult {
     /// Extended transaction XDR (base64 encoded)
     pub transaction: String,

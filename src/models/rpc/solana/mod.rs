@@ -83,12 +83,14 @@ impl TryFrom<EncodedSerializedTransaction> for VersionedTransaction {
 #[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
 #[serde(deny_unknown_fields)]
 #[derive(Clone)]
+#[schema(as = SolanaFeeEstimateRequestParams)]
 pub struct FeeEstimateRequestParams {
     pub transaction: EncodedSerializedTransaction,
     pub fee_token: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Clone, ToSchema)]
+#[schema(as = SolanaFeeEstimateResult)]
 pub struct FeeEstimateResult {
     pub estimated_fee: String,
     pub conversion_rate: String,
@@ -118,12 +120,14 @@ pub struct TransferTransactionResult {
 #[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
 #[serde(deny_unknown_fields)]
 #[derive(Clone)]
+#[schema(as = SolanaPrepareTransactionRequestParams)]
 pub struct PrepareTransactionRequestParams {
     pub transaction: EncodedSerializedTransaction,
     pub fee_token: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Clone, ToSchema)]
+#[schema(as = SolanaPrepareTransactionResult)]
 pub struct PrepareTransactionResult {
     pub transaction: EncodedSerializedTransaction,
     pub fee_in_spl: String,

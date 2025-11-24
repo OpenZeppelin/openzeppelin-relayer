@@ -4168,11 +4168,11 @@
           "data": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/PrepareTransactionResult",
+                "$ref": "#/components/schemas/SolanaPrepareTransactionResult",
                 "description": "Solana-specific prepare transaction result"
               },
               {
-                "$ref": "#/components/schemas/PrepareTransactionResult",
+                "$ref": "#/components/schemas/StellarPrepareTransactionResult",
                 "description": "Stellar-specific prepare transaction result"
               }
             ],
@@ -4201,11 +4201,11 @@
           "data": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/FeeEstimateResult",
+                "$ref": "#/components/schemas/SolanaFeeEstimateResult",
                 "description": "Solana-specific fee estimate result"
               },
               {
-                "$ref": "#/components/schemas/FeeEstimateResult",
+                "$ref": "#/components/schemas/StellarFeeEstimateResult",
                 "description": "Stellar-specific fee estimate result"
               }
             ],
@@ -5166,65 +5166,6 @@
           }
         }
       },
-      "FeeEstimateRequestParams": {
-        "type": "object",
-        "required": [
-          "fee_token"
-        ],
-        "properties": {
-          "fee_token": {
-            "type": "string",
-            "description": "Asset identifier for fee token (e.g., \"native\" or \"USDC:GA5Z...\")"
-          },
-          "operations": {
-            "type": [
-              "array",
-              "null"
-            ],
-            "items": {
-              "$ref": "#/components/schemas/OperationSpec"
-            },
-            "description": "Operations array to build transaction from\nMutually exclusive with transaction_xdr field"
-          },
-          "source_account": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Source account address (required when operations are provided)\nFor sponsored transactions, this should be the user's account address"
-          },
-          "transaction_xdr": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Pre-built transaction XDR (base64 encoded, signed or unsigned)\nMutually exclusive with operations field"
-          }
-        },
-        "additionalProperties": false
-      },
-      "FeeEstimateResult": {
-        "type": "object",
-        "required": [
-          "fee_in_token_ui",
-          "fee_in_token",
-          "conversion_rate"
-        ],
-        "properties": {
-          "conversion_rate": {
-            "type": "string",
-            "description": "Conversion rate from XLM to token (as string)"
-          },
-          "fee_in_token": {
-            "type": "string",
-            "description": "Estimated fee in token amount (raw units as string)"
-          },
-          "fee_in_token_ui": {
-            "type": "string",
-            "description": "Estimated fee in token amount (decimal UI representation as string)"
-          }
-        }
-      },
       "GetFeaturesEnabledRequestParams": {
         "type": "object",
         "additionalProperties": false
@@ -6039,80 +5980,6 @@
               "null"
             ],
             "items": {}
-          }
-        }
-      },
-      "PrepareTransactionRequestParams": {
-        "type": "object",
-        "required": [
-          "fee_token"
-        ],
-        "properties": {
-          "fee_token": {
-            "type": "string",
-            "description": "Asset identifier for fee token"
-          },
-          "operations": {
-            "type": [
-              "array",
-              "null"
-            ],
-            "items": {
-              "$ref": "#/components/schemas/OperationSpec"
-            },
-            "description": "Operations array to build transaction from\nMutually exclusive with transaction_xdr field"
-          },
-          "source_account": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Source account address (required when operations are provided)\nFor gasless transactions, this should be the user's account address"
-          },
-          "transaction_xdr": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Pre-built transaction XDR (base64 encoded, signed or unsigned)\nMutually exclusive with operations field"
-          }
-        },
-        "additionalProperties": false
-      },
-      "PrepareTransactionResult": {
-        "type": "object",
-        "required": [
-          "transaction",
-          "fee_in_token",
-          "fee_in_token_ui",
-          "fee_in_stroops",
-          "fee_token",
-          "valid_until"
-        ],
-        "properties": {
-          "fee_in_stroops": {
-            "type": "string",
-            "description": "Fee amount in stroops (as string)"
-          },
-          "fee_in_token": {
-            "type": "string",
-            "description": "Fee amount in token (raw units as string)"
-          },
-          "fee_in_token_ui": {
-            "type": "string",
-            "description": "Fee amount in token (decimal UI representation as string)"
-          },
-          "fee_token": {
-            "type": "string",
-            "description": "Asset identifier for fee token"
-          },
-          "transaction": {
-            "type": "string",
-            "description": "Extended transaction XDR (base64 encoded)"
-          },
-          "valid_until": {
-            "type": "string",
-            "description": "Transaction validity timestamp (ISO 8601 format)"
           }
         }
       },
@@ -7201,6 +7068,37 @@
         },
         "additionalProperties": false
       },
+      "SolanaFeeEstimateRequestParams": {
+        "type": "object",
+        "required": [
+          "transaction",
+          "fee_token"
+        ],
+        "properties": {
+          "fee_token": {
+            "type": "string"
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/EncodedSerializedTransaction"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SolanaFeeEstimateResult": {
+        "type": "object",
+        "required": [
+          "estimated_fee",
+          "conversion_rate"
+        ],
+        "properties": {
+          "conversion_rate": {
+            "type": "string"
+          },
+          "estimated_fee": {
+            "type": "string"
+          }
+        }
+      },
       "SolanaFeePaymentStrategy": {
         "type": "string",
         "description": "Solana fee payment strategy\n\nDetermines who pays transaction fees:\n- `User`: User must include fee payment to relayer in transaction (for custom RPC methods)\n- `Relayer`: Relayer pays all transaction fees (recommended for send transaction endpoint)\n\nDefault is `User`.",
@@ -7296,6 +7194,51 @@
         },
         "additionalProperties": false
       },
+      "SolanaPrepareTransactionRequestParams": {
+        "type": "object",
+        "required": [
+          "transaction",
+          "fee_token"
+        ],
+        "properties": {
+          "fee_token": {
+            "type": "string"
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/EncodedSerializedTransaction"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SolanaPrepareTransactionResult": {
+        "type": "object",
+        "required": [
+          "transaction",
+          "fee_in_spl",
+          "fee_in_lamports",
+          "fee_token",
+          "valid_until_blockheight"
+        ],
+        "properties": {
+          "fee_in_lamports": {
+            "type": "string"
+          },
+          "fee_in_spl": {
+            "type": "string"
+          },
+          "fee_token": {
+            "type": "string"
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/EncodedSerializedTransaction"
+          },
+          "valid_until_blockheight": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "SolanaRpcRequest": {
         "oneOf": [
           {
@@ -7312,7 +7255,7 @@
                 ]
               },
               "params": {
-                "$ref": "#/components/schemas/FeeEstimateRequestParams"
+                "$ref": "#/components/schemas/SolanaFeeEstimateRequestParams"
               }
             },
             "example": "feeEstimate"
@@ -7350,7 +7293,7 @@
                 ]
               },
               "params": {
-                "$ref": "#/components/schemas/PrepareTransactionRequestParams"
+                "$ref": "#/components/schemas/SolanaPrepareTransactionRequestParams"
               }
             },
             "example": "prepareTransaction"
@@ -7467,7 +7410,7 @@
           {
             "allOf": [
               {
-                "$ref": "#/components/schemas/FeeEstimateResult"
+                "$ref": "#/components/schemas/SolanaFeeEstimateResult"
               },
               {
                 "type": "object",
@@ -7509,7 +7452,7 @@
           {
             "allOf": [
               {
-                "$ref": "#/components/schemas/PrepareTransactionResult"
+                "$ref": "#/components/schemas/SolanaPrepareTransactionResult"
               },
               {
                 "type": "object",
@@ -7722,11 +7665,11 @@
       "SponsoredTransactionBuildRequest": {
         "oneOf": [
           {
-            "$ref": "#/components/schemas/PrepareTransactionRequestParams",
+            "$ref": "#/components/schemas/SolanaPrepareTransactionRequestParams",
             "description": "Solana-specific prepare transaction request parameters"
           },
           {
-            "$ref": "#/components/schemas/PrepareTransactionRequestParams",
+            "$ref": "#/components/schemas/StellarPrepareTransactionRequestParams",
             "description": "Stellar-specific prepare transaction request parameters"
           }
         ],
@@ -7735,11 +7678,11 @@
       "SponsoredTransactionBuildResponse": {
         "oneOf": [
           {
-            "$ref": "#/components/schemas/PrepareTransactionResult",
+            "$ref": "#/components/schemas/SolanaPrepareTransactionResult",
             "description": "Solana-specific prepare transaction result"
           },
           {
-            "$ref": "#/components/schemas/PrepareTransactionResult",
+            "$ref": "#/components/schemas/StellarPrepareTransactionResult",
             "description": "Stellar-specific prepare transaction result"
           }
         ],
@@ -7748,11 +7691,11 @@
       "SponsoredTransactionQuoteRequest": {
         "oneOf": [
           {
-            "$ref": "#/components/schemas/FeeEstimateRequestParams",
+            "$ref": "#/components/schemas/SolanaFeeEstimateRequestParams",
             "description": "Solana-specific fee estimate request parameters"
           },
           {
-            "$ref": "#/components/schemas/FeeEstimateRequestParams",
+            "$ref": "#/components/schemas/StellarFeeEstimateRequestParams",
             "description": "Stellar-specific fee estimate request parameters"
           }
         ],
@@ -7761,11 +7704,11 @@
       "SponsoredTransactionQuoteResponse": {
         "oneOf": [
           {
-            "$ref": "#/components/schemas/FeeEstimateResult",
+            "$ref": "#/components/schemas/SolanaFeeEstimateResult",
             "description": "Solana-specific fee estimate result"
           },
           {
-            "$ref": "#/components/schemas/FeeEstimateResult",
+            "$ref": "#/components/schemas/StellarFeeEstimateResult",
             "description": "Stellar-specific fee estimate result"
           }
         ],
@@ -7825,6 +7768,65 @@
         },
         "additionalProperties": false
       },
+      "StellarFeeEstimateRequestParams": {
+        "type": "object",
+        "required": [
+          "fee_token"
+        ],
+        "properties": {
+          "fee_token": {
+            "type": "string",
+            "description": "Asset identifier for fee token (e.g., \"native\" or \"USDC:GA5Z...\")"
+          },
+          "operations": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/OperationSpec"
+            },
+            "description": "Operations array to build transaction from\nMutually exclusive with transaction_xdr field"
+          },
+          "source_account": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Source account address (required when operations are provided)\nFor sponsored transactions, this should be the user's account address"
+          },
+          "transaction_xdr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pre-built transaction XDR (base64 encoded, signed or unsigned)\nMutually exclusive with operations field"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StellarFeeEstimateResult": {
+        "type": "object",
+        "required": [
+          "fee_in_token_ui",
+          "fee_in_token",
+          "conversion_rate"
+        ],
+        "properties": {
+          "conversion_rate": {
+            "type": "string",
+            "description": "Conversion rate from XLM to token (as string)"
+          },
+          "fee_in_token": {
+            "type": "string",
+            "description": "Estimated fee in token amount (raw units as string)"
+          },
+          "fee_in_token_ui": {
+            "type": "string",
+            "description": "Estimated fee in token amount (decimal UI representation as string)"
+          }
+        }
+      },
       "StellarFeePaymentStrategy": {
         "type": "string",
         "description": "Stellar fee payment strategy\n\nDetermines who pays transaction fees:\n- `User`: User must include fee payment to relayer in transaction (for custom RPC methods)\n- `Relayer`: Relayer pays all transaction fees (recommended for send transaction endpoint)",
@@ -7877,6 +7879,80 @@
           }
         },
         "additionalProperties": false
+      },
+      "StellarPrepareTransactionRequestParams": {
+        "type": "object",
+        "required": [
+          "fee_token"
+        ],
+        "properties": {
+          "fee_token": {
+            "type": "string",
+            "description": "Asset identifier for fee token"
+          },
+          "operations": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/OperationSpec"
+            },
+            "description": "Operations array to build transaction from\nMutually exclusive with transaction_xdr field"
+          },
+          "source_account": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Source account address (required when operations are provided)\nFor gasless transactions, this should be the user's account address"
+          },
+          "transaction_xdr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pre-built transaction XDR (base64 encoded, signed or unsigned)\nMutually exclusive with operations field"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StellarPrepareTransactionResult": {
+        "type": "object",
+        "required": [
+          "transaction",
+          "fee_in_token",
+          "fee_in_token_ui",
+          "fee_in_stroops",
+          "fee_token",
+          "valid_until"
+        ],
+        "properties": {
+          "fee_in_stroops": {
+            "type": "string",
+            "description": "Fee amount in stroops (as string)"
+          },
+          "fee_in_token": {
+            "type": "string",
+            "description": "Fee amount in token (raw units as string)"
+          },
+          "fee_in_token_ui": {
+            "type": "string",
+            "description": "Fee amount in token (decimal UI representation as string)"
+          },
+          "fee_token": {
+            "type": "string",
+            "description": "Asset identifier for fee token"
+          },
+          "transaction": {
+            "type": "string",
+            "description": "Extended transaction XDR (base64 encoded)"
+          },
+          "valid_until": {
+            "type": "string",
+            "description": "Transaction validity timestamp (ISO 8601 format)"
+          }
+        }
       },
       "StellarRpcRequest": {
         "oneOf": [
