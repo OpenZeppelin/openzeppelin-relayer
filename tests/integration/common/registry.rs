@@ -34,10 +34,6 @@ pub struct NetworkConfig {
     /// Whether this network is enabled for testing
     #[serde(default = "default_true")]
     pub enabled: bool,
-
-    /// Average test duration in seconds (for estimation)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub avg_test_duration_secs: Option<u32>,
 }
 
 fn default_true() -> bool {

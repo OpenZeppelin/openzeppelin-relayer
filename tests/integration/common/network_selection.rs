@@ -272,7 +272,6 @@ pub fn report_network_readiness() -> Result<()> {
     println!("{}\n", "=".repeat(70));
 
     let mut ready_count = 0;
-    let mut total_duration = 0;
 
     for network in &selected {
         match registry.validate_readiness(network) {
@@ -285,10 +284,6 @@ pub fn report_network_readiness() -> Result<()> {
                         println!("   Type: {}", config.network_type);
                         if !config.tags.is_empty() {
                             println!("   Tags: {}", config.tags.join(", "));
-                        }
-                        if let Some(duration) = config.avg_test_duration_secs {
-                            total_duration += duration;
-                            println!("   Est. time: ~{}s", duration);
                         }
                     }
                 } else {
@@ -316,13 +311,6 @@ pub fn report_network_readiness() -> Result<()> {
 
     println!("{}", "=".repeat(70));
     println!("Summary: {}/{} networks ready", ready_count, selected.len());
-    if total_duration > 0 {
-        println!(
-            "Estimated total time: ~{}m {}s",
-            total_duration / 60,
-            total_duration % 60
-        );
-    }
     println!("{}\n", "=".repeat(70));
 
     if ready_count == 0 {

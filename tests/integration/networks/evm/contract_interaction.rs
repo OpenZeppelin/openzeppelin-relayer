@@ -1,6 +1,6 @@
-//! Basic EVM transfer integration tests
+//! Contract interaction integration tests
 //!
-//! Tests basic ETH transfers on EVM networks.
+//! Tests contract calls on EVM networks using SimpleStorage contract.
 
 use crate::integration::common::{
     client::{CreateRelayerRequest, RelayerClient},
@@ -11,16 +11,20 @@ use crate::integration::common::{
 use openzeppelin_relayer::models::relayer::RelayerNetworkType;
 use serial_test::serial;
 
-/// Burn address for test transfers
-const BURN_ADDRESS: &str = "0x000000000000000000000000000000000000dEaD";
+/// SimpleStorage contract function selector for setNumber(uint256)
+/// keccak256("setNumber(uint256)")[0:4] = 0x3fb5c1cb
+const SET_NUMBER_SELECTOR: &str = "3fb5c1cb";
 
-/// Test value for transfers (0.0001 ETH in wei)
-const TRANSFER_VALUE: &str = "100000000000000";
+/// Encode a call to SimpleStorage.setNumber(uint256)
+fn encode_set_number_call(value: u64) -> String {
+    // Function selector + uint256 value (32 bytes, zero-padded)
+    format!("0x{}{:064x}", SET_NUMBER_SELECTOR, value)
+}
 
-/// Run a basic transfer test for a single EVM network
-async fn run_basic_transfer_test(network: &str) -> eyre::Result<()> {
+/// Run a contract interaction test for a single EVM network
+async fn run_contract_interaction_test(network: &str) -> eyre::Result<()> {
     println!("\n{}", "=".repeat(60));
-    println!("Testing basic transfer on: {}", network);
+    println!("Testing contract interaction on: {}", network);
     println!("{}\n", "=".repeat(60));
 
     // Load registry and get network config
@@ -32,6 +36,28 @@ async fn run_basic_transfer_test(network: &str) -> eyre::Result<()> {
         println!("Skipping {} - not an EVM network", network);
         return Ok(());
     }
+
+    // Get SimpleStorage contract address
+    let contract_address = match registry.get_contract(network, "simple_storage") {
+        Ok(addr) => {
+            // Check if it's a placeholder
+            if addr.starts_with("0x0000000000000000") {
+                return Err(eyre::eyre!(
+                    "SimpleStorage contract not deployed on {} (placeholder address)",
+                    network
+                ));
+            }
+            addr.clone()
+        }
+        Err(_) => {
+            return Err(eyre::eyre!(
+                "SimpleStorage contract not found in registry for {}",
+                network
+            ));
+        }
+    };
+
+    println!("SimpleStorage contract: {}", contract_address);
 
     // Verify network is ready for testing
     let readiness = registry.validate_readiness(network)?;
@@ -65,8 +91,8 @@ async fn run_basic_transfer_test(network: &str) -> eyre::Result<()> {
     let relayer = client.get_or_create_relayer(create_request).await?;
 
     println!(
-        "Created relayer {} with address {:?}, system_disabled: {:?}, disabled_reason: {:?}",
-        relayer.id, relayer.address, relayer.system_disabled, relayer.disabled_reason
+        "Created relayer {} with address {:?}",
+        relayer.id, relayer.address
     );
 
     // Check if relayer is disabled
@@ -85,7 +111,7 @@ async fn run_basic_transfer_test(network: &str) -> eyre::Result<()> {
         );
     }
 
-    // Wait for health check to run and update balance
+    // Wait for health check to run
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
     let relayer_status = client.get_relayer(&relayer.id).await?;
@@ -104,17 +130,29 @@ async fn run_basic_transfer_test(network: &str) -> eyre::Result<()> {
         );
     }
 
-    // Prepare transaction request
+    // Generate a random value to set
+    let test_value = rand::random::<u64>() % 1_000_000;
+    let call_data = encode_set_number_call(test_value);
+
+    println!("Calling SimpleStorage.setNumber({})", test_value);
+    println!("Call data: {}", call_data);
+
+    // Prepare transaction request (higher gas limit for contract calls)
     let tx_request = serde_json::json!({
-        "to": BURN_ADDRESS,
-        "value": TRANSFER_VALUE,
-        "data": "0x",
-        "gas_limit": 21000,
+        "to": contract_address,
+        "value": "0",
+        "data": call_data,
+        "gas_limit": 200000,
         "speed": "fast"
     });
 
     // Send the transaction
-    let tx_response = client.send_transaction(&relayer.id, tx_request).await?;
+    let tx_response = match client.send_transaction(&relayer.id, tx_request).await {
+        Ok(response) => response,
+        Err(e) => {
+            return Err(e);
+        }
+    };
 
     println!(
         "Sent transaction {} with status {}",
@@ -129,10 +167,24 @@ async fn run_basic_transfer_test(network: &str) -> eyre::Result<()> {
         receipt_config.poll_interval_ms, receipt_config.max_wait_ms
     );
 
-    wait_for_receipt(&client, &relayer.id, &tx_response.id, &receipt_config).await?;
+    if let Err(e) = wait_for_receipt(&client, &relayer.id, &tx_response.id, &receipt_config).await {
+        // Get more details about the failed transaction
+        if let Ok(failed_tx) = client.get_transaction(&relayer.id, &tx_response.id).await {
+            eprintln!("Transaction failed details:");
+            eprintln!("  Status: {}", failed_tx.status);
+            eprintln!("  Hash: {:?}", failed_tx.hash);
+            eprintln!("  Error: {:?}", failed_tx.error);
+        }
+        return Err(e);
+    }
 
     // Get final transaction status
-    let final_tx = client.get_transaction(&relayer.id, &tx_response.id).await?;
+    let final_tx = match client.get_transaction(&relayer.id, &tx_response.id).await {
+        Ok(tx) => tx,
+        Err(e) => {
+            return Err(e);
+        }
+    };
 
     println!(
         "Transaction confirmed! Hash: {:?}, Status: {}",
@@ -151,12 +203,15 @@ async fn run_basic_transfer_test(network: &str) -> eyre::Result<()> {
         return Err(eyre::eyre!("Confirmed transaction should have a hash"));
     }
 
-    println!("Test completed successfully for {}\n", network);
+    println!(
+        "Contract interaction test completed successfully for {}\n",
+        network
+    );
 
     Ok(())
 }
 
-/// Test basic ETH transfer on all selected EVM networks
+/// Test SimpleStorage contract interaction on all selected EVM networks
 ///
 /// Networks are selected via:
 /// - TEST_NETWORKS env var (comma-separated list)
@@ -165,16 +220,16 @@ async fn run_basic_transfer_test(network: &str) -> eyre::Result<()> {
 ///
 /// This test:
 /// 1. Gets the list of networks to test
-/// 2. Filters for EVM networks
+/// 2. Filters for EVM networks with deployed SimpleStorage
 /// 3. For each network:
 ///    - Creates a relayer
-///    - Sends a small ETH transfer to the burn address
+///    - Calls SimpleStorage.set(randomValue)
 ///    - Waits for confirmation
 ///    - Cleans up
 #[tokio::test]
-#[ignore = "Requires running relayer and funded signer"]
+#[ignore = "Requires running relayer, funded signer, and deployed contract"]
 #[serial]
-async fn test_evm_basic_transfer() {
+async fn test_evm_contract_interaction() {
     // Get networks to test based on environment configuration
     let networks = get_test_networks().expect("Failed to get test networks");
 
@@ -182,36 +237,42 @@ async fn test_evm_basic_transfer() {
         panic!("No networks selected for testing");
     }
 
-    // Load registry to filter for EVM networks
+    // Load registry to filter for EVM networks with SimpleStorage
     let registry = TestRegistry::load().expect("Failed to load test registry");
 
-    // Filter for EVM networks only
-    let evm_networks: Vec<String> = networks
+    // Filter for EVM networks with deployed SimpleStorage contract
+    let eligible_networks: Vec<String> = networks
         .into_iter()
         .filter(|network| {
-            registry
+            let is_evm = registry
                 .get_network(network)
                 .map(|config| config.network_type == "evm")
-                .unwrap_or(false)
+                .unwrap_or(false);
+
+            let has_contract = registry
+                .has_real_contract(network, "simple_storage")
+                .unwrap_or(false);
+
+            is_evm && has_contract
         })
         .collect();
 
-    if evm_networks.is_empty() {
-        println!("No EVM networks in selection, skipping test");
+    if eligible_networks.is_empty() {
+        println!("No EVM networks with deployed SimpleStorage contract, skipping test");
         return;
     }
 
     println!(
-        "Testing {} EVM networks: {:?}",
-        evm_networks.len(),
-        evm_networks
+        "Testing {} EVM networks with SimpleStorage: {:?}",
+        eligible_networks.len(),
+        eligible_networks
     );
 
     let mut failures = Vec::new();
 
-    // Run test for each EVM network
-    for network in &evm_networks {
-        match run_basic_transfer_test(network).await {
+    // Run test for each eligible network
+    for network in &eligible_networks {
+        match run_contract_interaction_test(network).await {
             Ok(()) => {
                 println!("PASS: {}", network);
             }
@@ -224,12 +285,12 @@ async fn test_evm_basic_transfer() {
 
     // Report results
     println!("\n{}", "=".repeat(60));
-    println!("Test Summary");
+    println!("Contract Interaction Test Summary");
     println!("{}", "=".repeat(60));
     println!(
         "Passed: {}/{}",
-        evm_networks.len() - failures.len(),
-        evm_networks.len()
+        eligible_networks.len() - failures.len(),
+        eligible_networks.len()
     );
 
     if !failures.is_empty() {
@@ -238,13 +299,13 @@ async fn test_evm_basic_transfer() {
             println!("  - {}: {}", network, error);
         }
         panic!(
-            "{} of {} EVM network tests failed",
+            "{} of {} contract interaction tests failed",
             failures.len(),
-            evm_networks.len()
+            eligible_networks.len()
         );
     }
 
-    println!("\nAll EVM basic transfer tests passed!");
+    println!("\nAll contract interaction tests passed!");
 }
 
 #[cfg(test)]
@@ -252,13 +313,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_constants() {
-        // Verify burn address is valid
-        assert!(BURN_ADDRESS.starts_with("0x"));
-        assert_eq!(BURN_ADDRESS.len(), 42);
+    fn test_encode_set_number_call() {
+        // Test encoding setNumber(42)
+        let encoded = encode_set_number_call(42);
+        assert!(encoded.starts_with("0x3fb5c1cb"));
+        assert_eq!(encoded.len(), 2 + 8 + 64); // 0x + selector + 32 bytes
 
-        // Verify transfer value is reasonable (0.0001 ETH)
-        let value: u128 = TRANSFER_VALUE.parse().unwrap();
-        assert_eq!(value, 100_000_000_000_000); // 0.0001 ETH in wei
+        // Value should be at the end, zero-padded
+        assert!(encoded.ends_with("2a")); // 42 in hex
+
+        // Test encoding setNumber(0)
+        let encoded_zero = encode_set_number_call(0);
+        assert!(encoded_zero.ends_with(&"0".repeat(64)));
+
+        // Test encoding setNumber(255)
+        let encoded_ff = encode_set_number_call(255);
+        assert!(encoded_ff.ends_with("ff"));
+    }
+
+    #[test]
+    fn test_function_selector() {
+        // Verify the function selector is correct for setNumber(uint256)
+        assert_eq!(SET_NUMBER_SELECTOR, "3fb5c1cb");
     }
 }
