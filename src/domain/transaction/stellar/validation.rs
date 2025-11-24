@@ -998,19 +998,13 @@ impl StellarTransactionValidator {
             required_xlm_fee += STELLAR_DEFAULT_TRANSACTION_FEE as u64;
         }
 
-        let fee_quote = convert_xlm_fee_to_token(
-            dex_service,
-            policy,
-            required_xlm_fee,
-            asset_id,
-            policy.fee_margin_percentage,
-        )
-        .await
-        .map_err(|e| {
-            StellarTransactionValidationError::ValidationError(format!(
-                "Failed to convert XLM fee to token {asset_id}: {e}",
-            ))
-        })?;
+        let fee_quote = convert_xlm_fee_to_token(dex_service, policy, required_xlm_fee, asset_id)
+            .await
+            .map_err(|e| {
+                StellarTransactionValidationError::ValidationError(format!(
+                    "Failed to convert XLM fee to token {asset_id}: {e}",
+                ))
+            })?;
 
         // Compare payment amount with required token amount (from convert_xlm_fee_to_token which includes margin)
         if *amount < fee_quote.fee_in_token {

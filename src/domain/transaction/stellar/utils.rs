@@ -849,7 +849,6 @@ where
 /// * `policy` - Stellar relayer policy for slippage and token decimals
 /// * `xlm_fee` - Fee amount in XLM stroops (already estimated)
 /// * `fee_token` - Token identifier (e.g., "native" or "USDC:GA5Z...")
-/// * `fee_margin_percentage` - Optional fee margin percentage to add as buffer
 ///
 /// # Returns
 /// A tuple containing:
@@ -860,7 +859,6 @@ pub async fn convert_xlm_fee_to_token<D>(
     policy: &RelayerStellarPolicy,
     xlm_fee: u64,
     fee_token: &str,
-    fee_margin_percentage: Option<f32>,
 ) -> Result<FeeQuote, StellarTransactionUtilsError>
 where
     D: StellarDexServiceTrait + Send + Sync,
@@ -868,7 +866,7 @@ where
     // Handle native XLM - no conversion needed
     if fee_token == "native" || fee_token.is_empty() {
         debug!("Converting XLM fee to native XLM: {}", xlm_fee);
-        let buffered_fee = if let Some(margin) = fee_margin_percentage {
+        let buffered_fee = if let Some(margin) = policy.fee_margin_percentage {
             (xlm_fee as f64 * (1.0 + margin as f64 / 100.0)) as u64
         } else {
             xlm_fee
@@ -884,8 +882,8 @@ where
 
     debug!("Converting XLM fee to token: {}", fee_token);
 
-    // Apply fee margin if specified
-    let buffered_xlm_fee = if let Some(margin) = fee_margin_percentage {
+    // Apply fee margin if specified in policy
+    let buffered_xlm_fee = if let Some(margin) = policy.fee_margin_percentage {
         (xlm_fee as f64 * (1.0 + margin as f64 / 100.0)) as u64
     } else {
         xlm_fee

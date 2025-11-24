@@ -123,7 +123,6 @@ where
             &policy,
             xlm_fee,
             &params.fee_token,
-            policy.fee_margin_percentage,
         )
         .await
         .map_err(crate::models::RelayerError::from)?;
@@ -155,7 +154,8 @@ where
         debug!("Fee estimate result: {:?}", fee_quote);
 
         let result = StellarFeeEstimateResult {
-            estimated_fee: fee_quote.fee_in_token_ui,
+            fee_in_token_ui: fee_quote.fee_in_token_ui,
+            fee_in_token: fee_quote.fee_in_token.to_string(),
             conversion_rate: fee_quote.conversion_rate.to_string(),
         };
         Ok(SponsoredTransactionQuoteResponse::Stellar(result))
@@ -240,7 +240,6 @@ where
             &policy,
             xlm_fee,
             &params.fee_token,
-            policy.fee_margin_percentage,
         )
         .await
         .map_err(crate::models::RelayerError::from)?;
@@ -278,7 +277,6 @@ where
             envelope,
             xlm_fee,
             &params.fee_token,
-            policy.fee_margin_percentage,
             &self.relayer.address,
         )
         .await?;
@@ -302,7 +300,8 @@ where
         Ok(SponsoredTransactionBuildResponse::Stellar(
             StellarPrepareTransactionResult {
                 transaction: extended_xdr,
-                fee_in_token: fee_quote.fee_in_token_ui,
+                fee_in_token: fee_quote.fee_in_token.to_string(),
+                fee_in_token_ui: fee_quote.fee_in_token_ui,
                 fee_in_stroops: fee_quote.fee_in_stroops.to_string(),
                 fee_token: params.fee_token,
                 valid_until: valid_until.to_rfc3339(),
@@ -395,7 +394,6 @@ async fn estimate_fee_and_add_payment_operation<P, RR, NR, TR, J, TCS, S, D>(
     mut envelope: TransactionEnvelope,
     xlm_fee: u64,
     fee_token: &str,
-    fee_margin_percentage: Option<f32>,
     relayer_address: &str,
 ) -> Result<(FeeQuote, TransactionEnvelope), RelayerError>
 where
@@ -410,15 +408,10 @@ where
 {
     // Convert XLM fee to token amount
     let policy = relayer.relayer.policies.get_stellar_policy();
-    let fee_quote = convert_xlm_fee_to_token(
-        relayer.dex_service.as_ref(),
-        &policy,
-        xlm_fee,
-        fee_token,
-        fee_margin_percentage,
-    )
-    .await
-    .map_err(crate::models::RelayerError::from)?;
+    let fee_quote =
+        convert_xlm_fee_to_token(relayer.dex_service.as_ref(), &policy, xlm_fee, fee_token)
+            .await
+            .map_err(crate::models::RelayerError::from)?;
 
     // Convert fee amount to i64 for payment operation
     let fee_amount = i64::try_from(fee_quote.fee_in_token).map_err(|_| {

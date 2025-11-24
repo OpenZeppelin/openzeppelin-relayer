@@ -71,8 +71,10 @@ impl FeeEstimateRequestParams {
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Clone, ToSchema)]
 pub struct FeeEstimateResult {
-    /// Estimated fee in token amount (as string for precision)
-    pub estimated_fee: String,
+    /// Estimated fee in token amount (decimal UI representation as string)
+    pub fee_in_token_ui: String,
+    /// Estimated fee in token amount (raw units as string)
+    pub fee_in_token: String,
     /// Conversion rate from XLM to token (as string)
     pub conversion_rate: String,
 }
@@ -152,8 +154,10 @@ impl PrepareTransactionRequestParams {
 pub struct PrepareTransactionResult {
     /// Extended transaction XDR (base64 encoded)
     pub transaction: String,
-    /// Fee amount in token (as string)
+    /// Fee amount in token (raw units as string)
     pub fee_in_token: String,
+    /// Fee amount in token (decimal UI representation as string)
+    pub fee_in_token_ui: String,
     /// Fee amount in stroops (as string)
     pub fee_in_stroops: String,
     /// Asset identifier for fee token

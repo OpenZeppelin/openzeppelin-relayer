@@ -844,7 +844,7 @@ where
             in_amount: amount,
             out_amount,
             price_impact_pct,
-            slippage_bps: (slippage * 100.0) as u32,
+            slippage_bps: (slippage * SLIPPAGE_TO_BPS_MULTIPLIER) as u32,
             path: Some(path_steps),
         })
     }
@@ -928,7 +928,7 @@ where
             in_amount: amount, // We are selling exactly this amount of XLM
             out_amount,        // We receive this amount of tokens
             price_impact_pct,
-            slippage_bps: (slippage * 100.0) as u32,
+            slippage_bps: (slippage * SLIPPAGE_TO_BPS_MULTIPLIER) as u32,
             path: Some(path_steps),
         })
     }

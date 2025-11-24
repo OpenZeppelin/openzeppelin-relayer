@@ -5206,7 +5206,8 @@
       "FeeEstimateResult": {
         "type": "object",
         "required": [
-          "estimated_fee",
+          "fee_in_token_ui",
+          "fee_in_token",
           "conversion_rate"
         ],
         "properties": {
@@ -5214,9 +5215,13 @@
             "type": "string",
             "description": "Conversion rate from XLM to token (as string)"
           },
-          "estimated_fee": {
+          "fee_in_token": {
             "type": "string",
-            "description": "Estimated fee in token amount (as string for precision)"
+            "description": "Estimated fee in token amount (raw units as string)"
+          },
+          "fee_in_token_ui": {
+            "type": "string",
+            "description": "Estimated fee in token amount (decimal UI representation as string)"
           }
         }
       },
@@ -6079,6 +6084,7 @@
         "required": [
           "transaction",
           "fee_in_token",
+          "fee_in_token_ui",
           "fee_in_stroops",
           "fee_token",
           "valid_until"
@@ -6090,7 +6096,11 @@
           },
           "fee_in_token": {
             "type": "string",
-            "description": "Fee amount in token (as string)"
+            "description": "Fee amount in token (raw units as string)"
+          },
+          "fee_in_token_ui": {
+            "type": "string",
+            "description": "Fee amount in token (decimal UI representation as string)"
           },
           "fee_token": {
             "type": "string",
