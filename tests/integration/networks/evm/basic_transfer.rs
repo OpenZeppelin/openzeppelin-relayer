@@ -1,15 +1,14 @@
 //! Basic EVM transfer integration tests
-//!
-//! Tests basic ETH transfers on EVM networks.
 
 use crate::integration::common::{
-    client::{CreateRelayerRequest, RelayerClient},
+    client::RelayerClient,
     confirmation::{wait_for_receipt, ReceiptConfig},
     network_selection::get_test_networks,
     registry::TestRegistry,
 };
-use openzeppelin_relayer::models::relayer::RelayerNetworkType;
 use serial_test::serial;
+
+use super::helpers::{setup_test_relayer, verify_network_ready};
 
 /// Burn address for test transfers
 const BURN_ADDRESS: &str = "0x000000000000000000000000000000000000dEaD";
@@ -17,94 +16,17 @@ const BURN_ADDRESS: &str = "0x000000000000000000000000000000000000dEaD";
 /// Test value for transfers (0.0001 ETH in wei)
 const TRANSFER_VALUE: &str = "100000000000000";
 
-/// Run a basic transfer test for a single EVM network
 async fn run_basic_transfer_test(network: &str) -> eyre::Result<()> {
     println!("\n{}", "=".repeat(60));
     println!("Testing basic transfer on: {}", network);
     println!("{}\n", "=".repeat(60));
 
-    // Load registry and get network config
     let registry = TestRegistry::load()?;
-    let network_config = registry.get_network(network)?;
+    verify_network_ready(&registry, network)?;
 
-    // Verify it's an EVM network
-    if network_config.network_type != "evm" {
-        println!("Skipping {} - not an EVM network", network);
-        return Ok(());
-    }
-
-    // Verify network is ready for testing
-    let readiness = registry.validate_readiness(network)?;
-    if !readiness.ready {
-        return Err(eyre::eyre!(
-            "Network {} is not ready: enabled={}, has_signer={}, has_contracts={}",
-            network,
-            readiness.enabled,
-            readiness.has_signer,
-            readiness.has_contracts
-        ));
-    }
-
-    // Create client from environment
     let client = RelayerClient::from_env()?;
+    let relayer = setup_test_relayer(&client, &registry, network).await?;
 
-    // Create relayer request (ID will be generated as {network}-{signer_id})
-    let create_request = CreateRelayerRequest {
-        id: None, // Will be auto-generated
-        name: format!("Test - {} - {}", network, network_config.signer.id),
-        network: network_config.network_name.to_string(),
-        paused: false,
-        network_type: RelayerNetworkType::Evm,
-        policies: None,
-        signer_id: network_config.signer.id.clone(),
-        notification_id: None,
-        custom_rpc_urls: None,
-    };
-
-    // Get or create the relayer (reuses existing if available)
-    let relayer = client.get_or_create_relayer(create_request).await?;
-
-    println!(
-        "Created relayer {} with address {:?}, system_disabled: {:?}, disabled_reason: {:?}",
-        relayer.id, relayer.address, relayer.system_disabled, relayer.disabled_reason
-    );
-
-    // Check if relayer is disabled
-    if relayer.system_disabled == Some(true) {
-        let reason = relayer
-            .disabled_reason
-            .map(|r| format!("{:?}", r))
-            .unwrap_or_else(|| "unknown".to_string());
-
-        // Warn about disabled status but continue with the test
-        // The relayer service may mark relayers as disabled during RPC validation checks,
-        // but they can still send transactions successfully
-        println!(
-            "Warning: Relayer initially marked as disabled: {}. Attempting to send transaction anyway...",
-            reason
-        );
-    }
-
-    // Wait for health check to run and update balance
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-
-    let relayer_status = client.get_relayer(&relayer.id).await?;
-    if relayer_status.system_disabled == Some(true) {
-        let reason = relayer_status
-            .disabled_reason
-            .map(|r| format!("{:?}", r))
-            .unwrap_or_else(|| "unknown".to_string());
-
-        // Warn about disabled status but continue with the test
-        // The relayer service may mark relayers as disabled during RPC validation checks,
-        // but they can still send transactions successfully
-        println!(
-            "Warning: Relayer marked as disabled: {}. Attempting to send transaction anyway...",
-            reason
-        );
-    }
-
-    // Prepare transaction request
     let tx_request = serde_json::json!({
         "to": BURN_ADDRESS,
         "value": TRANSFER_VALUE,
@@ -113,17 +35,13 @@ async fn run_basic_transfer_test(network: &str) -> eyre::Result<()> {
         "speed": "fast"
     });
 
-    // Send the transaction
     let tx_response = client.send_transaction(&relayer.id, tx_request).await?;
-
     println!(
         "Sent transaction {} with status {}",
         tx_response.id, tx_response.status
     );
 
-    // Wait for confirmation with network-aware timing
     let receipt_config = ReceiptConfig::from_network(network)?;
-
     println!(
         "Waiting for confirmation (poll: {}ms, max wait: {}ms)",
         receipt_config.poll_interval_ms, receipt_config.max_wait_ms
@@ -131,15 +49,12 @@ async fn run_basic_transfer_test(network: &str) -> eyre::Result<()> {
 
     wait_for_receipt(&client, &relayer.id, &tx_response.id, &receipt_config).await?;
 
-    // Get final transaction status
     let final_tx = client.get_transaction(&relayer.id, &tx_response.id).await?;
-
     println!(
         "Transaction confirmed! Hash: {:?}, Status: {}",
         final_tx.hash, final_tx.status
     );
 
-    // Assert transaction was successful
     if final_tx.status != "confirmed" && final_tx.status != "mined" {
         return Err(eyre::eyre!(
             "Transaction status should be confirmed or mined, got: {}",
@@ -152,40 +67,22 @@ async fn run_basic_transfer_test(network: &str) -> eyre::Result<()> {
     }
 
     println!("Test completed successfully for {}\n", network);
-
     Ok(())
 }
 
 /// Test basic ETH transfer on all selected EVM networks
-///
-/// Networks are selected via:
-/// - TEST_NETWORKS env var (comma-separated list)
-/// - TEST_TAGS env var (e.g., "evm,quick")
-/// - TEST_MODE env var (quick, ci, full)
-///
-/// This test:
-/// 1. Gets the list of networks to test
-/// 2. Filters for EVM networks
-/// 3. For each network:
-///    - Creates a relayer
-///    - Sends a small ETH transfer to the burn address
-///    - Waits for confirmation
-///    - Cleans up
 #[tokio::test]
 #[ignore = "Requires running relayer and funded signer"]
 #[serial]
 async fn test_evm_basic_transfer() {
-    // Get networks to test based on environment configuration
     let networks = get_test_networks().expect("Failed to get test networks");
 
     if networks.is_empty() {
         panic!("No networks selected for testing");
     }
 
-    // Load registry to filter for EVM networks
     let registry = TestRegistry::load().expect("Failed to load test registry");
 
-    // Filter for EVM networks only
     let evm_networks: Vec<String> = networks
         .into_iter()
         .filter(|network| {

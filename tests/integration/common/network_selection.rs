@@ -88,7 +88,7 @@ pub fn get_test_networks() -> Result<Vec<String>> {
     if let Ok(tags_str) = env::var("TEST_TAGS") {
         let tags_str = tags_str.trim();
         if !tags_str.is_empty() {
-            return select_by_tags(&tags_str, &registry);
+            return select_by_tags(tags_str, &registry);
         }
     }
 
@@ -192,7 +192,7 @@ pub fn load_full_testnets() -> Result<Vec<String>> {
         let path = entry.path();
 
         // Skip non-JSON files
-        if !path.extension().map_or(false, |ext| ext == "json") {
+        if path.extension().is_none_or(|ext| ext != "json") {
             continue;
         }
 
@@ -224,100 +224,6 @@ pub fn load_full_testnets() -> Result<Vec<String>> {
     testnets.dedup();
 
     Ok(testnets)
-}
-
-/// Filter networks to only include ready ones
-///
-/// If TEST_READY_ONLY is set to "true", filters out networks that aren't ready
-pub fn get_ready_networks(networks: Vec<String>) -> Result<Vec<String>> {
-    let ready_only = env::var("TEST_READY_ONLY")
-        .unwrap_or_else(|_| "false".to_string())
-        .to_lowercase()
-        == "true";
-
-    if !ready_only {
-        return Ok(networks);
-    }
-
-    let registry = TestRegistry::load()?;
-
-    let ready: Vec<String> = networks
-        .into_iter()
-        .filter(|network| {
-            registry
-                .validate_readiness(network)
-                .map(|status| status.ready)
-                .unwrap_or(false)
-        })
-        .collect();
-
-    if ready.is_empty() {
-        return Err(eyre::eyre!(
-            "No ready networks found. Ensure signers are funded and contracts are deployed."
-        ));
-    }
-
-    Ok(ready)
-}
-
-/// Report network readiness status
-///
-/// Provides a detailed report of which networks are ready for testing
-pub fn report_network_readiness() -> Result<()> {
-    let registry = TestRegistry::load()?;
-    let selected = get_test_networks()?;
-
-    println!("\n{}", "=".repeat(70));
-    println!("Integration Test Network Readiness Report");
-    println!("{}\n", "=".repeat(70));
-
-    let mut ready_count = 0;
-
-    for network in &selected {
-        match registry.validate_readiness(network) {
-            Ok(status) => {
-                if status.ready {
-                    ready_count += 1;
-                    println!("✅ {}: READY", network);
-
-                    if let Ok(config) = registry.get_network(network) {
-                        println!("   Type: {}", config.network_type);
-                        if !config.tags.is_empty() {
-                            println!("   Tags: {}", config.tags.join(", "));
-                        }
-                    }
-                } else {
-                    println!("⚠️  {}: NOT READY", network);
-                    if !status.enabled {
-                        println!("   - Network is disabled");
-                    }
-                    if !status.has_signer {
-                        println!("   - Missing funded signer");
-                    }
-                    if !status.has_contracts && !status.missing_contracts.is_empty() {
-                        println!(
-                            "   - Missing contracts: {}",
-                            status.missing_contracts.join(", ")
-                        );
-                    }
-                }
-            }
-            Err(e) => {
-                println!("❌ {}: ERROR - {}", network, e);
-            }
-        }
-        println!();
-    }
-
-    println!("{}", "=".repeat(70));
-    println!("Summary: {}/{} networks ready", ready_count, selected.len());
-    println!("{}\n", "=".repeat(70));
-
-    if ready_count == 0 {
-        return Err(eyre::eyre!("No networks are ready for testing"));
-    }
-
-    Ok(())
 }
 
 /// Check if the current test run should test a specific network

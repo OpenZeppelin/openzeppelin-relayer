@@ -13,17 +13,14 @@ use serial_test::serial;
 #[ignore = "Requires running relayer and funded signer"]
 #[serial]
 async fn test_relayer_crud() {
-    // Get networks to test
     let networks = get_test_networks().expect("Failed to get test networks");
 
     if networks.is_empty() {
         panic!("No networks selected for testing");
     }
 
-    // Load registry to filter for EVM networks
     let registry = TestRegistry::load().expect("Failed to load test registry");
 
-    // Get first EVM network
     let network = networks
         .iter()
         .find(|n| {
@@ -42,7 +39,6 @@ async fn test_relayer_crud() {
 
     let client = RelayerClient::from_env().expect("Failed to create RelayerClient");
 
-    // Clean up any existing relayers for this network to avoid conflicts
     let cleanup_count = client
         .delete_all_relayers_by_network(network)
         .await
@@ -55,7 +51,6 @@ async fn test_relayer_crud() {
         );
     }
 
-    // Create relayer with unique UUID for testing CRUD
     let relayer_id = uuid::Uuid::new_v4().to_string();
     let create_request = CreateRelayerRequest {
         id: Some(relayer_id.clone()),
@@ -80,7 +75,6 @@ async fn test_relayer_crud() {
     assert_eq!(created.network_type, RelayerNetworkType::Evm);
     assert!(!created.paused);
 
-    // Get relayer details
     let fetched = client
         .get_relayer(&relayer_id)
         .await
@@ -98,15 +92,12 @@ async fn test_relayer_crud() {
     assert_eq!(fetched.signer_id, network_config.signer.id);
     assert!(fetched.address.is_some(), "Relayer should have an address");
 
-    // Delete relayer
     client
         .delete_relayer(&relayer_id)
         .await
         .expect("Failed to delete relayer");
-
     println!("Deleted relayer: {}", relayer_id);
 
-    // Verify relayer is deleted
     let result = client.get_relayer(&relayer_id).await;
     assert!(result.is_err(), "Relayer should not exist after deletion");
 
@@ -140,17 +131,14 @@ async fn test_get_nonexistent_relayer() {
 #[ignore = "Requires running relayer and funded signer"]
 #[serial]
 async fn test_delete_all_relayers_by_network() {
-    // Get networks to test
     let networks = get_test_networks().expect("Failed to get test networks");
 
     if networks.is_empty() {
         panic!("No networks selected for testing");
     }
 
-    // Load registry to filter for EVM networks
     let registry = TestRegistry::load().expect("Failed to load test registry");
 
-    // Get first EVM network
     let network = networks
         .iter()
         .find(|n| {
@@ -169,7 +157,6 @@ async fn test_delete_all_relayers_by_network() {
 
     let client = RelayerClient::from_env().expect("Failed to create RelayerClient");
 
-    // Clean up any existing relayers for this network
     let initial_cleanup = client
         .delete_all_relayers_by_network(network)
         .await
@@ -182,7 +169,6 @@ async fn test_delete_all_relayers_by_network() {
         );
     }
 
-    // Create a single test relayer (only one relayer per signer+network allowed)
     let relayer_id = uuid::Uuid::new_v4().to_string();
     let create_request = CreateRelayerRequest {
         id: Some(relayer_id.clone()),
@@ -203,7 +189,6 @@ async fn test_delete_all_relayers_by_network() {
 
     println!("Created relayer: {}", created.id);
 
-    // List all relayers to verify creation
     let all_relayers = client
         .list_relayers()
         .await
@@ -219,7 +204,6 @@ async fn test_delete_all_relayers_by_network() {
         "Should have at least 1 relayer for the network"
     );
 
-    // Delete all relayers for the network
     let deleted_count = client
         .delete_all_relayers_by_network(network)
         .await
@@ -228,7 +212,6 @@ async fn test_delete_all_relayers_by_network() {
     println!("Deleted {} relayers for {}", deleted_count, network);
     assert!(deleted_count >= 1, "Should have deleted at least 1 relayer");
 
-    // Verify all relayers are deleted
     let remaining_relayers = client
         .list_relayers()
         .await

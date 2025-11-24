@@ -118,11 +118,6 @@ impl TestRegistry {
         })
     }
 
-    /// Get all network names in the registry
-    pub fn network_names(&self) -> Vec<String> {
-        self.networks.keys().cloned().collect()
-    }
-
     /// Get networks by type (evm, solana, stellar)
     pub fn networks_by_type(&self, network_type: &str) -> Vec<String> {
         self.networks
@@ -171,15 +166,6 @@ impl TestRegistry {
             .collect()
     }
 
-    /// Get all enabled networks
-    pub fn enabled_networks(&self) -> Vec<String> {
-        self.networks
-            .iter()
-            .filter(|(_, config)| config.enabled)
-            .map(|(name, _)| name.clone())
-            .collect()
-    }
-
     /// Validate if a network is ready for testing
     ///
     /// A network is ready if:
@@ -214,12 +200,10 @@ impl TestRegistry {
         let ready = config.enabled && has_real_signer && has_contracts;
 
         Ok(ReadinessStatus {
-            network: network.to_string(),
             ready,
             enabled: config.enabled,
             has_signer: has_real_signer,
             has_contracts,
-            missing_contracts,
         })
     }
 }
@@ -227,12 +211,10 @@ impl TestRegistry {
 /// Status of a network's readiness for testing
 #[derive(Debug, Clone)]
 pub struct ReadinessStatus {
-    pub network: String,
     pub ready: bool,
     pub enabled: bool,
     pub has_signer: bool,
     pub has_contracts: bool,
-    pub missing_contracts: Vec<String>,
 }
 
 #[cfg(test)]

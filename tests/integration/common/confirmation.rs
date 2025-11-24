@@ -120,7 +120,7 @@ fn load_network_timing(network: &str) -> Result<(u64, u32)> {
         let entry = entry?;
         let path = entry.path();
 
-        if !path.extension().map_or(false, |ext| ext == "json") {
+        if path.extension().is_none_or(|ext| ext != "json") {
             continue;
         }
 
