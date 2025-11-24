@@ -342,10 +342,49 @@ where
     }
 
     /// Checks the relayer's XLM balance and triggers token swap if it falls below the
-    /// specified threshold. Delegates to `handle_token_swap_request` which handles all
-    /// balance checking and swap logic.
+    /// specified threshold. Only proceeds with swap if balance is below the configured
+    /// min_balance_threshold.
     async fn check_balance_and_trigger_token_swap_if_needed(&self) -> Result<(), RelayerError> {
-        // handle_token_swap_request already checks balance and performs swaps if needed
+        let policy = self.relayer.policies.get_stellar_policy();
+
+        // Check if swap config exists and has a threshold configured
+        let swap_config = match policy.get_swap_config() {
+            Some(config) => config,
+            None => {
+                debug!(
+                    relayer_id = %self.relayer.id,
+                    "No swap configuration specified; skipping balance check"
+                );
+                return Ok(());
+            }
+        };
+
+        // Check balance against threshold if configured
+        if let Some(threshold) = swap_config.min_balance_threshold {
+            let balance_response = self.get_balance().await?;
+            let current_balance = u64::try_from(balance_response.balance).map_err(|_| {
+                RelayerError::Internal("Account balance exceeds u64 maximum value".to_string())
+            })?;
+
+            if current_balance >= threshold {
+                debug!(
+                    relayer_id = %self.relayer.id,
+                    balance = current_balance,
+                    threshold = threshold,
+                    "XLM balance is above threshold, no swap needed"
+                );
+                return Ok(());
+            }
+
+            debug!(
+                relayer_id = %self.relayer.id,
+                balance = current_balance,
+                threshold = threshold,
+                "XLM balance is below threshold, triggering token swap"
+            );
+        }
+
+        // Proceed with token swap
         let _swap_results = self
             .handle_token_swap_request(self.relayer.id.clone())
             .await?;
@@ -602,10 +641,6 @@ where
                     .await?;
             }
         }
-
-        self.check_balance_and_trigger_token_swap_if_needed()
-            .await?;
-
         debug!(
             "Stellar relayer initialized successfully: {}",
             self.relayer.id
@@ -619,19 +654,61 @@ where
             self.relayer.id
         );
 
+        let mut failures = Vec::new();
+
+        // Check sequence synchronization
         match self.sync_sequence().await {
             Ok(_) => {
                 debug!(
-                    "all health checks passed for Stellar relayer {}",
+                    "sequence sync passed for Stellar relayer {}",
                     self.relayer.id
                 );
-                Ok(())
             }
             Err(e) => {
                 let reason = HealthCheckFailure::SequenceSyncFailed(e.to_string());
-                warn!("health checks failed: {:?}", reason);
-                Err(vec![reason])
+                warn!("sequence sync failed: {:?}", reason);
+                failures.push(reason);
             }
+        }
+
+        // Check balance and trigger token swap if fee_payment_strategy is User
+        // Note: Swap failures are logged but don't cause health check failures
+        // to avoid disabling the relayer due to transient swap issues
+        let policy = self.relayer.policies.get_stellar_policy();
+        if matches!(
+            policy.fee_payment_strategy,
+            Some(StellarFeePaymentStrategy::User)
+        ) {
+            debug!(
+                "checking balance and attempting token swap for user fee payment strategy relayer {}",
+                self.relayer.id
+            );
+            if let Err(e) = self.check_balance_and_trigger_token_swap_if_needed().await {
+                warn!(
+                    relayer_id = %self.relayer.id,
+                    error = %e,
+                    "Balance check or token swap failed, but not treating as health check failure"
+                );
+            } else {
+                debug!(
+                    "balance check and token swap completed for Stellar relayer {}",
+                    self.relayer.id
+                );
+            }
+        }
+
+        if failures.is_empty() {
+            debug!(
+                "all health checks passed for Stellar relayer {}",
+                self.relayer.id
+            );
+            Ok(())
+        } else {
+            warn!(
+                "health checks failed for Stellar relayer {}: {:?}",
+                self.relayer.id, failures
+            );
+            Err(failures)
         }
     }
 

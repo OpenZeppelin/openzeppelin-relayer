@@ -38,7 +38,7 @@ First, configure a Stellar relayer in your `config.json`:
       "signer_id": "local-signer",
       "network_type": "stellar",
       "policies": {
-        "fee_payment_strategy": "relayer",
+        "fee_payment_strategy": "user",
         "min_balance": 100000000,
         "max_fee": 100000,
         "allowed_tokens": [
@@ -86,7 +86,7 @@ List of tokens that can be used for fee payment. Each token can have:
 #### `swap_config` (Global)
 Configuration for converting collected tokens back to XLM:
 
-- **`strategies`**: DEX strategies to use (currently supports `"order-book"`)
+- **`strategies`**: DEX strategies to use (currently supports `order-book`)
 - **`cron_schedule`**: Schedule for automatic token swaps (e.g., `"0 */6 * * *"` = every 6 hours)
 - **`min_balance_threshold`**: Minimum XLM balance (in stroops) before triggering swaps
 
