@@ -2291,4 +2291,150 @@ mod tests {
             panic!("Expected ForbiddenError for system disabled relayer");
         }
     }
+
+    #[actix_web::test]
+    async fn test_quote_sponsored_transaction_relayer_not_found() {
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        let request = SponsoredTransactionQuoteRequest::Stellar(
+            crate::models::StellarFeeEstimateRequestParams {
+                transaction_xdr: Some("test-xdr".to_string()),
+                operations: None,
+                source_account: None,
+                fee_token: "native".to_string(),
+            },
+        );
+
+        let result = quote_sponsored_transaction(
+            "nonexistent-relayer".to_string(),
+            request,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::NotFound(msg)) = result {
+            assert!(msg.contains("Relayer with ID nonexistent-relayer not found"));
+        } else {
+            panic!("Expected NotFound error for nonexistent relayer");
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_quote_sponsored_transaction_relayer_disabled() {
+        let mut relayer = create_mock_relayer("disabled-relayer".to_string(), false);
+        relayer.paused = true;
+        relayer.network_type = NetworkType::Stellar;
+        relayer.policies = crate::models::RelayerNetworkPolicy::Stellar(RelayerStellarPolicy {
+            fee_payment_strategy: Some(StellarFeePaymentStrategy::User),
+            ..Default::default()
+        });
+        let network = create_mock_stellar_network();
+        let signer = create_mock_signer();
+        let app_state = create_mock_app_state(
+            None,
+            Some(vec![relayer]),
+            Some(vec![signer]),
+            Some(vec![network]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = SponsoredTransactionQuoteRequest::Stellar(
+            crate::models::StellarFeeEstimateRequestParams {
+                transaction_xdr: Some("test-xdr".to_string()),
+                operations: None,
+                source_account: None,
+                fee_token: "native".to_string(),
+            },
+        );
+
+        let result = quote_sponsored_transaction(
+            "disabled-relayer".to_string(),
+            request,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::ForbiddenError(msg)) = result {
+            assert!(msg.contains("Relayer paused"));
+        } else {
+            panic!("Expected ForbiddenError for paused relayer");
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_build_sponsored_transaction_relayer_not_found() {
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        let request = SponsoredTransactionBuildRequest::Stellar(
+            crate::models::StellarPrepareTransactionRequestParams {
+                transaction_xdr: Some("test-xdr".to_string()),
+                operations: None,
+                source_account: None,
+                fee_token: "native".to_string(),
+            },
+        );
+
+        let result = build_sponsored_transaction(
+            "nonexistent-relayer".to_string(),
+            request,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::NotFound(msg)) = result {
+            assert!(msg.contains("Relayer with ID nonexistent-relayer not found"));
+        } else {
+            panic!("Expected NotFound error for nonexistent relayer");
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_build_sponsored_transaction_relayer_disabled() {
+        let mut relayer = create_mock_relayer("disabled-relayer".to_string(), false);
+        relayer.paused = true;
+        relayer.network_type = NetworkType::Stellar;
+        relayer.policies = crate::models::RelayerNetworkPolicy::Stellar(RelayerStellarPolicy {
+            fee_payment_strategy: Some(StellarFeePaymentStrategy::User),
+            ..Default::default()
+        });
+        let network = create_mock_stellar_network();
+        let signer = create_mock_signer();
+        let app_state = create_mock_app_state(
+            None,
+            Some(vec![relayer]),
+            Some(vec![signer]),
+            Some(vec![network]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = SponsoredTransactionBuildRequest::Stellar(
+            crate::models::StellarPrepareTransactionRequestParams {
+                transaction_xdr: Some("test-xdr".to_string()),
+                operations: None,
+                source_account: None,
+                fee_token: "native".to_string(),
+            },
+        );
+
+        let result = build_sponsored_transaction(
+            "disabled-relayer".to_string(),
+            request,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::ForbiddenError(msg)) = result {
+            assert!(msg.contains("Relayer paused"));
+        } else {
+            panic!("Expected ForbiddenError for paused relayer");
+        }
+    }
 }

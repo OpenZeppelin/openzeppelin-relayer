@@ -2673,4 +2673,61 @@ mod tests {
             _ => panic!("Expected Solana status"),
         }
     }
+
+    // GasAbstractionTrait tests
+    // These are passthrough methods to RPC handlers, so we verify:
+    // 1. Wrong network type returns ValidationError
+    // The actual RPC handler functionality (including method calls) is tested in the RPC handler tests
+    // Note: We can't easily mock the RPC handler here due to type constraints in TestCtx,
+    // but the passthrough behavior is verified through the RPC handler tests.
+
+    #[tokio::test]
+    async fn test_quote_sponsored_transaction_wrong_network() {
+        let ctx = TestCtx::default();
+        let solana_relayer = ctx.into_relayer().await;
+
+        // Use Stellar request instead of Solana
+        let request = SponsoredTransactionQuoteRequest::Stellar(
+            crate::models::StellarFeeEstimateRequestParams {
+                transaction_xdr: Some("test-xdr".to_string()),
+                operations: None,
+                source_account: None,
+                fee_token: "native".to_string(),
+            },
+        );
+
+        let result = solana_relayer.quote_sponsored_transaction(request).await;
+        assert!(result.is_err());
+
+        if let Err(RelayerError::ValidationError(msg)) = result {
+            assert!(msg.contains("Expected Solana fee estimate request parameters"));
+        } else {
+            panic!("Expected ValidationError for wrong network type");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_build_sponsored_transaction_wrong_network() {
+        let ctx = TestCtx::default();
+        let solana_relayer = ctx.into_relayer().await;
+
+        // Use Stellar request instead of Solana
+        let request = SponsoredTransactionBuildRequest::Stellar(
+            crate::models::StellarPrepareTransactionRequestParams {
+                transaction_xdr: Some("test-xdr".to_string()),
+                operations: None,
+                source_account: None,
+                fee_token: "native".to_string(),
+            },
+        );
+
+        let result = solana_relayer.build_sponsored_transaction(request).await;
+        assert!(result.is_err());
+
+        if let Err(RelayerError::ValidationError(msg)) = result {
+            assert!(msg.contains("Expected Solana prepare transaction request parameters"));
+        } else {
+            panic!("Expected ValidationError for wrong network type");
+        }
+    }
 }

@@ -346,16 +346,14 @@ where
 mod tests {
     use super::*;
     use crate::{
-        domain::SignTransactionResponse,
-        models::{DecoratedSignature, JsonRpcId, NetworkTransactionData, RepositoryError},
-        services::provider::ProviderError,
+        domain::{transaction::stellar::test_helpers::*, SignTransactionResponse},
+        models::{DecoratedSignature, JsonRpcId, RepositoryError},
+        services::{
+            provider::ProviderError, signer::MockSigner, stellar_dex::MockStellarDexServiceTrait,
+        },
     };
-    use soroban_rs::xdr::{
-        BytesM, Memo, MuxedAccount, Operation, OperationBody, PaymentOp, Preconditions, ScSymbol,
-        ScVal, SequenceNumber, Signature, SignatureHint, Transaction, TransactionExt,
-        TransactionV1Envelope, Uint256, VecM, WriteXdr,
-    };
-    use stellar_strkey::ed25519::PublicKey;
+    use soroban_rs::xdr::{BytesM, ScSymbol, ScVal, Signature, SignatureHint};
+    use std::future::ready;
 
     struct MockCounter {
         sequence: u64,
@@ -499,178 +497,13 @@ mod tests {
         }
     }
 
-    struct MockSigner {
-        address: String,
-    }
-
-    #[async_trait::async_trait]
-    impl Signer for MockSigner {
-        async fn address(&self) -> Result<crate::models::Address, crate::models::SignerError> {
-            Ok(crate::models::Address::Stellar(self.address.clone()))
-        }
-
-        async fn sign_transaction(
-            &self,
-            _data: NetworkTransactionData,
-        ) -> Result<SignTransactionResponse, crate::models::SignerError> {
-            let sig_bytes: Vec<u8> = vec![1u8; 64];
-            let sig_bytes_m: BytesM<64> = sig_bytes.try_into().unwrap();
-            Ok(SignTransactionResponse::Stellar(
-                crate::domain::SignTransactionResponseStellar {
-                    signature: DecoratedSignature {
-                        hint: SignatureHint([0; 4]),
-                        signature: Signature(sig_bytes_m),
-                    },
-                },
-            ))
-        }
-    }
-
-    struct MockDexService;
-
-    #[async_trait::async_trait]
-    impl StellarDexServiceTrait for MockDexService {
-        async fn get_token_to_xlm_quote(
-            &self,
-            _asset_id: &str,
-            amount: u64,
-            _slippage: f32,
-            _asset_decimals: Option<u8>,
-        ) -> Result<
-            crate::services::stellar_dex::StellarQuoteResponse,
-            crate::services::stellar_dex::StellarDexServiceError,
-        > {
-            // Return a quote that converts 1:1 for native, or 1:100 for other tokens
-            // This is a simple mock - in real tests you'd want more control
-            let out_amount = if _asset_id == "native" {
-                amount
-            } else {
-                amount * 100 // Assume token is worth 100x XLM
-            };
-
-            Ok(crate::services::stellar_dex::StellarQuoteResponse {
-                input_asset: _asset_id.to_string(),
-                output_asset: "native".to_string(),
-                in_amount: amount,
-                out_amount,
-                price_impact_pct: 0.0,
-                slippage_bps: 100,
-                path: None,
-            })
-        }
-
-        async fn get_xlm_to_token_quote(
-            &self,
-            asset_id: &str,
-            amount: u64,
-            _slippage: f32,
-            _asset_decimals: Option<u8>,
-        ) -> Result<
-            crate::services::stellar_dex::StellarQuoteResponse,
-            crate::services::stellar_dex::StellarDexServiceError,
-        > {
-            // Return a quote that converts 1:1 for native, or 100:1 for other tokens (XLM to token)
-            // This is a simple mock - in real tests you'd want more control
-            let out_amount = if asset_id == "native" {
-                amount
-            } else {
-                amount / 100 // Assume 100 XLM = 1 token
-            };
-
-            Ok(crate::services::stellar_dex::StellarQuoteResponse {
-                input_asset: "native".to_string(),
-                output_asset: asset_id.to_string(),
-                in_amount: amount,
-                out_amount,
-                price_impact_pct: 0.0,
-                slippage_bps: 100,
-                path: None,
-            })
-        }
-
-        async fn execute_swap(
-            &self,
-            params: crate::services::stellar_dex::SwapTransactionParams,
-        ) -> Result<
-            crate::services::stellar_dex::SwapExecutionResult,
-            crate::services::stellar_dex::StellarDexServiceError,
-        > {
-            // Mock implementation - return a fake transaction hash and destination amount
-            // For testing, assume 1:1 conversion for native, or use a simple multiplier
-            let destination_amount = if params.source_asset == "native" {
-                params.amount
-            } else {
-                params.amount * 100 // Assume token is worth 100x XLM for testing
-            };
-
-            Ok(crate::services::stellar_dex::SwapExecutionResult {
-                transaction_hash: "mock_tx_hash".to_string(),
-                destination_amount,
-            })
-        }
-
-        async fn prepare_swap_transaction(
-            &self,
-            _params: crate::services::stellar_dex::SwapTransactionParams,
-        ) -> Result<
-            (String, crate::services::stellar_dex::StellarQuoteResponse),
-            crate::services::stellar_dex::StellarDexServiceError,
-        > {
-            unimplemented!()
-        }
-
-        fn supported_asset_types(
-            &self,
-        ) -> std::collections::HashSet<crate::services::stellar_dex::AssetType> {
-            std::collections::HashSet::new()
-        }
-
-        fn can_handle_asset(&self, _asset_id: &str) -> bool {
-            true
-        }
-    }
-
     fn create_test_envelope(source_account: &str) -> TransactionEnvelope {
-        let pk = PublicKey::from_string(source_account).unwrap();
-        let source = MuxedAccount::Ed25519(Uint256(pk.0));
-
-        let dest_pk =
-            PublicKey::from_string("GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ")
-                .unwrap();
-
-        // Create a payment operation
-        let payment_op = PaymentOp {
-            destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
-            asset: soroban_rs::xdr::Asset::Native,
-            amount: 1000000,
-        };
-
-        let operation = Operation {
-            source_account: None,
-            body: OperationBody::Payment(payment_op),
-        };
-
-        let operations: VecM<Operation, 100> = vec![operation].try_into().unwrap();
-
-        let tx = Transaction {
-            source_account: source,
-            fee: 100,
-            seq_num: SequenceNumber(0), // Will be updated
-            cond: Preconditions::None,
-            memo: Memo::None,
-            operations,
-            ext: TransactionExt::V0,
-        };
-
-        TransactionEnvelope::Tx(TransactionV1Envelope {
-            tx,
-            signatures: VecM::default(),
-        })
+        create_simple_v1_envelope(source_account, TEST_PK_2)
     }
 
     #[tokio::test]
     async fn test_process_unsigned_xdr_valid_source() {
-        let relayer_address = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+        let relayer_address = TEST_PK;
         let relayer_id = "test-relayer";
         let expected_sequence = 42i64;
 
@@ -678,9 +511,26 @@ mod tests {
             sequence: expected_sequence as u64,
         };
         let provider = MockProvider;
-        let signer = MockSigner {
-            address: "test-signer-address".to_string(),
-        };
+        let mut signer = MockSigner::new();
+
+        // Mock signer expectations
+        signer.expect_address().returning(|| {
+            Box::pin(ready(Ok(crate::models::Address::Stellar(
+                "test-signer-address".to_string(),
+            ))))
+        });
+        signer.expect_sign_transaction().returning(|_| {
+            let sig_bytes: Vec<u8> = vec![1u8; 64];
+            let sig_bytes_m: BytesM<64> = sig_bytes.try_into().unwrap();
+            Box::pin(ready(Ok(SignTransactionResponse::Stellar(
+                crate::domain::SignTransactionResponseStellar {
+                    signature: DecoratedSignature {
+                        hint: SignatureHint([0; 4]),
+                        signature: Signature(sig_bytes_m),
+                    },
+                },
+            ))))
+        });
 
         // Create envelope with matching source
         let envelope = create_test_envelope(relayer_address);
@@ -700,7 +550,7 @@ mod tests {
             signed_envelope_xdr: None,
         };
 
-        let dex_service = MockDexService;
+        let dex_service = MockStellarDexServiceTrait::new();
         let result = process_unsigned_xdr(
             &counter,
             relayer_id,
@@ -722,15 +572,32 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_unsigned_xdr_invalid_source() {
-        let relayer_address = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+        let relayer_address = TEST_PK;
         let different_address = "GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ";
         let relayer_id = "test-relayer";
 
         let counter = MockCounter { sequence: 42 };
         let provider = MockProvider;
-        let signer = MockSigner {
-            address: "test-signer-address".to_string(),
-        };
+        let mut signer = MockSigner::new();
+
+        // Mock signer expectations
+        signer.expect_address().returning(|| {
+            Box::pin(ready(Ok(crate::models::Address::Stellar(
+                "test-signer-address".to_string(),
+            ))))
+        });
+        signer.expect_sign_transaction().returning(|_| {
+            let sig_bytes: Vec<u8> = vec![1u8; 64];
+            let sig_bytes_m: BytesM<64> = sig_bytes.try_into().unwrap();
+            Box::pin(ready(Ok(SignTransactionResponse::Stellar(
+                crate::domain::SignTransactionResponseStellar {
+                    signature: DecoratedSignature {
+                        hint: SignatureHint([0; 4]),
+                        signature: Signature(sig_bytes_m),
+                    },
+                },
+            ))))
+        });
 
         // Create envelope with different source
         let envelope = create_test_envelope(different_address);
@@ -750,7 +617,7 @@ mod tests {
             signed_envelope_xdr: None,
         };
 
-        let dex_service = MockDexService;
+        let dex_service = MockStellarDexServiceTrait::new();
         let result = process_unsigned_xdr(
             &counter,
             relayer_id,
@@ -774,14 +641,31 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_unsigned_xdr_fee_update() {
-        let relayer_address = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+        let relayer_address = TEST_PK;
         let relayer_id = "test-relayer";
 
         let counter = MockCounter { sequence: 42 };
         let provider = MockProvider;
-        let signer = MockSigner {
-            address: "test-signer-address".to_string(),
-        };
+        let mut signer = MockSigner::new();
+
+        // Mock signer expectations
+        signer.expect_address().returning(|| {
+            Box::pin(ready(Ok(crate::models::Address::Stellar(
+                "test-signer-address".to_string(),
+            ))))
+        });
+        signer.expect_sign_transaction().returning(|_| {
+            let sig_bytes: Vec<u8> = vec![1u8; 64];
+            let sig_bytes_m: BytesM<64> = sig_bytes.try_into().unwrap();
+            Box::pin(ready(Ok(SignTransactionResponse::Stellar(
+                crate::domain::SignTransactionResponseStellar {
+                    signature: DecoratedSignature {
+                        hint: SignatureHint([0; 4]),
+                        signature: Signature(sig_bytes_m),
+                    },
+                },
+            ))))
+        });
 
         // Create envelope with low fee
         let mut envelope = create_test_envelope(relayer_address);
@@ -804,7 +688,7 @@ mod tests {
             signed_envelope_xdr: None,
         };
 
-        let dex_service = MockDexService;
+        let dex_service = MockStellarDexServiceTrait::new();
         let result = process_unsigned_xdr(
             &counter,
             relayer_id,
@@ -836,14 +720,31 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_unsigned_xdr_wrong_input_type() {
-        let relayer_address = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+        let relayer_address = TEST_PK;
         let relayer_id = "test-relayer";
 
         let counter = MockCounter { sequence: 42 };
         let provider = MockProvider;
-        let signer = MockSigner {
-            address: "test-signer-address".to_string(),
-        };
+        let mut signer = MockSigner::new();
+
+        // Mock signer expectations
+        signer.expect_address().returning(|| {
+            Box::pin(ready(Ok(crate::models::Address::Stellar(
+                "test-signer-address".to_string(),
+            ))))
+        });
+        signer.expect_sign_transaction().returning(|_| {
+            let sig_bytes: Vec<u8> = vec![1u8; 64];
+            let sig_bytes_m: BytesM<64> = sig_bytes.try_into().unwrap();
+            Box::pin(ready(Ok(SignTransactionResponse::Stellar(
+                crate::domain::SignTransactionResponseStellar {
+                    signature: DecoratedSignature {
+                        hint: SignatureHint([0; 4]),
+                        signature: Signature(sig_bytes_m),
+                    },
+                },
+            ))))
+        });
 
         // Create stellar data with wrong input type
         let stellar_data = StellarTransactionData {
@@ -860,7 +761,7 @@ mod tests {
             signed_envelope_xdr: None,
         };
 
-        let dex_service = MockDexService;
+        let dex_service = MockStellarDexServiceTrait::new();
         let result = process_unsigned_xdr(
             &counter,
             relayer_id,
@@ -892,9 +793,10 @@ mod xdr_transaction_tests {
     use crate::domain::transaction::stellar::test_helpers::*;
     use crate::domain::SignTransactionResponse;
     use crate::models::{NetworkTransactionData, RepositoryError, TransactionStatus};
+    use crate::services::stellar_dex::MockStellarDexServiceTrait;
     use soroban_rs::xdr::{
-        Memo, MuxedAccount, Transaction, TransactionEnvelope, TransactionExt,
-        TransactionV1Envelope, Uint256, VecM,
+        Limits, Memo, MuxedAccount, Transaction, TransactionEnvelope, TransactionExt,
+        TransactionV1Envelope, Uint256, VecM, WriteXdr,
     };
     use stellar_strkey::ed25519::PublicKey;
 
@@ -1263,4 +1165,60 @@ mod xdr_transaction_tests {
             result
         );
     }
+
+    #[tokio::test]
+    async fn test_process_unsigned_xdr_rejects_user_fee_payment_strategy() {
+        use crate::models::{RelayerStellarPolicy, StellarFeePaymentStrategy};
+
+        let relayer = create_test_relayer();
+        let mocks = default_test_mocks();
+
+        let tx = create_test_transaction(&relayer.id);
+        let mut stellar_data = tx
+            .network_data
+            .get_stellar_transaction_data()
+            .unwrap()
+            .clone();
+
+        // Create unsigned XDR with a simple payment operation
+        let envelope = create_unsigned_xdr_envelope(&relayer.address);
+        let xdr = envelope.to_xdr_base64(Limits::none()).unwrap();
+        stellar_data.transaction_input = TransactionInput::UnsignedXdr(xdr);
+
+        // Create a policy with User fee payment strategy (gasless mode)
+        let mut policy = RelayerStellarPolicy::default();
+        policy.fee_payment_strategy = Some(StellarFeePaymentStrategy::User);
+
+        // Call process_unsigned_xdr directly with the policy
+        let dex_service = MockStellarDexServiceTrait::new();
+        let result = process_unsigned_xdr(
+            &mocks.counter,
+            &relayer.id,
+            &relayer.address,
+            stellar_data,
+            &mocks.provider,
+            &mocks.signer,
+            Some(&policy),
+            &dex_service,
+        )
+        .await;
+
+        // Should return a validation error
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            TransactionError::ValidationError(msg) => {
+                assert!(msg.contains("Gasless transactions"));
+                assert!(msg.contains("User fee payment strategy"));
+                assert!(msg.contains("not supported via unsigned_xdr path"));
+                assert!(msg.contains("fee_bump"));
+            }
+            other => panic!("Expected ValidationError, got: {:?}", other),
+        }
+    }
+
+    // Note: Additional tests for ChangeTrust and swap exceptions, as well as testing the Relayer
+    // fee payment strategy path, would require complex mocking of get_ledger_entries and proper
+    // mock setup. The core validation logic for User fee payment strategy rejection is tested above.
+    // Integration tests for these exception cases exist in the full test suite.
 }

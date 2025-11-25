@@ -27,7 +27,7 @@ use super::{JobType, TokenSwapRequest};
 #[cfg(test)]
 use mockall::automock;
 
-#[derive(Debug, Error, Serialize)]
+#[derive(Debug, Error, Serialize, Clone)]
 pub enum JobProducerError {
     #[error("Queue error: {0}")]
     QueueError(String),

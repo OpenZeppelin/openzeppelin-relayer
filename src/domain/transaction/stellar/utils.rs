@@ -1104,13 +1104,105 @@ pub fn set_time_bounds(
     Ok(())
 }
 
+/// Extract asset identifier from CreditAlphanum4
+fn credit_alphanum4_to_asset_id(
+    alpha4: &AlphaNum4,
+) -> Result<String, StellarTransactionUtilsError> {
+    // Extract code (trim null bytes)
+    let code_bytes = alpha4.asset_code.0;
+    let code_len = code_bytes.iter().position(|&b| b == 0).unwrap_or(4);
+    let code = String::from_utf8(code_bytes[..code_len].to_vec()).map_err(|e| {
+        StellarTransactionUtilsError::InvalidAssetFormat(format!("Invalid asset code: {e}"))
+    })?;
+
+    // Extract issuer
+    let issuer = match &alpha4.issuer.0 {
+        XdrPublicKey::PublicKeyTypeEd25519(uint256) => {
+            let bytes: [u8; 32] = uint256.0;
+            let pk = PublicKey(bytes);
+            pk.to_string()
+        }
+    };
+
+    Ok(format!("{code}:{issuer}"))
+}
+
+/// Extract asset identifier from CreditAlphanum12
+fn credit_alphanum12_to_asset_id(
+    alpha12: &AlphaNum12,
+) -> Result<String, StellarTransactionUtilsError> {
+    // Extract code (trim null bytes)
+    let code_bytes = alpha12.asset_code.0;
+    let code_len = code_bytes.iter().position(|&b| b == 0).unwrap_or(12);
+    let code = String::from_utf8(code_bytes[..code_len].to_vec()).map_err(|e| {
+        StellarTransactionUtilsError::InvalidAssetFormat(format!("Invalid asset code: {e}"))
+    })?;
+
+    // Extract issuer
+    let issuer = match &alpha12.issuer.0 {
+        XdrPublicKey::PublicKeyTypeEd25519(uint256) => {
+            let bytes: [u8; 32] = uint256.0;
+            let pk = PublicKey(bytes);
+            pk.to_string()
+        }
+    };
+
+    Ok(format!("{code}:{issuer}"))
+}
+
+/// Convert ChangeTrustAsset XDR to asset identifier string
+///
+/// Returns `Some(asset_id)` for CreditAlphanum4 and CreditAlphanum12 assets,
+/// or `None` for Native or PoolShare (which don't have asset identifiers).
+///
+/// # Arguments
+///
+/// * `change_trust_asset` - The ChangeTrustAsset to convert
+///
+/// # Returns
+///
+/// Asset identifier string in "CODE:ISSUER" format, or None for Native/PoolShare
+pub fn change_trust_asset_to_asset_id(
+    change_trust_asset: &ChangeTrustAsset,
+) -> Result<Option<String>, StellarTransactionUtilsError> {
+    match change_trust_asset {
+        ChangeTrustAsset::Native | ChangeTrustAsset::PoolShare(_) => Ok(None),
+        ChangeTrustAsset::CreditAlphanum4(alpha4) => {
+            // Convert to Asset and use the unified function
+            let asset = Asset::CreditAlphanum4(alpha4.clone());
+            asset_to_asset_id(&asset).map(Some)
+        }
+        ChangeTrustAsset::CreditAlphanum12(alpha12) => {
+            // Convert to Asset and use the unified function
+            let asset = Asset::CreditAlphanum12(alpha12.clone());
+            asset_to_asset_id(&asset).map(Some)
+        }
+    }
+}
+
+/// Convert Asset XDR to asset identifier string
+///
+/// # Arguments
+///
+/// * `asset` - The Asset to convert
+///
+/// # Returns
+///
+/// Asset identifier string ("native" for Native, or "CODE:ISSUER" for credit assets)
+pub fn asset_to_asset_id(asset: &Asset) -> Result<String, StellarTransactionUtilsError> {
+    match asset {
+        Asset::Native => Ok("native".to_string()),
+        Asset::CreditAlphanum4(alpha4) => credit_alphanum4_to_asset_id(alpha4),
+        Asset::CreditAlphanum12(alpha12) => credit_alphanum12_to_asset_id(alpha12),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::transaction::stellar::test_helpers::TEST_PK;
     use crate::models::AssetSpec;
     use crate::models::{AuthSpec, ContractSource, WasmSource};
-
-    const TEST_PK: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
 
     fn payment_op(destination: &str) -> OperationSpec {
         OperationSpec::Payment {
@@ -1489,95 +1581,1282 @@ mod tests {
     }
 }
 
-/// Extract asset identifier from CreditAlphanum4
-fn credit_alphanum4_to_asset_id(
-    alpha4: &AlphaNum4,
-) -> Result<String, StellarTransactionUtilsError> {
-    // Extract code (trim null bytes)
-    let code_bytes = alpha4.asset_code.0;
-    let code_len = code_bytes.iter().position(|&b| b == 0).unwrap_or(4);
-    let code = String::from_utf8(code_bytes[..code_len].to_vec()).map_err(|e| {
-        StellarTransactionUtilsError::InvalidAssetFormat(format!("Invalid asset code: {e}"))
-    })?;
-
-    // Extract issuer
-    let issuer = match &alpha4.issuer.0 {
-        XdrPublicKey::PublicKeyTypeEd25519(uint256) => {
-            let bytes: [u8; 32] = uint256.0;
-            let pk = PublicKey(bytes);
-            pk.to_string()
-        }
+#[cfg(test)]
+mod parse_contract_address_tests {
+    use super::*;
+    use crate::domain::transaction::stellar::test_helpers::{
+        TEST_CONTRACT, TEST_PK as TEST_ACCOUNT,
     };
 
-    Ok(format!("{code}:{issuer}"))
+    #[test]
+    fn test_parse_valid_contract_address() {
+        let result = parse_contract_address(TEST_CONTRACT);
+        assert!(result.is_ok());
+
+        let hash = result.unwrap();
+        assert_eq!(hash.0.len(), 32);
+    }
+
+    #[test]
+    fn test_parse_invalid_contract_address() {
+        let result = parse_contract_address("INVALID_CONTRACT");
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::InvalidContractAddress(addr, _) => {
+                assert_eq!(addr, "INVALID_CONTRACT");
+            }
+            _ => panic!("Expected InvalidContractAddress error"),
+        }
+    }
+
+    #[test]
+    fn test_parse_contract_address_wrong_prefix() {
+        // Try with an account address instead of contract
+        let result = parse_contract_address(TEST_ACCOUNT);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_empty_contract_address() {
+        let result = parse_contract_address("");
+        assert!(result.is_err());
+    }
 }
 
-/// Extract asset identifier from CreditAlphanum12
-fn credit_alphanum12_to_asset_id(
-    alpha12: &AlphaNum12,
-) -> Result<String, StellarTransactionUtilsError> {
-    // Extract code (trim null bytes)
-    let code_bytes = alpha12.asset_code.0;
-    let code_len = code_bytes.iter().position(|&b| b == 0).unwrap_or(12);
-    let code = String::from_utf8(code_bytes[..code_len].to_vec()).map_err(|e| {
-        StellarTransactionUtilsError::InvalidAssetFormat(format!("Invalid asset code: {e}"))
-    })?;
+// ============================================================================
+// Contract Data Key Tests
+// ============================================================================
 
-    // Extract issuer
-    let issuer = match &alpha12.issuer.0 {
-        XdrPublicKey::PublicKeyTypeEd25519(uint256) => {
-            let bytes: [u8; 32] = uint256.0;
-            let pk = PublicKey(bytes);
-            pk.to_string()
+#[cfg(test)]
+mod create_contract_data_key_tests {
+    use super::*;
+    use crate::domain::transaction::stellar::test_helpers::TEST_PK as TEST_ACCOUNT;
+    use stellar_strkey::ed25519::PublicKey;
+
+    #[test]
+    fn test_create_key_without_address() {
+        let result = create_contract_data_key("Balance", None);
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            ScVal::Symbol(sym) => {
+                assert_eq!(sym.to_string(), "Balance");
+            }
+            _ => panic!("Expected Symbol ScVal"),
         }
+    }
+
+    #[test]
+    fn test_create_key_with_address() {
+        let pk = PublicKey::from_string(TEST_ACCOUNT).unwrap();
+        let uint256 = Uint256(pk.0);
+        let account_id = AccountId(soroban_rs::xdr::PublicKey::PublicKeyTypeEd25519(uint256));
+        let sc_address = ScAddress::Account(account_id);
+
+        let result = create_contract_data_key("Balance", Some(sc_address.clone()));
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            ScVal::Vec(Some(vec)) => {
+                assert_eq!(vec.0.len(), 2);
+                match &vec.0[0] {
+                    ScVal::Symbol(sym) => assert_eq!(sym.to_string(), "Balance"),
+                    _ => panic!("Expected Symbol as first element"),
+                }
+                match &vec.0[1] {
+                    ScVal::Address(addr) => assert_eq!(addr, &sc_address),
+                    _ => panic!("Expected Address as second element"),
+                }
+            }
+            _ => panic!("Expected Vec ScVal"),
+        }
+    }
+
+    #[test]
+    fn test_create_key_invalid_symbol() {
+        // Test with symbol that's too long or has invalid characters
+        let very_long_symbol = "a".repeat(100);
+        let result = create_contract_data_key(&very_long_symbol, None);
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::SymbolCreationFailed(_, _) => {}
+            _ => panic!("Expected SymbolCreationFailed error"),
+        }
+    }
+
+    #[test]
+    fn test_create_key_decimals() {
+        let result = create_contract_data_key("Decimals", None);
+        assert!(result.is_ok());
+    }
+}
+
+// ============================================================================
+// Extract ScVal from Contract Data Tests
+// ============================================================================
+
+#[cfg(test)]
+mod extract_scval_from_contract_data_tests {
+    use super::*;
+    use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+    use soroban_rs::xdr::{
+        ContractDataDurability, ContractDataEntry, ExtensionPoint, Hash, LedgerEntry,
+        LedgerEntryData, LedgerEntryExt, ScSymbol, ScVal, WriteXdr,
     };
 
-    Ok(format!("{code}:{issuer}"))
-}
+    #[test]
+    fn test_extract_scval_success() {
+        let contract_data = ContractDataEntry {
+            ext: ExtensionPoint::V0,
+            contract: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
+            key: ScVal::Symbol(ScSymbol::try_from("test").unwrap()),
+            durability: ContractDataDurability::Persistent,
+            val: ScVal::U32(42),
+        };
 
-/// Convert ChangeTrustAsset XDR to asset identifier string
-///
-/// Returns `Some(asset_id)` for CreditAlphanum4 and CreditAlphanum12 assets,
-/// or `None` for Native or PoolShare (which don't have asset identifiers).
-///
-/// # Arguments
-///
-/// * `change_trust_asset` - The ChangeTrustAsset to convert
-///
-/// # Returns
-///
-/// Asset identifier string in "CODE:ISSUER" format, or None for Native/PoolShare
-pub fn change_trust_asset_to_asset_id(
-    change_trust_asset: &ChangeTrustAsset,
-) -> Result<Option<String>, StellarTransactionUtilsError> {
-    match change_trust_asset {
-        ChangeTrustAsset::Native | ChangeTrustAsset::PoolShare(_) => Ok(None),
-        ChangeTrustAsset::CreditAlphanum4(alpha4) => {
-            // Convert to Asset and use the unified function
-            let asset = Asset::CreditAlphanum4(alpha4.clone());
-            asset_to_asset_id(&asset).map(Some)
+        let ledger_entry = LedgerEntry {
+            last_modified_ledger_seq: 100,
+            data: LedgerEntryData::ContractData(contract_data),
+            ext: LedgerEntryExt::V0,
+        };
+
+        let xdr = ledger_entry
+            .data
+            .to_xdr_base64(soroban_rs::xdr::Limits::none())
+            .unwrap();
+
+        let response = GetLedgerEntriesResponse {
+            entries: Some(vec![LedgerEntryResult {
+                key: "test_key".to_string(),
+                xdr,
+                last_modified_ledger: 100,
+                live_until_ledger_seq_ledger_seq: None,
+            }]),
+            latest_ledger: 100,
+        };
+
+        let result = extract_scval_from_contract_data(&response, "test");
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            ScVal::U32(val) => assert_eq!(val, 42),
+            _ => panic!("Expected U32 ScVal"),
         }
-        ChangeTrustAsset::CreditAlphanum12(alpha12) => {
-            // Convert to Asset and use the unified function
-            let asset = Asset::CreditAlphanum12(alpha12.clone());
-            asset_to_asset_id(&asset).map(Some)
+    }
+
+    #[test]
+    fn test_extract_scval_no_entries() {
+        let response = GetLedgerEntriesResponse {
+            entries: None,
+            latest_ledger: 100,
+        };
+
+        let result = extract_scval_from_contract_data(&response, "test");
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::NoEntriesFound(_) => {}
+            _ => panic!("Expected NoEntriesFound error"),
+        }
+    }
+
+    #[test]
+    fn test_extract_scval_empty_entries() {
+        let response = GetLedgerEntriesResponse {
+            entries: Some(vec![]),
+            latest_ledger: 100,
+        };
+
+        let result = extract_scval_from_contract_data(&response, "test");
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::EmptyEntries(_) => {}
+            _ => panic!("Expected EmptyEntries error"),
         }
     }
 }
 
-/// Convert Asset XDR to asset identifier string
-///
-/// # Arguments
-///
-/// * `asset` - The Asset to convert
-///
-/// # Returns
-///
-/// Asset identifier string ("native" for Native, or "CODE:ISSUER" for credit assets)
-pub fn asset_to_asset_id(asset: &Asset) -> Result<String, StellarTransactionUtilsError> {
-    match asset {
-        Asset::Native => Ok("native".to_string()),
-        Asset::CreditAlphanum4(alpha4) => credit_alphanum4_to_asset_id(alpha4),
-        Asset::CreditAlphanum12(alpha12) => credit_alphanum12_to_asset_id(alpha12),
+// ============================================================================
+// Extract u32 from ScVal Tests
+// ============================================================================
+
+#[cfg(test)]
+mod extract_u32_from_scval_tests {
+    use super::*;
+    use soroban_rs::xdr::{Int128Parts, ScVal, UInt128Parts};
+
+    #[test]
+    fn test_extract_from_u32() {
+        let val = ScVal::U32(42);
+        assert_eq!(extract_u32_from_scval(&val, "test"), Some(42));
+    }
+
+    #[test]
+    fn test_extract_from_i32_positive() {
+        let val = ScVal::I32(100);
+        assert_eq!(extract_u32_from_scval(&val, "test"), Some(100));
+    }
+
+    #[test]
+    fn test_extract_from_i32_negative() {
+        let val = ScVal::I32(-1);
+        assert_eq!(extract_u32_from_scval(&val, "test"), None);
+    }
+
+    #[test]
+    fn test_extract_from_u64() {
+        let val = ScVal::U64(1000);
+        assert_eq!(extract_u32_from_scval(&val, "test"), Some(1000));
+    }
+
+    #[test]
+    fn test_extract_from_u64_overflow() {
+        let val = ScVal::U64(u64::MAX);
+        assert_eq!(extract_u32_from_scval(&val, "test"), None);
+    }
+
+    #[test]
+    fn test_extract_from_i64_positive() {
+        let val = ScVal::I64(500);
+        assert_eq!(extract_u32_from_scval(&val, "test"), Some(500));
+    }
+
+    #[test]
+    fn test_extract_from_i64_negative() {
+        let val = ScVal::I64(-500);
+        assert_eq!(extract_u32_from_scval(&val, "test"), None);
+    }
+
+    #[test]
+    fn test_extract_from_u128_small() {
+        let val = ScVal::U128(UInt128Parts { hi: 0, lo: 255 });
+        assert_eq!(extract_u32_from_scval(&val, "test"), Some(255));
+    }
+
+    #[test]
+    fn test_extract_from_u128_hi_set() {
+        let val = ScVal::U128(UInt128Parts { hi: 1, lo: 0 });
+        assert_eq!(extract_u32_from_scval(&val, "test"), None);
+    }
+
+    #[test]
+    fn test_extract_from_i128_small() {
+        let val = ScVal::I128(Int128Parts { hi: 0, lo: 123 });
+        assert_eq!(extract_u32_from_scval(&val, "test"), Some(123));
+    }
+
+    #[test]
+    fn test_extract_from_unsupported_type() {
+        let val = ScVal::Bool(true);
+        assert_eq!(extract_u32_from_scval(&val, "test"), None);
+    }
+}
+
+// ============================================================================
+// Amount to UI Amount Tests
+// ============================================================================
+
+#[cfg(test)]
+mod amount_to_ui_amount_tests {
+    use super::*;
+
+    #[test]
+    fn test_zero_decimals() {
+        assert_eq!(amount_to_ui_amount(100, 0), "100");
+        assert_eq!(amount_to_ui_amount(0, 0), "0");
+    }
+
+    #[test]
+    fn test_with_decimals_no_padding() {
+        assert_eq!(amount_to_ui_amount(1000000, 6), "1");
+        assert_eq!(amount_to_ui_amount(1500000, 6), "1.5");
+        assert_eq!(amount_to_ui_amount(1234567, 6), "1.234567");
+    }
+
+    #[test]
+    fn test_with_decimals_needs_padding() {
+        assert_eq!(amount_to_ui_amount(1, 6), "0.000001");
+        assert_eq!(amount_to_ui_amount(100, 6), "0.0001");
+        assert_eq!(amount_to_ui_amount(1000, 3), "1");
+    }
+
+    #[test]
+    fn test_trailing_zeros_removed() {
+        assert_eq!(amount_to_ui_amount(1000000, 6), "1");
+        assert_eq!(amount_to_ui_amount(1500000, 7), "0.15");
+        assert_eq!(amount_to_ui_amount(10000000, 7), "1");
+    }
+
+    #[test]
+    fn test_zero_amount() {
+        assert_eq!(amount_to_ui_amount(0, 6), "0");
+        assert_eq!(amount_to_ui_amount(0, 0), "0");
+    }
+
+    #[test]
+    fn test_xlm_7_decimals() {
+        assert_eq!(amount_to_ui_amount(10000000, 7), "1");
+        assert_eq!(amount_to_ui_amount(15000000, 7), "1.5");
+        assert_eq!(amount_to_ui_amount(100, 7), "0.00001");
+    }
+}
+
+// // ============================================================================
+// // Count Operations Tests
+// // ============================================================================
+
+// #[cfg(test)]
+#[cfg(test)]
+mod count_operations_tests {
+    use super::*;
+    use soroban_rs::xdr::{
+        Limits, MuxedAccount, Operation, OperationBody, PaymentOp, TransactionV1Envelope, Uint256,
+        WriteXdr,
+    };
+
+    #[test]
+    fn test_count_operations_from_xdr() {
+        use soroban_rs::xdr::{Memo, Preconditions, SequenceNumber, Transaction, TransactionExt};
+
+        // Create two payment operations
+        let payment_op = Operation {
+            source_account: None,
+            body: OperationBody::Payment(PaymentOp {
+                destination: MuxedAccount::Ed25519(Uint256([1u8; 32])),
+                asset: Asset::Native,
+                amount: 100,
+            }),
+        };
+
+        let operations = vec![payment_op.clone(), payment_op].try_into().unwrap();
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256([0u8; 32])),
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            cond: Preconditions::None,
+            memo: Memo::None,
+            operations,
+            ext: TransactionExt::V0,
+        };
+
+        let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        let xdr = envelope.to_xdr_base64(Limits::none()).unwrap();
+        let count = count_operations_from_xdr(&xdr).unwrap();
+
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_count_operations_invalid_xdr() {
+        let result = count_operations_from_xdr("invalid_xdr");
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::XdrParseFailed(_) => {}
+            _ => panic!("Expected XdrParseFailed error"),
+        }
+    }
+}
+
+// ============================================================================
+// Estimate Base Fee Tests
+// ============================================================================
+
+#[cfg(test)]
+mod estimate_base_fee_tests {
+    use super::*;
+
+    #[test]
+    fn test_single_operation() {
+        assert_eq!(estimate_base_fee(1), 100);
+    }
+
+    #[test]
+    fn test_multiple_operations() {
+        assert_eq!(estimate_base_fee(5), 500);
+        assert_eq!(estimate_base_fee(10), 1000);
+    }
+
+    #[test]
+    fn test_zero_operations() {
+        // Should return fee for at least 1 operation
+        assert_eq!(estimate_base_fee(0), 100);
+    }
+
+    #[test]
+    fn test_large_number_of_operations() {
+        assert_eq!(estimate_base_fee(100), 10000);
+    }
+}
+
+// ============================================================================
+// Create Fee Payment Operation Tests
+// ============================================================================
+
+#[cfg(test)]
+mod create_fee_payment_operation_tests {
+    use super::*;
+    use crate::domain::transaction::stellar::test_helpers::TEST_PK as TEST_ACCOUNT;
+
+    #[test]
+    fn test_create_native_payment() {
+        let result = create_fee_payment_operation(TEST_ACCOUNT, "native", 1000);
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            OperationSpec::Payment {
+                destination,
+                amount,
+                asset,
+            } => {
+                assert_eq!(destination, TEST_ACCOUNT);
+                assert_eq!(amount, 1000);
+                assert!(matches!(asset, AssetSpec::Native));
+            }
+            _ => panic!("Expected Payment operation"),
+        }
+    }
+
+    #[test]
+    fn test_create_credit4_payment() {
+        let result = create_fee_payment_operation(
+            TEST_ACCOUNT,
+            "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+            5000,
+        );
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            OperationSpec::Payment {
+                destination,
+                amount,
+                asset,
+            } => {
+                assert_eq!(destination, TEST_ACCOUNT);
+                assert_eq!(amount, 5000);
+                match asset {
+                    AssetSpec::Credit4 { code, issuer } => {
+                        assert_eq!(code, "USDC");
+                        assert_eq!(
+                            issuer,
+                            "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+                        );
+                    }
+                    _ => panic!("Expected Credit4 asset"),
+                }
+            }
+            _ => panic!("Expected Payment operation"),
+        }
+    }
+
+    #[test]
+    fn test_create_credit12_payment() {
+        let result = create_fee_payment_operation(
+            TEST_ACCOUNT,
+            "LONGASSETNAM:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+            2000,
+        );
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            OperationSpec::Payment {
+                destination,
+                amount,
+                asset,
+            } => {
+                assert_eq!(destination, TEST_ACCOUNT);
+                assert_eq!(amount, 2000);
+                match asset {
+                    AssetSpec::Credit12 { code, issuer } => {
+                        assert_eq!(code, "LONGASSETNAM");
+                        assert_eq!(
+                            issuer,
+                            "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+                        );
+                    }
+                    _ => panic!("Expected Credit12 asset"),
+                }
+            }
+            _ => panic!("Expected Payment operation"),
+        }
+    }
+
+    #[test]
+    fn test_create_payment_empty_asset() {
+        let result = create_fee_payment_operation(TEST_ACCOUNT, "", 1000);
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            OperationSpec::Payment { asset, .. } => {
+                assert!(matches!(asset, AssetSpec::Native));
+            }
+            _ => panic!("Expected Payment operation"),
+        }
+    }
+
+    #[test]
+    fn test_create_payment_invalid_format() {
+        let result = create_fee_payment_operation(TEST_ACCOUNT, "INVALID_FORMAT", 1000);
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::InvalidAssetFormat(_) => {}
+            _ => panic!("Expected InvalidAssetFormat error"),
+        }
+    }
+
+    #[test]
+    fn test_create_payment_asset_code_too_long() {
+        let result = create_fee_payment_operation(
+            TEST_ACCOUNT,
+            "VERYLONGASSETCODE:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+            1000,
+        );
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::AssetCodeTooLong(max_len, _) => {
+                assert_eq!(max_len, 12);
+            }
+            _ => panic!("Expected AssetCodeTooLong error"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod parse_account_id_tests {
+    use super::*;
+    use crate::domain::transaction::stellar::test_helpers::TEST_PK;
+
+    #[test]
+    fn test_parse_account_id_valid() {
+        let result = parse_account_id(TEST_PK);
+        assert!(result.is_ok());
+
+        let account_id = result.unwrap();
+        match account_id.0 {
+            soroban_rs::xdr::PublicKey::PublicKeyTypeEd25519(_) => {}
+        }
+    }
+
+    #[test]
+    fn test_parse_account_id_invalid() {
+        let result = parse_account_id("INVALID_ADDRESS");
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::InvalidAccountAddress(addr, _) => {
+                assert_eq!(addr, "INVALID_ADDRESS");
+            }
+            _ => panic!("Expected InvalidAccountAddress error"),
+        }
+    }
+
+    #[test]
+    fn test_parse_account_id_empty() {
+        let result = parse_account_id("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_account_id_wrong_prefix() {
+        // Contract address instead of account
+        let result = parse_account_id("CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM");
+        assert!(result.is_err());
+    }
+}
+
+#[cfg(test)]
+mod parse_transaction_and_count_operations_tests {
+    use super::*;
+    use crate::domain::transaction::stellar::test_helpers::{
+        create_native_payment_operation, create_xdr_with_operations, TEST_PK, TEST_PK_2,
+    };
+    use serde_json::json;
+
+    fn create_test_xdr_with_operations(num_ops: usize) -> String {
+        let payment_op = create_native_payment_operation(TEST_PK_2, 100);
+        let operations = vec![payment_op; num_ops];
+        create_xdr_with_operations(TEST_PK, operations, false)
+    }
+
+    #[test]
+    fn test_parse_xdr_string() {
+        let xdr = create_test_xdr_with_operations(2);
+        let json_value = json!(xdr);
+
+        let result = parse_transaction_and_count_operations(&json_value);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 2);
+    }
+
+    #[test]
+    fn test_parse_operations_array() {
+        let json_value = json!([
+            {"type": "payment"},
+            {"type": "payment"},
+            {"type": "payment"}
+        ]);
+
+        let result = parse_transaction_and_count_operations(&json_value);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 3);
+    }
+
+    #[test]
+    fn test_parse_object_with_operations() {
+        let json_value = json!({
+            "operations": [
+                {"type": "payment"},
+                {"type": "payment"}
+            ]
+        });
+
+        let result = parse_transaction_and_count_operations(&json_value);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 2);
+    }
+
+    #[test]
+    fn test_parse_object_with_transaction_xdr() {
+        let xdr = create_test_xdr_with_operations(3);
+        let json_value = json!({
+            "transaction_xdr": xdr
+        });
+
+        let result = parse_transaction_and_count_operations(&json_value);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 3);
+    }
+
+    #[test]
+    fn test_parse_invalid_xdr() {
+        let json_value = json!("INVALID_XDR");
+
+        let result = parse_transaction_and_count_operations(&json_value);
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::XdrParseFailed(_) => {}
+            _ => panic!("Expected XdrParseFailed error"),
+        }
+    }
+
+    #[test]
+    fn test_parse_invalid_format() {
+        let json_value = json!(123);
+
+        let result = parse_transaction_and_count_operations(&json_value);
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::InvalidTransactionFormat(_) => {}
+            _ => panic!("Expected InvalidTransactionFormat error"),
+        }
+    }
+
+    #[test]
+    fn test_parse_empty_operations() {
+        let json_value = json!([]);
+
+        let result = parse_transaction_and_count_operations(&json_value);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 0);
+    }
+}
+
+#[cfg(test)]
+mod parse_transaction_envelope_tests {
+    use super::*;
+    use crate::domain::transaction::stellar::test_helpers::{
+        create_unsigned_xdr, TEST_PK, TEST_PK_2,
+    };
+    use serde_json::json;
+
+    fn create_test_xdr() -> String {
+        create_unsigned_xdr(TEST_PK, TEST_PK_2)
+    }
+
+    #[test]
+    fn test_parse_xdr_string() {
+        let xdr = create_test_xdr();
+        let json_value = json!(xdr);
+
+        let result = parse_transaction_envelope(&json_value);
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            TransactionEnvelope::Tx(_) => {}
+            _ => panic!("Expected Tx envelope"),
+        }
+    }
+
+    #[test]
+    fn test_parse_object_with_transaction_xdr() {
+        let xdr = create_test_xdr();
+        let json_value = json!({
+            "transaction_xdr": xdr
+        });
+
+        let result = parse_transaction_envelope(&json_value);
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            TransactionEnvelope::Tx(_) => {}
+            _ => panic!("Expected Tx envelope"),
+        }
+    }
+
+    #[test]
+    fn test_parse_invalid_xdr() {
+        let json_value = json!("INVALID_XDR");
+
+        let result = parse_transaction_envelope(&json_value);
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::XdrParseFailed(_) => {}
+            _ => panic!("Expected XdrParseFailed error"),
+        }
+    }
+
+    #[test]
+    fn test_parse_invalid_format() {
+        let json_value = json!(123);
+
+        let result = parse_transaction_envelope(&json_value);
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::InvalidTransactionFormat(_) => {}
+            _ => panic!("Expected InvalidTransactionFormat error"),
+        }
+    }
+
+    #[test]
+    fn test_parse_object_without_xdr() {
+        let json_value = json!({
+            "some_field": "value"
+        });
+
+        let result = parse_transaction_envelope(&json_value);
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::InvalidTransactionFormat(_) => {}
+            _ => panic!("Expected InvalidTransactionFormat error"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod add_operation_to_envelope_tests {
+    use super::*;
+    use soroban_rs::xdr::{
+        Memo, MuxedAccount, Operation, OperationBody, PaymentOp, Preconditions, SequenceNumber,
+        Transaction, TransactionExt, TransactionV0, TransactionV0Envelope, TransactionV1Envelope,
+        Uint256,
+    };
+
+    fn create_payment_op() -> Operation {
+        Operation {
+            source_account: None,
+            body: OperationBody::Payment(PaymentOp {
+                destination: MuxedAccount::Ed25519(Uint256([1u8; 32])),
+                asset: Asset::Native,
+                amount: 100,
+            }),
+        }
+    }
+
+    #[test]
+    fn test_add_operation_to_tx_v0() {
+        let payment_op = create_payment_op();
+        let operations = vec![payment_op.clone()].try_into().unwrap();
+
+        let tx = TransactionV0 {
+            source_account_ed25519: Uint256([0u8; 32]),
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            time_bounds: None,
+            memo: Memo::None,
+            operations,
+            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+        };
+
+        let mut envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        let new_op = create_payment_op();
+        let result = add_operation_to_envelope(&mut envelope, new_op);
+
+        assert!(result.is_ok());
+
+        match envelope {
+            TransactionEnvelope::TxV0(e) => {
+                assert_eq!(e.tx.operations.len(), 2);
+                assert_eq!(e.tx.fee, 200); // 100 stroops per operation
+            }
+            _ => panic!("Expected TxV0 envelope"),
+        }
+    }
+
+    #[test]
+    fn test_add_operation_to_tx_v1() {
+        let payment_op = create_payment_op();
+        let operations = vec![payment_op.clone()].try_into().unwrap();
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256([0u8; 32])),
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            cond: Preconditions::None,
+            memo: Memo::None,
+            operations,
+            ext: TransactionExt::V0,
+        };
+
+        let mut envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        let new_op = create_payment_op();
+        let result = add_operation_to_envelope(&mut envelope, new_op);
+
+        assert!(result.is_ok());
+
+        match envelope {
+            TransactionEnvelope::Tx(e) => {
+                assert_eq!(e.tx.operations.len(), 2);
+                assert_eq!(e.tx.fee, 200); // 100 stroops per operation
+            }
+            _ => panic!("Expected Tx envelope"),
+        }
+    }
+
+    #[test]
+    fn test_add_operation_to_fee_bump_fails() {
+        // Create a simple inner transaction
+        let payment_op = create_payment_op();
+        let operations = vec![payment_op].try_into().unwrap();
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256([0u8; 32])),
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            cond: Preconditions::None,
+            memo: Memo::None,
+            operations,
+            ext: TransactionExt::V0,
+        };
+
+        let inner_envelope = TransactionV1Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        };
+
+        let inner_tx = soroban_rs::xdr::FeeBumpTransactionInnerTx::Tx(inner_envelope);
+
+        let fee_bump_tx = soroban_rs::xdr::FeeBumpTransaction {
+            fee_source: MuxedAccount::Ed25519(Uint256([2u8; 32])),
+            fee: 200,
+            inner_tx,
+            ext: soroban_rs::xdr::FeeBumpTransactionExt::V0,
+        };
+
+        let mut envelope =
+            TransactionEnvelope::TxFeeBump(soroban_rs::xdr::FeeBumpTransactionEnvelope {
+                tx: fee_bump_tx,
+                signatures: vec![].try_into().unwrap(),
+            });
+
+        let new_op = create_payment_op();
+        let result = add_operation_to_envelope(&mut envelope, new_op);
+
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::CannotModifyFeeBump => {}
+            _ => panic!("Expected CannotModifyFeeBump error"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod extract_time_bounds_tests {
+    use super::*;
+    use soroban_rs::xdr::{
+        Memo, MuxedAccount, Operation, OperationBody, PaymentOp, Preconditions, SequenceNumber,
+        TimeBounds, TimePoint, Transaction, TransactionExt, TransactionV0, TransactionV0Envelope,
+        TransactionV1Envelope, Uint256,
+    };
+
+    fn create_payment_op() -> Operation {
+        Operation {
+            source_account: None,
+            body: OperationBody::Payment(PaymentOp {
+                destination: MuxedAccount::Ed25519(Uint256([1u8; 32])),
+                asset: Asset::Native,
+                amount: 100,
+            }),
+        }
+    }
+
+    #[test]
+    fn test_extract_time_bounds_from_tx_v0_with_bounds() {
+        let payment_op = create_payment_op();
+        let operations = vec![payment_op].try_into().unwrap();
+
+        let time_bounds = TimeBounds {
+            min_time: TimePoint(0),
+            max_time: TimePoint(1000),
+        };
+
+        let tx = TransactionV0 {
+            source_account_ed25519: Uint256([0u8; 32]),
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            time_bounds: Some(time_bounds.clone()),
+            memo: Memo::None,
+            operations,
+            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+        };
+
+        let envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        let result = extract_time_bounds(&envelope);
+        assert!(result.is_some());
+
+        let bounds = result.unwrap();
+        assert_eq!(bounds.min_time.0, 0);
+        assert_eq!(bounds.max_time.0, 1000);
+    }
+
+    #[test]
+    fn test_extract_time_bounds_from_tx_v0_without_bounds() {
+        let payment_op = create_payment_op();
+        let operations = vec![payment_op].try_into().unwrap();
+
+        let tx = TransactionV0 {
+            source_account_ed25519: Uint256([0u8; 32]),
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            time_bounds: None,
+            memo: Memo::None,
+            operations,
+            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+        };
+
+        let envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        let result = extract_time_bounds(&envelope);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_time_bounds_from_tx_v1_with_time_precondition() {
+        let payment_op = create_payment_op();
+        let operations = vec![payment_op].try_into().unwrap();
+
+        let time_bounds = TimeBounds {
+            min_time: TimePoint(0),
+            max_time: TimePoint(2000),
+        };
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256([0u8; 32])),
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            cond: Preconditions::Time(time_bounds.clone()),
+            memo: Memo::None,
+            operations,
+            ext: TransactionExt::V0,
+        };
+
+        let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        let result = extract_time_bounds(&envelope);
+        assert!(result.is_some());
+
+        let bounds = result.unwrap();
+        assert_eq!(bounds.min_time.0, 0);
+        assert_eq!(bounds.max_time.0, 2000);
+    }
+
+    #[test]
+    fn test_extract_time_bounds_from_tx_v1_without_time_precondition() {
+        let payment_op = create_payment_op();
+        let operations = vec![payment_op].try_into().unwrap();
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256([0u8; 32])),
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            cond: Preconditions::None,
+            memo: Memo::None,
+            operations,
+            ext: TransactionExt::V0,
+        };
+
+        let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        let result = extract_time_bounds(&envelope);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_time_bounds_from_fee_bump() {
+        // Create inner transaction with time bounds
+        let payment_op = create_payment_op();
+        let operations = vec![payment_op].try_into().unwrap();
+
+        let time_bounds = TimeBounds {
+            min_time: TimePoint(0),
+            max_time: TimePoint(3000),
+        };
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256([0u8; 32])),
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            cond: Preconditions::Time(time_bounds.clone()),
+            memo: Memo::None,
+            operations,
+            ext: TransactionExt::V0,
+        };
+
+        let inner_envelope = TransactionV1Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        };
+
+        let inner_tx = soroban_rs::xdr::FeeBumpTransactionInnerTx::Tx(inner_envelope);
+
+        let fee_bump_tx = soroban_rs::xdr::FeeBumpTransaction {
+            fee_source: MuxedAccount::Ed25519(Uint256([2u8; 32])),
+            fee: 200,
+            inner_tx,
+            ext: soroban_rs::xdr::FeeBumpTransactionExt::V0,
+        };
+
+        let envelope =
+            TransactionEnvelope::TxFeeBump(soroban_rs::xdr::FeeBumpTransactionEnvelope {
+                tx: fee_bump_tx,
+                signatures: vec![].try_into().unwrap(),
+            });
+
+        let result = extract_time_bounds(&envelope);
+        assert!(result.is_some());
+
+        let bounds = result.unwrap();
+        assert_eq!(bounds.min_time.0, 0);
+        assert_eq!(bounds.max_time.0, 3000);
+    }
+}
+
+#[cfg(test)]
+mod set_time_bounds_tests {
+    use super::*;
+    use chrono::Utc;
+    use soroban_rs::xdr::{
+        Memo, MuxedAccount, Operation, OperationBody, PaymentOp, Preconditions, SequenceNumber,
+        TimeBounds, TimePoint, Transaction, TransactionExt, TransactionV0, TransactionV0Envelope,
+        TransactionV1Envelope, Uint256,
+    };
+
+    fn create_payment_op() -> Operation {
+        Operation {
+            source_account: None,
+            body: OperationBody::Payment(PaymentOp {
+                destination: MuxedAccount::Ed25519(Uint256([1u8; 32])),
+                asset: Asset::Native,
+                amount: 100,
+            }),
+        }
+    }
+
+    #[test]
+    fn test_set_time_bounds_on_tx_v0() {
+        let payment_op = create_payment_op();
+        let operations = vec![payment_op].try_into().unwrap();
+
+        let tx = TransactionV0 {
+            source_account_ed25519: Uint256([0u8; 32]),
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            time_bounds: None,
+            memo: Memo::None,
+            operations,
+            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+        };
+
+        let mut envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        let valid_until = Utc::now() + chrono::Duration::seconds(300);
+        let result = set_time_bounds(&mut envelope, valid_until);
+
+        assert!(result.is_ok());
+
+        match envelope {
+            TransactionEnvelope::TxV0(e) => {
+                assert!(e.tx.time_bounds.is_some());
+                let bounds = e.tx.time_bounds.unwrap();
+                assert_eq!(bounds.min_time.0, 0);
+                assert_eq!(bounds.max_time.0, valid_until.timestamp() as u64);
+            }
+            _ => panic!("Expected TxV0 envelope"),
+        }
+    }
+
+    #[test]
+    fn test_set_time_bounds_on_tx_v1() {
+        let payment_op = create_payment_op();
+        let operations = vec![payment_op].try_into().unwrap();
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256([0u8; 32])),
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            cond: Preconditions::None,
+            memo: Memo::None,
+            operations,
+            ext: TransactionExt::V0,
+        };
+
+        let mut envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        let valid_until = Utc::now() + chrono::Duration::seconds(300);
+        let result = set_time_bounds(&mut envelope, valid_until);
+
+        assert!(result.is_ok());
+
+        match envelope {
+            TransactionEnvelope::Tx(e) => match e.tx.cond {
+                Preconditions::Time(bounds) => {
+                    assert_eq!(bounds.min_time.0, 0);
+                    assert_eq!(bounds.max_time.0, valid_until.timestamp() as u64);
+                }
+                _ => panic!("Expected Time precondition"),
+            },
+            _ => panic!("Expected Tx envelope"),
+        }
+    }
+
+    #[test]
+    fn test_set_time_bounds_on_fee_bump_fails() {
+        // Create a simple inner transaction
+        let payment_op = create_payment_op();
+        let operations = vec![payment_op].try_into().unwrap();
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256([0u8; 32])),
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            cond: Preconditions::None,
+            memo: Memo::None,
+            operations,
+            ext: TransactionExt::V0,
+        };
+
+        let inner_envelope = TransactionV1Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        };
+
+        let inner_tx = soroban_rs::xdr::FeeBumpTransactionInnerTx::Tx(inner_envelope);
+
+        let fee_bump_tx = soroban_rs::xdr::FeeBumpTransaction {
+            fee_source: MuxedAccount::Ed25519(Uint256([2u8; 32])),
+            fee: 200,
+            inner_tx,
+            ext: soroban_rs::xdr::FeeBumpTransactionExt::V0,
+        };
+
+        let mut envelope =
+            TransactionEnvelope::TxFeeBump(soroban_rs::xdr::FeeBumpTransactionEnvelope {
+                tx: fee_bump_tx,
+                signatures: vec![].try_into().unwrap(),
+            });
+
+        let valid_until = Utc::now() + chrono::Duration::seconds(300);
+        let result = set_time_bounds(&mut envelope, valid_until);
+
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::CannotSetTimeBoundsOnFeeBump => {}
+            _ => panic!("Expected CannotSetTimeBoundsOnFeeBump error"),
+        }
+    }
+
+    #[test]
+    fn test_set_time_bounds_replaces_existing() {
+        let payment_op = create_payment_op();
+        let operations = vec![payment_op].try_into().unwrap();
+
+        let old_time_bounds = TimeBounds {
+            min_time: TimePoint(100),
+            max_time: TimePoint(1000),
+        };
+
+        let tx = TransactionV0 {
+            source_account_ed25519: Uint256([0u8; 32]),
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            time_bounds: Some(old_time_bounds),
+            memo: Memo::None,
+            operations,
+            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+        };
+
+        let mut envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        let valid_until = Utc::now() + chrono::Duration::seconds(300);
+        let result = set_time_bounds(&mut envelope, valid_until);
+
+        assert!(result.is_ok());
+
+        match envelope {
+            TransactionEnvelope::TxV0(e) => {
+                assert!(e.tx.time_bounds.is_some());
+                let bounds = e.tx.time_bounds.unwrap();
+                // Should replace with new bounds (min_time = 0, not 100)
+                assert_eq!(bounds.min_time.0, 0);
+                assert_eq!(bounds.max_time.0, valid_until.timestamp() as u64);
+            }
+            _ => panic!("Expected TxV0 envelope"),
+        }
     }
 }

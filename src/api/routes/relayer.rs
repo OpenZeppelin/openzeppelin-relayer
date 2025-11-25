@@ -526,6 +526,34 @@ mod tests {
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
+        // Test POST /relayers/{id}/transactions/sponsored/quote
+        let req = test::TestRequest::post()
+            .uri("/relayers/test-id/transactions/sponsored/quote")
+            .set_json(serde_json::json!({
+                "stellar": {
+                    "transaction_xdr": "test-xdr",
+                    "fee_token": "native"
+                }
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        // Route exists if status is not 404 (could be 400 for validation errors or 500 for internal errors)
+        assert_ne!(resp.status(), StatusCode::NOT_FOUND);
+
+        // Test POST /relayers/{id}/transactions/sponsored/build
+        let req = test::TestRequest::post()
+            .uri("/relayers/test-id/transactions/sponsored/build")
+            .set_json(serde_json::json!({
+                "stellar": {
+                    "transaction_xdr": "test-xdr",
+                    "fee_token": "native"
+                }
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        // Route exists if status is not 404 (could be 400 for validation errors or 500 for internal errors)
+        assert_ne!(resp.status(), StatusCode::NOT_FOUND);
+
         Ok(())
     }
 }

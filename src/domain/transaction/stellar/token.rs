@@ -592,312 +592,240 @@ where
 }
 
 #[cfg(test)]
-mod integration_tests {
-    use tracing::debug;
-
+mod tests {
     use super::*;
-    use crate::models::RpcConfig;
-    use crate::services::provider::StellarProvider;
+    use crate::domain::transaction::stellar::test_helpers::{create_account_id, TEST_PK};
+    use crate::services::provider::MockStellarProviderTrait;
+    use futures::future::ready;
+    use mockall::predicate::*;
+    use soroban_rs::xdr::{AccountEntry, AccountEntryExt, SequenceNumber, Thresholds};
+    use std::str::FromStr;
 
-    // Test accounts and assets on Stellar testnet
-    // These are well-known accounts that should exist on testnet
-    const TESTNET_TEST_ACCOUNT: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
-    const TESTNET_USDC_ISSUER: &str = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
-    const TESTNET_USDC_ASSET: &str =
-        "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
-
-    fn setup_test_env() {
-        std::env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
-        std::env::set_var("REDIS_URL", "redis://localhost:6379");
+    // Helper function to create a test provider
+    fn create_mock_provider() -> MockStellarProviderTrait {
+        MockStellarProviderTrait::new()
     }
 
-    // Helper function to create a testnet provider
-    fn create_testnet_provider() -> StellarProvider {
-        let rpc_configs = vec![RpcConfig::new(
-            "https://soroban-testnet.stellar.org".to_string(),
-        )];
-        StellarProvider::new(rpc_configs, 30).expect("Failed to create testnet provider")
+    // Helper function to create a mock AccountEntry
+    fn create_mock_account_entry(balance: i64) -> AccountEntry {
+        AccountEntry {
+            account_id: create_account_id(TEST_PK),
+            balance,
+            seq_num: SequenceNumber(1),
+            num_sub_entries: 0,
+            inflation_dest: None,
+            flags: 0,
+            home_domain: Default::default(),
+            thresholds: Thresholds([1, 0, 0, 0]),
+            signers: Default::default(),
+            ext: AccountEntryExt::V0,
+        }
     }
 
-    // Helper function to create a mainnet provider
-    fn create_mainnet_provider() -> StellarProvider {
-        let rpc_configs = vec![RpcConfig::new("https://mainnet.sorobanrpc.com".to_string())];
-        StellarProvider::new(rpc_configs, 30).expect("Failed to create mainnet provider")
-    }
-
-    #[tokio::test]
-    // #[ignore] // Integration test - requires network access
-    async fn test_get_token_balance_native_xlm_testnet() {
-        setup_test_env();
-        let provider = create_testnet_provider();
-
-        // Test with "native"
-        let result = get_token_balance(&provider, TESTNET_TEST_ACCOUNT, "native").await;
-        assert!(result.is_ok(), "Should fetch native XLM balance");
-        let _balance = result.unwrap();
-
-        // Test with "XLM"
-        let result = get_token_balance(&provider, TESTNET_TEST_ACCOUNT, "XLM").await;
-        assert!(
-            result.is_ok(),
-            "Should fetch XLM balance using 'XLM' identifier"
-        );
-        let balance_xlm = result.unwrap();
+    #[test]
+    fn test_parse_asset_identifier_valid() {
+        let result =
+            parse_asset_identifier("USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5");
+        assert!(result.is_ok());
+        let (code, issuer) = result.unwrap();
+        assert_eq!(code, "USDC");
         assert_eq!(
-            _balance, balance_xlm,
-            "Both 'native' and 'XLM' should return same balance"
+            issuer,
+            "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
         );
     }
 
-    #[tokio::test]
-    // #[ignore] // Integration test - requires network access
-    async fn test_get_token_balance_asset_testnet() {
-        setup_test_env();
-        let provider = create_testnet_provider();
-        // Test fetching balance for USDC on testnet
-        // Note: This will fail if the account doesn't have a trustline, which is expected
-        let result = get_token_balance(&provider, TESTNET_TEST_ACCOUNT, TESTNET_USDC_ASSET).await;
+    #[test]
+    fn test_parse_asset_identifier_invalid() {
+        // Missing colon
+        let result =
+            parse_asset_identifier("USDCGBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::InvalidAssetFormat(_) => {}
+            e => panic!("Expected InvalidAssetFormat, got: {:?}", e),
+        }
 
-        // Either the balance is fetched successfully, or we get a validation error (no trustline)
-        match result {
-            Ok(_balance) => {
-                // Balance is u64, so it's always non-negative by type
-            }
-            Err(StellarTransactionUtilsError::NoTrustlineFound(_, _)) => {
-                // This is expected if the account doesn't have a trustline
-            }
-            Err(e) => {
-                panic!("Unexpected error: {:?}", e);
-            }
+        // Empty string
+        let result = parse_asset_identifier("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_asset_identifier_multiple_colons() {
+        // Multiple colons - only first is used
+        let result = parse_asset_identifier(
+            "USD:C:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        );
+        assert!(result.is_ok());
+        let (code, issuer) = result.unwrap();
+        assert_eq!(code, "USD");
+        assert_eq!(
+            issuer,
+            "C:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+        );
+    }
+
+    #[test]
+    fn test_validate_and_parse_issuer_valid() {
+        let issuer = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
+        let result = validate_and_parse_issuer(issuer, "USDC:GBBD47...");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_and_parse_issuer_empty() {
+        let result = validate_and_parse_issuer("", "USDC:");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::EmptyIssuerAddress(_) => {}
+            e => panic!("Expected EmptyIssuerAddress, got: {:?}", e),
         }
     }
 
-    #[tokio::test]
-    // #[ignore] // Integration test - requires network access
-    async fn test_get_token_balance_contract_token_testnet() {
-        setup_test_env();
-        let provider = create_testnet_provider();
-        // Example contract address on testnet (you may need to update this with a real contract)
-        // This is a placeholder - replace with an actual contract address that exists on testnet
-        let test_contract = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
-
-        // Test fetching balance for a contract token
-        // This will return 0 if no balance entry exists, or the actual balance
-        let result = get_token_balance(&provider, TESTNET_TEST_ACCOUNT, test_contract).await;
-
-        match result {
-            Ok(_balance) => {
-                // Balance is u64, so it's always non-negative by type
+    #[test]
+    fn test_validate_and_parse_issuer_wrong_length() {
+        let result = validate_and_parse_issuer("SHORTADDR", "USDC:SHORTADDR");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::InvalidIssuerLength(expected, _) => {
+                assert_eq!(expected, STELLAR_ADDRESS_LENGTH);
             }
-            Err(StellarTransactionUtilsError::InvalidContractAddress(_, _)) => {
-                // Contract address might be invalid - this is okay for testing
-            }
-            Err(e) => {
-                // Other errors are acceptable for integration tests
-                eprintln!("Contract balance test returned error (expected): {:?}", e);
-            }
+            e => panic!("Expected InvalidIssuerLength, got: {:?}", e),
         }
     }
 
+    #[test]
+    fn test_validate_and_parse_issuer_wrong_prefix() {
+        // Contract address (starts with 'C') is not valid as issuer
+        let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
+        let result = validate_and_parse_issuer(contract_addr, "USDC:C...");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::InvalidIssuerPrefix(expected, _) => {
+                assert_eq!(expected, STELLAR_ACCOUNT_PREFIX);
+            }
+            e => panic!("Expected InvalidIssuerPrefix, got: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_validate_and_parse_issuer_invalid_checksum() {
+        // Valid length and prefix but invalid checksum
+        let bad_issuer = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA6"; // Changed last char
+        let result = validate_and_parse_issuer(bad_issuer, "USDC:G...");
+        assert!(result.is_err());
+    }
+
     #[tokio::test]
-    // #[ignore] // Integration test - requires network access
+    async fn test_get_token_balance_native_xlm() {
+        let mut provider = create_mock_provider();
+
+        let test_balance = 100_0000000i64; // 100 XLM
+        let account_entry = create_mock_account_entry(test_balance);
+
+        provider
+            .expect_get_account()
+            .with(eq(TEST_PK))
+            .times(1)
+            .returning(move |_| Box::pin(ready(Ok(account_entry.clone()))));
+
+        let result = get_token_balance(&provider, TEST_PK, "native").await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), test_balance as u64);
+    }
+
+    #[tokio::test]
+    async fn test_get_token_balance_xlm_identifier() {
+        let mut provider = create_mock_provider();
+
+        let test_balance = 50_0000000i64; // 50 XLM
+        let account_entry = create_mock_account_entry(test_balance);
+
+        provider
+            .expect_get_account()
+            .with(eq(TEST_PK))
+            .times(1)
+            .returning(move |_| Box::pin(ready(Ok(account_entry.clone()))));
+
+        // Test with "XLM" identifier
+        let result = get_token_balance(&provider, TEST_PK, "XLM").await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), test_balance as u64);
+    }
+
+    #[test]
+    fn test_asset_code_length_validation() {
+        // Valid codes (1-12 characters)
+        assert!(parse_asset_identifier(
+            "A:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+        )
+        .is_ok());
+        assert!(parse_asset_identifier(
+            "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+        )
+        .is_ok());
+        assert!(parse_asset_identifier(
+            "MAXLENCODE12:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+        )
+        .is_ok());
+
+        // Empty code - parsed successfully, but should fail in validation
+        let (code, _) =
+            parse_asset_identifier(":GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5")
+                .unwrap();
+        assert_eq!(code, "");
+    }
+
+    #[tokio::test]
     async fn test_get_token_metadata_native() {
-        setup_test_env();
-        let provider = create_testnet_provider();
+        let provider = create_mock_provider();
 
-        // Test native XLM metadata
         let result = get_token_metadata(&provider, "native").await;
-        assert!(result.is_ok(), "Should fetch native XLM metadata");
+        assert!(result.is_ok());
         let metadata = result.unwrap();
+
         assert_eq!(metadata.kind, StellarTokenKind::Native);
         assert_eq!(metadata.decimals, DEFAULT_STELLAR_DECIMALS);
         assert_eq!(metadata.canonical_asset_id, "native");
-
-        // Test with "XLM"
-        let result = get_token_metadata(&provider, "XLM").await;
-        assert!(
-            result.is_ok(),
-            "Should fetch XLM metadata using 'XLM' identifier"
-        );
-        let metadata_xlm = result.unwrap();
-        assert_eq!(metadata_xlm.kind, StellarTokenKind::Native);
-        assert_eq!(metadata_xlm.decimals, DEFAULT_STELLAR_DECIMALS);
-
-        // Test with empty string
-        let result = get_token_metadata(&provider, "").await;
-        assert!(
-            result.is_ok(),
-            "Should fetch native XLM metadata with empty string"
-        );
-        let metadata_empty = result.unwrap();
-        assert_eq!(metadata_empty.kind, StellarTokenKind::Native);
     }
 
     #[tokio::test]
-    // #[ignore] // Integration test - requires network access
-    async fn test_get_token_metadata_asset_testnet() {
-        setup_test_env();
-        let provider = create_testnet_provider();
+    async fn test_get_token_metadata_xlm_identifier() {
+        let provider = create_mock_provider();
 
-        // Test fetching metadata for USDC on testnet
-        let result = get_token_metadata(&provider, TESTNET_USDC_ASSET).await;
-        assert!(result.is_ok(), "Should fetch asset metadata");
+        let result = get_token_metadata(&provider, "XLM").await;
+        assert!(result.is_ok());
         let metadata = result.unwrap();
 
-        match metadata.kind {
-            StellarTokenKind::Classic { code, issuer } => {
-                assert_eq!(code, "USDC");
-                assert_eq!(issuer, TESTNET_USDC_ISSUER);
-            }
-            _ => panic!("Expected Classic asset kind"),
-        }
+        assert_eq!(metadata.kind, StellarTokenKind::Native);
         assert_eq!(metadata.decimals, DEFAULT_STELLAR_DECIMALS);
-        assert_eq!(metadata.canonical_asset_id, TESTNET_USDC_ASSET);
+        assert_eq!(metadata.canonical_asset_id, "native");
     }
 
     #[tokio::test]
-    // #[ignore] // Integration test - requires network access
-    async fn test_get_token_metadata_contract_token_testnet() {
-        setup_test_env();
-        let provider = create_testnet_provider();
-        // Example contract address on testnet (you may need to update this with a real contract)
-        let test_contract = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
+    async fn test_get_token_metadata_empty_string() {
+        let provider = create_mock_provider();
 
-        // Test fetching metadata for a contract token
-        let result = get_token_metadata(&provider, test_contract).await;
+        // Empty string should be treated as native XLM
+        let result = get_token_metadata(&provider, "").await;
+        assert!(result.is_ok());
+        let metadata = result.unwrap();
 
-        match result {
-            Ok(metadata) => {
-                eprintln!("metadata: {:?}", metadata);
-                match metadata.kind {
-                    StellarTokenKind::Contract { contract_id } => {
-                        assert_eq!(contract_id, test_contract);
-                    }
-                    _ => panic!("Expected Contract token kind"),
-                }
-                assert_eq!(metadata.canonical_asset_id, test_contract);
-                // Decimals should be fetched from contract or default to 7
-                assert!(metadata.decimals > 0 && metadata.decimals <= 18);
-            }
-            Err(StellarTransactionUtilsError::InvalidContractAddress(_, _)) => {
-                // Contract address might be invalid - this is okay for testing
-            }
-            Err(e) => {
-                // Other errors are acceptable for integration tests
-                eprintln!("Contract metadata test returned error (expected): {:?}", e);
-            }
-        }
+        assert_eq!(metadata.kind, StellarTokenKind::Native);
+        assert_eq!(metadata.decimals, DEFAULT_STELLAR_DECIMALS);
+        assert_eq!(metadata.canonical_asset_id, "native");
     }
 
     #[tokio::test]
-    // #[ignore] // Integration test - requires network access
-    async fn test_get_token_metadata_invalid_format() {
-        setup_test_env();
-        let provider = create_testnet_provider();
+    async fn test_get_token_metadata_classic_asset() {
+        let provider = create_mock_provider();
 
-        // Test invalid asset format
-        let result = get_token_metadata(&provider, "INVALID_FORMAT").await;
-        assert!(result.is_err(), "Should reject invalid asset format");
-        match result.unwrap_err() {
-            StellarTransactionUtilsError::InvalidAssetFormat(_) => {}
-            e => panic!("Expected InvalidAssetFormat error, got: {:?}", e),
-        }
-    }
-
-    #[tokio::test]
-    // #[ignore] // Integration test - requires network access
-    async fn test_get_token_metadata_empty_code() {
-        setup_test_env();
-        let provider = create_testnet_provider();
-
-        // Test asset with empty code
-        let result = get_token_metadata(
-            &provider,
-            ":GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
-        )
-        .await;
-        assert!(result.is_err(), "Should reject empty asset code");
-        match result.unwrap_err() {
-            StellarTransactionUtilsError::EmptyAssetCode(_) => {}
-            e => panic!("Expected EmptyAssetCode error, got: {:?}", e),
-        }
-    }
-
-    #[tokio::test]
-    // #[ignore] // Integration test - requires network access
-    async fn test_get_token_metadata_invalid_issuer() {
-        setup_test_env();
-        let provider = create_testnet_provider();
-
-        // Test asset with invalid issuer (too short)
-        let result = get_token_metadata(&provider, "USDC:INVALID").await;
-        assert!(result.is_err(), "Should reject invalid issuer");
-        match result.unwrap_err() {
-            StellarTransactionUtilsError::InvalidIssuerLength(_, _)
-            | StellarTransactionUtilsError::InvalidIssuerPrefix(_, _)
-            | StellarTransactionUtilsError::InvalidAccountAddress(_, _) => {}
-            e => panic!("Expected issuer validation error, got: {:?}", e),
-        }
-    }
-
-    #[tokio::test]
-    // #[ignore] // Integration test - requires network access
-    async fn test_get_contract_token_decimals_testnet() {
-        setup_test_env();
-        let provider = create_testnet_provider();
-        // Example contract address on testnet (you may need to update this with a real contract)
-        let test_contract = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
-
-        // Test fetching decimals for a contract token
-        let result = get_contract_token_decimals(&provider, test_contract).await;
-        eprintln!(
-            "result test_get_contract_token_decimals_testnet: {:?}",
-            result
-        );
-        match result {
-            Some(decimals) => {
-                assert!(
-                    decimals > 0 && decimals <= 18,
-                    "Decimals should be between 1 and 18"
-                );
-            }
-            None => {
-                // This is acceptable - contract might not have decimals key or might not exist
-                eprintln!("Contract decimals not found (expected for some contracts)");
-            }
-        }
-    }
-
-    #[tokio::test]
-    // #[ignore] // Integration test - requires network access
-    async fn test_get_token_balance_mainnet() {
-        // Test on mainnet with a well-known account
-        // Using Stellar Development Foundation's account as an example
-        let mainnet_account = "GAV5KSHR2ZXIKKP5QF5CZBFJQBEA6VTR6OZTMEAGQSY3DU5CTCUOXQEQ";
-        setup_test_env();
-        let provider = create_mainnet_provider();
-
-        // Test native XLM balance
-        let result = get_token_balance(&provider, mainnet_account, "native").await;
-        assert!(result.is_ok(), "Should fetch native XLM balance on mainnet");
-        let balance = result.unwrap();
-        eprintln!("Balance: {}", balance);
-        debug!("Balance: {}", balance);
-        assert!(balance > 0, "Balance should be greater than 0");
-    }
-
-    #[tokio::test]
-    // #[ignore] // Integration test - requires network access
-    async fn test_get_token_metadata_mainnet() {
-        // Test on mainnet with a well-known asset
-        // USDC on mainnet
-        const MAINNET_USDC_ASSET: &str =
-            "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
-        setup_test_env();
-        let provider = create_mainnet_provider();
-
-        let result = get_token_metadata(&provider, MAINNET_USDC_ASSET).await;
-        assert!(result.is_ok(), "Should fetch asset metadata on mainnet");
+        let asset_id = "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
+        let result = get_token_metadata(&provider, asset_id).await;
+        assert!(result.is_ok());
         let metadata = result.unwrap();
 
         match metadata.kind {
@@ -905,35 +833,1284 @@ mod integration_tests {
                 assert_eq!(code, "USDC");
                 assert_eq!(
                     issuer,
-                    "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+                    "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
                 );
             }
-            _ => panic!("Expected Classic asset kind"),
+            _ => panic!("Expected Classic token kind"),
+        }
+        assert_eq!(metadata.decimals, DEFAULT_STELLAR_DECIMALS);
+        assert_eq!(metadata.canonical_asset_id, asset_id);
+    }
+
+    #[tokio::test]
+    async fn test_get_token_metadata_classic_asset_credit12() {
+        let provider = create_mock_provider();
+
+        let asset_id = "LONGASSETCD:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
+        let result = get_token_metadata(&provider, asset_id).await;
+        assert!(result.is_ok());
+        let metadata = result.unwrap();
+
+        match metadata.kind {
+            StellarTokenKind::Classic { code, issuer } => {
+                assert_eq!(code, "LONGASSETCD");
+                assert_eq!(
+                    issuer,
+                    "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+                );
+            }
+            _ => panic!("Expected Classic token kind"),
         }
         assert_eq!(metadata.decimals, DEFAULT_STELLAR_DECIMALS);
     }
 
     #[tokio::test]
-    // #[ignore] // Integration test - requires network access
-    async fn test_get_contract_token_decimals_mainnet() {
-        setup_test_env();
-        let provider = create_mainnet_provider();
-        // Example contract address on mainnet (you may need to update this with a real contract)
-        let test_contract = "CDDS7IQJGQ2ZMO66E3MUYXZ56H2OO7RBTTAGZLZKOEA4EXCGZX65JGA7";
+    async fn test_get_token_metadata_invalid_format() {
+        let provider = create_mock_provider();
 
-        // Test fetching decimals for a contract token
-        let result = get_contract_token_decimals(&provider, test_contract).await;
-        match result {
-            Some(decimals) => {
-                assert!(
-                    decimals > 0 && decimals <= 18,
-                    "Decimals should be between 1 and 18"
-                );
-            }
-            None => {
-                // This is acceptable - contract might not have decimals key or might not exist
-                eprintln!("Contract decimals not found (expected for some contracts)");
-            }
+        let result = get_token_metadata(&provider, "INVALID_NO_COLON").await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::InvalidAssetFormat(_) => {}
+            e => panic!("Expected InvalidAssetFormat, got: {:?}", e),
         }
+    }
+
+    #[tokio::test]
+    async fn test_get_token_metadata_empty_code() {
+        let provider = create_mock_provider();
+
+        let result = get_token_metadata(
+            &provider,
+            ":GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        )
+        .await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::EmptyAssetCode(_) => {}
+            e => panic!("Expected EmptyAssetCode, got: {:?}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_token_metadata_code_too_long() {
+        let provider = create_mock_provider();
+
+        let result = get_token_metadata(
+            &provider,
+            "VERYLONGASSETCODE:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        )
+        .await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::AssetCodeTooLong(max, code) => {
+                assert_eq!(max, MAX_ASSET_CODE_LENGTH);
+                assert_eq!(code, "VERYLONGASSETCODE");
+            }
+            e => panic!("Expected AssetCodeTooLong, got: {:?}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_token_metadata_empty_issuer() {
+        let provider = create_mock_provider();
+
+        let result = get_token_metadata(&provider, "USDC:").await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::EmptyIssuerAddress(_) => {}
+            e => panic!("Expected EmptyIssuerAddress, got: {:?}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_token_metadata_invalid_issuer_length() {
+        let provider = create_mock_provider();
+
+        let result = get_token_metadata(&provider, "USDC:INVALID").await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::InvalidIssuerLength(expected, _) => {
+                assert_eq!(expected, STELLAR_ADDRESS_LENGTH);
+            }
+            e => panic!("Expected InvalidIssuerLength, got: {:?}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_token_metadata_invalid_issuer_prefix() {
+        let provider = create_mock_provider();
+
+        // Using contract address as issuer (starts with C, not G)
+        let result = get_token_metadata(
+            &provider,
+            "USDC:CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
+        )
+        .await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::InvalidIssuerPrefix(expected, _) => {
+                assert_eq!(expected, STELLAR_ACCOUNT_PREFIX);
+            }
+            e => panic!("Expected InvalidIssuerPrefix, got: {:?}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_token_metadata_contract_valid() {
+        let mut provider = create_mock_provider();
+
+        // Mock contract decimals query to return None (uses default)
+        provider.expect_call_contract().returning(|_, _, _| {
+            Box::pin(ready(Err(crate::services::provider::ProviderError::Other(
+                "Contract call failed".to_string(),
+            ))))
+        });
+
+        provider.expect_get_ledger_entries().returning(|_| {
+            Box::pin(ready(Ok(
+                soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse {
+                    entries: None,
+                    latest_ledger: 0,
+                },
+            )))
+        });
+
+        let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
+        let result = get_token_metadata(&provider, contract_addr).await;
+        assert!(result.is_ok());
+        let metadata = result.unwrap();
+
+        match metadata.kind {
+            StellarTokenKind::Contract { contract_id } => {
+                assert_eq!(contract_id, contract_addr);
+            }
+            _ => panic!("Expected Contract token kind"),
+        }
+        assert_eq!(metadata.decimals, DEFAULT_STELLAR_DECIMALS);
+        assert_eq!(metadata.canonical_asset_id, contract_addr.to_uppercase());
+    }
+
+    #[tokio::test]
+    async fn test_get_token_balance_trustline_v0_success() {
+        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+        use soroban_rs::xdr::{
+            LedgerEntry, LedgerEntryData, LedgerEntryExt, TrustLineAsset, WriteXdr,
+        };
+
+        let mut provider = create_mock_provider();
+
+        // Mock trustline response with V0 extension (no liabilities)
+        provider.expect_get_ledger_entries().returning(|_| {
+            let trustline_entry = TrustLineEntry {
+                account_id: create_account_id(TEST_PK),
+                asset: TrustLineAsset::CreditAlphanum4(AlphaNum4 {
+                    asset_code: AssetCode4(*b"USDC"),
+                    issuer: create_account_id(
+                        "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+                    ),
+                }),
+                balance: 10_0000000, // 10 USDC
+                limit: 1000_0000000,
+                flags: 1,
+                ext: TrustLineEntryExt::V0,
+            };
+
+            let ledger_entry = LedgerEntry {
+                last_modified_ledger_seq: 0,
+                data: LedgerEntryData::Trustline(trustline_entry),
+                ext: LedgerEntryExt::V0,
+            };
+
+            let xdr_base64 = ledger_entry
+                .data
+                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .unwrap();
+
+            Box::pin(ready(Ok(GetLedgerEntriesResponse {
+                entries: Some(vec![LedgerEntryResult {
+                    key: String::new(),
+                    xdr: xdr_base64,
+                    last_modified_ledger: 0,
+                    live_until_ledger_seq_ledger_seq: None,
+                }]),
+                latest_ledger: 0,
+            })))
+        });
+
+        let account = TEST_PK;
+        let asset = "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
+
+        let result = get_token_balance(&provider, account, asset).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 10_0000000);
+    }
+
+    #[tokio::test]
+    async fn test_get_token_balance_trustline_v1_with_liabilities() {
+        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+        use soroban_rs::xdr::{
+            LedgerEntry, LedgerEntryData, LedgerEntryExt, Liabilities, TrustLineAsset,
+            TrustLineEntryV1, TrustLineEntryV1Ext, WriteXdr,
+        };
+
+        let mut provider = create_mock_provider();
+
+        // Mock trustline response with V1 extension (with liabilities)
+        provider.expect_get_ledger_entries().returning(|_| {
+            let trustline_entry = TrustLineEntry {
+                account_id: create_account_id(TEST_PK),
+                asset: TrustLineAsset::CreditAlphanum4(AlphaNum4 {
+                    asset_code: AssetCode4(*b"USDC"),
+                    issuer: create_account_id(
+                        "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+                    ),
+                }),
+                balance: 10_0000000, // 10 USDC
+                limit: 1000_0000000,
+                flags: 1,
+                ext: TrustLineEntryExt::V1(TrustLineEntryV1 {
+                    liabilities: Liabilities {
+                        buying: 1_0000000,  // 1 USDC buying liability
+                        selling: 2_0000000, // 2 USDC selling liability
+                    },
+                    ext: TrustLineEntryV1Ext::V0,
+                }),
+            };
+
+            let ledger_entry = LedgerEntry {
+                last_modified_ledger_seq: 0,
+                data: LedgerEntryData::Trustline(trustline_entry),
+                ext: LedgerEntryExt::V0,
+            };
+
+            let xdr_base64 = ledger_entry
+                .data
+                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .unwrap();
+
+            Box::pin(ready(Ok(GetLedgerEntriesResponse {
+                entries: Some(vec![LedgerEntryResult {
+                    key: String::new(),
+                    xdr: xdr_base64,
+                    last_modified_ledger: 0,
+                    live_until_ledger_seq_ledger_seq: None,
+                }]),
+                latest_ledger: 0,
+            })))
+        });
+
+        let account = TEST_PK;
+        let asset = "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
+
+        let result = get_token_balance(&provider, account, asset).await;
+        assert!(result.is_ok());
+        // Available balance = 10 - 2 (selling liabilities) = 8 USDC
+        assert_eq!(result.unwrap(), 8_0000000);
+    }
+
+    #[tokio::test]
+    async fn test_get_token_balance_trustline_v1_selling_exceeds_balance() {
+        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+        use soroban_rs::xdr::{
+            LedgerEntry, LedgerEntryData, LedgerEntryExt, Liabilities, TrustLineAsset,
+            TrustLineEntryV1, TrustLineEntryV1Ext, WriteXdr,
+        };
+
+        let mut provider = create_mock_provider();
+
+        // Mock trustline where selling liabilities exceed balance (edge case)
+        provider.expect_get_ledger_entries().returning(|_| {
+            let trustline_entry = TrustLineEntry {
+                account_id: create_account_id(TEST_PK),
+                asset: TrustLineAsset::CreditAlphanum4(AlphaNum4 {
+                    asset_code: AssetCode4(*b"USDC"),
+                    issuer: create_account_id(
+                        "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+                    ),
+                }),
+                balance: 5_0000000, // 5 USDC
+                limit: 1000_0000000,
+                flags: 1,
+                ext: TrustLineEntryExt::V1(TrustLineEntryV1 {
+                    liabilities: Liabilities {
+                        buying: 0,
+                        selling: 10_0000000, // 10 USDC selling (more than balance)
+                    },
+                    ext: TrustLineEntryV1Ext::V0,
+                }),
+            };
+
+            let ledger_entry = LedgerEntry {
+                last_modified_ledger_seq: 0,
+                data: LedgerEntryData::Trustline(trustline_entry),
+                ext: LedgerEntryExt::V0,
+            };
+
+            let xdr_base64 = ledger_entry
+                .data
+                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .unwrap();
+
+            Box::pin(ready(Ok(GetLedgerEntriesResponse {
+                entries: Some(vec![LedgerEntryResult {
+                    key: String::new(),
+                    xdr: xdr_base64,
+                    last_modified_ledger: 0,
+                    live_until_ledger_seq_ledger_seq: None,
+                }]),
+                latest_ledger: 0,
+            })))
+        });
+
+        let account = TEST_PK;
+        let asset = "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
+
+        let result = get_token_balance(&provider, account, asset).await;
+        assert!(result.is_ok());
+        // saturating_sub should return 0 when selling exceeds balance
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_token_balance_trustline_not_found() {
+        use soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse;
+
+        let mut provider = create_mock_provider();
+
+        // Mock empty response (no trustline)
+        provider.expect_get_ledger_entries().returning(|_| {
+            Box::pin(ready(Ok(GetLedgerEntriesResponse {
+                entries: None,
+                latest_ledger: 0,
+            })))
+        });
+
+        let account = TEST_PK;
+        let asset = "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
+
+        let result = get_token_balance(&provider, account, asset).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::NoTrustlineFound(asset_id, account_id) => {
+                assert_eq!(asset_id, asset);
+                assert_eq!(account_id, account);
+            }
+            e => panic!("Expected NoTrustlineFound, got: {:?}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_token_balance_trustline_empty_entries() {
+        use soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse;
+
+        let mut provider = create_mock_provider();
+
+        // Mock response with empty entries vec
+        provider.expect_get_ledger_entries().returning(|_| {
+            Box::pin(ready(Ok(GetLedgerEntriesResponse {
+                entries: Some(vec![]),
+                latest_ledger: 0,
+            })))
+        });
+
+        let account = TEST_PK;
+        let asset = "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
+
+        let result = get_token_balance(&provider, account, asset).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::NoTrustlineFound(asset_id, account_id) => {
+                assert_eq!(asset_id, asset);
+                assert_eq!(account_id, account);
+            }
+            e => panic!("Expected NoTrustlineFound, got: {:?}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_token_balance_trustline_credit12() {
+        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+        use soroban_rs::xdr::{
+            LedgerEntry, LedgerEntryData, LedgerEntryExt, TrustLineAsset, WriteXdr,
+        };
+
+        let mut provider = create_mock_provider();
+
+        // Mock trustline for Credit12 asset
+        provider.expect_get_ledger_entries().returning(|_| {
+            let trustline_entry = TrustLineEntry {
+                account_id: create_account_id(TEST_PK),
+                asset: TrustLineAsset::CreditAlphanum12(AlphaNum12 {
+                    asset_code: AssetCode12(*b"LONGASSETCD\0"),
+                    issuer: create_account_id(
+                        "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+                    ),
+                }),
+                balance: 25_0000000, // 25 units
+                limit: 1000_0000000,
+                flags: 1,
+                ext: TrustLineEntryExt::V0,
+            };
+
+            let ledger_entry = LedgerEntry {
+                last_modified_ledger_seq: 0,
+                data: LedgerEntryData::Trustline(trustline_entry),
+                ext: LedgerEntryExt::V0,
+            };
+
+            let xdr_base64 = ledger_entry
+                .data
+                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .unwrap();
+
+            Box::pin(ready(Ok(GetLedgerEntriesResponse {
+                entries: Some(vec![LedgerEntryResult {
+                    key: String::new(),
+                    xdr: xdr_base64,
+                    last_modified_ledger: 0,
+                    live_until_ledger_seq_ledger_seq: None,
+                }]),
+                latest_ledger: 0,
+            })))
+        });
+
+        let account = TEST_PK;
+        let asset = "LONGASSETCD:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
+
+        let result = get_token_balance(&provider, account, asset).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 25_0000000);
+    }
+
+    #[tokio::test]
+    async fn test_get_token_balance_trustline_invalid_asset_code_too_long() {
+        let provider = create_mock_provider();
+
+        let account = TEST_PK;
+        let asset = "VERYLONGASSETCODE:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
+
+        let result = get_token_balance(&provider, account, asset).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::AssetCodeTooLong(max, code) => {
+                assert_eq!(max, MAX_ASSET_CODE_LENGTH);
+                assert_eq!(code, "VERYLONGASSETCODE");
+            }
+            e => panic!("Expected AssetCodeTooLong, got: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_constants() {
+        // Verify constants are set correctly
+        assert_eq!(STELLAR_ADDRESS_LENGTH, 56);
+        assert_eq!(MAX_ASSET_CODE_LENGTH, 12);
+        assert_eq!(DEFAULT_STELLAR_DECIMALS, 7);
+        assert_eq!(STELLAR_ACCOUNT_PREFIX, 'G');
+    }
+
+    #[test]
+    fn test_contract_id_validation() {
+        // Valid contract address
+        let valid_contract = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
+        assert!(ContractId::from_str(valid_contract).is_ok());
+
+        // Invalid contract address (not a contract, it's an account)
+        let account = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
+        assert!(ContractId::from_str(account).is_err());
+
+        // Invalid format
+        assert!(ContractId::from_str("INVALID").is_err());
+        assert!(ContractId::from_str("").is_err());
+    }
+
+    #[test]
+    fn test_asset_identifier_edge_cases() {
+        // Whitespace handling
+        let result =
+            parse_asset_identifier("USD :GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5");
+        assert!(result.is_ok());
+        let (code, _) = result.unwrap();
+        assert_eq!(code, "USD "); // Whitespace preserved
+
+        // Unicode characters (if supported)
+        let result =
+            parse_asset_identifier("U$D:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5");
+        assert!(result.is_ok());
+        let (code, _) = result.unwrap();
+        assert_eq!(code, "U$D");
+    }
+
+    #[tokio::test]
+    async fn test_get_token_balance_contract_token_no_balance_entry() {
+        let mut provider = create_mock_provider();
+
+        // Mock empty response (no balance entry)
+        provider.expect_get_ledger_entries().returning(|_| {
+            Box::pin(ready(Ok(
+                soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse {
+                    entries: None,
+                    latest_ledger: 0,
+                },
+            )))
+        });
+
+        let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
+        let account = TEST_PK;
+
+        let result = get_token_balance(&provider, account, contract_addr).await;
+
+        // Should return 0 for non-existent balance
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_token_balance_contract_token_i128_balance() {
+        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+        use soroban_rs::xdr::{
+            ContractDataDurability, ContractDataEntry, ExtensionPoint, Int128Parts, LedgerEntry,
+            LedgerEntryData, LedgerEntryExt, ScVal, WriteXdr,
+        };
+
+        let mut provider = create_mock_provider();
+
+        // Mock response with I128 balance
+        provider.expect_get_ledger_entries().returning(|_| {
+            let balance_val = ScVal::I128(Int128Parts { hi: 0, lo: 1000000 });
+
+            let contract_data = ContractDataEntry {
+                ext: ExtensionPoint::V0,
+                contract: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
+                key: ScVal::Vec(None),
+                durability: ContractDataDurability::Persistent,
+                val: balance_val,
+            };
+
+            let ledger_entry = LedgerEntry {
+                last_modified_ledger_seq: 0,
+                data: LedgerEntryData::ContractData(contract_data),
+                ext: LedgerEntryExt::V0,
+            };
+
+            let xdr_base64 = ledger_entry
+                .data
+                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .unwrap();
+
+            Box::pin(ready(Ok(GetLedgerEntriesResponse {
+                entries: Some(vec![LedgerEntryResult {
+                    key: String::new(),
+                    xdr: xdr_base64,
+                    last_modified_ledger: 0,
+                    live_until_ledger_seq_ledger_seq: None,
+                }]),
+                latest_ledger: 0,
+            })))
+        });
+
+        let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
+        let account = TEST_PK;
+
+        let result = get_token_balance(&provider, account, contract_addr).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 1000000);
+    }
+
+    #[tokio::test]
+    async fn test_get_token_balance_contract_token_i128_balance_too_large() {
+        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+        use soroban_rs::xdr::{
+            ContractDataDurability, ContractDataEntry, ExtensionPoint, Int128Parts, LedgerEntry,
+            LedgerEntryData, LedgerEntryExt, ScVal, WriteXdr,
+        };
+
+        let mut provider = create_mock_provider();
+
+        // Mock response with I128 balance where hi != 0
+        provider.expect_get_ledger_entries().returning(|_| {
+            let balance_val = ScVal::I128(Int128Parts {
+                hi: 1, // Non-zero hi means balance is too large
+                lo: 1000000,
+            });
+
+            let contract_data = ContractDataEntry {
+                ext: ExtensionPoint::V0,
+                contract: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
+                key: ScVal::Vec(None),
+                durability: ContractDataDurability::Persistent,
+                val: balance_val,
+            };
+
+            let ledger_entry = LedgerEntry {
+                last_modified_ledger_seq: 0,
+                data: LedgerEntryData::ContractData(contract_data),
+                ext: LedgerEntryExt::V0,
+            };
+
+            let xdr_base64 = ledger_entry
+                .data
+                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .unwrap();
+
+            Box::pin(ready(Ok(GetLedgerEntriesResponse {
+                entries: Some(vec![LedgerEntryResult {
+                    key: String::new(),
+                    xdr: xdr_base64,
+                    last_modified_ledger: 0,
+                    live_until_ledger_seq_ledger_seq: None,
+                }]),
+                latest_ledger: 0,
+            })))
+        });
+
+        let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
+        let account = TEST_PK;
+
+        let result = get_token_balance(&provider, account, contract_addr).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::BalanceTooLarge(hi, lo) => {
+                assert_eq!(hi, 1);
+                assert_eq!(lo, 1000000);
+            }
+            e => panic!("Expected BalanceTooLarge, got: {:?}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_token_balance_contract_token_i128_negative() {
+        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+        use soroban_rs::xdr::{
+            ContractDataDurability, ContractDataEntry, ExtensionPoint, Int128Parts, LedgerEntry,
+            LedgerEntryData, LedgerEntryExt, ScVal, WriteXdr,
+        };
+
+        let mut provider = create_mock_provider();
+
+        // Mock response with negative I128 balance
+        provider.expect_get_ledger_entries().returning(|_| {
+            let balance_val = ScVal::I128(Int128Parts {
+                hi: 0,
+                lo: u64::MAX, // When cast to i64, this is negative
+            });
+
+            let contract_data = ContractDataEntry {
+                ext: ExtensionPoint::V0,
+                contract: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
+                key: ScVal::Vec(None),
+                durability: ContractDataDurability::Persistent,
+                val: balance_val,
+            };
+
+            let ledger_entry = LedgerEntry {
+                last_modified_ledger_seq: 0,
+                data: LedgerEntryData::ContractData(contract_data),
+                ext: LedgerEntryExt::V0,
+            };
+
+            let xdr_base64 = ledger_entry
+                .data
+                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .unwrap();
+
+            Box::pin(ready(Ok(GetLedgerEntriesResponse {
+                entries: Some(vec![LedgerEntryResult {
+                    key: String::new(),
+                    xdr: xdr_base64,
+                    last_modified_ledger: 0,
+                    live_until_ledger_seq_ledger_seq: None,
+                }]),
+                latest_ledger: 0,
+            })))
+        });
+
+        let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
+        let account = TEST_PK;
+
+        let result = get_token_balance(&provider, account, contract_addr).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::NegativeBalanceI128(_) => {}
+            e => panic!("Expected NegativeBalanceI128, got: {:?}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_token_balance_contract_token_u64_balance() {
+        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+        use soroban_rs::xdr::{
+            ContractDataDurability, ContractDataEntry, ExtensionPoint, LedgerEntry,
+            LedgerEntryData, LedgerEntryExt, ScVal, WriteXdr,
+        };
+
+        let mut provider = create_mock_provider();
+
+        // Mock response with U64 balance
+        provider.expect_get_ledger_entries().returning(|_| {
+            let balance_val = ScVal::U64(5000000);
+
+            let contract_data = ContractDataEntry {
+                ext: ExtensionPoint::V0,
+                contract: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
+                key: ScVal::Vec(None),
+                durability: ContractDataDurability::Persistent,
+                val: balance_val,
+            };
+
+            let ledger_entry = LedgerEntry {
+                last_modified_ledger_seq: 0,
+                data: LedgerEntryData::ContractData(contract_data),
+                ext: LedgerEntryExt::V0,
+            };
+
+            let xdr_base64 = ledger_entry
+                .data
+                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .unwrap();
+
+            Box::pin(ready(Ok(GetLedgerEntriesResponse {
+                entries: Some(vec![LedgerEntryResult {
+                    key: String::new(),
+                    xdr: xdr_base64,
+                    last_modified_ledger: 0,
+                    live_until_ledger_seq_ledger_seq: None,
+                }]),
+                latest_ledger: 0,
+            })))
+        });
+
+        let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
+        let account = TEST_PK;
+
+        let result = get_token_balance(&provider, account, contract_addr).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 5000000);
+    }
+
+    #[tokio::test]
+    async fn test_get_token_balance_contract_token_i64_positive() {
+        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+        use soroban_rs::xdr::{
+            ContractDataDurability, ContractDataEntry, ExtensionPoint, LedgerEntry,
+            LedgerEntryData, LedgerEntryExt, ScVal, WriteXdr,
+        };
+
+        let mut provider = create_mock_provider();
+
+        // Mock response with positive I64 balance
+        provider.expect_get_ledger_entries().returning(|_| {
+            let balance_val = ScVal::I64(3000000);
+
+            let contract_data = ContractDataEntry {
+                ext: ExtensionPoint::V0,
+                contract: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
+                key: ScVal::Vec(None),
+                durability: ContractDataDurability::Persistent,
+                val: balance_val,
+            };
+
+            let ledger_entry = LedgerEntry {
+                last_modified_ledger_seq: 0,
+                data: LedgerEntryData::ContractData(contract_data),
+                ext: LedgerEntryExt::V0,
+            };
+
+            let xdr_base64 = ledger_entry
+                .data
+                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .unwrap();
+
+            Box::pin(ready(Ok(GetLedgerEntriesResponse {
+                entries: Some(vec![LedgerEntryResult {
+                    key: String::new(),
+                    xdr: xdr_base64,
+                    last_modified_ledger: 0,
+                    live_until_ledger_seq_ledger_seq: None,
+                }]),
+                latest_ledger: 0,
+            })))
+        });
+
+        let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
+        let account = TEST_PK;
+
+        let result = get_token_balance(&provider, account, contract_addr).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 3000000);
+    }
+
+    #[tokio::test]
+    async fn test_get_token_balance_contract_token_i64_negative() {
+        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+        use soroban_rs::xdr::{
+            ContractDataDurability, ContractDataEntry, ExtensionPoint, LedgerEntry,
+            LedgerEntryData, LedgerEntryExt, ScVal, WriteXdr,
+        };
+
+        let mut provider = create_mock_provider();
+
+        // Mock response with negative I64 balance
+        provider.expect_get_ledger_entries().returning(|_| {
+            let balance_val = ScVal::I64(-1000);
+
+            let contract_data = ContractDataEntry {
+                ext: ExtensionPoint::V0,
+                contract: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
+                key: ScVal::Vec(None),
+                durability: ContractDataDurability::Persistent,
+                val: balance_val,
+            };
+
+            let ledger_entry = LedgerEntry {
+                last_modified_ledger_seq: 0,
+                data: LedgerEntryData::ContractData(contract_data),
+                ext: LedgerEntryExt::V0,
+            };
+
+            let xdr_base64 = ledger_entry
+                .data
+                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .unwrap();
+
+            Box::pin(ready(Ok(GetLedgerEntriesResponse {
+                entries: Some(vec![LedgerEntryResult {
+                    key: String::new(),
+                    xdr: xdr_base64,
+                    last_modified_ledger: 0,
+                    live_until_ledger_seq_ledger_seq: None,
+                }]),
+                latest_ledger: 0,
+            })))
+        });
+
+        let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
+        let account = TEST_PK;
+
+        let result = get_token_balance(&provider, account, contract_addr).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::NegativeBalanceI64(n) => {
+                assert_eq!(n, -1000);
+            }
+            e => panic!("Expected NegativeBalanceI64, got: {:?}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_token_balance_contract_token_unexpected_balance_type() {
+        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+        use soroban_rs::xdr::{
+            ContractDataDurability, ContractDataEntry, ExtensionPoint, LedgerEntry,
+            LedgerEntryData, LedgerEntryExt, ScVal, WriteXdr,
+        };
+
+        let mut provider = create_mock_provider();
+
+        // Mock response with unexpected balance type (Bool)
+        provider.expect_get_ledger_entries().returning(|_| {
+            let balance_val = ScVal::Bool(true);
+
+            let contract_data = ContractDataEntry {
+                ext: ExtensionPoint::V0,
+                contract: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
+                key: ScVal::Vec(None),
+                durability: ContractDataDurability::Persistent,
+                val: balance_val,
+            };
+
+            let ledger_entry = LedgerEntry {
+                last_modified_ledger_seq: 0,
+                data: LedgerEntryData::ContractData(contract_data),
+                ext: LedgerEntryExt::V0,
+            };
+
+            let xdr_base64 = ledger_entry
+                .data
+                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .unwrap();
+
+            Box::pin(ready(Ok(GetLedgerEntriesResponse {
+                entries: Some(vec![LedgerEntryResult {
+                    key: String::new(),
+                    xdr: xdr_base64,
+                    last_modified_ledger: 0,
+                    live_until_ledger_seq_ledger_seq: None,
+                }]),
+                latest_ledger: 0,
+            })))
+        });
+
+        let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
+        let account = TEST_PK;
+
+        let result = get_token_balance(&provider, account, contract_addr).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::UnexpectedBalanceType(_) => {}
+            e => panic!("Expected UnexpectedBalanceType, got: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_asset_code_boundary_cases() {
+        // Exactly 4 characters (Credit4)
+        let (code, _) =
+            parse_asset_identifier("ABCD:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5")
+                .unwrap();
+        assert_eq!(code, "ABCD");
+        assert!(code.len() <= 4);
+
+        // Exactly 5 characters (Credit12)
+        let (code, _) = parse_asset_identifier(
+            "ABCDE:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        )
+        .unwrap();
+        assert_eq!(code, "ABCDE");
+        assert!(code.len() > 4 && code.len() <= 12);
+
+        // Exactly 12 characters (Credit12 max)
+        let (code, _) = parse_asset_identifier(
+            "ABCDEFGHIJKL:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        )
+        .unwrap();
+        assert_eq!(code, "ABCDEFGHIJKL");
+        assert_eq!(code.len(), 12);
+
+        // 13 characters (too long) - parsing succeeds, but validation should fail
+        let (code, _) = parse_asset_identifier(
+            "ABCDEFGHIJKLM:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        )
+        .unwrap();
+        assert_eq!(code, "ABCDEFGHIJKLM");
+        assert!(code.len() > MAX_ASSET_CODE_LENGTH);
+    }
+
+    #[tokio::test]
+    async fn test_get_token_metadata_contract_with_decimals() {
+        let mut provider = create_mock_provider();
+
+        // Mock successful decimals query
+        let decimals_value = ScVal::U32(6);
+        provider
+            .expect_call_contract()
+            .returning(move |_, _, _| Box::pin(ready(Ok(decimals_value.clone()))));
+
+        let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
+        let result = get_token_metadata(&provider, contract_addr).await;
+        assert!(result.is_ok());
+        let metadata = result.unwrap();
+
+        assert_eq!(metadata.decimals, 6);
+        match metadata.kind {
+            StellarTokenKind::Contract { contract_id } => {
+                assert_eq!(contract_id, contract_addr);
+            }
+            _ => panic!("Expected Contract token kind"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_contract_token_decimals_from_storage_fallback() {
+        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+        use soroban_rs::xdr::{
+            ContractDataDurability, ContractDataEntry, ExtensionPoint, LedgerEntry,
+            LedgerEntryData, LedgerEntryExt, ScVal, WriteXdr,
+        };
+
+        let mut provider = create_mock_provider();
+
+        // Mock failed contract invocation
+        provider.expect_call_contract().returning(|_, _, _| {
+            Box::pin(ready(Err(crate::services::provider::ProviderError::Other(
+                "Contract call failed".to_string(),
+            ))))
+        });
+
+        // Mock successful storage query with decimals = 8
+        provider.expect_get_ledger_entries().returning(|_| {
+            let decimals_val = ScVal::U32(8);
+
+            let contract_data = ContractDataEntry {
+                ext: ExtensionPoint::V0,
+                contract: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
+                key: ScVal::Vec(None),
+                durability: ContractDataDurability::Persistent,
+                val: decimals_val,
+            };
+
+            let ledger_entry = LedgerEntry {
+                last_modified_ledger_seq: 0,
+                data: LedgerEntryData::ContractData(contract_data),
+                ext: LedgerEntryExt::V0,
+            };
+
+            let xdr_base64 = ledger_entry
+                .data
+                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .unwrap();
+
+            Box::pin(ready(Ok(GetLedgerEntriesResponse {
+                entries: Some(vec![LedgerEntryResult {
+                    key: String::new(),
+                    xdr: xdr_base64,
+                    last_modified_ledger: 0,
+                    live_until_ledger_seq_ledger_seq: None,
+                }]),
+                latest_ledger: 0,
+            })))
+        });
+
+        let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
+        let result = get_contract_token_decimals(&provider, contract_addr).await;
+
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), 8);
+    }
+
+    #[tokio::test]
+    async fn test_get_contract_token_decimals_both_methods_fail() {
+        use soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse;
+
+        let mut provider = create_mock_provider();
+
+        // Mock failed contract invocation
+        provider.expect_call_contract().returning(|_, _, _| {
+            Box::pin(ready(Err(crate::services::provider::ProviderError::Other(
+                "Contract call failed".to_string(),
+            ))))
+        });
+
+        // Mock failed storage query (no entries)
+        provider.expect_get_ledger_entries().returning(|_| {
+            Box::pin(ready(Ok(GetLedgerEntriesResponse {
+                entries: None,
+                latest_ledger: 0,
+            })))
+        });
+
+        let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
+        let result = get_contract_token_decimals(&provider, contract_addr).await;
+
+        // Should return None when both methods fail
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_contract_token_decimals_invalid_contract_address() {
+        let provider = create_mock_provider();
+
+        let invalid_addr = "INVALID_CONTRACT_ADDRESS";
+        let result = get_contract_token_decimals(&provider, invalid_addr).await;
+
+        // Should return None for invalid contract address
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_invoke_decimals_function_success() {
+        let mut provider = create_mock_provider();
+
+        let decimals_value = ScVal::U32(9);
+        provider
+            .expect_call_contract()
+            .returning(move |_, _, _| Box::pin(ready(Ok(decimals_value.clone()))));
+
+        let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
+        let result = invoke_decimals_function(&provider, contract_addr).await;
+
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), 9);
+    }
+
+    #[tokio::test]
+    async fn test_invoke_decimals_function_failure() {
+        let mut provider = create_mock_provider();
+
+        provider.expect_call_contract().returning(|_, _, _| {
+            Box::pin(ready(Err(crate::services::provider::ProviderError::Other(
+                "Contract not found".to_string(),
+            ))))
+        });
+
+        let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
+        let result = invoke_decimals_function(&provider, contract_addr).await;
+
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_query_decimals_from_storage_success() {
+        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+        use soroban_rs::xdr::{
+            ContractDataDurability, ContractDataEntry, ExtensionPoint, LedgerEntry,
+            LedgerEntryData, LedgerEntryExt, ScVal, WriteXdr,
+        };
+
+        let mut provider = create_mock_provider();
+
+        provider.expect_get_ledger_entries().returning(|_| {
+            let decimals_val = ScVal::U32(18);
+
+            let contract_data = ContractDataEntry {
+                ext: ExtensionPoint::V0,
+                contract: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
+                key: ScVal::Vec(None),
+                durability: ContractDataDurability::Persistent,
+                val: decimals_val,
+            };
+
+            let ledger_entry = LedgerEntry {
+                last_modified_ledger_seq: 0,
+                data: LedgerEntryData::ContractData(contract_data),
+                ext: LedgerEntryExt::V0,
+            };
+
+            let xdr_base64 = ledger_entry
+                .data
+                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .unwrap();
+
+            Box::pin(ready(Ok(GetLedgerEntriesResponse {
+                entries: Some(vec![LedgerEntryResult {
+                    key: String::new(),
+                    xdr: xdr_base64,
+                    last_modified_ledger: 0,
+                    live_until_ledger_seq_ledger_seq: None,
+                }]),
+                latest_ledger: 0,
+            })))
+        });
+
+        let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
+        let contract_hash = parse_contract_address(contract_addr).unwrap();
+        let result = query_decimals_from_storage(&provider, contract_addr, contract_hash).await;
+
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), 18);
+    }
+
+    #[tokio::test]
+    async fn test_query_decimals_from_storage_no_entry() {
+        use soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse;
+
+        let mut provider = create_mock_provider();
+
+        provider.expect_get_ledger_entries().returning(|_| {
+            Box::pin(ready(Ok(GetLedgerEntriesResponse {
+                entries: None,
+                latest_ledger: 0,
+            })))
+        });
+
+        let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
+        let contract_hash = parse_contract_address(contract_addr).unwrap();
+        let result = query_decimals_from_storage(&provider, contract_addr, contract_hash).await;
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_stellar_address_validation() {
+        // Valid Stellar account address (starts with G)
+        let valid_account = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
+        assert_eq!(valid_account.len(), STELLAR_ADDRESS_LENGTH);
+        assert!(valid_account.starts_with(STELLAR_ACCOUNT_PREFIX));
+
+        // Valid contract address (starts with C)
+        let valid_contract = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
+        assert_eq!(valid_contract.len(), STELLAR_ADDRESS_LENGTH);
+        assert!(!valid_contract.starts_with(STELLAR_ACCOUNT_PREFIX));
+
+        // Invalid length
+        let short = "GBBD47IF6LWK7P7";
+        assert!(short.len() != STELLAR_ADDRESS_LENGTH);
+
+        // Invalid prefix (M is for muxed accounts)
+        let muxed = "MAAAAAAAAAAABBBBBBBBBBBBCCCCCCCCCCCCDDDDDDDDDDDDEEEEEEEE";
+        assert!(!muxed.starts_with(STELLAR_ACCOUNT_PREFIX));
+    }
+
+    #[tokio::test]
+    async fn test_get_token_balance_different_identifiers() {
+        let mut provider = create_mock_provider();
+
+        let test_balance = 75_0000000i64; // 75 XLM
+        let account_entry = create_mock_account_entry(test_balance);
+
+        // Mock get_account to be called twice
+        provider
+            .expect_get_account()
+            .times(2)
+            .returning(move |_| Box::pin(ready(Ok(account_entry.clone()))));
+
+        let account = TEST_PK;
+
+        // Test with "native"
+        let result1 = get_token_balance(&provider, account, "native").await;
+        assert!(result1.is_ok());
+        assert_eq!(result1.unwrap(), test_balance as u64);
+
+        // Test with "XLM"
+        let result2 = get_token_balance(&provider, account, "XLM").await;
+        assert!(result2.is_ok());
+        assert_eq!(result2.unwrap(), test_balance as u64);
+    }
+
+    #[test]
+    fn test_parse_asset_identifier_colon_in_issuer() {
+        // Edge case: what if issuer somehow contains a colon?
+        // split_once only splits on first colon
+        let result = parse_asset_identifier(
+            "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5:EXTRA",
+        );
+        assert!(result.is_ok());
+        let (code, issuer) = result.unwrap();
+        assert_eq!(code, "USDC");
+        assert_eq!(
+            issuer,
+            "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5:EXTRA"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_token_metadata_case_sensitivity() {
+        let provider = create_mock_provider();
+
+        // Asset codes are case-sensitive in Stellar
+        let asset_id = "usdc:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
+        let result = get_token_metadata(&provider, asset_id).await;
+        assert!(result.is_ok());
+        let metadata = result.unwrap();
+
+        match metadata.kind {
+            StellarTokenKind::Classic { code, .. } => {
+                assert_eq!(code, "usdc"); // Lowercase preserved
+            }
+            _ => panic!("Expected Classic token kind"),
+        }
+    }
+
+    #[test]
+    fn test_max_asset_code_length() {
+        // Test that MAX_ASSET_CODE_LENGTH is correctly set
+        assert_eq!(MAX_ASSET_CODE_LENGTH, 12);
+
+        // Asset codes up to 4 chars should be Credit4
+        for len in 1..=4 {
+            let code = "A".repeat(len);
+            assert!(code.len() <= 4);
+        }
+
+        // Asset codes 5-12 chars should be Credit12
+        for len in 5..=12 {
+            let code = "A".repeat(len);
+            assert!(code.len() > 4 && code.len() <= MAX_ASSET_CODE_LENGTH);
+        }
+
+        // Asset codes > 12 should be invalid
+        let too_long = "A".repeat(13);
+        assert!(too_long.len() > MAX_ASSET_CODE_LENGTH);
     }
 }

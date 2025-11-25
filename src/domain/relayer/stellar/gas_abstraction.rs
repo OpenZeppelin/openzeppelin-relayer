@@ -412,3 +412,838 @@ fn add_fee_payment_operation(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::transaction::stellar::utils::parse_account_id;
+    use crate::services::stellar_dex::AssetType;
+    use crate::{
+        config::{NetworkConfigCommon, StellarNetworkConfig},
+        jobs::MockJobProducerTrait,
+        models::{
+            transaction::stellar::OperationSpec, AssetSpec, NetworkConfigData, NetworkRepoModel,
+            NetworkType, RelayerNetworkPolicy, RelayerRepoModel, RelayerStellarPolicy,
+            SponsoredTransactionBuildRequest, SponsoredTransactionQuoteRequest,
+        },
+        repositories::{
+            InMemoryNetworkRepository, MockRelayerRepository, MockTransactionRepository,
+        },
+        services::{
+            provider::MockStellarProviderTrait, signer::MockStellarSignTrait,
+            stellar_dex::MockStellarDexServiceTrait, MockTransactionCounterServiceTrait,
+        },
+    };
+    use mockall::predicate::*;
+    use soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse;
+    use soroban_rs::stellar_rpc_client::LedgerEntryResult;
+    use soroban_rs::xdr::{
+        AccountEntry, AccountEntryExt, AccountId, AlphaNum4, AssetCode4, LedgerEntry,
+        LedgerEntryData, LedgerEntryExt, LedgerKey, Limits, MuxedAccount, Operation, OperationBody,
+        PaymentOp, Preconditions, PublicKey, SequenceNumber, String32, Thresholds, Transaction,
+        TransactionEnvelope, TransactionExt, TransactionV1Envelope, TrustLineEntry,
+        TrustLineEntryExt, Uint256, VecM, WriteXdr,
+    };
+    use std::future::ready;
+    use std::sync::Arc;
+    use stellar_strkey::ed25519::PublicKey as Ed25519PublicKey;
+
+    const TEST_PK: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+    const TEST_NETWORK_PASSPHRASE: &str = "Test SDF Network ; September 2015";
+    const USDC_ASSET: &str = "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+
+    /// Helper function to create a test transaction XDR
+    fn create_test_transaction_xdr() -> String {
+        // Use a different account than TEST_PK (relayer address) to avoid validation error
+        let source_pk = Ed25519PublicKey::from_string(
+            "GCZ54QGQCUZ6U5WJF4AG5JEZCUMYTS2F6JRLUS76XF2PQMEJ2E3JISI2",
+        )
+        .unwrap();
+        let dest_pk = Ed25519PublicKey::from_string(
+            "GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ",
+        )
+        .unwrap();
+
+        let payment_op = PaymentOp {
+            destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
+            asset: soroban_rs::xdr::Asset::Native,
+            amount: 1000000,
+        };
+
+        let operation = Operation {
+            source_account: None,
+            body: OperationBody::Payment(payment_op),
+        };
+
+        let operations: VecM<Operation, 100> = vec![operation].try_into().unwrap();
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
+            fee: 100,
+            seq_num: SequenceNumber(2), // Must be > account sequence (1)
+            cond: Preconditions::None,
+            memo: soroban_rs::xdr::Memo::None,
+            operations,
+            ext: TransactionExt::V0,
+        };
+
+        let envelope = TransactionV1Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        };
+
+        let tx_envelope = TransactionEnvelope::Tx(envelope);
+        tx_envelope.to_xdr_base64(Limits::none()).unwrap()
+    }
+
+    /// Helper function to create a test relayer with user fee payment strategy
+    fn create_test_relayer_with_user_fee_strategy() -> RelayerRepoModel {
+        let mut policy = RelayerStellarPolicy::default();
+        policy.fee_payment_strategy = Some(crate::models::StellarFeePaymentStrategy::User);
+        policy.allowed_tokens = Some(vec![crate::models::StellarAllowedTokensPolicy {
+            asset: USDC_ASSET.to_string(),
+            metadata: None,
+            max_allowed_fee: None,
+            swap_config: None,
+        }]);
+
+        RelayerRepoModel {
+            id: "test-relayer-id".to_string(),
+            name: "Test Relayer".to_string(),
+            network: "testnet".to_string(),
+            paused: false,
+            network_type: NetworkType::Stellar,
+            signer_id: "signer-id".to_string(),
+            policies: RelayerNetworkPolicy::Stellar(policy),
+            address: TEST_PK.to_string(),
+            notification_id: Some("notification-id".to_string()),
+            system_disabled: false,
+            custom_rpc_urls: None,
+            ..Default::default()
+        }
+    }
+
+    /// Helper function to create a mock DEX service
+    fn create_mock_dex_service() -> Arc<MockStellarDexServiceTrait> {
+        let mut mock_dex = MockStellarDexServiceTrait::new();
+        mock_dex
+            .expect_supported_asset_types()
+            .returning(|| std::collections::HashSet::from([AssetType::Native, AssetType::Classic]));
+        Arc::new(mock_dex)
+    }
+
+    /// Helper function to create a test network
+    fn create_test_network() -> NetworkRepoModel {
+        NetworkRepoModel {
+            id: "stellar:testnet".to_string(),
+            name: "testnet".to_string(),
+            network_type: NetworkType::Stellar,
+            config: NetworkConfigData::Stellar(StellarNetworkConfig {
+                common: NetworkConfigCommon {
+                    network: "testnet".to_string(),
+                    from: None,
+                    rpc_urls: Some(vec!["https://horizon-testnet.stellar.org".to_string()]),
+                    explorer_urls: None,
+                    average_blocktime_ms: Some(5000),
+                    is_testnet: Some(true),
+                    tags: None,
+                },
+                passphrase: Some(TEST_NETWORK_PASSPHRASE.to_string()),
+                horizon_url: Some("https://horizon-testnet.stellar.org".to_string()),
+            }),
+        }
+    }
+
+    /// Helper function to create a Stellar relayer instance for testing
+    async fn create_test_relayer_instance(
+        relayer_model: RelayerRepoModel,
+        provider: MockStellarProviderTrait,
+        dex_service: Arc<MockStellarDexServiceTrait>,
+    ) -> crate::domain::relayer::stellar::StellarRelayer<
+        MockStellarProviderTrait,
+        MockRelayerRepository,
+        InMemoryNetworkRepository,
+        MockTransactionRepository,
+        MockJobProducerTrait,
+        MockTransactionCounterServiceTrait,
+        MockStellarSignTrait,
+        MockStellarDexServiceTrait,
+    > {
+        let network_repository = Arc::new(InMemoryNetworkRepository::new());
+        let test_network = create_test_network();
+        network_repository.create(test_network).await.unwrap();
+
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+        let counter = Arc::new(MockTransactionCounterServiceTrait::new());
+        let signer = Arc::new(MockStellarSignTrait::new());
+
+        crate::domain::relayer::stellar::StellarRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            crate::domain::relayer::stellar::StellarRelayerDependencies::new(
+                relayer_repo,
+                network_repository,
+                tx_repo,
+                counter,
+                job_producer,
+            ),
+            dex_service,
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_quote_sponsored_transaction_with_xdr() {
+        let relayer_model = create_test_relayer_with_user_fee_strategy();
+        let mut provider = MockStellarProviderTrait::new();
+
+        // Mock account for validation
+        provider.expect_get_account().returning(|_| {
+            Box::pin(ready(Ok(AccountEntry {
+                account_id: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32]))),
+                balance: 1000000000,
+                seq_num: SequenceNumber(1),
+                num_sub_entries: 0,
+                inflation_dest: None,
+                flags: 0,
+                home_domain: String32::default(),
+                thresholds: Thresholds([0; 4]),
+                signers: VecM::default(),
+                ext: AccountEntryExt::V0,
+            })))
+        });
+
+        // Mock get_ledger_entries for token balance validation
+        // This mock extracts the account ID from the ledger key and returns a trustline with sufficient balance
+        provider.expect_get_ledger_entries().returning(|keys| {
+            // Extract account ID from the first ledger key (should be a Trustline key)
+            let account_id = if let Some(LedgerKey::Trustline(trustline_key)) = keys.first() {
+                trustline_key.account_id.clone()
+            } else {
+                // Fallback: try to parse TEST_PK
+                parse_account_id(TEST_PK).unwrap_or_else(|_| {
+                    AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32])))
+                })
+            };
+
+            let issuer_id =
+                parse_account_id("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN")
+                    .unwrap_or_else(|_| {
+                        AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32])))
+                    });
+
+            // Create a trustline entry with sufficient balance
+            let trustline_entry = TrustLineEntry {
+                account_id,
+                asset: soroban_rs::xdr::TrustLineAsset::CreditAlphanum4(AlphaNum4 {
+                    asset_code: AssetCode4(*b"USDC"),
+                    issuer: issuer_id,
+                }),
+                balance: 10_000_000i64,
+                limit: i64::MAX,
+                flags: 0,
+                ext: TrustLineEntryExt::V0,
+            };
+
+            let ledger_entry = LedgerEntry {
+                last_modified_ledger_seq: 0,
+                data: LedgerEntryData::Trustline(trustline_entry),
+                ext: LedgerEntryExt::V0,
+            };
+
+            // Encode LedgerEntryData to XDR base64 (not the full LedgerEntry)
+            let xdr = ledger_entry
+                .data
+                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .expect("Failed to encode trustline entry data to XDR");
+
+            Box::pin(ready(Ok(GetLedgerEntriesResponse {
+                entries: Some(vec![LedgerEntryResult {
+                    key: "test_key".to_string(),
+                    xdr,
+                    last_modified_ledger: 0u32,
+                    live_until_ledger_seq_ledger_seq: None,
+                }]),
+                latest_ledger: 0,
+            })))
+        });
+
+        let mut dex_service = MockStellarDexServiceTrait::new();
+        dex_service
+            .expect_supported_asset_types()
+            .returning(|| std::collections::HashSet::from([AssetType::Native, AssetType::Classic]));
+
+        // Mock get_xlm_to_token_quote for fee conversion (XLM -> token)
+        dex_service
+            .expect_get_xlm_to_token_quote()
+            .returning(|_, _, _, _| {
+                Box::pin(ready(Ok(
+                    crate::services::stellar_dex::StellarQuoteResponse {
+                        input_asset: "native".to_string(),
+                        output_asset: USDC_ASSET.to_string(),
+                        in_amount: 100000,
+                        out_amount: 1500000,
+                        price_impact_pct: 0.0,
+                        slippage_bps: 100,
+                        path: None,
+                    },
+                )))
+            });
+
+        let dex_service = Arc::new(dex_service);
+        let relayer = create_test_relayer_instance(relayer_model, provider, dex_service).await;
+
+        let transaction_xdr = create_test_transaction_xdr();
+        let request = SponsoredTransactionQuoteRequest::Stellar(
+            crate::models::StellarFeeEstimateRequestParams {
+                transaction_xdr: Some(transaction_xdr),
+                operations: None,
+                source_account: None,
+                fee_token: USDC_ASSET.to_string(),
+            },
+        );
+
+        let result = relayer.quote_sponsored_transaction(request).await;
+        if let Err(e) = &result {
+            eprintln!("Quote error: {:?}", e);
+        }
+        assert!(result.is_ok());
+
+        if let SponsoredTransactionQuoteResponse::Stellar(quote) = result.unwrap() {
+            assert_eq!(quote.fee_in_token, "1500000");
+            assert!(!quote.fee_in_token_ui.is_empty());
+            assert!(!quote.conversion_rate.is_empty());
+        } else {
+            panic!("Expected Stellar quote response");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_quote_sponsored_transaction_with_operations() {
+        let relayer_model = create_test_relayer_with_user_fee_strategy();
+        let mut provider = MockStellarProviderTrait::new();
+
+        provider.expect_get_account().returning(|_| {
+            Box::pin(ready(Ok(AccountEntry {
+                account_id: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32]))),
+                balance: 1000000000,
+                seq_num: SequenceNumber(-1),
+                num_sub_entries: 0,
+                inflation_dest: None,
+                flags: 0,
+                home_domain: String32::default(),
+                thresholds: Thresholds([0; 4]),
+                signers: VecM::default(),
+                ext: AccountEntryExt::V0,
+            })))
+        });
+
+        // Mock get_ledger_entries for token balance validation
+        // This mock extracts the account ID from the ledger key and returns a trustline with sufficient balance
+        provider.expect_get_ledger_entries().returning(|keys| {
+            // Extract account ID from the first ledger key (should be a Trustline key)
+            let account_id = if let Some(LedgerKey::Trustline(trustline_key)) = keys.first() {
+                trustline_key.account_id.clone()
+            } else {
+                // Fallback: use the source account from the test
+                parse_account_id("GCZ54QGQCUZ6U5WJF4AG5JEZCUMYTS2F6JRLUS76XF2PQMEJ2E3JISI2")
+                    .unwrap_or_else(|_| {
+                        AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32])))
+                    })
+            };
+
+            let issuer_id =
+                parse_account_id("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN")
+                    .unwrap_or_else(|_| {
+                        AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32])))
+                    });
+
+            // Create a trustline entry with sufficient balance
+            let trustline_entry = TrustLineEntry {
+                account_id,
+                asset: soroban_rs::xdr::TrustLineAsset::CreditAlphanum4(AlphaNum4 {
+                    asset_code: AssetCode4(*b"USDC"),
+                    issuer: issuer_id,
+                }),
+                balance: 10_000_000i64,
+                limit: i64::MAX,
+                flags: 0,
+                ext: TrustLineEntryExt::V0,
+            };
+
+            let ledger_entry = LedgerEntry {
+                last_modified_ledger_seq: 0,
+                data: LedgerEntryData::Trustline(trustline_entry),
+                ext: LedgerEntryExt::V0,
+            };
+
+            // Encode LedgerEntryData to XDR base64 (not the full LedgerEntry)
+            let xdr = ledger_entry
+                .data
+                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .expect("Failed to encode trustline entry data to XDR");
+
+            Box::pin(ready(Ok(
+                soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse {
+                    entries: Some(vec![LedgerEntryResult {
+                        key: "test_key".to_string(),
+                        xdr,
+                        last_modified_ledger: 0u32,
+                        live_until_ledger_seq_ledger_seq: None,
+                    }]),
+                    latest_ledger: 0,
+                },
+            )))
+        });
+
+        let mut dex_service = MockStellarDexServiceTrait::new();
+        dex_service
+            .expect_supported_asset_types()
+            .returning(|| std::collections::HashSet::from([AssetType::Native, AssetType::Classic]));
+
+        // Mock get_xlm_to_token_quote for fee conversion (XLM -> token)
+        dex_service
+            .expect_get_xlm_to_token_quote()
+            .returning(|_, _, _, _| {
+                Box::pin(ready(Ok(
+                    crate::services::stellar_dex::StellarQuoteResponse {
+                        input_asset: "native".to_string(),
+                        output_asset: USDC_ASSET.to_string(),
+                        in_amount: 100000,
+                        out_amount: 1500000,
+                        price_impact_pct: 0.0,
+                        slippage_bps: 100,
+                        path: None,
+                    },
+                )))
+            });
+
+        let dex_service = Arc::new(dex_service);
+        let relayer = create_test_relayer_instance(relayer_model, provider, dex_service).await;
+
+        let operations = vec![OperationSpec::Payment {
+            destination: TEST_PK.to_string(),
+            amount: 1000000,
+            asset: AssetSpec::Native,
+        }];
+
+        let request = SponsoredTransactionQuoteRequest::Stellar(
+            crate::models::StellarFeeEstimateRequestParams {
+                transaction_xdr: None,
+                operations: Some(operations),
+                source_account: Some(
+                    "GCZ54QGQCUZ6U5WJF4AG5JEZCUMYTS2F6JRLUS76XF2PQMEJ2E3JISI2".to_string(),
+                ),
+                fee_token: USDC_ASSET.to_string(),
+            },
+        );
+
+        let result = relayer.quote_sponsored_transaction(request).await;
+        if let Err(e) = &result {
+            eprintln!("Quote error: {:?}", e);
+        }
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_quote_sponsored_transaction_invalid_token() {
+        let relayer_model = create_test_relayer_with_user_fee_strategy();
+        let provider = MockStellarProviderTrait::new();
+        let dex_service = create_mock_dex_service();
+        let relayer = create_test_relayer_instance(relayer_model, provider, dex_service).await;
+
+        let transaction_xdr = create_test_transaction_xdr();
+        let request = SponsoredTransactionQuoteRequest::Stellar(
+            crate::models::StellarFeeEstimateRequestParams {
+                transaction_xdr: Some(transaction_xdr),
+                operations: None,
+                source_account: None,
+                fee_token: "INVALID:TOKEN".to_string(),
+            },
+        );
+
+        let result = relayer.quote_sponsored_transaction(request).await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            RelayerError::ValidationError(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_quote_sponsored_transaction_missing_xdr_and_operations() {
+        let relayer_model = create_test_relayer_with_user_fee_strategy();
+        let provider = MockStellarProviderTrait::new();
+        let dex_service = create_mock_dex_service();
+        let relayer = create_test_relayer_instance(relayer_model, provider, dex_service).await;
+
+        let request = SponsoredTransactionQuoteRequest::Stellar(
+            crate::models::StellarFeeEstimateRequestParams {
+                transaction_xdr: None,
+                operations: None,
+                source_account: None,
+                fee_token: USDC_ASSET.to_string(),
+            },
+        );
+
+        let result = relayer.quote_sponsored_transaction(request).await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            RelayerError::ValidationError(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_build_sponsored_transaction_with_xdr() {
+        let relayer_model = create_test_relayer_with_user_fee_strategy();
+        let mut provider = MockStellarProviderTrait::new();
+
+        provider.expect_get_account().returning(|_| {
+            Box::pin(ready(Ok(AccountEntry {
+                account_id: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32]))),
+                balance: 1000000000,
+                seq_num: SequenceNumber(-1),
+                num_sub_entries: 0,
+                inflation_dest: None,
+                flags: 0,
+                home_domain: String32::default(),
+                thresholds: Thresholds([0; 4]),
+                signers: VecM::default(),
+                ext: AccountEntryExt::V0,
+            })))
+        });
+
+        // Mock get_ledger_entries for token balance validation
+        // This mock extracts the account ID from the ledger key and returns a trustline with sufficient balance
+        provider.expect_get_ledger_entries().returning(|keys| {
+            // Extract account ID from the first ledger key (should be a Trustline key)
+            let account_id = if let Some(LedgerKey::Trustline(trustline_key)) = keys.first() {
+                trustline_key.account_id.clone()
+            } else {
+                // Fallback: try to parse TEST_PK
+                parse_account_id(TEST_PK).unwrap_or_else(|_| {
+                    AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32])))
+                })
+            };
+
+            let issuer_id =
+                parse_account_id("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN")
+                    .unwrap_or_else(|_| {
+                        AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32])))
+                    });
+
+            // Create a trustline entry with sufficient balance (10 USDC = 10000000 with 6 decimals)
+            let trustline_entry = TrustLineEntry {
+                account_id,
+                asset: soroban_rs::xdr::TrustLineAsset::CreditAlphanum4(AlphaNum4 {
+                    asset_code: AssetCode4(*b"USDC"),
+                    issuer: issuer_id,
+                }),
+                balance: 10_000_000i64, // 10 USDC (with 6 decimals) - sufficient for fee
+                limit: i64::MAX,
+                flags: 0,
+                ext: TrustLineEntryExt::V0, // V0 has no liabilities
+            };
+
+            let ledger_entry = LedgerEntry {
+                last_modified_ledger_seq: 0,
+                data: LedgerEntryData::Trustline(trustline_entry),
+                ext: LedgerEntryExt::V0,
+            };
+
+            // Encode LedgerEntryData to XDR base64 (not the full LedgerEntry)
+            let xdr = ledger_entry
+                .data
+                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .expect("Failed to encode trustline entry data to XDR");
+
+            Box::pin(ready(Ok(
+                soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse {
+                    entries: Some(vec![LedgerEntryResult {
+                        key: "test_key".to_string(),
+                        xdr,
+                        last_modified_ledger: 0u32,
+                        live_until_ledger_seq_ledger_seq: None,
+                    }]),
+                    latest_ledger: 0,
+                },
+            )))
+        });
+
+        let mut dex_service = MockStellarDexServiceTrait::new();
+        dex_service
+            .expect_supported_asset_types()
+            .returning(|| std::collections::HashSet::from([AssetType::Native, AssetType::Classic]));
+
+        // Mock get_xlm_to_token_quote for build (converting XLM fee to token)
+        dex_service
+            .expect_get_xlm_to_token_quote()
+            .returning(|_, _, _, _| {
+                Box::pin(ready(Ok(
+                    crate::services::stellar_dex::StellarQuoteResponse {
+                        input_asset: "native".to_string(),
+                        output_asset: USDC_ASSET.to_string(),
+                        in_amount: 1000000,
+                        out_amount: 1500000,
+                        price_impact_pct: 0.0,
+                        slippage_bps: 100,
+                        path: None,
+                    },
+                )))
+            });
+
+        let dex_service = Arc::new(dex_service);
+        let relayer = create_test_relayer_instance(relayer_model, provider, dex_service).await;
+
+        let transaction_xdr = create_test_transaction_xdr();
+        let request = SponsoredTransactionBuildRequest::Stellar(
+            crate::models::StellarPrepareTransactionRequestParams {
+                transaction_xdr: Some(transaction_xdr),
+                operations: None,
+                source_account: None,
+                fee_token: USDC_ASSET.to_string(),
+            },
+        );
+
+        let result = relayer.build_sponsored_transaction(request).await;
+        assert!(result.is_ok());
+
+        if let SponsoredTransactionBuildResponse::Stellar(build) = result.unwrap() {
+            assert!(!build.transaction.is_empty());
+            assert_eq!(build.fee_in_token, "1500000");
+            assert!(!build.fee_in_token_ui.is_empty());
+            assert_eq!(build.fee_token, USDC_ASSET);
+            assert!(!build.valid_until.is_empty());
+        } else {
+            panic!("Expected Stellar build response");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_build_sponsored_transaction_with_operations() {
+        let relayer_model = create_test_relayer_with_user_fee_strategy();
+        let mut provider = MockStellarProviderTrait::new();
+
+        provider.expect_get_account().returning(|_| {
+            Box::pin(ready(Ok(AccountEntry {
+                account_id: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32]))),
+                balance: 1000000000,
+                seq_num: SequenceNumber(-1),
+                num_sub_entries: 0,
+                inflation_dest: None,
+                flags: 0,
+                home_domain: String32::default(),
+                thresholds: Thresholds([0; 4]),
+                signers: VecM::default(),
+                ext: AccountEntryExt::V0,
+            })))
+        });
+
+        provider.expect_get_ledger_entries().returning(|_| {
+            use crate::domain::transaction::stellar::utils::parse_account_id;
+            use soroban_rs::stellar_rpc_client::LedgerEntryResult;
+            use soroban_rs::xdr::{
+                AccountId, AlphaNum4, AssetCode4, LedgerEntry, LedgerEntryData, LedgerEntryExt,
+                PublicKey, TrustLineEntry, TrustLineEntryExt, Uint256, WriteXdr,
+            };
+
+            // Parse account IDs - use the source account from the test
+            let account_id =
+                parse_account_id("GCZ54QGQCUZ6U5WJF4AG5JEZCUMYTS2F6JRLUS76XF2PQMEJ2E3JISI2")
+                    .unwrap_or_else(|_| {
+                        AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32])))
+                    });
+            let issuer_id =
+                parse_account_id("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN")
+                    .unwrap_or_else(|_| {
+                        AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32])))
+                    });
+
+            // Create a trustline entry with sufficient balance (10 USDC = 10000000 with 6 decimals)
+            // The fee is 1500000 (from the quote), so 10 USDC is more than enough
+            let trustline_entry = TrustLineEntry {
+                account_id,
+                asset: soroban_rs::xdr::TrustLineAsset::CreditAlphanum4(AlphaNum4 {
+                    asset_code: AssetCode4(*b"USDC"),
+                    issuer: issuer_id,
+                }),
+                balance: 10_000_000i64,
+                limit: i64::MAX,
+                flags: 0,
+                ext: TrustLineEntryExt::V0,
+            };
+
+            let ledger_entry = LedgerEntry {
+                last_modified_ledger_seq: 0,
+                data: LedgerEntryData::Trustline(trustline_entry),
+                ext: LedgerEntryExt::V0,
+            };
+
+            // Encode LedgerEntryData to XDR base64 (not the full LedgerEntry)
+            // The parse_ledger_entry_from_xdr function expects just the data portion
+            let xdr = ledger_entry
+                .data
+                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .expect("Failed to encode trustline entry data to XDR");
+
+            Box::pin(ready(Ok(
+                soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse {
+                    entries: Some(vec![LedgerEntryResult {
+                        key: "test_key".to_string(),
+                        xdr,
+                        last_modified_ledger: 0u32,
+                        live_until_ledger_seq_ledger_seq: None,
+                    }]),
+                    latest_ledger: 0,
+                },
+            )))
+        });
+
+        let mut dex_service = MockStellarDexServiceTrait::new();
+        dex_service
+            .expect_supported_asset_types()
+            .returning(|| std::collections::HashSet::from([AssetType::Native, AssetType::Classic]));
+
+        dex_service
+            .expect_get_xlm_to_token_quote()
+            .returning(|_, _, _, _| {
+                Box::pin(ready(Ok(
+                    crate::services::stellar_dex::StellarQuoteResponse {
+                        input_asset: "native".to_string(),
+                        output_asset: USDC_ASSET.to_string(),
+                        in_amount: 1000000,
+                        out_amount: 1500000,
+                        price_impact_pct: 0.0,
+                        slippage_bps: 100,
+                        path: None,
+                    },
+                )))
+            });
+
+        let dex_service = Arc::new(dex_service);
+        let relayer = create_test_relayer_instance(relayer_model, provider, dex_service).await;
+
+        let operations = vec![OperationSpec::Payment {
+            destination: TEST_PK.to_string(),
+            amount: 1000000,
+            asset: AssetSpec::Native,
+        }];
+
+        let request = SponsoredTransactionBuildRequest::Stellar(
+            crate::models::StellarPrepareTransactionRequestParams {
+                transaction_xdr: None,
+                operations: Some(operations),
+                source_account: Some(
+                    "GCZ54QGQCUZ6U5WJF4AG5JEZCUMYTS2F6JRLUS76XF2PQMEJ2E3JISI2".to_string(),
+                ),
+                fee_token: USDC_ASSET.to_string(),
+            },
+        );
+
+        let result = relayer.build_sponsored_transaction(request).await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_build_sponsored_transaction_missing_source_account() {
+        let relayer_model = create_test_relayer_with_user_fee_strategy();
+        let provider = MockStellarProviderTrait::new();
+        let dex_service = create_mock_dex_service();
+        let relayer = create_test_relayer_instance(relayer_model, provider, dex_service).await;
+
+        let operations = vec![OperationSpec::Payment {
+            destination: TEST_PK.to_string(),
+            amount: 1000000,
+            asset: AssetSpec::Native,
+        }];
+
+        let request = SponsoredTransactionBuildRequest::Stellar(
+            crate::models::StellarPrepareTransactionRequestParams {
+                transaction_xdr: None,
+                operations: Some(operations),
+                source_account: None,
+                fee_token: USDC_ASSET.to_string(),
+            },
+        );
+
+        let result = relayer.build_sponsored_transaction(request).await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            RelayerError::ValidationError(_)
+        ));
+    }
+
+    #[test]
+    fn test_build_envelope_from_request_with_xdr() {
+        let transaction_xdr = create_test_transaction_xdr();
+        let result = build_envelope_from_request(
+            Some(&transaction_xdr),
+            None,
+            None,
+            TEST_NETWORK_PASSPHRASE,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_build_envelope_from_request_with_operations() {
+        let operations = vec![OperationSpec::Payment {
+            destination: TEST_PK.to_string(),
+            amount: 1000000,
+            asset: AssetSpec::Native,
+        }];
+
+        let result = build_envelope_from_request(
+            None,
+            Some(&operations),
+            Some(&TEST_PK.to_string()),
+            TEST_NETWORK_PASSPHRASE,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_build_envelope_from_request_missing_source_account() {
+        let operations = vec![OperationSpec::Payment {
+            destination: TEST_PK.to_string(),
+            amount: 1000000,
+            asset: AssetSpec::Native,
+        }];
+
+        let result =
+            build_envelope_from_request(None, Some(&operations), None, TEST_NETWORK_PASSPHRASE);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            RelayerError::ValidationError(_)
+        ));
+    }
+
+    #[test]
+    fn test_build_envelope_from_request_missing_both() {
+        let result = build_envelope_from_request(None, None, None, TEST_NETWORK_PASSPHRASE);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            RelayerError::ValidationError(_)
+        ));
+    }
+
+    #[test]
+    fn test_build_envelope_from_request_invalid_xdr() {
+        let result = build_envelope_from_request(
+            Some(&"INVALID_XDR".to_string()),
+            None,
+            None,
+            TEST_NETWORK_PASSPHRASE,
+        );
+        assert!(result.is_err());
+    }
+}

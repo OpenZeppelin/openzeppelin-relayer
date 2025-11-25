@@ -2127,4 +2127,1033 @@ mod tests {
             assert_eq!(returned_tx.status, TransactionStatus::Pending);
         }
     }
+
+    // Tests for populate_allowed_tokens_metadata
+    mod populate_allowed_tokens_metadata_tests {
+        use super::*;
+        use crate::models::StellarTokenKind;
+
+        #[tokio::test]
+        async fn test_populate_allowed_tokens_metadata_no_tokens() {
+            let ctx = TestCtx::default();
+            ctx.setup_network().await;
+            let relayer_model = ctx.relayer_model.clone();
+
+            let provider = MockStellarProviderTrait::new();
+            let signer = Arc::new(MockStellarSignTrait::new());
+            let dex_service = create_mock_dex_service();
+
+            let mut relayer_repo = MockRelayerRepository::new();
+            // Should not be called since no tokens
+            relayer_repo.expect_update_policy().times(0);
+
+            let tx_repo = MockTransactionRepository::new();
+            let job_producer = MockJobProducerTrait::new();
+            let counter = MockTransactionCounterServiceTrait::new();
+
+            let relayer = StellarRelayer::new(
+                relayer_model.clone(),
+                signer,
+                provider,
+                StellarRelayerDependencies::new(
+                    Arc::new(relayer_repo),
+                    ctx.network_repository.clone(),
+                    Arc::new(tx_repo),
+                    Arc::new(counter),
+                    Arc::new(job_producer),
+                ),
+                dex_service,
+            )
+            .await
+            .unwrap();
+
+            let result = relayer.populate_allowed_tokens_metadata().await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_populate_allowed_tokens_metadata_empty_tokens() {
+            let ctx = TestCtx::default();
+            ctx.setup_network().await;
+            let mut relayer_model = ctx.relayer_model.clone();
+
+            // Set up empty allowed tokens
+            let mut policy = RelayerStellarPolicy::default();
+            policy.allowed_tokens = Some(vec![]);
+            relayer_model.policies = RelayerNetworkPolicy::Stellar(policy);
+
+            let provider = MockStellarProviderTrait::new();
+            let signer = Arc::new(MockStellarSignTrait::new());
+            let dex_service = create_mock_dex_service();
+
+            let mut relayer_repo = MockRelayerRepository::new();
+            // Should not be called since tokens list is empty
+            relayer_repo.expect_update_policy().times(0);
+
+            let tx_repo = MockTransactionRepository::new();
+            let job_producer = MockJobProducerTrait::new();
+            let counter = MockTransactionCounterServiceTrait::new();
+
+            let relayer = StellarRelayer::new(
+                relayer_model.clone(),
+                signer,
+                provider,
+                StellarRelayerDependencies::new(
+                    Arc::new(relayer_repo),
+                    ctx.network_repository.clone(),
+                    Arc::new(tx_repo),
+                    Arc::new(counter),
+                    Arc::new(job_producer),
+                ),
+                dex_service,
+            )
+            .await
+            .unwrap();
+
+            let result = relayer.populate_allowed_tokens_metadata().await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_populate_allowed_tokens_metadata_classic_asset_success() {
+            let ctx = TestCtx::default();
+            ctx.setup_network().await;
+            let mut relayer_model = ctx.relayer_model.clone();
+
+            // Set up allowed tokens with a classic asset (USDC)
+            let mut policy = RelayerStellarPolicy::default();
+            policy.allowed_tokens = Some(vec![crate::models::StellarAllowedTokensPolicy {
+                asset: "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5".to_string(),
+                metadata: None,
+                max_allowed_fee: None,
+                swap_config: None,
+            }]);
+            relayer_model.policies = RelayerNetworkPolicy::Stellar(policy);
+
+            let provider = MockStellarProviderTrait::new();
+            let signer = Arc::new(MockStellarSignTrait::new());
+            let dex_service = create_mock_dex_service();
+
+            let mut relayer_repo = MockRelayerRepository::new();
+            relayer_repo
+                .expect_update_policy()
+                .times(1)
+                .returning(|_, _| Ok(RelayerRepoModel::default()));
+
+            let tx_repo = MockTransactionRepository::new();
+            let job_producer = MockJobProducerTrait::new();
+            let counter = MockTransactionCounterServiceTrait::new();
+
+            let relayer = StellarRelayer::new(
+                relayer_model.clone(),
+                signer,
+                provider,
+                StellarRelayerDependencies::new(
+                    Arc::new(relayer_repo),
+                    ctx.network_repository.clone(),
+                    Arc::new(tx_repo),
+                    Arc::new(counter),
+                    Arc::new(job_producer),
+                ),
+                dex_service,
+            )
+            .await
+            .unwrap();
+
+            let result = relayer.populate_allowed_tokens_metadata().await;
+            assert!(result.is_ok());
+
+            let updated_policy = result.unwrap();
+            assert!(updated_policy.allowed_tokens.is_some());
+
+            let tokens = updated_policy.allowed_tokens.unwrap();
+            assert_eq!(tokens.len(), 1);
+
+            // Verify metadata was populated
+            let token = &tokens[0];
+            assert!(token.metadata.is_some());
+
+            let metadata = token.metadata.as_ref().unwrap();
+            assert_eq!(metadata.decimals, 7); // Default Stellar decimals
+            assert_eq!(
+                metadata.canonical_asset_id,
+                "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+            );
+
+            // Verify it's a classic asset
+            match &metadata.kind {
+                StellarTokenKind::Classic { code, issuer } => {
+                    assert_eq!(code, "USDC");
+                    assert_eq!(
+                        issuer,
+                        "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+                    );
+                }
+                _ => panic!("Expected Classic token kind"),
+            }
+        }
+
+        #[tokio::test]
+        async fn test_populate_allowed_tokens_metadata_multiple_tokens() {
+            let ctx = TestCtx::default();
+            ctx.setup_network().await;
+            let mut relayer_model = ctx.relayer_model.clone();
+
+            // Set up multiple allowed tokens
+            let mut policy = RelayerStellarPolicy::default();
+            policy.allowed_tokens = Some(vec![
+                crate::models::StellarAllowedTokensPolicy {
+                    asset: "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+                        .to_string(),
+                    metadata: None,
+                    max_allowed_fee: None,
+                    swap_config: None,
+                },
+                crate::models::StellarAllowedTokensPolicy {
+                    asset: "AQUA:GAHPYWLK6YRN7CVYZOO4H3VDRZ7PVF5UJGLZCSPAEIKJE2XSWF5LAGER"
+                        .to_string(),
+                    metadata: None,
+                    max_allowed_fee: Some(1000000),
+                    swap_config: None,
+                },
+            ]);
+            relayer_model.policies = RelayerNetworkPolicy::Stellar(policy);
+
+            let provider = MockStellarProviderTrait::new();
+            let signer = Arc::new(MockStellarSignTrait::new());
+            let dex_service = create_mock_dex_service();
+
+            let mut relayer_repo = MockRelayerRepository::new();
+            relayer_repo
+                .expect_update_policy()
+                .times(1)
+                .returning(|_, _| Ok(RelayerRepoModel::default()));
+
+            let tx_repo = MockTransactionRepository::new();
+            let job_producer = MockJobProducerTrait::new();
+            let counter = MockTransactionCounterServiceTrait::new();
+
+            let relayer = StellarRelayer::new(
+                relayer_model.clone(),
+                signer,
+                provider,
+                StellarRelayerDependencies::new(
+                    Arc::new(relayer_repo),
+                    ctx.network_repository.clone(),
+                    Arc::new(tx_repo),
+                    Arc::new(counter),
+                    Arc::new(job_producer),
+                ),
+                dex_service,
+            )
+            .await
+            .unwrap();
+
+            let result = relayer.populate_allowed_tokens_metadata().await;
+            assert!(result.is_ok());
+
+            let updated_policy = result.unwrap();
+            let tokens = updated_policy.allowed_tokens.unwrap();
+            assert_eq!(tokens.len(), 2);
+
+            // Verify both tokens have metadata
+            assert!(tokens[0].metadata.is_some());
+            assert!(tokens[1].metadata.is_some());
+
+            // Verify first token (USDC)
+            let usdc_metadata = tokens[0].metadata.as_ref().unwrap();
+            match &usdc_metadata.kind {
+                StellarTokenKind::Classic { code, .. } => {
+                    assert_eq!(code, "USDC");
+                }
+                _ => panic!("Expected Classic token kind for USDC"),
+            }
+
+            // Verify second token (AQUA)
+            let aqua_metadata = tokens[1].metadata.as_ref().unwrap();
+            match &aqua_metadata.kind {
+                StellarTokenKind::Classic { code, .. } => {
+                    assert_eq!(code, "AQUA");
+                }
+                _ => panic!("Expected Classic token kind for AQUA"),
+            }
+
+            // Verify max_allowed_fee is preserved
+            assert_eq!(tokens[1].max_allowed_fee, Some(1000000));
+        }
+
+        #[tokio::test]
+        async fn test_populate_allowed_tokens_metadata_invalid_asset() {
+            let ctx = TestCtx::default();
+            ctx.setup_network().await;
+            let mut relayer_model = ctx.relayer_model.clone();
+
+            // Set up allowed tokens with invalid asset format
+            let mut policy = RelayerStellarPolicy::default();
+            policy.allowed_tokens = Some(vec![crate::models::StellarAllowedTokensPolicy {
+                asset: "INVALID_FORMAT".to_string(), // Missing issuer
+                metadata: None,
+                max_allowed_fee: None,
+                swap_config: None,
+            }]);
+            relayer_model.policies = RelayerNetworkPolicy::Stellar(policy);
+
+            let provider = MockStellarProviderTrait::new();
+            let signer = Arc::new(MockStellarSignTrait::new());
+            let dex_service = create_mock_dex_service();
+
+            let relayer_repo = MockRelayerRepository::new();
+            let tx_repo = MockTransactionRepository::new();
+            let job_producer = MockJobProducerTrait::new();
+            let counter = MockTransactionCounterServiceTrait::new();
+
+            let relayer = StellarRelayer::new(
+                relayer_model.clone(),
+                signer,
+                provider,
+                StellarRelayerDependencies::new(
+                    Arc::new(relayer_repo),
+                    ctx.network_repository.clone(),
+                    Arc::new(tx_repo),
+                    Arc::new(counter),
+                    Arc::new(job_producer),
+                ),
+                dex_service,
+            )
+            .await
+            .unwrap();
+
+            let result = relayer.populate_allowed_tokens_metadata().await;
+            assert!(result.is_err());
+        }
+    }
+
+    // Tests for migrate_fee_payment_strategy_if_needed
+    mod migrate_fee_payment_strategy_tests {
+        use super::*;
+
+        #[tokio::test]
+        async fn test_migrate_fee_payment_strategy_in_memory_storage() {
+            let ctx = TestCtx::default();
+            ctx.setup_network().await;
+            let relayer_model = ctx.relayer_model.clone();
+
+            let provider = MockStellarProviderTrait::new();
+            let signer = Arc::new(MockStellarSignTrait::new());
+            let dex_service = create_mock_dex_service();
+
+            let mut relayer_repo = MockRelayerRepository::new();
+            // Mock in-memory storage
+            relayer_repo
+                .expect_is_persistent_storage()
+                .returning(|| false);
+            // Should not call update_policy for in-memory storage
+            relayer_repo.expect_update_policy().times(0);
+
+            let tx_repo = MockTransactionRepository::new();
+            let job_producer = MockJobProducerTrait::new();
+            let counter = MockTransactionCounterServiceTrait::new();
+
+            let relayer = StellarRelayer::new(
+                relayer_model.clone(),
+                signer,
+                provider,
+                StellarRelayerDependencies::new(
+                    Arc::new(relayer_repo),
+                    ctx.network_repository.clone(),
+                    Arc::new(tx_repo),
+                    Arc::new(counter),
+                    Arc::new(job_producer),
+                ),
+                dex_service,
+            )
+            .await
+            .unwrap();
+
+            let result = relayer.migrate_fee_payment_strategy_if_needed().await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_migrate_fee_payment_strategy_already_set() {
+            let ctx = TestCtx::default();
+            ctx.setup_network().await;
+            let mut relayer_model = ctx.relayer_model.clone();
+
+            // Set fee_payment_strategy
+            let mut policy = RelayerStellarPolicy::default();
+            policy.fee_payment_strategy = Some(StellarFeePaymentStrategy::User);
+            relayer_model.policies = RelayerNetworkPolicy::Stellar(policy);
+
+            let provider = MockStellarProviderTrait::new();
+            let signer = Arc::new(MockStellarSignTrait::new());
+            let dex_service = create_mock_dex_service();
+
+            let mut relayer_repo = MockRelayerRepository::new();
+            relayer_repo
+                .expect_is_persistent_storage()
+                .returning(|| true);
+            // Should not call update_policy since already set
+            relayer_repo.expect_update_policy().times(0);
+
+            let tx_repo = MockTransactionRepository::new();
+            let job_producer = MockJobProducerTrait::new();
+            let counter = MockTransactionCounterServiceTrait::new();
+
+            let relayer = StellarRelayer::new(
+                relayer_model.clone(),
+                signer,
+                provider,
+                StellarRelayerDependencies::new(
+                    Arc::new(relayer_repo),
+                    ctx.network_repository.clone(),
+                    Arc::new(tx_repo),
+                    Arc::new(counter),
+                    Arc::new(job_producer),
+                ),
+                dex_service,
+            )
+            .await
+            .unwrap();
+
+            let result = relayer.migrate_fee_payment_strategy_if_needed().await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_migrate_fee_payment_strategy_migration_needed() {
+            let ctx = TestCtx::default();
+            ctx.setup_network().await;
+            let relayer_model = ctx.relayer_model.clone();
+
+            let provider = MockStellarProviderTrait::new();
+            let signer = Arc::new(MockStellarSignTrait::new());
+            let dex_service = create_mock_dex_service();
+
+            let mut relayer_repo = MockRelayerRepository::new();
+            relayer_repo
+                .expect_is_persistent_storage()
+                .returning(|| true);
+            relayer_repo
+                .expect_update_policy()
+                .times(1)
+                .returning(|_, policy| {
+                    // Verify the policy is set to Relayer
+                    if let RelayerNetworkPolicy::Stellar(stellar_policy) = &policy {
+                        assert_eq!(
+                            stellar_policy.fee_payment_strategy,
+                            Some(StellarFeePaymentStrategy::Relayer)
+                        );
+                    }
+                    Ok(RelayerRepoModel::default())
+                });
+
+            let tx_repo = MockTransactionRepository::new();
+            let job_producer = MockJobProducerTrait::new();
+            let counter = MockTransactionCounterServiceTrait::new();
+
+            let relayer = StellarRelayer::new(
+                relayer_model.clone(),
+                signer,
+                provider,
+                StellarRelayerDependencies::new(
+                    Arc::new(relayer_repo),
+                    ctx.network_repository.clone(),
+                    Arc::new(tx_repo),
+                    Arc::new(counter),
+                    Arc::new(job_producer),
+                ),
+                dex_service,
+            )
+            .await
+            .unwrap();
+
+            let result = relayer.migrate_fee_payment_strategy_if_needed().await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_migrate_fee_payment_strategy_update_fails() {
+            let ctx = TestCtx::default();
+            ctx.setup_network().await;
+            let relayer_model = ctx.relayer_model.clone();
+
+            let provider = MockStellarProviderTrait::new();
+            let signer = Arc::new(MockStellarSignTrait::new());
+            let dex_service = create_mock_dex_service();
+
+            let mut relayer_repo = MockRelayerRepository::new();
+            relayer_repo
+                .expect_is_persistent_storage()
+                .returning(|| true);
+            relayer_repo
+                .expect_update_policy()
+                .times(1)
+                .returning(|_, _| {
+                    Err(RepositoryError::TransactionFailure(
+                        "Database error".to_string(),
+                    ))
+                });
+
+            let tx_repo = MockTransactionRepository::new();
+            let job_producer = MockJobProducerTrait::new();
+            let counter = MockTransactionCounterServiceTrait::new();
+
+            let relayer = StellarRelayer::new(
+                relayer_model.clone(),
+                signer,
+                provider,
+                StellarRelayerDependencies::new(
+                    Arc::new(relayer_repo),
+                    ctx.network_repository.clone(),
+                    Arc::new(tx_repo),
+                    Arc::new(counter),
+                    Arc::new(job_producer),
+                ),
+                dex_service,
+            )
+            .await
+            .unwrap();
+
+            let result = relayer.migrate_fee_payment_strategy_if_needed().await;
+            assert!(result.is_err());
+            assert!(matches!(
+                result.unwrap_err(),
+                RelayerError::PolicyConfigurationError(_)
+            ));
+        }
+    }
+
+    // Tests for check_balance_and_trigger_token_swap_if_needed
+    mod check_balance_and_trigger_token_swap_tests {
+        use super::*;
+        use crate::models::RelayerStellarSwapConfig;
+
+        #[tokio::test]
+        async fn test_check_balance_no_swap_config() {
+            let ctx = TestCtx::default();
+            ctx.setup_network().await;
+            let relayer_model = ctx.relayer_model.clone();
+
+            let provider = MockStellarProviderTrait::new();
+            let signer = Arc::new(MockStellarSignTrait::new());
+            let dex_service = create_mock_dex_service();
+
+            let relayer_repo = MockRelayerRepository::new();
+            let tx_repo = MockTransactionRepository::new();
+            let job_producer = MockJobProducerTrait::new();
+            let counter = MockTransactionCounterServiceTrait::new();
+
+            let relayer = StellarRelayer::new(
+                relayer_model.clone(),
+                signer,
+                provider,
+                StellarRelayerDependencies::new(
+                    Arc::new(relayer_repo),
+                    ctx.network_repository.clone(),
+                    Arc::new(tx_repo),
+                    Arc::new(counter),
+                    Arc::new(job_producer),
+                ),
+                dex_service,
+            )
+            .await
+            .unwrap();
+
+            let result = relayer
+                .check_balance_and_trigger_token_swap_if_needed()
+                .await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_check_balance_no_threshold() {
+            let ctx = TestCtx::default();
+            ctx.setup_network().await;
+            let mut relayer_model = ctx.relayer_model.clone();
+
+            // Set up swap config without threshold
+            let mut policy = RelayerStellarPolicy::default();
+            policy.swap_config = Some(RelayerStellarSwapConfig {
+                strategies: vec![],
+                min_balance_threshold: None,
+                cron_schedule: None,
+            });
+            relayer_model.policies = RelayerNetworkPolicy::Stellar(policy);
+
+            let provider = MockStellarProviderTrait::new();
+            let signer = Arc::new(MockStellarSignTrait::new());
+            let dex_service = create_mock_dex_service();
+
+            let relayer_repo = MockRelayerRepository::new();
+            let tx_repo = MockTransactionRepository::new();
+            let job_producer = MockJobProducerTrait::new();
+            let counter = MockTransactionCounterServiceTrait::new();
+
+            let relayer = StellarRelayer::new(
+                relayer_model.clone(),
+                signer,
+                provider,
+                StellarRelayerDependencies::new(
+                    Arc::new(relayer_repo),
+                    ctx.network_repository.clone(),
+                    Arc::new(tx_repo),
+                    Arc::new(counter),
+                    Arc::new(job_producer),
+                ),
+                dex_service,
+            )
+            .await
+            .unwrap();
+
+            let result = relayer
+                .check_balance_and_trigger_token_swap_if_needed()
+                .await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_check_balance_above_threshold() {
+            let ctx = TestCtx::default();
+            ctx.setup_network().await;
+            let mut relayer_model = ctx.relayer_model.clone();
+
+            // Set up swap config with threshold
+            let mut policy = RelayerStellarPolicy::default();
+            policy.swap_config = Some(RelayerStellarSwapConfig {
+                strategies: vec![],
+                min_balance_threshold: Some(1000000), // 1 XLM
+                cron_schedule: None,
+            });
+            relayer_model.policies = RelayerNetworkPolicy::Stellar(policy);
+
+            let mut provider = MockStellarProviderTrait::new();
+            // Mock get_account to return balance above threshold
+            provider.expect_get_account().returning(|_| {
+                Box::pin(async {
+                    Ok(AccountEntry {
+                        account_id: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32]))),
+                        balance: 10000000, // 10 XLM (above threshold)
+                        ext: AccountEntryExt::V0,
+                        flags: 0,
+                        home_domain: String32::default(),
+                        inflation_dest: None,
+                        seq_num: SequenceNumber(5),
+                        num_sub_entries: 0,
+                        signers: VecM::default(),
+                        thresholds: Thresholds([0, 0, 0, 0]),
+                    })
+                })
+            });
+
+            let signer = Arc::new(MockStellarSignTrait::new());
+            let dex_service = create_mock_dex_service();
+
+            let relayer_repo = MockRelayerRepository::new();
+            let tx_repo = MockTransactionRepository::new();
+            let job_producer = MockJobProducerTrait::new();
+            let counter = MockTransactionCounterServiceTrait::new();
+
+            let relayer = StellarRelayer::new(
+                relayer_model.clone(),
+                signer,
+                provider,
+                StellarRelayerDependencies::new(
+                    Arc::new(relayer_repo),
+                    ctx.network_repository.clone(),
+                    Arc::new(tx_repo),
+                    Arc::new(counter),
+                    Arc::new(job_producer),
+                ),
+                dex_service,
+            )
+            .await
+            .unwrap();
+
+            let result = relayer
+                .check_balance_and_trigger_token_swap_if_needed()
+                .await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_check_balance_provider_error() {
+            let ctx = TestCtx::default();
+            ctx.setup_network().await;
+            let mut relayer_model = ctx.relayer_model.clone();
+
+            // Set up swap config with threshold
+            let mut policy = RelayerStellarPolicy::default();
+            policy.swap_config = Some(RelayerStellarSwapConfig {
+                strategies: vec![],
+                min_balance_threshold: Some(1000000),
+                cron_schedule: None,
+            });
+            relayer_model.policies = RelayerNetworkPolicy::Stellar(policy);
+
+            let mut provider = MockStellarProviderTrait::new();
+            provider.expect_get_account().returning(|_| {
+                Box::pin(async { Err(ProviderError::Other("Network error".to_string())) })
+            });
+
+            let signer = Arc::new(MockStellarSignTrait::new());
+            let dex_service = create_mock_dex_service();
+
+            let relayer_repo = MockRelayerRepository::new();
+            let tx_repo = MockTransactionRepository::new();
+            let job_producer = MockJobProducerTrait::new();
+            let counter = MockTransactionCounterServiceTrait::new();
+
+            let relayer = StellarRelayer::new(
+                relayer_model.clone(),
+                signer,
+                provider,
+                StellarRelayerDependencies::new(
+                    Arc::new(relayer_repo),
+                    ctx.network_repository.clone(),
+                    Arc::new(tx_repo),
+                    Arc::new(counter),
+                    Arc::new(job_producer),
+                ),
+                dex_service,
+            )
+            .await
+            .unwrap();
+
+            let result = relayer
+                .check_balance_and_trigger_token_swap_if_needed()
+                .await;
+            assert!(result.is_err());
+        }
+    }
+
+    // Tests for check_health
+    mod check_health_tests {
+        use super::*;
+        use crate::models::RelayerStellarSwapConfig;
+
+        #[tokio::test]
+        async fn test_check_health_success() {
+            let ctx = TestCtx::default();
+            ctx.setup_network().await;
+            let relayer_model = ctx.relayer_model.clone();
+
+            let mut provider = MockStellarProviderTrait::new();
+            provider.expect_get_account().returning(|_| {
+                Box::pin(async {
+                    Ok(AccountEntry {
+                        account_id: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32]))),
+                        balance: 10000000,
+                        ext: AccountEntryExt::V0,
+                        flags: 0,
+                        home_domain: String32::default(),
+                        inflation_dest: None,
+                        seq_num: SequenceNumber(5),
+                        num_sub_entries: 0,
+                        signers: VecM::default(),
+                        thresholds: Thresholds([0, 0, 0, 0]),
+                    })
+                })
+            });
+
+            let signer = Arc::new(MockStellarSignTrait::new());
+            let dex_service = create_mock_dex_service();
+
+            let relayer_repo = MockRelayerRepository::new();
+            let tx_repo = MockTransactionRepository::new();
+            let job_producer = MockJobProducerTrait::new();
+
+            let mut counter = MockTransactionCounterServiceTrait::new();
+            counter
+                .expect_set()
+                .returning(|_| Box::pin(async { Ok(()) }));
+
+            let relayer = StellarRelayer::new(
+                relayer_model.clone(),
+                signer,
+                provider,
+                StellarRelayerDependencies::new(
+                    Arc::new(relayer_repo),
+                    ctx.network_repository.clone(),
+                    Arc::new(tx_repo),
+                    Arc::new(counter),
+                    Arc::new(job_producer),
+                ),
+                dex_service,
+            )
+            .await
+            .unwrap();
+
+            let result = relayer.check_health().await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_check_health_sequence_sync_fails() {
+            let ctx = TestCtx::default();
+            ctx.setup_network().await;
+            let relayer_model = ctx.relayer_model.clone();
+
+            let mut provider = MockStellarProviderTrait::new();
+            provider.expect_get_account().returning(|_| {
+                Box::pin(async { Err(ProviderError::Other("Network error".to_string())) })
+            });
+
+            let signer = Arc::new(MockStellarSignTrait::new());
+            let dex_service = create_mock_dex_service();
+
+            let relayer_repo = MockRelayerRepository::new();
+            let tx_repo = MockTransactionRepository::new();
+            let job_producer = MockJobProducerTrait::new();
+            let counter = MockTransactionCounterServiceTrait::new();
+
+            let relayer = StellarRelayer::new(
+                relayer_model.clone(),
+                signer,
+                provider,
+                StellarRelayerDependencies::new(
+                    Arc::new(relayer_repo),
+                    ctx.network_repository.clone(),
+                    Arc::new(tx_repo),
+                    Arc::new(counter),
+                    Arc::new(job_producer),
+                ),
+                dex_service,
+            )
+            .await
+            .unwrap();
+
+            let result = relayer.check_health().await;
+            assert!(result.is_err());
+            let failures = result.unwrap_err();
+            assert_eq!(failures.len(), 1);
+            assert!(matches!(
+                failures[0],
+                HealthCheckFailure::SequenceSyncFailed(_)
+            ));
+        }
+
+        #[tokio::test]
+        async fn test_check_health_with_user_fee_strategy() {
+            let ctx = TestCtx::default();
+            ctx.setup_network().await;
+            let mut relayer_model = ctx.relayer_model.clone();
+
+            // Set up user fee payment strategy
+            let mut policy = RelayerStellarPolicy::default();
+            policy.fee_payment_strategy = Some(StellarFeePaymentStrategy::User);
+            policy.swap_config = Some(RelayerStellarSwapConfig {
+                strategies: vec![],
+                min_balance_threshold: Some(1000000),
+                cron_schedule: None,
+            });
+            relayer_model.policies = RelayerNetworkPolicy::Stellar(policy);
+
+            let mut provider = MockStellarProviderTrait::new();
+            provider.expect_get_account().returning(|_| {
+                Box::pin(async {
+                    Ok(AccountEntry {
+                        account_id: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32]))),
+                        balance: 10000000, // Above threshold
+                        ext: AccountEntryExt::V0,
+                        flags: 0,
+                        home_domain: String32::default(),
+                        inflation_dest: None,
+                        seq_num: SequenceNumber(5),
+                        num_sub_entries: 0,
+                        signers: VecM::default(),
+                        thresholds: Thresholds([0, 0, 0, 0]),
+                    })
+                })
+            });
+
+            let signer = Arc::new(MockStellarSignTrait::new());
+            let dex_service = create_mock_dex_service();
+
+            let relayer_repo = MockRelayerRepository::new();
+            let tx_repo = MockTransactionRepository::new();
+            let job_producer = MockJobProducerTrait::new();
+
+            let mut counter = MockTransactionCounterServiceTrait::new();
+            counter
+                .expect_set()
+                .returning(|_| Box::pin(async { Ok(()) }));
+
+            let relayer = StellarRelayer::new(
+                relayer_model.clone(),
+                signer,
+                provider,
+                StellarRelayerDependencies::new(
+                    Arc::new(relayer_repo),
+                    ctx.network_repository.clone(),
+                    Arc::new(tx_repo),
+                    Arc::new(counter),
+                    Arc::new(job_producer),
+                ),
+                dex_service,
+            )
+            .await
+            .unwrap();
+
+            let result = relayer.check_health().await;
+            // Should pass even with user fee strategy
+            assert!(result.is_ok());
+        }
+    }
+
+    // Tests for RPC method
+    mod rpc_tests {
+        use super::*;
+        use crate::models::{JsonRpcId, StellarRpcRequest};
+
+        #[tokio::test]
+        async fn test_rpc_invalid_network_request() {
+            let ctx = TestCtx::default();
+            ctx.setup_network().await;
+            let relayer_model = ctx.relayer_model.clone();
+
+            let provider = MockStellarProviderTrait::new();
+            let signer = Arc::new(MockStellarSignTrait::new());
+            let dex_service = create_mock_dex_service();
+
+            let relayer_repo = MockRelayerRepository::new();
+            let tx_repo = MockTransactionRepository::new();
+            let job_producer = MockJobProducerTrait::new();
+            let counter = MockTransactionCounterServiceTrait::new();
+
+            let relayer = StellarRelayer::new(
+                relayer_model.clone(),
+                signer,
+                provider,
+                StellarRelayerDependencies::new(
+                    Arc::new(relayer_repo),
+                    ctx.network_repository.clone(),
+                    Arc::new(tx_repo),
+                    Arc::new(counter),
+                    Arc::new(job_producer),
+                ),
+                dex_service,
+            )
+            .await
+            .unwrap();
+
+            // Create a request with wrong network type
+            let request = JsonRpcRequest {
+                jsonrpc: "2.0".to_string(),
+                id: Some(JsonRpcId::Number(1)),
+                params: NetworkRpcRequest::Evm(crate::models::EvmRpcRequest::RawRpcRequest {
+                    method: "eth_blockNumber".to_string(),
+                    params: serde_json::Value::Null,
+                }),
+            };
+
+            let result = relayer.rpc(request).await;
+            assert!(result.is_ok());
+            let response = result.unwrap();
+            // Should return an error response for invalid network type
+            assert!(response.error.is_some());
+        }
+
+        #[tokio::test]
+        async fn test_rpc_provider_error() {
+            let ctx = TestCtx::default();
+            ctx.setup_network().await;
+            let relayer_model = ctx.relayer_model.clone();
+
+            let mut provider = MockStellarProviderTrait::new();
+            provider.expect_raw_request_dyn().returning(|_, _, _| {
+                Box::pin(async { Err(ProviderError::Other("RPC error".to_string())) })
+            });
+
+            let signer = Arc::new(MockStellarSignTrait::new());
+            let dex_service = create_mock_dex_service();
+
+            let relayer_repo = MockRelayerRepository::new();
+            let tx_repo = MockTransactionRepository::new();
+            let job_producer = MockJobProducerTrait::new();
+            let counter = MockTransactionCounterServiceTrait::new();
+
+            let relayer = StellarRelayer::new(
+                relayer_model.clone(),
+                signer,
+                provider,
+                StellarRelayerDependencies::new(
+                    Arc::new(relayer_repo),
+                    ctx.network_repository.clone(),
+                    Arc::new(tx_repo),
+                    Arc::new(counter),
+                    Arc::new(job_producer),
+                ),
+                dex_service,
+            )
+            .await
+            .unwrap();
+
+            let request = JsonRpcRequest {
+                jsonrpc: "2.0".to_string(),
+                id: Some(JsonRpcId::Number(1)),
+                params: NetworkRpcRequest::Stellar(StellarRpcRequest::RawRpcRequest {
+                    method: "getHealth".to_string(),
+                    params: serde_json::Value::Null,
+                }),
+            };
+
+            let result = relayer.rpc(request).await;
+            assert!(result.is_ok());
+            let response = result.unwrap();
+            // Should return an error response for provider error
+            assert!(response.error.is_some());
+        }
+
+        #[tokio::test]
+        async fn test_rpc_success() {
+            let ctx = TestCtx::default();
+            ctx.setup_network().await;
+            let relayer_model = ctx.relayer_model.clone();
+
+            let mut provider = MockStellarProviderTrait::new();
+            provider.expect_raw_request_dyn().returning(|_, _, _| {
+                Box::pin(async { Ok(serde_json::json!({"status": "healthy"})) })
+            });
+
+            let signer = Arc::new(MockStellarSignTrait::new());
+            let dex_service = create_mock_dex_service();
+
+            let relayer_repo = MockRelayerRepository::new();
+            let tx_repo = MockTransactionRepository::new();
+            let job_producer = MockJobProducerTrait::new();
+            let counter = MockTransactionCounterServiceTrait::new();
+
+            let relayer = StellarRelayer::new(
+                relayer_model.clone(),
+                signer,
+                provider,
+                StellarRelayerDependencies::new(
+                    Arc::new(relayer_repo),
+                    ctx.network_repository.clone(),
+                    Arc::new(tx_repo),
+                    Arc::new(counter),
+                    Arc::new(job_producer),
+                ),
+                dex_service,
+            )
+            .await
+            .unwrap();
+
+            let request = JsonRpcRequest {
+                jsonrpc: "2.0".to_string(),
+                id: Some(JsonRpcId::Number(1)),
+                params: NetworkRpcRequest::Stellar(StellarRpcRequest::RawRpcRequest {
+                    method: "getHealth".to_string(),
+                    params: serde_json::Value::Null,
+                }),
+            };
+
+            let result = relayer.rpc(request).await;
+            assert!(result.is_ok());
+            let response = result.unwrap();
+            assert!(response.error.is_none());
+            assert!(response.result.is_some());
+        }
+    }
 }

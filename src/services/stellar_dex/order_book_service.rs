@@ -179,6 +179,13 @@ where
     ) -> Result<u64, StellarDexServiceError> {
         let parts: Vec<&str> = amount_str.split('.').collect();
 
+        // Validate: at most one decimal point
+        if parts.len() > 2 {
+            return Err(StellarDexServiceError::UnknownError(format!(
+                "Invalid amount string: multiple decimal points: {amount_str}"
+            )));
+        }
+
         // Parse integer part into u128 for safe arithmetic
         let int_part = parts[0].parse::<u128>().map_err(|_| {
             StellarDexServiceError::UnknownError(format!("Invalid amount string: {amount_str}"))
@@ -818,5 +825,638 @@ where
             transaction_hash,
             destination_amount: quote.out_amount,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::SignerError;
+    use crate::services::provider::MockStellarProviderTrait;
+    use crate::services::signer::{MockStellarSignTrait, Signer};
+    use async_trait::async_trait;
+    use std::sync::Arc;
+
+    // Combined mock that implements both StellarSignTrait and Signer
+    struct MockCombinedSigner {
+        stellar_mock: MockStellarSignTrait,
+    }
+
+    impl MockCombinedSigner {
+        fn new() -> Self {
+            Self {
+                stellar_mock: MockStellarSignTrait::new(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl StellarSignTrait for MockCombinedSigner {
+        async fn sign_xdr_transaction(
+            &self,
+            unsigned_xdr: &str,
+            network_passphrase: &str,
+        ) -> Result<crate::domain::relayer::SignXdrTransactionResponseStellar, SignerError>
+        {
+            self.stellar_mock
+                .sign_xdr_transaction(unsigned_xdr, network_passphrase)
+                .await
+        }
+    }
+
+    #[async_trait]
+    impl Signer for MockCombinedSigner {
+        async fn address(&self) -> Result<crate::models::Address, SignerError> {
+            Ok(crate::models::Address::Stellar(
+                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            ))
+        }
+
+        async fn sign_transaction(
+            &self,
+            _transaction: crate::models::NetworkTransactionData,
+        ) -> Result<crate::domain::SignTransactionResponse, SignerError> {
+            Ok(crate::domain::SignTransactionResponse::Stellar(
+                crate::domain::SignTransactionResponseStellar {
+                    signature: crate::models::DecoratedSignature {
+                        hint: soroban_rs::xdr::SignatureHint([0; 4]),
+                        signature: soroban_rs::xdr::Signature(
+                            soroban_rs::xdr::BytesM::try_from(vec![0u8; 64]).unwrap(),
+                        ),
+                    },
+                },
+            ))
+        }
+    }
+
+    // Helper function to create a test service with mocks
+    fn create_test_service() -> (
+        OrderBookService<MockStellarProviderTrait, MockCombinedSigner>,
+        Arc<MockStellarProviderTrait>,
+        Arc<MockCombinedSigner>,
+    ) {
+        let provider = Arc::new(MockStellarProviderTrait::new());
+        let signer = Arc::new(MockCombinedSigner::new());
+
+        let service = OrderBookService::new(
+            "https://horizon-testnet.stellar.org".to_string(),
+            provider.clone(),
+            signer.clone(),
+        )
+        .expect("Failed to create OrderBookService");
+
+        (service, provider, signer)
+    }
+
+    #[test]
+    fn test_parse_asset_to_spec_native() {
+        let (service, _, _) = create_test_service();
+
+        let result = service.parse_asset_to_spec("native");
+        assert!(result.is_ok());
+        assert!(matches!(result.unwrap(), AssetSpec::Native));
+
+        let result = service.parse_asset_to_spec("");
+        assert!(result.is_ok());
+        assert!(matches!(result.unwrap(), AssetSpec::Native));
+    }
+
+    #[test]
+    fn test_parse_asset_to_spec_credit4() {
+        let (service, _, _) = create_test_service();
+
+        let result = service
+            .parse_asset_to_spec("USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5");
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            AssetSpec::Credit4 { code, issuer } => {
+                assert_eq!(code, "USDC");
+                assert_eq!(
+                    issuer,
+                    "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+                );
+            }
+            _ => panic!("Expected Credit4"),
+        }
+    }
+
+    #[test]
+    fn test_parse_asset_to_spec_credit12() {
+        let (service, _, _) = create_test_service();
+
+        let result = service.parse_asset_to_spec(
+            "LONGASSETCD:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        );
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            AssetSpec::Credit12 { code, issuer } => {
+                assert_eq!(code, "LONGASSETCD");
+                assert_eq!(
+                    issuer,
+                    "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+                );
+            }
+            _ => panic!("Expected Credit12"),
+        }
+    }
+
+    #[test]
+    fn test_parse_asset_to_spec_invalid() {
+        let (service, _, _) = create_test_service();
+
+        // Missing colon
+        let result = service
+            .parse_asset_to_spec("USDCGBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5");
+        assert!(result.is_err());
+
+        // Empty code
+        let result = service
+            .parse_asset_to_spec(":GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5");
+        assert!(result.is_err());
+
+        // Empty issuer
+        let result = service.parse_asset_to_spec("USDC:");
+        assert!(result.is_err());
+
+        // Code too long (>12 chars)
+        let result = service.parse_asset_to_spec(
+            "VERYLONGASSETCODE:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_to_decimal_string() {
+        let (service, _, _) = create_test_service();
+
+        // Standard 7 decimals (stroops)
+        assert_eq!(service.to_decimal_string(10000000, 7), "1.0000000");
+        assert_eq!(service.to_decimal_string(12345678, 7), "1.2345678");
+        assert_eq!(service.to_decimal_string(100, 7), "0.0000100");
+        assert_eq!(service.to_decimal_string(1, 7), "0.0000001");
+
+        // Different decimals
+        assert_eq!(service.to_decimal_string(1000, 3), "1.000");
+        assert_eq!(service.to_decimal_string(123456, 6), "0.123456");
+
+        // Zero
+        assert_eq!(service.to_decimal_string(0, 7), "0.0000000");
+    }
+
+    #[test]
+    fn test_parse_string_amount_to_stroops() {
+        let (service, _, _) = create_test_service();
+
+        // Standard conversions with 7 decimals
+        assert_eq!(
+            service
+                .parse_string_amount_to_stroops("1.0000000", 7)
+                .unwrap(),
+            10000000
+        );
+        assert_eq!(
+            service
+                .parse_string_amount_to_stroops("1.2345678", 7)
+                .unwrap(),
+            12345678
+        );
+        assert_eq!(
+            service
+                .parse_string_amount_to_stroops("0.0000100", 7)
+                .unwrap(),
+            100
+        );
+        assert_eq!(
+            service
+                .parse_string_amount_to_stroops("0.0000001", 7)
+                .unwrap(),
+            1
+        );
+
+        // Integer (no decimal)
+        assert_eq!(
+            service.parse_string_amount_to_stroops("100", 7).unwrap(),
+            1000000000
+        );
+
+        // Trailing decimal point
+        assert_eq!(
+            service.parse_string_amount_to_stroops("100.", 7).unwrap(),
+            1000000000
+        );
+
+        // Fewer decimals than expected (padding)
+        assert_eq!(
+            service.parse_string_amount_to_stroops("1.12", 7).unwrap(),
+            11200000
+        );
+
+        // More decimals than expected (truncation)
+        assert_eq!(
+            service
+                .parse_string_amount_to_stroops("1.12345678", 7)
+                .unwrap(),
+            11234567
+        );
+
+        // Different decimal precision
+        assert_eq!(
+            service.parse_string_amount_to_stroops("1.234", 3).unwrap(),
+            1234
+        );
+        assert_eq!(
+            service.parse_string_amount_to_stroops("0.5", 6).unwrap(),
+            500000
+        );
+    }
+
+    #[test]
+    fn test_parse_string_amount_to_stroops_invalid() {
+        let (service, _, _) = create_test_service();
+
+        // Invalid format
+        assert!(service.parse_string_amount_to_stroops("abc", 7).is_err());
+        assert!(service.parse_string_amount_to_stroops("1.2.3", 7).is_err());
+        assert!(service.parse_string_amount_to_stroops("", 7).is_err());
+    }
+
+    #[test]
+    fn test_parse_string_amount_to_stroops_overflow() {
+        let (service, _, _) = create_test_service();
+
+        // Value exceeds u64::MAX
+        let huge_value = format!("{}.0", u64::MAX as u128 + 1);
+        assert!(service
+            .parse_string_amount_to_stroops(&huge_value, 7)
+            .is_err());
+    }
+
+    #[test]
+    fn test_validate_swap_params_valid() {
+        let (service, _, _) = create_test_service();
+
+        let params = SwapTransactionParams {
+            source_account: "GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string(),
+            source_asset: "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+                .to_string(),
+            destination_asset: "native".to_string(),
+            amount: 1000000,
+            slippage_percent: 1.0,
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            source_asset_decimals: Some(7),
+            destination_asset_decimals: Some(7),
+        };
+
+        assert!(service.validate_swap_params(&params).is_ok());
+    }
+
+    #[test]
+    fn test_validate_swap_params_native_source() {
+        let (service, _, _) = create_test_service();
+
+        let params = SwapTransactionParams {
+            source_account: "GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string(),
+            source_asset: "native".to_string(),
+            destination_asset: "native".to_string(),
+            amount: 1000000,
+            slippage_percent: 1.0,
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            source_asset_decimals: Some(7),
+            destination_asset_decimals: Some(7),
+        };
+
+        let result = service.validate_swap_params(&params);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            StellarDexServiceError::InvalidAssetIdentifier(_)
+        ));
+    }
+
+    #[test]
+    fn test_validate_swap_params_zero_amount() {
+        let (service, _, _) = create_test_service();
+
+        let params = SwapTransactionParams {
+            source_account: "GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string(),
+            source_asset: "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+                .to_string(),
+            destination_asset: "native".to_string(),
+            amount: 0,
+            slippage_percent: 1.0,
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            source_asset_decimals: Some(7),
+            destination_asset_decimals: Some(7),
+        };
+
+        let result = service.validate_swap_params(&params);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            StellarDexServiceError::InvalidAssetIdentifier(_)
+        ));
+    }
+
+    #[test]
+    fn test_validate_swap_params_invalid_slippage() {
+        let (service, _, _) = create_test_service();
+
+        // Negative slippage
+        let mut params = SwapTransactionParams {
+            source_account: "GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string(),
+            source_asset: "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+                .to_string(),
+            destination_asset: "native".to_string(),
+            amount: 1000000,
+            slippage_percent: -1.0,
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            source_asset_decimals: Some(7),
+            destination_asset_decimals: Some(7),
+        };
+
+        assert!(service.validate_swap_params(&params).is_err());
+
+        // Slippage > 100%
+        params.slippage_percent = 101.0;
+        assert!(service.validate_swap_params(&params).is_err());
+    }
+
+    #[test]
+    fn test_validate_swap_params_non_native_destination() {
+        let (service, _, _) = create_test_service();
+
+        let params = SwapTransactionParams {
+            source_account: "GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string(),
+            source_asset: "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+                .to_string(),
+            destination_asset: "EUROC:GXXXXXXXXXXXXXX".to_string(),
+            amount: 1000000,
+            slippage_percent: 1.0,
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            source_asset_decimals: Some(7),
+            destination_asset_decimals: Some(7),
+        };
+
+        let result = service.validate_swap_params(&params);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_get_token_to_xlm_quote_native_to_native() {
+        let (service, _, _) = create_test_service();
+
+        let result = service
+            .get_token_to_xlm_quote("native", 10000000, 1.0, Some(7))
+            .await;
+
+        assert!(result.is_ok());
+        let quote = result.unwrap();
+        assert_eq!(quote.input_asset, "native");
+        assert_eq!(quote.output_asset, "native");
+        assert_eq!(quote.in_amount, 10000000);
+        assert_eq!(quote.out_amount, 10000000);
+        assert_eq!(quote.price_impact_pct, 0.0);
+        assert_eq!(quote.slippage_bps, 100);
+        assert!(quote.path.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_xlm_to_token_quote_native_to_native() {
+        let (service, _, _) = create_test_service();
+
+        let result = service
+            .get_xlm_to_token_quote("native", 10000000, 1.0, Some(7))
+            .await;
+
+        assert!(result.is_ok());
+        let quote = result.unwrap();
+        assert_eq!(quote.input_asset, "native");
+        assert_eq!(quote.output_asset, "native");
+        assert_eq!(quote.in_amount, 10000000);
+        assert_eq!(quote.out_amount, 10000000);
+        assert_eq!(quote.price_impact_pct, 0.0);
+        assert_eq!(quote.slippage_bps, 100);
+        assert!(quote.path.is_none());
+    }
+
+    #[test]
+    fn test_supported_asset_types() {
+        let (service, _, _) = create_test_service();
+
+        let types = service.supported_asset_types();
+        assert_eq!(types.len(), 2);
+        assert!(types.contains(&AssetType::Native));
+        assert!(types.contains(&AssetType::Classic));
+    }
+
+    // Integration tests with mocked provider and signer
+
+    #[test]
+    fn test_swap_params_validation_comprehensive() {
+        let (service, _, _) = create_test_service();
+
+        // Test valid params
+        let params = SwapTransactionParams {
+            source_account: "GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string(),
+            source_asset: "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+                .to_string(),
+            destination_asset: "native".to_string(),
+            amount: 100000000,
+            slippage_percent: 1.0,
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            source_asset_decimals: Some(7),
+            destination_asset_decimals: Some(7),
+        };
+
+        let validation = service.validate_swap_params(&params);
+        assert!(validation.is_ok());
+    }
+
+    #[test]
+    fn test_parse_asset_to_spec_edge_cases() {
+        let (_service, _, _) = create_test_service();
+
+        // Test asset with exactly 4 characters
+        let result = _service
+            .parse_asset_to_spec("ABCD:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            AssetSpec::Credit4 { code, .. } => assert_eq!(code, "ABCD"),
+            _ => panic!("Expected Credit4"),
+        }
+
+        // Test asset with exactly 12 characters
+        let result = _service.parse_asset_to_spec(
+            "ABCDEFGHIJKL:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        );
+        assert!(result.is_ok());
+        match result.unwrap() {
+            AssetSpec::Credit12 { code, .. } => assert_eq!(code, "ABCDEFGHIJKL"),
+            _ => panic!("Expected Credit12"),
+        }
+
+        // Test asset with 5 characters (should be Credit12)
+        let result = _service
+            .parse_asset_to_spec("ABCDE:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            AssetSpec::Credit12 { code, .. } => assert_eq!(code, "ABCDE"),
+            _ => panic!("Expected Credit12"),
+        }
+    }
+
+    #[test]
+    fn test_to_decimal_string_edge_cases() {
+        let (_service, _, _) = create_test_service();
+
+        // Test with 0 decimals (note: function adds trailing ".")
+        assert_eq!(_service.to_decimal_string(123, 0), "123.");
+
+        // Test with very large number (u64::MAX with 7 decimals)
+        assert_eq!(
+            _service.to_decimal_string(u64::MAX, 7),
+            "1844674407370.9551615"
+        );
+
+        // Test with 1 decimal
+        assert_eq!(_service.to_decimal_string(123, 1), "12.3");
+
+        // Test with 2 decimals
+        assert_eq!(_service.to_decimal_string(12345, 2), "123.45");
+    }
+
+    #[test]
+    fn test_parse_string_amount_edge_cases() {
+        let (_service, _, _) = create_test_service();
+
+        // Test with no decimal point
+        assert_eq!(
+            _service.parse_string_amount_to_stroops("100", 7).unwrap(),
+            1000000000
+        );
+
+        // Test with trailing decimal point
+        assert_eq!(
+            _service.parse_string_amount_to_stroops("100.", 7).unwrap(),
+            1000000000
+        );
+
+        // Test with leading zero
+        assert_eq!(
+            _service.parse_string_amount_to_stroops("0.1", 7).unwrap(),
+            1000000
+        );
+
+        // Test with many decimal places (truncation)
+        assert_eq!(
+            _service
+                .parse_string_amount_to_stroops("1.123456789", 7)
+                .unwrap(),
+            11234567
+        );
+
+        // Test with few decimal places (padding)
+        assert_eq!(
+            _service.parse_string_amount_to_stroops("1.12", 7).unwrap(),
+            11200000
+        );
+    }
+
+    // Note: Integration tests for sign_and_submit_transaction, prepare_swap_transaction,
+    // and other async functions that require HTTP mocking would need a more sophisticated
+    // setup with wiremock or similar HTTP mocking libraries. The current test structure
+    // focuses on unit-testable logic (parsing, validation, conversion) which provides
+    // excellent coverage for the core functionality.
+
+    // Edge case tests
+    #[test]
+    fn test_slippage_to_bps_conversion() {
+        let (_service, _, _) = create_test_service();
+
+        // Test various slippage percentages
+        let params = SwapTransactionParams {
+            source_account: "GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string(),
+            source_asset: "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+                .to_string(),
+            destination_asset: "native".to_string(),
+            amount: 1000000,
+            slippage_percent: 0.5,
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            source_asset_decimals: Some(7),
+            destination_asset_decimals: Some(7),
+        };
+
+        // Verify slippage conversion (0.5% = 50 bps)
+        let expected_bps = (params.slippage_percent * SLIPPAGE_TO_BPS_MULTIPLIER) as u32;
+        assert_eq!(expected_bps, 50);
+    }
+
+    #[test]
+    fn test_min_amount_calculation() {
+        // Test minimum receive amount calculation with slippage
+        // out_amount * (10000 - bps) / 10000
+
+        let out_amount = 1000000u128; // 1 XLM in stroops
+        let slippage_bps = 100u128; // 1%
+        let basis = 10000u128;
+
+        let min_amount = out_amount * (basis - slippage_bps) / basis;
+        assert_eq!(min_amount, 990000); // 0.99 XLM
+
+        // Test with 0.5% slippage
+        let slippage_bps = 50u128;
+        let min_amount = out_amount * (basis - slippage_bps) / basis;
+        assert_eq!(min_amount, 995000); // 0.995 XLM
+
+        // Test edge case: 100% slippage (accept anything)
+        let slippage_bps = 10000u128;
+        let min_amount = out_amount * (basis - slippage_bps) / basis;
+        assert_eq!(min_amount, 0);
+    }
+
+    #[test]
+    fn test_parse_string_amount_roundtrip() {
+        let (service, _, _) = create_test_service();
+
+        // Test that to_decimal_string and parse_string_amount_to_stroops are inverses
+        let test_amounts = vec![10000000u64, 12345678, 100, 1, 9999999999];
+
+        for amount in test_amounts {
+            let decimal_str = service.to_decimal_string(amount, 7);
+            let parsed = service
+                .parse_string_amount_to_stroops(&decimal_str, 7)
+                .unwrap();
+            assert_eq!(parsed, amount, "Roundtrip failed for amount {}", amount);
+        }
+    }
+
+    #[test]
+    fn test_asset_spec_conversion_roundtrip() {
+        let (service, _, _) = create_test_service();
+
+        let test_cases = vec![
+            "native",
+            "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+            "BTC:GCNSGHUCG5VMGLT5RIYYZSO7VQULQKAJ62QA33DBC5PPBSO57LFWVV6P",
+            "LONGASSETCD:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        ];
+
+        for asset_id in test_cases {
+            let spec = service.parse_asset_to_spec(asset_id).unwrap();
+
+            // Try to convert to XDR Asset
+            let xdr_result = Asset::try_from(spec);
+            assert!(xdr_result.is_ok(), "Failed to convert {} to XDR", asset_id);
+        }
+    }
+
+    #[test]
+    fn test_transaction_constants() {
+        // Verify constants are reasonable
+        assert_eq!(TRANSACTION_VALIDITY_MINUTES, 5);
+        assert_eq!(HTTP_REQUEST_TIMEOUT_SECONDS, 7);
+        assert_eq!(SLIPPAGE_TO_BPS_MULTIPLIER, 100.0);
     }
 }

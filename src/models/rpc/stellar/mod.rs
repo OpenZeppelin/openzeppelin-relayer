@@ -192,3 +192,323 @@ pub enum StellarRpcResult {
     /// Raw JSON-RPC response value. Covers string or structured JSON values.
     RawRpcResult(serde_json::Value),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::transaction::stellar::{asset::AssetSpec, OperationSpec};
+
+    const TEST_PK: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+    const VALID_FEE_TOKEN_NATIVE: &str = "native";
+    const VALID_FEE_TOKEN_USDC: &str =
+        "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
+    const INVALID_FEE_TOKEN: &str = "invalid-token";
+
+    // FeeEstimateRequestParams tests
+
+    #[test]
+    fn test_fee_estimate_validate_with_xdr_success() {
+        let params = FeeEstimateRequestParams {
+            transaction_xdr: Some("AAAAAgAAAAA=".to_string()),
+            operations: None,
+            source_account: None,
+            fee_token: VALID_FEE_TOKEN_USDC.to_string(),
+        };
+        assert!(params.validate().is_ok());
+    }
+
+    #[test]
+    fn test_fee_estimate_validate_with_operations_success() {
+        let params = FeeEstimateRequestParams {
+            transaction_xdr: None,
+            operations: Some(vec![OperationSpec::Payment {
+                destination: TEST_PK.to_string(),
+                amount: 1000000,
+                asset: AssetSpec::Native,
+            }]),
+            source_account: Some(TEST_PK.to_string()),
+            fee_token: VALID_FEE_TOKEN_USDC.to_string(),
+        };
+        assert!(params.validate().is_ok());
+    }
+
+    #[test]
+    fn test_fee_estimate_validate_with_usdc_token_success() {
+        let params = FeeEstimateRequestParams {
+            transaction_xdr: Some("AAAAAgAAAAA=".to_string()),
+            operations: None,
+            source_account: None,
+            fee_token: VALID_FEE_TOKEN_USDC.to_string(),
+        };
+        assert!(params.validate().is_ok());
+    }
+
+    #[test]
+    fn test_fee_estimate_validate_invalid_fee_token() {
+        let params = FeeEstimateRequestParams {
+            transaction_xdr: Some("AAAAAgAAAAA=".to_string()),
+            operations: None,
+            source_account: None,
+            fee_token: INVALID_FEE_TOKEN.to_string(),
+        };
+        let result = params.validate();
+        assert!(result.is_err());
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("Invalid fee_token structure"));
+        } else {
+            panic!("Expected BadRequest error for invalid fee_token");
+        }
+    }
+
+    #[test]
+    fn test_fee_estimate_validate_both_xdr_and_operations() {
+        let params = FeeEstimateRequestParams {
+            transaction_xdr: Some("AAAAAgAAAAA=".to_string()),
+            operations: Some(vec![OperationSpec::Payment {
+                destination: TEST_PK.to_string(),
+                amount: 1000000,
+                asset: AssetSpec::Native,
+            }]),
+            source_account: Some(TEST_PK.to_string()),
+            fee_token: VALID_FEE_TOKEN_NATIVE.to_string(),
+        };
+        let result = params.validate();
+        assert!(result.is_err());
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("Cannot provide both transaction_xdr and operations"));
+        } else {
+            panic!("Expected BadRequest error for both xdr and operations");
+        }
+    }
+
+    #[test]
+    fn test_fee_estimate_validate_neither_xdr_nor_operations() {
+        let params = FeeEstimateRequestParams {
+            transaction_xdr: None,
+            operations: None,
+            source_account: None,
+            fee_token: VALID_FEE_TOKEN_NATIVE.to_string(),
+        };
+        let result = params.validate();
+        assert!(result.is_err());
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("Must provide either transaction_xdr or operations"));
+        } else {
+            panic!("Expected BadRequest error for missing both xdr and operations");
+        }
+    }
+
+    #[test]
+    fn test_fee_estimate_validate_operations_without_source_account() {
+        let params = FeeEstimateRequestParams {
+            transaction_xdr: None,
+            operations: Some(vec![OperationSpec::Payment {
+                destination: TEST_PK.to_string(),
+                amount: 1000000,
+                asset: AssetSpec::Native,
+            }]),
+            source_account: None,
+            fee_token: VALID_FEE_TOKEN_NATIVE.to_string(),
+        };
+        let result = params.validate();
+        assert!(result.is_err());
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("source_account is required when providing operations"));
+        } else {
+            panic!("Expected BadRequest error for missing source_account");
+        }
+    }
+
+    #[test]
+    fn test_fee_estimate_validate_operations_with_empty_source_account() {
+        let params = FeeEstimateRequestParams {
+            transaction_xdr: None,
+            operations: Some(vec![OperationSpec::Payment {
+                destination: TEST_PK.to_string(),
+                amount: 1000000,
+                asset: AssetSpec::Native,
+            }]),
+            source_account: Some("".to_string()),
+            fee_token: VALID_FEE_TOKEN_NATIVE.to_string(),
+        };
+        let result = params.validate();
+        assert!(result.is_err());
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("source_account is required when providing operations"));
+        } else {
+            panic!("Expected BadRequest error for empty source_account");
+        }
+    }
+
+    #[test]
+    fn test_fee_estimate_validate_empty_operations() {
+        let params = FeeEstimateRequestParams {
+            transaction_xdr: None,
+            operations: Some(vec![]),
+            source_account: Some(TEST_PK.to_string()),
+            fee_token: VALID_FEE_TOKEN_NATIVE.to_string(),
+        };
+        let result = params.validate();
+        assert!(result.is_err());
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("Must provide either transaction_xdr or operations"));
+        } else {
+            panic!("Expected BadRequest error for empty operations");
+        }
+    }
+
+    // PrepareTransactionRequestParams tests
+
+    #[test]
+    fn test_prepare_transaction_validate_with_xdr_success() {
+        let params = PrepareTransactionRequestParams {
+            transaction_xdr: Some("AAAAAgAAAAA=".to_string()),
+            operations: None,
+            source_account: None,
+            fee_token: VALID_FEE_TOKEN_USDC.to_string(),
+        };
+        assert!(params.validate().is_ok());
+    }
+
+    #[test]
+    fn test_prepare_transaction_validate_with_operations_success() {
+        let params = PrepareTransactionRequestParams {
+            transaction_xdr: None,
+            operations: Some(vec![OperationSpec::Payment {
+                destination: TEST_PK.to_string(),
+                amount: 1000000,
+                asset: AssetSpec::Native,
+            }]),
+            source_account: Some(TEST_PK.to_string()),
+            fee_token: VALID_FEE_TOKEN_USDC.to_string(),
+        };
+        assert!(params.validate().is_ok());
+    }
+
+    #[test]
+    fn test_prepare_transaction_validate_with_usdc_token_success() {
+        let params = PrepareTransactionRequestParams {
+            transaction_xdr: Some("AAAAAgAAAAA=".to_string()),
+            operations: None,
+            source_account: None,
+            fee_token: VALID_FEE_TOKEN_USDC.to_string(),
+        };
+        assert!(params.validate().is_ok());
+    }
+
+    #[test]
+    fn test_prepare_transaction_validate_invalid_fee_token() {
+        let params = PrepareTransactionRequestParams {
+            transaction_xdr: Some("AAAAAgAAAAA=".to_string()),
+            operations: None,
+            source_account: None,
+            fee_token: INVALID_FEE_TOKEN.to_string(),
+        };
+        let result = params.validate();
+        assert!(result.is_err());
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("Invalid fee_token structure"));
+        } else {
+            panic!("Expected BadRequest error for invalid fee_token");
+        }
+    }
+
+    #[test]
+    fn test_prepare_transaction_validate_both_xdr_and_operations() {
+        let params = PrepareTransactionRequestParams {
+            transaction_xdr: Some("AAAAAgAAAAA=".to_string()),
+            operations: Some(vec![OperationSpec::Payment {
+                destination: TEST_PK.to_string(),
+                amount: 1000000,
+                asset: AssetSpec::Native,
+            }]),
+            source_account: Some(TEST_PK.to_string()),
+            fee_token: VALID_FEE_TOKEN_NATIVE.to_string(),
+        };
+        let result = params.validate();
+        assert!(result.is_err());
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("Cannot provide both transaction_xdr and operations"));
+        } else {
+            panic!("Expected BadRequest error for both xdr and operations");
+        }
+    }
+
+    #[test]
+    fn test_prepare_transaction_validate_neither_xdr_nor_operations() {
+        let params = PrepareTransactionRequestParams {
+            transaction_xdr: None,
+            operations: None,
+            source_account: None,
+            fee_token: VALID_FEE_TOKEN_NATIVE.to_string(),
+        };
+        let result = params.validate();
+        assert!(result.is_err());
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("Must provide either transaction_xdr or operations"));
+        } else {
+            panic!("Expected BadRequest error for missing both xdr and operations");
+        }
+    }
+
+    #[test]
+    fn test_prepare_transaction_validate_operations_without_source_account() {
+        let params = PrepareTransactionRequestParams {
+            transaction_xdr: None,
+            operations: Some(vec![OperationSpec::Payment {
+                destination: TEST_PK.to_string(),
+                amount: 1000000,
+                asset: AssetSpec::Native,
+            }]),
+            source_account: None,
+            fee_token: VALID_FEE_TOKEN_NATIVE.to_string(),
+        };
+        let result = params.validate();
+        assert!(result.is_err());
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("source_account is required when providing operations"));
+        } else {
+            panic!("Expected BadRequest error for missing source_account");
+        }
+    }
+
+    #[test]
+    fn test_prepare_transaction_validate_operations_with_empty_source_account() {
+        let params = PrepareTransactionRequestParams {
+            transaction_xdr: None,
+            operations: Some(vec![OperationSpec::Payment {
+                destination: TEST_PK.to_string(),
+                amount: 1000000,
+                asset: AssetSpec::Native,
+            }]),
+            source_account: Some("".to_string()),
+            fee_token: VALID_FEE_TOKEN_NATIVE.to_string(),
+        };
+        let result = params.validate();
+        assert!(result.is_err());
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("source_account is required when providing operations"));
+        } else {
+            panic!("Expected BadRequest error for empty source_account");
+        }
+    }
+
+    #[test]
+    fn test_prepare_transaction_validate_empty_operations() {
+        let params = PrepareTransactionRequestParams {
+            transaction_xdr: None,
+            operations: Some(vec![]),
+            source_account: Some(TEST_PK.to_string()),
+            fee_token: VALID_FEE_TOKEN_NATIVE.to_string(),
+        };
+        let result = params.validate();
+        assert!(result.is_err());
+        // Empty operations array is treated as "no operations provided"
+        // so it falls into the "neither xdr nor operations" case
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("Must provide either transaction_xdr or operations"));
+        } else {
+            panic!("Expected BadRequest error for empty operations");
+        }
+    }
+}

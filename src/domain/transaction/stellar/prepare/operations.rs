@@ -115,7 +115,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        domain::{SignTransactionResponse, SignTransactionResponseStellar},
+        domain::{
+            transaction::stellar::test_helpers::TEST_PK, SignTransactionResponse,
+            SignTransactionResponseStellar,
+        },
         models::{
             AssetSpec, DecoratedSignature, NetworkTransactionData, NetworkType, OperationSpec,
             RepositoryError, TransactionInput, TransactionStatus,
@@ -151,12 +154,12 @@ mod tests {
 
     fn create_test_stellar_data() -> StellarTransactionData {
         StellarTransactionData {
-            source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            source_account: TEST_PK.to_string(),
             network_passphrase: "Test SDF Network ; September 2015".to_string(),
             fee: None,
             sequence_number: None,
             transaction_input: TransactionInput::Operations(vec![OperationSpec::Payment {
-                destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+                destination: TEST_PK.to_string(),
                 amount: 10000000, // 1 XLM in stroops
                 asset: AssetSpec::Native,
             }]),
@@ -179,7 +182,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_operations_payment_success() {
         let relayer_id = "test-relayer";
-        let relayer_address = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+        let relayer_address = TEST_PK;
 
         let mut counter = MockTransactionCounterTrait::new();
         counter
@@ -226,7 +229,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_operations_with_soroban_simulation() {
         let relayer_id = "test-relayer";
-        let relayer_address = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+        let relayer_address = TEST_PK;
 
         let mut counter = MockTransactionCounterTrait::new();
         counter
@@ -295,7 +298,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_operations_sequence_failure() {
         let relayer_id = "test-relayer";
-        let relayer_address = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+        let relayer_address = TEST_PK;
 
         let mut counter = MockTransactionCounterTrait::new();
         counter.expect_get_and_increment().returning(|_, _| {
@@ -331,7 +334,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_operations_build_envelope_failure() {
         let relayer_id = "test-relayer";
-        let relayer_address = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+        let relayer_address = TEST_PK;
 
         let mut counter = MockTransactionCounterTrait::new();
         counter
@@ -374,7 +377,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_operations_signer_failure() {
         let relayer_id = "test-relayer";
-        let relayer_address = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+        let relayer_address = TEST_PK;
 
         let mut counter = MockTransactionCounterTrait::new();
         counter
@@ -417,7 +420,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_operations_simulation_failure() {
         let relayer_id = "test-relayer";
-        let relayer_address = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+        let relayer_address = TEST_PK;
 
         let mut counter = MockTransactionCounterTrait::new();
         counter
@@ -472,6 +475,50 @@ mod tests {
                 _ => panic!("Expected UnexpectedError"),
             },
             _ => panic!("Expected UnexpectedError"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_operations_rejects_user_fee_payment_strategy() {
+        use crate::models::{RelayerStellarPolicy, StellarFeePaymentStrategy};
+
+        let relayer_id = "test-relayer";
+        let relayer_address = TEST_PK;
+
+        let counter = MockTransactionCounterTrait::new();
+        let provider = MockStellarProviderTrait::new();
+        let signer = MockSigner::new();
+
+        let tx = create_test_transaction();
+        let stellar_data = create_test_stellar_data();
+
+        // Create a policy with User fee payment strategy (gasless mode)
+        let mut policy = RelayerStellarPolicy::default();
+        policy.fee_payment_strategy = Some(StellarFeePaymentStrategy::User);
+
+        let result = process_operations(
+            &counter,
+            relayer_id,
+            relayer_address,
+            &tx,
+            stellar_data,
+            &provider,
+            &signer,
+            Some(&policy),
+        )
+        .await;
+
+        // Should return a validation error
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            TransactionError::ValidationError(msg) => {
+                assert!(msg.contains("Gasless transactions"));
+                assert!(msg.contains("User fee payment strategy"));
+                assert!(msg.contains("not supported via operations path"));
+                assert!(msg.contains("fee bump"));
+            }
+            other => panic!("Expected ValidationError, got: {:?}", other),
         }
     }
 }
