@@ -1377,6 +1377,192 @@ mod tests {
         );
     }
 
+    // ===== HealthCheckFailure Tests =====
+
+    #[test]
+    fn test_health_check_failure_display() {
+        let failure1 = HealthCheckFailure::NonceSyncFailed("nonce mismatch".to_string());
+        assert_eq!(failure1.to_string(), "Nonce sync failed: nonce mismatch");
+
+        let failure2 = HealthCheckFailure::RpcValidationFailed("connection timeout".to_string());
+        assert_eq!(
+            failure2.to_string(),
+            "RPC validation failed: connection timeout"
+        );
+
+        let failure3 = HealthCheckFailure::BalanceCheckFailed("insufficient funds".to_string());
+        assert_eq!(
+            failure3.to_string(),
+            "Balance check failed: insufficient funds"
+        );
+
+        let failure4 = HealthCheckFailure::SequenceSyncFailed("sequence error".to_string());
+        assert_eq!(failure4.to_string(), "Sequence sync failed: sequence error");
+    }
+
+    #[test]
+    fn test_health_check_failure_serialization() {
+        let failure = HealthCheckFailure::RpcValidationFailed("test error".to_string());
+        let serialized = serde_json::to_string(&failure).unwrap();
+        let deserialized: HealthCheckFailure = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(failure, deserialized);
+    }
+
+    // ===== DisabledReason Conversion Tests =====
+
+    #[test]
+    fn test_disabled_reason_from_health_failure() {
+        let health_failure = HealthCheckFailure::NonceSyncFailed("nonce error".to_string());
+        let disabled_reason = DisabledReason::from_health_failure(health_failure);
+        assert!(matches!(
+            disabled_reason,
+            DisabledReason::NonceSyncFailed(_)
+        ));
+
+        let health_failure2 = HealthCheckFailure::RpcValidationFailed("rpc error".to_string());
+        let disabled_reason2 = DisabledReason::from_health_failure(health_failure2);
+        assert!(matches!(
+            disabled_reason2,
+            DisabledReason::RpcValidationFailed(_)
+        ));
+
+        let health_failure3 = HealthCheckFailure::BalanceCheckFailed("balance error".to_string());
+        let disabled_reason3 = DisabledReason::from_health_failure(health_failure3);
+        assert!(matches!(
+            disabled_reason3,
+            DisabledReason::BalanceCheckFailed(_)
+        ));
+
+        let health_failure4 = HealthCheckFailure::SequenceSyncFailed("sequence error".to_string());
+        let disabled_reason4 = DisabledReason::from_health_failure(health_failure4);
+        assert!(matches!(
+            disabled_reason4,
+            DisabledReason::SequenceSyncFailed(_)
+        ));
+    }
+
+    #[test]
+    fn test_disabled_reason_from_health_failures_empty() {
+        let failures: Vec<HealthCheckFailure> = vec![];
+        let result = DisabledReason::from_health_failures(failures);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_disabled_reason_from_health_failures_single() {
+        let failures = vec![HealthCheckFailure::NonceSyncFailed("error".to_string())];
+        let result = DisabledReason::from_health_failures(failures).unwrap();
+        assert!(matches!(result, DisabledReason::NonceSyncFailed(_)));
+    }
+
+    #[test]
+    fn test_disabled_reason_from_health_failures_multiple() {
+        let failures = vec![
+            HealthCheckFailure::NonceSyncFailed("error1".to_string()),
+            HealthCheckFailure::RpcValidationFailed("error2".to_string()),
+        ];
+        let result = DisabledReason::from_health_failures(failures).unwrap();
+        if let DisabledReason::Multiple(reasons) = result {
+            assert_eq!(reasons.len(), 2);
+            assert!(matches!(reasons[0], DisabledReason::NonceSyncFailed(_)));
+            assert!(matches!(reasons[1], DisabledReason::RpcValidationFailed(_)));
+        } else {
+            panic!("Expected Multiple variant");
+        }
+    }
+
+    #[test]
+    fn test_disabled_reason_from_failures_empty() {
+        let failures: Vec<DisabledReason> = vec![];
+        let result = DisabledReason::from_failures(failures);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_disabled_reason_from_failures_single() {
+        let failures = vec![DisabledReason::NonceSyncFailed("error".to_string())];
+        let result = DisabledReason::from_failures(failures).unwrap();
+        assert!(matches!(result, DisabledReason::NonceSyncFailed(_)));
+    }
+
+    #[test]
+    fn test_disabled_reason_from_failures_multiple() {
+        let failures = vec![
+            DisabledReason::NonceSyncFailed("error1".to_string()),
+            DisabledReason::RpcValidationFailed("error2".to_string()),
+        ];
+        let result = DisabledReason::from_failures(failures).unwrap();
+        if let DisabledReason::Multiple(reasons) = result {
+            assert_eq!(reasons.len(), 2);
+        } else {
+            panic!("Expected Multiple variant");
+        }
+    }
+
+    #[test]
+    fn test_disabled_reason_description() {
+        let reason1 = DisabledReason::NonceSyncFailed("nonce error".to_string());
+        assert_eq!(reason1.description(), "Nonce sync failed: nonce error");
+
+        let reason2 = DisabledReason::RpcValidationFailed("rpc error".to_string());
+        assert_eq!(reason2.description(), "RPC validation failed: rpc error");
+
+        let reason3 = DisabledReason::BalanceCheckFailed("balance error".to_string());
+        assert_eq!(reason3.description(), "Balance check failed: balance error");
+
+        let reason4 = DisabledReason::SequenceSyncFailed("sequence error".to_string());
+        assert_eq!(
+            reason4.description(),
+            "Sequence sync failed: sequence error"
+        );
+
+        let reason5 = DisabledReason::Multiple(vec![
+            DisabledReason::NonceSyncFailed("error1".to_string()),
+            DisabledReason::RpcValidationFailed("error2".to_string()),
+        ]);
+        assert_eq!(
+            reason5.description(),
+            "Nonce sync failed: error1, RPC validation failed: error2"
+        );
+    }
+
+    #[test]
+    fn test_disabled_reason_display() {
+        let reason = DisabledReason::NonceSyncFailed("test error".to_string());
+        assert_eq!(reason.to_string(), "Nonce sync failed: test error");
+    }
+
+    #[test]
+    fn test_disabled_reason_from_error_string_nonce() {
+        let reason = DisabledReason::from_error_string("Failed to sync nonce".to_string());
+        assert!(matches!(reason, DisabledReason::NonceSyncFailed(_)));
+    }
+
+    #[test]
+    fn test_disabled_reason_from_error_string_rpc() {
+        let reason = DisabledReason::from_error_string("RPC endpoint unreachable".to_string());
+        assert!(matches!(reason, DisabledReason::RpcValidationFailed(_)));
+    }
+
+    #[test]
+    fn test_disabled_reason_from_error_string_balance() {
+        let reason = DisabledReason::from_error_string("Insufficient balance detected".to_string());
+        assert!(matches!(reason, DisabledReason::BalanceCheckFailed(_)));
+    }
+
+    #[test]
+    fn test_disabled_reason_from_error_string_sequence() {
+        let reason = DisabledReason::from_error_string("Sequence number mismatch".to_string());
+        assert!(matches!(reason, DisabledReason::SequenceSyncFailed(_)));
+    }
+
+    #[test]
+    fn test_disabled_reason_from_error_string_unknown() {
+        let reason = DisabledReason::from_error_string("Unknown error occurred".to_string());
+        // Unknown errors default to RpcValidationFailed
+        assert!(matches!(reason, DisabledReason::RpcValidationFailed(_)));
+    }
+
     // ===== RelayerNetworkType Tests =====
 
     #[test]
@@ -1650,6 +1836,174 @@ mod tests {
         assert_eq!(policy.min_balance, None);
         assert_eq!(policy.max_fee, None);
         assert_eq!(policy.timeout_seconds, None);
+        assert_eq!(policy.concurrent_transactions, None);
+        assert_eq!(policy.allowed_tokens, None);
+        assert_eq!(policy.fee_payment_strategy, None);
+        assert_eq!(policy.slippage_percentage, None);
+        assert_eq!(policy.fee_margin_percentage, None);
+        assert_eq!(policy.swap_config, None);
+    }
+
+    #[test]
+    fn test_stellar_allowed_tokens_policy_new() {
+        let metadata = StellarTokenMetadata {
+            kind: StellarTokenKind::Native,
+            decimals: 7,
+            canonical_asset_id: "native".to_string(),
+        };
+
+        let swap_config = StellarAllowedTokensSwapConfig {
+            slippage_percentage: Some(0.5),
+            min_amount: Some(1000),
+            max_amount: Some(10000000),
+            retain_min_amount: Some(500),
+        };
+
+        let token = StellarAllowedTokensPolicy::new(
+            "native".to_string(),
+            Some(metadata.clone()),
+            Some(100000),
+            Some(swap_config.clone()),
+        );
+
+        assert_eq!(token.asset, "native");
+        assert_eq!(token.metadata, Some(metadata));
+        assert_eq!(token.max_allowed_fee, Some(100000));
+        assert_eq!(token.swap_config, Some(swap_config));
+    }
+
+    #[test]
+    fn test_relayer_stellar_policy_get_allowed_tokens() {
+        let token1 = StellarAllowedTokensPolicy::new("native".to_string(), None, Some(1000), None);
+        let token2 = StellarAllowedTokensPolicy::new(
+            "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".to_string(),
+            None,
+            Some(2000),
+            None,
+        );
+
+        let policy = RelayerStellarPolicy {
+            allowed_tokens: Some(vec![token1.clone(), token2.clone()]),
+            ..RelayerStellarPolicy::default()
+        };
+
+        let tokens = policy.get_allowed_tokens();
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0], token1);
+        assert_eq!(tokens[1], token2);
+
+        // Test empty case
+        let empty_policy = RelayerStellarPolicy::default();
+        let empty_tokens = empty_policy.get_allowed_tokens();
+        assert_eq!(empty_tokens.len(), 0);
+    }
+
+    #[test]
+    fn test_relayer_stellar_policy_get_allowed_token_entry() {
+        let token1 = StellarAllowedTokensPolicy::new("native".to_string(), None, Some(1000), None);
+        let token2 = StellarAllowedTokensPolicy::new(
+            "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".to_string(),
+            None,
+            Some(2000),
+            None,
+        );
+
+        let policy = RelayerStellarPolicy {
+            allowed_tokens: Some(vec![token1.clone(), token2.clone()]),
+            ..RelayerStellarPolicy::default()
+        };
+
+        let found_token = policy.get_allowed_token_entry("native").unwrap();
+        assert_eq!(found_token, token1);
+
+        let not_found = policy.get_allowed_token_entry(
+            "EURC:GDHU6WRG4IEQXM5NZ4BMPKOXHW76MZM4Y2IEMFDVXBSDP6SJY4ITNPP2",
+        );
+        assert!(not_found.is_none());
+
+        // Test empty case
+        let empty_policy = RelayerStellarPolicy::default();
+        let empty_result = empty_policy.get_allowed_token_entry("native");
+        assert!(empty_result.is_none());
+    }
+
+    #[test]
+    fn test_relayer_stellar_policy_get_allowed_token_decimals() {
+        let metadata1 = StellarTokenMetadata {
+            kind: StellarTokenKind::Native,
+            decimals: 7,
+            canonical_asset_id: "native".to_string(),
+        };
+
+        let metadata2 = StellarTokenMetadata {
+            kind: StellarTokenKind::Classic {
+                code: "USDC".to_string(),
+                issuer: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".to_string(),
+            },
+            decimals: 6,
+            canonical_asset_id: "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+                .to_string(),
+        };
+
+        let token1 = StellarAllowedTokensPolicy::new(
+            "native".to_string(),
+            Some(metadata1),
+            Some(1000),
+            None,
+        );
+        let token2 = StellarAllowedTokensPolicy::new(
+            "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".to_string(),
+            Some(metadata2),
+            Some(2000),
+            None,
+        );
+        let token3 = StellarAllowedTokensPolicy::new(
+            "EURC:GDHU6WRG4IEQXM5NZ4BMPKOXHW76MZM4Y2IEMFDVXBSDP6SJY4ITNPP2".to_string(),
+            None,
+            Some(3000),
+            None,
+        );
+
+        let policy = RelayerStellarPolicy {
+            allowed_tokens: Some(vec![token1, token2, token3]),
+            ..RelayerStellarPolicy::default()
+        };
+
+        assert_eq!(policy.get_allowed_token_decimals("native"), Some(7));
+        assert_eq!(
+            policy.get_allowed_token_decimals(
+                "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+            ),
+            Some(6)
+        );
+        assert_eq!(
+            policy.get_allowed_token_decimals(
+                "EURC:GDHU6WRG4IEQXM5NZ4BMPKOXHW76MZM4Y2IEMFDVXBSDP6SJY4ITNPP2"
+            ),
+            None
+        );
+        assert_eq!(policy.get_allowed_token_decimals("unknown"), None);
+    }
+
+    #[test]
+    fn test_relayer_stellar_policy_get_swap_config() {
+        let swap_config = RelayerStellarSwapConfig {
+            strategies: vec![StellarSwapStrategy::OrderBook],
+            cron_schedule: Some("0 0 * * *".to_string()),
+            min_balance_threshold: Some(1000000),
+        };
+
+        let policy = RelayerStellarPolicy {
+            swap_config: Some(swap_config.clone()),
+            ..RelayerStellarPolicy::default()
+        };
+
+        let retrieved_config = policy.get_swap_config().unwrap();
+        assert_eq!(retrieved_config, swap_config);
+
+        // Test None case
+        let empty_policy = RelayerStellarPolicy::default();
+        assert!(empty_policy.get_swap_config().is_none());
     }
 
     // ===== RelayerNetworkPolicy Tests =====

@@ -86,7 +86,9 @@ where
             params.operations.as_ref(),
             params.source_account.as_ref(),
             &self.network.passphrase,
-        )?;
+            &self.provider,
+        )
+        .await?;
 
         // Run comprehensive security validation (similar to build method)
         StellarTransactionValidator::gasless_transaction_validation(
@@ -193,7 +195,9 @@ where
             params.operations.as_ref(),
             params.source_account.as_ref(),
             &self.network.passphrase,
-        )?;
+            &self.provider,
+        )
+        .await?;
 
         StellarTransactionValidator::gasless_transaction_validation(
             &envelope,
@@ -350,12 +354,20 @@ fn add_payment_operation_to_envelope(
 /// This helper function is used by both quote and build methods to construct
 /// a transaction envelope from either a pre-built XDR transaction or from
 /// operations with a source account.
-fn build_envelope_from_request(
+///
+/// When building from operations, this function fetches the user's current
+/// sequence number from the network to ensure the transaction can be properly
+/// signed and submitted by the user.
+async fn build_envelope_from_request<P>(
     transaction_xdr: Option<&String>,
     operations: Option<&Vec<OperationSpec>>,
     source_account: Option<&String>,
     network_passphrase: &str,
-) -> Result<TransactionEnvelope, RelayerError> {
+    provider: &P,
+) -> Result<TransactionEnvelope, RelayerError>
+where
+    P: StellarProviderTrait + Send + Sync,
+{
     if let Some(xdr) = transaction_xdr {
         parse_transaction_xdr(xdr, false)
             .map_err(|e| RelayerError::Internal(format!("Failed to parse XDR: {e}")))
@@ -368,10 +380,21 @@ fn build_envelope_from_request(
         })?;
 
         // Create StellarTransactionData from operations
+        // Fetch the user's current sequence number from the network
+        // This is required because the user will sign the transaction with their account
+        let account_entry = provider.get_account(source_account).await.map_err(|e| {
+            RelayerError::Internal(format!(
+                "Failed to fetch account sequence number for {source_account}: {e}",
+            ))
+        })?;
+
+        // Use the next sequence number (current + 1)
+        let next_sequence = account_entry.seq_num.0 + 1;
+
         let stellar_data = StellarTransactionData {
             source_account: source_account.clone(),
             fee: None,
-            sequence_number: None,
+            sequence_number: Some(next_sequence as i64),
             memo: None,
             valid_until: None,
             network_passphrase: network_passphrase.to_string(),
@@ -1180,20 +1203,41 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn test_build_envelope_from_request_with_xdr() {
+    #[tokio::test]
+    async fn test_build_envelope_from_request_with_xdr() {
+        let provider = MockStellarProviderTrait::new();
         let transaction_xdr = create_test_transaction_xdr();
         let result = build_envelope_from_request(
             Some(&transaction_xdr),
             None,
             None,
             TEST_NETWORK_PASSPHRASE,
-        );
+            &provider,
+        )
+        .await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_build_envelope_from_request_with_operations() {
+    #[tokio::test]
+    async fn test_build_envelope_from_request_with_operations() {
+        let mut provider = MockStellarProviderTrait::new();
+
+        // Mock get_account to return a valid account with sequence number
+        provider.expect_get_account().returning(|_| {
+            Box::pin(ready(Ok(AccountEntry {
+                account_id: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32]))),
+                balance: 1000000000,
+                seq_num: SequenceNumber(100),
+                num_sub_entries: 0,
+                inflation_dest: None,
+                flags: 0,
+                home_domain: String32::default(),
+                thresholds: Thresholds([0; 4]),
+                signers: VecM::default(),
+                ext: AccountEntryExt::V0,
+            })))
+        });
+
         let operations = vec![OperationSpec::Payment {
             destination: TEST_PK.to_string(),
             amount: 1000000,
@@ -1205,20 +1249,48 @@ mod tests {
             Some(&operations),
             Some(&TEST_PK.to_string()),
             TEST_NETWORK_PASSPHRASE,
-        );
+            &provider,
+        )
+        .await;
         assert!(result.is_ok());
+
+        // Verify the sequence number is set correctly (current + 1 = 101)
+        if let Ok(envelope) = result {
+            if let TransactionEnvelope::Tx(tx_env) = envelope {
+                assert_eq!(tx_env.tx.seq_num.0, 101);
+            }
+        }
     }
 
-    #[test]
-    fn test_build_envelope_from_request_missing_source_account() {
+    #[tokio::test]
+    async fn test_build_envelope_from_request_missing_source_account() {
+        let provider = MockStellarProviderTrait::new();
         let operations = vec![OperationSpec::Payment {
             destination: TEST_PK.to_string(),
             amount: 1000000,
             asset: AssetSpec::Native,
         }];
 
+        let result = build_envelope_from_request(
+            None,
+            Some(&operations),
+            None,
+            TEST_NETWORK_PASSPHRASE,
+            &provider,
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            RelayerError::ValidationError(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_build_envelope_from_request_missing_both() {
+        let provider = MockStellarProviderTrait::new();
         let result =
-            build_envelope_from_request(None, Some(&operations), None, TEST_NETWORK_PASSPHRASE);
+            build_envelope_from_request(None, None, None, TEST_NETWORK_PASSPHRASE, &provider).await;
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -1226,24 +1298,17 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn test_build_envelope_from_request_missing_both() {
-        let result = build_envelope_from_request(None, None, None, TEST_NETWORK_PASSPHRASE);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            RelayerError::ValidationError(_)
-        ));
-    }
-
-    #[test]
-    fn test_build_envelope_from_request_invalid_xdr() {
+    #[tokio::test]
+    async fn test_build_envelope_from_request_invalid_xdr() {
+        let provider = MockStellarProviderTrait::new();
         let result = build_envelope_from_request(
             Some(&"INVALID_XDR".to_string()),
             None,
             None,
             TEST_NETWORK_PASSPHRASE,
-        );
+            &provider,
+        )
+        .await;
         assert!(result.is_err());
     }
 }
