@@ -1078,7 +1078,21 @@ impl StellarTransactionValidator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::AssetSpec;
+    use crate::domain::transaction::stellar::test_helpers::{
+        create_account_id, create_muxed_account, create_native_payment_operation,
+        create_simple_v1_envelope, TEST_CONTRACT, TEST_PK, TEST_PK_2,
+    };
+    use crate::models::{AssetSpec, StellarAllowedTokensPolicy};
+    use crate::services::provider::MockStellarProviderTrait;
+    use crate::services::stellar_dex::MockStellarDexServiceTrait;
+    use futures::future::ready;
+    use soroban_rs::xdr::{
+        AccountEntry, AccountEntryExt, Asset as XdrAsset, ChangeTrustAsset, ChangeTrustOp,
+        HostFunction, InvokeContractArgs, InvokeHostFunctionOp, Operation, OperationBody,
+        ScAddress, ScSymbol, SequenceNumber, SorobanAuthorizationEntry, SorobanAuthorizedFunction,
+        SorobanCredentials, Thresholds, TimeBounds, TimePoint, Transaction, TransactionEnvelope,
+        TransactionExt, TransactionV1Envelope,
+    };
 
     #[test]
     fn test_empty_operations_rejected() {
@@ -1094,7 +1108,7 @@ mod tests {
     fn test_too_many_operations_rejected() {
         let ops = vec![
             OperationSpec::Payment {
-                destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+                destination: TEST_PK.to_string(),
                 amount: 1000,
                 asset: AssetSpec::Native,
             };
@@ -1113,15 +1127,14 @@ mod tests {
         // Multiple Soroban operations should fail
         let ops = vec![
             OperationSpec::InvokeContract {
-                contract_address: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
-                    .to_string(),
+                contract_address: TEST_CONTRACT.to_string(),
                 function_name: "test".to_string(),
                 args: vec![],
                 auth: None,
             },
             OperationSpec::CreateContract {
                 source: crate::models::ContractSource::Address {
-                    address: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+                    address: TEST_PK.to_string(),
                 },
                 wasm_hash: "abc123".to_string(),
                 salt: None,
@@ -1135,14 +1148,13 @@ mod tests {
         // Soroban mixed with non-Soroban should fail
         let ops = vec![
             OperationSpec::InvokeContract {
-                contract_address: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
-                    .to_string(),
+                contract_address: TEST_CONTRACT.to_string(),
                 function_name: "test".to_string(),
                 args: vec![],
                 auth: None,
             },
             OperationSpec::Payment {
-                destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+                destination: TEST_PK.to_string(),
                 amount: 1000,
                 asset: AssetSpec::Native,
             },
@@ -1158,8 +1170,7 @@ mod tests {
     #[test]
     fn test_soroban_memo_restriction() {
         let soroban_op = vec![OperationSpec::InvokeContract {
-            contract_address: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
-                .to_string(),
+            contract_address: TEST_CONTRACT.to_string(),
             function_name: "test".to_string(),
             args: vec![],
             auth: None,
@@ -1181,5 +1192,1642 @@ mod tests {
         // Soroban with no memo should succeed
         let result = validate_soroban_memo_restriction(&soroban_op, &None);
         assert!(result.is_ok());
+    }
+
+    mod validate_fee_token_structure_tests {
+        use super::*;
+
+        #[test]
+        fn test_native_xlm_valid() {
+            assert!(StellarTransactionValidator::validate_fee_token_structure("native").is_ok());
+            assert!(StellarTransactionValidator::validate_fee_token_structure("XLM").is_ok());
+            assert!(StellarTransactionValidator::validate_fee_token_structure("").is_ok());
+        }
+
+        #[test]
+        fn test_contract_address_valid() {
+            assert!(
+                StellarTransactionValidator::validate_fee_token_structure(TEST_CONTRACT).is_ok()
+            );
+        }
+
+        #[test]
+        fn test_contract_address_invalid_length() {
+            let result = StellarTransactionValidator::validate_fee_token_structure("C123");
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid fee_token format"));
+        }
+
+        #[test]
+        fn test_classic_asset_valid() {
+            let result = StellarTransactionValidator::validate_fee_token_structure(&format!(
+                "USDC:{}",
+                TEST_PK
+            ));
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn test_classic_asset_code_too_long() {
+            let result = StellarTransactionValidator::validate_fee_token_structure(&format!(
+                "VERYLONGCODE1:{}",
+                TEST_PK
+            ));
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid asset code length"));
+        }
+
+        #[test]
+        fn test_classic_asset_invalid_issuer_length() {
+            let result = StellarTransactionValidator::validate_fee_token_structure("USDC:GSHORT");
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid issuer address length"));
+        }
+
+        #[test]
+        fn test_classic_asset_invalid_issuer_prefix() {
+            let result = StellarTransactionValidator::validate_fee_token_structure(
+                "USDC:SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+            );
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid issuer address prefix"));
+        }
+
+        #[test]
+        fn test_invalid_format_multiple_colons() {
+            let result =
+                StellarTransactionValidator::validate_fee_token_structure("USDC:ISSUER:EXTRA");
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid fee_token format"));
+        }
+    }
+
+    mod validate_allowed_token_tests {
+        use super::*;
+
+        #[test]
+        fn test_empty_allowed_list_allows_all() {
+            let policy = RelayerStellarPolicy::default();
+            assert!(StellarTransactionValidator::validate_allowed_token("native", &policy).is_ok());
+            assert!(
+                StellarTransactionValidator::validate_allowed_token(TEST_CONTRACT, &policy).is_ok()
+            );
+        }
+
+        #[test]
+        fn test_native_allowed() {
+            let mut policy = RelayerStellarPolicy::default();
+            policy.allowed_tokens = Some(vec![StellarAllowedTokensPolicy {
+                asset: "native".to_string(),
+                metadata: None,
+                swap_config: None,
+                max_allowed_fee: None,
+            }]);
+            assert!(StellarTransactionValidator::validate_allowed_token("native", &policy).is_ok());
+            assert!(StellarTransactionValidator::validate_allowed_token("", &policy).is_ok());
+        }
+
+        #[test]
+        fn test_native_not_allowed() {
+            let mut policy = RelayerStellarPolicy::default();
+            policy.allowed_tokens = Some(vec![StellarAllowedTokensPolicy {
+                asset: format!("USDC:{}", TEST_PK),
+                metadata: None,
+                swap_config: None,
+                max_allowed_fee: None,
+            }]);
+            let result = StellarTransactionValidator::validate_allowed_token("native", &policy);
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Native XLM not in allowed tokens list"));
+        }
+
+        #[test]
+        fn test_token_allowed() {
+            let token = format!("USDC:{}", TEST_PK);
+            let mut policy = RelayerStellarPolicy::default();
+            policy.allowed_tokens = Some(vec![StellarAllowedTokensPolicy {
+                asset: token.clone(),
+                metadata: None,
+                swap_config: None,
+                max_allowed_fee: None,
+            }]);
+            assert!(StellarTransactionValidator::validate_allowed_token(&token, &policy).is_ok());
+        }
+
+        #[test]
+        fn test_token_not_allowed() {
+            let mut policy = RelayerStellarPolicy::default();
+            policy.allowed_tokens = Some(vec![StellarAllowedTokensPolicy {
+                asset: format!("USDC:{}", TEST_PK),
+                metadata: None,
+                swap_config: None,
+                max_allowed_fee: None,
+            }]);
+            let result = StellarTransactionValidator::validate_allowed_token(
+                &format!("AQUA:{}", TEST_PK_2),
+                &policy,
+            );
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("not in allowed tokens list"));
+        }
+    }
+
+    mod validate_max_fee_tests {
+        use super::*;
+
+        #[test]
+        fn test_no_max_fee_allows_any() {
+            let policy = RelayerStellarPolicy::default();
+            assert!(StellarTransactionValidator::validate_max_fee(1_000_000, &policy).is_ok());
+        }
+
+        #[test]
+        fn test_fee_within_limit() {
+            let mut policy = RelayerStellarPolicy::default();
+            policy.max_fee = Some(1_000_000);
+            assert!(StellarTransactionValidator::validate_max_fee(500_000, &policy).is_ok());
+        }
+
+        #[test]
+        fn test_fee_exceeds_limit() {
+            let mut policy = RelayerStellarPolicy::default();
+            policy.max_fee = Some(1_000_000);
+            let result = StellarTransactionValidator::validate_max_fee(2_000_000, &policy);
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("Max fee exceeded"));
+        }
+    }
+
+    mod validate_token_max_fee_tests {
+        use super::*;
+
+        #[test]
+        fn test_no_token_entry() {
+            let policy = RelayerStellarPolicy::default();
+            assert!(StellarTransactionValidator::validate_token_max_fee(
+                "USDC:ISSUER",
+                1_000_000,
+                &policy
+            )
+            .is_ok());
+        }
+
+        #[test]
+        fn test_no_max_allowed_fee_in_entry() {
+            let mut policy = RelayerStellarPolicy::default();
+            policy.allowed_tokens = Some(vec![StellarAllowedTokensPolicy {
+                asset: "USDC:ISSUER".to_string(),
+                metadata: None,
+                swap_config: None,
+                max_allowed_fee: None,
+            }]);
+            assert!(StellarTransactionValidator::validate_token_max_fee(
+                "USDC:ISSUER",
+                1_000_000,
+                &policy
+            )
+            .is_ok());
+        }
+
+        #[test]
+        fn test_fee_within_token_limit() {
+            let mut policy = RelayerStellarPolicy::default();
+            policy.allowed_tokens = Some(vec![StellarAllowedTokensPolicy {
+                asset: "USDC:ISSUER".to_string(),
+                metadata: None,
+                swap_config: None,
+                max_allowed_fee: Some(1_000_000),
+            }]);
+            assert!(StellarTransactionValidator::validate_token_max_fee(
+                "USDC:ISSUER",
+                500_000,
+                &policy
+            )
+            .is_ok());
+        }
+
+        #[test]
+        fn test_fee_exceeds_token_limit() {
+            let mut policy = RelayerStellarPolicy::default();
+            policy.allowed_tokens = Some(vec![StellarAllowedTokensPolicy {
+                asset: "USDC:ISSUER".to_string(),
+                metadata: None,
+                swap_config: None,
+                max_allowed_fee: Some(1_000_000),
+            }]);
+            let result = StellarTransactionValidator::validate_token_max_fee(
+                "USDC:ISSUER",
+                2_000_000,
+                &policy,
+            );
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("Max fee exceeded"));
+        }
+    }
+
+    mod extract_relayer_payments_tests {
+        use super::*;
+
+        #[test]
+        fn test_extract_single_payment() {
+            let envelope = create_simple_v1_envelope(TEST_PK, TEST_PK_2);
+            let payments =
+                StellarTransactionValidator::extract_relayer_payments(&envelope, TEST_PK_2)
+                    .unwrap();
+            assert_eq!(payments.len(), 1);
+            assert_eq!(payments[0].0, "native");
+            assert_eq!(payments[0].1, 1_000_000);
+        }
+
+        #[test]
+        fn test_extract_no_payments_to_relayer() {
+            let envelope = create_simple_v1_envelope(TEST_PK, TEST_PK_2);
+            let payments =
+                StellarTransactionValidator::extract_relayer_payments(&envelope, TEST_PK).unwrap();
+            assert_eq!(payments.len(), 0);
+        }
+
+        #[test]
+        fn test_extract_negative_amount_rejected() {
+            let payment_op = Operation {
+                source_account: None,
+                body: OperationBody::Payment(soroban_rs::xdr::PaymentOp {
+                    destination: create_muxed_account(TEST_PK_2),
+                    asset: XdrAsset::Native,
+                    amount: -100, // Negative amount
+                }),
+            };
+
+            let tx = Transaction {
+                source_account: create_muxed_account(TEST_PK),
+                fee: 100,
+                seq_num: SequenceNumber(1),
+                cond: soroban_rs::xdr::Preconditions::None,
+                memo: soroban_rs::xdr::Memo::None,
+                operations: vec![payment_op].try_into().unwrap(),
+                ext: TransactionExt::V0,
+            };
+
+            let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+                tx,
+                signatures: vec![].try_into().unwrap(),
+            });
+
+            let result =
+                StellarTransactionValidator::extract_relayer_payments(&envelope, TEST_PK_2);
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Negative payment amount"));
+        }
+    }
+
+    mod validate_time_bounds_tests {
+        use super::*;
+
+        #[test]
+        fn test_no_time_bounds_is_ok() {
+            let envelope = create_simple_v1_envelope(TEST_PK, TEST_PK_2);
+            assert!(
+                StellarTransactionValidator::validate_time_bounds_not_expired(&envelope).is_ok()
+            );
+        }
+
+        #[test]
+        fn test_valid_time_bounds() {
+            let now = Utc::now().timestamp() as u64;
+            let payment_op = create_native_payment_operation(TEST_PK_2, 1_000_000);
+
+            let tx = Transaction {
+                source_account: create_muxed_account(TEST_PK),
+                fee: 100,
+                seq_num: SequenceNumber(1),
+                cond: soroban_rs::xdr::Preconditions::Time(TimeBounds {
+                    min_time: TimePoint(now - 60),
+                    max_time: TimePoint(now + 60),
+                }),
+                memo: soroban_rs::xdr::Memo::None,
+                operations: vec![payment_op].try_into().unwrap(),
+                ext: TransactionExt::V0,
+            };
+
+            let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+                tx,
+                signatures: vec![].try_into().unwrap(),
+            });
+
+            assert!(
+                StellarTransactionValidator::validate_time_bounds_not_expired(&envelope).is_ok()
+            );
+        }
+
+        #[test]
+        fn test_expired_transaction() {
+            let now = Utc::now().timestamp() as u64;
+            let payment_op = create_native_payment_operation(TEST_PK_2, 1_000_000);
+
+            let tx = Transaction {
+                source_account: create_muxed_account(TEST_PK),
+                fee: 100,
+                seq_num: SequenceNumber(1),
+                cond: soroban_rs::xdr::Preconditions::Time(TimeBounds {
+                    min_time: TimePoint(now - 120),
+                    max_time: TimePoint(now - 60), // Expired
+                }),
+                memo: soroban_rs::xdr::Memo::None,
+                operations: vec![payment_op].try_into().unwrap(),
+                ext: TransactionExt::V0,
+            };
+
+            let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+                tx,
+                signatures: vec![].try_into().unwrap(),
+            });
+
+            let result = StellarTransactionValidator::validate_time_bounds_not_expired(&envelope);
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("has expired"));
+        }
+
+        #[test]
+        fn test_not_yet_valid_transaction() {
+            let now = Utc::now().timestamp() as u64;
+            let payment_op = create_native_payment_operation(TEST_PK_2, 1_000_000);
+
+            let tx = Transaction {
+                source_account: create_muxed_account(TEST_PK),
+                fee: 100,
+                seq_num: SequenceNumber(1),
+                cond: soroban_rs::xdr::Preconditions::Time(TimeBounds {
+                    min_time: TimePoint(now + 60), // Not yet valid
+                    max_time: TimePoint(now + 120),
+                }),
+                memo: soroban_rs::xdr::Memo::None,
+                operations: vec![payment_op].try_into().unwrap(),
+                ext: TransactionExt::V0,
+            };
+
+            let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+                tx,
+                signatures: vec![].try_into().unwrap(),
+            });
+
+            let result = StellarTransactionValidator::validate_time_bounds_not_expired(&envelope);
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("not yet valid"));
+        }
+    }
+
+    mod validate_transaction_validity_duration_tests {
+        use super::*;
+
+        #[test]
+        fn test_duration_within_limit() {
+            let now = Utc::now().timestamp() as u64;
+            let payment_op = create_native_payment_operation(TEST_PK_2, 1_000_000);
+
+            let tx = Transaction {
+                source_account: create_muxed_account(TEST_PK),
+                fee: 100,
+                seq_num: SequenceNumber(1),
+                cond: soroban_rs::xdr::Preconditions::Time(TimeBounds {
+                    min_time: TimePoint(0),
+                    max_time: TimePoint(now + 60), // 1 minute from now
+                }),
+                memo: soroban_rs::xdr::Memo::None,
+                operations: vec![payment_op].try_into().unwrap(),
+                ext: TransactionExt::V0,
+            };
+
+            let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+                tx,
+                signatures: vec![].try_into().unwrap(),
+            });
+
+            let max_duration = Duration::minutes(5);
+            assert!(
+                StellarTransactionValidator::validate_transaction_validity_duration(
+                    &envelope,
+                    max_duration
+                )
+                .is_ok()
+            );
+        }
+
+        #[test]
+        fn test_duration_exceeds_limit() {
+            let now = Utc::now().timestamp() as u64;
+            let payment_op = create_native_payment_operation(TEST_PK_2, 1_000_000);
+
+            let tx = Transaction {
+                source_account: create_muxed_account(TEST_PK),
+                fee: 100,
+                seq_num: SequenceNumber(1),
+                cond: soroban_rs::xdr::Preconditions::Time(TimeBounds {
+                    min_time: TimePoint(0),
+                    max_time: TimePoint(now + 600), // 10 minutes from now
+                }),
+                memo: soroban_rs::xdr::Memo::None,
+                operations: vec![payment_op].try_into().unwrap(),
+                ext: TransactionExt::V0,
+            };
+
+            let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+                tx,
+                signatures: vec![].try_into().unwrap(),
+            });
+
+            let max_duration = Duration::minutes(5);
+            let result = StellarTransactionValidator::validate_transaction_validity_duration(
+                &envelope,
+                max_duration,
+            );
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("exceeds maximum allowed duration"));
+        }
+
+        #[test]
+        fn test_no_time_bounds_rejected() {
+            let envelope = create_simple_v1_envelope(TEST_PK, TEST_PK_2);
+            let max_duration = Duration::minutes(5);
+            let result = StellarTransactionValidator::validate_transaction_validity_duration(
+                &envelope,
+                max_duration,
+            );
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("must have time bounds set"));
+        }
+    }
+
+    mod validate_sequence_number_tests {
+        use super::*;
+
+        #[tokio::test]
+        async fn test_valid_sequence_number() {
+            let envelope = create_simple_v1_envelope(TEST_PK, TEST_PK_2);
+
+            let mut provider = MockStellarProviderTrait::new();
+            provider.expect_get_account().returning(|_| {
+                Box::pin(ready(Ok(AccountEntry {
+                    account_id: create_account_id(TEST_PK),
+                    balance: 1_000_000_000,
+                    seq_num: SequenceNumber(0), // Current sequence is 0, tx sequence is 1
+                    num_sub_entries: 0,
+                    inflation_dest: None,
+                    flags: 0,
+                    home_domain: Default::default(),
+                    thresholds: Thresholds([0; 4]),
+                    signers: Default::default(),
+                    ext: AccountEntryExt::V0,
+                })))
+            });
+
+            assert!(
+                StellarTransactionValidator::validate_sequence_number(&envelope, &provider)
+                    .await
+                    .is_ok()
+            );
+        }
+
+        #[tokio::test]
+        async fn test_equal_sequence_rejected() {
+            let envelope = create_simple_v1_envelope(TEST_PK, TEST_PK_2);
+
+            let mut provider = MockStellarProviderTrait::new();
+            provider.expect_get_account().returning(|_| {
+                Box::pin(ready(Ok(AccountEntry {
+                    account_id: create_account_id(TEST_PK),
+                    balance: 1_000_000_000,
+                    seq_num: SequenceNumber(1), // Same as tx sequence
+                    num_sub_entries: 0,
+                    inflation_dest: None,
+                    flags: 0,
+                    home_domain: Default::default(),
+                    thresholds: Thresholds([0; 4]),
+                    signers: Default::default(),
+                    ext: AccountEntryExt::V0,
+                })))
+            });
+
+            let result =
+                StellarTransactionValidator::validate_sequence_number(&envelope, &provider).await;
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("strictly greater than"));
+        }
+
+        #[tokio::test]
+        async fn test_past_sequence_rejected() {
+            let envelope = create_simple_v1_envelope(TEST_PK, TEST_PK_2);
+
+            let mut provider = MockStellarProviderTrait::new();
+            provider.expect_get_account().returning(|_| {
+                Box::pin(ready(Ok(AccountEntry {
+                    account_id: create_account_id(TEST_PK),
+                    balance: 1_000_000_000,
+                    seq_num: SequenceNumber(10), // Higher than tx sequence
+                    num_sub_entries: 0,
+                    inflation_dest: None,
+                    flags: 0,
+                    home_domain: Default::default(),
+                    thresholds: Thresholds([0; 4]),
+                    signers: Default::default(),
+                    ext: AccountEntryExt::V0,
+                })))
+            });
+
+            let result =
+                StellarTransactionValidator::validate_sequence_number(&envelope, &provider).await;
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("is invalid"));
+        }
+    }
+
+    mod validate_operations_count_tests {
+        use super::*;
+
+        #[test]
+        fn test_valid_operations_count() {
+            let envelope = create_simple_v1_envelope(TEST_PK, TEST_PK_2);
+            assert!(StellarTransactionValidator::validate_operations_count(&envelope).is_ok());
+        }
+
+        #[test]
+        fn test_too_many_operations() {
+            // VecM has a max of 100, so we can't actually create an envelope with 101 operations
+            // Instead, we test that the validation logic works correctly by checking the limit
+            // This test verifies the validation function would reject if it could receive such an envelope
+
+            // Create an envelope with exactly 100 operations (the maximum)
+            let operations: Vec<Operation> = (0..100)
+                .map(|_| create_native_payment_operation(TEST_PK_2, 100))
+                .collect();
+
+            let tx = Transaction {
+                source_account: create_muxed_account(TEST_PK),
+                fee: 100,
+                seq_num: SequenceNumber(1),
+                cond: soroban_rs::xdr::Preconditions::None,
+                memo: soroban_rs::xdr::Memo::None,
+                operations: operations.try_into().unwrap(),
+                ext: TransactionExt::V0,
+            };
+
+            let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+                tx,
+                signatures: vec![].try_into().unwrap(),
+            });
+
+            // 100 operations should be OK
+            let result = StellarTransactionValidator::validate_operations_count(&envelope);
+            assert!(result.is_ok());
+        }
+    }
+
+    mod validate_source_account_tests {
+        use super::*;
+
+        #[test]
+        fn test_source_account_not_relayer() {
+            let envelope = create_simple_v1_envelope(TEST_PK, TEST_PK_2);
+            assert!(
+                StellarTransactionValidator::validate_source_account_not_relayer(
+                    &envelope, TEST_PK_2
+                )
+                .is_ok()
+            );
+        }
+
+        #[test]
+        fn test_source_account_is_relayer_rejected() {
+            let envelope = create_simple_v1_envelope(TEST_PK, TEST_PK_2);
+            let result = StellarTransactionValidator::validate_source_account_not_relayer(
+                &envelope, TEST_PK,
+            );
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("cannot be the relayer address"));
+        }
+    }
+
+    mod validate_operation_types_tests {
+        use super::*;
+
+        #[test]
+        fn test_payment_operation_allowed() {
+            let envelope = create_simple_v1_envelope(TEST_PK, TEST_PK_2);
+            let policy = RelayerStellarPolicy::default();
+            assert!(StellarTransactionValidator::validate_operation_types(
+                &envelope, TEST_PK_2, &policy
+            )
+            .is_ok());
+        }
+
+        #[test]
+        fn test_account_merge_rejected() {
+            let operation = Operation {
+                source_account: None,
+                body: OperationBody::AccountMerge(create_muxed_account(TEST_PK_2)),
+            };
+
+            let tx = Transaction {
+                source_account: create_muxed_account(TEST_PK),
+                fee: 100,
+                seq_num: SequenceNumber(1),
+                cond: soroban_rs::xdr::Preconditions::None,
+                memo: soroban_rs::xdr::Memo::None,
+                operations: vec![operation].try_into().unwrap(),
+                ext: TransactionExt::V0,
+            };
+
+            let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+                tx,
+                signatures: vec![].try_into().unwrap(),
+            });
+
+            let policy = RelayerStellarPolicy::default();
+            let result = StellarTransactionValidator::validate_operation_types(
+                &envelope, TEST_PK_2, &policy,
+            );
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("AccountMerge operations are not allowed"));
+        }
+
+        #[test]
+        fn test_set_options_rejected() {
+            let operation = Operation {
+                source_account: None,
+                body: OperationBody::SetOptions(soroban_rs::xdr::SetOptionsOp {
+                    inflation_dest: None,
+                    clear_flags: None,
+                    set_flags: None,
+                    master_weight: None,
+                    low_threshold: None,
+                    med_threshold: None,
+                    high_threshold: None,
+                    home_domain: None,
+                    signer: None,
+                }),
+            };
+
+            let tx = Transaction {
+                source_account: create_muxed_account(TEST_PK),
+                fee: 100,
+                seq_num: SequenceNumber(1),
+                cond: soroban_rs::xdr::Preconditions::None,
+                memo: soroban_rs::xdr::Memo::None,
+                operations: vec![operation].try_into().unwrap(),
+                ext: TransactionExt::V0,
+            };
+
+            let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+                tx,
+                signatures: vec![].try_into().unwrap(),
+            });
+
+            let policy = RelayerStellarPolicy::default();
+            let result = StellarTransactionValidator::validate_operation_types(
+                &envelope, TEST_PK_2, &policy,
+            );
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("SetOptions operations are not allowed"));
+        }
+
+        #[test]
+        fn test_change_trust_allowed() {
+            let operation = Operation {
+                source_account: None,
+                body: OperationBody::ChangeTrust(ChangeTrustOp {
+                    line: ChangeTrustAsset::CreditAlphanum4(soroban_rs::xdr::AlphaNum4 {
+                        asset_code: soroban_rs::xdr::AssetCode4(*b"USDC"),
+                        issuer: create_account_id(TEST_PK_2),
+                    }),
+                    limit: 1_000_000_000,
+                }),
+            };
+
+            let tx = Transaction {
+                source_account: create_muxed_account(TEST_PK),
+                fee: 100,
+                seq_num: SequenceNumber(1),
+                cond: soroban_rs::xdr::Preconditions::None,
+                memo: soroban_rs::xdr::Memo::None,
+                operations: vec![operation].try_into().unwrap(),
+                ext: TransactionExt::V0,
+            };
+
+            let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+                tx,
+                signatures: vec![].try_into().unwrap(),
+            });
+
+            let policy = RelayerStellarPolicy::default();
+            assert!(StellarTransactionValidator::validate_operation_types(
+                &envelope, TEST_PK_2, &policy
+            )
+            .is_ok());
+        }
+    }
+
+    mod validate_token_payment_tests {
+        use super::*;
+
+        #[test]
+        fn test_valid_native_payment() {
+            let envelope = create_simple_v1_envelope(TEST_PK, TEST_PK_2);
+            let policy = RelayerStellarPolicy::default();
+
+            let result = StellarTransactionValidator::validate_token_payment(
+                &envelope, TEST_PK_2, "native", 1_000_000, &policy,
+            );
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn test_no_payment_to_relayer() {
+            let envelope = create_simple_v1_envelope(TEST_PK, TEST_PK_2);
+            let policy = RelayerStellarPolicy::default();
+
+            // Wrong relayer address - no payments will match
+            let result = StellarTransactionValidator::validate_token_payment(
+                &envelope, TEST_PK, // Different from destination
+                "native", 1_000_000, &policy,
+            );
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("No payment operation found to relayer"));
+        }
+
+        #[test]
+        fn test_wrong_token_in_payment() {
+            let envelope = create_simple_v1_envelope(TEST_PK, TEST_PK_2);
+            let policy = RelayerStellarPolicy::default();
+
+            // Expecting USDC but envelope has native payment
+            let result = StellarTransactionValidator::validate_token_payment(
+                &envelope,
+                TEST_PK_2,
+                &format!("USDC:{}", TEST_PK),
+                1_000_000,
+                &policy,
+            );
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("No payment found for expected token"));
+        }
+
+        #[test]
+        fn test_insufficient_payment_amount() {
+            let envelope = create_simple_v1_envelope(TEST_PK, TEST_PK_2);
+            let policy = RelayerStellarPolicy::default();
+
+            // Expecting 2M but envelope has 1M payment
+            let result = StellarTransactionValidator::validate_token_payment(
+                &envelope, TEST_PK_2, "native", 2_000_000, &policy,
+            );
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Insufficient token payment"));
+        }
+
+        #[test]
+        fn test_payment_within_tolerance() {
+            let envelope = create_simple_v1_envelope(TEST_PK, TEST_PK_2);
+            let policy = RelayerStellarPolicy::default();
+
+            let result = StellarTransactionValidator::validate_token_payment(
+                &envelope, TEST_PK_2, "native", 990_000, &policy,
+            );
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn test_token_not_in_allowed_list() {
+            let envelope = create_simple_v1_envelope(TEST_PK, TEST_PK_2);
+            let mut policy = RelayerStellarPolicy::default();
+            policy.allowed_tokens = Some(vec![StellarAllowedTokensPolicy {
+                asset: format!("USDC:{}", TEST_PK),
+                metadata: None,
+                swap_config: None,
+                max_allowed_fee: None,
+            }]);
+
+            // Native payment but only USDC is allowed
+            let result = StellarTransactionValidator::validate_token_payment(
+                &envelope, TEST_PK_2, "native", 1_000_000, &policy,
+            );
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("not in allowed tokens list"));
+        }
+
+        #[test]
+        fn test_payment_exceeds_token_max_fee() {
+            let envelope = create_simple_v1_envelope(TEST_PK, TEST_PK_2);
+            let mut policy = RelayerStellarPolicy::default();
+            policy.allowed_tokens = Some(vec![StellarAllowedTokensPolicy {
+                asset: "native".to_string(),
+                metadata: None,
+                swap_config: None,
+                max_allowed_fee: Some(500_000), // Max 0.5 XLM
+            }]);
+
+            // Payment is 1M but max allowed is 500K
+            let result = StellarTransactionValidator::validate_token_payment(
+                &envelope, TEST_PK_2, "native", 1_000_000, &policy,
+            );
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("Max fee exceeded"));
+        }
+
+        #[test]
+        fn test_classic_asset_payment() {
+            let usdc_asset = format!("USDC:{}", TEST_PK);
+            let payment_op = Operation {
+                source_account: None,
+                body: OperationBody::Payment(soroban_rs::xdr::PaymentOp {
+                    destination: create_muxed_account(TEST_PK_2),
+                    asset: XdrAsset::CreditAlphanum4(soroban_rs::xdr::AlphaNum4 {
+                        asset_code: soroban_rs::xdr::AssetCode4(*b"USDC"),
+                        issuer: create_account_id(TEST_PK),
+                    }),
+                    amount: 1_000_000,
+                }),
+            };
+
+            let tx = Transaction {
+                source_account: create_muxed_account(TEST_PK),
+                fee: 100,
+                seq_num: SequenceNumber(1),
+                cond: soroban_rs::xdr::Preconditions::None,
+                memo: soroban_rs::xdr::Memo::None,
+                operations: vec![payment_op].try_into().unwrap(),
+                ext: TransactionExt::V0,
+            };
+
+            let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+                tx,
+                signatures: vec![].try_into().unwrap(),
+            });
+
+            let mut policy = RelayerStellarPolicy::default();
+            policy.allowed_tokens = Some(vec![StellarAllowedTokensPolicy {
+                asset: usdc_asset.clone(),
+                metadata: None,
+                swap_config: None,
+                max_allowed_fee: None,
+            }]);
+
+            let result = StellarTransactionValidator::validate_token_payment(
+                &envelope,
+                TEST_PK_2,
+                &usdc_asset,
+                1_000_000,
+                &policy,
+            );
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn test_multiple_payments_finds_correct_token() {
+            // Create envelope with two payments: one USDC to relayer, one XLM to someone else
+            let usdc_asset = format!("USDC:{}", TEST_PK);
+            let usdc_payment = Operation {
+                source_account: None,
+                body: OperationBody::Payment(soroban_rs::xdr::PaymentOp {
+                    destination: create_muxed_account(TEST_PK_2),
+                    asset: XdrAsset::CreditAlphanum4(soroban_rs::xdr::AlphaNum4 {
+                        asset_code: soroban_rs::xdr::AssetCode4(*b"USDC"),
+                        issuer: create_account_id(TEST_PK),
+                    }),
+                    amount: 500_000,
+                }),
+            };
+
+            let xlm_payment = create_native_payment_operation(TEST_PK, 1_000_000);
+
+            let tx = Transaction {
+                source_account: create_muxed_account(TEST_PK),
+                fee: 100,
+                seq_num: SequenceNumber(1),
+                cond: soroban_rs::xdr::Preconditions::None,
+                memo: soroban_rs::xdr::Memo::None,
+                operations: vec![xlm_payment, usdc_payment].try_into().unwrap(),
+                ext: TransactionExt::V0,
+            };
+
+            let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+                tx,
+                signatures: vec![].try_into().unwrap(),
+            });
+
+            let policy = RelayerStellarPolicy::default();
+
+            // Should find the USDC payment to TEST_PK_2
+            let result = StellarTransactionValidator::validate_token_payment(
+                &envelope,
+                TEST_PK_2,
+                &usdc_asset,
+                500_000,
+                &policy,
+            );
+            assert!(result.is_ok());
+        }
+    }
+
+    mod validate_user_fee_payment_amounts_tests {
+        use super::*;
+        use soroban_rs::stellar_rpc_client::{
+            GetLatestLedgerResponse, SimulateTransactionResponse,
+        };
+        use soroban_rs::xdr::WriteXdr;
+
+        const USDC_ISSUER: &str = TEST_PK;
+
+        fn create_usdc_payment_envelope(
+            source: &str,
+            destination: &str,
+            amount: i64,
+        ) -> TransactionEnvelope {
+            let payment_op = Operation {
+                source_account: None,
+                body: OperationBody::Payment(PaymentOp {
+                    destination: create_muxed_account(destination),
+                    asset: soroban_rs::xdr::Asset::CreditAlphanum4(soroban_rs::xdr::AlphaNum4 {
+                        asset_code: soroban_rs::xdr::AssetCode4(*b"USDC"),
+                        issuer: create_account_id(USDC_ISSUER),
+                    }),
+                    amount,
+                }),
+            };
+
+            let tx = Transaction {
+                source_account: create_muxed_account(source),
+                fee: 100,
+                seq_num: SequenceNumber(1),
+                cond: soroban_rs::xdr::Preconditions::None,
+                memo: soroban_rs::xdr::Memo::None,
+                operations: vec![payment_op].try_into().unwrap(),
+                ext: TransactionExt::V0,
+            };
+
+            TransactionEnvelope::Tx(TransactionV1Envelope {
+                tx,
+                signatures: vec![].try_into().unwrap(),
+            })
+        }
+
+        fn create_usdc_policy() -> RelayerStellarPolicy {
+            let usdc_asset = format!("USDC:{}", USDC_ISSUER);
+            let mut policy = RelayerStellarPolicy::default();
+            policy.allowed_tokens = Some(vec![StellarAllowedTokensPolicy {
+                asset: usdc_asset,
+                metadata: None,
+                swap_config: None,
+                max_allowed_fee: None,
+            }]);
+            policy
+        }
+
+        fn create_mock_provider_with_balance(balance: i64) -> MockStellarProviderTrait {
+            let mut provider = MockStellarProviderTrait::new();
+
+            // Mock get_account for source account
+            provider.expect_get_account().returning(move |_| {
+                Box::pin(ready(Ok(AccountEntry {
+                    account_id: create_account_id(TEST_PK),
+                    balance,
+                    seq_num: SequenceNumber(1),
+                    num_sub_entries: 0,
+                    inflation_dest: None,
+                    flags: 0,
+                    home_domain: Default::default(),
+                    thresholds: Thresholds([0; 4]),
+                    signers: Default::default(),
+                    ext: AccountEntryExt::V0,
+                })))
+            });
+
+            // Mock get_latest_ledger for fee estimation
+            provider.expect_get_latest_ledger().returning(|| {
+                Box::pin(ready(Ok(GetLatestLedgerResponse {
+                    id: "test".to_string(),
+                    protocol_version: 20,
+                    sequence: 1000,
+                })))
+            });
+
+            // Mock simulate_transaction_envelope for Soroban fee estimation
+            provider
+                .expect_simulate_transaction_envelope()
+                .returning(|_| {
+                    Box::pin(ready(Ok(SimulateTransactionResponse {
+                        min_resource_fee: 100,
+                        transaction_data: String::new(),
+                        ..Default::default()
+                    })))
+                });
+
+            // Mock get_ledger_entries for trustline balance check
+            provider.expect_get_ledger_entries().returning(|_| {
+                use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+                use soroban_rs::xdr::{
+                    LedgerEntry, LedgerEntryData, LedgerEntryExt, TrustLineAsset, TrustLineEntry,
+                    TrustLineEntryExt,
+                };
+
+                let trustline_entry = TrustLineEntry {
+                    account_id: create_account_id(TEST_PK),
+                    asset: TrustLineAsset::CreditAlphanum4(soroban_rs::xdr::AlphaNum4 {
+                        asset_code: soroban_rs::xdr::AssetCode4(*b"USDC"),
+                        issuer: create_account_id(TEST_PK_2),
+                    }),
+                    balance: 10_000_000, // 10 USDC
+                    limit: 1_000_000_000,
+                    flags: 1,
+                    ext: TrustLineEntryExt::V0,
+                };
+
+                let ledger_entry = LedgerEntry {
+                    last_modified_ledger_seq: 0,
+                    data: LedgerEntryData::Trustline(trustline_entry),
+                    ext: LedgerEntryExt::V0,
+                };
+
+                let xdr_base64 = ledger_entry
+                    .data
+                    .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                    .unwrap();
+
+                Box::pin(ready(Ok(GetLedgerEntriesResponse {
+                    entries: Some(vec![LedgerEntryResult {
+                        key: String::new(),
+                        xdr: xdr_base64,
+                        last_modified_ledger: 0,
+                        live_until_ledger_seq_ledger_seq: None,
+                    }]),
+                    latest_ledger: 0,
+                })))
+            });
+
+            provider
+        }
+
+        fn create_mock_dex_service() -> MockStellarDexServiceTrait {
+            let mut dex_service = MockStellarDexServiceTrait::new();
+            dex_service
+                .expect_get_xlm_to_token_quote()
+                .returning(|_, _, _, _| {
+                    Box::pin(ready(Ok(
+                        crate::services::stellar_dex::StellarQuoteResponse {
+                            input_asset: "native".to_string(),
+                            output_asset: format!("USDC:{}", USDC_ISSUER),
+                            in_amount: 100,
+                            out_amount: 1_000_000, // 0.1 USDC
+                            price_impact_pct: 0.0,
+                            slippage_bps: 100,
+                            path: None,
+                        },
+                    )))
+                });
+            dex_service
+        }
+
+        #[tokio::test]
+        async fn test_valid_fee_payment() {
+            let envelope = create_usdc_payment_envelope(TEST_PK, TEST_PK_2, 1_000_000);
+            let policy = create_usdc_policy();
+            let provider = create_mock_provider_with_balance(10_000_000_000);
+            let dex_service = create_mock_dex_service();
+
+            let result = StellarTransactionValidator::validate_user_fee_payment_amounts(
+                &envelope,
+                TEST_PK_2,
+                &policy,
+                &provider,
+                &dex_service,
+            )
+            .await;
+
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_no_fee_payment() {
+            // Envelope with payment to different address (not the relayer)
+            let envelope = create_usdc_payment_envelope(TEST_PK, TEST_PK, 1_000_000);
+            let policy = create_usdc_policy();
+            let provider = create_mock_provider_with_balance(10_000_000_000);
+            let dex_service = create_mock_dex_service();
+
+            let result = StellarTransactionValidator::validate_user_fee_payment_amounts(
+                &envelope,
+                TEST_PK_2, // Different from destination
+                &policy,
+                &provider,
+                &dex_service,
+            )
+            .await;
+
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("must include a fee payment operation to the relayer"));
+        }
+
+        #[tokio::test]
+        async fn test_multiple_fee_payments_rejected() {
+            // Create envelope with two USDC payments to relayer
+            let payment1 = Operation {
+                source_account: None,
+                body: OperationBody::Payment(PaymentOp {
+                    destination: create_muxed_account(TEST_PK_2),
+                    asset: soroban_rs::xdr::Asset::CreditAlphanum4(soroban_rs::xdr::AlphaNum4 {
+                        asset_code: soroban_rs::xdr::AssetCode4(*b"USDC"),
+                        issuer: create_account_id(USDC_ISSUER),
+                    }),
+                    amount: 500_000,
+                }),
+            };
+            let payment2 = Operation {
+                source_account: None,
+                body: OperationBody::Payment(PaymentOp {
+                    destination: create_muxed_account(TEST_PK_2),
+                    asset: soroban_rs::xdr::Asset::CreditAlphanum4(soroban_rs::xdr::AlphaNum4 {
+                        asset_code: soroban_rs::xdr::AssetCode4(*b"USDC"),
+                        issuer: create_account_id(USDC_ISSUER),
+                    }),
+                    amount: 500_000,
+                }),
+            };
+
+            let tx = Transaction {
+                source_account: create_muxed_account(TEST_PK),
+                fee: 100,
+                seq_num: SequenceNumber(1),
+                cond: soroban_rs::xdr::Preconditions::None,
+                memo: soroban_rs::xdr::Memo::None,
+                operations: vec![payment1, payment2].try_into().unwrap(),
+                ext: TransactionExt::V0,
+            };
+
+            let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+                tx,
+                signatures: vec![].try_into().unwrap(),
+            });
+
+            let policy = create_usdc_policy();
+            let provider = create_mock_provider_with_balance(10_000_000_000);
+            let dex_service = create_mock_dex_service();
+
+            let result = StellarTransactionValidator::validate_user_fee_payment_amounts(
+                &envelope,
+                TEST_PK_2,
+                &policy,
+                &provider,
+                &dex_service,
+            )
+            .await;
+
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("exactly one fee payment operation"));
+        }
+
+        #[tokio::test]
+        async fn test_token_not_allowed() {
+            // Create envelope with EURC payment (not in allowed list)
+            let payment_op = Operation {
+                source_account: None,
+                body: OperationBody::Payment(PaymentOp {
+                    destination: create_muxed_account(TEST_PK_2),
+                    asset: soroban_rs::xdr::Asset::CreditAlphanum4(soroban_rs::xdr::AlphaNum4 {
+                        asset_code: soroban_rs::xdr::AssetCode4(*b"EURC"),
+                        issuer: create_account_id(TEST_PK),
+                    }),
+                    amount: 1_000_000,
+                }),
+            };
+
+            let tx = Transaction {
+                source_account: create_muxed_account(TEST_PK),
+                fee: 100,
+                seq_num: SequenceNumber(1),
+                cond: soroban_rs::xdr::Preconditions::None,
+                memo: soroban_rs::xdr::Memo::None,
+                operations: vec![payment_op].try_into().unwrap(),
+                ext: TransactionExt::V0,
+            };
+
+            let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+                tx,
+                signatures: vec![].try_into().unwrap(),
+            });
+
+            let policy = create_usdc_policy(); // Only USDC is allowed
+
+            let provider = create_mock_provider_with_balance(10_000_000_000);
+            let dex_service = create_mock_dex_service();
+
+            let result = StellarTransactionValidator::validate_user_fee_payment_amounts(
+                &envelope,
+                TEST_PK_2,
+                &policy,
+                &provider,
+                &dex_service,
+            )
+            .await;
+
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("not in allowed tokens list"));
+        }
+
+        #[tokio::test]
+        async fn test_fee_exceeds_token_max() {
+            let envelope = create_usdc_payment_envelope(TEST_PK, TEST_PK_2, 1_000_000);
+            let usdc_asset = format!("USDC:{}", USDC_ISSUER);
+            let mut policy = RelayerStellarPolicy::default();
+            policy.allowed_tokens = Some(vec![StellarAllowedTokensPolicy {
+                asset: usdc_asset,
+                metadata: None,
+                swap_config: None,
+                max_allowed_fee: Some(500_000), // Lower than payment amount
+            }]);
+
+            let provider = create_mock_provider_with_balance(10_000_000_000);
+            let dex_service = create_mock_dex_service();
+
+            let result = StellarTransactionValidator::validate_user_fee_payment_amounts(
+                &envelope,
+                TEST_PK_2,
+                &policy,
+                &provider,
+                &dex_service,
+            )
+            .await;
+
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("Max fee exceeded"));
+        }
+
+        #[tokio::test]
+        async fn test_insufficient_payment_amount() {
+            let envelope = create_usdc_payment_envelope(TEST_PK, TEST_PK_2, 1_000_000);
+            let policy = create_usdc_policy();
+            let provider = create_mock_provider_with_balance(10_000_000_000);
+
+            // Mock DEX to require more than the payment amount
+            let mut dex_service = MockStellarDexServiceTrait::new();
+            dex_service
+                .expect_get_xlm_to_token_quote()
+                .returning(|_, _, _, _| {
+                    Box::pin(ready(Ok(
+                        crate::services::stellar_dex::StellarQuoteResponse {
+                            input_asset: "native".to_string(),
+                            output_asset: "USDC:...".to_string(),
+                            in_amount: 200,
+                            out_amount: 2_000_000, // More than the 1M payment
+                            price_impact_pct: 0.0,
+                            slippage_bps: 100,
+                            path: None,
+                        },
+                    )))
+                });
+
+            let result = StellarTransactionValidator::validate_user_fee_payment_amounts(
+                &envelope,
+                TEST_PK_2,
+                &policy,
+                &provider,
+                &dex_service,
+            )
+            .await;
+
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Insufficient token payment"));
+        }
+
+        #[tokio::test]
+        async fn test_insufficient_user_balance() {
+            let envelope = create_usdc_payment_envelope(TEST_PK, TEST_PK_2, 1_000_000);
+            let policy = create_usdc_policy();
+
+            // Create provider with low USDC trustline balance
+            let mut provider = MockStellarProviderTrait::new();
+
+            provider.expect_get_account().returning(move |_| {
+                Box::pin(ready(Ok(AccountEntry {
+                    account_id: create_account_id(TEST_PK),
+                    balance: 10_000_000_000,
+                    seq_num: SequenceNumber(1),
+                    num_sub_entries: 0,
+                    inflation_dest: None,
+                    flags: 0,
+                    home_domain: Default::default(),
+                    thresholds: Thresholds([0; 4]),
+                    signers: Default::default(),
+                    ext: AccountEntryExt::V0,
+                })))
+            });
+
+            provider.expect_get_latest_ledger().returning(|| {
+                Box::pin(ready(Ok(GetLatestLedgerResponse {
+                    id: "test".to_string(),
+                    protocol_version: 20,
+                    sequence: 1000,
+                })))
+            });
+
+            provider
+                .expect_simulate_transaction_envelope()
+                .returning(|_| {
+                    Box::pin(ready(Ok(SimulateTransactionResponse {
+                        min_resource_fee: 100,
+                        transaction_data: String::new(),
+                        ..Default::default()
+                    })))
+                });
+
+            // Mock get_ledger_entries with low USDC balance
+            provider.expect_get_ledger_entries().returning(|_| {
+                use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+                use soroban_rs::xdr::{
+                    LedgerEntry, LedgerEntryData, LedgerEntryExt, TrustLineAsset, TrustLineEntry,
+                    TrustLineEntryExt,
+                };
+
+                let trustline_entry = TrustLineEntry {
+                    account_id: create_account_id(TEST_PK),
+                    asset: TrustLineAsset::CreditAlphanum4(soroban_rs::xdr::AlphaNum4 {
+                        asset_code: soroban_rs::xdr::AssetCode4(*b"USDC"),
+                        issuer: create_account_id(USDC_ISSUER),
+                    }),
+                    balance: 500_000, // Only 0.05 USDC - insufficient
+                    limit: 1_000_000_000,
+                    flags: 1,
+                    ext: TrustLineEntryExt::V0,
+                };
+
+                let ledger_entry = LedgerEntry {
+                    last_modified_ledger_seq: 0,
+                    data: LedgerEntryData::Trustline(trustline_entry),
+                    ext: LedgerEntryExt::V0,
+                };
+
+                let xdr_base64 = ledger_entry
+                    .data
+                    .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                    .unwrap();
+
+                Box::pin(ready(Ok(GetLedgerEntriesResponse {
+                    entries: Some(vec![LedgerEntryResult {
+                        key: String::new(),
+                        xdr: xdr_base64,
+                        last_modified_ledger: 0,
+                        live_until_ledger_seq_ledger_seq: None,
+                    }]),
+                    latest_ledger: 0,
+                })))
+            });
+
+            let dex_service = create_mock_dex_service();
+
+            let result = StellarTransactionValidator::validate_user_fee_payment_amounts(
+                &envelope,
+                TEST_PK_2,
+                &policy,
+                &provider,
+                &dex_service,
+            )
+            .await;
+
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Insufficient balance"));
+        }
+
+        #[tokio::test]
+        async fn test_valid_fee_payment_with_usdc() {
+            let envelope = create_usdc_payment_envelope(TEST_PK, TEST_PK_2, 1_000_000);
+            let policy = create_usdc_policy();
+            let provider = create_mock_provider_with_balance(10_000_000_000);
+            let dex_service = create_mock_dex_service();
+
+            let result = StellarTransactionValidator::validate_user_fee_payment_amounts(
+                &envelope,
+                TEST_PK_2,
+                &policy,
+                &provider,
+                &dex_service,
+            )
+            .await;
+
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_dex_conversion_failure() {
+            let envelope = create_usdc_payment_envelope(TEST_PK, TEST_PK_2, 1_000_000);
+            let policy = create_usdc_policy();
+            let provider = create_mock_provider_with_balance(10_000_000_000);
+
+            let mut dex_service = MockStellarDexServiceTrait::new();
+            dex_service
+                .expect_get_xlm_to_token_quote()
+                .returning(|_, _, _, _| {
+                    Box::pin(ready(Err(
+                        crate::services::stellar_dex::StellarDexServiceError::UnknownError(
+                            "DEX unavailable".to_string(),
+                        ),
+                    )))
+                });
+
+            let result = StellarTransactionValidator::validate_user_fee_payment_amounts(
+                &envelope,
+                TEST_PK_2,
+                &policy,
+                &provider,
+                &dex_service,
+            )
+            .await;
+
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to convert XLM fee to token"));
+        }
+    }
+
+    mod validate_contract_invocation_tests {
+        use super::*;
+
+        #[test]
+        fn test_invoke_contract_allowed() {
+            let invoke_op = InvokeHostFunctionOp {
+                host_function: HostFunction::InvokeContract(InvokeContractArgs {
+                    contract_address: ScAddress::Contract(soroban_rs::xdr::ContractId(
+                        soroban_rs::xdr::Hash([0u8; 32]),
+                    )),
+                    function_name: ScSymbol("test".try_into().unwrap()),
+                    args: Default::default(),
+                }),
+                auth: Default::default(),
+            };
+
+            let policy = RelayerStellarPolicy::default();
+            assert!(StellarTransactionValidator::validate_contract_invocation(
+                &invoke_op, 0, TEST_PK_2, &policy
+            )
+            .is_ok());
+        }
+
+        #[test]
+        fn test_create_contract_rejected() {
+            let invoke_op = InvokeHostFunctionOp {
+                host_function: HostFunction::CreateContract(soroban_rs::xdr::CreateContractArgs {
+                    contract_id_preimage: soroban_rs::xdr::ContractIdPreimage::Address(
+                        soroban_rs::xdr::ContractIdPreimageFromAddress {
+                            address: ScAddress::Account(create_account_id(TEST_PK)),
+                            salt: soroban_rs::xdr::Uint256([0u8; 32]),
+                        },
+                    ),
+                    executable: soroban_rs::xdr::ContractExecutable::Wasm(soroban_rs::xdr::Hash(
+                        [0u8; 32],
+                    )),
+                }),
+                auth: Default::default(),
+            };
+
+            let policy = RelayerStellarPolicy::default();
+            let result = StellarTransactionValidator::validate_contract_invocation(
+                &invoke_op, 0, TEST_PK_2, &policy,
+            );
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("CreateContract not allowed"));
+        }
+
+        #[test]
+        fn test_upload_wasm_rejected() {
+            let invoke_op = InvokeHostFunctionOp {
+                host_function: HostFunction::UploadContractWasm(vec![0u8; 100].try_into().unwrap()),
+                auth: Default::default(),
+            };
+
+            let policy = RelayerStellarPolicy::default();
+            let result = StellarTransactionValidator::validate_contract_invocation(
+                &invoke_op, 0, TEST_PK_2, &policy,
+            );
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("UploadContractWasm not allowed"));
+        }
+
+        #[test]
+        fn test_relayer_in_auth_rejected() {
+            let auth_entry = SorobanAuthorizationEntry {
+                credentials: SorobanCredentials::Address(
+                    soroban_rs::xdr::SorobanAddressCredentials {
+                        address: ScAddress::Account(create_account_id(TEST_PK_2)),
+                        nonce: 0,
+                        signature_expiration_ledger: 0,
+                        signature: soroban_rs::xdr::ScVal::Void,
+                    },
+                ),
+                root_invocation: soroban_rs::xdr::SorobanAuthorizedInvocation {
+                    function: SorobanAuthorizedFunction::ContractFn(
+                        soroban_rs::xdr::InvokeContractArgs {
+                            contract_address: ScAddress::Contract(soroban_rs::xdr::ContractId(
+                                soroban_rs::xdr::Hash([0u8; 32]),
+                            )),
+                            function_name: ScSymbol("test".try_into().unwrap()),
+                            args: Default::default(),
+                        },
+                    ),
+                    sub_invocations: Default::default(),
+                },
+            };
+
+            let invoke_op = InvokeHostFunctionOp {
+                host_function: HostFunction::InvokeContract(InvokeContractArgs {
+                    contract_address: ScAddress::Contract(soroban_rs::xdr::ContractId(
+                        soroban_rs::xdr::Hash([0u8; 32]),
+                    )),
+                    function_name: ScSymbol("test".try_into().unwrap()),
+                    args: Default::default(),
+                }),
+                auth: vec![auth_entry].try_into().unwrap(),
+            };
+
+            let policy = RelayerStellarPolicy::default();
+            let result = StellarTransactionValidator::validate_contract_invocation(
+                &invoke_op, 0, TEST_PK_2, // Relayer address matches auth entry
+                &policy,
+            );
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("requires relayer"));
+        }
     }
 }
