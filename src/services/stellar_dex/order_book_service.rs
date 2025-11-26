@@ -1459,4 +1459,440 @@ mod tests {
         assert_eq!(HTTP_REQUEST_TIMEOUT_SECONDS, 7);
         assert_eq!(SLIPPAGE_TO_BPS_MULTIPLIER, 100.0);
     }
+
+    // HTTP Integration tests with mockito
+
+    #[tokio::test]
+    async fn test_get_token_to_xlm_quote_with_http_mock() {
+        let mut mock_server = mockito::Server::new_async().await;
+
+        // Mock successful Horizon API response
+        let mock = mock_server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(r".*/paths/strict-send.*".to_string()),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                "_embedded": {
+                    "records": [
+                        {
+                            "source_amount": "10.0000000",
+                            "destination_amount": "9.8500000",
+                            "path": []
+                        }
+                    ]
+                }
+            }"#,
+            )
+            .create_async()
+            .await;
+
+        let provider = Arc::new(MockStellarProviderTrait::new());
+        let signer = Arc::new(MockCombinedSigner::new());
+
+        let service = OrderBookService::new(mock_server.url(), provider, signer)
+            .expect("Failed to create OrderBookService");
+
+        let result = service
+            .get_token_to_xlm_quote(
+                "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+                100000000,
+                1.0,
+                Some(7),
+            )
+            .await;
+
+        mock.assert_async().await;
+        assert!(result.is_ok());
+        let quote = result.unwrap();
+        assert_eq!(quote.in_amount, 100000000);
+        assert_eq!(quote.out_amount, 98500000);
+        assert_eq!(quote.slippage_bps, 100);
+    }
+
+    #[tokio::test]
+    async fn test_get_token_to_xlm_quote_http_error_404() {
+        let mut mock_server = mockito::Server::new_async().await;
+
+        let mock = mock_server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(r".*/paths/strict-send.*".to_string()),
+            )
+            .with_status(404)
+            .with_body("Not found")
+            .create_async()
+            .await;
+
+        let provider = Arc::new(MockStellarProviderTrait::new());
+        let signer = Arc::new(MockCombinedSigner::new());
+
+        let service = OrderBookService::new(mock_server.url(), provider, signer)
+            .expect("Failed to create OrderBookService");
+
+        let result = service
+            .get_token_to_xlm_quote(
+                "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+                100000000,
+                1.0,
+                Some(7),
+            )
+            .await;
+
+        mock.assert_async().await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_get_token_to_xlm_quote_http_error_500() {
+        let mut mock_server = mockito::Server::new_async().await;
+
+        let mock = mock_server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(r".*/paths/strict-send.*".to_string()),
+            )
+            .with_status(500)
+            .with_body("Internal server error")
+            .create_async()
+            .await;
+
+        let provider = Arc::new(MockStellarProviderTrait::new());
+        let signer = Arc::new(MockCombinedSigner::new());
+
+        let service = OrderBookService::new(mock_server.url(), provider, signer)
+            .expect("Failed to create OrderBookService");
+
+        let result = service
+            .get_token_to_xlm_quote(
+                "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+                100000000,
+                1.0,
+                Some(7),
+            )
+            .await;
+
+        mock.assert_async().await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_get_token_to_xlm_quote_no_paths_found() {
+        let mut mock_server = mockito::Server::new_async().await;
+
+        let mock = mock_server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(r".*/paths/strict-send.*".to_string()),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                "_embedded": {
+                    "records": []
+                }
+            }"#,
+            )
+            .create_async()
+            .await;
+
+        let provider = Arc::new(MockStellarProviderTrait::new());
+        let signer = Arc::new(MockCombinedSigner::new());
+
+        let service = OrderBookService::new(mock_server.url(), provider, signer)
+            .expect("Failed to create OrderBookService");
+
+        let result = service
+            .get_token_to_xlm_quote(
+                "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+                100000000,
+                1.0,
+                Some(7),
+            )
+            .await;
+
+        mock.assert_async().await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            StellarDexServiceError::NoPathFound
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_get_token_to_xlm_quote_invalid_json() {
+        let mut mock_server = mockito::Server::new_async().await;
+
+        let mock = mock_server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(r".*/paths/strict-send.*".to_string()),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body("invalid json")
+            .create_async()
+            .await;
+
+        let provider = Arc::new(MockStellarProviderTrait::new());
+        let signer = Arc::new(MockCombinedSigner::new());
+
+        let service = OrderBookService::new(mock_server.url(), provider, signer)
+            .expect("Failed to create OrderBookService");
+
+        let result = service
+            .get_token_to_xlm_quote(
+                "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+                100000000,
+                1.0,
+                Some(7),
+            )
+            .await;
+
+        mock.assert_async().await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_get_token_to_xlm_quote_with_multi_hop_path() {
+        let mut mock_server = mockito::Server::new_async().await;
+
+        let mock = mock_server
+            .mock("GET", mockito::Matcher::Regex(r".*/paths/strict-send.*".to_string()))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{
+                "_embedded": {
+                    "records": [
+                        {
+                            "source_amount": "10.0000000",
+                            "destination_amount": "9.9000000",
+                            "path": [
+                                {
+                                    "asset_code": "USDC",
+                                    "asset_issuer": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+                                },
+                                {
+                                    "asset_code": "BTC",
+                                    "asset_issuer": "GCNSGHUCG5VMGLT5RIYYZSO7VQULQKAJ62QA33DBC5PPBSO57LFWVV6P"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }"#)
+            .create_async()
+            .await;
+
+        let provider = Arc::new(MockStellarProviderTrait::new());
+        let signer = Arc::new(MockCombinedSigner::new());
+
+        let service = OrderBookService::new(mock_server.url(), provider, signer)
+            .expect("Failed to create OrderBookService");
+
+        let result = service
+            .get_token_to_xlm_quote(
+                "EUROC:GDHU6WRG4IEQXM5NZ4BMPKOXHW76MZM4Y2IEMFDVXBSDP6SJY4ITNPP2",
+                100000000,
+                1.0,
+                Some(7),
+            )
+            .await;
+
+        mock.assert_async().await;
+        assert!(result.is_ok());
+        let quote = result.unwrap();
+        assert!(quote.path.is_some());
+        let path = quote.path.unwrap();
+        assert_eq!(path.len(), 2);
+        assert_eq!(path[0].asset_code, Some("USDC".to_string()));
+        assert_eq!(
+            path[0].asset_issuer,
+            Some("GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5".to_string())
+        );
+        assert_eq!(path[1].asset_code, Some("BTC".to_string()));
+        assert_eq!(
+            path[1].asset_issuer,
+            Some("GCNSGHUCG5VMGLT5RIYYZSO7VQULQKAJ62QA33DBC5PPBSO57LFWVV6P".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_xlm_to_token_quote_with_http_mock() {
+        let mut mock_server = mockito::Server::new_async().await;
+
+        let mock = mock_server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(r".*/paths/strict-send.*".to_string()),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                "_embedded": {
+                    "records": [
+                        {
+                            "source_amount": "1.0000000",
+                            "destination_amount": "10.5000000",
+                            "path": []
+                        }
+                    ]
+                }
+            }"#,
+            )
+            .create_async()
+            .await;
+
+        let provider = Arc::new(MockStellarProviderTrait::new());
+        let signer = Arc::new(MockCombinedSigner::new());
+
+        let service = OrderBookService::new(mock_server.url(), provider, signer)
+            .expect("Failed to create OrderBookService");
+
+        let result = service
+            .get_xlm_to_token_quote(
+                "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+                10000000,
+                1.0,
+                Some(7),
+            )
+            .await;
+
+        mock.assert_async().await;
+        assert!(result.is_ok());
+        let quote = result.unwrap();
+        assert_eq!(quote.input_asset, "native");
+        assert_eq!(quote.in_amount, 10000000);
+        assert_eq!(quote.out_amount, 105000000);
+    }
+
+    #[tokio::test]
+    async fn test_get_token_to_xlm_quote_with_different_decimals() {
+        let mut mock_server = mockito::Server::new_async().await;
+
+        let mock = mock_server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(r".*/paths/strict-send.*".to_string()),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                "_embedded": {
+                    "records": [
+                        {
+                            "source_amount": "100.000000",
+                            "destination_amount": "98.500000",
+                            "path": []
+                        }
+                    ]
+                }
+            }"#,
+            )
+            .create_async()
+            .await;
+
+        let provider = Arc::new(MockStellarProviderTrait::new());
+        let signer = Arc::new(MockCombinedSigner::new());
+
+        let service = OrderBookService::new(mock_server.url(), provider, signer)
+            .expect("Failed to create OrderBookService");
+
+        // Test with 6 decimals (USDC on some chains)
+        let result = service
+            .get_token_to_xlm_quote(
+                "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+                100000000,
+                1.0,
+                Some(6),
+            )
+            .await;
+
+        mock.assert_async().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_swap_quote_token_to_xlm() {
+        let mut mock_server = mockito::Server::new_async().await;
+
+        let mock = mock_server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(r".*/paths/strict-send.*".to_string()),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                "_embedded": {
+                    "records": [
+                        {
+                            "source_amount": "10.0000000",
+                            "destination_amount": "9.8000000",
+                            "path": []
+                        }
+                    ]
+                }
+            }"#,
+            )
+            .create_async()
+            .await;
+
+        let provider = Arc::new(MockStellarProviderTrait::new());
+        let signer = Arc::new(MockCombinedSigner::new());
+
+        let service = OrderBookService::new(mock_server.url(), provider, signer)
+            .expect("Failed to create OrderBookService");
+
+        let params = SwapTransactionParams {
+            source_account: "GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string(),
+            source_asset: "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+                .to_string(),
+            destination_asset: "native".to_string(),
+            amount: 100000000,
+            slippage_percent: 1.0,
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            source_asset_decimals: Some(7),
+            destination_asset_decimals: Some(7),
+        };
+
+        let result = service.get_swap_quote(&params).await;
+
+        mock.assert_async().await;
+        assert!(result.is_ok());
+        let quote = result.unwrap();
+        assert_eq!(quote.in_amount, 100000000);
+        assert_eq!(quote.out_amount, 98000000);
+    }
+
+    #[test]
+    fn test_slippage_bps_calculation() {
+        let (_service, _, _) = create_test_service();
+
+        // Test slippage to BPS conversion
+        let test_cases = vec![
+            (0.0, 0),
+            (0.5, 50),
+            (1.0, 100),
+            (2.5, 250),
+            (5.0, 500),
+            (10.0, 1000),
+        ];
+
+        for (slippage_percent, expected_bps) in test_cases {
+            let bps = (slippage_percent * SLIPPAGE_TO_BPS_MULTIPLIER) as u32;
+            assert_eq!(
+                bps, expected_bps,
+                "Failed for slippage {}%",
+                slippage_percent
+            );
+        }
+    }
 }

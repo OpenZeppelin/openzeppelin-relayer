@@ -347,155 +347,14 @@ mod tests {
     use super::*;
     use crate::{
         domain::{transaction::stellar::test_helpers::*, SignTransactionResponse},
-        models::{DecoratedSignature, JsonRpcId, RepositoryError},
-        services::{
-            provider::ProviderError, signer::MockSigner, stellar_dex::MockStellarDexServiceTrait,
-        },
+        models::DecoratedSignature,
+        services::{signer::MockSigner, stellar_dex::MockStellarDexServiceTrait},
     };
-    use soroban_rs::xdr::{BytesM, ScSymbol, ScVal, Signature, SignatureHint};
+    use soroban_rs::xdr::{BytesM, Signature, SignatureHint};
     use std::future::ready;
 
-    struct MockCounter {
-        sequence: u64,
-    }
-
-    #[async_trait::async_trait]
-    impl TransactionCounterTrait for MockCounter {
-        async fn get_and_increment(
-            &self,
-            _relayer_id: &str,
-            _address: &str,
-        ) -> Result<u64, RepositoryError> {
-            Ok(self.sequence)
-        }
-
-        async fn get(
-            &self,
-            _relayer_id: &str,
-            _address: &str,
-        ) -> Result<Option<u64>, RepositoryError> {
-            Ok(Some(self.sequence))
-        }
-
-        async fn decrement(
-            &self,
-            _relayer_id: &str,
-            _address: &str,
-        ) -> Result<u64, RepositoryError> {
-            Ok(self.sequence - 1)
-        }
-
-        async fn set(
-            &self,
-            _relayer_id: &str,
-            _address: &str,
-            _value: u64,
-        ) -> Result<(), RepositoryError> {
-            Ok(())
-        }
-    }
-
-    struct MockProvider;
-
-    #[async_trait::async_trait]
-    impl StellarProviderTrait for MockProvider {
-        async fn get_account(
-            &self,
-            _account_id: &str,
-        ) -> Result<soroban_rs::xdr::AccountEntry, ProviderError> {
-            unimplemented!()
-        }
-
-        async fn call_contract(
-            &self,
-            _contract_address: &str,
-            _function_name: &ScSymbol,
-            _args: Vec<ScVal>,
-        ) -> Result<ScVal, ProviderError> {
-            unimplemented!()
-        }
-
-        async fn simulate_transaction_envelope(
-            &self,
-            _envelope: &TransactionEnvelope,
-        ) -> Result<soroban_rs::stellar_rpc_client::SimulateTransactionResponse, ProviderError>
-        {
-            // Return a response indicating no simulation needed
-            Ok(
-                soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
-                    min_resource_fee: 0,
-                    transaction_data: String::new(),
-                    ..Default::default()
-                },
-            )
-        }
-
-        async fn send_transaction_polling(
-            &self,
-            _tx_envelope: &TransactionEnvelope,
-        ) -> Result<soroban_rs::SorobanTransactionResponse, ProviderError> {
-            unimplemented!()
-        }
-
-        async fn get_network(
-            &self,
-        ) -> Result<soroban_rs::stellar_rpc_client::GetNetworkResponse, ProviderError> {
-            unimplemented!()
-        }
-
-        async fn get_latest_ledger(
-            &self,
-        ) -> Result<soroban_rs::stellar_rpc_client::GetLatestLedgerResponse, ProviderError>
-        {
-            unimplemented!()
-        }
-
-        async fn send_transaction(
-            &self,
-            _tx_envelope: &TransactionEnvelope,
-        ) -> Result<soroban_rs::xdr::Hash, ProviderError> {
-            unimplemented!()
-        }
-
-        async fn get_transaction(
-            &self,
-            _tx_id: &soroban_rs::xdr::Hash,
-        ) -> Result<soroban_rs::stellar_rpc_client::GetTransactionResponse, ProviderError> {
-            unimplemented!()
-        }
-
-        async fn get_transactions(
-            &self,
-            _request: soroban_rs::stellar_rpc_client::GetTransactionsRequest,
-        ) -> Result<soroban_rs::stellar_rpc_client::GetTransactionsResponse, ProviderError>
-        {
-            unimplemented!()
-        }
-
-        async fn get_ledger_entries(
-            &self,
-            _keys: &[soroban_rs::xdr::LedgerKey],
-        ) -> Result<soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse, ProviderError>
-        {
-            unimplemented!()
-        }
-
-        async fn get_events(
-            &self,
-            _request: crate::services::provider::GetEventsRequest,
-        ) -> Result<soroban_rs::stellar_rpc_client::GetEventsResponse, ProviderError> {
-            unimplemented!()
-        }
-
-        async fn raw_request_dyn(
-            &self,
-            _method: &str,
-            _params: serde_json::Value,
-            _id: Option<JsonRpcId>,
-        ) -> Result<serde_json::Value, ProviderError> {
-            unimplemented!()
-        }
-    }
+    use crate::repositories::MockTransactionCounterTrait;
+    use crate::services::provider::MockStellarProviderTrait;
 
     fn create_test_envelope(source_account: &str) -> TransactionEnvelope {
         create_simple_v1_envelope(source_account, TEST_PK_2)
@@ -507,10 +366,24 @@ mod tests {
         let relayer_id = "test-relayer";
         let expected_sequence = 42i64;
 
-        let counter = MockCounter {
-            sequence: expected_sequence as u64,
-        };
-        let provider = MockProvider;
+        let mut counter = MockTransactionCounterTrait::new();
+        counter
+            .expect_get_and_increment()
+            .returning(move |_, _| Box::pin(ready(Ok(expected_sequence as u64))));
+
+        let mut provider = MockStellarProviderTrait::new();
+        provider
+            .expect_simulate_transaction_envelope()
+            .returning(|_| {
+                Box::pin(ready(Ok(
+                    soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
+                        min_resource_fee: 0,
+                        transaction_data: String::new(),
+                        ..Default::default()
+                    },
+                )))
+            });
+
         let mut signer = MockSigner::new();
 
         // Mock signer expectations
@@ -576,8 +449,24 @@ mod tests {
         let different_address = "GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ";
         let relayer_id = "test-relayer";
 
-        let counter = MockCounter { sequence: 42 };
-        let provider = MockProvider;
+        let mut counter = MockTransactionCounterTrait::new();
+        counter
+            .expect_get_and_increment()
+            .returning(|_, _| Box::pin(ready(Ok(42))));
+
+        let mut provider = MockStellarProviderTrait::new();
+        provider
+            .expect_simulate_transaction_envelope()
+            .returning(|_| {
+                Box::pin(ready(Ok(
+                    soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
+                        min_resource_fee: 0,
+                        transaction_data: String::new(),
+                        ..Default::default()
+                    },
+                )))
+            });
+
         let mut signer = MockSigner::new();
 
         // Mock signer expectations
@@ -644,8 +533,24 @@ mod tests {
         let relayer_address = TEST_PK;
         let relayer_id = "test-relayer";
 
-        let counter = MockCounter { sequence: 42 };
-        let provider = MockProvider;
+        let mut counter = MockTransactionCounterTrait::new();
+        counter
+            .expect_get_and_increment()
+            .returning(|_, _| Box::pin(ready(Ok(42))));
+
+        let mut provider = MockStellarProviderTrait::new();
+        provider
+            .expect_simulate_transaction_envelope()
+            .returning(|_| {
+                Box::pin(ready(Ok(
+                    soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
+                        min_resource_fee: 0,
+                        transaction_data: String::new(),
+                        ..Default::default()
+                    },
+                )))
+            });
+
         let mut signer = MockSigner::new();
 
         // Mock signer expectations
@@ -723,8 +628,8 @@ mod tests {
         let relayer_address = TEST_PK;
         let relayer_id = "test-relayer";
 
-        let counter = MockCounter { sequence: 42 };
-        let provider = MockProvider;
+        let counter = MockTransactionCounterTrait::new();
+        let provider = MockStellarProviderTrait::new();
         let mut signer = MockSigner::new();
 
         // Mock signer expectations
@@ -781,6 +686,339 @@ mod tests {
             }
             _ => panic!("Expected UnexpectedError"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_process_unsigned_xdr_invalid_xdr() {
+        let relayer_address = TEST_PK;
+        let relayer_id = "test-relayer";
+
+        let counter = MockTransactionCounterTrait::new();
+        let provider = MockStellarProviderTrait::new();
+        let mut signer = MockSigner::new();
+
+        signer.expect_address().returning(|| {
+            Box::pin(ready(Ok(crate::models::Address::Stellar(
+                "test-signer-address".to_string(),
+            ))))
+        });
+
+        // Create stellar data with invalid XDR
+        let stellar_data = StellarTransactionData {
+            source_account: relayer_address.to_string(),
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            fee: None,
+            sequence_number: None,
+            transaction_input: TransactionInput::UnsignedXdr("invalid-xdr".to_string()),
+            memo: None,
+            valid_until: None,
+            signatures: vec![],
+            hash: None,
+            simulation_transaction_data: None,
+            signed_envelope_xdr: None,
+        };
+
+        let dex_service = MockStellarDexServiceTrait::new();
+        let result = process_unsigned_xdr(
+            &counter,
+            relayer_id,
+            relayer_address,
+            stellar_data,
+            &provider,
+            &signer,
+            None,
+            &dex_service,
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            TransactionError::ValidationError(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_process_unsigned_xdr_with_policy_relayer_strategy() {
+        let relayer_address = TEST_PK;
+        let relayer_id = "test-relayer";
+
+        let mut counter = MockTransactionCounterTrait::new();
+        counter
+            .expect_get_and_increment()
+            .returning(|_, _| Box::pin(ready(Ok(42))));
+
+        let mut provider = MockStellarProviderTrait::new();
+        provider
+            .expect_simulate_transaction_envelope()
+            .returning(|_| {
+                Box::pin(ready(Ok(
+                    soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
+                        min_resource_fee: 0,
+                        transaction_data: String::new(),
+                        ..Default::default()
+                    },
+                )))
+            });
+
+        let mut signer = MockSigner::new();
+
+        signer.expect_address().returning(|| {
+            Box::pin(ready(Ok(crate::models::Address::Stellar(
+                "test-signer-address".to_string(),
+            ))))
+        });
+        signer.expect_sign_transaction().returning(|_| {
+            let sig_bytes: Vec<u8> = vec![1u8; 64];
+            let sig_bytes_m: BytesM<64> = sig_bytes.try_into().unwrap();
+            Box::pin(ready(Ok(SignTransactionResponse::Stellar(
+                crate::domain::SignTransactionResponseStellar {
+                    signature: DecoratedSignature {
+                        hint: SignatureHint([0; 4]),
+                        signature: Signature(sig_bytes_m),
+                    },
+                },
+            ))))
+        });
+
+        let envelope = create_test_envelope(relayer_address);
+        let xdr = envelope.to_xdr_base64(Limits::none()).unwrap();
+
+        let stellar_data = StellarTransactionData {
+            source_account: relayer_address.to_string(),
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            fee: None,
+            sequence_number: None,
+            transaction_input: TransactionInput::UnsignedXdr(xdr),
+            memo: None,
+            valid_until: None,
+            signatures: vec![],
+            hash: None,
+            simulation_transaction_data: None,
+            signed_envelope_xdr: None,
+        };
+
+        let policy = RelayerStellarPolicy {
+            fee_payment_strategy: Some(StellarFeePaymentStrategy::Relayer),
+            ..Default::default()
+        };
+
+        let dex_service = MockStellarDexServiceTrait::new();
+        let result = process_unsigned_xdr(
+            &counter,
+            relayer_id,
+            relayer_address,
+            stellar_data,
+            &provider,
+            &signer,
+            Some(&policy),
+            &dex_service,
+        )
+        .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_is_valid_swap_transaction_with_valid_swap() {
+        use soroban_rs::xdr::{
+            Asset, Operation, OperationBody, PathPaymentStrictSendOp, Transaction, TransactionExt,
+            TransactionV1Envelope, VecM,
+        };
+
+        let relayer_address = TEST_PK;
+
+        // Create a PathPaymentStrictSend operation from USDC to XLM
+        let usdc_asset = Asset::CreditAlphanum4(soroban_rs::xdr::AlphaNum4 {
+            asset_code: soroban_rs::xdr::AssetCode4(*b"USDC"),
+            issuer: create_account_id(TEST_PK_2),
+        });
+
+        let path_payment_op = PathPaymentStrictSendOp {
+            send_asset: usdc_asset,
+            send_amount: 10000000,
+            destination: create_muxed_account(relayer_address),
+            dest_asset: Asset::Native,
+            dest_min: 9000000,
+            path: VecM::default(),
+        };
+
+        let op = Operation {
+            source_account: None,
+            body: OperationBody::PathPaymentStrictSend(path_payment_op),
+        };
+
+        let tx = Transaction {
+            source_account: create_muxed_account(relayer_address),
+            fee: 100,
+            seq_num: soroban_rs::xdr::SequenceNumber(1),
+            cond: soroban_rs::xdr::Preconditions::None,
+            memo: soroban_rs::xdr::Memo::None,
+            operations: vec![op].try_into().unwrap(),
+            ext: TransactionExt::V0,
+        };
+
+        let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        let mut policy = RelayerStellarPolicy::default();
+        policy.allowed_tokens = Some(vec![crate::models::StellarAllowedTokensPolicy {
+            asset: format!("USDC:{}", TEST_PK_2),
+            metadata: None,
+            swap_config: None,
+            max_allowed_fee: None,
+        }]);
+
+        let result = is_valid_swap_transaction(&envelope, relayer_address, &policy);
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_is_valid_swap_transaction_with_multiple_operations() {
+        use soroban_rs::xdr::{Operation, Transaction, TransactionExt, TransactionV1Envelope};
+
+        let relayer_address = TEST_PK;
+
+        let operations: Vec<Operation> = vec![
+            create_native_payment_operation(TEST_PK_2, 1000000),
+            create_native_payment_operation(TEST_PK_2, 1000000),
+        ];
+
+        let tx = Transaction {
+            source_account: create_muxed_account(relayer_address),
+            fee: 100,
+            seq_num: soroban_rs::xdr::SequenceNumber(1),
+            cond: soroban_rs::xdr::Preconditions::None,
+            memo: soroban_rs::xdr::Memo::None,
+            operations: operations.try_into().unwrap(),
+            ext: TransactionExt::V0,
+        };
+
+        let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        let policy = RelayerStellarPolicy::default();
+        let result = is_valid_swap_transaction(&envelope, relayer_address, &policy);
+        assert!(result.is_ok());
+        assert!(!result.unwrap()); // Should return false for multiple operations
+    }
+
+    #[test]
+    fn test_is_valid_swap_transaction_with_non_path_payment() {
+        let relayer_address = TEST_PK;
+        let envelope = create_simple_v1_envelope(relayer_address, TEST_PK_2);
+
+        let policy = RelayerStellarPolicy::default();
+        let result = is_valid_swap_transaction(&envelope, relayer_address, &policy);
+        assert!(result.is_ok());
+        assert!(!result.unwrap()); // Should return false for non-PathPaymentStrictSend
+    }
+
+    #[test]
+    fn test_is_valid_swap_transaction_with_native_source() {
+        use soroban_rs::xdr::{
+            Asset, Operation, OperationBody, PathPaymentStrictSendOp, Transaction, TransactionExt,
+            TransactionV1Envelope, VecM,
+        };
+
+        let relayer_address = TEST_PK;
+
+        // Create a PathPaymentStrictSend with native source (should be rejected)
+        let path_payment_op = PathPaymentStrictSendOp {
+            send_asset: Asset::Native,
+            send_amount: 10000000,
+            destination: create_muxed_account(relayer_address),
+            dest_asset: Asset::Native,
+            dest_min: 9000000,
+            path: VecM::default(),
+        };
+
+        let op = Operation {
+            source_account: None,
+            body: OperationBody::PathPaymentStrictSend(path_payment_op),
+        };
+
+        let tx = Transaction {
+            source_account: create_muxed_account(relayer_address),
+            fee: 100,
+            seq_num: soroban_rs::xdr::SequenceNumber(1),
+            cond: soroban_rs::xdr::Preconditions::None,
+            memo: soroban_rs::xdr::Memo::None,
+            operations: vec![op].try_into().unwrap(),
+            ext: TransactionExt::V0,
+        };
+
+        let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        let policy = RelayerStellarPolicy::default();
+        let result = is_valid_swap_transaction(&envelope, relayer_address, &policy);
+        assert!(result.is_ok());
+        assert!(!result.unwrap()); // Should return false for native source
+    }
+
+    #[test]
+    fn test_is_valid_swap_transaction_with_wrong_destination() {
+        use soroban_rs::xdr::{
+            Asset, Operation, OperationBody, PathPaymentStrictSendOp, Transaction, TransactionExt,
+            TransactionV1Envelope, VecM,
+        };
+
+        let relayer_address = TEST_PK;
+
+        let usdc_asset = Asset::CreditAlphanum4(soroban_rs::xdr::AlphaNum4 {
+            asset_code: soroban_rs::xdr::AssetCode4(*b"USDC"),
+            issuer: create_account_id(TEST_PK_2),
+        });
+
+        // Destination is different from relayer
+        let path_payment_op = PathPaymentStrictSendOp {
+            send_asset: usdc_asset,
+            send_amount: 10000000,
+            destination: create_muxed_account(TEST_PK_2), // Different destination
+            dest_asset: Asset::Native,
+            dest_min: 9000000,
+            path: VecM::default(),
+        };
+
+        let op = Operation {
+            source_account: None,
+            body: OperationBody::PathPaymentStrictSend(path_payment_op),
+        };
+
+        let tx = Transaction {
+            source_account: create_muxed_account(relayer_address),
+            fee: 100,
+            seq_num: soroban_rs::xdr::SequenceNumber(1),
+            cond: soroban_rs::xdr::Preconditions::None,
+            memo: soroban_rs::xdr::Memo::None,
+            operations: vec![op].try_into().unwrap(),
+            ext: TransactionExt::V0,
+        };
+
+        let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        let mut policy = RelayerStellarPolicy::default();
+        policy.allowed_tokens = Some(vec![crate::models::StellarAllowedTokensPolicy {
+            asset: format!("USDC:{}", TEST_PK_2),
+            metadata: None,
+            swap_config: None,
+            max_allowed_fee: None,
+        }]);
+
+        let result = is_valid_swap_transaction(&envelope, relayer_address, &policy);
+        assert!(result.is_ok());
+        assert!(!result.unwrap()); // Should return false for wrong destination
     }
 }
 
