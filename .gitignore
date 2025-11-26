@@ -34,6 +34,7 @@ logs/
 
 # env
 .env
+.env.integration
 
 # Ignore node_modules
 node_modules
@@ -48,3 +49,7 @@ openapi.json
 
 # Exclude generated OpenAPI files from the docs directory
 !docs/openapi.json
+
+# Integration test artifacts
+test-results/
+tests/integration/config/keys/
