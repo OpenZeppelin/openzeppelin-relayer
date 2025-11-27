@@ -46,7 +46,7 @@ jobs:
       - name: Install cargo hack, cargo-llvm-cov, and grcov
         uses: taiki-e/install-action@a24ba45235ed716ff76646268742990dc9458860 # v2.62.42
         with:
-          tool: cargo-hack,cargo-llvm-cov,grcov
+          tool: cargo-hack,cargo-llvm-cov
 
       - name: Build
         run: cargo test --no-run --locked
@@ -69,14 +69,9 @@ jobs:
 
       - name: Run AI Tests and Generate Coverage Report
         id: ai_coverage
-        env:
-          LLVM_PROFILE_FILE: profile-ai-%p-%m.profraw
-          RUSTFLAGS: -Cinstrument-coverage
-          RUST_TEST_THREADS: 1
         run: |
-          cargo test ai_
-          grcov . -s . -t lcov --binary-path target/debug -o ai-lcov.info
-          bash <(curl -s https://codecov.io/bash) -f lcov-ai.info -F ai
+          cargo llvm-cov clean --workspace
+          cargo hack llvm-cov --locked --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path ai-lcov.info -- --test-threads=1 ai_
 
       - name: Upload AI Coverage to Codecov
         uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7 # v5.5.1
@@ -89,14 +84,9 @@ jobs:
 
       - name: Run Developer Tests (excluding AI) and Generate Coverage Report
         id: dev_coverage
-        env:
-          LLVM_PROFILE_FILE: profile-dev-%p-%m.profraw
-          RUSTFLAGS: -Cinstrument-coverage
-          RUST_TEST_THREADS: 1
         run: |
-          cargo test | grep -v ai_
-          grcov . -s . -t lcov --binary-path target/debug -o dev-lcov.info
-          bash <(curl -s https://codecov.io/bash) -f lcov-dev.info -F dev
+          cargo llvm-cov clean --workspace
+          cargo hack llvm-cov --locked --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path dev-lcov.info -- --test-threads=1 --skip ai_
 
       - name: Upload Developer Coverage to Codecov
         uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7 # v5.5.1
