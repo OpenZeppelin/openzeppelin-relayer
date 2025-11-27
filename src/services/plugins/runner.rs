@@ -172,109 +172,109 @@ mod tests {
           }
     "#;
 
-    // #[tokio::test]
-    // async fn test_run() {
-    //     let temp_dir = tempdir().unwrap();
-    //     let ts_config = temp_dir.path().join("tsconfig.json");
-    //     let script_path = temp_dir.path().join("test_run.ts");
-    //     let socket_path = temp_dir.path().join("test_run.sock");
+    #[tokio::test]
+    async fn test_run() {
+        let temp_dir = tempdir().unwrap();
+        let ts_config = temp_dir.path().join("tsconfig.json");
+        let script_path = temp_dir.path().join("test_run.ts");
+        let socket_path = temp_dir.path().join("test_run.sock");
 
-    //     let content = r#"
-    //         export async function handler(api: any, params: any) {
-    //             console.log('test');
-    //             console.error('test-error');
-    //             return 'test-result';
-    //         }
-    //     "#;
-    //     fs::write(script_path.clone(), content).unwrap();
-    //     fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
+        let content = r#"
+            export async function handler(api: any, params: any) {
+                console.log('test');
+                console.error('test-error');
+                return 'test-result';
+            }
+        "#;
+        fs::write(script_path.clone(), content).unwrap();
+        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
 
-    //     let state = create_mock_app_state(None, None, None, None, None, None).await;
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
 
-    //     let plugin_runner = PluginRunner;
-    //     let plugin_id = "test-plugin".to_string();
-    //     let socket_path_str = socket_path.display().to_string();
-    //     let script_path_str = script_path.display().to_string();
-    //     let result = plugin_runner
-    //         .run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>(
-    //             plugin_id,
-    //             &socket_path_str,
-    //             script_path_str,
-    //             Duration::from_secs(10),
-    //             "{ \"test\": \"test\" }".to_string(),
-    //             None,
-    //             Arc::new(web::ThinData(state)),
-    //         )
-    //         .await;
-    //     if matches!(
-    //         result,
-    //         Err(PluginError::SocketError(ref msg)) if msg.contains("Operation not permitted")
-    //     ) {
-    //         eprintln!("skipping test_run due to sandbox socket restrictions");
-    //         return;
-    //     }
+        let plugin_runner = PluginRunner;
+        let plugin_id = "test-plugin".to_string();
+        let socket_path_str = socket_path.display().to_string();
+        let script_path_str = script_path.display().to_string();
+        let result = plugin_runner
+            .run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>(
+                plugin_id,
+                &socket_path_str,
+                script_path_str,
+                Duration::from_secs(10),
+                "{ \"test\": \"test\" }".to_string(),
+                None,
+                Arc::new(web::ThinData(state)),
+            )
+            .await;
+        if matches!(
+            result,
+            Err(PluginError::SocketError(ref msg)) if msg.contains("Operation not permitted")
+        ) {
+            eprintln!("skipping test_run due to sandbox socket restrictions");
+            return;
+        }
 
-    //     let result = result.expect("runner should complete without error");
-    //     assert_eq!(result.logs[0].level, LogLevel::Log);
-    //     assert_eq!(result.logs[0].message, "test");
-    //     assert_eq!(result.logs[1].level, LogLevel::Error);
-    //     assert_eq!(result.logs[1].message, "test-error");
-    //     assert_eq!(result.return_value, "test-result");
-    // }
+        let result = result.expect("runner should complete without error");
+        assert_eq!(result.logs[0].level, LogLevel::Log);
+        assert_eq!(result.logs[0].message, "test");
+        assert_eq!(result.logs[1].level, LogLevel::Error);
+        assert_eq!(result.logs[1].message, "test-error");
+        assert_eq!(result.return_value, "test-result");
+    }
 
-    // #[tokio::test]
-    // async fn test_run_timeout() {
-    //     let temp_dir = tempdir().unwrap();
-    //     let ts_config = temp_dir.path().join("tsconfig.json");
-    //     let script_path = temp_dir.path().join("test_simple_timeout.ts");
-    //     let socket_path = temp_dir.path().join("test_simple_timeout.sock");
+    #[tokio::test]
+    async fn test_run_timeout() {
+        let temp_dir = tempdir().unwrap();
+        let ts_config = temp_dir.path().join("tsconfig.json");
+        let script_path = temp_dir.path().join("test_simple_timeout.ts");
+        let socket_path = temp_dir.path().join("test_simple_timeout.sock");
 
-    //     // Script that takes 200ms
-    //     let content = r#"
-    //         function sleep(ms) {
-    //             return new Promise(resolve => setTimeout(resolve, ms));
-    //         }
+        // Script that takes 200ms
+        let content = r#"
+            function sleep(ms) {
+                return new Promise(resolve => setTimeout(resolve, ms));
+            }
 
-    //         async function main() {
-    //             await sleep(200); // 200ms
-    //             console.log(JSON.stringify({ level: 'result', message: 'Should not reach here' }));
-    //         }
+            async function main() {
+                await sleep(200); // 200ms
+                console.log(JSON.stringify({ level: 'result', message: 'Should not reach here' }));
+            }
 
-    //         main();
-    //     "#;
+            main();
+        "#;
 
-    //     fs::write(script_path.clone(), content).unwrap();
-    //     fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
+        fs::write(script_path.clone(), content).unwrap();
+        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
 
-    //     let state = create_mock_app_state(None, None, None, None, None, None).await;
-    //     let plugin_runner = PluginRunner;
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
+        let plugin_runner = PluginRunner;
 
-    //     // Use 100ms timeout for a 200ms script
-    //     let plugin_id = "test-plugin".to_string();
-    //     let socket_path_str = socket_path.display().to_string();
-    //     let script_path_str = script_path.display().to_string();
-    //     let result = plugin_runner
-    //         .run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>(
-    //             plugin_id,
-    //             &socket_path_str,
-    //             script_path_str,
-    //             Duration::from_millis(100), // 100ms timeout
-    //             "{}".to_string(),
-    //             None,
-    //             Arc::new(web::ThinData(state)),
-    //         )
-    //         .await;
+        // Use 100ms timeout for a 200ms script
+        let plugin_id = "test-plugin".to_string();
+        let socket_path_str = socket_path.display().to_string();
+        let script_path_str = script_path.display().to_string();
+        let result = plugin_runner
+            .run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>(
+                plugin_id,
+                &socket_path_str,
+                script_path_str,
+                Duration::from_millis(100), // 100ms timeout
+                "{}".to_string(),
+                None,
+                Arc::new(web::ThinData(state)),
+            )
+            .await;
 
-    //     // Should timeout
-    //     if matches!(
-    //         result,
-    //         Err(PluginError::SocketError(ref msg)) if msg.contains("Operation not permitted")
-    //     ) {
-    //         eprintln!("skipping test_run_timeout due to sandbox socket restrictions");
-    //         return;
-    //     }
+        // Should timeout
+        if matches!(
+            result,
+            Err(PluginError::SocketError(ref msg)) if msg.contains("Operation not permitted")
+        ) {
+            eprintln!("skipping test_run_timeout due to sandbox socket restrictions");
+            return;
+        }
 
-    //     let err = result.expect_err("runner should timeout");
-    //     assert!(err.to_string().contains("Script execution timed out after"));
-    // }
+        let err = result.expect_err("runner should timeout");
+        assert!(err.to_string().contains("Script execution timed out after"));
+    }
 }
