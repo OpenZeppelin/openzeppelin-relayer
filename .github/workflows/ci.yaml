@@ -225,10 +225,10 @@ jobs:
       # Get the output of the prepare composite action
       - name: Get cache-hit output
         run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
-      - name: Install cargo hack and cargo-llvm-cov
+      - name: Install cargo hack, cargo-llvm-cov, and grcov
         uses: taiki-e/install-action@a24ba45235ed716ff76646268742990dc9458860  # v2.62.42
         with:
-          tool: cargo-hack,cargo-llvm-cov
+          tool: cargo-hack,cargo-llvm-cov,grcov
       - name: Build
         run: cargo test --no-run --locked
 
@@ -283,6 +283,62 @@ jobs:
           name: properties-coverage
           files: properties-lcov.info
           flags: properties
+          fail_ci_if_error: true
+
+      - name: Run AI Tests and Generate Coverage Report
+        id: ai_coverage
+        env:
+          LLVM_PROFILE_FILE: profile-ai-%p-%m.profraw
+          RUSTFLAGS: -Cinstrument-coverage
+          RUST_TEST_THREADS: 1
+        run: |
+          set -euo pipefail
+          find . -name "*.profraw" -delete
+          cargo test ai_test_case --locked -- --nocapture
+          if compgen -G "profile-ai-*.profraw" > /dev/null; then
+            grcov . -s . -t lcov --binary-path target/debug -o lcov-ai.info
+            echo "has_ai_coverage=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No AI tests matched; skipping AI coverage upload."
+            echo "has_ai_coverage=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload AI Coverage to Codecov
+        if: steps.ai_coverage.outputs.has_ai_coverage == 'true'
+        uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          name: ai-coverage
+          files: lcov-ai.info
+          flags: ai
+          fail_ci_if_error: true
+
+      - name: Run Developer Tests (excluding AI) and Generate Coverage Report
+        id: dev_coverage
+        env:
+          LLVM_PROFILE_FILE: profile-dev-%p-%m.profraw
+          RUSTFLAGS: -Cinstrument-coverage
+          RUST_TEST_THREADS: 1
+        run: |
+          set -euo pipefail
+          find . -name "*.profraw" -delete
+          cargo test --locked -- --skip ai_test_case --nocapture
+          if compgen -G "profile-dev-*.profraw" > /dev/null; then
+            grcov . -s . -t lcov --binary-path target/debug -o lcov-dev.info
+            echo "has_dev_coverage=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No dev coverage profiles found; skipping dev coverage upload."
+            echo "has_dev_coverage=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload Developer Coverage to Codecov
+        if: steps.dev_coverage.outputs.has_dev_coverage == 'true'
+        uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          name: dev-coverage
+          files: lcov-dev.info
+          flags: dev
           fail_ci_if_error: true
   docker-scan:
     runs-on: ubuntu-latest

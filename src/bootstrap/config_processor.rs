@@ -804,7 +804,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_process_networks_single_evm() -> Result<()> {
+    async fn ai_test_process_networks_single_evm() -> Result<()> {
         use crate::config::network::test_utils::*;
 
         let networks = vec![create_evm_network_wrapped("mainnet")];
