@@ -73,7 +73,6 @@ jobs:
         continue-on-error: true
         id: ai_coverage
         run: |
-          cargo llvm-cov clean --workspace
           cargo hack llvm-cov --locked --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path ai-lcov.info -- --test-threads=1 ai_
 
       - name: Upload AI Coverage to Codecov
@@ -89,7 +88,6 @@ jobs:
         continue-on-error: true
         id: dev_coverage
         run: |
-          cargo llvm-cov clean --workspace
           cargo hack llvm-cov --locked --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path dev-lcov.info -- --test-threads=1 --skip ai_
 
       - name: Upload Developer Coverage to Codecov
