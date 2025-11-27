@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - codecove-ai-tests
+      - main
     types:
       - opened
       - synchronize
@@ -17,6 +18,7 @@ on:
   push:
     branches:
       - codecove-ai-tests
+      - main
     paths-ignore:
       - docs/**
       - "**.md"
