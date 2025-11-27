@@ -51,35 +51,12 @@ jobs:
       - name: Build
         run: cargo test --no-run --locked
 
-      # - name: Run Unit Tests and Generate Coverage Report
-      #   env:
-      #     LLVM_PROFILE_FILE: unit-%p-%m.profraw
-      #     RUSTFLAGS: -Cinstrument-coverage
-      #     RUST_TEST_THREADS: 1
-      #   run: cargo hack llvm-cov --locked --lib --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path unit-lcov.info
-
       # - name: Run Integration Tests and Generate Coverage Report
       #   env:
       #     LLVM_PROFILE_FILE: integration-%p-%m.profraw
       #     RUSTFLAGS: -Cinstrument-coverage
       #     RUST_TEST_THREADS: 1
       #   run: cargo hack llvm-cov --locked --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path integration-lcov.info --test integration
-
-      # - name: Run Properties Tests
-      #   env:
-      #     LLVM_PROFILE_FILE: properties-%p-%m.profraw
-      #     RUSTFLAGS: -Cinstrument-coverage
-      #     RUST_TEST_THREADS: 1
-      #   run: cargo hack llvm-cov --locked --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path properties-lcov.info --test properties
-
-      # - name: Upload Unit Coverage to Codecov
-      #   uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
-      #   with:
-      #     token: ${{ secrets.CODECOV_TOKEN }}
-      #     name: unit-coverage
-      #     files: unit-lcov.info
-      #     flags: unittests
-      #     fail_ci_if_error: true
 
       # - name: Upload Integration Coverage to Codecov
       #   uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
@@ -90,24 +67,13 @@ jobs:
       #     flags: integration
       #     fail_ci_if_error: true
 
-      # - name: Upload Properties Coverage to Codecov
-      #   uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
-      #   with:
-      #     token: ${{ secrets.CODECOV_TOKEN }}
-      #     name: properties-coverage
-      #     files: properties-lcov.info
-      #     flags: properties
-      #     fail_ci_if_error: true
-
       - name: Run AI Tests and Generate Coverage Report
         id: ai_coverage
         env:
           LLVM_PROFILE_FILE: profile-ai-%p-%m.profraw
-          RUSTFLAGS: -C instrument-coverage
+          RUSTFLAGS: -Cinstrument-coverage
           RUST_TEST_THREADS: 1
         run: |
-          set -euo pipefail
-          find . -name "*.profraw" -delete
           cargo test ai_
           grcov . -s . -t lcov --binary-path target/debug -o ai-lcov.info
           bash <(curl -s https://codecov.io/bash) -f lcov-ai.info -F ai
@@ -125,11 +91,9 @@ jobs:
         id: dev_coverage
         env:
           LLVM_PROFILE_FILE: profile-dev-%p-%m.profraw
-          RUSTFLAGS: -C instrument-coverage
+          RUSTFLAGS: -Cinstrument-coverage
           RUST_TEST_THREADS: 1
         run: |
-          set -euo pipefail
-          find . -name "*.profraw" -delete
           cargo test | grep -v ai_
           grcov . -s . -t lcov --binary-path target/debug -o dev-lcov.info
           bash <(curl -s https://codecov.io/bash) -f lcov-dev.info -F dev
