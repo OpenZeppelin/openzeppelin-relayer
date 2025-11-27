@@ -11,7 +11,7 @@ on:
       - ready_for_review
     paths-ignore:
       - docs/**
-      - '**.md'
+      - "**.md"
       - .github/**
       - .gitignore
   push:
@@ -19,7 +19,7 @@ on:
       - main
     paths-ignore:
       - docs/**
-      - '**.md'
+      - "**.md"
       - .github/**
 # run concurrency group for the workflow
 concurrency:
@@ -38,14 +38,14 @@ jobs:
     steps:
       # Checkout the repository
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a  # v2.13.1
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
         with:
           egress-policy: audit
       - name: Checkout Code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Get changed files
         id: changed-files-yaml
-        uses: tj-actions/changed-files@24d32ffd492484c1d75e0c0b894501ddb9d30d62  # v47.0.0
+        uses: tj-actions/changed-files@24d32ffd492484c1d75e0c0b894501ddb9d30d62 # v47.0.0
         with:
           files_yaml: |
             code:
@@ -76,7 +76,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a  # v2.13.1
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
         with:
           egress-policy: audit
       - name: Failed
@@ -89,11 +89,11 @@ jobs:
     steps:
       # Checkout the repository
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a  # v2.13.1
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
         with:
           egress-policy: audit
       - name: Checkout Code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Prepare
         id: init
         uses: ./.github/actions/prepare
@@ -102,7 +102,7 @@ jobs:
       - name: Get cache-hit output
         run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
       - name: Install cargo hack
-        uses: taiki-e/install-action@a24ba45235ed716ff76646268742990dc9458860  # v2.62.42
+        uses: taiki-e/install-action@a24ba45235ed716ff76646268742990dc9458860 # v2.62.42
         with:
           tool: cargo-hack
 
@@ -116,11 +116,11 @@ jobs:
     steps:
       # Checkout the repository
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a  # v2.13.1
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
         with:
           egress-policy: audit
       - name: Checkout Code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Prepare
         id: init
         uses: ./.github/actions/prepare
@@ -139,11 +139,11 @@ jobs:
     steps:
       # Checkout the repository
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a  # v2.13.1
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
         with:
           egress-policy: audit
       - name: Checkout Code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Prepare
         id: init
         uses: ./.github/actions/prepare
@@ -163,13 +163,13 @@ jobs:
           | sarif-fmt
         continue-on-error: true
       - name: upload sarif artifact
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: clippy-results.sarif
           path: clippy-results.sarif
           retention-days: 1
       - name: Upload
-        uses: github/codeql-action/upload-sarif@0499de31b99561a6d14a36a5f662c2a54f91beee  # v3.29.5
+        uses: github/codeql-action/upload-sarif@0499de31b99561a6d14a36a5f662c2a54f91beee # v3.29.5
         with:
           sarif_file: clippy-results.sarif
           wait-for-processing: true
@@ -185,15 +185,15 @@ jobs:
     steps:
       # Checkout the repository
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a  # v2.13.1
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
         with:
           egress-policy: audit
       - name: Checkout Code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Setup Node.js
-        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903  # v6.0.0
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
         with:
-          node-version: '20'
+          node-version: "20"
       - name: Install pnpm and plugin dependencies
         run: |
           npm install -g pnpm
@@ -225,10 +225,10 @@ jobs:
       # Get the output of the prepare composite action
       - name: Get cache-hit output
         run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
-      - name: Install cargo hack, cargo-llvm-cov, and grcov
-        uses: taiki-e/install-action@a24ba45235ed716ff76646268742990dc9458860  # v2.62.42
+      - name: Install cargo hack and cargo-llvm-cov
+        uses: taiki-e/install-action@a24ba45235ed716ff76646268742990dc9458860 # v2.62.42
         with:
-          tool: cargo-hack,cargo-llvm-cov,grcov
+          tool: cargo-hack,cargo-llvm-cov
       - name: Build
         run: cargo test --no-run --locked
 
@@ -257,7 +257,7 @@ jobs:
 
       # Upload unit coverage
       - name: Upload Unit Coverage to Codecov
-        uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
+        uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7 # v5.5.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           name: unit-coverage
@@ -267,7 +267,7 @@ jobs:
 
       # Upload integration coverage
       - name: Upload Integration Coverage to Codecov
-        uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
+        uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7 # v5.5.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           name: integration-coverage
@@ -277,68 +277,12 @@ jobs:
 
       # Upload properties coverage
       - name: Upload Properties Coverage to Codecov
-        uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
+        uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7 # v5.5.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           name: properties-coverage
           files: properties-lcov.info
           flags: properties
-          fail_ci_if_error: true
-
-      - name: Run AI Tests and Generate Coverage Report
-        id: ai_coverage
-        env:
-          LLVM_PROFILE_FILE: profile-ai-%p-%m.profraw
-          RUSTFLAGS: -Cinstrument-coverage
-          RUST_TEST_THREADS: 1
-        run: |
-          set -euo pipefail
-          find . -name "*.profraw" -delete
-          cargo test ai_test_case --locked -- --nocapture
-          if compgen -G "profile-ai-*.profraw" > /dev/null; then
-            grcov . -s . -t lcov --binary-path target/debug -o lcov-ai.info
-            echo "has_ai_coverage=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "No AI tests matched; skipping AI coverage upload."
-            echo "has_ai_coverage=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Upload AI Coverage to Codecov
-        if: steps.ai_coverage.outputs.has_ai_coverage == 'true'
-        uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          name: ai-coverage
-          files: lcov-ai.info
-          flags: ai
-          fail_ci_if_error: true
-
-      - name: Run Developer Tests (excluding AI) and Generate Coverage Report
-        id: dev_coverage
-        env:
-          LLVM_PROFILE_FILE: profile-dev-%p-%m.profraw
-          RUSTFLAGS: -Cinstrument-coverage
-          RUST_TEST_THREADS: 1
-        run: |
-          set -euo pipefail
-          find . -name "*.profraw" -delete
-          cargo test --locked -- --skip ai_test_case --nocapture
-          if compgen -G "profile-dev-*.profraw" > /dev/null; then
-            grcov . -s . -t lcov --binary-path target/debug -o lcov-dev.info
-            echo "has_dev_coverage=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "No dev coverage profiles found; skipping dev coverage upload."
-            echo "has_dev_coverage=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Upload Developer Coverage to Codecov
-        if: steps.dev_coverage.outputs.has_dev_coverage == 'true'
-        uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          name: dev-coverage
-          files: lcov-dev.info
-          flags: dev
           fail_ci_if_error: true
   docker-scan:
     runs-on: ubuntu-latest
@@ -350,15 +294,15 @@ jobs:
     steps:
       # Checkout the repository
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a  # v2.13.1
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
         with:
           egress-policy: audit
       - name: Checkout Code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435  # v3.11.1
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
       - name: Build local container
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83  # v6.18.0
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
           tags: openzeppelin-relayer-dev:${{ github.sha }}
           push: false
@@ -366,7 +310,7 @@ jobs:
           file: Dockerfile.development
           platforms: linux/amd64
       - name: Scan image
-        uses: anchore/scan-action@568b89d27fc18c60e56937bff480c91c772cd993  # v7.1.0
+        uses: anchore/scan-action@568b89d27fc18c60e56937bff480c91c772cd993 # v7.1.0
         with:
           image: openzeppelin-relayer-dev:${{ github.sha }}
           fail-build: true

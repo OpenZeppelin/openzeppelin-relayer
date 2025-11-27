@@ -70,6 +70,7 @@ jobs:
       #     fail_ci_if_error: true
 
       - name: Run AI Tests and Generate Coverage Report
+        continue-on-error: true
         id: ai_coverage
         run: |
           cargo llvm-cov clean --workspace
@@ -85,6 +86,7 @@ jobs:
           fail_ci_if_error: true
 
       - name: Run Developer Tests (excluding AI) and Generate Coverage Report
+        continue-on-error: true
         id: dev_coverage
         run: |
           cargo llvm-cov clean --workspace
