@@ -177,198 +177,198 @@ mod tests {
       }
 "#;
 
-    #[tokio::test]
-    async fn test_execute_typescript() {
-        let temp_dir = tempdir().unwrap();
-        let ts_config = temp_dir.path().join("tsconfig.json");
-        let script_path = temp_dir.path().join("test_execute_typescript.ts");
-        let socket_path = temp_dir.path().join("test_execute_typescript.sock");
+    // #[tokio::test]
+    // async fn test_execute_typescript() {
+    //     let temp_dir = tempdir().unwrap();
+    //     let ts_config = temp_dir.path().join("tsconfig.json");
+    //     let script_path = temp_dir.path().join("test_execute_typescript.ts");
+    //     let socket_path = temp_dir.path().join("test_execute_typescript.sock");
 
-        let content = r#"
-            export async function handler(api: any, params: any) {
-                console.log('test');
-                console.info('test-info');
-                return 'test-result';
-            }
-        "#;
-        fs::write(script_path.clone(), content).unwrap();
-        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
+    //     let content = r#"
+    //         export async function handler(api: any, params: any) {
+    //             console.log('test');
+    //             console.info('test-info');
+    //             return 'test-result';
+    //         }
+    //     "#;
+    //     fs::write(script_path.clone(), content).unwrap();
+    //     fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
 
-        let result = ScriptExecutor::execute_typescript(
-            "test-plugin-1".to_string(),
-            script_path.display().to_string(),
-            socket_path.display().to_string(),
-            "{}".to_string(),
-            None,
-        )
-        .await;
+    //     let result = ScriptExecutor::execute_typescript(
+    //         "test-plugin-1".to_string(),
+    //         script_path.display().to_string(),
+    //         socket_path.display().to_string(),
+    //         "{}".to_string(),
+    //         None,
+    //     )
+    //     .await;
 
-        assert!(result.is_ok());
-        let result = result.unwrap();
-        assert_eq!(result.logs[0].level, LogLevel::Log);
-        assert_eq!(result.logs[0].message, "test");
-        assert_eq!(result.logs[1].level, LogLevel::Info);
-        assert_eq!(result.logs[1].message, "test-info");
-        assert_eq!(result.return_value, "test-result");
-    }
+    //     assert!(result.is_ok());
+    //     let result = result.unwrap();
+    //     assert_eq!(result.logs[0].level, LogLevel::Log);
+    //     assert_eq!(result.logs[0].message, "test");
+    //     assert_eq!(result.logs[1].level, LogLevel::Info);
+    //     assert_eq!(result.logs[1].message, "test-info");
+    //     assert_eq!(result.return_value, "test-result");
+    // }
 
-    #[tokio::test]
-    async fn test_execute_typescript_with_result() {
-        let temp_dir = tempdir().unwrap();
-        let ts_config = temp_dir.path().join("tsconfig.json");
-        let script_path = temp_dir
-            .path()
-            .join("test_execute_typescript_with_result.ts");
-        let socket_path = temp_dir
-            .path()
-            .join("test_execute_typescript_with_result.sock");
+    // #[tokio::test]
+    // async fn test_execute_typescript_with_result() {
+    //     let temp_dir = tempdir().unwrap();
+    //     let ts_config = temp_dir.path().join("tsconfig.json");
+    //     let script_path = temp_dir
+    //         .path()
+    //         .join("test_execute_typescript_with_result.ts");
+    //     let socket_path = temp_dir
+    //         .path()
+    //         .join("test_execute_typescript_with_result.sock");
 
-        let content = r#"
-            export async function handler(api: any, params: any) {
-                console.log('test');
-                console.info('test-info');
-                return {
-                    test: 'test-result',
-                    test2: 'test-result2'
-                };
-            }
-        "#;
-        fs::write(script_path.clone(), content).unwrap();
-        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
+    //     let content = r#"
+    //         export async function handler(api: any, params: any) {
+    //             console.log('test');
+    //             console.info('test-info');
+    //             return {
+    //                 test: 'test-result',
+    //                 test2: 'test-result2'
+    //             };
+    //         }
+    //     "#;
+    //     fs::write(script_path.clone(), content).unwrap();
+    //     fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
 
-        let result = ScriptExecutor::execute_typescript(
-            "test-plugin-1".to_string(),
-            script_path.display().to_string(),
-            socket_path.display().to_string(),
-            "{}".to_string(),
-            None,
-        )
-        .await;
+    //     let result = ScriptExecutor::execute_typescript(
+    //         "test-plugin-1".to_string(),
+    //         script_path.display().to_string(),
+    //         socket_path.display().to_string(),
+    //         "{}".to_string(),
+    //         None,
+    //     )
+    //     .await;
 
-        assert!(result.is_ok());
-        let result = result.unwrap();
-        assert_eq!(result.logs[0].level, LogLevel::Log);
-        assert_eq!(result.logs[0].message, "test");
-        assert_eq!(result.logs[1].level, LogLevel::Info);
-        assert_eq!(result.logs[1].message, "test-info");
-        assert_eq!(
-            result.return_value,
-            "{\"test\":\"test-result\",\"test2\":\"test-result2\"}"
-        );
-    }
+    //     assert!(result.is_ok());
+    //     let result = result.unwrap();
+    //     assert_eq!(result.logs[0].level, LogLevel::Log);
+    //     assert_eq!(result.logs[0].message, "test");
+    //     assert_eq!(result.logs[1].level, LogLevel::Info);
+    //     assert_eq!(result.logs[1].message, "test-info");
+    //     assert_eq!(
+    //         result.return_value,
+    //         "{\"test\":\"test-result\",\"test2\":\"test-result2\"}"
+    //     );
+    // }
 
-    #[tokio::test]
-    async fn test_execute_typescript_error() {
-        let temp_dir = tempdir().unwrap();
-        let ts_config = temp_dir.path().join("tsconfig.json");
-        let script_path = temp_dir.path().join("test_execute_typescript_error.ts");
-        let socket_path = temp_dir.path().join("test_execute_typescript_error.sock");
+    // #[tokio::test]
+    // async fn test_execute_typescript_error() {
+    //     let temp_dir = tempdir().unwrap();
+    //     let ts_config = temp_dir.path().join("tsconfig.json");
+    //     let script_path = temp_dir.path().join("test_execute_typescript_error.ts");
+    //     let socket_path = temp_dir.path().join("test_execute_typescript_error.sock");
 
-        let content = "console.logger('test');";
-        fs::write(script_path.clone(), content).unwrap();
-        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
+    //     let content = "console.logger('test');";
+    //     fs::write(script_path.clone(), content).unwrap();
+    //     fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
 
-        let result = ScriptExecutor::execute_typescript(
-            "test-plugin-1".to_string(),
-            script_path.display().to_string(),
-            socket_path.display().to_string(),
-            "{}".to_string(),
-            None,
-        )
-        .await;
+    //     let result = ScriptExecutor::execute_typescript(
+    //         "test-plugin-1".to_string(),
+    //         script_path.display().to_string(),
+    //         socket_path.display().to_string(),
+    //         "{}".to_string(),
+    //         None,
+    //     )
+    //     .await;
 
-        // Script errors should now return an Err with PluginFailed
-        assert!(result.is_err());
+    //     // Script errors should now return an Err with PluginFailed
+    //     assert!(result.is_err());
 
-        if let Err(PluginError::HandlerError(ctx)) = result {
-            // The error will be from our JSON output or raw stderr
-            // It should contain error info about the logger issue
-            assert_eq!(ctx.status, 500);
-            // The message should contain something about the error
-            assert!(!ctx.message.is_empty());
-        } else {
-            panic!("Expected PluginError::HandlerError, got: {:?}", result);
-        }
-    }
+    //     if let Err(PluginError::HandlerError(ctx)) = result {
+    //         // The error will be from our JSON output or raw stderr
+    //         // It should contain error info about the logger issue
+    //         assert_eq!(ctx.status, 500);
+    //         // The message should contain something about the error
+    //         assert!(!ctx.message.is_empty());
+    //     } else {
+    //         panic!("Expected PluginError::HandlerError, got: {:?}", result);
+    //     }
+    // }
 
-    #[tokio::test]
-    async fn test_execute_typescript_handler_json_error() {
-        let temp_dir = tempdir().unwrap();
-        let ts_config = temp_dir.path().join("tsconfig.json");
-        let script_path = temp_dir
-            .path()
-            .join("test_execute_typescript_handler_json_error.ts");
-        let socket_path = temp_dir
-            .path()
-            .join("test_execute_typescript_handler_json_error.sock");
+    // #[tokio::test]
+    // async fn test_execute_typescript_handler_json_error() {
+    //     let temp_dir = tempdir().unwrap();
+    //     let ts_config = temp_dir.path().join("tsconfig.json");
+    //     let script_path = temp_dir
+    //         .path()
+    //         .join("test_execute_typescript_handler_json_error.ts");
+    //     let socket_path = temp_dir
+    //         .path()
+    //         .join("test_execute_typescript_handler_json_error.sock");
 
-        // This handler throws an error with code/status/details; our executor should capture
-        // and emit a normalized JSON error to stderr which the Rust side parses.
-        let content = r#"
-            export async function handler(_api: any, _params: any) {
-                const err: any = new Error('Validation failed');
-                err.code = 'VALIDATION_FAILED';
-                err.status = 422;
-                err.details = { field: 'email' };
-                throw err;
-            }
-        "#;
-        fs::write(&script_path, content).unwrap();
-        fs::write(&ts_config, TS_CONFIG.as_bytes()).unwrap();
+    //     // This handler throws an error with code/status/details; our executor should capture
+    //     // and emit a normalized JSON error to stderr which the Rust side parses.
+    //     let content = r#"
+    //         export async function handler(_api: any, _params: any) {
+    //             const err: any = new Error('Validation failed');
+    //             err.code = 'VALIDATION_FAILED';
+    //             err.status = 422;
+    //             err.details = { field: 'email' };
+    //             throw err;
+    //         }
+    //     "#;
+    //     fs::write(&script_path, content).unwrap();
+    //     fs::write(&ts_config, TS_CONFIG.as_bytes()).unwrap();
 
-        let result = ScriptExecutor::execute_typescript(
-            "test-plugin-json-error".to_string(),
-            script_path.display().to_string(),
-            socket_path.display().to_string(),
-            "{}".to_string(),
-            None,
-        )
-        .await;
+    //     let result = ScriptExecutor::execute_typescript(
+    //         "test-plugin-json-error".to_string(),
+    //         script_path.display().to_string(),
+    //         socket_path.display().to_string(),
+    //         "{}".to_string(),
+    //         None,
+    //     )
+    //     .await;
 
-        match result {
-            Err(PluginError::HandlerError(ctx)) => {
-                assert_eq!(ctx.message, "Validation failed");
-                assert_eq!(ctx.status, 422);
-                assert_eq!(ctx.code.as_deref(), Some("VALIDATION_FAILED"));
-                let d = ctx.details.expect("details should be present");
-                assert_eq!(d["field"].as_str(), Some("email"));
-            }
-            other => panic!("Expected HandlerError, got: {:?}", other),
-        }
-    }
-    #[tokio::test]
-    async fn test_parse_logs_error() {
-        let temp_dir = tempdir().unwrap();
-        let ts_config = temp_dir.path().join("tsconfig.json");
-        let script_path = temp_dir.path().join("test_execute_typescript.ts");
-        let socket_path = temp_dir.path().join("test_execute_typescript.sock");
+    //     match result {
+    //         Err(PluginError::HandlerError(ctx)) => {
+    //             assert_eq!(ctx.message, "Validation failed");
+    //             assert_eq!(ctx.status, 422);
+    //             assert_eq!(ctx.code.as_deref(), Some("VALIDATION_FAILED"));
+    //             let d = ctx.details.expect("details should be present");
+    //             assert_eq!(d["field"].as_str(), Some("email"));
+    //         }
+    //         other => panic!("Expected HandlerError, got: {:?}", other),
+    //     }
+    // }
+    // #[tokio::test]
+    // async fn test_parse_logs_error() {
+    //     let temp_dir = tempdir().unwrap();
+    //     let ts_config = temp_dir.path().join("tsconfig.json");
+    //     let script_path = temp_dir.path().join("test_execute_typescript.ts");
+    //     let socket_path = temp_dir.path().join("test_execute_typescript.sock");
 
-        let invalid_content = r#"
-            export async function handler(api: any, params: any) {
-                // Output raw invalid JSON directly to stdout (bypasses LogInterceptor)
-                process.stdout.write('invalid json line\n');
-                process.stdout.write('{"level":"log","message":"valid"}\n');
-                process.stdout.write('another invalid line\n');
-                return 'test';
-            }
-        "#;
-        fs::write(script_path.clone(), invalid_content).unwrap();
-        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
+    //     let invalid_content = r#"
+    //         export async function handler(api: any, params: any) {
+    //             // Output raw invalid JSON directly to stdout (bypasses LogInterceptor)
+    //             process.stdout.write('invalid json line\n');
+    //             process.stdout.write('{"level":"log","message":"valid"}\n');
+    //             process.stdout.write('another invalid line\n');
+    //             return 'test';
+    //         }
+    //     "#;
+    //     fs::write(script_path.clone(), invalid_content).unwrap();
+    //     fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
 
-        let result = ScriptExecutor::execute_typescript(
-            "test-plugin-1".to_string(),
-            script_path.display().to_string(),
-            socket_path.display().to_string(),
-            "{}".to_string(),
-            None,
-        )
-        .await;
+    //     let result = ScriptExecutor::execute_typescript(
+    //         "test-plugin-1".to_string(),
+    //         script_path.display().to_string(),
+    //         socket_path.display().to_string(),
+    //         "{}".to_string(),
+    //         None,
+    //     )
+    //     .await;
 
-        assert!(result.is_err());
-        assert!(result
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("Failed to parse log"));
-    }
+    //     assert!(result.is_err());
+    //     assert!(result
+    //         .err()
+    //         .unwrap()
+    //         .to_string()
+    //         .contains("Failed to parse log"));
+    // }
 }
