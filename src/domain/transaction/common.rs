@@ -33,6 +33,13 @@ pub fn is_pending_transaction(tx_status: &TransactionStatus) -> bool {
     )
 }
 
+pub fn is_unsubmitted_transaction(tx_status: &TransactionStatus) -> bool {
+    matches!(
+        tx_status,
+        TransactionStatus::Pending | TransactionStatus::Sent
+    )
+}
+
 /// Gets the age of a transaction since it was sent.
 pub fn get_age_of_sent_at(tx: &TransactionRepoModel) -> Result<Duration, TransactionError> {
     let now = Utc::now();
@@ -83,6 +90,21 @@ mod tests {
         assert!(!is_pending_transaction(&TransactionStatus::Canceled));
         assert!(!is_pending_transaction(&TransactionStatus::Mined));
         assert!(!is_pending_transaction(&TransactionStatus::Expired));
+    }
+
+    #[test]
+    fn test_is_unsubmitted_transaction() {
+        // Unsubmitted statuses should return true
+        assert!(is_unsubmitted_transaction(&TransactionStatus::Pending));
+        assert!(is_unsubmitted_transaction(&TransactionStatus::Sent));
+
+        // Submitted and other statuses should return false
+        assert!(!is_unsubmitted_transaction(&TransactionStatus::Submitted));
+        assert!(!is_unsubmitted_transaction(&TransactionStatus::Mined));
+        assert!(!is_unsubmitted_transaction(&TransactionStatus::Confirmed));
+        assert!(!is_unsubmitted_transaction(&TransactionStatus::Failed));
+        assert!(!is_unsubmitted_transaction(&TransactionStatus::Canceled));
+        assert!(!is_unsubmitted_transaction(&TransactionStatus::Expired));
     }
 
     #[test]

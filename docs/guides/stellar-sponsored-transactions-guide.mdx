@@ -206,7 +206,30 @@ For complete code examples, see the [Relayer SDK examples](https://github.com/Op
 
 ### Step 3: Sign Transaction
 
-Sign the transaction returned from the Build endpoint. The transaction includes fee payment operations and is ready for signing.
+The user must sign the transaction XDR returned from the Build endpoint. The transaction includes fee payment operations and is ready for signing. The signing method depends on your wallet setup and relayer configuration:
+
+#### Option 1: Manual Signing with xBull Wallet
+
+If using the xBull wallet, the transaction can be manually signed:
+
+1. Open xBull wallet
+2. Navigate to **Drawer menu → Lab → Import XDR**
+3. Paste the transaction XDR from the Build response
+4. Review and sign the transaction
+
+> **Note:** Other Stellar wallets may support similar XDR import and signing flows. Consult your wallet's documentation for specific instructions.
+
+#### Option 2: Programmatic Signing via Relayer
+
+If the user's address is connected with another relayer configured in **relayer fee payment mode**, you can use the Sign Transaction endpoint:
+
+**Endpoint:** `POST /api/v1/relayers/{relayer_id}/sign-transaction`
+
+```
+
+#### Option 3: Custom Signing Solution
+
+You can also use any Stellar SDK or signing library to sign the transaction programmatically with the user's private key.
 
 For complete code examples, see the [Relayer SDK examples](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/stellar/sponsored).
 
