@@ -3,7 +3,6 @@ name: tmp-codecov
 on:
   pull_request:
     branches:
-      - codecove-ai-tests
       - main
     types:
       - opened
