@@ -81,10 +81,13 @@ jobs:
       #     fail_ci_if_error: true
 
       - name: Run AI Tests and Generate Coverage Report
-        continue-on-error: true
         id: ai_coverage
+        env:
+          LLVM_PROFILE_FILE: ai-%p-%m.profraw
+          RUSTFLAGS: -Cinstrument-coverage
+          RUST_TEST_THREADS: 1
         run: |
-          cargo hack llvm-cov --locked --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path dev-lcov.info --test ai_
+          cargo hack llvm-cov --locked --lib --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path ai-lcov.info --tests ai_
 
       - name: Upload AI Coverage to Codecov
         uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7 # v5.5.1
@@ -96,10 +99,13 @@ jobs:
           fail_ci_if_error: true
 
       - name: Run Developer Tests (excluding AI) and Generate Coverage Report
-        continue-on-error: true
         id: dev_coverage
+        env:
+          LLVM_PROFILE_FILE: dev-%p-%m.profraw
+          RUSTFLAGS: -Cinstrument-coverage
+          RUST_TEST_THREADS: 1
         run: |
-          cargo hack llvm-cov --locked --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path dev-lcov.info --test --skip ai_
+          cargo hack llvm-cov --locked --lib --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path dev-lcov.info --tests -- --skip ai_
 
       # - name: Run Developer Tests (excluding AI) and Generate Coverage Report
       #   continue-on-error: true
