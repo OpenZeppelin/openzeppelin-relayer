@@ -26,7 +26,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  timeout-minutes: 180
   changed_files:
     if: ${{ github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
@@ -66,6 +65,7 @@ jobs:
               - '**/*.rs'
               - tests/**/*.json
   ci:
+    timeout-minutes: 680
     if: ${{ github.event.pull_request.draft == false && always() }}
     permissions:
       contents: none
