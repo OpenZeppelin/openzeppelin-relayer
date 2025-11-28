@@ -85,6 +85,7 @@ jobs:
           LLVM_PROFILE_FILE: ai-%p-%m.profraw
           RUSTFLAGS: -Cinstrument-coverage
           RUST_TEST_THREADS: 1
+        timeout-minutes: 45
         run: |
           cargo hack llvm-cov --locked --lib --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path ai-lcov.info --tests -- ai_
 
@@ -103,6 +104,7 @@ jobs:
           LLVM_PROFILE_FILE: dev-%p-%m.profraw
           RUSTFLAGS: -Cinstrument-coverage
           RUST_TEST_THREADS: 1
+        timeout-minutes: 45
         run: |
           cargo hack llvm-cov --locked --lib --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path dev-lcov.info --tests -- --skip ai_
 
