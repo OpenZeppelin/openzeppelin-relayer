@@ -102,7 +102,6 @@ API_KEY=<api_key_from_above>
 # Channels Configuration
 STELLAR_NETWORK=testnet
 PLUGIN_ADMIN_SECRET=<admin_secret_for_channels_mgmt_api>
-SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
 FUND_RELAYER_ID=channels-fund
 LOCK_TTL_SECONDS=30
 LOG_LEVEL=info
@@ -124,7 +123,6 @@ The Channels plugin and relayer configurations are already set up for testnet. T
 Channels is configured through environment variables in your `.env` file:
 
 - `STELLAR_NETWORK=testnet` - Sets the Stellar network
-- `SOROBAN_RPC_URL=https://soroban-testnet.stellar.org` - RPC endpoint
 - `FUND_RELAYER_ID=channels-fund` - ID of the fund relayer
 - `PLUGIN_ADMIN_SECRET` - Admin secret for Channels operations
 - `LOCK_TTL_SECONDS=30` - Lock timeout for sequence management
@@ -302,17 +300,17 @@ pnpm -C $CHANNELS_PLUGIN_DIR build
 
 ### Start with the dev override
 
-`docker-compose.plugin-dev.yaml` mounts your local plugin's `dist/` over the installed package's `dist/` in the container.
+`docker-compose.plugin-dev.yaml` mounts your entire local plugin directory over the installed package in the container.
 
 ```bash
-export CHANNELS_PLUGIN_LOCAL_DIST=$CHANNELS_PLUGIN_DIR/dist
+export CHANNELS_PLUGIN_LOCAL=$CHANNELS_PLUGIN_DIR
 docker compose -f docker-compose.yaml -f docker-compose.plugin-dev.yaml up -d --build
 ```
 
 Under the hood:
 
-- Your local `dist/` is mounted at `/app/plugins/channel/node_modules/@openzeppelin/relayer-plugin-channels/dist` inside the container.
-- Dependencies remain intact from the installed npm package; only the runtime JS is swapped.
+- Your local plugin directory is mounted at `/app/plugins/channel/node_modules/@openzeppelin/relayer-plugin-channels` inside the container.
+- This includes `dist/`, `node_modules/`, and `package.json` from your local build.
 
 ### Iterating on code
 

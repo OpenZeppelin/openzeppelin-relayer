@@ -102,7 +102,6 @@ API_KEY=<api_key_from_above>
 # LaunchTube Configuration
 STELLAR_NETWORK=testnet
 LAUNCHTUBE_ADMIN_SECRET=<admin_secret_for_launchtube_mgmt_api>
-SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
 FUND_RELAYER_ID=launchtube-fund
 LOCK_TTL_SECONDS=30
 LOG_LEVEL=info
@@ -158,7 +157,6 @@ The LaunchTube plugin and relayer configurations are already set up for testnet.
 LaunchTube is configured through environment variables in your `.env` file:
 
 - `STELLAR_NETWORK=testnet` - Sets the Stellar network
-- `SOROBAN_RPC_URL=https://soroban-testnet.stellar.org` - RPC endpoint
 - `FUND_RELAYER_ID=launchtube-fund` - ID of the fund relayer
 - `LAUNCHTUBE_ADMIN_SECRET` - Admin secret for LaunchTube operations
 - `LOCK_TTL_SECONDS=30` - Lock timeout for sequence management

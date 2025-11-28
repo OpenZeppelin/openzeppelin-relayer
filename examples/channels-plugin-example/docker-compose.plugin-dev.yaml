@@ -2,4 +2,5 @@
 services:
   relayer:
     volumes:
-      - ${CHANNELS_PLUGIN_LOCAL_DIST}:/app/plugins/channel/node_modules/@openzeppelin/relayer-plugin-channels/dist
+      # Mount entire plugin directory
+      - ${CHANNELS_PLUGIN_LOCAL}:/app/plugins/channel/node_modules/@openzeppelin/relayer-plugin-channels

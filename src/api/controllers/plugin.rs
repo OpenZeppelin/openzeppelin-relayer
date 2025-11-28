@@ -179,6 +179,7 @@ mod tests {
             create_mock_app_state(None, None, None, None, Some(vec![plugin]), None).await;
         let plugin_call_request = PluginCallRequest {
             params: serde_json::json!({"key":"value"}),
+            headers: None,
         };
         let response = call_plugin(
             "test-plugin".to_string(),
@@ -198,6 +199,7 @@ mod tests {
         let app_state = create_mock_app_state(None, None, None, None, None, None).await;
         let plugin_call_request = PluginCallRequest {
             params: serde_json::json!({"key":"value"}),
+            headers: None,
         };
         let response = call_plugin(
             "non-existent".to_string(),
@@ -226,6 +228,7 @@ mod tests {
             create_mock_app_state(None, None, None, None, Some(vec![plugin]), None).await;
         let plugin_call_request = PluginCallRequest {
             params: serde_json::json!({}),
+            headers: None,
         };
         let response = call_plugin(
             "test-plugin-logs".to_string(),

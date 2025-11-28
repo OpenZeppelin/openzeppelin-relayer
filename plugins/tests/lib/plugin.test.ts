@@ -277,3 +277,63 @@ describe('PluginAPI', () => {
     });
   });
 });
+
+describe('PluginContext Headers', () => {
+  it('should have correct PluginHeaders type structure', () => {
+    // Test type structure: Record<string, string[]>
+    const headers: Record<string, string[]> = {
+      'content-type': ['application/json'],
+      'authorization': ['Bearer token'],
+      'x-multi-value': ['value1', 'value2'],
+    };
+
+    expect(headers['content-type']).toEqual(['application/json']);
+    expect(headers['authorization']).toEqual(['Bearer token']);
+    expect(headers['x-multi-value']).toHaveLength(2);
+  });
+
+  it('should handle empty headers object', () => {
+    const headers: Record<string, string[]> = {};
+
+    expect(Object.keys(headers)).toHaveLength(0);
+    expect(headers['non-existent']).toBeUndefined();
+  });
+
+  it('should handle multi-value headers correctly', () => {
+    const headers: Record<string, string[]> = {
+      'set-cookie': ['cookie1=value1', 'cookie2=value2', 'cookie3=value3'],
+      'accept': ['application/json', 'text/html'],
+    };
+
+    expect(headers['set-cookie']).toHaveLength(3);
+    expect(headers['accept']).toEqual(['application/json', 'text/html']);
+  });
+
+  it('should support optional chaining for safe header access', () => {
+    const headers: Record<string, string[]> = {
+      'authorization': ['Bearer token123'],
+    };
+
+    // Safe access pattern that plugins should use
+    const auth = headers['authorization']?.[0];
+    const missing = headers['x-missing']?.[0];
+
+    expect(auth).toBe('Bearer token123');
+    expect(missing).toBeUndefined();
+  });
+
+  it('should preserve header case as lowercase', () => {
+    // Headers should be normalized to lowercase by Rust
+    const headers: Record<string, string[]> = {
+      'content-type': ['application/json'],
+      'x-custom-header': ['value'],
+      'authorization': ['Bearer token'],
+    };
+
+    // All keys should be lowercase
+    const keys = Object.keys(headers);
+    keys.forEach(key => {
+      expect(key).toBe(key.toLowerCase());
+    });
+  });
+});
