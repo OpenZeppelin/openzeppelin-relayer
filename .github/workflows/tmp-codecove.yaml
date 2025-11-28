@@ -27,6 +27,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   coverage:
+    timeout-minutes: 680
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (Audit all outbound calls)
