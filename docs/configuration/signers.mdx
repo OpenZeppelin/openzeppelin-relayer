@@ -50,7 +50,7 @@ The following table shows which signer types are compatible with each network ty
 | `vault_transit` | ❌ Not supported | ✅ Supported | ❌ Not supported |
 | `turnkey` | ✅ Supported | ✅ Supported | ✅ Supported |
 | `google_cloud_kms` | ✅ Supported | ✅ Supported | ✅ Supported |
-| `aws_kms` | ✅ Supported | ❌ Not supported | ❌ Not supported |
+| `aws_kms` | ✅ Supported | ✅ Supported | ✅ Supported |
 | `cdp` | ✅ Supported | ✅ Supported | ❌ Not supported |
 
 <Callout>
@@ -60,8 +60,8 @@ The following table shows which signer types are compatible with each network ty
 
 * ***EVM Networks***: Use secp256k1 cryptography. Most signers support EVM networks with proper key generation.
 * ***Solana Networks***: Use ed25519 cryptography. Ensure your signer supports ed25519 key generation and signing.
-* ***Stellar Networks***: Use ed25519 cryptography with specific Stellar requirements. Supported by local, Google Cloud KMS, and Turnkey signers.
-* ***AWS KMS***: Currently optimized for EVM networks with secp256k1 support.
+* ***Stellar Networks***: Use ed25519 cryptography with specific Stellar requirements. Supported by local, AWS KMS, Google Cloud KMS, and Turnkey signers.
+* ***AWS KMS***: Supports secp256k1 (EVM) and ed25519 (Solana, Stellar) key types.
 * ***Google Cloud KMS***: Supports secp256k1 (EVM) and ed25519 (Solana, Stellar) key types.
 * ***Turnkey***: Supports EVM, Solana, and Stellar networks with appropriate key management.
 
@@ -295,7 +295,7 @@ Uses Amazon Web Services Key Management Service for cryptographic operations.
 Configuration fields:
 | Field | Type | Description |
 | --- | --- | --- |
-| region | String | AWS region. If the key is non-replicated across regions, this must match the key’s original region. Optional. If not specified, the default region from shared credentials is used |
+| region | String | AWS region. If the key is non-replicated across regions, this must match the key's original region. Optional. If not specified, the default region from shared credentials is used |
 | key_id | String | ID of the key in AWS KMS (can be key ID, key ARN, alias name, or alias ARN) |
 
 ## CDP Signer Configuration
