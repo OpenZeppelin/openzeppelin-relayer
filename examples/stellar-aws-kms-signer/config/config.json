@@ -1,0 +1,29 @@
+{
+  "relayers": [
+    {
+      "id": "stellar-example",
+      "name": "Stellar Example",
+      "network": "testnet",
+      "paused": false,
+      "signer_id": "aws-kms-signer-stellar",
+      "network_type": "stellar",
+      "policies": {
+        "min_balance": 0,
+        "fee_payment_strategy": "relayer"
+      }
+    }
+  ],
+  "networks": "./config/networks",
+  "notifications": [],
+  "signers": [
+    {
+      "id": "aws-kms-signer-stellar",
+      "type": "aws_kms",
+      "config": {
+        "region": "",
+        "key_id": ""
+      }
+    }
+  ],
+  "plugins": []
+}

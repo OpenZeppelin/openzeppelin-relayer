@@ -1,0 +1,34 @@
+{
+  "relayers": [
+    {
+      "id": "solana-example",
+      "name": "Solana Example",
+      "network": "devnet",
+      "paused": false,
+      "signer_id": "aws-kms-signer-solana",
+      "network_type": "solana",
+      "policies": {
+        "fee_payment_strategy": "user",
+        "min_balance": 0,
+        "allowed_tokens": [
+          {
+            "mint": "So11111111111111111111111111111111111111112"
+          }
+        ]
+      }
+    }
+  ],
+  "networks": "./config/networks",
+  "notifications": [],
+  "signers": [
+    {
+      "id": "aws-kms-signer-solana",
+      "type": "aws_kms",
+      "config": {
+        "region": "",
+        "key_id": ""
+      }
+    }
+  ],
+  "plugins": []
+}
