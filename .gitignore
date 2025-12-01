@@ -46,4 +46,4 @@ node_modules
 # Exclude generated OpenAPI files from the docs directory
 !./openapi.json
 
-*lcov.info
+**/*lcov.info
