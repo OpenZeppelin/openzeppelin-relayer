@@ -217,8 +217,7 @@ impl AwsKmsK256 for AwsKmsClient {
             .await
             .map_err(|e| {
                 AwsKmsError::GetError(format!(
-                    "Failed to get secp256k1 public key for key '{}': {:?}",
-                    key_id, e
+                    "Failed to get secp256k1 public key for key '{key_id}': {e:?}"
                 ))
             })?;
 
@@ -287,8 +286,7 @@ impl AwsKmsEd25519 for AwsKmsClient {
             .await
             .map_err(|e| {
                 AwsKmsError::GetError(format!(
-                    "Failed to get Ed25519 public key for key '{}': {:?}",
-                    key_id, e
+                    "Failed to get Ed25519 public key for key '{key_id}': {e:?}"
                 ))
             })?;
 

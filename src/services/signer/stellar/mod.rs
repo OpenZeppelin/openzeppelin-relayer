@@ -168,8 +168,7 @@ impl StellarSignerFactory {
                 ))
                 .map_err(|e| {
                     SignerFactoryError::InvalidConfig(format!(
-                        "Failed to create AWS KMS service: {}",
-                        e
+                        "Failed to create AWS KMS service: {e}"
                     ))
                 })?;
                 StellarSigner::AwsKms(AwsKmsSigner::new(aws_kms_service))
