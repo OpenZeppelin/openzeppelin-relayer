@@ -22,12 +22,12 @@ fn build_zkevm_transaction_params(tx: &EvmTransactionData) -> serde_json::Value 
         "to": tx.to.clone(),
         "value": format!("0x{:x}", tx.value),
         "data": tx.data.as_ref().map(|d| {
-            if d.starts_with("0x") { d.clone() } else { format!("0x{}", d) }
+            if d.starts_with("0x") { d.clone() } else { format!("0x{d}") }
         }).unwrap_or("0x".to_string()),
-        "gas": tx.gas_limit.map(|g| format!("0x{:x}", g)),
-        "gasPrice": tx.gas_price.map(|gp| format!("0x{:x}", gp)),
-        "maxFeePerGas": tx.max_fee_per_gas.map(|mfpg| format!("0x{:x}", mfpg)),
-        "maxPriorityFeePerGas": tx.max_priority_fee_per_gas.map(|mpfpg| format!("0x{:x}", mpfpg)),
+        "gas": tx.gas_limit.map(|g| format!("0x{g:x}")),
+        "gasPrice": tx.gas_price.map(|gp| format!("0x{gp:x}")),
+        "maxFeePerGas": tx.max_fee_per_gas.map(|mfpg| format!("0x{mfpg:x}")),
+        "maxPriorityFeePerGas": tx.max_priority_fee_per_gas.map(|mpfpg| format!("0x{mpfpg:x}")),
     })
 }
 
@@ -67,7 +67,7 @@ impl<P: EvmProviderTrait> PolygonZKEvmPriceHandler<P> {
             .ok_or_else(|| ProviderError::Other("Invalid fee response".to_string()))?;
 
         let fee = U256::from_str_radix(fee_hex.trim_start_matches("0x"), 16)
-            .map_err(|e| ProviderError::Other(format!("Failed to parse fee: {}", e)))?;
+            .map_err(|e| ProviderError::Other(format!("Failed to parse fee: {e}")))?;
 
         Ok(fee)
     }
@@ -92,8 +92,7 @@ impl<P: EvmProviderTrait> PolygonZKEvmPriceHandler<P> {
             Ok(fee_estimate) => fee_estimate,
             Err(e) => {
                 return Err(TransactionError::UnexpectedError(format!(
-                    "Failed to estimate zkEVM fee: {}",
-                    e
+                    "Failed to estimate zkEVM fee: {e}"
                 )))
             }
         };

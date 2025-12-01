@@ -37,10 +37,10 @@ use crate::{
         NetworkTransactionData, Signer as SignerDomainModel, SignerError, SignerRepoModel,
         SignerType, TransactionRepoModel,
     },
-    services::Signer,
+    services::signer::{evm::construct_eip712_message_hash, Signer},
 };
 
-use super::DataSignerTrait;
+use super::{validate_and_format_signature, DataSignerTrait};
 
 use alloy::rpc::types::TransactionRequest;
 
@@ -60,7 +60,7 @@ impl LocalSigner {
             let key_bytes = config.raw_key.borrow();
 
             AlloyLocalSignerClient::from_bytes(&FixedBytes::from_slice(&key_bytes)).map_err(
-                |e| SignerError::Configuration(format!("Failed to create local signer: {}", e)),
+                |e| SignerError::Configuration(format!("Failed to create local signer: {e}")),
             )?
         };
 
@@ -89,7 +89,6 @@ impl Signer for LocalSigner {
     ) -> Result<SignTransactionResponse, SignerError> {
         let evm_data = transaction.get_evm_transaction_data()?;
         if evm_data.is_eip1559() {
-            // Handle EIP-1559 transaction
             let mut unsigned_tx = TxEip1559::try_from(transaction)?;
 
             let signature = self
@@ -119,7 +118,6 @@ impl Signer for LocalSigner {
                 raw,
             }))
         } else {
-            // Handle legacy transaction
             let mut unsigned_tx = TxLegacy::try_from(transaction.clone())?;
 
             let signature = self
@@ -154,23 +152,25 @@ impl DataSignerTrait for LocalSigner {
             .local_signer_client
             .sign_message(message)
             .await
-            .map_err(|e| SignerError::SigningError(format!("Failed to sign message: {}", e)))?;
+            .map_err(|e| SignerError::SigningError(format!("Failed to sign message: {e}")))?;
 
-        let ste = signature.as_bytes();
-
-        Ok(SignDataResponse::Evm(SignDataResponseEvm {
-            r: hex::encode(&ste[0..32]),
-            s: hex::encode(&ste[32..64]),
-            v: ste[64],
-            sig: hex::encode(ste),
-        }))
+        validate_and_format_signature(&signature.as_bytes(), "Local")
     }
 
     async fn sign_typed_data(
         &self,
-        _typed_data: SignTypedDataRequest,
+        request: SignTypedDataRequest,
     ) -> Result<SignDataResponse, SignerError> {
-        todo!()
+        let message_hash = construct_eip712_message_hash(&request)?;
+        let signature = self
+            .local_signer_client
+            .sign_hash(&message_hash.into())
+            .await
+            .map_err(|e| {
+                SignerError::SigningError(format!("Failed to sign EIP-712 message: {e}"))
+            })?;
+
+        validate_and_format_signature(&signature.as_bytes(), "Local")
     }
 }
 
@@ -342,6 +342,119 @@ mod tests {
                 assert!(!signed_tx.signature.sig.is_empty());
             }
             _ => panic!("Expected EVM transaction response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_typed_data() {
+        let signer = LocalSigner::new(&create_test_signer_model()).unwrap();
+
+        // Valid 32-byte hashes (64 hex characters each)
+        let domain_separator = "a".repeat(64);
+        let hash_struct = "b".repeat(64);
+
+        let request = SignTypedDataRequest {
+            domain_separator,
+            hash_struct_message: hash_struct,
+        };
+
+        let result = signer.sign_typed_data(request).await;
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            SignDataResponse::Evm(sig) => {
+                assert_eq!(sig.r.len(), 64); // 32 bytes in hex
+                assert_eq!(sig.s.len(), 64); // 32 bytes in hex
+                assert!(sig.v == 27 || sig.v == 28); // Valid v values
+                assert_eq!(sig.sig.len(), 130); // 65 bytes in hex
+            }
+            _ => panic!("Expected EVM signature"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_typed_data_with_0x_prefix() {
+        let signer = LocalSigner::new(&create_test_signer_model()).unwrap();
+
+        // Valid 32-byte hashes with 0x prefix
+        let domain_separator = format!("0x{}", "a".repeat(64));
+        let hash_struct = format!("0x{}", "b".repeat(64));
+
+        let request = SignTypedDataRequest {
+            domain_separator,
+            hash_struct_message: hash_struct,
+        };
+
+        let result = signer.sign_typed_data(request).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_sign_typed_data_invalid_domain_length() {
+        let signer = LocalSigner::new(&create_test_signer_model()).unwrap();
+
+        // Invalid domain separator (too short)
+        let domain_separator = "a".repeat(30);
+        let hash_struct = "b".repeat(64);
+
+        let request = SignTypedDataRequest {
+            domain_separator,
+            hash_struct_message: hash_struct,
+        };
+
+        let result = signer.sign_typed_data(request).await;
+        assert!(result.is_err());
+        match result {
+            Err(SignerError::SigningError(msg)) => {
+                assert!(msg.contains("Invalid domain separator length"));
+            }
+            _ => panic!("Expected SigningError for invalid domain length"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_typed_data_invalid_hash_struct_length() {
+        let signer = LocalSigner::new(&create_test_signer_model()).unwrap();
+
+        // Invalid hash struct (too short)
+        let domain_separator = "a".repeat(64);
+        let hash_struct = "b".repeat(30);
+
+        let request = SignTypedDataRequest {
+            domain_separator,
+            hash_struct_message: hash_struct,
+        };
+
+        let result = signer.sign_typed_data(request).await;
+        assert!(result.is_err());
+        match result {
+            Err(SignerError::SigningError(msg)) => {
+                assert!(msg.contains("Invalid hash struct length"));
+            }
+            _ => panic!("Expected SigningError for invalid hash struct length"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_typed_data_invalid_hex() {
+        let signer = LocalSigner::new(&create_test_signer_model()).unwrap();
+
+        // Invalid hex characters
+        let domain_separator = "zzzzzzzz".to_string();
+        let hash_struct = "b".repeat(64);
+
+        let request = SignTypedDataRequest {
+            domain_separator,
+            hash_struct_message: hash_struct,
+        };
+
+        let result = signer.sign_typed_data(request).await;
+        assert!(result.is_err());
+        match result {
+            Err(SignerError::SigningError(msg)) => {
+                assert!(msg.contains("Invalid domain separator hex"));
+            }
+            _ => panic!("Expected SigningError for invalid hex"),
         }
     }
 }

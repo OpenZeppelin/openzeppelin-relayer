@@ -8,13 +8,14 @@ use solana_sdk::signature::Signature;
 use crate::{
     domain::{SignTransactionResponse, SignTypedDataRequest},
     models::{Address, NetworkTransactionData, SignerError},
-    services::{AwsKmsService, AwsKmsSolanaService, Signer},
+    services::{signer::Signer, AwsKmsService, AwsKmsSolanaService},
 };
 
 use super::SolanaSignTrait;
 
 pub type DefaultAwsKmsService = AwsKmsService;
 
+#[derive(Debug)]
 pub struct AwsKmsSigner<T = DefaultAwsKmsService>
 where
     T: AwsKmsSolanaService,

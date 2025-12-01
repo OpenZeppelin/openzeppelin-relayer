@@ -185,7 +185,7 @@ impl From<NotificationValidationError> for crate::models::ApiError {
           NotificationValidationError::EmptyUrl => "URL cannot be empty".to_string(),
           NotificationValidationError::InvalidUrl => "Invalid URL format".to_string(),
           NotificationValidationError::SigningKeyTooShort(min_len) => {
-              format!("Signing key must be at least {} characters long", min_len)
+              format!("Signing key must be at least {min_len} characters long")
           }
       })
     }

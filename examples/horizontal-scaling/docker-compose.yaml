@@ -1,0 +1,286 @@
+---
+services:
+  # Load Balancer - distributes traffic across relayer instances
+  nginx:
+    image: nginx:alpine
+    ports:
+      - 8080:80/tcp
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - relayer-1
+      - relayer-2
+      - relayer-3
+    networks:
+      - relayer-network
+    restart: on-failure:5
+    security_opt:
+      - no-new-privileges
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - --quiet
+        - --tries=1
+        - --spider
+        - http://localhost/health
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Relayer Instance 1
+  relayer-1:
+    build:
+      context: ../../
+      dockerfile: Dockerfile.development
+    # No external port mapping - accessed via load balancer
+    secrets:
+      - api_key
+      - webhook_signing_key
+      - keystore_passphrase
+      - storage_encryption_key
+    environment:
+      APP_PORT: 8080
+      REDIS_URL: redis://redis:6379
+      # High throughput configuration
+      RATE_LIMIT_REQUESTS_PER_SECOND: 1500
+      RATE_LIMIT_BURST_SIZE: 3000
+      # Redis storage for shared state
+      REPOSITORY_STORAGE_TYPE: redis
+      STORAGE_ENCRYPTION_KEY: ${STORAGE_ENCRYPTION_KEY}
+      REDIS_KEY_PREFIX: ${REDIS_KEY_PREFIX}
+      RESET_STORAGE_ON_START: false
+      RUST_LOG: debug
+      # RPC configuration
+      RPC_TIMEOUT_MS: 5000
+      PROVIDER_MAX_RETRIES: 3
+      PROVIDER_RETRY_BASE_DELAY_MS: 100
+      PROVIDER_RETRY_MAX_DELAY_MS: 2000
+      PROVIDER_MAX_FAILOVERS: 3
+      # Secrets
+      WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY}
+      API_KEY: ${API_KEY}
+      KEYSTORE_PASSPHRASE: ${KEYSTORE_PASSPHRASE}
+      LOG_MODE: file
+      LOG_DATA_DIR: logs1/
+      LOG_MAX_SIZE: 1073741824
+    security_opt:
+      - no-new-privileges
+    networks:
+      - relayer-network
+    volumes:
+      - ./config:/app/config/
+      - ../../config/networks:/app/config/networks
+      - ./logs/relayer-1:/app/logs1
+    depends_on:
+      - redis
+    restart: on-failure:5
+    deploy:
+      resources:
+        limits:
+          cpus: '3.0'
+          memory: 4G
+        reservations:
+          cpus: '2.0'
+          memory: 2G
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - --quiet
+        - --tries=1
+        - --spider
+        - http://localhost:8080/api/v1/health
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Relayer Instance 2
+  relayer-2:
+    build:
+      context: ../../
+      dockerfile: Dockerfile.development
+    secrets:
+      - api_key
+      - webhook_signing_key
+      - keystore_passphrase
+      - storage_encryption_key
+    environment:
+      APP_PORT: 8080
+      REDIS_URL: redis://redis:6379
+      RATE_LIMIT_REQUESTS_PER_SECOND: 1500
+      RATE_LIMIT_BURST_SIZE: 3000
+      REPOSITORY_STORAGE_TYPE: redis
+      STORAGE_ENCRYPTION_KEY: ${STORAGE_ENCRYPTION_KEY}
+      RESET_STORAGE_ON_START: false
+      REDIS_KEY_PREFIX: ${REDIS_KEY_PREFIX}
+      RUST_LOG: debug
+      # RPC configuration
+      RPC_TIMEOUT_MS: 5000
+      PROVIDER_MAX_RETRIES: 3
+      PROVIDER_RETRY_BASE_DELAY_MS: 100
+      PROVIDER_RETRY_MAX_DELAY_MS: 2000
+      PROVIDER_MAX_FAILOVERS: 3
+      WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY}
+      API_KEY: ${API_KEY}
+      KEYSTORE_PASSPHRASE: ${KEYSTORE_PASSPHRASE}
+      LOG_MODE: file
+      LOG_DATA_DIR: logs2/
+      LOG_MAX_SIZE: 1073741824
+    security_opt:
+      - no-new-privileges
+    networks:
+      - relayer-network
+    volumes:
+      - ./config:/app/config/
+      - ../../config/networks:/app/config/networks
+      - ./logs/relayer-2:/app/logs2
+    depends_on:
+      - redis
+    restart: on-failure:5
+    deploy:
+      resources:
+        limits:
+          cpus: '3.0'
+          memory: 4G
+        reservations:
+          cpus: '2.0'
+          memory: 2G
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - --quiet
+        - --tries=1
+        - --spider
+        - http://localhost:8080/api/v1/health
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Relayer Instance 3
+  relayer-3:
+    build:
+      context: ../../
+      dockerfile: Dockerfile.development
+    secrets:
+      - api_key
+      - webhook_signing_key
+      - keystore_passphrase
+      - storage_encryption_key
+    environment:
+      APP_PORT: 8080
+      REDIS_URL: redis://redis:6379
+      RATE_LIMIT_REQUESTS_PER_SECOND: 1500
+      RATE_LIMIT_BURST_SIZE: 3000
+      REPOSITORY_STORAGE_TYPE: redis
+      STORAGE_ENCRYPTION_KEY: ${STORAGE_ENCRYPTION_KEY}
+      RESET_STORAGE_ON_START: false
+      REDIS_KEY_PREFIX: ${REDIS_KEY_PREFIX}
+      RUST_LOG: debug
+      # RPC configuration
+      RPC_TIMEOUT_MS: 5000
+      PROVIDER_MAX_RETRIES: 3
+      PROVIDER_RETRY_BASE_DELAY_MS: 100
+      PROVIDER_RETRY_MAX_DELAY_MS: 2000
+      PROVIDER_MAX_FAILOVERS: 3
+      WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY}
+      API_KEY: ${API_KEY}
+      KEYSTORE_PASSPHRASE: ${KEYSTORE_PASSPHRASE}
+      LOG_MODE: file
+      LOG_DATA_DIR: logs3/
+      LOG_MAX_SIZE: 1073741824
+    security_opt:
+      - no-new-privileges
+    networks:
+      - relayer-network
+    volumes:
+      - ./config:/app/config/
+      - ../../config/networks:/app/config/networks
+      - ./logs/relayer-3:/app/logs3
+    depends_on:
+      - redis
+    restart: on-failure:5
+    deploy:
+      resources:
+        limits:
+          cpus: '3.0'
+          memory: 4G
+        reservations:
+          cpus: '2.0'
+          memory: 2G
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - --quiet
+        - --tries=1
+        - --spider
+        - http://localhost:8080/api/v1/health
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Shared Redis instance for all relayers
+  redis:
+    image: redis:bookworm
+    ports:
+      - 6379:6379/tcp
+    security_opt:
+      - no-new-privileges
+    volumes:
+      - redis_data:/data
+    command:
+      - redis-server
+      - --appendonly
+      - yes  # Enable AOF persistence
+      - --appendfsync
+      - everysec  # Flush AOF to disk every second
+      - --maxmemory
+      - 4gb  # Max memory usage
+      - --maxmemory-policy
+      - allkeys-lru
+      - --save
+      - '300'  # Save the DB every 300 seconds if there are at least 10 changes
+      - '10'
+      - --tcp-backlog
+      - '511'  # Max number of connections in the backlog
+      - --timeout
+      - '300'  # Connection timeout in seconds
+    networks:
+      - relayer-network
+    restart: on-failure:5
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 10s
+      timeout: 5s
+      retries: 3
+networks:
+  relayer-network:
+    driver: bridge
+volumes:
+  redis_data:
+    driver: local
+secrets:
+  api_key:
+    environment: API_KEY
+  webhook_signing_key:
+    environment: WEBHOOK_SIGNING_KEY
+  keystore_passphrase:
+    environment: KEYSTORE_PASSPHRASE
+  storage_encryption_key:
+    environment: STORAGE_ENCRYPTION_KEY

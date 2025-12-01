@@ -33,7 +33,7 @@ impl TryFrom<AssetSpec> for Asset {
                 buf[..b.len()].copy_from_slice(b);
 
                 let issuer_pk = PublicKey::from_str(&issuer)
-                    .map_err(|e| SignerError::ConversionError(format!("Invalid issuer: {}", e)))?;
+                    .map_err(|e| SignerError::ConversionError(format!("Invalid issuer: {e}")))?;
 
                 let uint256 = Uint256(issuer_pk.0);
                 let pk = XdrPublicKey::PublicKeyTypeEd25519(uint256);
@@ -53,7 +53,7 @@ impl TryFrom<AssetSpec> for Asset {
                 buf[..b.len()].copy_from_slice(b);
 
                 let issuer_pk = PublicKey::from_str(&issuer)
-                    .map_err(|e| SignerError::ConversionError(format!("Invalid issuer: {}", e)))?;
+                    .map_err(|e| SignerError::ConversionError(format!("Invalid issuer: {e}")))?;
 
                 let uint256 = Uint256(issuer_pk.0);
                 let pk = XdrPublicKey::PublicKeyTypeEd25519(uint256);

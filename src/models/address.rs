@@ -15,8 +15,8 @@ impl fmt::Display for Address {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Address::Evm(addr) => write!(f, "0x{}", hex::encode(addr)),
-            Address::Stellar(addr) => write!(f, "{}", addr),
-            Address::Solana(addr) => write!(f, "{}", addr),
+            Address::Stellar(addr) => write!(f, "{addr}"),
+            Address::Solana(addr) => write!(f, "{addr}"),
         }
     }
 }

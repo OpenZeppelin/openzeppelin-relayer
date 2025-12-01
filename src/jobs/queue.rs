@@ -26,7 +26,12 @@ use super::{
 pub struct Queue {
     pub transaction_request_queue: RedisStorage<Job<TransactionRequest>>,
     pub transaction_submission_queue: RedisStorage<Job<TransactionSend>>,
+    /// Default/fallback status queue for backward compatibility, Solana, and future networks
     pub transaction_status_queue: RedisStorage<Job<TransactionStatusCheck>>,
+    /// EVM-specific status queue with slower retries
+    pub transaction_status_queue_evm: RedisStorage<Job<TransactionStatusCheck>>,
+    /// Stellar-specific status queue with fast retries
+    pub transaction_status_queue_stellar: RedisStorage<Job<TransactionStatusCheck>>,
     pub notification_queue: RedisStorage<Job<NotificationSend>>,
     pub solana_token_swap_request_queue: RedisStorage<Job<SolanaTokenSwapRequest>>,
     pub relayer_health_check_queue: RedisStorage<Job<RelayerHealthCheck>>,
@@ -68,32 +73,42 @@ impl Queue {
             .unwrap_or_default();
         Ok(Self {
             transaction_request_queue: Self::storage(
-                &format!("{}transaction_request_queue", redis_key_prefix),
+                &format!("{redis_key_prefix}transaction_request_queue"),
                 shared.clone(),
             )
             .await?,
             transaction_submission_queue: Self::storage(
-                &format!("{}transaction_submission_queue", redis_key_prefix),
+                &format!("{redis_key_prefix}transaction_submission_queue"),
                 shared.clone(),
             )
             .await?,
             transaction_status_queue: Self::storage(
-                &format!("{}transaction_status_queue", redis_key_prefix),
+                &format!("{redis_key_prefix}transaction_status_queue"),
+                shared.clone(),
+            )
+            .await?,
+            transaction_status_queue_evm: Self::storage(
+                &format!("{redis_key_prefix}transaction_status_queue_evm"),
+                shared.clone(),
+            )
+            .await?,
+            transaction_status_queue_stellar: Self::storage(
+                &format!("{redis_key_prefix}transaction_status_queue_stellar"),
                 shared.clone(),
             )
             .await?,
             notification_queue: Self::storage(
-                &format!("{}notification_queue", redis_key_prefix),
+                &format!("{redis_key_prefix}notification_queue"),
                 shared.clone(),
             )
             .await?,
             solana_token_swap_request_queue: Self::storage(
-                &format!("{}solana_token_swap_request_queue", redis_key_prefix),
+                &format!("{redis_key_prefix}solana_token_swap_request_queue"),
                 shared.clone(),
             )
             .await?,
             relayer_health_check_queue: Self::storage(
-                &format!("{}relayer_health_check_queue", redis_key_prefix),
+                &format!("{redis_key_prefix}relayer_health_check_queue"),
                 shared.clone(),
             )
             .await?,
@@ -120,6 +135,8 @@ mod tests {
         pub namespace_transaction_request: String,
         pub namespace_transaction_submission: String,
         pub namespace_transaction_status: String,
+        pub namespace_transaction_status_evm: String,
+        pub namespace_transaction_status_stellar: String,
         pub namespace_notification: String,
         pub namespace_solana_token_swap_request_queue: String,
         pub namespace_relayer_health_check_queue: String,
@@ -131,6 +148,9 @@ mod tests {
                 namespace_transaction_request: "transaction_request_queue".to_string(),
                 namespace_transaction_submission: "transaction_submission_queue".to_string(),
                 namespace_transaction_status: "transaction_status_queue".to_string(),
+                namespace_transaction_status_evm: "transaction_status_queue_evm".to_string(),
+                namespace_transaction_status_stellar: "transaction_status_queue_stellar"
+                    .to_string(),
                 namespace_notification: "notification_queue".to_string(),
                 namespace_solana_token_swap_request_queue: "solana_token_swap_request_queue"
                     .to_string(),
@@ -154,6 +174,14 @@ mod tests {
         assert_eq!(
             mock_queue.namespace_transaction_status,
             "transaction_status_queue"
+        );
+        assert_eq!(
+            mock_queue.namespace_transaction_status_evm,
+            "transaction_status_queue_evm"
+        );
+        assert_eq!(
+            mock_queue.namespace_transaction_status_stellar,
+            "transaction_status_queue_stellar"
         );
         assert_eq!(mock_queue.namespace_notification, "notification_queue");
         assert_eq!(

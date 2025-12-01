@@ -64,8 +64,8 @@ impl FieldEncryption {
 
     /// Creates a new FieldEncryption instance with a provided key (for testing)
     pub fn new_with_key(key: &[u8; 32]) -> Result<Self, EncryptionError> {
-        let key = Key::<Aes256Gcm>::from_slice(key);
-        let cipher = Aes256Gcm::new(key);
+        let key = Key::<Aes256Gcm>::from(*key);
+        let cipher = Aes256Gcm::new(&key);
         Ok(Self { cipher })
     }
 
@@ -85,7 +85,11 @@ impl FieldEncryption {
                 return Err(EncryptionError::InvalidKeyLength(key_bytes.len()));
             }
 
-            Ok(*Key::<Aes256Gcm>::from_slice(&key_bytes))
+            let key_array: [u8; 32] = key_bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| EncryptionError::InvalidKeyLength(key_bytes.len()))?;
+            Ok(Key::<Aes256Gcm>::from(key_array))
         })
     }
 
@@ -94,7 +98,7 @@ impl FieldEncryption {
         // Generate random 12-byte nonce for GCM
         let mut nonce_bytes = [0u8; 12];
         OsRng.fill_bytes(&mut nonce_bytes);
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        let nonce = &Nonce::from(nonce_bytes);
 
         // Encrypt the data
         let ciphertext = self
@@ -120,10 +124,10 @@ impl FieldEncryption {
 
         // Decode nonce and ciphertext
         let nonce_bytes = base64_decode(&encrypted_data.nonce)
-            .map_err(|e| EncryptionError::InvalidFormat(format!("Invalid nonce: {}", e)))?;
+            .map_err(|e| EncryptionError::InvalidFormat(format!("Invalid nonce: {e}")))?;
 
         let ciphertext_bytes = base64_decode(&encrypted_data.ciphertext)
-            .map_err(|e| EncryptionError::InvalidFormat(format!("Invalid ciphertext: {}", e)))?;
+            .map_err(|e| EncryptionError::InvalidFormat(format!("Invalid ciphertext: {e}")))?;
 
         if nonce_bytes.len() != 12 {
             return Err(EncryptionError::InvalidFormat(format!(
@@ -132,7 +136,11 @@ impl FieldEncryption {
             )));
         }
 
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        let nonce_array: [u8; 12] = nonce_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| EncryptionError::InvalidFormat("Invalid nonce length".to_string()))?;
+        let nonce = &Nonce::from(nonce_array);
 
         // Decrypt the data
         let plaintext = self
@@ -146,9 +154,8 @@ impl FieldEncryption {
     /// Encrypts a string and returns base64-encoded encrypted data (opaque format)
     pub fn encrypt_string(&self, plaintext: &str) -> Result<String, EncryptionError> {
         let encrypted_data = self.encrypt(plaintext.as_bytes())?;
-        let json_data = serde_json::to_string(&encrypted_data).map_err(|e| {
-            EncryptionError::EncryptionFailed(format!("Serialization failed: {}", e))
-        })?;
+        let json_data = serde_json::to_string(&encrypted_data)
+            .map_err(|e| EncryptionError::EncryptionFailed(format!("Serialization failed: {e}")))?;
 
         // Base64 encode the entire JSON to make it opaque
         Ok(base64_encode(json_data.as_bytes()))
@@ -158,19 +165,18 @@ impl FieldEncryption {
     pub fn decrypt_string(&self, encrypted_base64: &str) -> Result<String, EncryptionError> {
         // Decode from base64 to get the JSON
         let json_bytes = base64_decode(encrypted_base64)
-            .map_err(|e| EncryptionError::InvalidFormat(format!("Invalid base64: {}", e)))?;
+            .map_err(|e| EncryptionError::InvalidFormat(format!("Invalid base64: {e}")))?;
 
         let encrypted_json = String::from_utf8(json_bytes).map_err(|e| {
-            EncryptionError::InvalidFormat(format!("Invalid UTF-8 in decoded data: {}", e))
+            EncryptionError::InvalidFormat(format!("Invalid UTF-8 in decoded data: {e}"))
         })?;
 
-        let encrypted_data: EncryptedData = serde_json::from_str(&encrypted_json).map_err(|e| {
-            EncryptionError::InvalidFormat(format!("Invalid JSON structure: {}", e))
-        })?;
+        let encrypted_data: EncryptedData = serde_json::from_str(&encrypted_json)
+            .map_err(|e| EncryptionError::InvalidFormat(format!("Invalid JSON structure: {e}")))?;
 
         let plaintext_bytes = self.decrypt(&encrypted_data)?;
         String::from_utf8(plaintext_bytes).map_err(|e| {
-            EncryptionError::DecryptionFailed(format!("Invalid UTF-8 in plaintext: {}", e))
+            EncryptionError::DecryptionFailed(format!("Invalid UTF-8 in plaintext: {e}"))
         })
     }
 
@@ -214,9 +220,8 @@ pub fn encrypt_sensitive_field(data: &str) -> Result<String, EncryptionError> {
     } else {
         // For development/testing when encryption is not configured,
         // base64-encode the JSON string for consistency
-        let json_data = serde_json::to_string(data).map_err(|e| {
-            EncryptionError::EncryptionFailed(format!("JSON encoding failed: {}", e))
-        })?;
+        let json_data = serde_json::to_string(data)
+            .map_err(|e| EncryptionError::EncryptionFailed(format!("JSON encoding failed: {e}")))?;
         Ok(base64_encode(json_data.as_bytes()))
     }
 }
@@ -225,10 +230,10 @@ pub fn encrypt_sensitive_field(data: &str) -> Result<String, EncryptionError> {
 pub fn decrypt_sensitive_field(data: &str) -> Result<String, EncryptionError> {
     // Always try to decode base64 first
     let json_bytes = base64_decode(data)
-        .map_err(|e| EncryptionError::InvalidFormat(format!("Invalid base64: {}", e)))?;
+        .map_err(|e| EncryptionError::InvalidFormat(format!("Invalid base64: {e}")))?;
 
     let json_str = String::from_utf8(json_bytes)
-        .map_err(|e| EncryptionError::InvalidFormat(format!("Invalid UTF-8: {}", e)))?;
+        .map_err(|e| EncryptionError::InvalidFormat(format!("Invalid UTF-8: {e}")))?;
 
     // Try to parse as encrypted data first (if encryption is configured)
     if FieldEncryption::is_configured() {
@@ -238,7 +243,7 @@ pub fn decrypt_sensitive_field(data: &str) -> Result<String, EncryptionError> {
                 // This is encrypted data, decrypt it
                 let plaintext_bytes = encryption.decrypt(&encrypted_data)?;
                 return String::from_utf8(plaintext_bytes).map_err(|e| {
-                    EncryptionError::DecryptionFailed(format!("Invalid UTF-8 in plaintext: {}", e))
+                    EncryptionError::DecryptionFailed(format!("Invalid UTF-8 in plaintext: {e}"))
                 });
             }
         }
@@ -247,7 +252,7 @@ pub fn decrypt_sensitive_field(data: &str) -> Result<String, EncryptionError> {
     // If we get here, either encryption is not configured, or this is fallback data
     // Try to parse as JSON string (fallback format)
     serde_json::from_str(&json_str)
-        .map_err(|e| EncryptionError::DecryptionFailed(format!("Invalid JSON string: {}", e)))
+        .map_err(|e| EncryptionError::DecryptionFailed(format!("Invalid JSON string: {e}")))
 }
 
 /// Utility function to generate a new encryption key

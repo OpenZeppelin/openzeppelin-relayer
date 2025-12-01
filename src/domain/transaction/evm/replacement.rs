@@ -144,8 +144,7 @@ pub fn validate_explicit_price_bump(
     if let Some(gas_price) = new_evm_data.gas_price {
         if gas_price > gas_price_cap {
             return Err(TransactionError::ValidationError(format!(
-                "Gas price {} exceeds gas price cap {}",
-                gas_price, gas_price_cap
+                "Gas price {gas_price} exceeds gas price cap {gas_price_cap}"
             )));
         }
     }
@@ -153,8 +152,7 @@ pub fn validate_explicit_price_bump(
     if let Some(max_fee) = new_evm_data.max_fee_per_gas {
         if max_fee > gas_price_cap {
             return Err(TransactionError::ValidationError(format!(
-                "Max fee per gas {} exceeds gas price cap {}",
-                max_fee, gas_price_cap
+                "Max fee per gas {max_fee} exceeds gas price cap {gas_price_cap}"
             )));
         }
     }

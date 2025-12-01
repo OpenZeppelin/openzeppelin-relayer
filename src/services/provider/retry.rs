@@ -127,16 +127,14 @@ impl RetryConfig {
         // Validate delay consistency: both zero or both non-zero
         if (base_delay_ms == 0) != (max_delay_ms == 0) {
             panic!(
-                "Delay values must be consistent: both zero (no delays) or both non-zero. Got base_delay_ms={}, max_delay_ms={}",
-                base_delay_ms, max_delay_ms
+                "Delay values must be consistent: both zero (no delays) or both non-zero. Got base_delay_ms={base_delay_ms}, max_delay_ms={max_delay_ms}"
             );
         }
 
         // Validate delay ordering when both are non-zero
         if base_delay_ms > 0 && max_delay_ms > 0 && max_delay_ms < base_delay_ms {
             panic!(
-                "max_delay_ms ({}) must be >= base_delay_ms ({}) when both are non-zero",
-                max_delay_ms, base_delay_ms
+                "max_delay_ms ({max_delay_ms}) must be >= base_delay_ms ({base_delay_ms}) when both are non-zero"
             );
         }
 
@@ -339,17 +337,10 @@ where
 
     let error_message = match &last_error {
         Some(e) => format!(
-            "RPC call '{}' failed after {} total attempts across {} providers: {}",
-            operation_name,
-            total_attempts,
-            failover_count,
-            e
+            "RPC call '{operation_name}' failed after {total_attempts} total attempts across {failover_count} providers: {e}"
         ),
         None => format!(
-            "RPC call '{}' failed after {} total attempts across {} providers with no error details",
-            operation_name,
-            total_attempts,
-            failover_count
+            "RPC call '{operation_name}' failed after {total_attempts} total attempts across {failover_count} providers with no error details"
         )
     };
 
@@ -371,7 +362,7 @@ where
     let provider_url = selector
         .get_client(|url| Ok::<_, eyre::Report>(url.to_string()))
         .map_err(|e| {
-            let err_msg = format!("Failed to get provider URL for {}: {}", operation_name, e);
+            let err_msg = format!("Failed to get provider URL for {operation_name}: {e}");
             tracing::warn!(operation_name = %operation_name, error = %e, "failed to get provider url");
             E::from(err_msg)
         })?;

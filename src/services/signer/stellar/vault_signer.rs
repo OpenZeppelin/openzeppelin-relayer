@@ -25,9 +25,8 @@ use crate::{
         VaultSignerConfig,
     },
     services::{
-        signer::stellar::local_signer::LocalSigner,
+        signer::{stellar::local_signer::LocalSigner, Signer},
         vault::{VaultService, VaultServiceTrait},
-        Signer,
     },
 };
 
@@ -184,7 +183,7 @@ impl<T: VaultServiceTrait + Clone> VaultSigner<T> {
         }
 
         let decoded_bytes = hex::decode(hex_str)
-            .map_err(|e| SignerError::KeyError(format!("Failed to decode hex: {}", e)))?;
+            .map_err(|e| SignerError::KeyError(format!("Failed to decode hex: {e}")))?;
 
         Ok(SecretVec::new(decoded_bytes.len(), |buffer| {
             buffer.copy_from_slice(&decoded_bytes);

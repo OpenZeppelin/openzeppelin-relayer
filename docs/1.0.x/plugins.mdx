@@ -1,0 +1,180 @@
+---
+title: Plugins
+---
+
+## Overview
+
+OpenZeppelin Relayer supports plugins to extend the functionality of the relayer.
+
+Plugins are `TypeScript` functions running in the Relayer server that can include any arbitrary logic defined by the Relayer operator.
+
+It also includes a simple `Plugin` library to interact with the Relayer, allowing to send transactions, and
+is extensible to support new features in the future.
+
+## Configuration
+
+### Writing a Plugin
+
+Plugins are declared under `plugins` directory, and are expected to be TypeScript files (`.ts` extension).
+
+```bash
+openzeppelin-relayer/
+├── plugins/
+│   └── my-plugin.ts    # Plugin code
+└── config/
+    └── config.json     # Plugins in configuration file
+```
+
+The plugin code must include the following structure:
+
+```typescript
+/// Required imports.
+import { runPlugin, Plugin } from "./lib/plugin";
+
+/// Here you can define custom params that will be included as part
+/// of the request when the plugin is invoked.
+type MyCustomParams = {
+  foo: string,
+  bar: number
+}
+
+/// The plugin function body.
+async function myPlugin(api: Plugin, params: MyCustomParams) {
+    // You can use the `params` to access the custom params passed to the plugin.
+    console.log(params.foo);
+    console.log(params.bar);
+
+    // Api usage to send a transaction:
+    let relayer = api.relayer('my-relayer');
+    const tx = await relayer.sendTransaction({
+        to: "0x1234567890123456789012345678901234567890",
+        value: ethers.parseEther("1"),
+    });
+}
+
+/// `runPlugin` is the entry point for the plugin.
+runPlugin(myPlugin);
+```
+
+### Declaring in config file
+
+Plugins are configured in the `./config/config.json` file, under the `plugins` key.
+
+The file contains a list of plugins, each with an id and path.
+
+<Callout>
+The plugin path is relative to the `/plugins` directory
+</Callout>
+
+Example:
+
+```json
+
+"plugins": [
+  {
+    "id": "my-plugin",
+    "path": "my-plugin.ts"
+  }
+]
+```
+
+## Invocation
+
+Plugins are invoked by hitting the `api/v1/plugins/plugin-id/call` endpoint.
+
+The endpoint accepts a `POST` request with the following body:
+
+```json
+{
+  "params": {
+    "foo": "bar",
+    "bar": 1
+  }
+}
+```
+
+Then the plugin will be invoked passing the `params` as the second argument of the plugin function.
+
+## Debugging
+
+When invoking a plugin, the response will include:
+
+* `logs`: The logs from the plugin execution.
+* `return_value`: The returned value of the plugin execution.
+* `error`: An error message if the plugin execution failed.
+* `traces`: A list of messages sent between the plugin and the Relayer instance. This includes all the payloads passed through the `api` object.
+
+### Example
+
+1. Example Plugin code:
+
+```typescript
+import { runPlugin, Plugin } from "./lib/plugin";
+import { ethers } from "ethers";
+
+type MyCustomParams = {
+  foo: string,
+}
+
+async function myPlugin(api: Plugin, params: MyCustomParams) {
+    console.log("Hello, world!");
+
+    // For example, to send a transaction:
+    let relayer = api.relayer('my-relayer');
+    const tx = await relayer.sendTransaction({
+        to: "0x1234567890123456789012345678901234567890",
+        value: ethers.parseEther("1"),
+    });
+
+    console.log("Foo ", params.foo);
+
+    return `Successfully sent transaction with id: ${tx.id}`;
+}
+
+runPlugin(myPlugin);
+```
+
+1. Example Invocation:
+
+```bash
+curl -X POST http://localhost:3000/api/v1/plugins/my-plugin/call \
+-H "Content-Type: application/json" \
+-d '{"params": {"foo": "bar"}}'
+```
+
+1. Example Response:
+
+```json
+{
+  "success": true,
+  "message": "Plugin called successfully",
+  "logs": [
+    {
+      "level": "log",
+      "message": "Hello, world!"
+    },
+    {
+      "level": "log",
+      "message": "Foo bar"
+    }
+  ],
+  "return_value": "Successfully sent transaction with id: 1234567890",
+  "error": "",
+  "traces": [
+    {
+      "relayer_id": "my-relayer",
+      "method": "sendTransaction",
+      "payload": {
+        "to": "0x1234567890123456789012345678901234567890",
+        "value": "1000000000000000000"
+      }
+    }
+  ]
+}
+```
+
+Where:
+- `logs` indicates the terminal logs (console.log, console.error, etc.) of the plugin.
+- `traces` are the messages sent between the plugin and the Relayer instance.
+- `error` will include the error message if the plugin fails.
+- `return_value` will include the returned value of the plugin execution.

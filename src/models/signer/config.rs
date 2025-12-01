@@ -234,7 +234,7 @@ impl TryFrom<LocalSignerFileConfig> for LocalSignerConfig {
         }
 
         let passphrase = config.passphrase.get_value().map_err(|e| {
-            ConfigFileError::InvalidFormat(format!("Failed to get passphrase value: {}", e))
+            ConfigFileError::InvalidFormat(format!("Failed to get passphrase value: {e}"))
         })?;
 
         if passphrase.is_empty() {
@@ -271,7 +271,7 @@ impl TryFrom<TurnkeySignerFileConfig> for TurnkeySignerConfig {
 
     fn try_from(config: TurnkeySignerFileConfig) -> Result<Self, Self::Error> {
         let api_private_key = config.api_private_key.get_value().map_err(|e| {
-            ConfigFileError::InvalidFormat(format!("Failed to get API private key: {}", e))
+            ConfigFileError::InvalidFormat(format!("Failed to get API private key: {e}"))
         })?;
 
         Ok(TurnkeySignerConfig {
@@ -289,11 +289,11 @@ impl TryFrom<CdpSignerFileConfig> for CdpSignerConfig {
 
     fn try_from(config: CdpSignerFileConfig) -> Result<Self, Self::Error> {
         let api_key_secret = config.api_key_secret.get_value().map_err(|e| {
-            ConfigFileError::InvalidFormat(format!("Failed to get API key secret: {}", e))
+            ConfigFileError::InvalidFormat(format!("Failed to get API key secret: {e}"))
         })?;
 
         let wallet_secret = config.wallet_secret.get_value().map_err(|e| {
-            ConfigFileError::InvalidFormat(format!("Failed to get wallet secret: {}", e))
+            ConfigFileError::InvalidFormat(format!("Failed to get wallet secret: {e}"))
         })?;
 
         Ok(CdpSignerConfig {
@@ -312,11 +312,12 @@ impl TryFrom<VaultSignerFileConfig> for VaultSignerConfig {
         let role_id = config
             .role_id
             .get_value()
-            .map_err(|e| ConfigFileError::InvalidFormat(format!("Failed to get role ID: {}", e)))?;
+            .map_err(|e| ConfigFileError::InvalidFormat(format!("Failed to get role ID: {e}")))?;
 
-        let secret_id = config.secret_id.get_value().map_err(|e| {
-            ConfigFileError::InvalidFormat(format!("Failed to get secret ID: {}", e))
-        })?;
+        let secret_id = config
+            .secret_id
+            .get_value()
+            .map_err(|e| ConfigFileError::InvalidFormat(format!("Failed to get secret ID: {e}")))?;
 
         Ok(VaultSignerConfig {
             address: config.address,
@@ -336,11 +337,12 @@ impl TryFrom<VaultTransitSignerFileConfig> for VaultTransitSignerConfig {
         let role_id = config
             .role_id
             .get_value()
-            .map_err(|e| ConfigFileError::InvalidFormat(format!("Failed to get role ID: {}", e)))?;
+            .map_err(|e| ConfigFileError::InvalidFormat(format!("Failed to get role ID: {e}")))?;
 
-        let secret_id = config.secret_id.get_value().map_err(|e| {
-            ConfigFileError::InvalidFormat(format!("Failed to get secret ID: {}", e))
-        })?;
+        let secret_id = config
+            .secret_id
+            .get_value()
+            .map_err(|e| ConfigFileError::InvalidFormat(format!("Failed to get secret ID: {e}")))?;
 
         Ok(VaultTransitSignerConfig {
             key_name: config.key_name,
@@ -363,7 +365,7 @@ impl TryFrom<GoogleCloudKmsSignerFileConfig> for GoogleCloudKmsSignerConfig {
             .private_key
             .get_value()
             .map_err(|e| {
-                ConfigFileError::InvalidFormat(format!("Failed to get private key: {}", e))
+                ConfigFileError::InvalidFormat(format!("Failed to get private key: {e}"))
             })?;
 
         let private_key_id = config
@@ -371,7 +373,7 @@ impl TryFrom<GoogleCloudKmsSignerFileConfig> for GoogleCloudKmsSignerConfig {
             .private_key_id
             .get_value()
             .map_err(|e| {
-                ConfigFileError::InvalidFormat(format!("Failed to get private key ID: {}", e))
+                ConfigFileError::InvalidFormat(format!("Failed to get private key ID: {e}"))
             })?;
 
         let client_email = config
@@ -379,7 +381,7 @@ impl TryFrom<GoogleCloudKmsSignerFileConfig> for GoogleCloudKmsSignerConfig {
             .client_email
             .get_value()
             .map_err(|e| {
-                ConfigFileError::InvalidFormat(format!("Failed to get client email: {}", e))
+                ConfigFileError::InvalidFormat(format!("Failed to get client email: {e}"))
             })?;
 
         let service_account = GoogleCloudKmsSignerServiceAccountConfig {
@@ -459,7 +461,7 @@ impl TryFrom<SignerFileConfig> for Signer {
                 ConfigFileError::InvalidFormat("Invalid signer ID format".into())
             }
             crate::models::signer::SignerValidationError::InvalidConfig(msg) => {
-                ConfigFileError::InvalidFormat(format!("Invalid signer configuration: {}", msg))
+                ConfigFileError::InvalidFormat(format!("Invalid signer configuration: {msg}"))
             }
         })?;
 

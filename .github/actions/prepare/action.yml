@@ -14,7 +14,7 @@ runs:
   using: composite
   steps:
     - name: setup rust tool chain
-      uses: dtolnay/rust-toolchain@1.86.0  # v1.86.0
+      uses: dtolnay/rust-toolchain@1.88.0  # v1.88.0
       with:
         components: ${{ (inputs.components != '') && format('{0}, rustfmt, clippy', inputs.components) || 'rustfmt, clippy' }}
     - name: Install libsodium

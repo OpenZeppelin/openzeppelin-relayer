@@ -21,8 +21,8 @@ use crate::{
         SignerRepoModel, SignerType, TransactionRepoModel, VaultSignerConfig,
     },
     services::{
-        signer::{SignXdrTransactionResponseStellar, SignerError, SignerFactoryError},
-        AwsKmsService, GoogleCloudKmsService, Signer, TurnkeyService, VaultConfig, VaultService,
+        signer::{SignXdrTransactionResponseStellar, Signer, SignerError, SignerFactoryError},
+        AwsKmsService, GoogleCloudKmsService, TurnkeyService, VaultConfig, VaultService,
     },
 };
 

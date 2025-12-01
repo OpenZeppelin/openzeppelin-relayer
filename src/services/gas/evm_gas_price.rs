@@ -6,7 +6,7 @@ use crate::{
     models::{evm::Speed, EvmNetwork, EvmTransactionData, TransactionError},
     services::{
         gas::{cache::GasPriceCache, fetchers::GasPriceFetcherFactory},
-        EvmProviderTrait,
+        provider::EvmProviderTrait,
     },
 };
 use alloy::rpc::types::{BlockNumberOrTag, FeeHistory};
@@ -136,7 +136,7 @@ impl IntoIterator for SpeedPrices {
 
 #[async_trait]
 #[cfg_attr(test, automock(
-    type Provider = crate::services::MockEvmProviderTrait;
+    type Provider = crate::services::provider::MockEvmProviderTrait;
 ))]
 #[allow(dead_code)]
 pub trait EvmGasPriceServiceTrait {
@@ -379,8 +379,7 @@ impl<P: EvmProviderTrait + Send + Sync + 'static> EvmGasPriceServiceTrait
                     .await
                     .map_err(|e| {
                         TransactionError::NetworkConfiguration(format!(
-                            "Failed to fetch fee history data: {}",
-                            e
+                            "Failed to fetch fee history data: {e}"
                         ))
                     })
             }

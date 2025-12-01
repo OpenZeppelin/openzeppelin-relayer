@@ -73,7 +73,7 @@ impl RedisPluginRepository {
         let json: Option<String> = conn
             .get(&key)
             .await
-            .map_err(|e| self.map_redis_error(e, &format!("get_plugin_by_id_{}", id)))?;
+            .map_err(|e| self.map_redis_error(e, &format!("get_plugin_by_id_{id}")))?;
 
         match json {
             Some(json) => {

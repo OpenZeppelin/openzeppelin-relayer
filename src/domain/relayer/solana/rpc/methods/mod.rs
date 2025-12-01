@@ -12,7 +12,6 @@ mod sign_and_send_transaction;
 mod sign_transaction;
 mod transfer_transaction;
 mod utils;
-mod validations;
 
 #[cfg(test)]
 mod test_setup;
@@ -23,13 +22,17 @@ use std::sync::Arc;
 
 #[cfg(test)]
 pub use test_setup::*;
-pub use validations::*;
+
+// Re-export validation types from transaction domain module
+pub use crate::domain::transaction::solana::{
+    SolanaTransactionValidationError, SolanaTransactionValidator,
+};
 
 use crate::{
     jobs::{JobProducer, JobProducerTrait},
     models::{NetworkRepoModel, RelayerRepoModel, TransactionRepoModel},
     repositories::{Repository, TransactionRepository, TransactionRepositoryStorage},
-    services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
+    services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
 };
 
 use super::*;
@@ -38,7 +41,9 @@ use super::*;
 use crate::{jobs::MockJobProducerTrait, repositories::MockTransactionRepository};
 
 #[cfg(test)]
-use crate::services::{MockJupiterServiceTrait, MockSolanaProviderTrait, MockSolanaSignTrait};
+use crate::services::{
+    provider::MockSolanaProviderTrait, signer::MockSolanaSignTrait, MockJupiterServiceTrait,
+};
 use async_trait::async_trait;
 
 use crate::{
@@ -50,7 +55,7 @@ use crate::{
         SignTransactionRequestParams, SignTransactionResult, TransferTransactionRequestParams,
         TransferTransactionResult,
     },
-    services::{JupiterService, SolanaProvider, SolanaSigner},
+    services::{provider::SolanaProvider, signer::SolanaSigner, JupiterService},
 };
 
 #[cfg_attr(test, automock)]

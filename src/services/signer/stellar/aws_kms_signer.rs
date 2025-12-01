@@ -11,7 +11,7 @@ use crate::{
         SignTransactionResponse, SignXdrTransactionResponseStellar,
     },
     models::{Address, NetworkTransactionData, SignerError},
-    services::{AwsKmsService, AwsKmsStellarService, Signer},
+    services::{signer::Signer, AwsKmsService, AwsKmsStellarService},
 };
 
 use async_trait::async_trait;

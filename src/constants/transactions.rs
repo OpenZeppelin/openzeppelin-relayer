@@ -1,8 +1,15 @@
 //! Transaction-related constants
+//!
+//! This module contains generic transaction constants that apply across all chain types.
+//! Chain-specific constants are defined in their respective modules:
+//! - EVM constants: `crate::constants::evm_transaction`
+//! - Stellar constants: `crate::constants::stellar_transaction`
 
 use crate::models::TransactionStatus;
 
 /// Transaction statuses that are considered final states.
+/// These states indicate that a transaction has reached its terminal state
+/// and will not be processed further.
 pub const FINAL_TRANSACTION_STATUSES: &[TransactionStatus] = &[
     TransactionStatus::Canceled,
     TransactionStatus::Confirmed,

@@ -8,7 +8,7 @@
 
 use alloy::{
     consensus::{SignableTransaction, TxEip1559, TxLegacy},
-    primitives::{eip191_hash_message, utils::eip191_message, Signature},
+    primitives::{utils::eip191_message, Signature},
 };
 use async_trait::async_trait;
 
@@ -21,7 +21,13 @@ use crate::{
         Address, EvmTransactionDataSignature, EvmTransactionDataTrait, NetworkTransactionData,
         SignerError,
     },
-    services::{DataSignerTrait, GoogleCloudKmsEvmService, GoogleCloudKmsService, Signer},
+    services::{
+        signer::{
+            evm::{construct_eip712_message_hash, validate_and_format_signature},
+            DataSignerTrait, Signer,
+        },
+        GoogleCloudKmsEvmService, GoogleCloudKmsService,
+    },
     utils::base64_encode,
 };
 
@@ -49,13 +55,10 @@ impl Signer for GoogleCloudKmsSigner {
         let evm_data = transaction.get_evm_transaction_data()?;
 
         if evm_data.is_eip1559() {
-            // Handle EIP-1559 transaction
             let unsigned_tx = TxEip1559::try_from(transaction)?;
-
             let payload = unsigned_tx.encoded_for_signing();
             let signed_bytes = self.gcp_kms_service.sign_payload_evm(&payload).await?;
 
-            // Ensure we have the right signature length
             if signed_bytes.len() != 65 {
                 return Err(SignerError::SigningError(format!(
                     "Invalid signature length from Google Cloud KMS: expected 65 bytes, got {}",
@@ -76,7 +79,6 @@ impl Signer for GoogleCloudKmsSigner {
                 signature_bytes[64] = 1;
             }
 
-            // RLP encode the signed transaction
             let mut raw = Vec::with_capacity(signed_tx.eip2718_encoded_length());
             signed_tx.eip2718_encode(&mut raw);
 
@@ -86,13 +88,10 @@ impl Signer for GoogleCloudKmsSigner {
                 raw,
             }))
         } else {
-            // Handle legacy transaction
             let unsigned_tx = TxLegacy::try_from(transaction)?;
-
             let payload = unsigned_tx.encoded_for_signing();
             let signed_bytes = self.gcp_kms_service.sign_payload_evm(&payload).await?;
 
-            // Ensure we have the right signature length
             if signed_bytes.len() != 65 {
                 return Err(SignerError::SigningError(format!(
                     "Invalid signature length from Google Cloud KMS: expected 65 bytes, got {}",
@@ -104,7 +103,6 @@ impl Signer for GoogleCloudKmsSigner {
                 .map_err(|e| SignerError::ConversionError(e.to_string()))?;
 
             let signature_bytes = signature.as_bytes();
-
             let signed_tx = unsigned_tx.into_signed(signature);
 
             let mut raw = Vec::with_capacity(signed_tx.rlp_encoded_length());
@@ -123,41 +121,22 @@ impl Signer for GoogleCloudKmsSigner {
 impl DataSignerTrait for GoogleCloudKmsSigner {
     async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, SignerError> {
         let eip191_message = eip191_message(&request.message);
-
         let signature_bytes = self
             .gcp_kms_service
             .sign_payload_evm(&eip191_message)
             .await?;
 
-        // Ensure we have the right signature length
-        if signature_bytes.len() != 65 {
-            return Err(SignerError::SigningError(format!(
-                "Invalid signature length from Google Cloud KMS: expected 65 bytes, got {}",
-                signature_bytes.len()
-            )));
-        }
-
-        let r = hex::encode(&signature_bytes[0..32]);
-        let s = hex::encode(&signature_bytes[32..64]);
-        let v = signature_bytes[64];
-
-        Ok(SignDataResponse::Evm(SignDataResponseEvm {
-            r,
-            s,
-            v,
-            sig: hex::encode(&signature_bytes),
-        }))
+        validate_and_format_signature(&signature_bytes, "Google Cloud KMS")
     }
 
     async fn sign_typed_data(
         &self,
-        _typed_data: SignTypedDataRequest,
+        request: SignTypedDataRequest,
     ) -> Result<SignDataResponse, SignerError> {
-        // EIP-712 typed data signing requires specific handling
-        // This is a placeholder that you'll need to implement based on your needs
-        Err(SignerError::NotImplemented(
-            "EIP-712 typed data signing not yet implemented for Google Cloud KMS".into(),
-        ))
+        let message_hash = construct_eip712_message_hash(&request)?;
+        let signature_bytes = self.gcp_kms_service.sign_hash_evm(&message_hash).await?;
+
+        validate_and_format_signature(&signature_bytes, "Google Cloud KMS")
     }
 }
 
