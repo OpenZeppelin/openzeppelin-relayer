@@ -258,6 +258,7 @@ jobs:
 
       - name: Run Developer Tests (excluding AI) and Generate Coverage Report
         id: dev_coverage
+        timeout-minutes: 45
         env:
           LLVM_PROFILE_FILE: dev-%p-%m.profraw
           RUSTFLAGS: -Cinstrument-coverage
@@ -267,6 +268,7 @@ jobs:
 
       - name: Run AI Tests and Generate Coverage Report
         id: ai_coverage
+        timeout-minutes: 45
         env:
           LLVM_PROFILE_FILE: ai-%p-%m.profraw
           RUSTFLAGS: -Cinstrument-coverage

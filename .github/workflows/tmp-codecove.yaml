@@ -67,7 +67,7 @@ jobs:
 
   coverage:
     timeout-minutes: 680
-    runs-on: ubuntu-22.04-oz-8core
+    runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (Audit all outbound calls)
         uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
@@ -102,22 +102,6 @@ jobs:
 
       - name: Build
         run: cargo test --no-run --locked
-
-      # - name: Run Integration Tests and Generate Coverage Report
-      #   env:
-      #     LLVM_PROFILE_FILE: integration-%p-%m.profraw
-      #     RUSTFLAGS: -Cinstrument-coverage
-      #     RUST_TEST_THREADS: 1
-      #   run: cargo hack llvm-cov --locked --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path integration-lcov.info --test integration
-
-      # - name: Upload Integration Coverage to Codecov
-      #   uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
-      #   with:
-      #     token: ${{ secrets.CODECOV_TOKEN }}
-      #     name: integration-coverage
-      #     files: integration-lcov.info
-      #     flags: integration
-      #     fail_ci_if_error: true
 
       - name: Run AI Tests and Generate Coverage Report
         id: ai_coverage
