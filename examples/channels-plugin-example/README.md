@@ -105,6 +105,9 @@ PLUGIN_ADMIN_SECRET=<admin_secret_for_channels_mgmt_api>
 FUND_RELAYER_ID=channels-fund
 LOCK_TTL_SECONDS=30
 LOG_LEVEL=info
+# Fee Tracking (optional)
+FEE_LIMIT=100000000                 # Max fee per API key in stroops (optional)
+API_KEY_HEADER=x-api-key            # Header for fee tracking (default: x-api-key)
 ```
 
 ### 3. Verify Configuration
@@ -360,6 +363,32 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
 - You must configure at least one channel account before Channels can process `func`+`auth` transactions
 - The management API will prevent removing accounts that are currently locked (in use)
 - All relayer IDs must exist in your OpenZeppelin Relayer configuration
+
+### Fee Tracking
+
+The plugin supports per-API-key fee consumption tracking with a fair use policy. The API key used for authentication is also used for fee tracking. When an API key exceeds its fee limit, requests will be rejected with a `FEE_LIMIT_EXCEEDED` error.
+
+**Environment Variables:**
+
+- `FEE_LIMIT`: Maximum fee consumption per API key in stroops (when not set, fee tracking is disabled)
+- `API_KEY_HEADER`: HTTP header name used to extract the client API key for fee tracking (default: x-api-key)
+
+#### Query Fee Usage
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "getFeeUsage",
+        "adminSecret": "YOUR_ADMIN_SECRET",
+        "apiKey": "client-api-key-to-check"
+      }
+    }
+  }'
+```
 
 ### Generating XDR for the Relayer
 

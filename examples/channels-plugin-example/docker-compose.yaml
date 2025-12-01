@@ -27,6 +27,8 @@ services:
       PLUGIN_ADMIN_SECRET: ${PLUGIN_ADMIN_SECRET}
       FUND_RELAYER_ID: ${FUND_RELAYER_ID}
       LOCK_TTL_SECONDS: ${LOCK_TTL_SECONDS}
+      FEE_LIMIT: ${FEE_LIMIT}
+      API_KEY_HEADER: ${API_KEY_HEADER}
     security_opt:
       - no-new-privileges
     networks:

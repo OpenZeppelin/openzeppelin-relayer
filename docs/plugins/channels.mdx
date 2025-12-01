@@ -45,7 +45,8 @@ const directClient = new ChannelsClient({
 const relayerClient = new ChannelsClient({
   pluginId: 'channels-plugin', // Plugin identifier (triggers relayer mode)
   baseUrl: 'http://localhost:8080', // Relayer URL
-  apiKey: process.env.RELAYER_API_KEY, // Relayer API key
+  apiKey: process.env.RELAYER_API_KEY, // Relayer API key (sent as Bearer AND custom header)
+  apiKeyHeader: 'x-api-key', // Optional: header for fee tracking (default: x-api-key)
   adminSecret: process.env.CHANNELS_ADMIN, // Optional: for management
 });
 ```
@@ -81,6 +82,10 @@ console.log('Channel accounts:', accounts.relayerIds);
 // Update channel accounts (requires adminSecret)
 const result = await client.setChannelAccounts(['channel-001', 'channel-002', 'channel-003']);
 console.log('Update successful:', result.ok, result.appliedRelayerIds);
+
+// Query fee usage (requires adminSecret)
+const usage = await client.getFeeUsage('client-api-key');
+console.log('Fee usage:', usage);
 ```
 
 ### Example Scripts
@@ -175,6 +180,8 @@ export MAX_FEE=1000000                              # Maximum fee in stroops (de
 - `PLUGIN_ADMIN_SECRET`: Secret for accessing the management API (required to manage channel accounts)
 - `LOCK_TTL_SECONDS`: TTL for channel account locks in seconds (default: 30, range: 3-30)
 - `MAX_FEE`: Maximum transaction fee in stroops (default: 1,000,000)
+- `FEE_LIMIT`: Fair use limit for fee consumption per API key in stroops. When exceeded, requests are rejected with `FEE_LIMIT_EXCEEDED` error (when not set, fee tracking is disabled)
+- `API_KEY_HEADER`: HTTP header name used to extract the client API key for fee tracking (default: x-api-key)
 
 ### Relayer Configuration
 
@@ -537,6 +544,39 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels-plugin/call \
 - All relayer IDs must exist in your OpenZeppelin Relayer configuration
 - The `adminSecret` must match the `PLUGIN_ADMIN_SECRET` environment variable
 
+### Get Fee Usage
+
+Query fee consumption for a specific API key (requires `FEE_LIMIT` to be configured):
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels-plugin/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "getFeeUsage",
+        "adminSecret": "your-secret-here",
+        "apiKey": "client-api-key-to-check"
+      }
+    }
+  }'
+```
+
+**_Response:_**
+
+```json
+{
+  "success": true,
+  "data": {
+    "apiKey": "client-api-key-to-check",
+    "feeUsed": 50000,
+    "feeLimit": 100000000
+  },
+  "error": null
+}
+```
+
 ## Responses
 
 All API responses use the standard Relayer envelope format: `success, data, error, metadata`.
@@ -606,6 +646,7 @@ All API responses use the standard Relayer envelope format: `success, data, erro
 - `MANAGEMENT_DISABLED`: Management API not enabled
 - `UNAUTHORIZED`: Invalid admin secret
 - `LOCKED_CONFLICT`: Cannot remove locked channel accounts
+- `FEE_LIMIT_EXCEEDED`: API key has exceeded its fair use fee limit
 
 ## Additional Resources
 
