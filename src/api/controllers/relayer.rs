@@ -12,14 +12,17 @@
 use crate::{
     domain::{
         get_network_relayer, get_network_relayer_by_model, get_relayer_by_id,
-        get_relayer_transaction_by_model, get_transaction_by_id as get_tx_by_id, Relayer,
-        RelayerFactory, RelayerFactoryTrait, SignDataRequest, SignDataResponse,
-        SignTransactionRequest, SignTypedDataRequest, Transaction,
+        get_relayer_transaction_by_model, get_transaction_by_id as get_tx_by_id,
+        GasAbstractionTrait, Relayer, RelayerFactory, RelayerFactoryTrait, SignDataRequest,
+        SignDataResponse, SignTransactionRequest, SignTypedDataRequest, Transaction,
     },
     jobs::JobProducerTrait,
     models::{
-        convert_to_internal_rpc_request, deserialize_policy_for_network_type, ApiError,
-        ApiResponse, CreateRelayerRequest, DefaultAppState, NetworkRepoModel,
+        convert_to_internal_rpc_request, deserialize_policy_for_network_type,
+        transaction::request::{
+            SponsoredTransactionBuildRequest, SponsoredTransactionQuoteRequest,
+        },
+        ApiError, ApiResponse, CreateRelayerRequest, DefaultAppState, NetworkRepoModel,
         NetworkTransactionRequest, NetworkType, NotificationRepoModel, PaginationMeta,
         PaginationQuery, Relayer as RelayerDomainModel, RelayerRepoModel, RelayerRepoUpdater,
         RelayerResponse, Signer as SignerDomainModel, SignerRepoModel, ThinDataAppState,
@@ -828,6 +831,82 @@ where
     Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
 }
 
+/// Estimates fees for a transaction using gas abstraction.
+///
+/// # Arguments
+///
+/// * `relayer_id` - The ID of the relayer.
+/// * `params` - The fee estimate request parameters.
+/// * `state` - The application state containing the relayer repository.
+///
+/// # Returns
+///
+/// The fee estimate result.
+pub async fn quote_sponsored_transaction<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    relayer_id: String,
+    request: SponsoredTransactionQuoteRequest,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+) -> Result<HttpResponse, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
+    relayer.validate_active_state()?;
+
+    request.validate()?;
+
+    let network_relayer = get_network_relayer_by_model(relayer, &state).await?;
+
+    let result = network_relayer.quote_sponsored_transaction(request).await?;
+    Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
+}
+
+/// Prepares a transaction with fee payments using gas abstraction.
+///
+/// # Arguments
+///
+/// * `relayer_id` - The ID of the relayer.
+/// * `params` - The prepare transaction request parameters (network-agnostic).
+/// * `state` - The application state containing the relayer repository.
+///
+/// # Returns
+///
+/// The prepare transaction result.
+pub async fn build_sponsored_transaction<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    relayer_id: String,
+    request: SponsoredTransactionBuildRequest,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+) -> Result<HttpResponse, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
+    relayer.validate_active_state()?;
+
+    request.validate()?;
+
+    let network_relayer = get_network_relayer_by_model(relayer, &state).await?;
+
+    let result = network_relayer.build_sponsored_transaction(request).await?;
+    Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -836,7 +915,7 @@ mod tests {
         models::{
             ApiResponse, CreateRelayerPolicyRequest, CreateRelayerRequest, RelayerEvmPolicy,
             RelayerNetworkPolicyResponse, RelayerNetworkType, RelayerResponse, RelayerSolanaPolicy,
-            RelayerStellarPolicy, SolanaFeePaymentStrategy,
+            RelayerStellarPolicy, SolanaFeePaymentStrategy, StellarFeePaymentStrategy,
         },
         utils::mocks::mockutils::{
             create_mock_app_state, create_mock_network, create_mock_notification,
@@ -926,6 +1005,7 @@ mod tests {
                     tags: None,
                 },
                 passphrase: Some("Test Network ; September 2015".to_string()),
+                horizon_url: Some("https://horizon-testnet.stellar.org".to_string()),
             }),
         }
     }
@@ -1186,6 +1266,11 @@ mod tests {
             max_fee: Some(100),
             timeout_seconds: Some(30),
             concurrent_transactions: None,
+            allowed_tokens: None,
+            fee_payment_strategy: Some(StellarFeePaymentStrategy::Relayer),
+            slippage_percentage: None,
+            fee_margin_percentage: None,
+            swap_config: None,
         }));
 
         let result = create_relayer(request, actix_web::web::ThinData(app_state)).await;
@@ -2204,6 +2289,152 @@ mod tests {
             assert!(msg.contains("Relayer disabled"));
         } else {
             panic!("Expected ForbiddenError for system disabled relayer");
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_quote_sponsored_transaction_relayer_not_found() {
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        let request = SponsoredTransactionQuoteRequest::Stellar(
+            crate::models::StellarFeeEstimateRequestParams {
+                transaction_xdr: Some("test-xdr".to_string()),
+                operations: None,
+                source_account: None,
+                fee_token: "native".to_string(),
+            },
+        );
+
+        let result = quote_sponsored_transaction(
+            "nonexistent-relayer".to_string(),
+            request,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::NotFound(msg)) = result {
+            assert!(msg.contains("Relayer with ID nonexistent-relayer not found"));
+        } else {
+            panic!("Expected NotFound error for nonexistent relayer");
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_quote_sponsored_transaction_relayer_disabled() {
+        let mut relayer = create_mock_relayer("disabled-relayer".to_string(), false);
+        relayer.paused = true;
+        relayer.network_type = NetworkType::Stellar;
+        relayer.policies = crate::models::RelayerNetworkPolicy::Stellar(RelayerStellarPolicy {
+            fee_payment_strategy: Some(StellarFeePaymentStrategy::User),
+            ..Default::default()
+        });
+        let network = create_mock_stellar_network();
+        let signer = create_mock_signer();
+        let app_state = create_mock_app_state(
+            None,
+            Some(vec![relayer]),
+            Some(vec![signer]),
+            Some(vec![network]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = SponsoredTransactionQuoteRequest::Stellar(
+            crate::models::StellarFeeEstimateRequestParams {
+                transaction_xdr: Some("test-xdr".to_string()),
+                operations: None,
+                source_account: None,
+                fee_token: "native".to_string(),
+            },
+        );
+
+        let result = quote_sponsored_transaction(
+            "disabled-relayer".to_string(),
+            request,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::ForbiddenError(msg)) = result {
+            assert!(msg.contains("Relayer paused"));
+        } else {
+            panic!("Expected ForbiddenError for paused relayer");
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_build_sponsored_transaction_relayer_not_found() {
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        let request = SponsoredTransactionBuildRequest::Stellar(
+            crate::models::StellarPrepareTransactionRequestParams {
+                transaction_xdr: Some("test-xdr".to_string()),
+                operations: None,
+                source_account: None,
+                fee_token: "native".to_string(),
+            },
+        );
+
+        let result = build_sponsored_transaction(
+            "nonexistent-relayer".to_string(),
+            request,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::NotFound(msg)) = result {
+            assert!(msg.contains("Relayer with ID nonexistent-relayer not found"));
+        } else {
+            panic!("Expected NotFound error for nonexistent relayer");
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_build_sponsored_transaction_relayer_disabled() {
+        let mut relayer = create_mock_relayer("disabled-relayer".to_string(), false);
+        relayer.paused = true;
+        relayer.network_type = NetworkType::Stellar;
+        relayer.policies = crate::models::RelayerNetworkPolicy::Stellar(RelayerStellarPolicy {
+            fee_payment_strategy: Some(StellarFeePaymentStrategy::User),
+            ..Default::default()
+        });
+        let network = create_mock_stellar_network();
+        let signer = create_mock_signer();
+        let app_state = create_mock_app_state(
+            None,
+            Some(vec![relayer]),
+            Some(vec![signer]),
+            Some(vec![network]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = SponsoredTransactionBuildRequest::Stellar(
+            crate::models::StellarPrepareTransactionRequestParams {
+                transaction_xdr: Some("test-xdr".to_string()),
+                operations: None,
+                source_account: None,
+                fee_token: "native".to_string(),
+            },
+        );
+
+        let result = build_sponsored_transaction(
+            "disabled-relayer".to_string(),
+            request,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::ForbiddenError(msg)) = result {
+            assert!(msg.contains("Relayer paused"));
+        } else {
+            panic!("Expected ForbiddenError for paused relayer");
         }
     }
 }

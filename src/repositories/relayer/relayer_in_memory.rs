@@ -162,6 +162,10 @@ impl RelayerRepository for InMemoryRelayerRepository {
             )))
         }
     }
+
+    fn is_persistent_storage(&self) -> bool {
+        false
+    }
 }
 
 #[async_trait]

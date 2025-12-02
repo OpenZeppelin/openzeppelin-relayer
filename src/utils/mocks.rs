@@ -259,7 +259,7 @@ pub mod mockutils {
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
         mock_job_producer
-            .expect_produce_solana_token_swap_request_job()
+            .expect_produce_token_swap_request_job()
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
         AppState {

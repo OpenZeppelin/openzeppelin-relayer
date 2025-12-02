@@ -12,9 +12,13 @@ use soroban_rs::stellar_rpc_client::{
     GetLedgerEntriesResponse, GetNetworkResponse, GetTransactionResponse, GetTransactionsRequest,
     GetTransactionsResponse, SimulateTransactionResponse,
 };
-use soroban_rs::xdr::{AccountEntry, Hash, LedgerKey, TransactionEnvelope};
+use soroban_rs::xdr::{
+    AccountEntry, ContractId, Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp,
+    LedgerKey, Limits, MuxedAccount, Operation, OperationBody, ReadXdr, ScAddress, ScSymbol, ScVal,
+    SequenceNumber, Transaction, TransactionEnvelope, TransactionV1Envelope, Uint256, VecM,
+};
 #[cfg(test)]
-use soroban_rs::xdr::{AccountId, LedgerKeyAccount, PublicKey, Uint256};
+use soroban_rs::xdr::{AccountId, LedgerKeyAccount, PublicKey};
 use soroban_rs::SorobanTransactionResponse;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -305,6 +309,24 @@ pub trait StellarProviderTrait: Send + Sync {
         params: serde_json::Value,
         id: Option<JsonRpcId>,
     ) -> Result<serde_json::Value, ProviderError>;
+    /// Calls a contract function (read-only, via simulation).
+    ///
+    /// This method invokes a Soroban contract function without submitting a transaction.
+    /// It uses simulation to execute the function and return the result.
+    ///
+    /// # Arguments
+    /// * `contract_address` - The contract address in StrKey format
+    /// * `function_name` - The function name as an ScSymbol
+    /// * `args` - Function arguments as ScVal vector
+    ///
+    /// # Returns
+    /// The function result as an ScVal, or an error if the call fails
+    async fn call_contract(
+        &self,
+        contract_address: &str,
+        function_name: &ScSymbol,
+        args: Vec<ScVal>,
+    ) -> Result<ScVal, ProviderError>;
 }
 
 impl StellarProvider {
@@ -679,6 +701,94 @@ impl StellarProviderTrait for StellarProvider {
             .get("result")
             .cloned()
             .ok_or_else(|| ProviderError::Other("No result field in JSON-RPC response".to_string()))
+    }
+
+    async fn call_contract(
+        &self,
+        contract_address: &str,
+        function_name: &ScSymbol,
+        args: Vec<ScVal>,
+    ) -> Result<ScVal, ProviderError> {
+        // Parse contract address
+        let contract = stellar_strkey::Contract::from_string(contract_address)
+            .map_err(|e| ProviderError::Other(format!("Invalid contract address: {e}")))?;
+        let contract_addr = ScAddress::Contract(ContractId(Hash(contract.0)));
+
+        // Convert args to VecM
+        let args_vec = VecM::try_from(args)
+            .map_err(|e| ProviderError::Other(format!("Failed to convert arguments: {e:?}")))?;
+
+        // Build InvokeHostFunction operation
+        let host_function = HostFunction::InvokeContract(InvokeContractArgs {
+            contract_address: contract_addr,
+            function_name: function_name.clone(),
+            args: args_vec,
+        });
+
+        let operation = Operation {
+            source_account: None,
+            body: OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
+                host_function,
+                auth: VecM::try_from(vec![]).unwrap(),
+            }),
+        };
+
+        // Build a minimal transaction envelope for simulation
+        //
+        // Why simulation instead of direct reads?
+        // In Soroban, contract functions (even read-only ones like decimals()) must be invoked
+        // through the transaction system. Simulation is the standard way to call read-only
+        // functions because it:
+        // 1. Executes the contract function without submitting to the ledger (no fees, no state changes)
+        // 2. Returns the computed result immediately
+        // 3. Works for functions that compute values (not just storage reads)
+        //
+        // Direct storage reads (get_ledger_entries) only work if the value is stored in contract
+        // data storage. For functions that compute values, simulation is required.
+        //
+        // Use a dummy account - simulation doesn't require a real account or signature
+        let dummy_account = MuxedAccount::Ed25519(Uint256([0u8; 32]));
+        let operations: VecM<Operation, 100> = vec![operation].try_into().map_err(|e| {
+            ProviderError::Other(format!("Failed to create operations vector: {e:?}"))
+        })?;
+
+        let tx = Transaction {
+            source_account: dummy_account,
+            fee: 100,
+            seq_num: SequenceNumber(0),
+            cond: soroban_rs::xdr::Preconditions::None,
+            memo: soroban_rs::xdr::Memo::None,
+            operations,
+            ext: soroban_rs::xdr::TransactionExt::V0,
+        };
+
+        let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: VecM::try_from(vec![]).unwrap(),
+        });
+
+        // Simulate the transaction to get the result (read-only execution, no ledger submission)
+        let sim_response = self.simulate_transaction_envelope(&envelope).await?;
+
+        // Check for simulation errors
+        if let Some(error) = sim_response.error {
+            return Err(ProviderError::Other(format!(
+                "Contract invocation simulation failed: {error}",
+            )));
+        }
+
+        // Extract result from simulation response
+        if sim_response.results.is_empty() {
+            return Err(ProviderError::Other(
+                "Simulation returned no results".to_string(),
+            ));
+        }
+
+        // Parse the XDR result as ScVal
+        let result_xdr = &sim_response.results[0].xdr;
+        ScVal::from_xdr_base64(result_xdr, Limits::none()).map_err(|e| {
+            ProviderError::Other(format!("Failed to parse simulation result XDR: {e}"))
+        })
     }
 }
 

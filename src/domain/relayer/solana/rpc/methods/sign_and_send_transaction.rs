@@ -26,10 +26,10 @@ use tracing::{debug, error};
 use crate::{
     models::{
         produce_solana_rpc_webhook_payload, EncodedSerializedTransaction, NetworkTransactionData,
-        NetworkTransactionRequest, SignAndSendTransactionRequestParams,
-        SignAndSendTransactionResult, SolanaFeePaymentStrategy, SolanaTransactionData,
-        SolanaTransactionRequest, SolanaWebhookRpcPayload, TransactionRepoModel, TransactionStatus,
-        TransactionUpdateRequest,
+        NetworkTransactionRequest, SolanaFeePaymentStrategy,
+        SolanaSignAndSendTransactionRequestParams, SolanaSignAndSendTransactionResult,
+        SolanaTransactionData, SolanaTransactionRequest, SolanaWebhookRpcPayload,
+        TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{Repository, TransactionRepository},
     services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
@@ -47,8 +47,8 @@ where
 {
     pub(crate) async fn sign_and_send_transaction_impl(
         &self,
-        params: SignAndSendTransactionRequestParams,
-    ) -> Result<SignAndSendTransactionResult, SolanaRpcError> {
+        params: SolanaSignAndSendTransactionRequestParams,
+    ) -> Result<SolanaSignAndSendTransactionResult, SolanaRpcError> {
         debug!("Processing sign and send transaction request");
         let transaction_request = Transaction::try_from(params.transaction.clone())?;
 
@@ -170,7 +170,7 @@ where
 
         let serialized_transaction = EncodedSerializedTransaction::try_from(&signed_transaction)?;
 
-        let result = SignAndSendTransactionResult {
+        let result = SolanaSignAndSendTransactionResult {
             transaction: serialized_transaction,
             signature: send_signature.to_string(),
             id: tx_repo_model.id.clone(),
@@ -339,7 +339,7 @@ mod tests {
             Arc::new(tx_repo_mock),
         );
 
-        let params = SignAndSendTransactionRequestParams {
+        let params = SolanaSignAndSendTransactionRequestParams {
             transaction: encoded_tx,
         };
 
@@ -512,7 +512,7 @@ mod tests {
             Arc::new(ctx.transaction_repository),
         );
 
-        let params = SignAndSendTransactionRequestParams {
+        let params = SolanaSignAndSendTransactionRequestParams {
             transaction: ctx.encoded_tx,
         };
 
@@ -675,7 +675,7 @@ mod tests {
             Arc::new(ctx.transaction_repository),
         );
 
-        let params = SignAndSendTransactionRequestParams {
+        let params = SolanaSignAndSendTransactionRequestParams {
             transaction: ctx.encoded_tx,
         };
 
@@ -853,7 +853,7 @@ mod tests {
             Arc::new(ctx.transaction_repository),
         );
 
-        let params = SignAndSendTransactionRequestParams {
+        let params = SolanaSignAndSendTransactionRequestParams {
             transaction: ctx.encoded_tx,
         };
 
@@ -926,7 +926,7 @@ mod tests {
         );
 
         let result = rpc
-            .sign_and_send_transaction_impl(SignAndSendTransactionRequestParams {
+            .sign_and_send_transaction_impl(SolanaSignAndSendTransactionRequestParams {
                 transaction: encoded_tx,
             })
             .await;
@@ -972,7 +972,7 @@ mod tests {
         );
 
         let result = rpc
-            .sign_and_send_transaction_impl(SignAndSendTransactionRequestParams {
+            .sign_and_send_transaction_impl(SolanaSignAndSendTransactionRequestParams {
                 transaction: encoded_tx,
             })
             .await;
@@ -1069,7 +1069,7 @@ mod tests {
             Arc::new(tx_repo_mock),
         );
 
-        let params = SignAndSendTransactionRequestParams {
+        let params = SolanaSignAndSendTransactionRequestParams {
             transaction: encoded_tx,
         };
 

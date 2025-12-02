@@ -83,7 +83,7 @@ zeroize = "1.8"
 subtle = "2.6"
 aes-gcm = "0.10"
 ed25519-dalek = "2.2"
-stellar-strkey = "0.0.13"
+stellar-strkey = "0.0.14"
 soroban-rs = "0.2.6"
 jsonrpsee-core = "0.20.4"
 p256 = { version = "0.13.2" }

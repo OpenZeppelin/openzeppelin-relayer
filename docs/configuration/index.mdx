@@ -232,17 +232,25 @@ Available configuration fields
 <a name="network_policies"></a>Policies
 | Network type | Policy | Type | Description |
 | --- | --- | --- | --- |
-| solana, evm | min_balance | `unsigned 128` | Minimum balance (in lamports or wei) required for the relayer to operate. Optional. |
+| solana, evm, stellar | min_balance | `unsigned 128` (evm/solana), `unsigned 64` (stellar) | Minimum balance (in lamports, wei, or stroops) required for the relayer to operate. Optional. |
 | solana | fee_payment_strategy | `enum(user,relayer)` | Specifies who pays the fee. "user" (default) means the sender pays; "relayer" means the relayer pays. For "user", RPC methods add an instruction to transfer SPL tokens (calculated from the current SOL price plus a configurable margin) from the user to the relayer, ensuring fees are sustainably covered in tokens rather than SOL. |
+| stellar | fee_payment_strategy | `enum(user,relayer)` | Specifies who pays the fee. "user" enables sponsored transactions (users pay fees in tokens), "relayer" means relayer pays all fees in XLM. Optional. |
 | solana | swap_config | `SwapConfig` | Optional object configuring automated token‐swaps on Solana. |
+| stellar | swap_config | `SwapConfig` | Optional object configuring automated token swaps on Stellar. Includes strategies (order-book, soroswap), cron_schedule, and min_balance_threshold. |
 | solana | fee_margin_percentage | `f32` | Additional margin percentage added to estimated transaction fees to account for price fluctuations. For example, a value of 10 will add 10% to estimated fees. Optional. |
+| stellar | fee_margin_percentage | `f32` | Fee margin percentage applied when converting XLM fees to token amounts for sponsored transactions. Optional. |
+| stellar | slippage_percentage | `f32` | Maximum slippage percentage allowed when swapping tokens via DEX for sponsored transactions. Optional. |
 | solana | max_allowed_fee_lamports | `unsigned 64` | Maximum allowed fee (in lamports) for a transaction. Optional. |
 | solana | allowed_tokens | `Vector<AllowedToken>` | List of allowed tokens. Only these tokens are supported if provided. Optional. |
+| stellar | allowed_tokens | `Vector<StellarAllowedToken>` | List of tokens allowed for fee payments in sponsored transactions. Each token includes asset, max_allowed_fee (optional), and swap_config (optional). Optional. |
 | solana | allowed_programs | `Vector<String>` | List of allowed programs by their identifiers. Only these programs are supported if provided. |
 | solana | allowed_accounts | `Vector<String>` | List of allowed accounts by their public keys. The relayer will only operate with these accounts if provided. |
 | solana | disallowed_accounts | `Vector<String>` | List of disallowed accounts by their public keys. These accounts will be explicitly blocked. |
 | solana | max_tx_data_size | `unsigned 16` | Maximum transaction size. Optional. |
 | solana | max_signatures | `unsigned 8` | Maximum supported signatures. Optional. |
+| stellar | max_fee | `unsigned 32` | Maximum transaction fee in stroops (1 XLM = 10,000,000 stroops) the relayer is willing to pay. Optional. |
+| stellar | timeout_seconds | `unsigned 64` | Transaction timeout in seconds. Optional. |
+| stellar | concurrent_transactions | `bool` | Enable concurrent transaction processing. When enabled, bypasses the lane gating mechanism that normally ensures sequential processing for each relayer. Only enable this when your relayer manages transactions from multiple accounts with independent sequence number pools. Optional. |
 | evm | gas_price_cap | `unsigned 128` | Specify a maximum gas price for every transaction sent with the Relayer. When enabled, any transaction exceeding the cap will have its gasPrice or maxFeePerGas overwritten. (Optional) |
 | evm | gas_limit_estimation | `bool` | Automatic gas_limit calculation. Enabled by default. (Optional) |
 | evm | whitelist_receivers | `Vector<String>` | A list of authorized contracts for each transaction sent using the Relayer. Transactions will be rejected if the destination address is not on the list. (Optional) |

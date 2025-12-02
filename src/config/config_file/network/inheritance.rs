@@ -420,7 +420,8 @@ mod tests {
                 is_testnet: None,
                 tags: None,
             },
-            passphrase: None, // Will inherit from parent
+            passphrase: None,  // Will inherit from parent
+            horizon_url: None, // Will inherit from parent
         };
 
         let result = resolver.resolve_stellar_inheritance(&child_config, "child", "parent");

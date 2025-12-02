@@ -5,10 +5,33 @@ mod json_rpc;
 pub use json_rpc::*;
 
 mod solana;
-pub use solana::*;
+pub use solana::{
+    EncodedSerializedTransaction, FeeEstimateRequestParams as SolanaFeeEstimateRequestParams,
+    FeeEstimateResult as SolanaFeeEstimateResult,
+    GetFeaturesEnabledRequestParams as SolanaGetFeaturesEnabledRequestParams,
+    GetFeaturesEnabledResult as SolanaGetFeaturesEnabledResult,
+    GetSupportedTokensItem as SolanaGetSupportedTokensItem,
+    GetSupportedTokensRequestParams as SolanaGetSupportedTokensRequestParams,
+    GetSupportedTokensResult as SolanaGetSupportedTokensResult,
+    PrepareTransactionRequestParams as SolanaPrepareTransactionRequestParams,
+    PrepareTransactionResult as SolanaPrepareTransactionResult,
+    SignAndSendTransactionRequestParams as SolanaSignAndSendTransactionRequestParams,
+    SignAndSendTransactionResult as SolanaSignAndSendTransactionResult,
+    SignTransactionRequestParams as SolanaSignTransactionRequestParams,
+    SignTransactionResult as SolanaSignTransactionResult, SolanaEncodingError, SolanaRpcMethod,
+    SolanaRpcRequest, SolanaRpcResult,
+    TransferTransactionRequestParams as SolanaTransferTransactionRequestParams,
+    TransferTransactionResult as SolanaTransferTransactionResult,
+};
 
 mod stellar;
-pub use stellar::*;
+pub use stellar::{
+    FeeEstimateRequestParams as StellarFeeEstimateRequestParams,
+    FeeEstimateResult as StellarFeeEstimateResult,
+    PrepareTransactionRequestParams as StellarPrepareTransactionRequestParams,
+    PrepareTransactionResult as StellarPrepareTransactionResult, StellarRpcMethod,
+    StellarRpcRequest, StellarRpcResult,
+};
 
 mod evm;
 pub use evm::*;
@@ -442,7 +465,8 @@ mod tests {
             NetworkRpcRequest::Stellar(stellar_request) => match stellar_request {
                 StellarRpcRequest::RawRpcRequest { method: _, params } => {
                     assert_eq!(params, serde_json::Value::String("test_params".to_string()));
-                }
+                } // StellarRpcRequest now only has RawRpcRequest variant
+                  // FeeEstimate, PrepareTransaction, and GetSupportedTokens are handled via REST endpoints
             },
             _ => unreachable!("Expected Stellar request"),
         }

@@ -27,6 +27,13 @@ pub struct SolanaRpcHandler<T> {
 }
 
 impl<T: SolanaRpcMethods> SolanaRpcHandler<T> {
+    /// Gets a reference to the underlying RPC methods implementation.
+    pub fn rpc_methods(&self) -> &T {
+        &self.rpc_methods
+    }
+}
+
+impl<T: SolanaRpcMethods> SolanaRpcHandler<T> {
     /// Creates a new `SolanaRpcHandler` with the specified RPC methods.
     ///
     /// # Arguments
@@ -127,12 +134,13 @@ mod tests {
     use crate::{
         domain::MockSolanaRpcMethods,
         models::{
-            EncodedSerializedTransaction, FeeEstimateRequestParams, FeeEstimateResult,
-            GetFeaturesEnabledRequestParams, GetFeaturesEnabledResult, JsonRpcId,
-            PrepareTransactionRequestParams, PrepareTransactionResult,
-            SignAndSendTransactionRequestParams, SignAndSendTransactionResult,
-            SignTransactionRequestParams, SignTransactionResult, TransferTransactionRequestParams,
-            TransferTransactionResult,
+            EncodedSerializedTransaction, JsonRpcId, SolanaFeeEstimateRequestParams,
+            SolanaFeeEstimateResult, SolanaGetFeaturesEnabledRequestParams,
+            SolanaGetFeaturesEnabledResult, SolanaPrepareTransactionRequestParams,
+            SolanaPrepareTransactionResult, SolanaSignAndSendTransactionRequestParams,
+            SolanaSignAndSendTransactionResult, SolanaSignTransactionRequestParams,
+            SolanaSignTransactionResult, SolanaTransferTransactionRequestParams,
+            SolanaTransferTransactionResult,
         },
     };
 
@@ -144,12 +152,12 @@ mod tests {
         let mut mock_rpc_methods = MockSolanaRpcMethods::new();
         mock_rpc_methods
             .expect_fee_estimate()
-            .with(predicate::eq(FeeEstimateRequestParams {
+            .with(predicate::eq(SolanaFeeEstimateRequestParams {
                 transaction: EncodedSerializedTransaction::new("test_transaction".to_string()),
                 fee_token: "test_token".to_string(),
             }))
             .returning(|_| {
-                Ok(FeeEstimateResult {
+                Ok(SolanaFeeEstimateResult {
                     estimated_fee: "0".to_string(),
                     conversion_rate: "0".to_string(),
                 })
@@ -160,7 +168,7 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             id: Some(JsonRpcId::Number(1)),
             params: NetworkRpcRequest::Solana(SolanaRpcRequest::FeeEstimate(
-                FeeEstimateRequestParams {
+                SolanaFeeEstimateRequestParams {
                     transaction: EncodedSerializedTransaction::new("test_transaction".to_string()),
                     fee_token: "test_token".to_string(),
                 },
@@ -174,7 +182,7 @@ mod tests {
         assert_eq!(
             json_response.result,
             Some(NetworkRpcResult::Solana(SolanaRpcResult::FeeEstimate(
-                FeeEstimateResult {
+                SolanaFeeEstimateResult {
                     estimated_fee: "0".to_string(),
                     conversion_rate: "0".to_string(),
                 }
@@ -187,9 +195,9 @@ mod tests {
         let mut mock_rpc_methods = MockSolanaRpcMethods::new();
         mock_rpc_methods
             .expect_get_features_enabled()
-            .with(predicate::eq(GetFeaturesEnabledRequestParams {}))
+            .with(predicate::eq(SolanaGetFeaturesEnabledRequestParams {}))
             .returning(|_| {
-                Ok(GetFeaturesEnabledResult {
+                Ok(SolanaGetFeaturesEnabledResult {
                     features: vec!["gasless".to_string()],
                 })
             })
@@ -199,7 +207,7 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             id: Some(JsonRpcId::Number(1)),
             params: NetworkRpcRequest::Solana(SolanaRpcRequest::GetFeaturesEnabled(
-                GetFeaturesEnabledRequestParams {},
+                SolanaGetFeaturesEnabledRequestParams {},
             )),
         };
 
@@ -210,7 +218,7 @@ mod tests {
         assert_eq!(
             json_response.result,
             Some(NetworkRpcResult::Solana(
-                SolanaRpcResult::GetFeaturesEnabled(GetFeaturesEnabledResult {
+                SolanaRpcResult::GetFeaturesEnabled(SolanaGetFeaturesEnabledResult {
                     features: vec!["gasless".to_string()],
                 })
             ))
@@ -227,11 +235,11 @@ mod tests {
 
         mock_rpc_methods
             .expect_sign_transaction()
-            .with(predicate::eq(SignTransactionRequestParams {
+            .with(predicate::eq(SolanaSignTransactionRequestParams {
                 transaction: EncodedSerializedTransaction::new(mock_transaction.clone()),
             }))
             .returning(move |_| {
-                Ok(SignTransactionResult {
+                Ok(SolanaSignTransactionResult {
                     transaction: EncodedSerializedTransaction::new(mock_transaction.clone()),
                     signature: mock_signature.to_string(),
                 })
@@ -244,7 +252,7 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             id: Some(JsonRpcId::Number(1)),
             params: NetworkRpcRequest::Solana(SolanaRpcRequest::SignTransaction(
-                SignTransactionRequestParams {
+                SolanaSignTransactionRequestParams {
                     transaction: EncodedSerializedTransaction::new("AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string()),
                 },
             )),
@@ -277,11 +285,11 @@ mod tests {
 
         mock_rpc_methods
             .expect_sign_and_send_transaction()
-            .with(predicate::eq(SignAndSendTransactionRequestParams {
+            .with(predicate::eq(SolanaSignAndSendTransactionRequestParams {
                 transaction: EncodedSerializedTransaction::new(mock_transaction.clone()),
             }))
             .returning(move |_| {
-                Ok(SignAndSendTransactionResult {
+                Ok(SolanaSignAndSendTransactionResult {
                     transaction: EncodedSerializedTransaction::new(mock_transaction.clone()),
                     signature: mock_signature.to_string(),
                     id: "123".to_string(),
@@ -295,7 +303,7 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             id: Some(JsonRpcId::Number(1)),
             params: NetworkRpcRequest::Solana(SolanaRpcRequest::SignAndSendTransaction(
-                SignAndSendTransactionRequestParams {
+                SolanaSignAndSendTransactionRequestParams {
                     transaction: EncodedSerializedTransaction::new("AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string()),
                 },
             )),
@@ -326,14 +334,14 @@ mod tests {
 
         mock_rpc_methods
             .expect_transfer_transaction()
-            .with(predicate::eq(TransferTransactionRequestParams {
+            .with(predicate::eq(SolanaTransferTransactionRequestParams {
                 source: "C6VBV1EK2Jx7kFgCkCD5wuDeQtEH8ct2hHGUPzEhUSc8".to_string(),
                 destination: "C6VBV1EK2Jx7kFgCkCD5wuDeQtEH8ct2hHGUPzEhUSc8".to_string(),
                 amount: 10,
                 token: "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr".to_string(), // noboost
             }))
             .returning(move |_| {
-                Ok(TransferTransactionResult {
+                Ok(SolanaTransferTransactionResult {
                     fee_in_lamports: "1005000".to_string(),
                     fee_in_spl: "1005000".to_string(),
                     fee_token: "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr".to_string(), // noboost
@@ -349,7 +357,7 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             id: Some(JsonRpcId::Number(1)),
             params: NetworkRpcRequest::Solana(SolanaRpcRequest::TransferTransaction(
-                TransferTransactionRequestParams {
+                SolanaTransferTransactionRequestParams {
                     source: "C6VBV1EK2Jx7kFgCkCD5wuDeQtEH8ct2hHGUPzEhUSc8".to_string(),
                     destination: "C6VBV1EK2Jx7kFgCkCD5wuDeQtEH8ct2hHGUPzEhUSc8".to_string(),
                     amount: 10,
@@ -387,12 +395,12 @@ mod tests {
 
         mock_rpc_methods
             .expect_prepare_transaction()
-            .with(predicate::eq(PrepareTransactionRequestParams {
+            .with(predicate::eq(SolanaPrepareTransactionRequestParams {
                 transaction: EncodedSerializedTransaction::new(mock_transaction.clone()),
                 fee_token: "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr".to_string(),
             }))
             .returning(move |_| {
-                Ok(PrepareTransactionResult {
+                Ok(SolanaPrepareTransactionResult {
                     fee_in_lamports: "1005000".to_string(),
                     fee_in_spl: "1005000".to_string(),
                     fee_token: "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr".to_string(),
@@ -408,7 +416,7 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             id: Some(JsonRpcId::Number(1)),
             params: NetworkRpcRequest::Solana(SolanaRpcRequest::PrepareTransaction(
-                PrepareTransactionRequestParams {
+                SolanaPrepareTransactionRequestParams {
                     transaction: EncodedSerializedTransaction::new("AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string()),
                     fee_token: "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr".to_string(),
                 },

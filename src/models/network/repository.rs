@@ -206,6 +206,7 @@ mod tests {
                 tags: Some(vec!["stellar".to_string()]),
             },
             passphrase: passphrase.map(|s| s.to_string()),
+            horizon_url: Some("https://horizon.stellar.org".to_string()),
         }
     }
 

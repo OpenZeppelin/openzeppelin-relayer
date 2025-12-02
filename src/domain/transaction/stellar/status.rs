@@ -8,6 +8,7 @@ use tracing::{debug, info, warn};
 
 use super::{is_final_state, StellarRelayerTransaction};
 use crate::{
+    domain::is_unsubmitted_transaction,
     jobs::JobProducerTrait,
     models::{
         NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
@@ -17,7 +18,7 @@ use crate::{
     services::{provider::StellarProviderTrait, signer::Signer},
 };
 
-impl<R, T, J, S, P, C> StellarRelayerTransaction<R, T, J, S, P, C>
+impl<R, T, J, S, P, C, D> StellarRelayerTransaction<R, T, J, S, P, C, D>
 where
     R: Repository<RelayerRepoModel, String> + Send + Sync,
     T: TransactionRepository + Send + Sync,
@@ -25,6 +26,7 @@ where
     S: Signer + Send + Sync,
     P: StellarProviderTrait + Send + Sync,
     C: TransactionCounterTrait + Send + Sync,
+    D: crate::services::stellar_dex::StellarDexServiceTrait + Send + Sync + 'static,
 {
     /// Main status handling method with robust error handling.
     /// This method checks transaction status and handles lane cleanup for finalized transactions.
@@ -32,7 +34,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!(tx_id = %tx.id, status = ?tx.status, "handling transaction status");
+        debug!(tx_id = %tx.id, status = ?tx.status, "handling transaction status");
 
         // Early exit for final states - no need to check
         if is_final_state(&tx.status) {
@@ -90,7 +92,16 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        let stellar_hash = self.parse_and_validate_hash(&tx)?;
+        let stellar_hash = match self.parse_and_validate_hash(&tx) {
+            Ok(hash) => hash,
+            Err(e) => {
+                warn!(tx_id = %tx.id, error = ?e, "failed to parse and validate hash");
+                if is_unsubmitted_transaction(&tx.status) {
+                    return Ok(tx);
+                }
+                return Err(e);
+            }
+        };
 
         let provider_response = match self.provider().get_transaction(&stellar_hash).await {
             Ok(response) => response,

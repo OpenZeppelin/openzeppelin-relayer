@@ -1079,7 +1079,7 @@ mod tests {
                 RelayerEvmPolicy, RelayerNetworkPolicy, RelayerSolanaPolicy, RelayerStellarPolicy,
             },
             transaction::stellar::AssetSpec,
-            EncodedSerializedTransaction,
+            EncodedSerializedTransaction, StellarFeePaymentStrategy,
         },
     };
 
@@ -1845,6 +1845,7 @@ mod tests {
                     tags: Some(vec!["mainnet".to_string()]),
                 },
                 passphrase: Some("Public Global Stellar Network ; September 2015".to_string()),
+                horizon_url: Some("https://horizon.stellar.org".to_string()),
             }),
         };
 
@@ -2104,6 +2105,7 @@ mod tests {
                 tags: None,
             },
             passphrase: Some("Test SDF Network ; September 2015".to_string()),
+            horizon_url: Some("https://horizon-testnet.stellar.org".to_string()),
         });
 
         let network_model = NetworkRepoModel {
@@ -2125,6 +2127,11 @@ mod tests {
                 timeout_seconds: None,
                 min_balance: Some(DEFAULT_STELLAR_MIN_BALANCE),
                 concurrent_transactions: None,
+                allowed_tokens: None,
+                fee_payment_strategy: Some(StellarFeePaymentStrategy::Relayer),
+                slippage_percentage: None,
+                fee_margin_percentage: None,
+                swap_config: None,
             }),
             address: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
             notification_id: None,
