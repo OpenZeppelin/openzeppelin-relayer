@@ -6,9 +6,8 @@ use async_trait::async_trait;
 use solana_sdk::signature::Signature;
 
 use crate::{
-    domain::{SignTransactionResponse, SignTypedDataRequest},
-    models::{Address, NetworkTransactionData, SignerError},
-    services::{signer::Signer, AwsKmsService, AwsKmsSolanaService},
+    models::{Address, SignerError},
+    services::{AwsKmsService, AwsKmsSolanaService},
 };
 
 use super::SolanaSignTrait;
@@ -60,56 +59,11 @@ impl<T: AwsKmsSolanaService> SolanaSignTrait for AwsKmsSigner<T> {
     }
 }
 
-#[async_trait]
-impl<T: AwsKmsSolanaService> Signer for AwsKmsSigner<T> {
-    async fn address(&self) -> Result<Address, SignerError> {
-        self.aws_kms_service
-            .get_solana_address()
-            .await
-            .map_err(|e| SignerError::SigningError(e.to_string()))
-    }
-
-    async fn sign_transaction(
-        &self,
-        _transaction: NetworkTransactionData,
-    ) -> Result<SignTransactionResponse, SignerError> {
-        Err(SignerError::NotImplemented(
-            "sign_transaction is not implemented".to_string(),
-        ))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::services::{AwsKmsError, MockAwsKmsSolanaService};
     use mockall::predicate::*;
-
-    #[tokio::test]
-    async fn test_address() {
-        let mut mock_service = MockAwsKmsSolanaService::new();
-
-        mock_service
-            .expect_get_solana_address()
-            .times(1)
-            .returning(|| {
-                Box::pin(async {
-                    Ok(Address::Solana(
-                        "BavUBpkD77FABnevMkBVqV8BDHv7gX8sSoYYJY9WU9L5".to_string(),
-                    ))
-                })
-            });
-
-        let signer = AwsKmsSigner::new_for_testing(mock_service);
-        let result = signer.address().await.unwrap();
-
-        match result {
-            Address::Solana(addr) => {
-                assert_eq!(addr, "BavUBpkD77FABnevMkBVqV8BDHv7gX8sSoYYJY9WU9L5");
-            }
-            _ => panic!("Expected Solana address"),
-        }
-    }
 
     #[tokio::test]
     async fn test_pubkey() {
@@ -198,29 +152,6 @@ mod tests {
         match result {
             Err(SignerError::SigningError(msg)) => {
                 assert!(msg.contains("Failed to create signature from bytes"));
-            }
-            _ => panic!("Expected SigningError error variant"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_address_error_handling() {
-        let mut mock_service = MockAwsKmsSolanaService::new();
-
-        mock_service
-            .expect_get_solana_address()
-            .times(1)
-            .returning(|| {
-                Box::pin(async { Err(AwsKmsError::GetError("Invalid public key".to_string())) })
-            });
-
-        let signer = AwsKmsSigner::new_for_testing(mock_service);
-        let result = signer.address().await;
-
-        assert!(result.is_err());
-        match result {
-            Err(SignerError::SigningError(msg)) => {
-                assert!(msg.contains("Invalid public key"));
             }
             _ => panic!("Expected SigningError error variant"),
         }
