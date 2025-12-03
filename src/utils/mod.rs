@@ -26,6 +26,9 @@ pub use der::*;
 mod secp256k;
 pub use secp256k::*;
 
+mod ed25519;
+pub use ed25519::*;
+
 mod redis;
 pub use redis::*;
 

@@ -257,7 +257,7 @@ pub struct GetEventsRequest {
     pub start: EventStart,
     pub event_type: Option<EventType>,
     pub contract_ids: Vec<String>,
-    pub topics: Vec<String>,
+    pub topics: Vec<Vec<String>>,
     pub limit: Option<usize>,
 }
 

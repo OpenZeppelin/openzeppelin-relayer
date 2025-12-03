@@ -1,12 +1,14 @@
 // openzeppelin-relayer/src/services/signer/stellar/mod.rs
-//! Stellar signer implementation (local keystore, Google Cloud KMS and Turnkey)
+//! Stellar signer implementation (local keystore, Google Cloud KMS, AWS KMS, and Turnkey)
 
+mod aws_kms_signer;
 mod google_cloud_kms_signer;
 mod local_signer;
 mod turnkey_signer;
 mod vault_signer;
 
 use async_trait::async_trait;
+use aws_kms_signer::*;
 use google_cloud_kms_signer::*;
 use local_signer::*;
 use turnkey_signer::*;
@@ -20,7 +22,7 @@ use crate::{
     },
     services::{
         signer::{SignXdrTransactionResponseStellar, Signer, SignerError, SignerFactoryError},
-        GoogleCloudKmsService, TurnkeyService, VaultConfig, VaultService,
+        AwsKmsService, GoogleCloudKmsService, TurnkeyService, VaultConfig, VaultService,
     },
 };
 
@@ -57,6 +59,7 @@ pub enum StellarSigner {
     Local(Box<LocalSigner>),
     Vault(VaultSigner<VaultService>),
     GoogleCloudKms(GoogleCloudKmsSigner),
+    AwsKms(AwsKmsSigner),
     Turnkey(TurnkeySigner),
 }
 
@@ -67,6 +70,7 @@ impl Signer for StellarSigner {
             Self::Local(s) => s.address().await,
             Self::Vault(s) => s.address().await,
             Self::GoogleCloudKms(s) => s.address().await,
+            Self::AwsKms(s) => s.address().await,
             Self::Turnkey(s) => s.address().await,
         }
     }
@@ -79,6 +83,7 @@ impl Signer for StellarSigner {
             Self::Local(s) => s.sign_transaction(tx).await,
             Self::Vault(s) => s.sign_transaction(tx).await,
             Self::GoogleCloudKms(s) => s.sign_transaction(tx).await,
+            Self::AwsKms(s) => s.sign_transaction(tx).await,
             Self::Turnkey(s) => s.sign_transaction(tx).await,
         }
     }
@@ -101,6 +106,10 @@ impl StellarSignTrait for StellarSigner {
                     .await
             }
             Self::GoogleCloudKms(s) => {
+                s.sign_xdr_transaction(unsigned_xdr, network_passphrase)
+                    .await
+            }
+            Self::AwsKms(s) => {
                 s.sign_xdr_transaction(unsigned_xdr, network_passphrase)
                     .await
             }
@@ -153,8 +162,16 @@ impl StellarSignerFactory {
                     .map_err(|e| SignerFactoryError::CreationFailed(e.to_string()))?;
                 StellarSigner::Turnkey(TurnkeySigner::new(service))
             }
-            SignerConfig::AwsKms(_) => {
-                return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()))
+            SignerConfig::AwsKms(config) => {
+                let aws_kms_service = futures::executor::block_on(AwsKmsService::new(
+                    config.clone(),
+                ))
+                .map_err(|e| {
+                    SignerFactoryError::InvalidConfig(format!(
+                        "Failed to create AWS KMS service: {e}"
+                    ))
+                })?;
+                StellarSigner::AwsKms(AwsKmsSigner::new(aws_kms_service))
             }
             SignerConfig::VaultTransit(_) => {
                 return Err(SignerFactoryError::UnsupportedType("Vault Transit".into()))

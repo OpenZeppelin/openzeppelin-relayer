@@ -10,9 +10,9 @@
 //!   ├── Local (Raw Key Signer)
 //!   ├── Vault (HashiCorp Vault backend)
 //!   ├── VaultTransit (HashiCorp Vault Transit signer)
-//!   |── GoogleCloudKms (Google Cloud KMS backend)
+//!   ├── GoogleCloudKms (Google Cloud KMS backend)
+//!   ├── AwsKms (AWS KMS backend)
 //!   └── Turnkey (Turnkey backend)
-
 //! ```
 use async_trait::async_trait;
 mod local_signer;
@@ -33,6 +33,9 @@ use cdp_signer::*;
 mod google_cloud_kms_signer;
 use google_cloud_kms_signer::*;
 
+mod aws_kms_signer;
+use aws_kms_signer::*;
+
 use solana_program::message::compiled_instruction::CompiledInstruction;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
@@ -50,7 +53,9 @@ use crate::{
         Address, EncodedSerializedTransaction, NetworkTransactionData, Signer as SignerDomainModel,
         SignerConfig, SignerRepoModel, SignerType, TransactionRepoModel, VaultSignerConfig,
     },
-    services::{CdpService, GoogleCloudKmsService, TurnkeyService, VaultConfig, VaultService},
+    services::{
+        AwsKmsService, CdpService, GoogleCloudKmsService, TurnkeyService, VaultConfig, VaultService,
+    },
 };
 use eyre::Result;
 
@@ -66,6 +71,7 @@ pub enum SolanaSigner {
     Turnkey(TurnkeySigner),
     Cdp(CdpSigner),
     GoogleCloudKms(GoogleCloudKmsSigner),
+    AwsKms(AwsKmsSigner),
 }
 
 #[async_trait]
@@ -214,6 +220,7 @@ impl SolanaSignTrait for SolanaSigner {
             Self::Turnkey(signer) => signer.pubkey().await,
             Self::Cdp(signer) => signer.pubkey().await,
             Self::GoogleCloudKms(signer) => signer.pubkey().await,
+            Self::AwsKms(signer) => signer.pubkey().await,
         }
     }
 
@@ -225,6 +232,7 @@ impl SolanaSignTrait for SolanaSigner {
             Self::Turnkey(signer) => Ok(signer.sign(message).await?),
             Self::Cdp(signer) => Ok(signer.sign(message).await?),
             Self::GoogleCloudKms(signer) => Ok(signer.sign(message).await?),
+            Self::AwsKms(signer) => Ok(signer.sign(message).await?),
         }
     }
 }
@@ -272,8 +280,16 @@ impl SolanaSignerFactory {
                     vault_service,
                 )));
             }
-            SignerConfig::AwsKms(_) => {
-                return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()));
+            SignerConfig::AwsKms(config) => {
+                let aws_kms_service = futures::executor::block_on(AwsKmsService::new(
+                    config.clone(),
+                ))
+                .map_err(|e| {
+                    SignerFactoryError::InvalidConfig(format!(
+                        "Failed to create AWS KMS service: {e}"
+                    ))
+                })?;
+                return Ok(SolanaSigner::AwsKms(AwsKmsSigner::new(aws_kms_service)));
             }
             SignerConfig::Cdp(config) => {
                 let cdp_signer = CdpSigner::new(config.clone()).map_err(|e| {
@@ -810,7 +826,7 @@ mod solana_signer_factory_tests {
     }
 
     #[test]
-    fn test_create_solana_signer_aws_kms_unsupported() {
+    fn test_create_solana_signer_aws_kms_supported() {
         let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::AwsKms(AwsKmsSignerConfig {
@@ -820,14 +836,7 @@ mod solana_signer_factory_tests {
         };
 
         let result = SolanaSignerFactory::create_solana_signer(&signer_model);
-        assert!(result.is_err());
-        let error = result.unwrap_err();
-        match error {
-            SignerFactoryError::UnsupportedType(msg) => {
-                assert_eq!(msg, "AWS KMS");
-            }
-            _ => panic!("Expected UnsupportedType error, got {:?}", error),
-        }
+        assert!(result.is_ok(), "AWS KMS should be supported for Solana");
     }
 
     #[cfg(test)]

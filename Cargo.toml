@@ -82,7 +82,7 @@ libsodium-sys = "0.2.7"
 zeroize = "1.8"
 subtle = "2.6"
 aes-gcm = "0.10"
-ed25519-dalek = "2.2"
+ed25519-dalek = { version = "2.2", features = ["pkcs8"] }
 stellar-strkey = "0.0.14"
 soroban-rs = "0.2.6"
 jsonrpsee-core = "0.20.4"

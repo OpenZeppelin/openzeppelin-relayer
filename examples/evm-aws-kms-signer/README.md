@@ -1,10 +1,8 @@
-# Using AWS KMS for Secure Transaction Signing in OpenZeppelin Relayer
+# Using AWS KMS for Secure EVM Transaction Signing in OpenZeppelin Relayer
 
-This example demonstrates how to use AWS KMS hosted private key to securely sign transactions in OpenZeppelin Relayer.
+This example demonstrates how to use AWS KMS hosted secp256k1 private key to securely sign EVM transactions in OpenZeppelin Relayer.
 
->>[!IMPORTANT]
->> As of June 2025, AWS KMS does not yet support ED25519 signing scheme or secp256r1 curve. Therefore, the AWS KMS support is only offered to EVM chains and potentially other chains, that allow signing over secp256k1.
->>
+> **Note**: For Stellar and Solana networks, use an Ed25519 key (`ECC_EDWARDS_ED25519`). See the `stellar-aws-kms-signer` and `solana-aws-kms-signer` examples.
 
 ## Prerequisites
 
