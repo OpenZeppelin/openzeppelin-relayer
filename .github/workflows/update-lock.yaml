@@ -14,11 +14,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a  # v2.13.1
+        uses: step-security/harden-runner@df199fb7be9f65074067a9eb93f12bb4c5547cf2  # v2.13.3
         with:
           egress-policy: audit
       - name: Checkout
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -43,14 +43,14 @@ jobs:
           fi
       - name: Install cargo hack
         if: steps.lock-file-commit.outputs.changes == 'true'
-        uses: taiki-e/install-action@a24ba45235ed716ff76646268742990dc9458860  # v2.62.42
+        uses: taiki-e/install-action@92e6dd1c202153a204d471a3c509bf1e03dcfa44  # v2.62.61
         with:
           tool: cargo-hack
       - name: Check MSRV
         if: steps.lock-file-commit.outputs.changes == 'true'
         run: cargo hack check --feature-powerset --locked --rust-version --workspace --lib --bins
       - name: Create or update pull request
-        uses: peter-evans/create-pull-request@271a8d0340265f705b14b6d32b9829c1cb33d45e  # v7.0.8
+        uses: peter-evans/create-pull-request@84ae59a2cdc2258d6fa0732dd66352dddae2a412  # v7.0.9
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           title: 'chore: Updating lock file'
