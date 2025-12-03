@@ -1,4 +1,8 @@
 use crate::{
+    models::rpc::{
+        SolanaFeeEstimateResult, SolanaPrepareTransactionResult, StellarFeeEstimateResult,
+        StellarPrepareTransactionResult,
+    },
     models::{
         evm::Speed, EvmTransactionDataSignature, NetworkTransactionData, SolanaInstructionSpec,
         TransactionRepoModel, TransactionStatus, U256,
@@ -163,6 +167,30 @@ impl From<TransactionRepoModel> for TransactionResponse {
             }
         }
     }
+}
+
+/// Network-agnostic fee estimate response for gasless transactions.
+/// Contains network-specific fee estimate results.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+#[serde(untagged)]
+#[schema(as = SponsoredTransactionQuoteResponse)]
+pub enum SponsoredTransactionQuoteResponse {
+    /// Solana-specific fee estimate result
+    Solana(SolanaFeeEstimateResult),
+    /// Stellar-specific fee estimate result
+    Stellar(StellarFeeEstimateResult),
+}
+
+/// Network-agnostic prepare transaction response for gasless transactions.
+/// Contains network-specific prepare transaction results.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+#[serde(untagged)]
+#[schema(as = SponsoredTransactionBuildResponse)]
+pub enum SponsoredTransactionBuildResponse {
+    /// Solana-specific prepare transaction result
+    Solana(SolanaPrepareTransactionResult),
+    /// Stellar-specific prepare transaction result
+    Stellar(StellarPrepareTransactionResult),
 }
 
 #[cfg(test)]

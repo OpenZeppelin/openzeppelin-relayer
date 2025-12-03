@@ -18,7 +18,7 @@ use tracing::error;
 use crate::config::ServerConfig;
 
 use super::{
-    Job, NotificationSend, RelayerHealthCheck, SolanaTokenSwapRequest, TransactionRequest,
+    Job, NotificationSend, RelayerHealthCheck, TokenSwapRequest, TransactionRequest,
     TransactionSend, TransactionStatusCheck,
 };
 
@@ -33,7 +33,7 @@ pub struct Queue {
     /// Stellar-specific status queue with fast retries
     pub transaction_status_queue_stellar: RedisStorage<Job<TransactionStatusCheck>>,
     pub notification_queue: RedisStorage<Job<NotificationSend>>,
-    pub solana_token_swap_request_queue: RedisStorage<Job<SolanaTokenSwapRequest>>,
+    pub token_swap_request_queue: RedisStorage<Job<TokenSwapRequest>>,
     pub relayer_health_check_queue: RedisStorage<Job<RelayerHealthCheck>>,
 }
 
@@ -102,8 +102,8 @@ impl Queue {
                 shared.clone(),
             )
             .await?,
-            solana_token_swap_request_queue: Self::storage(
-                &format!("{redis_key_prefix}solana_token_swap_request_queue"),
+            token_swap_request_queue: Self::storage(
+                &format!("{redis_key_prefix}token_swap_request_queue"),
                 shared.clone(),
             )
             .await?,
@@ -138,7 +138,7 @@ mod tests {
         pub namespace_transaction_status_evm: String,
         pub namespace_transaction_status_stellar: String,
         pub namespace_notification: String,
-        pub namespace_solana_token_swap_request_queue: String,
+        pub namespace_token_swap_request_queue: String,
         pub namespace_relayer_health_check_queue: String,
     }
 
@@ -152,8 +152,7 @@ mod tests {
                 namespace_transaction_status_stellar: "transaction_status_queue_stellar"
                     .to_string(),
                 namespace_notification: "notification_queue".to_string(),
-                namespace_solana_token_swap_request_queue: "solana_token_swap_request_queue"
-                    .to_string(),
+                namespace_token_swap_request_queue: "token_swap_request_queue".to_string(),
                 namespace_relayer_health_check_queue: "relayer_health_check_queue".to_string(),
             }
         }
@@ -185,8 +184,8 @@ mod tests {
         );
         assert_eq!(mock_queue.namespace_notification, "notification_queue");
         assert_eq!(
-            mock_queue.namespace_solana_token_swap_request_queue,
-            "solana_token_swap_request_queue"
+            mock_queue.namespace_token_swap_request_queue,
+            "token_swap_request_queue"
         );
         assert_eq!(
             mock_queue.namespace_relayer_health_check_queue,

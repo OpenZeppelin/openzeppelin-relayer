@@ -205,6 +205,7 @@ mod tests {
                 let stellar_config = StellarNetworkConfig {
                     common,
                     passphrase: None,
+                    horizon_url: None,
                 };
                 NetworkRepoModel::new_stellar(stellar_config)
             }

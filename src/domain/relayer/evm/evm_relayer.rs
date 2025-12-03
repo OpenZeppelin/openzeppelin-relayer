@@ -33,7 +33,10 @@ use crate::{
         BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
         SignTransactionRequest, SignTypedDataRequest,
     },
-    jobs::{JobProducerTrait, RelayerHealthCheck, TransactionRequest, TransactionStatusCheck},
+    jobs::{
+        JobProducerTrait, RelayerHealthCheck, TransactionRequest, TransactionSend,
+        TransactionStatusCheck,
+    },
     models::{
         produce_relayer_disabled_payload, DeletePendingTransactionsResponse, DisabledReason,
         EvmNetwork, HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel,
@@ -189,8 +192,6 @@ where
         &self,
         transaction: TransactionRepoModel,
     ) -> Result<(), RelayerError> {
-        use crate::jobs::TransactionSend;
-
         let cancel_job = TransactionSend::cancel(
             transaction.id.clone(),
             transaction.relayer_id.clone(),
@@ -626,6 +627,7 @@ where
 mod tests {
     use super::*;
     use crate::{
+        config::{EvmNetworkConfig, NetworkConfigCommon},
         jobs::MockJobProducerTrait,
         models::{
             EvmRpcRequest, EvmRpcResult, JsonRpcId, NetworkRepoModel, NetworkType,
@@ -668,8 +670,6 @@ mod tests {
     }
 
     fn create_test_network_repo_model() -> NetworkRepoModel {
-        use crate::config::{EvmNetworkConfig, NetworkConfigCommon};
-
         let config = EvmNetworkConfig {
             common: NetworkConfigCommon {
                 network: "mainnet".to_string(),
@@ -1855,7 +1855,7 @@ mod tests {
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             params: NetworkRpcRequest::Solana(crate::models::SolanaRpcRequest::GetSupportedTokens(
-                crate::models::GetSupportedTokensRequestParams {},
+                crate::models::SolanaGetSupportedTokensRequestParams {},
             )),
             id: Some(JsonRpcId::Number(1)),
         };

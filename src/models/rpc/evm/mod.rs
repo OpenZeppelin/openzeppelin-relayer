@@ -9,7 +9,7 @@ pub enum EvmRpcResult {
     RawRpcResult(serde_json::Value),
 }
 
-#[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq, Clone)]
 #[serde(untagged)]
 pub enum EvmRpcRequest {
     /// Unified raw request variant where params may be a JSON string or structured JSON value.

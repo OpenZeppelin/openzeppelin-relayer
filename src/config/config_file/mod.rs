@@ -186,7 +186,8 @@ pub fn load_config(config_file_path: &str) -> Result<Config, ConfigFileError> {
 mod tests {
     use crate::models::{
         signer::{LocalSignerFileConfig, SignerFileConfig, SignerFileConfigEnum},
-        NotificationType, PlainOrEnvValue, SecretString,
+        ConfigFileRelayerNetworkPolicy, ConfigFileRelayerStellarPolicy,
+        ConfigFileStellarFeePaymentStrategy, NotificationType, PlainOrEnvValue, SecretString,
     };
     use std::path::Path;
 
@@ -1285,7 +1286,19 @@ mod tests {
             network: "testnet".to_string(),
             paused: true,
             network_type: ConfigFileNetworkType::Stellar,
-            policies: None,
+            policies: Some(ConfigFileRelayerNetworkPolicy::Stellar(
+                ConfigFileRelayerStellarPolicy {
+                    fee_payment_strategy: Some(ConfigFileStellarFeePaymentStrategy::Relayer),
+                    max_fee: None,
+                    timeout_seconds: None,
+                    min_balance: None,
+                    concurrent_transactions: None,
+                    slippage_percentage: None,
+                    fee_margin_percentage: None,
+                    allowed_tokens: None,
+                    swap_config: None,
+                },
+            )),
             signer_id: "test-1".to_string(),
             notification_id: Some("test-1".to_string()),
             custom_rpc_urls: None,
@@ -1314,6 +1327,7 @@ mod tests {
                 tags: Some(vec!["test".to_string()]),
             },
             passphrase: Some("Test SDF Network ; September 2015".to_string()),
+            horizon_url: Some("https://horizon-testnet.stellar.org".to_string()),
         });
 
         let mut networks = config.networks.networks;
@@ -1355,6 +1369,7 @@ mod tests {
                 tags: Some(vec!["stellar".to_string()]),
             },
             passphrase: Some("Test Network ; September 2015".to_string()),
+            horizon_url: Some("https://horizon-testnet.stellar.org".to_string()),
         });
 
         // Get the existing networks and add new ones

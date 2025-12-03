@@ -16,8 +16,8 @@ pub use notification_handler::*;
 mod transaction_status_handler;
 pub use transaction_status_handler::*;
 
-mod solana_swap_request_handler;
-pub use solana_swap_request_handler::*;
+mod token_swap_request_handler;
+pub use token_swap_request_handler::*;
 
 mod transaction_cleanup_handler;
 pub use transaction_cleanup_handler::*;

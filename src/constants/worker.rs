@@ -16,8 +16,8 @@ pub const WORKER_TRANSACTION_STATUS_CHECKER_RETRIES: usize = usize::MAX;
 // Number of retries for the notification sender job
 pub const WORKER_NOTIFICATION_SENDER_RETRIES: usize = 5;
 
-// Number of retries for the solana token swap request job
-pub const WORKER_SOLANA_TOKEN_SWAP_REQUEST_RETRIES: usize = 2;
+// Number of retries for the token swap request job
+pub const WORKER_TOKEN_SWAP_REQUEST_RETRIES: usize = 2;
 
 // Number of retries for the transaction cleanup job
 pub const WORKER_TRANSACTION_CLEANUP_RETRIES: usize = 5;
@@ -35,5 +35,5 @@ pub const DEFAULT_CONCURRENCY_STATUS_CHECKER: usize = 50; // Generic/Solana
 pub const DEFAULT_CONCURRENCY_STATUS_CHECKER_EVM: usize = 100; // Highest volume (75% of jobs)
 pub const DEFAULT_CONCURRENCY_STATUS_CHECKER_STELLAR: usize = 50;
 pub const DEFAULT_CONCURRENCY_NOTIFICATION: usize = 30;
-pub const DEFAULT_CONCURRENCY_SOLANA_SWAP: usize = 10; // Low volume
+pub const DEFAULT_CONCURRENCY_TOKEN_SWAP: usize = 10; // Low volume
 pub const DEFAULT_CONCURRENCY_HEALTH_CHECK: usize = 10; // Low volume

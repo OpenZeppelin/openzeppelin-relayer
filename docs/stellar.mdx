@@ -16,6 +16,7 @@ Stellar support is currently under active development. The API interactions and 
 * Standard Stellar payment operations
 * Support for all Stellar operations via XDR transaction submission
 * Fee bump transaction support
+* Sponsored transactions - Users pay fees in tokens instead of XLM
 * Secure transaction signing with multiple signer backends
 * Transaction status monitoring and sequence number management
 * Custom RPC endpoints and network policies
@@ -80,7 +81,7 @@ Example configuration for a Stellar relayer:
 }
 ```
 
-For more configuration examples, visit the [OpenZeppelin Relayer examples repository, window=_blank](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples).
+For more configuration examples, visit the [OpenZeppelin Relayer examples repository](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples).
 
 ## Configuration
 
@@ -94,6 +95,11 @@ Stellar relayers support standard relayer configuration options along with Stell
 | `max_fee` | integer | None | Maximum transaction fee in stroops the relayer is willing to pay |
 | `timeout_seconds` | integer | None | Transaction timeout in seconds |
 | `concurrent_transactions` | boolean | false | Enable concurrent transaction processing. When enabled, bypasses the lane gating mechanism that normally ensures sequential processing for each relayer. Only enable this when your relayer manages transactions from multiple accounts with independent sequence number pools. |
+| `fee_payment_strategy` | string | None | Fee payment strategy: `user` enables sponsored transactions (users pay fees in tokens), `relayer` means relayer pays all fees in XLM |
+| `allowed_tokens` | array | None | List of tokens allowed for fee payments in sponsored transactions. Each token includes `asset`, `max_allowed_fee` (optional), and `metadata` (optional) |
+| `fee_margin_percentage` | float | None | Fee margin percentage applied when converting XLM fees to token amounts for sponsored transactions |
+| `slippage_percentage` | float | None | Maximum slippage percentage allowed when swapping tokens via DEX for sponsored transactions |
+| `swap_config` | object | None | DEX swap configuration for automated token swaps to keep relayer funded. See [Swap Configuration](#swap-configuration) below for details |
 
 Example configuration with policies:
 ```json
@@ -105,6 +111,7 @@ Example configuration with policies:
   "network_type": "stellar",
   "signer_id": "local-signer",
   "policies": {
+    "fee_payment_strategy": "relayer",
     "min_balance": 10000000,
     "max_fee": 1000000,
     "timeout_seconds": 30,
@@ -114,6 +121,139 @@ Example configuration with policies:
 ```
 
 For general relayer configuration options, check [User Documentation - Relayers](/relayer#3_relayers).
+
+### Swap Configuration (Sponsored Transactions)
+
+The `swap_config` policy enables automated token swaps to keep the relayer funded with XLM. This is particularly useful for sponsored transactions where the relayer receives tokens but needs XLM to pay network fees.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `strategies` | array | DEX strategies to use for token swaps, in priority order. Supported values: `order-book` (Stellar Horizon order book API). Strategies are tried sequentially until one can handle the asset. |
+| `cron_schedule` | string | Cron expression defining how often scheduled swaps should run (e.g., `"0 0 * * * *"` for every hour). Optional. |
+| `min_balance_threshold` | integer | Minimum XLM balance (in stroops) that triggers a swap. If the relayer's balance drops below this, a swap is attempted. Optional. |
+
+Example swap configuration:
+
+```json
+{
+  "policies": {
+    "fee_payment_strategy": "user",
+    "swap_config": {
+      "strategies": ["order-book"],
+      "cron_schedule": "0 0 * * * *",
+      "min_balance_threshold": 10000000
+    }
+  }
+}
+```
+
+### Allowed Tokens Configuration
+
+When using sponsored transactions (`fee_payment_strategy: "user"`), you can configure which tokens users can pay fees with via the `allowed_tokens` array. Each token entry supports:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `asset` | string | **Required.** The asset identifier (e.g., `native` for XLM or `USDC:GBBD...` for USDC) |
+| `max_allowed_fee` | integer | Maximum fee amount allowed for this token (in token's smallest unit). Optional. |
+| `swap_config` | object | Per-token swap configuration. Optional. |
+
+Per-token swap configuration fields:
+* `slippage_percentage`: Maximum slippage percentage allowed when swapping this token via DEX
+* `min_amount`: Minimum amount of a token to swap in a single operation
+* `max_amount`: Maximum amount of a token to swap in a single operation
+* `retain_min_amount`: Minimum amount of a token to retain in the relayer account after a swap (prevents swapping the entire balance)
+
+Example allowed tokens configuration:
+
+```json
+{
+  "policies": {
+    "fee_payment_strategy": "user",
+    "allowed_tokens": [
+      {
+        "asset": "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        "max_allowed_fee": 1000000000,
+        "swap_config": {
+          "slippage_percentage": 0.5,
+          "min_amount": 10000000,
+          "max_amount": 1000000000,
+          "retain_min_amount": 10000000
+        }
+      }
+    ]
+  }
+}
+```
+
+## Sponsored Transactions
+
+Sponsored transactions allow users to pay transaction fees in tokens (e.g., USDC) instead of native XLM. This enables gasless user experiences where users don't need to hold XLM to interact with Stellar applications.
+
+<Callout type="info">
+
+**Asset Support**: Currently, only classic Stellar assets (credit_alphanum4 and credit_alphanum12) are supported for sponsored transactions. Soroban token support will be available in a future release.
+
+</Callout>
+
+### Enabling Sponsored Transactions
+
+To enable sponsored transactions for a Stellar relayer, configure the following in your relayer's policies:
+
+1. **Set `fee_payment_strategy` to `user`**: This enables the sponsored transaction flow where users pay fees in tokens.
+
+2. **Configure `allowed_tokens`**: Specify which tokens users can pay fees with. Each token can have:
+   - `asset`: The asset identifier (e.g., `native` for XLM or `USDC:GBBD...` for USDC)
+   - `max_allowed_fee`: Maximum fee amount allowed for this token (optional)
+   - `swap_config`: DEX swap configuration for automated token swaps to keep relayer funded
+
+3. **Configure DEX service**: The relayer needs a DEX service configured to convert between XLM and fee tokens. This is typically configured at the service level.
+
+Example configuration for sponsored transactions:
+
+```json
+{
+  "id": "stellar-example",
+  "name": "Stellar Example",
+  "network": "testnet",
+  "paused": false,
+  "notification_id": "notification-example",
+  "signer_id": "local-signer",
+  "network_type": "stellar",
+  "policies": {
+    "fee_payment_strategy": "user",
+    "fee_margin_percentage": 5,
+    "swap_config": {
+      "strategies": ["order-book"]
+    },
+    "allowed_tokens": [
+      {
+        "asset": "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+      }
+    ]
+  }
+}
+```
+
+### Sponsored Transaction Endpoints
+
+Once enabled, the relayer provides two endpoints for sponsored transactions:
+
+1. **Quote** (`POST /api/v1/relayers/<relayer_id>/transactions/sponsored/quote`): Estimate the fee in tokens for a transaction
+2. **Build** (`POST /api/v1/relayers/<relayer_id>/transactions/sponsored/build`): Prepare a transaction with fee payment instructions
+
+Both endpoints accept either:
+- `transaction_xdr`: A pre-built transaction XDR (base64 encoded)
+- `operations`: An array of operations with `source_account` (required when using operations)
+
+
+The build endpoint returns a prepared transaction that includes:
+- The transaction XDR ready for signing
+- Fee amount in both XLM (stroops) and the specified token
+- Transaction validity timestamp
+
+After receiving the prepared transaction, users must sign it and submit it through the standard transaction submission endpoint. The relayer will wrap it in a fee-bump transaction where the relayer pays the XLM fees, and the user pays the token fees.
+
+For detailed examples and code samples, see the [SDK Stellar examples](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/stellar/sponsored).
 
 ## API Reference
 
@@ -126,6 +266,8 @@ The Stellar API supports a variety of transaction operations:
 | Send Transaction | `network`, `operations` (or `transaction_xdr`) | Submit a transaction to the Stellar network. Supports payment and Soroban operations directly, or any Stellar operation via pre-built XDR transactions. Also supports fee bump transactions for managing transaction fees. |
 | Get Transaction Details | `transaction_id` | Retrieve a specific transaction by its ID. |
 | List Transactions | (none) | List transactions for the relayer with pagination support. |
+| Quote Sponsored Transaction | `transaction_xdr` (or `operations` with `source_account`), `fee_token` | Estimate the fee in tokens for a transaction. **Available in user fee payment mode only.** |
+| Build Sponsored Transaction | `transaction_xdr` (or `operations` with `source_account`), `fee_token` | Prepare a transaction with fee payment instructions. **Available in user fee payment mode only.** |
 
 ### Supported Operation Types
 

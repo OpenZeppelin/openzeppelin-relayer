@@ -8,15 +8,15 @@
 //!
 //! # Returns
 //!
-//! On success, returns a vector of [`GetSupportedTokensItem`] structures.
+//! On success, returns a vector of [`SolanaGetSupportedTokensItem`] structures.
 use tracing::info;
 
 use crate::{
     constants::DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE,
     jobs::JobProducerTrait,
     models::{
-        GetSupportedTokensItem, GetSupportedTokensRequestParams, GetSupportedTokensResult,
-        TransactionRepoModel,
+        SolanaGetSupportedTokensItem, SolanaGetSupportedTokensRequestParams,
+        SolanaGetSupportedTokensResult, TransactionRepoModel,
     },
     repositories::{Repository, TransactionRepository},
     services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
@@ -34,8 +34,8 @@ where
 {
     pub(crate) async fn get_supported_tokens_impl(
         &self,
-        _params: GetSupportedTokensRequestParams,
-    ) -> Result<GetSupportedTokensResult, SolanaRpcError> {
+        _params: SolanaGetSupportedTokensRequestParams,
+    ) -> Result<SolanaGetSupportedTokensResult, SolanaRpcError> {
         info!("Processing get supported tokens request");
 
         let tokens = self
@@ -46,7 +46,7 @@ where
             .map(|tokens| {
                 tokens
                     .iter()
-                    .map(|token| GetSupportedTokensItem {
+                    .map(|token| SolanaGetSupportedTokensItem {
                         mint: token.mint.clone(),
                         symbol: token.symbol.as_deref().unwrap_or("").to_string(),
                         decimals: token.decimals.unwrap_or(0),
@@ -68,7 +68,7 @@ where
             tokens
         );
 
-        Ok(GetSupportedTokensResult { tokens })
+        Ok(SolanaGetSupportedTokensResult { tokens })
     }
 }
 
@@ -79,8 +79,8 @@ mod tests {
     use crate::{
         domain::{setup_test_context, SolanaRpcMethodsImpl},
         models::{
-            GetSupportedTokensRequestParams, RelayerNetworkPolicy, RelayerSolanaPolicy,
-            SolanaAllowedTokensPolicy, SolanaAllowedTokensSwapConfig,
+            RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
+            SolanaAllowedTokensSwapConfig, SolanaGetSupportedTokensRequestParams,
         },
         repositories::MockTransactionRepository,
     };
@@ -126,7 +126,7 @@ mod tests {
         );
 
         let result = rpc
-            .get_supported_tokens_impl(GetSupportedTokensRequestParams {})
+            .get_supported_tokens_impl(SolanaGetSupportedTokensRequestParams {})
             .await;
 
         assert!(result.is_ok());

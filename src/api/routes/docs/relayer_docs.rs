@@ -9,6 +9,8 @@
 //! - `POST /api/v1/relayers`: Create a new relayer
 //! - `PATCH /api/v1/relayers/{id}`: Update a relayer
 //! - `DELETE /api/v1/relayers/{id}`: Delete a relayer
+//! - `POST /api/v1/relayers/{id}/transactions/sponsored/quote`: Get fee estimate for sponsored transaction
+//! - `POST /api/v1/relayers/{id}/transactions/sponsored/build`: Build a sponsored transaction
 
 use crate::{
     domain::{
@@ -16,6 +18,10 @@ use crate::{
         SignTransactionRequest, SignTypedDataRequest,
     },
     models::{
+        transaction::{
+            SponsoredTransactionBuildRequest, SponsoredTransactionBuildResponse,
+            SponsoredTransactionQuoteRequest, SponsoredTransactionQuoteResponse,
+        },
         ApiResponse, CreateRelayerRequest, DeletePendingTransactionsResponse, JsonRpcRequest,
         JsonRpcResponse, NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest,
         RelayerResponse, RelayerStatus, TransactionResponse, UpdateRelayerRequest,
@@ -1275,3 +1281,191 @@ fn doc_sign_transaction() {}
 )]
 #[allow(dead_code)]
 fn doc_rpc() {}
+
+/// Estimates fees for a sponsored (gasless) transaction.
+///
+/// This endpoint provides fee estimation for transactions where the relayer will pay the network fees
+/// on behalf of the user. The user pays fees in a token of their choice (e.g., USDC) instead of the
+/// native network currency (e.g., XLM for Stellar).
+///
+/// The endpoint accepts either a pre-built transaction XDR or a set of operations to build a transaction from.
+/// It returns the estimated fee amount in the specified fee token and the conversion rate from the native currency.
+#[utoipa::path(
+    post,
+    path = "/api/v1/relayers/{relayer_id}/transactions/sponsored/quote",
+    tag = "Relayers",
+    operation_id = "quoteSponsoredTransaction",
+    security(
+        ("bearer_auth" = [])
+    ),
+    params(
+        ("relayer_id" = String, Path, description = "The unique identifier of the relayer")
+    ),
+    request_body = SponsoredTransactionQuoteRequest,
+    responses(
+        (
+            status = 200,
+            description = "Fee estimate retrieved successfully",
+            body = ApiResponse<SponsoredTransactionQuoteResponse>,
+            example = json!({
+                "success": true,
+                "message": "Fee estimate retrieved successfully",
+                "data": {
+                    "estimated_fee": "1.5",
+                    "conversion_rate": "0.15"
+                }
+            })
+        ),
+        (
+            status = 400,
+            description = "Bad Request - Invalid request parameters",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Bad Request",
+                "data": null
+            })
+        ),
+        (
+            status = 401,
+            description = "Unauthorized",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Unauthorized",
+                "data": null
+            })
+        ),
+        (
+            status = 404,
+            description = "Not Found",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Relayer with ID relayer_id not found",
+                "data": null
+            })
+        ),
+        (
+            status = 429,
+            description = "Too Many Requests",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Too Many Requests",
+                "data": null
+            })
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Internal Server Error",
+                "data": null
+            })
+        ),
+    )
+)]
+#[allow(dead_code)]
+fn doc_quote_sponsored_transaction() {}
+
+/// Prepares a sponsored (gasless) transaction with fee payments.
+///
+/// This endpoint builds a transaction where the relayer will pay the network fees on behalf of the user.
+/// The user pays fees in a token of their choice (e.g., USDC) instead of the native network currency.
+///
+/// The endpoint accepts either a pre-built transaction XDR or a set of operations to build a transaction from.
+/// It returns a prepared transaction that includes:
+/// - The transaction XDR (base64 encoded) ready for signing
+/// - The fee amount in both the fee token and native currency (stroops for Stellar)
+/// - The fee token identifier
+/// - The transaction validity timestamp
+///
+/// After receiving the prepared transaction, the user must sign it and submit it through the standard
+/// transaction submission endpoint. For Stellar, the transaction will be wrapped in a fee-bump transaction
+/// where the relayer pays the network fees.
+#[utoipa::path(
+    post,
+    path = "/api/v1/relayers/{relayer_id}/transactions/sponsored/build",
+    tag = "Relayers",
+    operation_id = "buildSponsoredTransaction",
+    security(
+        ("bearer_auth" = [])
+    ),
+    params(
+        ("relayer_id" = String, Path, description = "The unique identifier of the relayer")
+    ),
+    request_body = SponsoredTransactionBuildRequest,
+    responses(
+        (
+            status = 200,
+            description = "Sponsored transaction built successfully",
+            body = ApiResponse<SponsoredTransactionBuildResponse>,
+            example = json!({
+                "success": true,
+                "message": "Sponsored transaction built successfully",
+                "data": {
+                    "transaction": "AAAAAgAAAAD...",
+                    "fee_in_token": "1.5",
+                    "fee_in_stroops": "100000",
+                    "fee_token": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+                    "valid_until": "2024-01-01T00:00:00Z"
+                }
+            })
+        ),
+        (
+            status = 400,
+            description = "Bad Request - Invalid request parameters",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Bad Request",
+                "data": null
+            })
+        ),
+        (
+            status = 401,
+            description = "Unauthorized",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Unauthorized",
+                "data": null
+            })
+        ),
+        (
+            status = 404,
+            description = "Not Found",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Relayer with ID relayer_id not found",
+                "data": null
+            })
+        ),
+        (
+            status = 429,
+            description = "Too Many Requests",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Too Many Requests",
+                "data": null
+            })
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Internal Server Error",
+                "data": null
+            })
+        ),
+    )
+)]
+#[allow(dead_code)]
+fn doc_build_sponsored_transaction() {}

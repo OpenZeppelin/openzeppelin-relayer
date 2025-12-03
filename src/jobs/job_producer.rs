@@ -22,12 +22,12 @@ use thiserror::Error;
 use tokio::sync::Mutex;
 use tracing::{debug, error};
 
-use super::{JobType, SolanaTokenSwapRequest};
+use super::{JobType, TokenSwapRequest};
 
 #[cfg(test)]
 use mockall::automock;
 
-#[derive(Debug, Error, Serialize)]
+#[derive(Debug, Error, Serialize, Clone)]
 pub enum JobProducerError {
     #[error("Queue error: {0}")]
     QueueError(String),
@@ -93,9 +93,9 @@ pub trait JobProducerTrait: Send + Sync {
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError>;
 
-    async fn produce_solana_token_swap_request_job(
+    async fn produce_token_swap_request_job(
         &self,
-        solana_swap_request_job: SolanaTokenSwapRequest,
+        swap_request_job: TokenSwapRequest,
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError>;
 
@@ -238,28 +238,25 @@ impl JobProducerTrait for JobProducer {
         Ok(())
     }
 
-    async fn produce_solana_token_swap_request_job(
+    async fn produce_token_swap_request_job(
         &self,
-        solana_swap_request_job: SolanaTokenSwapRequest,
+        swap_request_job: TokenSwapRequest,
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError> {
         let mut queue = self.queue.lock().await;
-        let job = Job::new(JobType::SolanaTokenSwapRequest, solana_swap_request_job)
-            .with_request_id(get_request_id());
+        let job =
+            Job::new(JobType::TokenSwapRequest, swap_request_job).with_request_id(get_request_id());
 
         match scheduled_on {
             Some(on) => {
-                queue
-                    .solana_token_swap_request_queue
-                    .schedule(job, on)
-                    .await?;
+                queue.token_swap_request_queue.schedule(job, on).await?;
             }
             None => {
-                queue.solana_token_swap_request_queue.push(job).await?;
+                queue.token_swap_request_queue.push(job).await?;
             }
         }
 
-        debug!("Solana token swap job produced successfully");
+        debug!("Token swap job produced successfully");
         Ok(())
     }
 
@@ -338,7 +335,7 @@ mod tests {
         pub transaction_status_queue_evm: TestRedisStorage<Job<TransactionStatusCheck>>,
         pub transaction_status_queue_stellar: TestRedisStorage<Job<TransactionStatusCheck>>,
         pub notification_queue: TestRedisStorage<Job<NotificationSend>>,
-        pub solana_token_swap_request_queue: TestRedisStorage<Job<SolanaTokenSwapRequest>>,
+        pub token_swap_request_queue: TestRedisStorage<Job<TokenSwapRequest>>,
         pub relayer_health_check_queue: TestRedisStorage<Job<RelayerHealthCheck>>,
     }
 
@@ -351,7 +348,7 @@ mod tests {
                 transaction_status_queue_evm: TestRedisStorage::new(),
                 transaction_status_queue_stellar: TestRedisStorage::new(),
                 notification_queue: TestRedisStorage::new(),
-                solana_token_swap_request_queue: TestRedisStorage::new(),
+                token_swap_request_queue: TestRedisStorage::new(),
                 relayer_health_check_queue: TestRedisStorage::new(),
             }
         }
@@ -488,26 +485,20 @@ mod tests {
             Ok(())
         }
 
-        async fn produce_solana_token_swap_request_job(
+        async fn produce_token_swap_request_job(
             &self,
-            solana_token_swap_request_job: SolanaTokenSwapRequest,
+            swap_request_job: TokenSwapRequest,
             scheduled_on: Option<i64>,
         ) -> Result<(), JobProducerError> {
             let mut queue = self.queue.lock().await;
-            let job = Job::new(
-                JobType::SolanaTokenSwapRequest,
-                solana_token_swap_request_job,
-            );
+            let job = Job::new(JobType::TokenSwapRequest, swap_request_job);
 
             match scheduled_on {
                 Some(on) => {
-                    queue
-                        .solana_token_swap_request_queue
-                        .schedule(job, on)
-                        .await?;
+                    queue.token_swap_request_queue.schedule(job, on).await?;
                 }
                 None => {
-                    queue.solana_token_swap_request_queue.push(job).await?;
+                    queue.token_swap_request_queue.push(job).await?;
                 }
             }
 
@@ -689,7 +680,7 @@ mod tests {
         assert!(!queue.transaction_request_queue.schedule_called);
         assert!(!queue.transaction_submission_queue.push_called);
         assert!(!queue.notification_queue.push_called);
-        assert!(!queue.solana_token_swap_request_queue.push_called);
+        assert!(!queue.token_swap_request_queue.push_called);
         assert!(!queue.relayer_health_check_queue.push_called);
     }
 
@@ -716,7 +707,7 @@ mod tests {
         assert!(!queue.transaction_submission_queue.push_called);
         assert!(!queue.transaction_status_queue.push_called);
         assert!(!queue.notification_queue.push_called);
-        assert!(!queue.solana_token_swap_request_queue.push_called);
+        assert!(!queue.token_swap_request_queue.push_called);
     }
 
     #[tokio::test]
@@ -743,7 +734,7 @@ mod tests {
         assert!(!queue.transaction_submission_queue.push_called);
         assert!(!queue.transaction_status_queue.push_called);
         assert!(!queue.notification_queue.push_called);
-        assert!(!queue.solana_token_swap_request_queue.push_called);
+        assert!(!queue.token_swap_request_queue.push_called);
     }
 
     #[tokio::test]
@@ -899,31 +890,31 @@ mod tests {
     async fn test_solana_swap_job_immediate() {
         let producer = TestJobProducer::new();
 
-        let swap_job = SolanaTokenSwapRequest::new("relayer-solana".to_string());
+        let swap_job = TokenSwapRequest::new("relayer-solana".to_string());
         let result = producer
-            .produce_solana_token_swap_request_job(swap_job, None)
+            .produce_token_swap_request_job(swap_job, None)
             .await;
 
         assert!(result.is_ok());
         let queue = producer.get_queue().await;
-        assert!(queue.solana_token_swap_request_queue.push_called);
-        assert!(!queue.solana_token_swap_request_queue.schedule_called);
+        assert!(queue.token_swap_request_queue.push_called);
+        assert!(!queue.token_swap_request_queue.schedule_called);
     }
 
     #[tokio::test]
-    async fn test_solana_swap_job_scheduled() {
+    async fn test_token_swap_job_scheduled() {
         let producer = TestJobProducer::new();
 
-        let swap_job = SolanaTokenSwapRequest::new("relayer-solana".to_string());
+        let swap_job = TokenSwapRequest::new("relayer-solana".to_string());
         let scheduled_timestamp = calculate_scheduled_timestamp(20);
         let result = producer
-            .produce_solana_token_swap_request_job(swap_job, Some(scheduled_timestamp))
+            .produce_token_swap_request_job(swap_job, Some(scheduled_timestamp))
             .await;
 
         assert!(result.is_ok());
         let queue = producer.get_queue().await;
-        assert!(queue.solana_token_swap_request_queue.schedule_called);
-        assert!(!queue.solana_token_swap_request_queue.push_called);
+        assert!(queue.token_swap_request_queue.schedule_called);
+        assert!(!queue.token_swap_request_queue.push_called);
     }
 
     #[tokio::test]

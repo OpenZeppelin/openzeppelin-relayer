@@ -2,8 +2,9 @@ use crate::{
     domain::SwapResult,
     jobs::NotificationSend,
     models::{
-        RelayerRepoModel, RelayerResponse, SignAndSendTransactionResult, SignTransactionResult,
-        TransactionRepoModel, TransactionResponse, TransferTransactionResult,
+        RelayerRepoModel, RelayerResponse, SolanaSignAndSendTransactionResult,
+        SolanaSignTransactionResult, SolanaTransferTransactionResult, TransactionRepoModel,
+        TransactionResponse,
     },
 };
 use chrono::Utc;
@@ -52,6 +53,11 @@ pub struct SolanaDexPayload {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct StellarDexPayload {
+    pub swap_results: Vec<SwapResult>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
 #[serde(tag = "payload_type")]
 pub enum WebhookPayload {
@@ -66,6 +72,8 @@ pub enum WebhookPayload {
     SolanaRpc(SolanaWebhookRpcPayload),
     #[serde(rename = "solana_dex")]
     SolanaDex(SolanaDexPayload),
+    #[serde(rename = "stellar_dex")]
+    StellarDex(StellarDexPayload),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -130,9 +138,9 @@ pub fn produce_relayer_enabled_payload(
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
 pub enum SolanaWebhookRpcPayload {
-    SignAndSendTransaction(SignAndSendTransactionResult),
-    SignTransaction(SignTransactionResult),
-    TransferTransaction(TransferTransactionResult),
+    SignAndSendTransaction(SolanaSignAndSendTransactionResult),
+    SignTransaction(SolanaSignTransactionResult),
+    TransferTransaction(SolanaTransferTransactionResult),
 }
 
 /// Produces a notification payload for a Solana RPC webhook event
@@ -155,6 +163,17 @@ pub fn produce_solana_dex_webhook_payload(
     NotificationSend::new(
         notification_id.to_string(),
         WebhookNotification::new(event, WebhookPayload::SolanaDex(payload)),
+    )
+}
+
+pub fn produce_stellar_dex_webhook_payload(
+    notification_id: &str,
+    event: String,
+    payload: StellarDexPayload,
+) -> NotificationSend {
+    NotificationSend::new(
+        notification_id.to_string(),
+        WebhookNotification::new(event, WebhookPayload::StellarDex(payload)),
     )
 }
 
@@ -315,10 +334,11 @@ mod tests {
 
         let notification_id = "test-notification-id";
         let event = "solana_sign_transaction".to_string();
-        let solana_payload = SolanaWebhookRpcPayload::SignTransaction(SignTransactionResult {
-            transaction: EncodedSerializedTransaction::new("test-transaction".to_string()),
-            signature: "test-signature".to_string(),
-        });
+        let solana_payload =
+            SolanaWebhookRpcPayload::SignTransaction(SolanaSignTransactionResult {
+                transaction: EncodedSerializedTransaction::new("test-transaction".to_string()),
+                signature: "test-signature".to_string(),
+            });
 
         let result =
             produce_solana_rpc_webhook_payload(notification_id, event.clone(), solana_payload);
@@ -360,6 +380,34 @@ mod tests {
                 assert_eq!(payload.swap_results.len(), 0);
             }
             _ => panic!("Expected SolanaDex payload"),
+        }
+    }
+
+    #[test]
+    fn test_produce_stellar_dex_webhook_payload() {
+        let notification_id = "test-notification-id";
+        let event = "stellar_dex_queued".to_string();
+        let swap_results = vec![];
+        let dex_payload = StellarDexPayload { swap_results };
+
+        let result = produce_stellar_dex_webhook_payload(
+            notification_id,
+            event.clone(),
+            dex_payload.clone(),
+        );
+
+        // Verify notification_id
+        assert_eq!(result.notification_id, notification_id);
+
+        // Verify webhook structure
+        assert_eq!(result.notification.event, event);
+
+        // Verify payload type
+        match result.notification.payload {
+            WebhookPayload::StellarDex(payload) => {
+                assert_eq!(payload.swap_results.len(), 0);
+            }
+            _ => panic!("Expected StellarDex payload"),
         }
     }
 

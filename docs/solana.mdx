@@ -123,10 +123,50 @@ For more configuration examples, visit the [OpenZeppelin Relayer examples reposi
 
 In addition to standard relayer configuration and policies, Solana relayers support additional options:
 
-* `fee_payment_strategy`: `"user"` or `"relayer"` (who pays transaction fees). "user" is default value.
-  * `"user"`: Users pay transaction fees in tokens (relayer receives fee payment from user)
-  * `"relayer"`: ***Relayer pays for all transaction fees*** using SOL from the relayer’s account
-* `allowed_tokens`: List of SPL tokens supported for swaps and fee payments. Restrict relayer operations to specific tokens. Optional.
+| Feature | User Pays (Default) | Relayer Pays |
+|---------|---------------------|--------------|
+| **Who pays fees** | Users pay in SPL tokens | Relayer pays in SOL |
+| **Transaction format** | Pre-signed transactions only | Encoded transactions OR instruction arrays |
+| **Best endpoint** | RPC methods (Paymaster spec) | REST API `POST /transactions` |
+| **Use case** | Gasless UX, user-controlled signing | Simplified UX, backend automation |
+
+<Callout type="warning">
+
+***Future Breaking Change:***
+
+In future versions, `fee_payment_strategy` will be a **mandatory field** in the relayer configuration. This change is being made to prevent misconfigurations and misunderstandings. Please ensure your relayer configurations explicitly specify `fee_payment_strategy` as either `"user"` or `"relayer"` to avoid issues when upgrading.
+
+</Callout>
+
+#### User Pays Fees (Default)
+
+**fee_payment_strategy**: `user` (default when not specified)
+
+In this mode:
+* Users pay transaction fees in SPL tokens
+* The relayer receives fee payment from the user as part of the transaction
+* Users submit **fully-formed, pre-signed transactions** via the API
+* The relayer validates and relays the transaction to the network
+
+#### Relayer Pays Fees
+
+**fee_payment_strategy**: `relayer`
+
+In this mode:
+* ***The relayer pays all transaction fees in SOL***
+* Users can submit either:
+  * **Encoded transactions** (base64-encoded, pre-signed)
+  * **Array of instructions** (relayer builds and signs the full transaction)
+
+**Use Cases**:
+* Simplified user experience (no fee token management)
+* Backend-controlled transaction execution
+* Automated workflows and scheduled operations
+* Applications where the relayer subsidizes transaction costs
+
+### Additional Relayer Policies
+
+* `allowed_tokens`: List of SPL tokens supported for swaps and fee payments. Optional.
   * ***When not set or empty, all tokens are allowed*** for transactions and fee payments
   * When configured, only tokens in this list can be used for transfers and fee payments
 * `allowed_programs`, `allowed_accounts`, `disallowed_accounts`: Restrict relayer operations to specific programs/accounts
@@ -162,22 +202,40 @@ Swaps can be set to work as:
 
 ## API Reference
 
-The Solana API conforms to the [Paymaster spec, window=_blank](https://docs.google.com/document/d/1lweO5WH12QJaSAu5RG_wUistyk_nFeT6gy1CdvyCEHg/edit?tab=t.0#heading=h.4yldgprkuvav).
+The Solana relayer provides two API interfaces that support fee estimation, transaction preparation, signing, and sending:
 
-Common endpoints:
-- `POST /api/v1/relayers/<relayer_id>/rpc`
-  Methods:
+1. **RPC Endpoint** (JSON-RPC 2.0) - Conforms to the [Paymaster spec](https://docs.google.com/document/d/1lweO5WH12QJaSAu5RG_wUistyk_nFeT6gy1CdvyCEHg/edit?tab=t.0#heading=h.4yldgprkuvav)
+   * **Best for**: User fee payment mode
+   * **URL**: `POST /api/v1/relayers/<relayer_id>/rpc`
+   * **Works in**: Both fee payment modes
+   * **Supports**: `feeEstimate`, `prepareTransaction`, `signTransaction`, and `signAndSendTransaction` methods
 
-* `feeEstimate`,
-* `prepareTransaction`,
-* `transferTransaction`,
-* `signTransaction`,
-* `signAndSendTransaction`,
-* `getSupportedTokens`
-* `getSupportedFeatures`
+2. **REST Endpoints** - Direct transaction operations
+   * **Fee Estimation**: `POST /api/v1/relayers/<relayer_id>/transactions/sponsored/quote` (matches `feeEstimate` RPC method)
+   * **Transaction Preparation**: `POST /api/v1/relayers/<relayer_id>/transactions/sponsored/build` (matches `prepareTransaction` RPC method)
+   * **Sign Transaction**: `POST /api/v1/relayers/<relayer_id>/sign-transaction`
+   * **Send Transaction**: `POST /api/v1/relayers/<relayer_id>/transactions`
 
 <Callout>
 
+**Base URL**: `POST /api/v1/relayers/<relayer_id>/rpc`
+
+This endpoint can be used in **both fee payment modes**, but provides the best experience for **user fee payment mode**.
+
+#### RPC Methods
+
+* `feeEstimate` - Estimate transaction fees
+* `getSupportedTokens` - Get list of supported tokens
+* `getSupportedFeatures` - Get list of available features
+* `prepareTransaction` - Prepare transaction with fee payments
+* `transferTransaction` - Execute token transfers with fee payments
+* `signTransaction` - Sign user-provided transactions
+* `signAndSendTransaction` - Sign and send transactions (combines signing and submission)
+
+For complete RPC examples, see the [SDK Solana examples](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/solana).
+
+
+<Callout type="info">
 
 ***Fee Token Parameter Behavior:***
 
@@ -187,23 +245,83 @@ When using `fee_payment_strategy: "user"`, the `fee_token` parameter determines 
 
 </Callout>
 
-Example: Estimate fee for a transaction
-```bash
-curl --location --request POST 'http://localhost:8080/api/v1/relayers/solana-example/rpc' \
---header 'Authorization: Bearer <api_key>' \
---header 'Content-Type: application/json' \
---data-raw '{
-  "jsonrpc": "2.0",
-  "method": "feeEstimate",
-  "params": {
-    "transaction": "<base64-encoded-tx>",
-    "fee_token": "<mint-address>"
-  },
-  "id": 1
-}'
-```
+### REST Endpoints
 
-See [API Reference](https://release-v1-0-0%2D%2Dopenzeppelin-relayer.netlify.app/api_docs.html) and [SDK examples, window=_blank](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/solana) for full details and examples.
+#### Fee Estimation (Quote)
+
+**Base URL**: `POST /api/v1/relayers/<relayer_id>/transactions/sponsored/quote`
+
+**Available in**: `user` payment mode.
+
+**Matches RPC method**: `feeEstimate`
+
+Estimates transaction fees for a given transaction. Returns the fee amount in both the native currency (SOL) and the specified fee token. This endpoint helps users understand the cost before building or submitting a transaction.
+
+#### Transaction Preparation (Build)
+
+**Base URL**: `POST /api/v1/relayers/<relayer_id>/transactions/sponsored/build`
+
+**Available in**: `user` payment mode.
+
+**Matches RPC method**: `prepareTransaction`
+
+Prepares a transaction with fee payments. This endpoint builds a transaction that includes the necessary fee payment instructions based on the fee payment strategy. Returns a prepared transaction ready for signing.
+
+#### Sign Transaction
+
+**Base URL**: `POST /api/v1/relayers/<relayer_id>/sign-transaction`
+
+**Available in**: Both fee payment modes
+
+**Matches RPC method**: `signTransaction`
+
+Signs a user-provided transaction without submitting it to the network. This is useful when you want to sign a transaction and handle submission separately.
+
+#### Send Transaction
+
+**Base URL**: `POST /api/v1/relayers/<relayer_id>/transactions`
+
+**Matches RPC method**: `signAndSendTransaction`
+
+This endpoint provides two ways to submit transactions:
+
+#### Option 1: Encoded Transaction (Pre-signed)
+
+Submit a base64-encoded, pre-signed transaction that the relayer will relay to the network. When in user payment mode, the relayer optionally validates that the transaction contains user payment to the relayer.
+
+#### Option 2: Array of Instructions (Relayer Builds Transaction)
+
+Submit an array of Solana instructions. The relayer will:
+1. Build a complete transaction from the provided instructions
+2. Add necessary compute budget and priority fee instructions
+3. Optionally validate that the transaction contains user payment to the relayer when in user payment mode
+4. Sign the transaction with the relayer's signer
+5. Submit the transaction to the Solana network
+
+For complete REST API examples with both options, see the [SDK Solana examples](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/solana).
+
+### API Summary
+
+**For User Fee Payment Mode** (`fee_payment_strategy: "user"`):
+* **RPC endpoint**: `POST /api/v1/relayers/<relayer_id>/rpc`
+  * Full Paymaster specification support
+  * Methods: `feeEstimate`, `prepareTransaction`, `signTransaction`, `signAndSendTransaction`, etc.
+* **REST endpoints**:
+  * `POST /api/v1/relayers/<relayer_id>/transactions/sponsored/quote` - Estimate fees (matches `feeEstimate`)
+  * `POST /api/v1/relayers/<relayer_id>/transactions/sponsored/build` - Prepare transaction (matches `prepareTransaction`)
+  * `POST /api/v1/relayers/<relayer_id>/sign-transaction` - Sign transactions without submitting
+  * `POST /api/v1/relayers/<relayer_id>/transactions` - Send transactions (accepts encoded transactions or instruction arrays)
+
+**For Relayer Fee Payment Mode** (`fee_payment_strategy: "relayer"`):
+* **REST endpoints**:
+  * `POST /api/v1/relayers/<relayer_id>/transactions` - Send transactions (accepts encoded transactions or instruction arrays)
+  * `POST /api/v1/relayers/<relayer_id>/sign-transaction` - Sign transactions without submitting
+* **RPC endpoint**: `POST /api/v1/relayers/<relayer_id>/rpc`
+  * Alternative: RPC methods also work but REST is recommended for sending transactions
+
+**Additional Resources**:
+* [API Reference Documentation](https://docs.openzeppelin.com/relayer/1.2.x/api) - Complete API specification
+* [SDK Solana Examples](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/solana) - Working code examples for both RPC and REST endpoints
 
 ## Security
 
