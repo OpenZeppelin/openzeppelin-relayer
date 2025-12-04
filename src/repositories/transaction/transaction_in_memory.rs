@@ -176,10 +176,10 @@ impl TransactionRepository for InMemoryTransactionRepository {
 
         let start = ((query.page - 1) * query.per_page) as usize;
 
-        // Sort and paginate
+        // Sort and paginate (newest first)
         let items = filtered
             .into_iter()
-            .sorted_by(|a, b| a.created_at.cmp(&b.created_at)) // Sort by created_at
+            .sorted_by(|a, b| b.created_at.cmp(&a.created_at)) // Sort by created_at descending (newest first)
             .skip(start)
             .take(query.per_page as usize)
             .collect();
@@ -204,10 +204,10 @@ impl TransactionRepository for InMemoryTransactionRepository {
             .cloned()
             .collect();
 
-        // Sort by created_at (oldest first)
+        // Sort by created_at (newest first)
         let sorted = filtered
             .into_iter()
-            .sorted_by_key(|tx| tx.created_at.clone())
+            .sorted_by(|a, b| b.created_at.cmp(&a.created_at))
             .collect();
 
         Ok(sorted)
@@ -826,6 +826,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_find_by_relayer_id_sorted_by_created_at_newest_first() {
+        let repo = InMemoryTransactionRepository::new();
+
+        // Create transactions with different created_at timestamps
+        let mut tx1 = create_test_transaction("test-1");
+        tx1.created_at = "2025-01-27T10:00:00.000000+00:00".to_string(); // Oldest
+
+        let mut tx2 = create_test_transaction("test-2");
+        tx2.created_at = "2025-01-27T12:00:00.000000+00:00".to_string(); // Middle
+
+        let mut tx3 = create_test_transaction("test-3");
+        tx3.created_at = "2025-01-27T14:00:00.000000+00:00".to_string(); // Newest
+
+        // Create transactions in non-chronological order to ensure sorting works
+        repo.create(tx2.clone()).await.unwrap(); // Middle first
+        repo.create(tx1.clone()).await.unwrap(); // Oldest second
+        repo.create(tx3.clone()).await.unwrap(); // Newest last
+
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 10,
+        };
+        let result = repo.find_by_relayer_id("relayer-1", query).await.unwrap();
+
+        assert_eq!(result.total, 3);
+        assert_eq!(result.items.len(), 3);
+
+        // Verify transactions are sorted by created_at descending (newest first)
+        assert_eq!(
+            result.items[0].id, "test-3",
+            "First item should be newest (test-3)"
+        );
+        assert_eq!(
+            result.items[0].created_at,
+            "2025-01-27T14:00:00.000000+00:00"
+        );
+
+        assert_eq!(
+            result.items[1].id, "test-2",
+            "Second item should be middle (test-2)"
+        );
+        assert_eq!(
+            result.items[1].created_at,
+            "2025-01-27T12:00:00.000000+00:00"
+        );
+
+        assert_eq!(
+            result.items[2].id, "test-1",
+            "Third item should be oldest (test-1)"
+        );
+        assert_eq!(
+            result.items[2].created_at,
+            "2025-01-27T10:00:00.000000+00:00"
+        );
+    }
+
+    #[tokio::test]
     async fn test_find_by_status() {
         let repo = InMemoryTransactionRepository::new();
         let tx1 = create_test_transaction_pending_state("tx1");
@@ -908,16 +965,16 @@ mod tests {
             .await
             .unwrap();
 
-        // Verify they are sorted by created_at (oldest first)
+        // Verify they are sorted by created_at (newest first)
         assert_eq!(result.len(), 3);
-        assert_eq!(result[0].id, "tx1"); // Earliest
+        assert_eq!(result[0].id, "tx3"); // Earliest
         assert_eq!(result[1].id, "tx2"); // Middle
-        assert_eq!(result[2].id, "tx3"); // Latest
+        assert_eq!(result[2].id, "tx1"); // Latest
 
-        // Verify the timestamps are in ascending order
-        assert_eq!(result[0].created_at, "2025-01-27T15:00:00.000000+00:00");
+        // Verify the timestamps are in descending order
+        assert_eq!(result[0].created_at, "2025-01-27T17:00:00.000000+00:00");
         assert_eq!(result[1].created_at, "2025-01-27T16:00:00.000000+00:00");
-        assert_eq!(result[2].created_at, "2025-01-27T17:00:00.000000+00:00");
+        assert_eq!(result[2].created_at, "2025-01-27T15:00:00.000000+00:00");
     }
 
     #[tokio::test]
