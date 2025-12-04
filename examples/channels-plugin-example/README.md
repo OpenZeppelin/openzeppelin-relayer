@@ -107,6 +107,7 @@ LOCK_TTL_SECONDS=30
 LOG_LEVEL=info
 # Fee Tracking (optional)
 FEE_LIMIT=100000000                 # Max fee per API key in stroops (optional)
+FEE_RESET_PERIOD_SECONDS=86400      # Reset fee consumption every N seconds (e.g., 86400 = 24 hours)
 API_KEY_HEADER=x-api-key            # Header for fee tracking (default: x-api-key)
 ```
 
@@ -371,6 +372,7 @@ The plugin supports per-API-key fee consumption tracking with a fair use policy.
 **Environment Variables:**
 
 - `FEE_LIMIT`: Maximum fee consumption per API key in stroops (when not set, fee tracking is disabled)
+- `FEE_RESET_PERIOD_SECONDS`: Reset fee consumption every N seconds (e.g., 86400 = 24 hours). When configured, each API key's fee consumption resets automatically after the period expires.
 - `API_KEY_HEADER`: HTTP header name used to extract the client API key for fee tracking (default: x-api-key)
 
 #### Query Fee Usage
@@ -388,6 +390,111 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
       }
     }
   }'
+```
+
+**Response:**
+
+```json
+{
+  "consumed": 500000,
+  "limit": 1000000,
+  "remaining": 500000,
+  "periodStartAt": "2024-01-15T00:00:00.000Z",
+  "periodEndsAt": "2024-01-16T00:00:00.000Z"
+}
+```
+
+**Response Fields:**
+
+- `consumed`: Fee used in stroops
+- `limit`: Effective fee limit (custom if set, otherwise default) - undefined if unlimited
+- `remaining`: Remaining fee budget - undefined if unlimited
+- `periodStartAt`: ISO 8601 timestamp when current period started (if reset period configured)
+- `periodEndsAt`: ISO 8601 timestamp when period will reset (if reset period configured)
+
+#### Get Fee Limit
+
+Query fee limit configuration for an API key:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "getFeeLimit",
+        "adminSecret": "YOUR_ADMIN_SECRET",
+        "apiKey": "client-api-key-to-query"
+      }
+    }
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "limit": 500000
+}
+```
+
+- `limit`: Fee limit (custom if set, otherwise default), undefined if unlimited
+
+#### Set Fee Limit
+
+Set a custom fee limit for an API key:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "setFeeLimit",
+        "adminSecret": "YOUR_ADMIN_SECRET",
+        "apiKey": "client-api-key",
+        "limit": 500000
+      }
+    }
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "ok": true,
+  "limit": 500000
+}
+```
+
+#### Delete Fee Limit
+
+Remove custom limit for an API key (reverts to default):
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "deleteFeeLimit",
+        "adminSecret": "YOUR_ADMIN_SECRET",
+        "apiKey": "client-api-key"
+      }
+    }
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "ok": true
+}
 ```
 
 ### Generating XDR for the Relayer

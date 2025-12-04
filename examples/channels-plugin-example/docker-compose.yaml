@@ -29,6 +29,7 @@ services:
       LOCK_TTL_SECONDS: ${LOCK_TTL_SECONDS}
       FEE_LIMIT: ${FEE_LIMIT}
       API_KEY_HEADER: ${API_KEY_HEADER}
+      FEE_RESET_PERIOD_SECONDS: ${FEE_RESET_PERIOD_SECONDS}
     security_opt:
       - no-new-privileges
     networks:
