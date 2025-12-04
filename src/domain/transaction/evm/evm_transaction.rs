@@ -286,6 +286,49 @@ where
         Ok(())
     }
 
+    /// Marks a transaction as failed with a reason, updates it, sends notification, and returns the updated transaction.
+    ///
+    /// This is a common pattern used when a transaction should be marked as failed.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - The transaction to mark as failed
+    /// * `reason` - The reason for the failure
+    /// * `error_context` - Context string for error logging (e.g., "gas limit exceeds block gas limit")
+    ///
+    /// # Returns
+    ///
+    /// The updated transaction with Failed status
+    async fn mark_transaction_as_failed(
+        &self,
+        tx: &TransactionRepoModel,
+        reason: String,
+        error_context: &str,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        let update = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Failed),
+            status_reason: Some(reason.clone()),
+            ..Default::default()
+        };
+
+        let updated_tx = self
+            .transaction_repository
+            .partial_update(tx.id.clone(), update)
+            .await?;
+
+        if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
+            error!(
+                tx_id = %updated_tx.id,
+                status = ?TransactionStatus::Failed,
+                "sending transaction update notification failed for {}: {:?}",
+                error_context,
+                e
+            );
+        }
+
+        Ok(updated_tx)
+    }
+
     /// Validates that the relayer has sufficient balance for the transaction.
     ///
     /// # Arguments
@@ -415,6 +458,34 @@ where
                     evm_data.gas_limit = Some(default_gas_limit);
                 }
             }
+        } else {
+            // do user gas limit validation against block gas limit
+            let block = self.provider.get_block_by_number().await;
+            if let Ok(block) = block {
+                let block_gas_limit = block.header.gas_limit;
+                if let Some(gas_limit) = evm_data.gas_limit {
+                    if gas_limit > block_gas_limit {
+                        let reason = format!(
+                            "Transaction gas limit ({gas_limit}) exceeds block gas limit ({block_gas_limit})",
+                        );
+                        warn!(
+                            tx_id = %tx.id,
+                            tx_gas_limit = %gas_limit,
+                            block_gas_limit = %block_gas_limit,
+                            "transaction gas limit exceeds block gas limit"
+                        );
+
+                        let updated_tx = self
+                            .mark_transaction_as_failed(
+                                &tx,
+                                reason,
+                                "gas limit exceeds block gas limit",
+                            )
+                            .await?;
+                        return Ok(updated_tx);
+                    }
+                }
+            }
         }
 
         // set the gas price
@@ -435,25 +506,13 @@ where
                 TransactionError::InsufficientBalance(_) => {
                     warn!(error = %balance_error, "insufficient balance for transaction");
 
-                    let update = TransactionUpdateRequest {
-                        status: Some(TransactionStatus::Failed),
-                        status_reason: Some(balance_error.to_string()),
-                        ..Default::default()
-                    };
-
                     let updated_tx = self
-                        .transaction_repository
-                        .partial_update(tx.id.clone(), update)
+                        .mark_transaction_as_failed(
+                            &tx,
+                            balance_error.to_string(),
+                            "insufficient balance",
+                        )
                         .await?;
-
-                    if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
-                        error!(
-                            tx_id = %updated_tx.id,
-                            status = ?TransactionStatus::Failed,
-                            "sending transaction update notification failed for insufficient balance: {:?}",
-                            e
-                        );
-                    }
 
                     // Return Ok since transaction is in final Failed state - no retry needed
                     return Ok(updated_tx);
@@ -843,7 +902,7 @@ where
                 .await;
         }
 
-        let update = self.prepare_noop_update_request(&tx, true).await?;
+        let update = self.prepare_noop_update_request(&tx, true, None).await?;
         let updated_tx = self
             .transaction_repository()
             .partial_update(tx.id.clone(), update)
@@ -1188,6 +1247,20 @@ mod tests {
             .with(eq("0xSender"))
             .returning(|_| Box::pin(ready(Ok(U256::from(1000000000000000000u64)))));
 
+        // Mock get_block_by_number for gas limit validation (tx has gas_limit: Some(21000))
+        mock_provider
+            .expect_get_block_by_number()
+            .times(1)
+            .returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    // Set block gas limit to 30M (higher than tx gas limit of 21_000)
+                    block.header.gas_limit = 30_000_000u64;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
+
         let test_tx_clone = test_tx.clone();
         mock_transaction
             .expect_partial_update()
@@ -1288,6 +1361,20 @@ mod tests {
             .with(eq("0xSender"))
             .returning(|_| Box::pin(ready(Ok(U256::from(90000000000000000u64)))));
 
+        // Mock get_block_by_number for gas limit validation (tx has gas_limit: Some(21000))
+        mock_provider
+            .expect_get_block_by_number()
+            .times(1)
+            .returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    // Set block gas limit to 30M (higher than tx gas limit of 21_000)
+                    block.header.gas_limit = 30_000_000u64;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
+
         let test_tx_clone = test_tx.clone();
         mock_transaction
             .expect_partial_update()
@@ -1342,6 +1429,248 @@ mod tests {
             "Status reason should contain insufficient balance error, got: {:?}",
             updated_tx.status_reason
         );
+    }
+
+    #[tokio::test]
+    async fn test_prepare_transaction_with_gas_limit_exceeding_block_limit() {
+        let mut mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mock_price_calculator = MockPriceCalculator::new();
+        let mut counter_service = MockTransactionCounterTrait::new();
+
+        let relayer = create_test_relayer_with_policy(RelayerEvmPolicy {
+            gas_limit_estimation: Some(false), // User provides gas limit
+            min_balance: Some(100000000000000000u128),
+            ..Default::default()
+        });
+
+        // Create a transaction with a gas limit that exceeds block gas limit
+        let mut test_tx = create_test_transaction();
+        if let NetworkTransactionData::Evm(ref mut evm_data) = test_tx.network_data {
+            evm_data.gas_limit = Some(30_000_001); // Exceeds typical block gas limit of 30M
+        }
+
+        counter_service
+            .expect_get_and_increment()
+            .returning(|_, _| Box::pin(ready(Ok(42))));
+
+        // Mock get_block_by_number to return a block with gas_limit lower than tx gas_limit
+        mock_provider
+            .expect_get_block_by_number()
+            .times(1)
+            .returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    // Set block gas limit to 30M (lower than tx gas limit of 30_000_001)
+                    block.header.gas_limit = 30_000_000u64;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
+
+        // Mock partial_update to be called when marking transaction as failed
+        let test_tx_clone = test_tx.clone();
+        mock_transaction
+            .expect_partial_update()
+            .withf(move |id, update| {
+                id == "test-tx-id"
+                    && update.status == Some(TransactionStatus::Failed)
+                    && update.status_reason.is_some()
+                    && update
+                        .status_reason
+                        .as_ref()
+                        .unwrap()
+                        .contains("exceeds block gas limit")
+            })
+            .returning(move |_, update| {
+                let mut updated_tx = test_tx_clone.clone();
+                updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                updated_tx.status_reason = update.status_reason.clone();
+                Ok(updated_tx)
+            });
+
+        mock_job_producer
+            .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        let mock_network = MockNetworkRepository::new();
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(mock_network),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.prepare_transaction(test_tx.clone()).await;
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+
+        let updated_tx = result.unwrap();
+        assert_eq!(
+            updated_tx.status,
+            TransactionStatus::Failed,
+            "Transaction should be marked as Failed"
+        );
+        assert!(
+            updated_tx.status_reason.is_some(),
+            "Status reason should be set"
+        );
+        assert!(
+            updated_tx
+                .status_reason
+                .as_ref()
+                .unwrap()
+                .contains("exceeds block gas limit"),
+            "Status reason should mention gas limit exceeds block gas limit, got: {:?}",
+            updated_tx.status_reason
+        );
+        assert!(
+            updated_tx
+                .status_reason
+                .as_ref()
+                .unwrap()
+                .contains("30000001"),
+            "Status reason should contain transaction gas limit, got: {:?}",
+            updated_tx.status_reason
+        );
+        assert!(
+            updated_tx
+                .status_reason
+                .as_ref()
+                .unwrap()
+                .contains("30000000"),
+            "Status reason should contain block gas limit, got: {:?}",
+            updated_tx.status_reason
+        );
+    }
+
+    #[tokio::test]
+    async fn test_prepare_transaction_with_gas_limit_within_block_limit() {
+        let mut mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mut mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mut mock_price_calculator = MockPriceCalculator::new();
+        let mut counter_service = MockTransactionCounterTrait::new();
+
+        let relayer = create_test_relayer_with_policy(RelayerEvmPolicy {
+            gas_limit_estimation: Some(false), // User provides gas limit
+            min_balance: Some(100000000000000000u128),
+            ..Default::default()
+        });
+
+        // Create a transaction with a gas limit within block gas limit
+        let mut test_tx = create_test_transaction();
+        if let NetworkTransactionData::Evm(ref mut evm_data) = test_tx.network_data {
+            evm_data.gas_limit = Some(21_000); // Within typical block gas limit of 30M
+        }
+
+        counter_service
+            .expect_get_and_increment()
+            .returning(|_, _| Box::pin(ready(Ok(42))));
+
+        let price_params = PriceParams {
+            gas_price: Some(30000000000),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            is_min_bumped: None,
+            extra_fee: None,
+            total_cost: U256::from(630000000000000u64),
+        };
+        mock_price_calculator
+            .expect_get_transaction_price_params()
+            .returning(move |_, _| Ok(price_params.clone()));
+
+        mock_signer.expect_sign_transaction().returning(|_| {
+            Box::pin(ready(Ok(
+                crate::domain::relayer::SignTransactionResponse::Evm(
+                    crate::domain::relayer::SignTransactionResponseEvm {
+                        hash: "0xtx_hash".to_string(),
+                        signature: crate::models::EvmTransactionDataSignature {
+                            r: "r".to_string(),
+                            s: "s".to_string(),
+                            v: 1,
+                            sig: "0xsignature".to_string(),
+                        },
+                        raw: vec![1, 2, 3],
+                    },
+                ),
+            )))
+        });
+
+        mock_provider
+            .expect_get_balance()
+            .with(eq("0xSender"))
+            .returning(|_| Box::pin(ready(Ok(U256::from(1000000000000000000u64)))));
+
+        // Mock get_block_by_number to return a block with gas_limit higher than tx gas_limit
+        mock_provider
+            .expect_get_block_by_number()
+            .times(1)
+            .returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    // Set block gas limit to 30M (higher than tx gas limit of 21_000)
+                    block.header.gas_limit = 30_000_000u64;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
+
+        let test_tx_clone = test_tx.clone();
+        mock_transaction
+            .expect_partial_update()
+            .returning(move |_, update| {
+                let mut updated_tx = test_tx_clone.clone();
+                if let Some(status) = &update.status {
+                    updated_tx.status = status.clone();
+                }
+                if let Some(network_data) = &update.network_data {
+                    updated_tx.network_data = network_data.clone();
+                }
+                if let Some(hashes) = &update.hashes {
+                    updated_tx.hashes = hashes.clone();
+                }
+                Ok(updated_tx)
+            });
+
+        mock_job_producer
+            .expect_produce_submit_transaction_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+        mock_job_producer
+            .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        let mock_network = MockNetworkRepository::new();
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(mock_network),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.prepare_transaction(test_tx.clone()).await;
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+
+        let prepared_tx = result.unwrap();
+        // Transaction should proceed normally (not be marked as Failed)
+        assert_eq!(prepared_tx.status, TransactionStatus::Sent);
+        assert!(!prepared_tx.hashes.is_empty());
     }
 
     #[tokio::test]
