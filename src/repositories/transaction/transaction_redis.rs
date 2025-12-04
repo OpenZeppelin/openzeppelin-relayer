@@ -305,11 +305,8 @@ impl RedisTransactionRepository {
     }
 
     /// Migrate old transactions to sorted set if they exist
-    /// Returns Ok(Some(count)) if migration succeeded and count is available,
-    /// Ok(None) if no transactions exist,
-    /// Err(_) if migration failed and fallback should be used
     ///
-    /// TODO: Remove this migration function in the future
+    /// Remove this migration function in the future
     async fn check_and_migrate_if_needed(
         &self,
         relayer_id: &str,
@@ -321,17 +318,31 @@ impl RedisTransactionRepository {
             "{}:{}:{}:{}:*",
             self.key_prefix, RELAYER_PREFIX, relayer_id, TX_PREFIX
         );
-        let (_, keys): (u64, Vec<String>) = redis::cmd("SCAN")
-            .cursor_arg(0)
-            .arg("MATCH")
-            .arg(&pattern)
-            .arg("COUNT")
-            .arg(1) // Only need to check if any exist
-            .query_async(&mut conn)
-            .await
-            .map_err(|e| self.map_redis_error(e, "check_and_migrate_scan_check"))?;
 
-        if keys.is_empty() {
+        // Scan for keys (need to iterate through cursor to ensure we check all keys)
+        let mut cursor = 0u64;
+        let mut found_any = false;
+        loop {
+            let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                .cursor_arg(cursor)
+                .arg("MATCH")
+                .arg(&pattern)
+                .query_async(&mut conn)
+                .await
+                .map_err(|e| self.map_redis_error(e, "check_and_migrate_scan_check"))?;
+
+            if !keys.is_empty() {
+                found_any = true;
+                break; // Found at least one key, that's enough to know migration is needed
+            }
+
+            cursor = next_cursor;
+            if cursor == 0 {
+                break; // Finished scanning
+            }
+        }
+
+        if !found_any {
             // No transactions at all
             debug!(relayer_id = %relayer_id, "no transactions found for relayer");
             return Ok(None);
@@ -1027,7 +1038,13 @@ impl TransactionRepository for RedisTransactionRepository {
         all_ids.sort();
         all_ids.dedup();
 
-        let transactions = self.get_transactions_by_ids(&all_ids).await?;
+        let mut transactions = self.get_transactions_by_ids(&all_ids).await?;
+
+        // Sort by created_at descending (newest first)
+        transactions
+            .results
+            .sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
         Ok(transactions.results)
     }
 
@@ -1535,6 +1552,165 @@ mod tests {
             .unwrap();
         assert_eq!(result.total, 0);
         assert_eq!(result.items.len(), 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_find_by_relayer_id_sorted_by_created_at_newest_first() {
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+
+        // Create transactions with different created_at timestamps
+        let mut tx1 = create_test_transaction_with_relayer("test-1", &relayer_id);
+        tx1.created_at = "2025-01-27T10:00:00.000000+00:00".to_string(); // Oldest
+
+        let mut tx2 = create_test_transaction_with_relayer("test-2", &relayer_id);
+        tx2.created_at = "2025-01-27T12:00:00.000000+00:00".to_string(); // Middle
+
+        let mut tx3 = create_test_transaction_with_relayer("test-3", &relayer_id);
+        tx3.created_at = "2025-01-27T14:00:00.000000+00:00".to_string(); // Newest
+
+        // Create transactions in non-chronological order to ensure sorting works
+        repo.create(tx2.clone()).await.unwrap(); // Middle first
+        repo.create(tx1.clone()).await.unwrap(); // Oldest second
+        repo.create(tx3.clone()).await.unwrap(); // Newest last
+
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 10,
+        };
+        let result = repo.find_by_relayer_id(&relayer_id, query).await.unwrap();
+
+        assert_eq!(result.total, 3);
+        assert_eq!(result.items.len(), 3);
+
+        // Verify transactions are sorted by created_at descending (newest first)
+        assert_eq!(
+            result.items[0].id, "test-3",
+            "First item should be newest (test-3)"
+        );
+        assert_eq!(
+            result.items[0].created_at,
+            "2025-01-27T14:00:00.000000+00:00"
+        );
+
+        assert_eq!(
+            result.items[1].id, "test-2",
+            "Second item should be middle (test-2)"
+        );
+        assert_eq!(
+            result.items[1].created_at,
+            "2025-01-27T12:00:00.000000+00:00"
+        );
+
+        assert_eq!(
+            result.items[2].id, "test-1",
+            "Third item should be oldest (test-1)"
+        );
+        assert_eq!(
+            result.items[2].created_at,
+            "2025-01-27T10:00:00.000000+00:00"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_find_by_relayer_id_migration_from_old_index() {
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+
+        // Create transactions with different created_at timestamps
+        let mut tx1 = create_test_transaction_with_relayer("migrate-test-1", &relayer_id);
+        tx1.created_at = "2025-01-27T10:00:00.000000+00:00".to_string(); // Oldest
+
+        let mut tx2 = create_test_transaction_with_relayer("migrate-test-2", &relayer_id);
+        tx2.created_at = "2025-01-27T12:00:00.000000+00:00".to_string(); // Middle
+
+        let mut tx3 = create_test_transaction_with_relayer("migrate-test-3", &relayer_id);
+        tx3.created_at = "2025-01-27T14:00:00.000000+00:00".to_string(); // Newest
+
+        // Create transactions directly in Redis WITHOUT adding to sorted set
+        // This simulates old transactions created before the sorted set index existed
+        let mut conn = repo.client.as_ref().clone();
+        let relayer_list_key = repo.relayer_list_key();
+        let _: () = conn.sadd(&relayer_list_key, &relayer_id).await.unwrap();
+
+        for tx in &[&tx1, &tx2, &tx3] {
+            let key = repo.tx_key(&tx.relayer_id, &tx.id);
+            let reverse_key = repo.tx_to_relayer_key(&tx.id);
+            let value = repo.serialize_entity(tx, |t| &t.id, "transaction").unwrap();
+
+            let mut pipe = redis::pipe();
+            pipe.atomic();
+            pipe.set(&key, &value);
+            pipe.set(&reverse_key, &tx.relayer_id);
+
+            // Add to status index (but NOT to sorted set)
+            let status_key = repo.relayer_status_key(&tx.relayer_id, &tx.status);
+            pipe.sadd(&status_key, &tx.id);
+
+            pipe.exec_async(&mut conn).await.unwrap();
+        }
+
+        // Verify sorted set is empty (transactions were created without sorted set index)
+        let relayer_sorted_key = repo.relayer_tx_by_created_at_key(&relayer_id);
+        let count: u64 = conn.zcard(&relayer_sorted_key).await.unwrap();
+        assert_eq!(count, 0, "Sorted set should be empty for old transactions");
+
+        // Call find_by_relayer_id - this should trigger migration
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 10,
+        };
+        let result = repo
+            .find_by_relayer_id(&relayer_id, query.clone())
+            .await
+            .unwrap();
+
+        // Verify migration happened - sorted set should now have entries
+        let count_after: u64 = conn.zcard(&relayer_sorted_key).await.unwrap();
+        assert_eq!(
+            count_after, 3,
+            "Sorted set should be populated after migration"
+        );
+
+        // Verify results are correct and sorted (newest first)
+        assert_eq!(result.total, 3);
+        assert_eq!(result.items.len(), 3);
+
+        assert_eq!(
+            result.items[0].id, "migrate-test-3",
+            "First item should be newest after migration"
+        );
+        assert_eq!(
+            result.items[0].created_at,
+            "2025-01-27T14:00:00.000000+00:00"
+        );
+
+        assert_eq!(
+            result.items[1].id, "migrate-test-2",
+            "Second item should be middle after migration"
+        );
+        assert_eq!(
+            result.items[1].created_at,
+            "2025-01-27T12:00:00.000000+00:00"
+        );
+
+        assert_eq!(
+            result.items[2].id, "migrate-test-1",
+            "Third item should be oldest after migration"
+        );
+        assert_eq!(
+            result.items[2].created_at,
+            "2025-01-27T10:00:00.000000+00:00"
+        );
+
+        // Verify second call uses sorted set (no migration needed)
+        let result2 = repo.find_by_relayer_id(&relayer_id, query).await.unwrap();
+        assert_eq!(result2.total, 3);
+        assert_eq!(result2.items.len(), 3);
+        // Results should be identical since sorted set is now populated
+        assert_eq!(result.items[0].id, result2.items[0].id);
     }
 
     #[tokio::test]
