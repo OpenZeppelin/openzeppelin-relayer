@@ -339,8 +339,6 @@ where
         debug!("scheduling resubmit job for transaction");
 
         // Check if transaction gas limit exceeds block gas limit before resubmitting
-        // This is a safety net for transactions that were submitted before validation was added
-        // or transactions that somehow got through with invalid gas limits
         let (should_noop, reason) = self.should_noop(&tx).await?;
         let tx_to_process = if should_noop {
             self.process_noop_transaction(&tx, reason).await?
