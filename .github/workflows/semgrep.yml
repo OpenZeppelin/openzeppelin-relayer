@@ -29,11 +29,11 @@ jobs:
     if: (github.actor != 'dependabot[bot]')
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a  # v2.13.1
+        uses: step-security/harden-runner@df199fb7be9f65074067a9eb93f12bb4c5547cf2  # v2.13.3
         with:
           egress-policy: audit
       - name: Checkout code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v4.5.4
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v4.5.4
       # Run the "semgrep ci" command on the command line of the docker image.
       - run: semgrep ci --sarif --sarif-output=semgrep.sarif
         env:
@@ -44,6 +44,6 @@ jobs:
           # No metrics
           SEMGREP_SEND_METRICS: 'off'
       - name: Upload SARIF file for GitHub Advanced Security Dashboard
-        uses: github/codeql-action/upload-sarif@0499de31b99561a6d14a36a5f662c2a54f91beee  # v3.29.5
+        uses: github/codeql-action/upload-sarif@fe4161a26a8629af62121b670040955b330f9af2  # v3.29.5
         with:
           sarif_file: semgrep.sarif
