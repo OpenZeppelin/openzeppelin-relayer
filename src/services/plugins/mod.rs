@@ -229,6 +229,9 @@ impl<R: PluginRunnerTrait> PluginService<R> {
         let socket_path = format!("/tmp/{}.sock", Uuid::new_v4());
         let script_path = Self::resolve_plugin_path(&plugin.path);
         let script_params = plugin_call_request.params.to_string();
+        let headers_json = plugin_call_request
+            .headers
+            .map(|h| serde_json::to_string(&h).unwrap_or_default());
 
         let result = self
             .runner
@@ -239,6 +242,7 @@ impl<R: PluginRunnerTrait> PluginService<R> {
                 plugin.timeout,
                 script_params,
                 get_request_id(),
+                headers_json,
                 state,
             )
             .await;
@@ -407,7 +411,7 @@ mod tests {
 
         plugin_runner
             .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
-            .returning(|_, _, _, _, _, _, _| {
+            .returning(|_, _, _, _, _, _, _, _| {
                 Ok(ScriptResult {
                     logs: vec![LogEntry {
                         level: LogLevel::Log,
@@ -425,6 +429,7 @@ mod tests {
                 plugin,
                 PluginCallRequest {
                     params: serde_json::Value::Null,
+                    headers: None,
                 },
                 Arc::new(web::ThinData(app_state)),
             )
@@ -705,7 +710,7 @@ mod tests {
 
         plugin_runner
             .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
-            .returning(move |_, _, _, _, _, _, _| {
+            .returning(move |_, _, _, _, _, _, _, _| {
                 Err(PluginError::HandlerError(Box::new(PluginHandlerPayload {
                     status: 400,
                     message: "Plugin handler error".to_string(),
@@ -725,6 +730,7 @@ mod tests {
                 plugin,
                 PluginCallRequest {
                     params: serde_json::Value::Null,
+                    headers: None,
                 },
                 Arc::new(web::ThinData(app_state)),
             )
@@ -759,7 +765,7 @@ mod tests {
 
         plugin_runner
             .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
-            .returning(|_, _, _, _, _, _, _| {
+            .returning(|_, _, _, _, _, _, _, _| {
                 Err(PluginError::PluginExecutionError("Fatal error".to_string()))
             });
 
@@ -769,6 +775,7 @@ mod tests {
                 plugin,
                 PluginCallRequest {
                     params: serde_json::Value::Null,
+                    headers: None,
                 },
                 Arc::new(web::ThinData(app_state)),
             )
@@ -798,7 +805,7 @@ mod tests {
 
         plugin_runner
             .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
-            .returning(|_, _, _, _, _, _, _| {
+            .returning(|_, _, _, _, _, _, _, _| {
                 Ok(ScriptResult {
                     logs: vec![LogEntry {
                         level: LogLevel::Log,
@@ -816,6 +823,7 @@ mod tests {
                 plugin,
                 PluginCallRequest {
                     params: serde_json::Value::Null,
+                    headers: None,
                 },
                 Arc::new(web::ThinData(app_state)),
             )
@@ -850,7 +858,7 @@ mod tests {
 
         plugin_runner
             .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
-            .returning(|_, _, _, _, _, _, _| {
+            .returning(|_, _, _, _, _, _, _, _| {
                 Ok(ScriptResult {
                     logs: vec![],
                     error: "".to_string(),
@@ -865,6 +873,7 @@ mod tests {
                 plugin,
                 PluginCallRequest {
                     params: serde_json::Value::Null,
+                    headers: None,
                 },
                 Arc::new(web::ThinData(app_state)),
             )
@@ -879,5 +888,133 @@ mod tests {
             }
             _ => panic!("Expected Success result"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_call_plugin_with_headers() {
+        use std::sync::{Arc as StdArc, Mutex};
+
+        let plugin = PluginModel {
+            id: "test-plugin".to_string(),
+            path: "test-path".to_string(),
+            timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+            emit_logs: false,
+            emit_traces: false,
+        };
+        let app_state =
+            create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;
+
+        // Capture the headers_json parameter passed to the runner
+        let captured_headers: StdArc<Mutex<Option<String>>> = StdArc::new(Mutex::new(None));
+        let captured_headers_clone = captured_headers.clone();
+
+        let mut plugin_runner = MockPluginRunnerTrait::default();
+
+        plugin_runner
+            .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
+            .returning(move |_, _, _, _, _, _, headers_json, _| {
+                // Capture the headers_json parameter
+                *captured_headers_clone.lock().unwrap() = headers_json;
+                Ok(ScriptResult {
+                    logs: vec![],
+                    error: "".to_string(),
+                    return_value: "{}".to_string(),
+                    trace: vec![],
+                })
+            });
+
+        // Create request with headers
+        let mut headers_map = std::collections::HashMap::new();
+        headers_map.insert(
+            "x-custom-header".to_string(),
+            vec!["custom-value".to_string()],
+        );
+        headers_map.insert(
+            "authorization".to_string(),
+            vec!["Bearer token123".to_string()],
+        );
+
+        let plugin_service = PluginService::<MockPluginRunnerTrait>::new(plugin_runner);
+        let _outcome = plugin_service
+            .call_plugin(
+                plugin,
+                PluginCallRequest {
+                    params: serde_json::json!({"test": "data"}),
+                    headers: Some(headers_map.clone()),
+                },
+                Arc::new(web::ThinData(app_state)),
+            )
+            .await;
+
+        // Verify headers were serialized and passed to the runner
+        let captured = captured_headers.lock().unwrap();
+        assert!(
+            captured.is_some(),
+            "headers_json should be passed to runner"
+        );
+
+        let headers_json = captured.as_ref().unwrap();
+        let parsed: std::collections::HashMap<String, Vec<String>> =
+            serde_json::from_str(headers_json).expect("headers_json should be valid JSON");
+
+        assert_eq!(
+            parsed.get("x-custom-header"),
+            Some(&vec!["custom-value".to_string()])
+        );
+        assert_eq!(
+            parsed.get("authorization"),
+            Some(&vec!["Bearer token123".to_string()])
+        );
+    }
+
+    #[tokio::test]
+    async fn test_call_plugin_without_headers() {
+        use std::sync::{Arc as StdArc, Mutex};
+
+        let plugin = PluginModel {
+            id: "test-plugin".to_string(),
+            path: "test-path".to_string(),
+            timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+            emit_logs: false,
+            emit_traces: false,
+        };
+        let app_state =
+            create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;
+
+        let captured_headers: StdArc<Mutex<Option<String>>> = StdArc::new(Mutex::new(None));
+        let captured_headers_clone = captured_headers.clone();
+
+        let mut plugin_runner = MockPluginRunnerTrait::default();
+
+        plugin_runner
+            .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
+            .returning(move |_, _, _, _, _, _, headers_json, _| {
+                *captured_headers_clone.lock().unwrap() = headers_json;
+                Ok(ScriptResult {
+                    logs: vec![],
+                    error: "".to_string(),
+                    return_value: "{}".to_string(),
+                    trace: vec![],
+                })
+            });
+
+        let plugin_service = PluginService::<MockPluginRunnerTrait>::new(plugin_runner);
+        let _outcome = plugin_service
+            .call_plugin(
+                plugin,
+                PluginCallRequest {
+                    params: serde_json::json!({}),
+                    headers: None, // No headers
+                },
+                Arc::new(web::ThinData(app_state)),
+            )
+            .await;
+
+        // Verify headers_json is None when no headers provided
+        let captured = captured_headers.lock().unwrap();
+        assert!(
+            captured.is_none(),
+            "headers_json should be None when no headers provided"
+        );
     }
 }

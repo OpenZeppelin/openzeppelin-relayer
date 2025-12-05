@@ -44,6 +44,7 @@ impl ScriptExecutor {
         socket_path: String,
         script_params: String,
         http_request_id: Option<String>,
+        headers_json: Option<String>,
     ) -> Result<ScriptResult, PluginError> {
         if Command::new("ts-node")
             .arg("--version")
@@ -69,6 +70,7 @@ impl ScriptExecutor {
             .arg(script_params)       // Plugin parameters (argv[4])
             .arg(script_path)         // User script path (argv[5])
             .arg(http_request_id.unwrap_or_default()) // HTTP x-request-id (argv[6], optional)
+            .arg(headers_json.unwrap_or_default()) // HTTP headers as JSON (argv[7], optional)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -200,6 +202,7 @@ mod tests {
             socket_path.display().to_string(),
             "{}".to_string(),
             None,
+            None,
         )
         .await;
 
@@ -242,6 +245,7 @@ mod tests {
             socket_path.display().to_string(),
             "{}".to_string(),
             None,
+            None,
         )
         .await;
 
@@ -273,6 +277,7 @@ mod tests {
             script_path.display().to_string(),
             socket_path.display().to_string(),
             "{}".to_string(),
+            None,
             None,
         )
         .await;
@@ -322,6 +327,7 @@ mod tests {
             socket_path.display().to_string(),
             "{}".to_string(),
             None,
+            None,
         )
         .await;
 
@@ -361,6 +367,7 @@ mod tests {
             socket_path.display().to_string(),
             "{}".to_string(),
             None,
+            None,
         )
         .await;
 
@@ -370,5 +377,67 @@ mod tests {
             .unwrap()
             .to_string()
             .contains("Failed to parse log"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_typescript_with_headers() {
+        let temp_dir = tempdir().unwrap();
+        let ts_config = temp_dir.path().join("tsconfig.json");
+        let script_path = temp_dir
+            .path()
+            .join("test_execute_typescript_with_headers.ts");
+        let socket_path = temp_dir
+            .path()
+            .join("test_execute_typescript_with_headers.sock");
+
+        // Plugin using modern context pattern to access headers
+        let content = r#"
+            export async function handler(context: any) {
+                const { headers, params } = context;
+                console.log(`Received ${Object.keys(headers).length} headers`);
+                return {
+                    headerCount: Object.keys(headers).length,
+                    customHeader: headers['x-custom-header']?.[0],
+                    authHeader: headers['authorization']?.[0],
+                    multiValueHeader: headers['x-multi-value'],
+                    params: params
+                };
+            }
+        "#;
+        fs::write(script_path.clone(), content).unwrap();
+        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
+
+        // Create headers JSON matching HashMap<String, Vec<String>>
+        let headers_json = r#"{"x-custom-header":["custom-value"],"authorization":["Bearer token123"],"x-multi-value":["value1","value2"]}"#;
+
+        let result = ScriptExecutor::execute_typescript(
+            "test-plugin-headers".to_string(),
+            script_path.display().to_string(),
+            socket_path.display().to_string(),
+            r#"{"foo":"bar"}"#.to_string(),
+            None,
+            Some(headers_json.to_string()),
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+
+        // Verify log output
+        assert_eq!(result.logs[0].level, LogLevel::Log);
+        assert!(result.logs[0].message.contains("Received 3 headers"));
+
+        // Parse return value and verify headers were accessible
+        let return_obj: serde_json::Value =
+            serde_json::from_str(&result.return_value).expect("Failed to parse return value");
+
+        assert_eq!(return_obj["headerCount"], 3);
+        assert_eq!(return_obj["customHeader"], "custom-value");
+        assert_eq!(return_obj["authHeader"], "Bearer token123");
+        assert_eq!(
+            return_obj["multiValueHeader"],
+            serde_json::json!(["value1", "value2"])
+        );
+        assert_eq!(return_obj["params"], serde_json::json!({"foo": "bar"}));
     }
 }
