@@ -16,7 +16,7 @@ use super::{
 use crate::constants::{
     get_evm_min_age_for_hash_recovery, get_evm_pending_recovery_trigger_timeout,
     get_evm_prepare_timeout, get_evm_resend_timeout, ARBITRUM_TIME_TO_RESUBMIT,
-    EVM_MIN_HASHES_FOR_RECOVERY, EVM_PREPARE_TIMEOUT_MINUTES,
+    EVM_MIN_HASHES_FOR_RECOVERY,
 };
 use crate::domain::transaction::common::{
     get_age_of_sent_at, is_final_state, is_pending_transaction,
@@ -175,18 +175,26 @@ where
     }
 
     /// Determines if a transaction should be replaced with a NOOP transaction.
+    ///
+    /// Returns a tuple `(should_noop, reason)` where:
+    /// - `should_noop`: `true` if transaction should be replaced with NOOP
+    /// - `reason`: Optional reason string explaining why NOOP is needed (only set when `should_noop` is `true`)
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - The transaction to check
     pub(super) async fn should_noop(
         &self,
         tx: &TransactionRepoModel,
-    ) -> Result<bool, TransactionError> {
+    ) -> Result<(bool, Option<String>), TransactionError> {
         if too_many_noop_attempts(tx) {
             info!("Transaction has too many NOOP attempts already");
-            return Ok(false);
+            return Ok((false, None));
         }
 
         let evm_data = tx.network_data.get_evm_transaction_data()?;
         if is_noop(&evm_data) {
-            return Ok(false);
+            return Ok((false, None));
         }
 
         let network_model = self
@@ -205,13 +213,16 @@ where
         })?;
 
         if network.is_rollup() && too_many_attempts(tx) {
-            info!("Rollup transaction has too many attempts, will replace with NOOP");
-            return Ok(true);
+            let reason =
+                "Rollup transaction has too many attempts. Replacing with NOOP.".to_string();
+            info!("{}", reason);
+            return Ok((true, Some(reason)));
         }
 
         if !is_transaction_valid(&tx.created_at, &tx.valid_until) {
-            info!("Transaction is expired, will replace with NOOP");
-            return Ok(true);
+            let reason = "Transaction is expired. Replacing with NOOP.".to_string();
+            info!("{}", reason);
+            return Ok((true, Some(reason)));
         }
 
         if tx.status == TransactionStatus::Pending {
@@ -223,11 +234,35 @@ where
                 .with_timezone(&Utc);
             let age = Utc::now().signed_duration_since(created_time);
             if age > get_evm_prepare_timeout() {
-                info!("Transaction in Pending state for over {EVM_PREPARE_TIMEOUT_MINUTES} minutes, will replace with NOOP");
-                return Ok(true);
+                let reason = format!(
+                    "Transaction in Pending state for over {} minutes. Replacing with NOOP.",
+                    get_evm_prepare_timeout().num_minutes()
+                );
+                info!("{}", reason);
+                return Ok((true, Some(reason)));
             }
         }
-        Ok(false)
+
+        let latest_block = self.provider().get_block_by_number().await;
+        if let Ok(block) = latest_block {
+            let block_gas_limit = block.header.gas_limit;
+            if let Some(gas_limit) = evm_data.gas_limit {
+                if gas_limit > block_gas_limit {
+                    let reason = format!(
+                                "Transaction gas limit ({gas_limit}) exceeds block gas limit ({block_gas_limit}). Replacing with NOOP.",
+                            );
+                    warn!(
+                        tx_id = %tx.id,
+                        tx_gas_limit = %gas_limit,
+                        block_gas_limit = %block_gas_limit,
+                        "transaction gas limit exceeds block gas limit, replacing with NOOP"
+                    );
+                    return Ok((true, Some(reason)));
+                }
+            }
+        }
+
+        Ok((false, None))
     }
 
     /// Helper method that updates transaction status only if it's different from the current status.
@@ -247,6 +282,7 @@ where
         &self,
         tx: &TransactionRepoModel,
         is_cancellation: bool,
+        reason: Option<String>,
     ) -> Result<TransactionUpdateRequest, TransactionError> {
         let mut evm_data = tx.network_data.get_evm_transaction_data()?;
         let network_model = self
@@ -270,6 +306,7 @@ where
         let update_request = TransactionUpdateRequest {
             network_data: Some(NetworkTransactionData::Evm(evm_data)),
             noop_count: Some(noop_count),
+            status_reason: reason,
             is_canceled: if is_cancellation {
                 Some(true)
             } else {
@@ -301,8 +338,10 @@ where
     ) -> Result<TransactionRepoModel, TransactionError> {
         debug!("scheduling resubmit job for transaction");
 
-        let tx_to_process = if self.should_noop(&tx).await? {
-            self.process_noop_transaction(&tx).await?
+        // Check if transaction gas limit exceeds block gas limit before resubmitting
+        let (should_noop, reason) = self.should_noop(&tx).await?;
+        let tx_to_process = if should_noop {
+            self.process_noop_transaction(&tx, reason).await?
         } else {
             tx
         };
@@ -315,9 +354,10 @@ where
     async fn process_noop_transaction(
         &self,
         tx: &TransactionRepoModel,
+        reason: Option<String>,
     ) -> Result<TransactionRepoModel, TransactionError> {
         debug!("preparing transaction NOOP before resubmission");
-        let update = self.prepare_noop_update_request(tx, false).await?;
+        let update = self.prepare_noop_update_request(tx, false, reason).await?;
         let updated_tx = self
             .transaction_repository()
             .partial_update(tx.id.clone(), update)
@@ -340,21 +380,31 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        if self.should_noop(&tx).await? {
-            debug!("preparing NOOP for pending transaction {}", tx.id);
-            let update = self.prepare_noop_update_request(&tx, false).await?;
+        let (should_noop, reason) = self.should_noop(&tx).await?;
+        if should_noop {
+            // For Pending state transactions, nonces are not yet assigned, so we mark as Failed
+            // instead of NOOP. This matches prepare_transaction behavior.
+            debug!(
+                tx_id = %tx.id,
+                reason = %reason.as_ref().unwrap_or(&"unknown".to_string()),
+                "marking pending transaction as Failed (nonce not assigned, no NOOP needed)"
+            );
+            let update = TransactionUpdateRequest {
+                status: Some(TransactionStatus::Failed),
+                status_reason: reason,
+                ..Default::default()
+            };
             let updated_tx = self
                 .transaction_repository()
                 .partial_update(tx.id.clone(), update)
                 .await?;
 
-            self.send_transaction_submit_job(&updated_tx).await?;
             let res = self.send_transaction_update_notification(&updated_tx).await;
             if let Err(e) = res {
                 error!(
                     tx_id = %updated_tx.id,
                     status = ?updated_tx.status,
-                    "sending transaction update notification failed for Pending state NOOP: {:?}",
+                    "sending transaction update notification failed: {:?}",
                     e
                 );
             }
@@ -469,6 +519,29 @@ where
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
         debug!(tx_id = %tx.id, "handling Sent state");
+
+        // Check if transaction should be replaced with NOOP (expired, too many attempts on rollup, etc.)
+        let (should_noop, reason) = self.should_noop(&tx).await?;
+        if should_noop {
+            debug!("preparing NOOP for sent transaction {}", tx.id);
+            let update = self.prepare_noop_update_request(&tx, false, reason).await?;
+            let updated_tx = self
+                .transaction_repository()
+                .partial_update(tx.id.clone(), update)
+                .await?;
+
+            self.send_transaction_submit_job(&updated_tx).await?;
+            let res = self.send_transaction_update_notification(&updated_tx).await;
+            if let Err(e) = res {
+                error!(
+                    tx_id = %updated_tx.id,
+                    status = ?updated_tx.status,
+                    "sending transaction update notification failed for Sent state NOOP: {:?}",
+                    e
+                );
+            }
+            return Ok(updated_tx);
+        }
 
         // Transaction was prepared but submission job may have failed
         // Re-queue a resend job if it's been stuck for a while
@@ -1195,8 +1268,16 @@ mod tests {
                 .returning(|_, _| Ok(Some(create_test_network_model())));
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let res = evm_transaction.should_noop(&tx).await.unwrap();
+            let (res, reason) = evm_transaction.should_noop(&tx).await.unwrap();
             assert!(res, "Expired transaction should be replaced with a NOOP.");
+            assert!(
+                reason.is_some(),
+                "Reason should be provided for expired transaction"
+            );
+            assert!(
+                reason.unwrap().contains("expired"),
+                "Reason should mention expiration"
+            );
         }
 
         #[tokio::test]
@@ -1208,10 +1289,14 @@ mod tests {
             tx.noop_count = Some(51); // Max is 50, so this should return false
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let res = evm_transaction.should_noop(&tx).await.unwrap();
+            let (res, reason) = evm_transaction.should_noop(&tx).await.unwrap();
             assert!(
                 !res,
                 "Transaction with too many NOOP attempts should not be replaced."
+            );
+            assert!(
+                reason.is_none(),
+                "Reason should not be provided when should_noop is false"
             );
         }
 
@@ -1232,11 +1317,25 @@ mod tests {
                 .expect_get_by_chain_id()
                 .returning(|_, _| Ok(Some(create_test_network_model())));
 
+            // Mock get_block_by_number for gas limit validation (won't be called since is_noop returns early, but needed for compilation)
+            mocks.provider.expect_get_block_by_number().returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    block.header.gas_limit = 30_000_000u64;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
+
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let res = evm_transaction.should_noop(&tx).await.unwrap();
+            let (res, reason) = evm_transaction.should_noop(&tx).await.unwrap();
             assert!(
                 !res,
                 "Transaction that is already a NOOP should not be replaced."
+            );
+            assert!(
+                reason.is_none(),
+                "Reason should not be provided when should_noop is false"
             );
         }
 
@@ -1260,10 +1359,18 @@ mod tests {
                 .returning(|_, _| Ok(Some(create_test_no_mempool_network_model())));
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let res = evm_transaction.should_noop(&tx).await.unwrap();
+            let (res, reason) = evm_transaction.should_noop(&tx).await.unwrap();
             assert!(
                 res,
                 "Rollup transaction with too many attempts should be replaced with NOOP."
+            );
+            assert!(
+                reason.is_some(),
+                "Reason should be provided for rollup transaction"
+            );
+            assert!(
+                reason.unwrap().contains("too many attempts"),
+                "Reason should mention too many attempts"
             );
         }
 
@@ -1282,10 +1389,18 @@ mod tests {
                 .returning(|_, _| Ok(Some(create_test_network_model())));
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let res = evm_transaction.should_noop(&tx).await.unwrap();
+            let (res, reason) = evm_transaction.should_noop(&tx).await.unwrap();
             assert!(
                 res,
                 "Pending transaction stuck for >2 minutes should be replaced with NOOP."
+            );
+            assert!(
+                reason.is_some(),
+                "Reason should be provided for pending timeout"
+            );
+            assert!(
+                reason.unwrap().contains("Pending state"),
+                "Reason should mention Pending state"
             );
         }
 
@@ -1302,9 +1417,23 @@ mod tests {
                 .expect_get_by_chain_id()
                 .returning(|_, _| Ok(Some(create_test_network_model())));
 
+            // Mock get_block_by_number for gas limit validation
+            mocks.provider.expect_get_block_by_number().returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    block.header.gas_limit = 30_000_000u64;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
+
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let res = evm_transaction.should_noop(&tx).await.unwrap();
+            let (res, reason) = evm_transaction.should_noop(&tx).await.unwrap();
             assert!(!res, "Valid transaction should not be replaced with NOOP.");
+            assert!(
+                reason.is_none(),
+                "Reason should not be provided when should_noop is false"
+            );
         }
     }
 
@@ -1375,6 +1504,22 @@ mod tests {
             // Set sent_at to recent (e.g., 10 seconds ago)
             tx.sent_at = Some((Utc::now() - Duration::seconds(10)).to_rfc3339());
 
+            // Mock network repository to return a test network model for should_noop check
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            // Mock get_block_by_number for gas limit validation in handle_sent_state
+            mocks.provider.expect_get_block_by_number().returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    block.header.gas_limit = 30_000_000u64;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
+
             // Mock status check job scheduling
             mocks
                 .job_producer
@@ -1395,6 +1540,22 @@ mod tests {
             let mut tx = make_test_transaction(TransactionStatus::Sent);
             // Set sent_at to long ago (> 30 seconds for resend timeout)
             tx.sent_at = Some((Utc::now() - Duration::seconds(60)).to_rfc3339());
+
+            // Mock network repository to return a test network model for should_noop check
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            // Mock get_block_by_number for gas limit validation in handle_sent_state
+            mocks.provider.expect_get_block_by_number().returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    block.header.gas_limit = 30_000_000u64;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
 
             // Mock resubmit job scheduling
             mocks
@@ -1430,7 +1591,7 @@ mod tests {
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
             let update_req = evm_transaction
-                .prepare_noop_update_request(&tx, false)
+                .prepare_noop_update_request(&tx, false, None)
                 .await
                 .unwrap();
 
@@ -1451,7 +1612,7 @@ mod tests {
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
             let update_req = evm_transaction
-                .prepare_noop_update_request(&tx, true)
+                .prepare_noop_update_request(&tx, true, None)
                 .await
                 .unwrap();
 
@@ -1480,6 +1641,16 @@ mod tests {
                 .network_repo
                 .expect_get_by_chain_id()
                 .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            // Mock get_block_by_number for gas limit validation
+            mocks.provider.expect_get_block_by_number().returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    block.header.gas_limit = 30_000_000u64;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
 
             // Expect the resubmit job to be produced
             mocks
@@ -1519,6 +1690,16 @@ mod tests {
                 .expect_get_by_chain_id()
                 .returning(|_, _| Ok(Some(create_test_network_model())));
 
+            // Mock get_block_by_number for gas limit validation
+            mocks.provider.expect_get_block_by_number().returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    block.header.gas_limit = 30_000_000u64;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
+
             // Expect status check to be scheduled when not doing NOOP
             mocks
                 .job_producer
@@ -1551,21 +1732,34 @@ mod tests {
                 .expect_get_by_chain_id()
                 .returning(|_, _| Ok(Some(create_test_network_model())));
 
-            // Expect partial_update to be called and simulate a NOOP update by setting noop_count.
+            // Mock get_block_by_number for gas limit validation
+            mocks.provider.expect_get_block_by_number().returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    block.header.gas_limit = 30_000_000u64;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
+
+            // Expect partial_update to be called and simulate a Failed update
+            // (Pending state transactions are marked as Failed, not NOOP, since nonces aren't assigned)
             let tx_clone = tx.clone();
             mocks
                 .tx_repo
                 .expect_partial_update()
+                .withf(move |id, update| {
+                    id == "test-tx-id"
+                        && update.status == Some(TransactionStatus::Failed)
+                        && update.status_reason.is_some()
+                })
                 .returning(move |_, update| {
                     let mut updated_tx = tx_clone.clone();
-                    updated_tx.noop_count = update.noop_count;
+                    updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                    updated_tx.status_reason = update.status_reason.clone();
                     Ok(updated_tx)
                 });
-            // Expect that a submit job and notification are produced.
-            mocks
-                .job_producer
-                .expect_produce_submit_transaction_job()
-                .returning(|_, _| Box::pin(async { Ok(()) }));
+            // Expect that a notification is produced (no submit job needed for Failed status)
             mocks
                 .job_producer
                 .expect_produce_send_notification_job()
@@ -1577,8 +1771,10 @@ mod tests {
                 .await
                 .unwrap();
 
-            // Since should_noop returns true, the returned transaction should have a nonzero noop_count.
-            assert!(result.noop_count.unwrap_or(0) > 0);
+            // Since should_noop returns true for pending timeout, transaction should be marked as Failed
+            assert_eq!(result.status, TransactionStatus::Failed);
+            assert!(result.status_reason.is_some());
+            assert!(result.status_reason.unwrap().contains("Pending state"));
         }
     }
 
