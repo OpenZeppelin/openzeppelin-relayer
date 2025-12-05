@@ -215,13 +215,13 @@ where
         if network.is_rollup() && too_many_attempts(tx) {
             let reason =
                 "Rollup transaction has too many attempts. Replacing with NOOP.".to_string();
-            info!("{}, will replace with NOOP", reason);
+            info!("{}", reason);
             return Ok((true, Some(reason)));
         }
 
         if !is_transaction_valid(&tx.created_at, &tx.valid_until) {
             let reason = "Transaction is expired. Replacing with NOOP.".to_string();
-            info!("{}, will replace with NOOP", reason);
+            info!("{}", reason);
             return Ok((true, Some(reason)));
         }
 
@@ -238,7 +238,7 @@ where
                     "Transaction in Pending state for over {} minutes. Replacing with NOOP.",
                     get_evm_prepare_timeout().num_minutes()
                 );
-                info!("{}, will replace with NOOP", reason);
+                info!("{}", reason);
                 return Ok((true, Some(reason)));
             }
         }
