@@ -10,7 +10,7 @@ on:
 jobs:
   build-push-image:
     name: Build and Push Docker Image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04-oz-8core
     environment: release
     env:
       DOCKERHUB_IMAGE: openzeppelin/openzeppelin-relayer
