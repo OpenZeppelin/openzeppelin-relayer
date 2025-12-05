@@ -405,6 +405,7 @@ mod tests {
             &self,
             _evm_data: &EvmTransactionData,
             _relayer: &RelayerRepoModel,
+            _force_bump: bool,
         ) -> Result<PriceParams, TransactionError> {
             if self.should_error {
                 return Err(TransactionError::ValidationError("Mock error".to_string()));
