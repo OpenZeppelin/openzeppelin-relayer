@@ -180,6 +180,7 @@ mod tests {
         let plugin_call_request = PluginCallRequest {
             params: serde_json::json!({"key":"value"}),
             headers: None,
+            route: None,
         };
         let response = call_plugin(
             "test-plugin".to_string(),
@@ -200,6 +201,7 @@ mod tests {
         let plugin_call_request = PluginCallRequest {
             params: serde_json::json!({"key":"value"}),
             headers: None,
+            route: None,
         };
         let response = call_plugin(
             "non-existent".to_string(),
@@ -229,6 +231,7 @@ mod tests {
         let plugin_call_request = PluginCallRequest {
             params: serde_json::json!({}),
             headers: None,
+            route: None,
         };
         let response = call_plugin(
             "test-plugin-logs".to_string(),

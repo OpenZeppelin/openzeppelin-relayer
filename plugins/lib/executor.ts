@@ -33,13 +33,14 @@ import { LogInterceptor } from './logger';
  * Now includes pluginId as a separate argument
  */
 function extractCliArguments() {
-  // Get arguments: [node, executor.ts, socketPath, pluginId, paramsJson, userScriptPath, httpRequestId, headersJson]
+  // Get arguments: [node, executor.ts, socketPath, pluginId, paramsJson, userScriptPath, httpRequestId, headersJson, route]
   const socketPath = process.argv[2];
   const pluginId = process.argv[3]; // NEW: Plugin ID as separate arg
   const paramsJson = process.argv[4]; // Shifted from argv[3]
   const userScriptPath = process.argv[5]; // Shifted from argv[4]
   const httpRequestId = process.argv[6]; // original HTTP request id
   const headersJson = process.argv[7]; // HTTP headers as JSON (optional)
+  const route = process.argv[8]; // Wildcard route (optional)
 
   // Validate required arguments
   if (!socketPath) {
@@ -58,7 +59,7 @@ function extractCliArguments() {
     throw new Error('User script path is required (argument 4)');
   }
 
-  return { socketPath, pluginId, paramsJson, userScriptPath, httpRequestId, headersJson };
+  return { socketPath, pluginId, paramsJson, userScriptPath, httpRequestId, headersJson, route };
 }
 
 /**
@@ -99,7 +100,7 @@ async function main(): Promise<void> {
     logInterceptor.start();
 
     // Extract and validate CLI arguments including plugin ID
-    const { socketPath, pluginId, paramsJson, userScriptPath, httpRequestId, headersJson } = extractCliArguments();
+    const { socketPath, pluginId, paramsJson, userScriptPath, httpRequestId, headersJson, route } = extractCliArguments();
 
     // Parse plugin parameters
     const pluginParams = parsePluginParameters(paramsJson);
@@ -108,7 +109,7 @@ async function main(): Promise<void> {
     const headers = parseHeaders(headersJson);
 
     // Pass plugin ID as separate argument
-    const result = await runUserPlugin(socketPath, pluginId, pluginParams, userScriptPath, httpRequestId, headers);
+    const result = await runUserPlugin(socketPath, pluginId, pluginParams, userScriptPath, httpRequestId, headers, route);
 
     // Add the result to LogInterceptor output
     logInterceptor.addResult(serializeResult(result));

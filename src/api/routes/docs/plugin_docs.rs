@@ -9,12 +9,20 @@ use crate::{
 /// Logs and traces are only returned when the plugin is configured with `emit_logs` / `emit_traces`.
 /// Plugin-provided errors are normalized into a consistent payload (`code`, `details`) and a derived
 /// message so downstream clients receive a stable shape regardless of how the handler threw.
+///
+/// The endpoint supports wildcard route routing, allowing plugins to implement custom routing logic:
+/// - `/api/v1/plugins/{plugin_id}/call` - Default endpoint (route = "")
+/// - `/api/v1/plugins/{plugin_id}/call/verify` - Custom route (route = "/verify")
+/// - `/api/v1/plugins/{plugin_id}/call/settle` - Custom route (route = "/settle")
+/// - `/api/v1/plugins/{plugin_id}/call/api/v1/action` - Nested route (route = "/api/v1/action")
+///
+/// The route is passed to the plugin handler via the `context.route` field.
 #[utoipa::path(
     post,
     path = "/api/v1/plugins/{plugin_id}/call",
     tag = "Plugins",
     operation_id = "callPlugin",
-    summary = "Execute a plugin and receive the sanitized result",
+    summary = "Execute a plugin with optional wildcard route routing",
     security(
         ("bearer_auth" = [])
     ),

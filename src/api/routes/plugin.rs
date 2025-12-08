@@ -33,16 +33,18 @@ fn extract_headers(http_req: &HttpRequest) -> HashMap<String, Vec<String>> {
 }
 
 /// Calls a plugin method.
-#[post("/plugins/{plugin_id}/call")]
+#[post("/plugins/{plugin_id}/call{route:.*}")]
 async fn plugin_call(
-    plugin_id: web::Path<String>,
+    params: web::Path<(String, String)>,
     http_req: HttpRequest,
     req: web::Json<PluginCallRequest>,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
+    let (plugin_id, route) = params.into_inner();
     let mut plugin_call_request = req.into_inner();
     plugin_call_request.headers = Some(extract_headers(&http_req));
-    plugin::call_plugin(plugin_id.into_inner(), plugin_call_request, data).await
+    plugin_call_request.route = Some(route);
+    plugin::call_plugin(plugin_id, plugin_call_request, data).await
 }
 
 /// Initializes the routes for the plugins module.
@@ -91,7 +93,7 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .service(
-                    web::resource("/plugins/{plugin_id}/call")
+                    web::resource("/plugins/{plugin_id}/call{route:.*}")
                         .route(web::post().to(mock_plugin_call)),
                 )
                 .configure(init),
@@ -144,7 +146,7 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .service(
-                    web::resource("/plugins/{plugin_id}/call")
+                    web::resource("/plugins/{plugin_id}/call{route:.*}")
                         .route(web::post().to(mock_plugin_call)),
                 )
                 .configure(init),
@@ -222,5 +224,52 @@ mod tests {
         // Should return empty HashMap (no panic)
         // Note: TestRequest may include default headers, so we just verify it doesn't panic
         let _ = headers.len();
+    }
+
+    #[actix_web::test]
+    async fn test_plugin_call_with_wildcard_route() {
+        // Test that wildcard routes are captured correctly
+        let app = test::init_service(
+            App::new()
+                .service(
+                    web::resource("/plugins/{plugin_id}/call{route:.*}")
+                        .route(web::post().to(mock_plugin_call)),
+                )
+                .configure(init),
+        )
+        .await;
+
+        // Test with /verify path
+        let req = test::TestRequest::post()
+            .uri("/plugins/test-plugin/call/verify")
+            .insert_header(("Content-Type", "application/json"))
+            .set_json(serde_json::json!({
+                "params": {"action": "verify"},
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+
+        // Test with /settle path
+        let req = test::TestRequest::post()
+            .uri("/plugins/test-plugin/call/settle")
+            .insert_header(("Content-Type", "application/json"))
+            .set_json(serde_json::json!({
+                "params": {"action": "settle"},
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+
+        // Test with nested path
+        let req = test::TestRequest::post()
+            .uri("/plugins/test-plugin/call/api/v1/action")
+            .insert_header(("Content-Type", "application/json"))
+            .set_json(serde_json::json!({
+                "params": {"nested": true},
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
     }
 }

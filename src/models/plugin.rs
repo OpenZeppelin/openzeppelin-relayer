@@ -27,4 +27,7 @@ pub struct PluginCallRequest {
     /// HTTP headers from the incoming request (injected by the route handler)
     #[serde(default, skip_deserializing)]
     pub headers: Option<HashMap<String, Vec<String>>>,
+    /// Wildcard route from the endpoint (e.g., "" for /call, "/verify" for /call/verify)
+    #[serde(default, skip_deserializing)]
+    pub route: Option<String>,
 }
