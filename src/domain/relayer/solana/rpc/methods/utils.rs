@@ -26,21 +26,26 @@
 use super::*;
 use std::str::FromStr;
 
-use crate::utils::calculate_scheduled_timestamp;
+use crate::{services::signer::sign_sdk_transaction, utils::calculate_scheduled_timestamp};
+
+/// Convert raw token amount to UI amount based on decimals
+fn amount_to_ui_amount(amount: u64, decimals: u8) -> f64 {
+    amount as f64 / 10_f64.powi(decimals as i32)
+}
+
+use solana_commitment_config::CommitmentConfig;
 use solana_sdk::{
-    commitment_config::CommitmentConfig,
     hash::Hash,
-    instruction::{AccountMeta, CompiledInstruction, Instruction},
-    message::{Message, MessageHeader},
+    instruction::{AccountMeta, Instruction},
+    message::{compiled_instruction::CompiledInstruction, Message, MessageHeader},
     program_pack::Pack,
     pubkey::Pubkey,
     signature::Signature,
-    system_instruction::SystemInstruction,
     transaction::Transaction,
 };
-use solana_system_interface::program;
-use spl_token::{amount_to_ui_amount, state::Account};
-use tracing::debug;
+use solana_system_interface::{instruction::SystemInstruction, program};
+use spl_token_interface::state::Account;
+use tracing::{debug, error};
 
 use crate::{
     constants::{
@@ -48,7 +53,7 @@ use crate::{
     },
     domain::{SolanaTokenProgram, TokenInstruction},
     jobs::TransactionStatusCheck,
-    services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
+    services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
 };
 
 #[derive(Debug)]
@@ -84,7 +89,7 @@ where
         token_mint_str: &str,
     ) -> Result<u8, SolanaRpcError> {
         let token_mint = Pubkey::from_str(token_mint_str)
-            .map_err(|e| SolanaRpcError::Internal(format!("Invalid mint address: {}", e)))?;
+            .map_err(|e| SolanaRpcError::Internal(format!("Invalid mint address: {e}")))?;
 
         self.fetch_token_decimals_from_chain_pubkey(&token_mint)
             .await
@@ -99,12 +104,10 @@ where
             .provider
             .get_account_from_pubkey(token_mint)
             .await
-            .map_err(|e| {
-                SolanaRpcError::Internal(format!("Failed to fetch mint account: {}", e))
-            })?;
+            .map_err(|e| SolanaRpcError::Internal(format!("Failed to fetch mint account: {e}")))?;
 
-        let mint_info = spl_token::state::Mint::unpack(&mint_account.data)
-            .map_err(|e| SolanaRpcError::Internal(format!("Failed to unpack mint data: {}", e)))?;
+        let mint_info = spl_token_interface::state::Mint::unpack(&mint_account.data)
+            .map_err(|e| SolanaRpcError::Internal(format!("Failed to unpack mint data: {e}")))?;
 
         Ok(mint_info.decimals)
     }
@@ -153,43 +156,11 @@ where
     /// * The transaction format is invalid
     pub(crate) async fn relayer_sign_transaction(
         &self,
-        mut transaction: Transaction,
+        transaction: Transaction,
     ) -> Result<(Transaction, Signature), SolanaRpcError> {
-        // Parse relayer public key
-        let relayer_pubkey = Pubkey::from_str(&self.relayer.address)
-            .map_err(|e| SolanaRpcError::Internal(e.to_string()))?;
-
-        // Find the position of the relayer's public key in account_keys
-        let signer_index = transaction
-            .message
-            .account_keys
-            .iter()
-            .position(|key| *key == relayer_pubkey)
-            .ok_or_else(|| {
-                SolanaRpcError::Internal(
-                    "Relayer public key not found in transaction signers".to_string(),
-                )
-            })?;
-
-        // Check if this is a signer position (within num_required_signatures)
-        if signer_index >= transaction.message.header.num_required_signatures as usize {
-            return Err(SolanaRpcError::Internal(
-                "Relayer is not marked as a required signer in the transaction".to_string(),
-            ));
-        }
-
-        // Generate signature
-        let signature = self.signer.sign(&transaction.message_data()).await?;
-
-        // Ensure signatures array has enough elements
-        while transaction.signatures.len() <= signer_index {
-            transaction.signatures.push(Signature::default());
-        }
-
-        // Place signature in the correct position
-        transaction.signatures[signer_index] = signature;
-
-        Ok((transaction, signature))
+        sign_sdk_transaction(&*self.signer, transaction)
+            .await
+            .map_err(|e| SolanaRpcError::Internal(e.to_string()))
     }
 
     /// Estimates the total fee that the fee payer will incur for a given transaction.
@@ -228,7 +199,7 @@ where
             .iter()
             .filter(|ix| {
                 transaction.message.account_keys[ix.program_id_index as usize]
-                    == spl_associated_token_account::id()
+                    == spl_associated_token_account_interface::program::id()
             })
             .count();
 
@@ -285,8 +256,7 @@ where
                         // second is the destination.
                         let source_index = ix.accounts.first().ok_or_else(|| {
                             SolanaRpcError::Internal(format!(
-                                "Missing source account in instruction {}",
-                                ix_index
+                                "Missing source account in instruction {ix_index}"
                             ))
                         })?;
                         let source_pubkey = &tx.message.account_keys[*source_index as usize];
@@ -354,7 +324,7 @@ where
         } else {
             // Allowed tokens are configured - check if token is in the list
             let token_entry = policy.get_allowed_token_entry(token).ok_or_else(|| {
-                SolanaRpcError::UnsupportedFeeToken(format!("Token {} not allowed", token))
+                SolanaRpcError::UnsupportedFeeToken(format!("Token {token} not allowed"))
             })?;
 
             // Get token decimals from policy first, then fetch from blockchain
@@ -950,7 +920,11 @@ where
         let scheduled_on = delay.map(calculate_scheduled_timestamp);
         self.job_producer
             .produce_check_transaction_status_job(
-                TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
+                TransactionStatusCheck::new(
+                    tx.id.clone(),
+                    tx.relayer_id.clone(),
+                    crate::models::NetworkType::Solana,
+                ),
                 scheduled_on,
             )
             .await
@@ -959,6 +933,72 @@ where
                 SolanaRpcError::Internal(e.to_string())
             })?;
         Ok(())
+    }
+
+    /// Reconstruct a Transaction from an existing Transaction by replacing the fee payer
+    /// with `fee_payer`. This recalculates message metadata (num_required_signatures,
+    /// account ordering) and returns a new unsigned Transaction with signature slots initialized.
+    pub(crate) fn reconstruct_transaction_with_fee_payer(
+        &self,
+        message: &Message,
+        fee_payer: &Pubkey,
+        blockhash: &Hash,
+    ) -> Result<Transaction, SolanaRpcError> {
+        fn is_writable(index: usize, header: &MessageHeader, total: usize) -> bool {
+            if index < header.num_required_signatures as usize {
+                index
+                    < (header.num_required_signatures - header.num_readonly_signed_accounts)
+                        as usize
+            } else {
+                let non_signer_index = index - header.num_required_signatures as usize;
+                non_signer_index
+                    < (total - header.num_required_signatures as usize)
+                        - header.num_readonly_unsigned_accounts as usize
+            }
+        }
+
+        let account_keys = &message.account_keys;
+        let header = &message.header;
+        let mut instructions = Vec::with_capacity(message.instructions.len());
+
+        for compiled_ix in &message.instructions {
+            if compiled_ix.program_id_index as usize >= account_keys.len() {
+                return Err(SolanaRpcError::Internal(
+                    "Invalid program id index".to_string(),
+                ));
+            }
+
+            let mut accounts = Vec::with_capacity(compiled_ix.accounts.len());
+            for &index in &compiled_ix.accounts {
+                if index as usize >= account_keys.len() {
+                    return Err(SolanaRpcError::Internal(
+                        "Invalid account index".to_string(),
+                    ));
+                }
+                let pubkey = account_keys[index as usize];
+                let is_signer = (index as usize) < header.num_required_signatures as usize;
+                let writable = is_writable(index as usize, header, account_keys.len());
+
+                accounts.push(match (is_signer, writable) {
+                    (true, true) => AccountMeta::new(pubkey, true),
+                    (true, false) => AccountMeta::new_readonly(pubkey, true),
+                    (false, true) => AccountMeta::new(pubkey, false),
+                    (false, false) => AccountMeta::new_readonly(pubkey, false),
+                });
+            }
+
+            instructions.push(Instruction {
+                program_id: account_keys[compiled_ix.program_id_index as usize],
+                accounts,
+                data: compiled_ix.data.clone(),
+            });
+        }
+
+        let message = Message::new_with_blockhash(&instructions, Some(fee_payer), blockhash);
+        Ok(Transaction {
+            signatures: vec![Signature::default(); message.header.num_required_signatures as usize],
+            message,
+        })
     }
 }
 
@@ -975,14 +1015,10 @@ mod tests {
     };
 
     use super::*;
-    use solana_sdk::{
-        instruction::AccountMeta,
-        signature::{Keypair, Signature},
-        signer::Signer,
-    };
+    use solana_sdk::{instruction::AccountMeta, signature::Keypair, signer::Signer};
     use solana_system_interface::instruction;
-    use spl_associated_token_account::{
-        get_associated_token_address, instruction::create_associated_token_account,
+    use spl_associated_token_account_interface::{
+        address::get_associated_token_address, instruction::create_associated_token_account,
     };
 
     #[tokio::test]
@@ -994,11 +1030,9 @@ mod tests {
         let instruction = instruction::transfer(&relayer_pubkey, &recipient, 1000);
         let message = Message::new(&[instruction], Some(&relayer_pubkey));
         let transaction = Transaction::new_unsigned(message);
-        signer.expect_sign().returning(move |_| {
-            let signature = Signature::new_unique();
-            let signature_clone = signature;
-            Box::pin(async move { Ok(signature_clone) })
-        });
+
+        // Setup signer mocks
+        super::test_setup::setup_signer_mocks(&mut signer, relayer.address.clone());
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
@@ -1198,8 +1232,12 @@ mod tests {
         let owner = Pubkey::new_unique();
         let mint = Pubkey::new_unique();
 
-        let ata_ix =
-            create_associated_token_account(&payer.pubkey(), &owner, &mint, &spl_token::id());
+        let ata_ix = create_associated_token_account(
+            &payer.pubkey(),
+            &owner,
+            &mint,
+            &spl_token_interface::id(),
+        );
 
         let message = Message::new(&[ata_ix], Some(&payer.pubkey()));
         let transaction = Transaction::new_unsigned(message);
@@ -1243,10 +1281,18 @@ mod tests {
         let owner2 = Pubkey::new_unique();
         let mint = Pubkey::new_unique();
 
-        let ata_ix1 =
-            create_associated_token_account(&payer.pubkey(), &owner1, &mint, &spl_token::id());
-        let ata_ix2 =
-            create_associated_token_account(&payer.pubkey(), &owner2, &mint, &spl_token::id());
+        let ata_ix1 = create_associated_token_account(
+            &payer.pubkey(),
+            &owner1,
+            &mint,
+            &spl_token_interface::id(),
+        );
+        let ata_ix2 = create_associated_token_account(
+            &payer.pubkey(),
+            &owner2,
+            &mint,
+            &spl_token_interface::id(),
+        );
 
         let message = Message::new(&[ata_ix1, ata_ix2], Some(&payer.pubkey()));
         let transaction = Transaction::new_unsigned(message);
@@ -1457,11 +1503,8 @@ mod tests {
         let recipient = Pubkey::new_unique();
         let amount = 1_000_000;
 
-        let expected_signature = Signature::new_unique();
-        signer.expect_sign().returning(move |_| {
-            let signature_clone = expected_signature;
-            Box::pin(async move { Ok(signature_clone) })
-        });
+        // Setup signer mocks
+        super::test_setup::setup_signer_mocks(&mut signer, relayer.address.clone());
 
         let expected_blockhash = Hash::new_unique();
         let expected_slot = 100u64;
@@ -1492,7 +1535,16 @@ mod tests {
 
         assert_eq!(signed_tx.message.recent_blockhash, expected_blockhash);
         assert_eq!(slot, expected_slot);
-        assert_eq!(signed_tx.signatures[0], expected_signature);
+        assert_eq!(
+            signed_tx.signatures.len(),
+            1,
+            "Transaction should have exactly one signature"
+        );
+        assert_ne!(
+            signed_tx.signatures[0].as_ref(),
+            &[0u8; 64],
+            "Signature should not be default/empty"
+        );
         assert_eq!(
             signed_tx.message.account_keys[0],
             Pubkey::from_str(&relayer_keypair.pubkey().to_string()).unwrap()
@@ -1507,9 +1559,8 @@ mod tests {
         let relayer_keypair = Keypair::new();
         relayer.address = relayer_keypair.pubkey().to_string();
 
-        signer
-            .expect_sign()
-            .returning(|_| Box::pin(async { Ok(Signature::new_unique()) }));
+        // Setup signer mocks
+        super::test_setup::setup_signer_mocks(&mut signer, relayer.address.clone());
 
         provider
             .expect_get_latest_blockhash_with_commitment()
@@ -1989,8 +2040,8 @@ mod tests {
         let destination = get_associated_token_address(&Pubkey::new_unique(), &mint);
         let amount = 1_000_000;
 
-        let transfer_ix = spl_token::instruction::transfer_checked(
-            &spl_token::id(),
+        let transfer_ix = spl_token_interface::instruction::transfer_checked(
+            &spl_token_interface::id(),
             &source,
             &mint,
             &destination,
@@ -2014,13 +2065,13 @@ mod tests {
             &message.header,
         );
 
-        assert_eq!(converted_ix.program_id, spl_token::id());
+        assert_eq!(converted_ix.program_id, spl_token_interface::id());
 
         let decoded_ix =
-            spl_token::instruction::TokenInstruction::unpack(&converted_ix.data).unwrap();
+            spl_token_interface::instruction::TokenInstruction::unpack(&converted_ix.data).unwrap();
 
         match decoded_ix {
-            spl_token::instruction::TokenInstruction::TransferChecked {
+            spl_token_interface::instruction::TokenInstruction::TransferChecked {
                 amount: decoded_amount,
                 decimals,
                 ..
@@ -2092,12 +2143,12 @@ mod tests {
                 let pubkey = *pubkey;
                 Box::pin(async move {
                     // Create a token account with sufficient balance
-                    let mut account_data = vec![0; spl_token::state::Account::LEN];
+                    let mut account_data = vec![0; spl_token_interface::state::Account::LEN];
                     let mut token_account = Account {
                         mint: token_mint,
                         owner: user_pubkey,
                         amount: 10_000_000,
-                        state: spl_token::state::AccountState::Initialized,
+                        state: spl_token_interface::state::AccountState::Initialized,
                         ..Default::default()
                     };
                     if pubkey == user_token_account {
@@ -2106,12 +2157,13 @@ mod tests {
                         token_account.owner = relayer_pubkey;
                     }
 
-                    spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                    spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                        .unwrap();
 
                     Ok(solana_sdk::account::Account {
                         lamports: 1_000_000,
                         data: account_data,
-                        owner: spl_token::id(),
+                        owner: spl_token_interface::id(),
                         executable: false,
                         rent_epoch: 0,
                     })
@@ -2180,11 +2232,13 @@ mod tests {
             let program_idx = ix.program_id_index as usize;
 
             if program_idx < modified_tx.message.account_keys.len()
-                && modified_tx.message.account_keys[program_idx] == spl_token::id()
+                && modified_tx.message.account_keys[program_idx] == spl_token_interface::id()
             {
-                if let Ok(token_ix) = spl_token::instruction::TokenInstruction::unpack(&ix.data) {
+                if let Ok(token_ix) =
+                    spl_token_interface::instruction::TokenInstruction::unpack(&ix.data)
+                {
                     match token_ix {
-                        spl_token::instruction::TokenInstruction::TransferChecked {
+                        spl_token_interface::instruction::TokenInstruction::TransferChecked {
                             amount,
                             ..
                         } => {
@@ -2313,12 +2367,12 @@ mod tests {
                 let pubkey = *pubkey;
                 Box::pin(async move {
                     // Create a token account with sufficient balance
-                    let mut account_data = vec![0; spl_token::state::Account::LEN];
+                    let mut account_data = vec![0; spl_token_interface::state::Account::LEN];
                     let mut token_account = Account {
                         mint: token_mint,
                         owner: user_pubkey,
                         amount: 1_000,
-                        state: spl_token::state::AccountState::Initialized,
+                        state: spl_token_interface::state::AccountState::Initialized,
                         ..Default::default()
                     };
                     if pubkey == user_token_account {
@@ -2327,12 +2381,13 @@ mod tests {
                         token_account.owner = relayer_pubkey;
                     }
 
-                    spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                    spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                        .unwrap();
 
                     Ok(solana_sdk::account::Account {
                         lamports: 1_000_000,
                         data: account_data,
-                        owner: spl_token::id(),
+                        owner: spl_token_interface::id(),
                         executable: false,
                         rent_epoch: 0,
                     })
@@ -2528,12 +2583,12 @@ mod tests {
                 let pubkey = *pubkey;
                 Box::pin(async move {
                     // Create a token account with sufficient balance
-                    let mut account_data = vec![0; spl_token::state::Account::LEN];
+                    let mut account_data = vec![0; spl_token_interface::state::Account::LEN];
                     let mut token_account = Account {
                         mint: token_mint,
                         owner: user_pubkey,
                         amount: 10000000,
-                        state: spl_token::state::AccountState::Initialized,
+                        state: spl_token_interface::state::AccountState::Initialized,
                         ..Default::default()
                     };
                     if pubkey == user_token_account {
@@ -2542,12 +2597,13 @@ mod tests {
                         token_account.owner = relayer_pubkey;
                     }
 
-                    spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                    spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                        .unwrap();
 
                     Ok(solana_sdk::account::Account {
                         lamports: 1_000_000,
                         data: account_data,
-                        owner: spl_token::id(),
+                        owner: spl_token_interface::id(),
                         executable: false,
                         rent_epoch: 0,
                     })
@@ -2567,8 +2623,8 @@ mod tests {
         let token_payment = 1_000_000; // Amount in token units
         let sol_fee = 5000; // Equivalent amount in SOL
 
-        let transfer_ix = spl_token::instruction::transfer_checked(
-            &spl_token::id(),
+        let transfer_ix = spl_token_interface::instruction::transfer_checked(
+            &spl_token_interface::id(),
             &user_token_account,
             &token_mint,
             &relayer_token_account,
@@ -2670,12 +2726,12 @@ mod tests {
                 let pubkey = *pubkey;
                 Box::pin(async move {
                     // Create a token account with sufficient balance
-                    let mut account_data = vec![0; spl_token::state::Account::LEN];
+                    let mut account_data = vec![0; spl_token_interface::state::Account::LEN];
                     let mut token_account = Account {
                         mint: token_mint,
                         owner: user_pubkey,
                         amount: 10000000,
-                        state: spl_token::state::AccountState::Initialized,
+                        state: spl_token_interface::state::AccountState::Initialized,
                         ..Default::default()
                     };
                     if pubkey == user_token_account {
@@ -2684,12 +2740,13 @@ mod tests {
                         token_account.owner = relayer_pubkey;
                     }
 
-                    spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                    spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                        .unwrap();
 
                     Ok(solana_sdk::account::Account {
                         lamports: 1_000_000,
                         data: account_data,
-                        owner: spl_token::id(),
+                        owner: spl_token_interface::id(),
                         executable: false,
                         rent_epoch: 0,
                     })
@@ -2707,8 +2764,8 @@ mod tests {
         );
         let token_payment = 1_000_000; // 1 USDC
 
-        let transfer_ix = spl_token::instruction::transfer_checked(
-            &spl_token::id(),
+        let transfer_ix = spl_token_interface::instruction::transfer_checked(
+            &spl_token_interface::id(),
             &user_token_account,
             &token_mint,
             &relayer_token_account,
@@ -2753,8 +2810,9 @@ mod tests {
             valid_until: None,
             network_data: crate::models::NetworkTransactionData::Solana(
                 crate::models::SolanaTransactionData {
-                    transaction: "test-transaction".to_string(),
+                    transaction: Some("test-transaction".to_string()),
                     signature: Some("test-signature".to_string()),
+                    ..Default::default()
                 },
             ),
             priced_at: None,
@@ -2803,15 +2861,15 @@ mod tests {
 
         // Mock the provider to return mint account data when get_account_from_pubkey is called
         let mint_data = {
-            let mint_info = spl_token::state::Mint {
+            let mint_info = spl_token_interface::state::Mint {
                 mint_authority: None.into(),
                 supply: 1_000_000_000_000,
                 decimals: 6, // USDC decimals
                 is_initialized: true,
                 freeze_authority: None.into(),
             };
-            let mut data = vec![0u8; spl_token::state::Mint::LEN];
-            spl_token::state::Mint::pack(mint_info, &mut data).unwrap();
+            let mut data = vec![0u8; spl_token_interface::state::Mint::LEN];
+            spl_token_interface::state::Mint::pack(mint_info, &mut data).unwrap();
             data
         };
 
@@ -2823,7 +2881,7 @@ mod tests {
                     Ok(solana_sdk::account::Account {
                         lamports: 1000000,
                         data: mint_data_clone,
-                        owner: spl_token::id(),
+                        owner: spl_token_interface::id(),
                         executable: false,
                         rent_epoch: 0,
                     })
@@ -2894,6 +2952,550 @@ mod tests {
             (quote.conversion_rate - 1000.0).abs() < 0.001,
             "Conversion rate should be approximately 1000.0, got {}",
             quote.conversion_rate
+        );
+    }
+
+    #[tokio::test]
+    async fn test_reconstruct_transaction_with_fee_payer_basic() {
+        let (relayer, signer, provider, jupiter_service, _, job_producer, network) =
+            setup_test_context();
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            network,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
+        );
+
+        // Create original transaction with user as fee payer
+        let original_fee_payer = Keypair::new();
+        let recipient = Pubkey::new_unique();
+        let transfer_ix = instruction::transfer(&original_fee_payer.pubkey(), &recipient, 1000);
+        let blockhash = Hash::new_unique();
+        let original_message = Message::new_with_blockhash(
+            &[transfer_ix],
+            Some(&original_fee_payer.pubkey()),
+            &blockhash,
+        );
+        let original_tx = Transaction::new_unsigned(original_message);
+
+        // New fee payer (relayer)
+        let new_fee_payer = Keypair::new();
+
+        // Reconstruct transaction with new fee payer
+        let result = rpc.reconstruct_transaction_with_fee_payer(
+            &original_tx.message,
+            &new_fee_payer.pubkey(),
+            &blockhash,
+        );
+
+        assert!(result.is_ok(), "Transaction reconstruction should succeed");
+        let reconstructed_tx = result.unwrap();
+
+        // Verify fee payer changed
+        assert_eq!(
+            reconstructed_tx.message.account_keys[0],
+            new_fee_payer.pubkey(),
+            "Fee payer should be updated"
+        );
+
+        // Verify blockhash is preserved
+        assert_eq!(
+            reconstructed_tx.message.recent_blockhash, blockhash,
+            "Blockhash should be preserved"
+        );
+
+        // Verify signature slots are initialized
+        assert_eq!(
+            reconstructed_tx.signatures.len(),
+            reconstructed_tx.message.header.num_required_signatures as usize,
+            "Signature slots should be initialized"
+        );
+
+        // Verify all signatures are default (empty)
+        assert!(
+            reconstructed_tx
+                .signatures
+                .iter()
+                .all(|sig| sig.as_ref() == &[0u8; 64]),
+            "All signatures should be default"
+        );
+
+        // Verify instruction is preserved - program ID should still be at the same relative position
+        assert_eq!(
+            reconstructed_tx.message.instructions.len(),
+            1,
+            "Should have one instruction"
+        );
+        // The program ID index should be 3 (new_fee_payer, original_fee_payer, recipient, system_program)
+        assert_eq!(
+            reconstructed_tx.message.instructions[0].program_id_index, 3,
+            "Program ID index should be correct for system program"
+        );
+
+        // Verify the program ID is still the system program
+        assert_eq!(
+            reconstructed_tx.message.account_keys
+                [reconstructed_tx.message.instructions[0].program_id_index as usize],
+            program::id(),
+            "Program ID should be system program"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_reconstruct_transaction_with_fee_payer_multiple_signers() {
+        let (relayer, signer, provider, jupiter_service, _, job_producer, network) =
+            setup_test_context();
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            network,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
+        );
+
+        // Create transaction with multiple signers
+        let fee_payer = Keypair::new();
+        let signer1 = Keypair::new();
+        let signer2 = Keypair::new();
+        let recipient = Pubkey::new_unique();
+
+        // Create instruction that requires multiple signers
+        let transfer_ix = Instruction {
+            program_id: program::id(),
+            accounts: vec![
+                AccountMeta::new(fee_payer.pubkey(), true), // fee payer, signer, writable
+                AccountMeta::new(recipient, false),         // recipient, not signer, writable
+                AccountMeta::new(signer1.pubkey(), true),   // additional signer, writable
+                AccountMeta::new_readonly(signer2.pubkey(), true), // additional signer, readonly
+            ],
+            data: vec![2, 0, 0, 0, 232, 3, 0, 0, 0, 0, 0, 0], // transfer instruction data
+        };
+
+        let blockhash = Hash::new_unique();
+        let message =
+            Message::new_with_blockhash(&[transfer_ix], Some(&fee_payer.pubkey()), &blockhash);
+        let original_tx = Transaction::new_unsigned(message);
+
+        // New fee payer
+        let new_fee_payer = Keypair::new();
+
+        // Reconstruct transaction
+        let result = rpc.reconstruct_transaction_with_fee_payer(
+            &original_tx.message,
+            &new_fee_payer.pubkey(),
+            &blockhash,
+        );
+
+        assert!(result.is_ok(), "Transaction reconstruction should succeed");
+        let reconstructed_tx = result.unwrap();
+
+        // Verify fee payer is now first
+        assert_eq!(
+            reconstructed_tx.message.account_keys[0],
+            new_fee_payer.pubkey(),
+            "New fee payer should be first"
+        );
+
+        // Account ordering: fee_payer first, then other writable signers sorted by pubkey, then readonly signers, then writable non-signers, then program IDs
+        // Collect the expected writable signers (excluding fee_payer) and sort by pubkey
+        let mut other_writable_signers = vec![fee_payer.pubkey(), signer1.pubkey()];
+        other_writable_signers.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
+
+        // Expected order: new_fee_payer, then sorted other writable signers, then readonly signers, then non-signers, then program IDs
+        assert_eq!(
+            reconstructed_tx.message.account_keys[0],
+            new_fee_payer.pubkey(),
+            "New fee payer should be first"
+        );
+        assert_eq!(
+            reconstructed_tx.message.account_keys[1], other_writable_signers[0],
+            "First sorted writable signer should be second"
+        );
+        assert_eq!(
+            reconstructed_tx.message.account_keys[2], other_writable_signers[1],
+            "Second sorted writable signer should be third"
+        );
+        assert_eq!(
+            reconstructed_tx.message.account_keys[3],
+            signer2.pubkey(),
+            "Signer2 should be fourth"
+        );
+        assert_eq!(
+            reconstructed_tx.message.account_keys[4], recipient,
+            "Recipient should be fifth"
+        );
+        assert_eq!(
+            reconstructed_tx.message.account_keys[5],
+            program::id(),
+            "System program should be last"
+        );
+
+        // Verify header is correct
+        assert_eq!(
+            reconstructed_tx.message.header.num_required_signatures, 4,
+            "Should have 4 required signatures"
+        );
+        assert_eq!(
+            reconstructed_tx.message.header.num_readonly_signed_accounts, 1,
+            "Should have 1 readonly signed account"
+        );
+        assert_eq!(
+            reconstructed_tx
+                .message
+                .header
+                .num_readonly_unsigned_accounts,
+            1,
+            "Should have 1 readonly unsigned account (system program)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_reconstruct_transaction_with_fee_payer_readonly_accounts() {
+        let (relayer, signer, provider, jupiter_service, _, job_producer, network) =
+            setup_test_context();
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            network,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
+        );
+
+        // Create transaction with readonly accounts
+        let fee_payer = Keypair::new();
+        let writable_account = Pubkey::new_unique();
+        let readonly_account = Pubkey::new_unique();
+        let program_id = Pubkey::new_unique();
+
+        let test_ix = Instruction {
+            program_id,
+            accounts: vec![
+                AccountMeta::new(fee_payer.pubkey(), true), // fee payer, signer, writable
+                AccountMeta::new(writable_account, false),  // writable, not signer
+                AccountMeta::new_readonly(readonly_account, false), // readonly, not signer
+            ],
+            data: vec![0],
+        };
+
+        let blockhash = Hash::new_unique();
+        let message =
+            Message::new_with_blockhash(&[test_ix], Some(&fee_payer.pubkey()), &blockhash);
+        let original_tx = Transaction::new_unsigned(message);
+
+        // New fee payer
+        let new_fee_payer = Keypair::new();
+
+        // Reconstruct transaction
+        let result = rpc.reconstruct_transaction_with_fee_payer(
+            &original_tx.message,
+            &new_fee_payer.pubkey(),
+            &blockhash,
+        );
+
+        assert!(result.is_ok(), "Transaction reconstruction should succeed");
+        let reconstructed_tx = result.unwrap();
+
+        // Verify account ordering: signers first, then writable non-signers, then readonly non-signers
+        assert_eq!(
+            reconstructed_tx.message.account_keys[0],
+            new_fee_payer.pubkey(),
+            "Fee payer should be first"
+        );
+
+        // Expected ordering: new_fee_payer, fee_payer, writable_account, readonly_account, program_id
+        assert_eq!(
+            reconstructed_tx.message.account_keys[1],
+            fee_payer.pubkey(),
+            "Original fee payer should be second"
+        );
+        assert_eq!(
+            reconstructed_tx.message.account_keys[2], writable_account,
+            "Writable account should be third"
+        );
+        assert_eq!(
+            reconstructed_tx.message.account_keys[3], readonly_account,
+            "Readonly account should be fourth"
+        );
+        assert_eq!(
+            reconstructed_tx.message.account_keys[4], program_id,
+            "Program ID should be fifth"
+        );
+
+        // Verify header
+        assert_eq!(
+            reconstructed_tx.message.header.num_required_signatures, 2,
+            "Should have 2 required signatures"
+        );
+        assert_eq!(
+            reconstructed_tx.message.header.num_readonly_signed_accounts, 0,
+            "Should have 0 readonly signed accounts"
+        );
+        assert_eq!(
+            reconstructed_tx
+                .message
+                .header
+                .num_readonly_unsigned_accounts,
+            2,
+            "Should have 2 readonly unsigned accounts"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_reconstruct_transaction_with_fee_payer_invalid_program_id_index() {
+        let (relayer, signer, provider, jupiter_service, _, job_producer, network) =
+            setup_test_context();
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            network,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
+        );
+
+        // Create message with invalid program_id_index
+        let fee_payer = Keypair::new();
+        let account1 = Pubkey::new_unique();
+        let account2 = Pubkey::new_unique();
+
+        let message = Message {
+            account_keys: vec![fee_payer.pubkey(), account1, account2],
+            header: MessageHeader {
+                num_required_signatures: 1,
+                num_readonly_signed_accounts: 0,
+                num_readonly_unsigned_accounts: 0,
+            },
+            instructions: vec![CompiledInstruction {
+                program_id_index: 5, // Invalid index (only 3 accounts)
+                accounts: vec![0, 1],
+                data: vec![0],
+            }],
+            recent_blockhash: Hash::new_unique(),
+        };
+
+        let new_fee_payer = Keypair::new();
+        let blockhash = Hash::new_unique();
+
+        // Reconstruct transaction
+        let result = rpc.reconstruct_transaction_with_fee_payer(
+            &message,
+            &new_fee_payer.pubkey(),
+            &blockhash,
+        );
+
+        assert!(result.is_err(), "Should fail with invalid program ID index");
+        match result {
+            Err(SolanaRpcError::Internal(msg)) => {
+                assert!(
+                    msg.contains("Invalid program id index"),
+                    "Error should mention invalid program id index"
+                );
+            }
+            _ => panic!("Expected Internal error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reconstruct_transaction_with_fee_payer_invalid_account_index() {
+        let (relayer, signer, provider, jupiter_service, _, job_producer, network) =
+            setup_test_context();
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            network,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
+        );
+
+        // Create message with invalid account index in instruction
+        let fee_payer = Keypair::new();
+        let account1 = Pubkey::new_unique();
+        let account2 = Pubkey::new_unique();
+
+        let message = Message {
+            account_keys: vec![fee_payer.pubkey(), account1, account2],
+            header: MessageHeader {
+                num_required_signatures: 1,
+                num_readonly_signed_accounts: 0,
+                num_readonly_unsigned_accounts: 0,
+            },
+            instructions: vec![CompiledInstruction {
+                program_id_index: 2,
+                accounts: vec![0, 5], // Invalid account index 5 (only 3 accounts)
+                data: vec![0],
+            }],
+            recent_blockhash: Hash::new_unique(),
+        };
+
+        let new_fee_payer = Keypair::new();
+        let blockhash = Hash::new_unique();
+
+        // Reconstruct transaction
+        let result = rpc.reconstruct_transaction_with_fee_payer(
+            &message,
+            &new_fee_payer.pubkey(),
+            &blockhash,
+        );
+
+        assert!(result.is_err(), "Should fail with invalid account index");
+        match result {
+            Err(SolanaRpcError::Internal(msg)) => {
+                assert!(
+                    msg.contains("Invalid account index"),
+                    "Error should mention invalid account index"
+                );
+            }
+            _ => panic!("Expected Internal error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reconstruct_transaction_with_fee_payer_multiple_instructions() {
+        let (relayer, signer, provider, jupiter_service, _, job_producer, network) =
+            setup_test_context();
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            network,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
+        );
+
+        // Create transaction with multiple instructions
+        let fee_payer = Keypair::new();
+        let recipient1 = Pubkey::new_unique();
+        let recipient2 = Pubkey::new_unique();
+
+        let transfer1_ix = instruction::transfer(&fee_payer.pubkey(), &recipient1, 1000);
+        let transfer2_ix = instruction::transfer(&fee_payer.pubkey(), &recipient2, 2000);
+
+        let blockhash = Hash::new_unique();
+        let message = Message::new_with_blockhash(
+            &[transfer1_ix, transfer2_ix],
+            Some(&fee_payer.pubkey()),
+            &blockhash,
+        );
+        let original_tx = Transaction::new_unsigned(message);
+
+        // New fee payer
+        let new_fee_payer = Keypair::new();
+
+        // Reconstruct transaction
+        let result = rpc.reconstruct_transaction_with_fee_payer(
+            &original_tx.message,
+            &new_fee_payer.pubkey(),
+            &blockhash,
+        );
+
+        assert!(result.is_ok(), "Transaction reconstruction should succeed");
+        let reconstructed_tx = result.unwrap();
+
+        // Verify fee payer changed
+        assert_eq!(
+            reconstructed_tx.message.account_keys[0],
+            new_fee_payer.pubkey(),
+            "Fee payer should be updated"
+        );
+
+        // Verify both instructions are preserved
+        assert_eq!(
+            reconstructed_tx.message.instructions.len(),
+            2,
+            "Should have two instructions"
+        );
+
+        // Verify program ID indices are updated correctly (system program is at index 4)
+        assert_eq!(
+            reconstructed_tx.message.instructions[0].program_id_index, 4,
+            "First instruction program ID index should be updated"
+        );
+        assert_eq!(
+            reconstructed_tx.message.instructions[1].program_id_index, 4,
+            "Second instruction program ID index should be updated"
+        );
+
+        // Verify account indices in instructions are updated (fee_payer is at index 1, not 0)
+        assert_eq!(
+            reconstructed_tx.message.instructions[0].accounts[0], 1,
+            "Fee payer account index should be 1 in first instruction"
+        );
+        assert_eq!(
+            reconstructed_tx.message.instructions[1].accounts[0], 1,
+            "Fee payer account index should be 1 in second instruction"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_reconstruct_transaction_with_fee_payer_same_fee_payer() {
+        let (relayer, signer, provider, jupiter_service, _, job_producer, network) =
+            setup_test_context();
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            network,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
+        );
+
+        // Create transaction
+        let fee_payer = Keypair::new();
+        let recipient = Pubkey::new_unique();
+        let transfer_ix = instruction::transfer(&fee_payer.pubkey(), &recipient, 1000);
+        let blockhash = Hash::new_unique();
+        let message =
+            Message::new_with_blockhash(&[transfer_ix], Some(&fee_payer.pubkey()), &blockhash);
+        let original_tx = Transaction::new_unsigned(message);
+
+        // Use same fee payer
+        let result = rpc.reconstruct_transaction_with_fee_payer(
+            &original_tx.message,
+            &fee_payer.pubkey(),
+            &blockhash,
+        );
+
+        assert!(
+            result.is_ok(),
+            "Transaction reconstruction should succeed even with same fee payer"
+        );
+        let reconstructed_tx = result.unwrap();
+
+        // Verify fee payer remains the same
+        assert_eq!(
+            reconstructed_tx.message.account_keys[0],
+            fee_payer.pubkey(),
+            "Fee payer should remain the same"
+        );
+
+        // Verify account ordering is still correct
+        assert_eq!(
+            reconstructed_tx.message.account_keys[1], recipient,
+            "Recipient should be second"
+        );
+        assert_eq!(
+            reconstructed_tx.message.account_keys[2],
+            program::id(),
+            "Program ID should be third"
         );
     }
 }

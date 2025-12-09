@@ -1,0 +1,219 @@
+---
+title: Stellar Channels Guide
+---
+
+## Overview
+
+OpenZeppelin Stellar Channels Service is a managed infrastructure for submitting Stellar Soroban transactions with automatic parallel processing and fee management. The service handles all the complexity of transaction submission, allowing you to focus on building your application.
+
+**Key Benefits:**
+
+- **_Zero Infrastructure Management_**: No servers, relayers, or channel accounts to configure
+- **_Automatic Fee Payment_**: Gas fees paid by the service on your behalf
+- **_Parallel Processing_**: High throughput via managed pool of channel accounts
+- **_Simple Integration_**: Type-safe SDK with minimal setup
+- **_Free to Use_**: No credits, subscriptions, or payment systems
+
+## Service Endpoints
+
+- **Mainnet**: `https://channels.openzeppelin.com`
+- **Testnet**: `https://channels.openzeppelin.com/testnet`
+
+## Getting Started
+
+### 1. Get Your API Key
+
+Visit the service endpoint to generate an API key:
+
+- **Mainnet**: https://channels.openzeppelin.com/gen
+- **Testnet**: https://channels.openzeppelin.com/testnet/gen
+
+Save your API key securely - you'll need it for all requests.
+
+### 2. Install the Client
+
+```bash
+npm install @openzeppelin/relayer-plugin-channels
+# or
+pnpm add @openzeppelin/relayer-plugin-channels
+# or
+yarn add @openzeppelin/relayer-plugin-channels
+```
+
+### 3. Initialize the Client
+
+```typescript
+import { ChannelsClient } from '@openzeppelin/relayer-plugin-channels';
+
+const client = new ChannelsClient({
+  baseUrl: 'https://channels.openzeppelin.com/testnet',
+  apiKey: process.env.CHANNELS_API_KEY,
+});
+```
+
+## Submitting Transactions
+
+The Channels service supports two transaction submission methods depending on your use case.
+
+### Method 1: Soroban Function + Auth (Recommended)
+
+This method is ideal when you want the service to handle transaction building and simulation. Submit the Soroban function and authorization entries, and the service builds the complete transaction using a channel account from the pool, enabling high-throughput parallel processing.
+
+```typescript
+import { Contract, Networks, SorobanRpc } from '@stellar/stellar-sdk';
+
+// Initialize your contract
+const contract = new Contract('CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA');
+
+// Build the transaction (don't sign yet)
+const rpc = new SorobanRpc.Server('https://soroban-testnet.stellar.org');
+const source = await rpc.getAccount(sourceAddress);
+
+const tx = new TransactionBuilder(source, {
+  fee: '100',
+  networkPassphrase: Networks.TESTNET,
+})
+  .addOperation(contract.call('transfer' /* args */))
+  .setTimeout(30)
+  .build();
+
+// Simulate to get auth entries
+const simulation = await rpc.simulateTransaction(tx);
+const assembled = SorobanRpc.assembleTransaction(tx, simulation).build();
+
+// Extract function and auth XDRs
+const op = assembled.operations[0];
+const func = op.func.toXDR('base64');
+const auth = (op.auth ?? []).map((a) => a.toXDR('base64'));
+
+// Submit to Channels
+const result = await client.submitSorobanTransaction({
+  func: func,
+  auth: auth,
+});
+
+console.log('Transaction submitted:', result.hash);
+console.log('Status:', result.status);
+```
+
+**When to use this method:**
+
+- You want the service to handle transaction assembly
+- You're working with standard Soroban contract calls
+- You need automatic simulation and resource calculation
+- You need high-throughput parallel transaction processing
+
+### Method 2: Pre-Signed Transaction XDR
+
+This method gives you full control over the transaction structure. You build, sign, and submit a complete transaction envelope.
+
+```typescript
+import { Keypair, Networks, TransactionBuilder } from '@stellar/stellar-sdk';
+
+// Build and sign your transaction
+const sourceKeypair = Keypair.fromSecret('S...');
+const tx = new TransactionBuilder(source, {
+  fee: '100',
+  networkPassphrase: Networks.TESTNET,
+})
+  .addOperation(/* your operation */)
+  .setTimeout(30)
+  .build();
+
+// Sign the transaction
+tx.sign(sourceKeypair);
+
+// Submit to Channels
+const result = await client.submitTransaction({
+  xdr: tx.toXDR(), // base64 envelope XDR
+});
+
+console.log('Transaction submitted:', result.hash);
+console.log('Status:', result.status);
+```
+
+**When to use this method:**
+
+- You need precise control over transaction structure
+- You're using advanced Stellar features
+- Your transaction is already signed by another system
+
+## Response Format
+
+All successful submissions return:
+
+```typescript
+{
+  transactionId: string; // Internal tracking ID
+  hash: string; // Stellar transaction hash
+  status: string; // Transaction status (e.g., "confirmed")
+}
+```
+
+## Error Handling
+
+The SDK provides structured error handling with three error types:
+
+```typescript
+import {
+  PluginTransportError,
+  PluginExecutionError,
+  PluginUnexpectedError,
+} from '@openzeppelin/relayer-plugin-channels';
+
+try {
+  const result = await client.submitSorobanTransaction({ func, auth });
+  console.log('Success:', result.hash);
+} catch (error) {
+  if (error instanceof PluginTransportError) {
+    // Network failures (connection, timeout, 5xx errors)
+    console.error('Service unavailable:', error.message);
+    console.error('Status:', error.statusCode);
+  } else if (error instanceof PluginExecutionError) {
+    // Transaction rejected (validation, simulation failure, on-chain failure)
+    console.error('Transaction failed:', error.message);
+    console.error('Error code:', error.errorDetails?.code);
+    console.error('Details:', error.errorDetails?.details);
+  } else if (error instanceof PluginUnexpectedError) {
+    // Client-side errors (parsing, validation)
+    console.error('Client error:', error.message);
+  }
+}
+```
+
+### Common Error Codes
+
+| Code                  | Description                           | Resolution                                                |
+| --------------------- | ------------------------------------- | --------------------------------------------------------- |
+| `INVALID_PARAMS`      | Invalid request parameters            | Check that you're providing either `xdr` OR `func`+`auth` |
+| `INVALID_XDR`         | Failed to parse XDR                   | Verify XDR is valid base64 and properly encoded           |
+| `POOL_CAPACITY`       | All channel accounts in use           | Retry after a short delay                                 |
+| `SIMULATION_FAILED`   | Transaction simulation failed         | Check contract address and function arguments             |
+| `ONCHAIN_FAILED`      | Transaction failed on-chain           | Review transaction logic and on-chain state               |
+| `INVALID_TIME_BOUNDS` | Transaction timeout too far in future | Set timeout to ≤30 seconds                                |
+
+## TypeScript Support
+
+The SDK is fully typed
+
+```typescript
+import type {
+  ChannelsClient,
+  ChannelsFuncAuthRequest,
+  ChannelsXdrRequest,
+  ChannelsTransactionResponse,
+} from '@openzeppelin/relayer-plugin-channels';
+
+// All parameters and responses are fully typed
+const request: ChannelsFuncAuthRequest = {
+  func: 'AAAABAAAAAEAAAAGc3ltYm9s...',
+  auth: ['AAAACAAAAAEAAAA...'],
+};
+
+const response: ChannelsTransactionResponse = await client.submitSorobanTransaction(request);
+```
+
+## Support & Resources
+
+- **Stellar SDK Documentation**: https://stellar.github.io/js-stellar-sdk/
+- **Channels Plugin**: https://github.com/OpenZeppelin/relayer-plugin-channels

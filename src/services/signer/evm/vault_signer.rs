@@ -10,7 +10,7 @@ use secrets::SecretVec;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{OnceCell, RwLock};
 use zeroize::Zeroizing;
 
 use crate::{
@@ -23,9 +23,11 @@ use crate::{
         VaultSignerConfig,
     },
     services::{
-        signer::evm::{local_signer::LocalSigner, DataSignerTrait},
+        signer::{
+            evm::{local_signer::LocalSigner, DataSignerTrait},
+            Signer,
+        },
         vault::{VaultService, VaultServiceTrait},
-        Signer,
     },
 };
 
@@ -74,8 +76,8 @@ where
     namespace: Option<String>,
     mount_point: Option<String>,
     vault_service: T,
-    /// Cached local signer
-    local_signer: Arc<Mutex<Option<Arc<LocalSigner>>>>,
+    /// Cached local signer (uses OnceCell to prevent race conditions)
+    local_signer: Arc<OnceCell<Arc<LocalSigner>>>,
 }
 
 impl<T: VaultServiceTrait + Clone> VaultSigner<T> {
@@ -87,50 +89,35 @@ impl<T: VaultServiceTrait + Clone> VaultSigner<T> {
             namespace: vault_config.namespace,
             mount_point: vault_config.mount_point,
             vault_service,
-            local_signer: Arc::new(Mutex::new(None)),
+            local_signer: Arc::new(OnceCell::new()),
         }
     }
 
     /// Ensures the local signer is loaded, using caching for performance
     async fn get_local_signer(&self) -> Result<Arc<LocalSigner>, SignerError> {
-        // Fast path: check if already loaded
-        {
-            let guard = self.local_signer.lock().await;
-            if let Some(ref signer) = *guard {
-                return Ok(Arc::clone(signer));
-            }
-        }
+        self.local_signer
+            .get_or_try_init(|| async {
+                let cache_key = self.create_cache_key()?;
+                {
+                    let cache = VAULT_SIGNER_CACHE.read().await;
+                    if let Some(signer) = cache.get(&cache_key) {
+                        return Ok(Arc::clone(signer));
+                    }
+                }
 
-        // Check global cache
-        let cache_key = self.create_cache_key()?;
-        {
-            let cache = VAULT_SIGNER_CACHE.read().await;
-            if let Some(signer) = cache.get(&cache_key) {
-                // Update local cache
-                let mut guard = self.local_signer.lock().await;
-                *guard = Some(Arc::clone(signer));
-                return Ok(Arc::clone(signer));
-            }
-        }
+                let signer = Arc::new(self.load_signer_from_vault().await?);
 
-        // Need to load from vault
-        let signer = self.load_signer_from_vault().await?;
-        let arc_signer = Arc::new(signer);
+                {
+                    let mut cache = VAULT_SIGNER_CACHE.write().await;
+                    cache.insert(cache_key, Arc::clone(&signer));
+                }
 
-        // Update both caches
-        {
-            let mut cache = VAULT_SIGNER_CACHE.write().await;
-            cache.insert(cache_key, Arc::clone(&arc_signer));
-        }
-        {
-            let mut guard = self.local_signer.lock().await;
-            *guard = Some(Arc::clone(&arc_signer));
-        }
-
-        Ok(arc_signer)
+                Ok(signer)
+            })
+            .await
+            .map(Arc::clone)
     }
 
-    /// Loads a new signer from vault
     async fn load_signer_from_vault(&self) -> Result<LocalSigner, SignerError> {
         let raw_key = self.fetch_private_key().await?;
         let local_config = crate::models::LocalSignerConfig { raw_key };
@@ -142,7 +129,6 @@ impl<T: VaultServiceTrait + Clone> VaultSigner<T> {
         LocalSigner::new(&local_model)
     }
 
-    /// Fetches private key from vault with proper error handling
     async fn fetch_private_key(&self) -> Result<SecretVec<u8>, SignerError> {
         let hex_secret = Zeroizing::new(
             self.vault_service
@@ -151,7 +137,6 @@ impl<T: VaultServiceTrait + Clone> VaultSigner<T> {
                 .map_err(SignerError::VaultError)?,
         );
 
-        // Validate hex format before decoding
         let trimmed = hex_secret.trim();
         if trimmed.is_empty() {
             return Err(SignerError::KeyError(
@@ -159,21 +144,18 @@ impl<T: VaultServiceTrait + Clone> VaultSigner<T> {
             ));
         }
 
-        // Remove '0x' prefix if present
         let hex_str = if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
             &trimmed[2..]
         } else {
             trimmed
         };
 
-        // Validate hex characters
         if !hex_str.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(SignerError::KeyError(
                 "Invalid hex characters in vault secret".to_string(),
             ));
         }
 
-        // Validate key length (32 bytes = 64 hex chars for secp256k1)
         if hex_str.len() != 64 {
             return Err(SignerError::KeyError(format!(
                 "Invalid key length: expected 64 hex characters, got {}",
@@ -182,7 +164,7 @@ impl<T: VaultServiceTrait + Clone> VaultSigner<T> {
         }
 
         let decoded_bytes = hex::decode(hex_str)
-            .map_err(|e| SignerError::KeyError(format!("Failed to decode hex: {}", e)))?;
+            .map_err(|e| SignerError::KeyError(format!("Failed to decode hex: {e}")))?;
 
         Ok(SecretVec::new(decoded_bytes.len(), |buffer| {
             buffer.copy_from_slice(&decoded_bytes);

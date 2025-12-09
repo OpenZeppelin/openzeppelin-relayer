@@ -12,7 +12,8 @@ use crate::{
     },
     models::{Address, NetworkTransactionData, SignerError},
     services::{
-        GoogleCloudKmsService, GoogleCloudKmsServiceTrait, GoogleCloudKmsStellarService, Signer,
+        signer::Signer, GoogleCloudKmsService, GoogleCloudKmsServiceTrait,
+        GoogleCloudKmsStellarService,
     },
 };
 
@@ -69,7 +70,7 @@ impl<T: GoogleCloudKmsStellarService + GoogleCloudKmsServiceTrait> Signer
     ) -> Result<SignTransactionResponse, SignerError> {
         let stellar_data = tx
             .get_stellar_transaction_data()
-            .map_err(|e| SignerError::SigningError(format!("Failed to get tx data: {}", e)))?;
+            .map_err(|e| SignerError::SigningError(format!("Failed to get tx data: {e}")))?;
 
         let passphrase = &stellar_data.network_passphrase;
         let hash_bytes: [u8; 32] = Sha256::digest(passphrase.as_bytes()).into();
@@ -81,8 +82,7 @@ impl<T: GoogleCloudKmsStellarService + GoogleCloudKmsServiceTrait> Signer
                 // Build transaction from operations and sign
                 let transaction = Transaction::try_from(stellar_data).map_err(|e| {
                     SignerError::SigningError(format!(
-                        "Failed to build Stellar transaction from operations: {}",
-                        e
+                        "Failed to build Stellar transaction from operations: {e}"
                     ))
                 })?;
 
@@ -122,12 +122,12 @@ impl<T: GoogleCloudKmsStellarService + GoogleCloudKmsServiceTrait> GoogleCloudKm
 
         // Create the appropriate signature payload based on envelope type
         let payload = create_signature_payload(envelope, network_id)
-            .map_err(|e| SignerError::SigningError(format!("Failed to create payload: {}", e)))?;
+            .map_err(|e| SignerError::SigningError(format!("Failed to create payload: {e}")))?;
 
         // Serialize and hash the payload
-        let payload_bytes = payload.to_xdr(Limits::none()).map_err(|e| {
-            SignerError::SigningError(format!("Failed to serialize payload: {}", e))
-        })?;
+        let payload_bytes = payload
+            .to_xdr(Limits::none())
+            .map_err(|e| SignerError::SigningError(format!("Failed to serialize payload: {e}")))?;
 
         let hash = Sha256::digest(&payload_bytes);
 
@@ -138,7 +138,7 @@ impl<T: GoogleCloudKmsStellarService + GoogleCloudKmsServiceTrait> GoogleCloudKm
         )
         .await
         .map_err(|e| {
-            SignerError::SigningError(format!("Google Cloud KMS signing operation failed: {}", e))
+            SignerError::SigningError(format!("Google Cloud KMS signing operation failed: {e}"))
         })?;
 
         // Create decorated signature with improved error handling
@@ -157,9 +157,9 @@ impl<T: GoogleCloudKmsStellarService + GoogleCloudKmsServiceTrait> GoogleCloudKm
         let payload = create_transaction_signature_payload(transaction, network_id);
 
         // Serialize and hash the payload
-        let payload_bytes = payload.to_xdr(Limits::none()).map_err(|e| {
-            SignerError::SigningError(format!("Failed to serialize payload: {}", e))
-        })?;
+        let payload_bytes = payload
+            .to_xdr(Limits::none())
+            .map_err(|e| SignerError::SigningError(format!("Failed to serialize payload: {e}")))?;
 
         let hash = Sha256::digest(&payload_bytes);
 
@@ -170,7 +170,7 @@ impl<T: GoogleCloudKmsStellarService + GoogleCloudKmsServiceTrait> GoogleCloudKm
         )
         .await
         .map_err(|e| {
-            SignerError::SigningError(format!("Google Cloud KMS signing operation failed: {}", e))
+            SignerError::SigningError(format!("Google Cloud KMS signing operation failed: {e}"))
         })?;
 
         // Create decorated signature with improved error handling
@@ -217,8 +217,7 @@ impl<T: GoogleCloudKmsStellarService + GoogleCloudKmsServiceTrait> GoogleCloudKm
                 .await
                 .map_err(|e| {
                     SignerError::SigningError(format!(
-                        "Failed to retrieve Stellar address from Google Cloud KMS: {}",
-                        e
+                        "Failed to retrieve Stellar address from Google Cloud KMS: {e}"
                     ))
                 })?;
 
@@ -229,8 +228,7 @@ impl<T: GoogleCloudKmsStellarService + GoogleCloudKmsServiceTrait> GoogleCloudKm
                 use stellar_strkey::ed25519::PublicKey;
                 let pk = PublicKey::from_string(&addr).map_err(|e| {
                     SignerError::SigningError(format!(
-                        "Failed to parse Stellar address '{}': {}",
-                        addr, e
+                        "Failed to parse Stellar address '{addr}': {e}"
                     ))
                 })?;
                 let pk_bytes = pk.0;
@@ -252,8 +250,7 @@ impl<T: GoogleCloudKmsStellarService + GoogleCloudKmsServiceTrait> GoogleCloudKm
                 Ok(SignatureHint(hint_bytes))
             }
             _ => Err(SignerError::SigningError(format!(
-                "Expected Stellar address, got: {:?}",
-                stellar_address
+                "Expected Stellar address, got: {stellar_address:?}"
             ))),
         }
     }
@@ -272,7 +269,7 @@ impl<T: GoogleCloudKmsStellarService + GoogleCloudKmsServiceTrait> StellarSignTr
 
         // Parse the unsigned XDR
         let mut envelope = parse_transaction_xdr(unsigned_xdr, false)
-            .map_err(|e| SignerError::SigningError(format!("Invalid XDR: {}", e)))?;
+            .map_err(|e| SignerError::SigningError(format!("Invalid XDR: {e}")))?;
 
         // Create network ID from passphrase
         let hash_bytes: [u8; 32] = Sha256::digest(network_passphrase.as_bytes()).into();
@@ -283,11 +280,11 @@ impl<T: GoogleCloudKmsStellarService + GoogleCloudKmsServiceTrait> StellarSignTr
 
         // Attach the signature to the envelope
         attach_signatures_to_envelope(&mut envelope, vec![signature.clone()])
-            .map_err(|e| SignerError::SigningError(format!("Failed to attach signature: {}", e)))?;
+            .map_err(|e| SignerError::SigningError(format!("Failed to attach signature: {e}")))?;
 
         // Serialize the signed envelope
         let signed_xdr = envelope.to_xdr_base64(Limits::none()).map_err(|e| {
-            SignerError::SigningError(format!("Failed to serialize signed XDR: {}", e))
+            SignerError::SigningError(format!("Failed to serialize signed XDR: {e}"))
         })?;
 
         Ok(SignXdrTransactionResponseStellar {

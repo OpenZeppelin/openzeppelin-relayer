@@ -23,6 +23,8 @@ pub struct StellarNetworkConfig {
     pub common: NetworkConfigCommon,
     /// The passphrase for the Stellar network.
     pub passphrase: Option<String>,
+    /// The Horizon URL for the Stellar network.
+    pub horizon_url: Option<String>,
     // Additional Stellar-specific fields can be added here.
 }
 
@@ -46,6 +48,10 @@ impl StellarNetworkConfig {
                 .passphrase
                 .clone()
                 .or_else(|| parent.passphrase.clone()),
+            horizon_url: self
+                .horizon_url
+                .clone()
+                .or_else(|| parent.horizon_url.clone()),
             // Add Stellar-specific field merging here as they are added to the struct
         }
     }

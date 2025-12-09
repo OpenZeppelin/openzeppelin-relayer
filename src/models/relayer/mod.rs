@@ -98,15 +98,15 @@ pub enum HealthCheckFailure {
 impl Display for HealthCheckFailure {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            HealthCheckFailure::NonceSyncFailed(msg) => write!(f, "Nonce sync failed: {}", msg),
+            HealthCheckFailure::NonceSyncFailed(msg) => write!(f, "Nonce sync failed: {msg}"),
             HealthCheckFailure::RpcValidationFailed(msg) => {
-                write!(f, "RPC validation failed: {}", msg)
+                write!(f, "RPC validation failed: {msg}")
             }
             HealthCheckFailure::BalanceCheckFailed(msg) => {
-                write!(f, "Balance check failed: {}", msg)
+                write!(f, "Balance check failed: {msg}")
             }
             HealthCheckFailure::SequenceSyncFailed(msg) => {
-                write!(f, "Sequence sync failed: {}", msg)
+                write!(f, "Sequence sync failed: {msg}")
             }
         }
     }
@@ -218,10 +218,10 @@ impl DisabledReason {
     /// Get a human-readable description of the disabled reason
     pub fn description(&self) -> String {
         match self {
-            DisabledReason::NonceSyncFailed(e) => format!("Nonce sync failed: {}", e),
-            DisabledReason::RpcValidationFailed(e) => format!("RPC validation failed: {}", e),
-            DisabledReason::BalanceCheckFailed(e) => format!("Balance check failed: {}", e),
-            DisabledReason::SequenceSyncFailed(e) => format!("Sequence sync failed: {}", e),
+            DisabledReason::NonceSyncFailed(e) => format!("Nonce sync failed: {e}"),
+            DisabledReason::RpcValidationFailed(e) => format!("RPC validation failed: {e}"),
+            DisabledReason::BalanceCheckFailed(e) => format!("Balance check failed: {e}"),
+            DisabledReason::SequenceSyncFailed(e) => format!("Sequence sync failed: {e}"),
             DisabledReason::Multiple(reasons) => reasons
                 .iter()
                 .map(|r| r.description())
@@ -379,6 +379,12 @@ impl SolanaAllowedTokensPolicy {
 }
 
 /// Solana fee payment strategy
+///
+/// Determines who pays transaction fees:
+/// - `User`: User must include fee payment to relayer in transaction (for custom RPC methods)
+/// - `Relayer`: Relayer pays all transaction fees (recommended for send transaction endpoint)
+///
+/// Default is `User`.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SolanaFeePaymentStrategy {
@@ -444,6 +450,7 @@ pub struct RelayerSolanaPolicy {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_tokens: Option<Vec<SolanaAllowedTokensPolicy>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub fee_payment_strategy: Option<SolanaFeePaymentStrategy>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fee_margin_percentage: Option<f32>,
@@ -454,6 +461,7 @@ pub struct RelayerSolanaPolicy {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_allowed_fee_lamports: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub swap_config: Option<RelayerSolanaSwapConfig>,
 }
 
@@ -483,6 +491,113 @@ impl RelayerSolanaPolicy {
             .and_then(|entry| entry.decimals)
     }
 }
+
+/// Stellar token swap configuration
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct StellarAllowedTokensSwapConfig {
+    /// Conversion slippage percentage for token. Optional.
+    #[schema(nullable = false)]
+    pub slippage_percentage: Option<f32>,
+    /// Minimum amount of tokens to swap. Optional.
+    #[schema(nullable = false)]
+    pub min_amount: Option<u64>,
+    /// Maximum amount of tokens to swap. Optional.
+    #[schema(nullable = false)]
+    pub max_amount: Option<u64>,
+    /// Minimum amount of tokens to retain after swap. Optional.
+    #[schema(nullable = false)]
+    pub retain_min_amount: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum StellarTokenKind {
+    Native,
+    Classic { code: String, issuer: String },
+    Contract { contract_id: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StellarTokenMetadata {
+    pub kind: StellarTokenKind,
+    pub decimals: u32,
+    pub canonical_asset_id: String,
+}
+
+/// Configuration for allowed token handling on Stellar
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StellarAllowedTokensPolicy {
+    pub asset: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub metadata: Option<StellarTokenMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub max_allowed_fee: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub swap_config: Option<StellarAllowedTokensSwapConfig>,
+}
+
+impl StellarAllowedTokensPolicy {
+    /// Create a new AllowedToken with required parameters
+    pub fn new(
+        asset: String,
+        metadata: Option<StellarTokenMetadata>,
+        max_allowed_fee: Option<u64>,
+        swap_config: Option<StellarAllowedTokensSwapConfig>,
+    ) -> Self {
+        Self {
+            asset,
+            metadata,
+            max_allowed_fee,
+            swap_config,
+        }
+    }
+}
+
+/// Stellar fee payment strategy
+///
+/// Determines who pays transaction fees:
+/// - `User`: User must include fee payment to relayer in transaction (for custom RPC methods)
+/// - `Relayer`: Relayer pays all transaction fees (recommended for send transaction endpoint)
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum StellarFeePaymentStrategy {
+    User,
+    Relayer,
+}
+
+/// Stellar swap strategy
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum StellarSwapStrategy {
+    /// Use Stellar Horizon order book API (/order_book endpoint)
+    OrderBook,
+    /// Use Soroswap DEX (future implementation)
+    Soroswap,
+}
+
+/// Stellar swap policy configuration
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct RelayerStellarSwapConfig {
+    /// DEX strategies to use for token swaps, in priority order.
+    /// Strategies are tried sequentially until one can handle the asset.
+    #[schema(nullable = false)]
+    #[serde(default)]
+    pub strategies: Vec<StellarSwapStrategy>,
+    /// Cron schedule for executing token swap logic to keep relayer funded. Optional.
+    #[schema(nullable = false)]
+    pub cron_schedule: Option<String>,
+    /// Min XLM balance (in stroops) to execute token swap logic to keep relayer funded. Optional.
+    #[schema(nullable = false)]
+    pub min_balance_threshold: Option<u64>,
+}
+
 /// Stellar-specific relayer policy configuration
 #[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
@@ -495,6 +610,49 @@ pub struct RelayerStellarPolicy {
     pub timeout_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub concurrent_transactions: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_tokens: Option<Vec<StellarAllowedTokensPolicy>>,
+    /// Fee payment strategy - determines who pays transaction fees (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub fee_payment_strategy: Option<StellarFeePaymentStrategy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slippage_percentage: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fee_margin_percentage: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub swap_config: Option<RelayerStellarSwapConfig>,
+}
+
+impl RelayerStellarPolicy {
+    /// Get allowed tokens for this policy
+    pub fn get_allowed_tokens(&self) -> Vec<StellarAllowedTokensPolicy> {
+        self.allowed_tokens.clone().unwrap_or_default()
+    }
+
+    /// Get allowed token entry by asset identifier
+    pub fn get_allowed_token_entry(&self, asset: &str) -> Option<StellarAllowedTokensPolicy> {
+        self.allowed_tokens
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .find(|entry| entry.asset == asset)
+    }
+
+    /// Get allowed token decimals by asset identifier
+    pub fn get_allowed_token_decimals(&self, asset: &str) -> Option<u8> {
+        self.get_allowed_token_entry(asset).and_then(|entry| {
+            entry
+                .metadata
+                .and_then(|metadata| u8::try_from(metadata.decimals).ok())
+        })
+    }
+
+    /// Get swap configuration for this policy
+    pub fn get_swap_config(&self) -> Option<RelayerStellarSwapConfig> {
+        self.swap_config.clone()
+    }
 }
 
 /// Network-specific policy for relayers
@@ -640,8 +798,13 @@ impl Relayer {
             (RelayerNetworkType::Evm, Some(RelayerNetworkPolicy::Evm(_))) => {
                 // EVM policies don't need special validation currently
             }
-            (RelayerNetworkType::Stellar, Some(RelayerNetworkPolicy::Stellar(_))) => {
-                // Stellar policies don't need special validation currently
+            (RelayerNetworkType::Stellar, Some(RelayerNetworkPolicy::Stellar(policy))) => {
+                self.validate_stellar_policy(policy)?;
+            }
+            (RelayerNetworkType::Stellar, None) => {
+                return Err(RelayerValidationError::InvalidPolicy(
+                    "Stellar policy is required. fee_payment_strategy is required".into(),
+                ));
             }
             // Mismatched network type and policy type
             (network_type, Some(policy)) => {
@@ -650,10 +813,9 @@ impl Relayer {
                     RelayerNetworkPolicy::Solana(_) => "Solana",
                     RelayerNetworkPolicy::Stellar(_) => "Stellar",
                 };
-                let network_type_str = format!("{:?}", network_type);
+                let network_type_str = format!("{network_type:?}");
                 return Err(RelayerValidationError::InvalidPolicy(format!(
-                    "Network type {} does not match policy type {}",
-                    network_type_str, policy_type
+                    "Network type {network_type_str} does not match policy type {policy_type}"
                 )));
             }
             // No policies is fine
@@ -710,7 +872,7 @@ impl Relayer {
         if let Some(keys) = keys {
             let solana_pub_key_regex =
                 Regex::new(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$").map_err(|e| {
-                    RelayerValidationError::InvalidPolicy(format!("Regex compilation error: {}", e))
+                    RelayerValidationError::InvalidPolicy(format!("Regex compilation error: {e}"))
                 })?;
 
             for key in keys {
@@ -745,8 +907,7 @@ impl Relayer {
                 SolanaSwapStrategy::JupiterSwap | SolanaSwapStrategy::JupiterUltra => {
                     if self.network != "mainnet-beta" {
                         return Err(RelayerValidationError::InvalidPolicy(format!(
-                            "{:?} strategy is only supported on mainnet-beta",
-                            strategy
+                            "{strategy:?} strategy is only supported on mainnet-beta"
                         )));
                     }
                 }
@@ -823,6 +984,160 @@ impl Relayer {
         Ok(())
     }
 
+    /// Validates Stellar-specific policies
+    fn validate_stellar_policy(
+        &self,
+        policy: &RelayerStellarPolicy,
+    ) -> Result<(), RelayerValidationError> {
+        if policy.fee_payment_strategy.is_none() {
+            return Err(RelayerValidationError::InvalidPolicy(
+                "Fee payment strategy is required".into(),
+            ));
+        }
+        // Validate fee margin percentage
+        if let Some(fee_margin) = policy.fee_margin_percentage {
+            if fee_margin < 0.0 {
+                return Err(RelayerValidationError::InvalidPolicy(
+                    "Negative fee margin percentage values are not accepted".into(),
+                ));
+            }
+        }
+
+        // Validate slippage percentage
+        if let Some(slippage) = policy.slippage_percentage {
+            if !(0.0..=100.0).contains(&slippage) {
+                return Err(RelayerValidationError::InvalidPolicy(
+                    "Slippage percentage must be between 0 and 100".into(),
+                ));
+            }
+        }
+
+        // Validate allowed tokens asset identifiers
+        if let Some(tokens) = &policy.allowed_tokens {
+            for token in tokens {
+                self.validate_stellar_asset_identifier(&token.asset)?;
+            }
+        }
+
+        // Validate swap configuration
+        if let Some(swap_config) = &policy.swap_config {
+            self.validate_stellar_swap_config(swap_config, policy)?;
+        }
+
+        Ok(())
+    }
+
+    /// Validates Stellar asset identifier format
+    ///
+    /// Valid formats:
+    /// - "native" or "XLM" for native XLM
+    /// - "CODE:ISSUER" for classic assets (e.g., "USDC:GA5Z...")
+    /// - Contract address (StrKey format starting with 'C')
+    fn validate_stellar_asset_identifier(&self, asset: &str) -> Result<(), RelayerValidationError> {
+        // Native XLM is always valid
+        if asset == "native" || asset == "XLM" || asset.is_empty() {
+            return Ok(());
+        }
+
+        // Check if it's a contract address (StrKey format starting with 'C')
+        if asset.starts_with('C') && asset.len() == 56 && !asset.contains(':') {
+            return Err(RelayerValidationError::InvalidPolicy(
+                "Contract addresses are not supported. Soroban will be supported soon.".into(),
+            ));
+            // // Basic validation - contract addresses are 56 characters starting with 'C'
+            // // Full validation would require StrKey decoding, but this catches most invalid formats
+            // return Ok(());
+        }
+
+        // Check if it's a classic asset format "CODE:ISSUER"
+        if let Some(colon_pos) = asset.find(':') {
+            let code = &asset[..colon_pos];
+            let issuer = &asset[colon_pos + 1..];
+
+            // Validate code (1-12 characters, alphanumeric)
+            if code.is_empty() || code.len() > 12 {
+                return Err(RelayerValidationError::InvalidPolicy(
+                    "Asset code must be between 1 and 12 characters".into(),
+                ));
+            }
+
+            if !code.chars().all(|c| c.is_alphanumeric()) {
+                return Err(RelayerValidationError::InvalidPolicy(
+                    "Asset code must contain only alphanumeric characters".into(),
+                ));
+            }
+
+            // Validate issuer (Stellar address format: 56 characters starting with 'G')
+            if issuer.len() != 56 {
+                return Err(RelayerValidationError::InvalidPolicy(
+                    "Issuer address must be 56 characters long".into(),
+                ));
+            }
+
+            if !issuer.starts_with('G') {
+                return Err(RelayerValidationError::InvalidPolicy(
+                    "Issuer address must start with 'G'".into(),
+                ));
+            }
+
+            // Basic format check for Stellar address (base32-like characters)
+            let stellar_address_regex = Regex::new(r"^G[0-9A-Z]{55}$").map_err(|e| {
+                RelayerValidationError::InvalidPolicy(format!("Regex compilation error: {e}"))
+            })?;
+
+            if !stellar_address_regex.is_match(issuer) {
+                return Err(RelayerValidationError::InvalidPolicy(
+                    "Issuer address must be a valid Stellar address".into(),
+                ));
+            }
+
+            return Ok(());
+        }
+
+        // If none of the formats match, it's invalid
+        Err(RelayerValidationError::InvalidPolicy(
+            "Asset identifier must be 'native', 'XLM', 'CODE:ISSUER', or a contract address".into(),
+        ))
+    }
+
+    /// Validates Stellar swap configuration
+    fn validate_stellar_swap_config(
+        &self,
+        swap_config: &RelayerStellarSwapConfig,
+        policy: &RelayerStellarPolicy,
+    ) -> Result<(), RelayerValidationError> {
+        // Swap config only supported for user fee payment strategy
+        if let Some(fee_payment_strategy) = &policy.fee_payment_strategy {
+            if *fee_payment_strategy == StellarFeePaymentStrategy::Relayer {
+                return Err(RelayerValidationError::InvalidPolicy(
+                    "Swap config only supported for user fee payment strategy".into(),
+                ));
+            }
+        }
+
+        // Validate cron schedule
+        if let Some(cron_schedule) = &swap_config.cron_schedule {
+            if cron_schedule.is_empty() {
+                return Err(RelayerValidationError::InvalidPolicy(
+                    "Empty cron schedule is not accepted".into(),
+                ));
+            }
+
+            Schedule::from_str(cron_schedule).map_err(|_| {
+                RelayerValidationError::InvalidPolicy("Invalid cron schedule format".into())
+            })?;
+        }
+
+        // Validate strategies are not empty if swap_config is present
+        if swap_config.strategies.is_empty() {
+            return Err(RelayerValidationError::InvalidPolicy(
+                "Swap config must include at least one strategy".into(),
+            ));
+        }
+
+        Ok(())
+    }
+
     /// Validates custom RPC URL configurations
     fn validate_custom_rpc_urls(&self) -> Result<(), RelayerValidationError> {
         if let Some(configs) = &self.custom_rpc_urls {
@@ -853,7 +1168,7 @@ impl Relayer {
     ) -> Result<Self, RelayerValidationError> {
         // 1. Convert current domain object to JSON
         let mut domain_json = serde_json::to_value(self).map_err(|e| {
-            RelayerValidationError::InvalidField(format!("Serialization error: {}", e))
+            RelayerValidationError::InvalidField(format!("Serialization error: {e}"))
         })?;
 
         // 2. Apply JSON Merge Patch
@@ -861,7 +1176,7 @@ impl Relayer {
 
         // 3. Convert back to domain object
         let updated: Relayer = serde_json::from_value(domain_json).map_err(|e| {
-            RelayerValidationError::InvalidField(format!("Invalid result after patch: {}", e))
+            RelayerValidationError::InvalidField(format!("Invalid result after patch: {e}"))
         })?;
 
         // 4. Validate the final result
@@ -910,10 +1225,10 @@ impl From<RelayerValidationError> for crate::models::ApiError {
             RelayerValidationError::EmptyName => "Name cannot be empty".to_string(),
             RelayerValidationError::EmptyNetwork => "Network cannot be empty".to_string(),
             RelayerValidationError::InvalidPolicy(msg) => {
-                format!("Invalid relayer policy: {}", msg)
+                format!("Invalid relayer policy: {msg}")
             }
             RelayerValidationError::InvalidRpcUrl(url) => {
-                format!("Invalid RPC URL: {}", url)
+                format!("Invalid RPC URL: {url}")
             }
             RelayerValidationError::InvalidRpcWeight => {
                 "RPC URL weight must be in range 0-100".to_string()
@@ -1060,6 +1375,192 @@ mod tests {
             !reason1.same_variant(&reason2),
             "Single variant vs Multiple should not be considered the same"
         );
+    }
+
+    // ===== HealthCheckFailure Tests =====
+
+    #[test]
+    fn test_health_check_failure_display() {
+        let failure1 = HealthCheckFailure::NonceSyncFailed("nonce mismatch".to_string());
+        assert_eq!(failure1.to_string(), "Nonce sync failed: nonce mismatch");
+
+        let failure2 = HealthCheckFailure::RpcValidationFailed("connection timeout".to_string());
+        assert_eq!(
+            failure2.to_string(),
+            "RPC validation failed: connection timeout"
+        );
+
+        let failure3 = HealthCheckFailure::BalanceCheckFailed("insufficient funds".to_string());
+        assert_eq!(
+            failure3.to_string(),
+            "Balance check failed: insufficient funds"
+        );
+
+        let failure4 = HealthCheckFailure::SequenceSyncFailed("sequence error".to_string());
+        assert_eq!(failure4.to_string(), "Sequence sync failed: sequence error");
+    }
+
+    #[test]
+    fn test_health_check_failure_serialization() {
+        let failure = HealthCheckFailure::RpcValidationFailed("test error".to_string());
+        let serialized = serde_json::to_string(&failure).unwrap();
+        let deserialized: HealthCheckFailure = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(failure, deserialized);
+    }
+
+    // ===== DisabledReason Conversion Tests =====
+
+    #[test]
+    fn test_disabled_reason_from_health_failure() {
+        let health_failure = HealthCheckFailure::NonceSyncFailed("nonce error".to_string());
+        let disabled_reason = DisabledReason::from_health_failure(health_failure);
+        assert!(matches!(
+            disabled_reason,
+            DisabledReason::NonceSyncFailed(_)
+        ));
+
+        let health_failure2 = HealthCheckFailure::RpcValidationFailed("rpc error".to_string());
+        let disabled_reason2 = DisabledReason::from_health_failure(health_failure2);
+        assert!(matches!(
+            disabled_reason2,
+            DisabledReason::RpcValidationFailed(_)
+        ));
+
+        let health_failure3 = HealthCheckFailure::BalanceCheckFailed("balance error".to_string());
+        let disabled_reason3 = DisabledReason::from_health_failure(health_failure3);
+        assert!(matches!(
+            disabled_reason3,
+            DisabledReason::BalanceCheckFailed(_)
+        ));
+
+        let health_failure4 = HealthCheckFailure::SequenceSyncFailed("sequence error".to_string());
+        let disabled_reason4 = DisabledReason::from_health_failure(health_failure4);
+        assert!(matches!(
+            disabled_reason4,
+            DisabledReason::SequenceSyncFailed(_)
+        ));
+    }
+
+    #[test]
+    fn test_disabled_reason_from_health_failures_empty() {
+        let failures: Vec<HealthCheckFailure> = vec![];
+        let result = DisabledReason::from_health_failures(failures);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_disabled_reason_from_health_failures_single() {
+        let failures = vec![HealthCheckFailure::NonceSyncFailed("error".to_string())];
+        let result = DisabledReason::from_health_failures(failures).unwrap();
+        assert!(matches!(result, DisabledReason::NonceSyncFailed(_)));
+    }
+
+    #[test]
+    fn test_disabled_reason_from_health_failures_multiple() {
+        let failures = vec![
+            HealthCheckFailure::NonceSyncFailed("error1".to_string()),
+            HealthCheckFailure::RpcValidationFailed("error2".to_string()),
+        ];
+        let result = DisabledReason::from_health_failures(failures).unwrap();
+        if let DisabledReason::Multiple(reasons) = result {
+            assert_eq!(reasons.len(), 2);
+            assert!(matches!(reasons[0], DisabledReason::NonceSyncFailed(_)));
+            assert!(matches!(reasons[1], DisabledReason::RpcValidationFailed(_)));
+        } else {
+            panic!("Expected Multiple variant");
+        }
+    }
+
+    #[test]
+    fn test_disabled_reason_from_failures_empty() {
+        let failures: Vec<DisabledReason> = vec![];
+        let result = DisabledReason::from_failures(failures);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_disabled_reason_from_failures_single() {
+        let failures = vec![DisabledReason::NonceSyncFailed("error".to_string())];
+        let result = DisabledReason::from_failures(failures).unwrap();
+        assert!(matches!(result, DisabledReason::NonceSyncFailed(_)));
+    }
+
+    #[test]
+    fn test_disabled_reason_from_failures_multiple() {
+        let failures = vec![
+            DisabledReason::NonceSyncFailed("error1".to_string()),
+            DisabledReason::RpcValidationFailed("error2".to_string()),
+        ];
+        let result = DisabledReason::from_failures(failures).unwrap();
+        if let DisabledReason::Multiple(reasons) = result {
+            assert_eq!(reasons.len(), 2);
+        } else {
+            panic!("Expected Multiple variant");
+        }
+    }
+
+    #[test]
+    fn test_disabled_reason_description() {
+        let reason1 = DisabledReason::NonceSyncFailed("nonce error".to_string());
+        assert_eq!(reason1.description(), "Nonce sync failed: nonce error");
+
+        let reason2 = DisabledReason::RpcValidationFailed("rpc error".to_string());
+        assert_eq!(reason2.description(), "RPC validation failed: rpc error");
+
+        let reason3 = DisabledReason::BalanceCheckFailed("balance error".to_string());
+        assert_eq!(reason3.description(), "Balance check failed: balance error");
+
+        let reason4 = DisabledReason::SequenceSyncFailed("sequence error".to_string());
+        assert_eq!(
+            reason4.description(),
+            "Sequence sync failed: sequence error"
+        );
+
+        let reason5 = DisabledReason::Multiple(vec![
+            DisabledReason::NonceSyncFailed("error1".to_string()),
+            DisabledReason::RpcValidationFailed("error2".to_string()),
+        ]);
+        assert_eq!(
+            reason5.description(),
+            "Nonce sync failed: error1, RPC validation failed: error2"
+        );
+    }
+
+    #[test]
+    fn test_disabled_reason_display() {
+        let reason = DisabledReason::NonceSyncFailed("test error".to_string());
+        assert_eq!(reason.to_string(), "Nonce sync failed: test error");
+    }
+
+    #[test]
+    fn test_disabled_reason_from_error_string_nonce() {
+        let reason = DisabledReason::from_error_string("Failed to sync nonce".to_string());
+        assert!(matches!(reason, DisabledReason::NonceSyncFailed(_)));
+    }
+
+    #[test]
+    fn test_disabled_reason_from_error_string_rpc() {
+        let reason = DisabledReason::from_error_string("RPC endpoint unreachable".to_string());
+        assert!(matches!(reason, DisabledReason::RpcValidationFailed(_)));
+    }
+
+    #[test]
+    fn test_disabled_reason_from_error_string_balance() {
+        let reason = DisabledReason::from_error_string("Insufficient balance detected".to_string());
+        assert!(matches!(reason, DisabledReason::BalanceCheckFailed(_)));
+    }
+
+    #[test]
+    fn test_disabled_reason_from_error_string_sequence() {
+        let reason = DisabledReason::from_error_string("Sequence number mismatch".to_string());
+        assert!(matches!(reason, DisabledReason::SequenceSyncFailed(_)));
+    }
+
+    #[test]
+    fn test_disabled_reason_from_error_string_unknown() {
+        let reason = DisabledReason::from_error_string("Unknown error occurred".to_string());
+        // Unknown errors default to RpcValidationFailed
+        assert!(matches!(reason, DisabledReason::RpcValidationFailed(_)));
     }
 
     // ===== RelayerNetworkType Tests =====
@@ -1335,6 +1836,174 @@ mod tests {
         assert_eq!(policy.min_balance, None);
         assert_eq!(policy.max_fee, None);
         assert_eq!(policy.timeout_seconds, None);
+        assert_eq!(policy.concurrent_transactions, None);
+        assert_eq!(policy.allowed_tokens, None);
+        assert_eq!(policy.fee_payment_strategy, None);
+        assert_eq!(policy.slippage_percentage, None);
+        assert_eq!(policy.fee_margin_percentage, None);
+        assert_eq!(policy.swap_config, None);
+    }
+
+    #[test]
+    fn test_stellar_allowed_tokens_policy_new() {
+        let metadata = StellarTokenMetadata {
+            kind: StellarTokenKind::Native,
+            decimals: 7,
+            canonical_asset_id: "native".to_string(),
+        };
+
+        let swap_config = StellarAllowedTokensSwapConfig {
+            slippage_percentage: Some(0.5),
+            min_amount: Some(1000),
+            max_amount: Some(10000000),
+            retain_min_amount: Some(500),
+        };
+
+        let token = StellarAllowedTokensPolicy::new(
+            "native".to_string(),
+            Some(metadata.clone()),
+            Some(100000),
+            Some(swap_config.clone()),
+        );
+
+        assert_eq!(token.asset, "native");
+        assert_eq!(token.metadata, Some(metadata));
+        assert_eq!(token.max_allowed_fee, Some(100000));
+        assert_eq!(token.swap_config, Some(swap_config));
+    }
+
+    #[test]
+    fn test_relayer_stellar_policy_get_allowed_tokens() {
+        let token1 = StellarAllowedTokensPolicy::new("native".to_string(), None, Some(1000), None);
+        let token2 = StellarAllowedTokensPolicy::new(
+            "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".to_string(),
+            None,
+            Some(2000),
+            None,
+        );
+
+        let policy = RelayerStellarPolicy {
+            allowed_tokens: Some(vec![token1.clone(), token2.clone()]),
+            ..RelayerStellarPolicy::default()
+        };
+
+        let tokens = policy.get_allowed_tokens();
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0], token1);
+        assert_eq!(tokens[1], token2);
+
+        // Test empty case
+        let empty_policy = RelayerStellarPolicy::default();
+        let empty_tokens = empty_policy.get_allowed_tokens();
+        assert_eq!(empty_tokens.len(), 0);
+    }
+
+    #[test]
+    fn test_relayer_stellar_policy_get_allowed_token_entry() {
+        let token1 = StellarAllowedTokensPolicy::new("native".to_string(), None, Some(1000), None);
+        let token2 = StellarAllowedTokensPolicy::new(
+            "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".to_string(),
+            None,
+            Some(2000),
+            None,
+        );
+
+        let policy = RelayerStellarPolicy {
+            allowed_tokens: Some(vec![token1.clone(), token2.clone()]),
+            ..RelayerStellarPolicy::default()
+        };
+
+        let found_token = policy.get_allowed_token_entry("native").unwrap();
+        assert_eq!(found_token, token1);
+
+        let not_found = policy.get_allowed_token_entry(
+            "EURC:GDHU6WRG4IEQXM5NZ4BMPKOXHW76MZM4Y2IEMFDVXBSDP6SJY4ITNPP2",
+        );
+        assert!(not_found.is_none());
+
+        // Test empty case
+        let empty_policy = RelayerStellarPolicy::default();
+        let empty_result = empty_policy.get_allowed_token_entry("native");
+        assert!(empty_result.is_none());
+    }
+
+    #[test]
+    fn test_relayer_stellar_policy_get_allowed_token_decimals() {
+        let metadata1 = StellarTokenMetadata {
+            kind: StellarTokenKind::Native,
+            decimals: 7,
+            canonical_asset_id: "native".to_string(),
+        };
+
+        let metadata2 = StellarTokenMetadata {
+            kind: StellarTokenKind::Classic {
+                code: "USDC".to_string(),
+                issuer: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".to_string(),
+            },
+            decimals: 6,
+            canonical_asset_id: "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+                .to_string(),
+        };
+
+        let token1 = StellarAllowedTokensPolicy::new(
+            "native".to_string(),
+            Some(metadata1),
+            Some(1000),
+            None,
+        );
+        let token2 = StellarAllowedTokensPolicy::new(
+            "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".to_string(),
+            Some(metadata2),
+            Some(2000),
+            None,
+        );
+        let token3 = StellarAllowedTokensPolicy::new(
+            "EURC:GDHU6WRG4IEQXM5NZ4BMPKOXHW76MZM4Y2IEMFDVXBSDP6SJY4ITNPP2".to_string(),
+            None,
+            Some(3000),
+            None,
+        );
+
+        let policy = RelayerStellarPolicy {
+            allowed_tokens: Some(vec![token1, token2, token3]),
+            ..RelayerStellarPolicy::default()
+        };
+
+        assert_eq!(policy.get_allowed_token_decimals("native"), Some(7));
+        assert_eq!(
+            policy.get_allowed_token_decimals(
+                "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+            ),
+            Some(6)
+        );
+        assert_eq!(
+            policy.get_allowed_token_decimals(
+                "EURC:GDHU6WRG4IEQXM5NZ4BMPKOXHW76MZM4Y2IEMFDVXBSDP6SJY4ITNPP2"
+            ),
+            None
+        );
+        assert_eq!(policy.get_allowed_token_decimals("unknown"), None);
+    }
+
+    #[test]
+    fn test_relayer_stellar_policy_get_swap_config() {
+        let swap_config = RelayerStellarSwapConfig {
+            strategies: vec![StellarSwapStrategy::OrderBook],
+            cron_schedule: Some("0 0 * * *".to_string()),
+            min_balance_threshold: Some(1000000),
+        };
+
+        let policy = RelayerStellarPolicy {
+            swap_config: Some(swap_config.clone()),
+            ..RelayerStellarPolicy::default()
+        };
+
+        let retrieved_config = policy.get_swap_config().unwrap();
+        assert_eq!(retrieved_config, swap_config);
+
+        // Test None case
+        let empty_policy = RelayerStellarPolicy::default();
+        assert!(empty_policy.get_swap_config().is_none());
     }
 
     // ===== RelayerNetworkPolicy Tests =====
@@ -1388,6 +2057,11 @@ mod tests {
             max_fee: Some(100000),
             timeout_seconds: Some(30),
             concurrent_transactions: None,
+            allowed_tokens: None,
+            fee_payment_strategy: Some(StellarFeePaymentStrategy::Relayer),
+            slippage_percentage: None,
+            fee_margin_percentage: None,
+            swap_config: None,
         };
 
         let network_policy = RelayerNetworkPolicy::Stellar(stellar_policy.clone());

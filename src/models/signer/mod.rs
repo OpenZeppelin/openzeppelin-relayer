@@ -109,8 +109,14 @@ impl<'de> Deserialize<'de> for LocalSignerConfig {
 /// The AWS authentication is carried out
 /// through recommended credential providers as outlined in
 /// https://docs.aws.amazon.com/sdk-for-rust/latest/dg/credproviders.html
-/// Currently only EVM signing is supported since, as of June 2025,
-/// AWS does not support ed25519 scheme
+///
+/// Supports:
+/// - EVM networks using secp256k1 (ECDSA_SHA_256)
+/// - Solana using Ed25519 (ED25519_SHA_512)
+/// - Stellar using Ed25519 (ED25519_SHA_512)
+///
+/// Note: Ed25519 support was added to AWS KMS in November 2025.
+/// See: https://aws.amazon.com/about-aws/whats-new/2025/11/aws-kms-edwards-curve-digital-signature-algorithm/
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct AwsKmsSignerConfig {
     #[validate(length(min = 1, message = "Region cannot be empty"))]
@@ -457,7 +463,7 @@ fn format_validation_errors(errors: &validator::ValidationErrors) -> String {
     for (struct_field, kind) in errors.errors().iter() {
         if let validator::ValidationErrorsKind::Struct(nested) = kind {
             let nested_msgs = format_validation_errors(nested);
-            messages.push(format!("{}.{}", struct_field, nested_msgs));
+            messages.push(format!("{struct_field}.{nested_msgs}"));
         }
     }
 
@@ -553,7 +559,7 @@ impl From<SignerValidationError> for crate::models::ApiError {
             SignerValidationError::InvalidIdFormat => {
                 "ID must contain only letters, numbers, dashes and underscores and must be at most 36 characters long".to_string()
             }
-            SignerValidationError::InvalidConfig(msg) => format!("Invalid signer configuration: {}", msg),
+            SignerValidationError::InvalidConfig(msg) => format!("Invalid signer configuration: {msg}"),
         })
     }
 }

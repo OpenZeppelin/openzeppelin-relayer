@@ -6,7 +6,7 @@ use soroban_rs::xdr::Hash;
 
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub struct StellarNetwork {
-    /// Unique network identifier (e.g., "mainnet", "sepolia", "custom-devnet").
+    /// Unique network identifier (e.g., "mainnet", "devnet", "custom-devnet").
     pub network: String,
     /// List of RPC endpoint URLs for connecting to the network.
     pub rpc_urls: Vec<String>,
@@ -20,6 +20,8 @@ pub struct StellarNetwork {
     pub tags: Vec<String>,
     /// The passphrase for the Stellar network.
     pub passphrase: String,
+    /// The Horizon API URL for the Stellar network.
+    pub horizon_url: Option<String>,
 }
 
 impl TryFrom<NetworkRepoModel> for StellarNetwork {
@@ -66,6 +68,7 @@ impl TryFrom<NetworkRepoModel> for StellarNetwork {
                     is_testnet: common.is_testnet.unwrap_or(false),
                     tags: common.tags.clone().unwrap_or_default(),
                     passphrase,
+                    horizon_url: stellar_config.horizon_url.clone(),
                 })
             }
             _ => Err(RepositoryError::InvalidData(format!(

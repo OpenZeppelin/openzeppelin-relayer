@@ -33,11 +33,11 @@ use crate::{
     domain::relayer::solana::rpc::methods::utils::FeeQuote,
     models::{
         produce_solana_rpc_webhook_payload, EncodedSerializedTransaction, SolanaFeePaymentStrategy,
-        SolanaWebhookRpcPayload, TransactionRepoModel, TransferTransactionRequestParams,
-        TransferTransactionResult,
+        SolanaTransferTransactionRequestParams, SolanaTransferTransactionResult,
+        SolanaWebhookRpcPayload, TransactionRepoModel,
     },
     repositories::{Repository, TransactionRepository},
-    services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
+    services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
 };
 
 use super::*;
@@ -52,8 +52,8 @@ where
 {
     pub(crate) async fn transfer_transaction_impl(
         &self,
-        params: TransferTransactionRequestParams,
-    ) -> Result<TransferTransactionResult, SolanaRpcError> {
+        params: SolanaTransferTransactionRequestParams,
+    ) -> Result<SolanaTransferTransactionResult, SolanaRpcError> {
         info!(
             "Processing transfer transaction for: {} and amount {}",
             params.token, params.amount
@@ -105,7 +105,7 @@ where
 
         let encoded_tx = EncodedSerializedTransaction::try_from(&transaction)?;
 
-        let result = TransferTransactionResult {
+        let result = SolanaTransferTransactionResult {
             transaction: encoded_tx,
             fee_in_spl: fee_quote.fee_in_spl.to_string(),
             fee_in_lamports: fee_quote.fee_in_lamports.to_string(),
@@ -250,15 +250,12 @@ mod tests {
         services::{QuoteResponse, RoutePlan, SwapInfo},
     };
 
+    use super::super::test_setup::setup_signer_mocks;
     use super::*;
     use solana_sdk::{
-        hash::Hash,
-        program_option::COption,
-        program_pack::Pack,
-        signature::{Keypair, Signature},
-        signer::Signer,
+        hash::Hash, program_option::COption, program_pack::Pack, signature::Keypair, signer::Signer,
     };
-    use spl_token::state::Account;
+    use spl_token_interface::state::Account;
 
     #[tokio::test]
     async fn test_transfer_wsol_spl_token_success_relayer_fee_strategy() {
@@ -267,12 +264,12 @@ mod tests {
         let test_token = WRAPPED_SOL_MINT;
 
         // Create valid token account data
-        let token_account = spl_token::state::Account {
+        let token_account = spl_token_interface::state::Account {
             mint: Pubkey::from_str(test_token).unwrap(),
             owner: Pubkey::new_unique(), // Source account owner
             amount: 10_000_000_000,      // 10 WSOL
             delegate: COption::None,
-            state: spl_token::state::AccountState::Initialized,
+            state: spl_token_interface::state::AccountState::Initialized,
             is_native: COption::None,
             delegated_amount: 0,
             close_authority: COption::None,
@@ -297,12 +294,8 @@ mod tests {
             ..Default::default()
         });
 
-        let signature = Signature::new_unique();
-
-        signer.expect_sign().returning(move |_| {
-            let signature_clone = signature;
-            Box::pin(async move { Ok(signature_clone) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut signer, relayer.address.clone());
 
         // Mock provider responses
         provider
@@ -325,7 +318,7 @@ mod tests {
                     Ok(solana_sdk::account::Account {
                         lamports: 1_000_000,
                         data: account_data,
-                        owner: spl_token::id(),
+                        owner: spl_token_interface::id(),
                         executable: false,
                         rent_epoch: 0,
                     })
@@ -342,7 +335,7 @@ mod tests {
             Arc::new(MockTransactionRepository::new()),
         );
 
-        let params = TransferTransactionRequestParams {
+        let params = SolanaTransferTransactionRequestParams {
             token: test_token.to_string(),
             source: Pubkey::new_unique().to_string(),
             destination: Pubkey::new_unique().to_string(),
@@ -366,12 +359,12 @@ mod tests {
         let test_token = WRAPPED_SOL_MINT;
 
         // Create valid token account data
-        let token_account = spl_token::state::Account {
+        let token_account = spl_token_interface::state::Account {
             mint: Pubkey::from_str(test_token).unwrap(),
             owner: Pubkey::new_unique(), // Source account owner
             amount: 10_000_000_000,
             delegate: COption::None,
-            state: spl_token::state::AccountState::Initialized,
+            state: spl_token_interface::state::AccountState::Initialized,
             is_native: COption::None,
             delegated_amount: 0,
             close_authority: COption::None,
@@ -395,12 +388,8 @@ mod tests {
             ..Default::default()
         });
 
-        let signature = Signature::new_unique();
-
-        signer.expect_sign().returning(move |_| {
-            let signature_clone = signature;
-            Box::pin(async move { Ok(signature_clone) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut signer, relayer.address.clone());
 
         provider
             .expect_get_latest_blockhash_with_commitment()
@@ -422,7 +411,7 @@ mod tests {
                     Ok(solana_sdk::account::Account {
                         lamports: 1_000_000,
                         data: account_data,
-                        owner: spl_token::id(),
+                        owner: spl_token_interface::id(),
                         executable: false,
                         rent_epoch: 0,
                     })
@@ -439,7 +428,7 @@ mod tests {
             Arc::new(MockTransactionRepository::new()),
         );
 
-        let params = TransferTransactionRequestParams {
+        let params = SolanaTransferTransactionRequestParams {
             token: test_token.to_string(),
             source: Pubkey::new_unique().to_string(),
             destination: Pubkey::new_unique().to_string(),
@@ -463,12 +452,12 @@ mod tests {
         let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
 
         // Create valid token account data
-        let token_account = spl_token::state::Account {
+        let token_account = spl_token_interface::state::Account {
             mint: Pubkey::from_str(test_token).unwrap(),
             owner: Pubkey::new_unique(), // Source account owner
             amount: 10_000_000,          // 10 USDC (assuming 6 decimals)
             delegate: COption::None,
-            state: spl_token::state::AccountState::Initialized,
+            state: spl_token_interface::state::AccountState::Initialized,
             is_native: COption::None,
             delegated_amount: 0,
             close_authority: COption::None,
@@ -493,12 +482,8 @@ mod tests {
             ..Default::default()
         });
 
-        let signature = Signature::new_unique();
-
-        signer.expect_sign().returning(move |_| {
-            let signature_clone = signature;
-            Box::pin(async move { Ok(signature_clone) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut signer, relayer.address.clone());
 
         // Mock provider responses
         provider
@@ -521,7 +506,7 @@ mod tests {
                     Ok(solana_sdk::account::Account {
                         lamports: 1_000_000,
                         data: account_data,
-                        owner: spl_token::id(),
+                        owner: spl_token_interface::id(),
                         executable: false,
                         rent_epoch: 0,
                     })
@@ -572,7 +557,7 @@ mod tests {
             Arc::new(MockTransactionRepository::new()),
         );
 
-        let params = TransferTransactionRequestParams {
+        let params = SolanaTransferTransactionRequestParams {
             token: test_token.to_string(),
             source: Pubkey::new_unique().to_string(),
             destination: Pubkey::new_unique().to_string(),
@@ -595,19 +580,20 @@ mod tests {
         let source_pubkey = ctx.source_keypair.pubkey();
         let destination_pubkey = ctx.destination;
 
-        let source_token_account = spl_token::state::Account {
+        let source_token_account = spl_token_interface::state::Account {
             mint: Pubkey::from_str(&ctx.token).unwrap(),
             owner: source_pubkey,
             amount: 10_000_000,
             delegate: COption::None,
-            state: spl_token::state::AccountState::Initialized,
+            state: spl_token_interface::state::AccountState::Initialized,
             is_native: COption::None,
             delegated_amount: 0,
             close_authority: COption::None,
         };
 
-        let mut source_account_data = vec![0; spl_token::state::Account::LEN];
-        spl_token::state::Account::pack(source_token_account, &mut source_account_data).unwrap();
+        let mut source_account_data = vec![0; spl_token_interface::state::Account::LEN];
+        spl_token_interface::state::Account::pack(source_token_account, &mut source_account_data)
+            .unwrap();
 
         ctx.relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
@@ -624,12 +610,8 @@ mod tests {
             ..Default::default()
         });
 
-        let signature = Signature::new_unique();
-
-        ctx.signer.expect_sign().returning(move |_| {
-            let signature_clone = signature;
-            Box::pin(async move { Ok(signature_clone) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut ctx.signer, ctx.relayer.address.clone());
 
         ctx.provider
             .expect_get_latest_blockhash_with_commitment()
@@ -650,8 +632,8 @@ mod tests {
                 let account_data = source_account_data.clone();
                 Box::pin(async move {
                     if pubkey == ctx.token_mint {
-                        let mut mint_data = vec![0; spl_token::state::Mint::LEN];
-                        let mint = spl_token::state::Mint {
+                        let mut mint_data = vec![0; spl_token_interface::state::Mint::LEN];
+                        let mint = spl_token_interface::state::Mint {
                             is_initialized: true,
                             mint_authority: solana_sdk::program_option::COption::Some(
                                 Pubkey::new_unique(),
@@ -660,12 +642,12 @@ mod tests {
                             decimals: 6,
                             ..Default::default()
                         };
-                        spl_token::state::Mint::pack(mint, &mut mint_data).unwrap();
+                        spl_token_interface::state::Mint::pack(mint, &mut mint_data).unwrap();
 
                         Ok(solana_sdk::account::Account {
                             lamports: 1_000_000,
                             data: mint_data,
-                            owner: spl_token::id(),
+                            owner: spl_token_interface::id(),
                             executable: false,
                             rent_epoch: 0,
                         })
@@ -673,14 +655,16 @@ mod tests {
                         Ok(solana_sdk::account::Account {
                             lamports: 1_000_000,
                             data: account_data,
-                            owner: spl_token::id(),
+                            owner: spl_token_interface::id(),
                             executable: false,
                             rent_epoch: 0,
                         })
                     } else {
-                        Err(crate::services::SolanaProviderError::InvalidAddress(
-                            format!("Invalid token address {}", pubkey),
-                        ))
+                        Err(
+                            crate::services::provider::SolanaProviderError::InvalidAddress(
+                                format!("Invalid token address {}", pubkey),
+                            ),
+                        )
                     }
                 })
             });
@@ -735,7 +719,7 @@ mod tests {
             Arc::new(ctx.transaction_repository),
         );
 
-        let params = TransferTransactionRequestParams {
+        let params = SolanaTransferTransactionRequestParams {
             token: ctx.token.to_string(),
             source: source_pubkey.to_string(),
             destination: destination_pubkey.to_string(),
@@ -795,12 +779,12 @@ mod tests {
             ..Default::default()
         };
         // Create token account with low balance
-        let token_account = spl_token::state::Account {
+        let token_account = spl_token_interface::state::Account {
             mint: Pubkey::from_str(test_token).unwrap(),
             owner: Pubkey::new_unique(),
             amount: 100,
             delegate: COption::None,
-            state: spl_token::state::AccountState::Initialized,
+            state: spl_token_interface::state::AccountState::Initialized,
             is_native: COption::None,
             delegated_amount: 0,
             close_authority: COption::None,
@@ -817,7 +801,7 @@ mod tests {
                     Ok(solana_sdk::account::Account {
                         lamports: 1_000_000,
                         data: account_data,
-                        owner: spl_token::id(),
+                        owner: spl_token_interface::id(),
                         executable: false,
                         rent_epoch: 0,
                     })
@@ -834,7 +818,7 @@ mod tests {
             Arc::new(MockTransactionRepository::new()),
         );
 
-        let params = TransferTransactionRequestParams {
+        let params = SolanaTransferTransactionRequestParams {
             token: test_token.to_string(),
             source: Pubkey::new_unique().to_string(),
             destination: Pubkey::new_unique().to_string(),

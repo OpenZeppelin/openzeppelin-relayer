@@ -1,0 +1,51 @@
+---
+description: General Rust coding standards for the Relayer project
+globs:
+  - "**/*.rs"
+alwaysApply: true
+---
+
+# Code Style and Formatting
+- Follow official Rust style guidelines using rustfmt (edition = 2021, max_width = 100).
+- Follow Rust naming conventions: snake_case for functions/variables, PascalCase for types, SCREAMING_SNAKE_CASE for constants and statics.
+- Order imports alphabetically and group by: std, external crates, local crates.
+- Include relevant doc comments (///) on public functions, structs, and modules. Use comments for "why", not "what". Avoid redundant doc comments.
+- Document lifetime parameters when they're not obvious.
+
+# Safety and Error Handling
+- Avoid unsafe code unless absolutely necessary; justify its use in comments.
+- Write idiomatic Rust: Prefer Result over panic, use ? operator for error propagation.
+- Avoid unwrap; handle errors explicitly with Result and custom Error types for all async operations.
+- Prefer header imports over function-level imports of dependencies.
+
+# Performance and Memory
+- Prefer borrowing over cloning when possible.
+- Use &str instead of &String for function parameters.
+- Use &[T] instead of &Vec<T> for function parameters.
+- Avoid unnecessary .clone() calls.
+- Use Vec::with_capacity() when size is known in advance.
+- Use explicit lifetimes only when necessary; infer where possible.
+
+# Async and Concurrency
+- Always use Tokio runtime for async code. Await futures eagerly; avoid blocking calls in async contexts.
+- Streams: Use futures::StreamExt for processing streams efficiently.
+
+# Serialization and Data
+- Always use serde for JSON serialization/deserialization with #[derive(Serialize, Deserialize)].
+- Use type aliases for complex types to improve readability.
+- Implement common traits (Debug, Clone, PartialEq) where appropriate, using derive macros when possible.
+- Implement Display for user-facing types.
+
+# Testing
+- Prefer defining traits when implementing services to make mocking and testing easier.
+- For tests, prefer existing utils for creating mocks instead of duplicating code.
+- Use assert_eq! and assert! macros appropriately.
+- Keep tests minimal, deterministic, and fast.
+
+# Logging and Observability
+- Use tracing for structured logging, e.g., tracing::info! for request and error logs.
+
+# Code Organization and Clarity
+- When optimizing, prefer clarity first, then performance.
+- Modularize code to keep functions concise and focused.
+- Use derive macros to reduce boilerplate where possible.

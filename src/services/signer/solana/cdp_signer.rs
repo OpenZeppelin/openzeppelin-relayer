@@ -14,9 +14,13 @@
 //! Private keys never leave the CDP service, providing enhanced security
 //! compared to local key storage solutions.
 use crate::{
-    domain::SignTransactionResponse,
-    models::{Address, CdpSignerConfig, NetworkTransactionData, SignerError},
+    domain::{SignTransactionResponse, SignTransactionResponseSolana},
+    models::{
+        Address, CdpSignerConfig, EncodedSerializedTransaction, NetworkTransactionData,
+        SignerError, TransactionError,
+    },
     services::{signer::Signer, CdpService, CdpServiceTrait},
+    utils::base64_encode,
 };
 use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine as _};
@@ -28,6 +32,7 @@ use super::SolanaSignTrait;
 
 pub type DefaultCdpService = CdpService;
 
+#[derive(Debug)]
 pub struct CdpSigner<T = DefaultCdpService>
 where
     T: CdpServiceTrait,
@@ -38,7 +43,7 @@ where
 impl CdpSigner<DefaultCdpService> {
     pub fn new(config: CdpSignerConfig) -> Result<Self, SignerError> {
         let cdp_service = DefaultCdpService::new(config).map_err(|e| {
-            SignerError::Configuration(format!("Failed to create CDP service: {}", e))
+            SignerError::Configuration(format!("Failed to create CDP service: {e}"))
         })?;
 
         Ok(Self { cdp_service })
@@ -75,7 +80,7 @@ impl<T: CdpServiceTrait> SolanaSignTrait for CdpSigner<T> {
         // Deserialize the message from bincode
         let solana_message: solana_sdk::message::Message =
             bincode::deserialize(message).map_err(|e| {
-                SignerError::SigningError(format!("Failed to deserialize message: {}", e))
+                SignerError::SigningError(format!("Failed to deserialize message: {e}"))
             })?;
 
         // Create an unsigned transaction from the message
@@ -83,9 +88,7 @@ impl<T: CdpServiceTrait> SolanaSignTrait for CdpSigner<T> {
 
         // Convert to EncodedSerializedTransaction (base64)
         let encoded_tx = crate::models::EncodedSerializedTransaction::try_from(&transaction)
-            .map_err(|e| {
-                SignerError::SigningError(format!("Failed to encode transaction: {}", e))
-            })?;
+            .map_err(|e| SignerError::SigningError(format!("Failed to encode transaction: {e}")))?;
 
         // Use the CDP transaction signing API instead of message signing
         let signed_tx_bytes = self
@@ -100,7 +103,7 @@ impl<T: CdpServiceTrait> SolanaSignTrait for CdpSigner<T> {
 
         let signed_tx_data = crate::models::EncodedSerializedTransaction::new(signed_tx_encoded);
         let signed_transaction: Transaction = signed_tx_data.try_into().map_err(|e| {
-            SignerError::SigningError(format!("Failed to decode signed transaction: {}", e))
+            SignerError::SigningError(format!("Failed to decode signed transaction: {e}"))
         })?;
 
         // Get the CDP signer's address to find the correct signature index
@@ -112,7 +115,7 @@ impl<T: CdpServiceTrait> SolanaSignTrait for CdpSigner<T> {
 
         let cdp_pubkey = match cdp_address {
             crate::models::Address::Solana(addr) => Pubkey::from_str(&addr)
-                .map_err(|e| SignerError::SigningError(format!("Invalid CDP pubkey: {}", e)))?,
+                .map_err(|e| SignerError::SigningError(format!("Invalid CDP pubkey: {e}")))?,
             _ => {
                 return Err(SignerError::SigningError(
                     "CDP address is not a Solana address".to_string(),
@@ -138,34 +141,6 @@ impl<T: CdpServiceTrait> SolanaSignTrait for CdpSigner<T> {
         }
 
         Ok(signed_transaction.signatures[signer_index])
-    }
-}
-
-#[async_trait]
-impl<T: CdpServiceTrait> Signer for CdpSigner<T> {
-    async fn address(&self) -> Result<Address, SignerError> {
-        let address = self
-            .cdp_service
-            .account_address()
-            .await
-            .map_err(SignerError::CdpError)?;
-
-        Ok(address)
-    }
-
-    async fn sign_transaction(
-        &self,
-        transaction: NetworkTransactionData,
-    ) -> Result<SignTransactionResponse, SignerError> {
-        let solana_data = transaction.get_solana_transaction_data()?;
-
-        let signed_transaction = self
-            .cdp_service
-            .sign_solana_transaction(solana_data.transaction)
-            .await
-            .map_err(SignerError::CdpError)?;
-
-        Ok(SignTransactionResponse::Solana(signed_transaction))
     }
 }
 
@@ -195,7 +170,7 @@ mod tests {
             });
 
         let signer = CdpSigner::new_for_testing(mock_service);
-        let result = signer.address().await.unwrap();
+        let result = signer.pubkey().await.unwrap();
 
         match result {
             Address::Solana(addr) => {
@@ -356,76 +331,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sign_transaction_success() {
-        let mut mock_service = MockCdpServiceTrait::new();
-
-        let test_transaction = "transaction_123".to_string();
-        let mock_signed_transaction = vec![1u8; 64]; // Mock signed transaction bytes
-
-        mock_service
-            .expect_sign_solana_transaction()
-            .times(1)
-            .with(eq(test_transaction.clone()))
-            .returning(move |_| {
-                let signed_tx = mock_signed_transaction.clone();
-                Box::pin(async { Ok(signed_tx) })
-            });
-
-        let signer = CdpSigner::new_for_testing(mock_service);
-
-        let tx_data = SolanaTransactionData {
-            transaction: test_transaction,
-            signature: None,
-        };
-
-        let result = signer
-            .sign_transaction(NetworkTransactionData::Solana(tx_data))
-            .await;
-
-        assert!(result.is_ok());
-        match result.unwrap() {
-            SignTransactionResponse::Solana(signed_tx) => {
-                assert_eq!(signed_tx, vec![1u8; 64]);
-            }
-            _ => panic!("Expected Solana SignTransactionResponse"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_sign_transaction_error() {
-        let mut mock_service = MockCdpServiceTrait::new();
-
-        let test_transaction = "transaction_123".to_string();
-
-        mock_service
-            .expect_sign_solana_transaction()
-            .times(1)
-            .with(eq(test_transaction.clone()))
-            .returning(move |_| {
-                Box::pin(async { Err(CdpError::SigningError("Mock signing error".into())) })
-            });
-
-        let signer = CdpSigner::new_for_testing(mock_service);
-
-        let tx_data = SolanaTransactionData {
-            transaction: test_transaction,
-            signature: None,
-        };
-
-        let result = signer
-            .sign_transaction(NetworkTransactionData::Solana(tx_data))
-            .await;
-
-        assert!(result.is_err());
-        match result {
-            Err(SignerError::CdpError(err)) => {
-                assert_eq!(err.to_string(), "Signing error: Mock signing error");
-            }
-            _ => panic!("Expected CdpError error variant"),
-        }
-    }
-
-    #[tokio::test]
     async fn test_address_error_handling() {
         let mut mock_service = MockCdpServiceTrait::new();
 
@@ -437,7 +342,7 @@ mod tests {
             });
 
         let signer = CdpSigner::new_for_testing(mock_service);
-        let result = signer.address().await;
+        let result = signer.pubkey().await;
 
         assert!(result.is_err());
     }

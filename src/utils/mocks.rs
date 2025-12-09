@@ -40,7 +40,7 @@ pub mod mockutils {
                 ..Default::default()
             }),
             signer_id: "test".to_string(),
-            address: "0x".to_string(),
+            address: "11111111111111111111111111111112".to_string(),
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
@@ -159,13 +159,13 @@ pub mod mockutils {
             relayer_id: "test".to_string(),
             status: TransactionStatus::Pending,
             status_reason: None,
-            created_at: Utc::now().to_string(),
+            created_at: Utc::now().to_rfc3339(),
             sent_at: None,
             confirmed_at: None,
             valid_until: None,
             network_data: NetworkTransactionData::Solana(SolanaTransactionData {
-                transaction: "test".to_string(),
-                signature: None,
+                transaction: Some("test".to_string()),
+                ..Default::default()
             }),
             priced_at: None,
             hashes: vec![],
@@ -259,7 +259,7 @@ pub mod mockutils {
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
         mock_job_producer
-            .expect_produce_solana_token_swap_request_job()
+            .expect_produce_token_swap_request_job()
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
         AppState {

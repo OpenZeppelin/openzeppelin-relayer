@@ -1,7 +1,11 @@
 use crate::{
+    models::rpc::{
+        SolanaFeeEstimateResult, SolanaPrepareTransactionResult, StellarFeeEstimateResult,
+        StellarPrepareTransactionResult,
+    },
     models::{
-        evm::Speed, EvmTransactionDataSignature, NetworkTransactionData, TransactionRepoModel,
-        TransactionStatus, U256,
+        evm::Speed, EvmTransactionDataSignature, NetworkTransactionData, SolanaInstructionSpec,
+        TransactionRepoModel, TransactionStatus, U256,
     },
     utils::{deserialize_optional_u128, deserialize_optional_u64, serialize_optional_u128},
 };
@@ -69,17 +73,24 @@ pub struct EvmTransactionResponse {
 #[derive(Debug, Serialize, Clone, PartialEq, Deserialize, ToSchema)]
 pub struct SolanaTransactionResponse {
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub signature: Option<String>,
     pub status: TransactionStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub status_reason: Option<String>,
     pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub sent_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub confirmed_at: Option<String>,
-    #[schema(nullable = false)]
     pub transaction: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub instructions: Option<Vec<SolanaInstructionSpec>>,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Deserialize, ToSchema)]
@@ -129,13 +140,14 @@ impl From<TransactionRepoModel> for TransactionResponse {
             NetworkTransactionData::Solana(solana_data) => {
                 TransactionResponse::Solana(Box::new(SolanaTransactionResponse {
                     id: model.id,
-                    transaction: solana_data.transaction,
+                    transaction: solana_data.transaction.unwrap_or_default(),
                     status: model.status,
                     status_reason: model.status_reason,
                     created_at: model.created_at,
                     sent_at: model.sent_at,
                     confirmed_at: model.confirmed_at,
                     signature: solana_data.signature,
+                    instructions: solana_data.instructions,
                 }))
             }
             NetworkTransactionData::Stellar(stellar_data) => {
@@ -155,6 +167,30 @@ impl From<TransactionRepoModel> for TransactionResponse {
             }
         }
     }
+}
+
+/// Network-agnostic fee estimate response for gasless transactions.
+/// Contains network-specific fee estimate results.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+#[serde(untagged)]
+#[schema(as = SponsoredTransactionQuoteResponse)]
+pub enum SponsoredTransactionQuoteResponse {
+    /// Solana-specific fee estimate result
+    Solana(SolanaFeeEstimateResult),
+    /// Stellar-specific fee estimate result
+    Stellar(StellarFeeEstimateResult),
+}
+
+/// Network-agnostic prepare transaction response for gasless transactions.
+/// Contains network-specific prepare transaction results.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+#[serde(untagged)]
+#[schema(as = SponsoredTransactionBuildResponse)]
+pub enum SponsoredTransactionBuildResponse {
+    /// Solana-specific prepare transaction result
+    Solana(SolanaPrepareTransactionResult),
+    /// Stellar-specific prepare transaction result
+    Stellar(StellarPrepareTransactionResult),
 }
 
 #[cfg(test)]
@@ -238,7 +274,8 @@ mod tests {
             priced_at: None,
             hashes: vec![],
             network_data: NetworkTransactionData::Solana(SolanaTransactionData {
-                transaction: "transaction_123".to_string(),
+                transaction: Some("transaction_123".to_string()),
+                instructions: None,
                 signature: Some("signature_123".to_string()),
             }),
             valid_until: None,
@@ -385,7 +422,8 @@ mod tests {
             priced_at: None,
             hashes: vec![],
             network_data: NetworkTransactionData::Solana(SolanaTransactionData {
-                transaction: "transaction_123".to_string(),
+                transaction: Some("transaction_123".to_string()),
+                instructions: None,
                 signature: None,
             }),
             valid_until: None,

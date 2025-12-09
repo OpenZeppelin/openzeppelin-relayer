@@ -5,20 +5,20 @@
 use chrono::Utc;
 use tracing::{info, warn};
 
-use super::{utils::is_bad_sequence_error, StellarRelayerTransaction};
+use super::{is_final_state, utils::is_bad_sequence_error, StellarRelayerTransaction};
 use crate::{
-    constants::{STELLAR_BAD_SEQUENCE_RETRY_DELAY_SECONDS, STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS},
-    jobs::{JobProducerTrait, TransactionStatusCheck},
+    constants::STELLAR_BAD_SEQUENCE_RETRY_DELAY_SECONDS,
+    jobs::JobProducerTrait,
     models::{
         NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
         TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
-    services::{Signer, StellarProviderTrait},
+    services::{provider::StellarProviderTrait, signer::Signer},
     utils::calculate_scheduled_timestamp,
 };
 
-impl<R, T, J, S, P, C> StellarRelayerTransaction<R, T, J, S, P, C>
+impl<R, T, J, S, P, C, D> StellarRelayerTransaction<R, T, J, S, P, C, D>
 where
     R: Repository<RelayerRepoModel, String> + Send + Sync,
     T: TransactionRepository + Send + Sync,
@@ -26,6 +26,7 @@ where
     S: Signer + Send + Sync,
     P: StellarProviderTrait + Send + Sync,
     C: TransactionCounterTrait + Send + Sync,
+    D: crate::services::stellar_dex::StellarDexServiceTrait + Send + Sync + 'static,
 {
     /// Main submission method with robust error handling.
     /// Unlike prepare, submit doesn't claim lanes but still needs proper error handling.
@@ -33,7 +34,17 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("submitting stellar transaction");
+        info!(tx_id = %tx.id, status = ?tx.status, "submitting stellar transaction");
+
+        // Defensive check: if transaction is in a final state or unexpected state, don't retry
+        if is_final_state(&tx.status) {
+            warn!(
+                tx_id = %tx.id,
+                status = ?tx.status,
+                "transaction already in final state, skipping submission"
+            );
+            return Ok(tx);
+        }
 
         // Call core submission logic with error handling
         match self.submit_core(tx.clone()).await {
@@ -80,19 +91,8 @@ where
             .partial_update(tx.id.clone(), update_req)
             .await?;
 
-        // Enqueue status check job
-        self.job_producer()
-            .produce_check_transaction_status_job(
-                TransactionStatusCheck::new(updated_tx.id.clone(), updated_tx.relayer_id.clone()),
-                Some(calculate_scheduled_timestamp(
-                    STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS,
-                )),
-            )
-            .await?;
-
         // Send notification
-        self.send_transaction_update_notification(&updated_tx)
-            .await?;
+        self.send_transaction_update_notification(&updated_tx).await;
 
         Ok(updated_tx)
     }
@@ -104,7 +104,7 @@ where
         tx: TransactionRepoModel,
         error: TransactionError,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        let error_reason = format!("Submission failed: {}", error);
+        let error_reason = format!("Submission failed: {error}");
         let tx_id = tx.id.clone();
         warn!(reason = %error_reason, "transaction submission failed");
 
@@ -201,7 +201,7 @@ mod tests {
     use crate::domain::transaction::stellar::test_helpers::*;
 
     mod submit_transaction_tests {
-        use crate::models::RepositoryError;
+        use crate::{models::RepositoryError, services::provider::ProviderError};
 
         use super::*;
 
@@ -228,12 +228,7 @@ mod tests {
                     Ok::<_, RepositoryError>(tx)
                 });
 
-            // enqueue status-check & notification
-            mocks
-                .job_producer
-                .expect_produce_check_transaction_status_job()
-                .times(1)
-                .returning(|_, _| Box::pin(async { Ok(()) }));
+            // Expect notification
             mocks
                 .job_producer
                 .expect_produce_send_notification_job()
@@ -257,10 +252,9 @@ mod tests {
             let mut mocks = default_test_mocks();
 
             // Provider fails with non-bad-sequence error
-            mocks
-                .provider
-                .expect_send_transaction()
-                .returning(|_| Box::pin(async { Err(eyre::eyre!("Network error")) }));
+            mocks.provider.expect_send_transaction().returning(|_| {
+                Box::pin(async { Err(ProviderError::Other("Network error".to_string())) })
+            });
 
             // Mock finalize_transaction_state for failure handling
             mocks
@@ -392,12 +386,7 @@ mod tests {
                     Ok::<_, RepositoryError>(tx)
                 });
 
-            // Job and notification expectations
-            mocks
-                .job_producer
-                .expect_produce_check_transaction_status_job()
-                .times(1)
-                .returning(|_, _| Box::pin(async { Ok(()) }));
+            // Expect notification
             mocks
                 .job_producer
                 .expect_produce_send_notification_job()
@@ -433,12 +422,7 @@ mod tests {
                     Ok::<_, RepositoryError>(tx)
                 });
 
-            // enqueue status-check & notification
-            mocks
-                .job_producer
-                .expect_produce_check_transaction_status_job()
-                .times(1)
-                .returning(|_, _| Box::pin(async { Ok(()) }));
+            // Expect notification
             mocks
                 .job_producer
                 .expect_produce_send_notification_job()
@@ -462,10 +446,9 @@ mod tests {
             let mut mocks = default_test_mocks();
 
             // Provider fails with non-bad-sequence error
-            mocks
-                .provider
-                .expect_send_transaction()
-                .returning(|_| Box::pin(async { Err(eyre::eyre!("Network error")) }));
+            mocks.provider.expect_send_transaction().returning(|_| {
+                Box::pin(async { Err(ProviderError::Other("Network error".to_string())) })
+            });
 
             // No sync expected for non-bad-sequence errors
 
@@ -532,7 +515,11 @@ mod tests {
 
             // Mock provider to return bad sequence error
             mocks.provider.expect_send_transaction().returning(|_| {
-                Box::pin(async { Err(eyre::eyre!("transaction submission failed: TxBadSeq")) })
+                Box::pin(async {
+                    Err(ProviderError::Other(
+                        "transaction submission failed: TxBadSeq".to_string(),
+                    ))
+                })
             });
 
             // Mock get_account for sync_sequence_from_chain

@@ -20,20 +20,19 @@
 use std::str::FromStr;
 
 use chrono::Utc;
-use futures::try_join;
 use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
-use tracing::info;
+use tracing::{debug, error};
 
 use crate::{
     models::{
         produce_solana_rpc_webhook_payload, EncodedSerializedTransaction, NetworkTransactionData,
-        NetworkTransactionRequest, SignAndSendTransactionRequestParams,
-        SignAndSendTransactionResult, SolanaFeePaymentStrategy, SolanaTransactionData,
-        SolanaTransactionRequest, SolanaWebhookRpcPayload, TransactionRepoModel, TransactionStatus,
-        TransactionUpdateRequest,
+        NetworkTransactionRequest, SolanaFeePaymentStrategy,
+        SolanaSignAndSendTransactionRequestParams, SolanaSignAndSendTransactionResult,
+        SolanaTransactionData, SolanaTransactionRequest, SolanaWebhookRpcPayload,
+        TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{Repository, TransactionRepository},
-    services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
+    services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
 };
 
 use super::*;
@@ -48,9 +47,9 @@ where
 {
     pub(crate) async fn sign_and_send_transaction_impl(
         &self,
-        params: SignAndSendTransactionRequestParams,
-    ) -> Result<SignAndSendTransactionResult, SolanaRpcError> {
-        info!("Processing sign and send transaction request");
+        params: SolanaSignAndSendTransactionRequestParams,
+    ) -> Result<SolanaSignAndSendTransactionResult, SolanaRpcError> {
+        debug!("Processing sign and send transaction request");
         let transaction_request = Transaction::try_from(params.transaction.clone())?;
 
         validate_sign_and_send_transaction(&transaction_request, &self.relayer, &*self.provider)
@@ -93,7 +92,9 @@ where
         let (signed_transaction, _) = self.relayer_sign_transaction(transaction_request).await?;
 
         let network_transaction = NetworkTransactionRequest::Solana(SolanaTransactionRequest {
-            transaction: params.transaction.clone(),
+            transaction: Some(params.transaction.clone()),
+            instructions: None,
+            valid_until: None,
         });
 
         let transaction =
@@ -112,21 +113,48 @@ where
                 SolanaRpcError::Internal(e.to_string())
             })?;
 
-        let send_signature = self
-            .provider
-            .send_transaction(&signed_transaction)
-            .await
-            .map_err(|e| {
-                error!(error = %e, "failed to send transaction");
-                SolanaRpcError::Send(e.to_string())
-            })?;
+        let send_signature = match self.provider.send_transaction(&signed_transaction).await {
+            Ok(signature) => signature,
+            Err(e) => {
+                error!(
+                    tx_id = %tx_repo_model.id,
+                    error = %e,
+                    "failed to send transaction - marking as failed"
+                );
+
+                // Mark transaction as failed in the database
+                // Most RPC errors at this point are simulation failures or invalid transaction body
+                let failure_reason = format!("Transaction send failed: {e}");
+                let update = TransactionUpdateRequest {
+                    status: Some(TransactionStatus::Failed),
+                    status_reason: Some(failure_reason),
+                    ..Default::default()
+                };
+
+                // Attempt to mark as failed, but don't fail the error return if update fails
+                if let Err(update_err) = self
+                    .transaction_repository
+                    .partial_update(tx_repo_model.id.clone(), update)
+                    .await
+                {
+                    error!(
+                        tx_id = %tx_repo_model.id,
+                        error = %update_err,
+                        "failed to update transaction status to Failed"
+                    );
+                }
+
+                return Err(SolanaRpcError::Send(e.to_string()));
+            }
+        };
 
         let update = TransactionUpdateRequest {
             status: Some(TransactionStatus::Submitted),
             sent_at: Some(Utc::now().to_rfc3339()),
             network_data: Some(NetworkTransactionData::Solana(SolanaTransactionData {
                 signature: Some(send_signature.to_string()),
-                transaction: params.transaction.clone().into_inner(),
+                transaction: Some(params.transaction.clone().into_inner()),
+                ..Default::default()
             })),
             ..Default::default()
         };
@@ -142,7 +170,7 @@ where
 
         let serialized_transaction = EncodedSerializedTransaction::try_from(&signed_transaction)?;
 
-        let result = SignAndSendTransactionResult {
+        let result = SolanaSignAndSendTransactionResult {
             transaction: serialized_transaction,
             signature: send_signature.to_string(),
             id: tx_repo_model.id.clone(),
@@ -169,7 +197,7 @@ where
         self.schedule_status_check_job(&tx_repo_model, Some(5))
             .await?;
 
-        info!(
+        debug!(
             "Transaction signed and sent successfully with signature: {}",
             result.signature
         );
@@ -177,16 +205,28 @@ where
     }
 }
 
+/// Validates a fully prepared Solana transaction according to relayer policies.
+///
+/// This orchestrates multiple validation checks in parallel for optimal performance.
+///
+/// # Validations Performed
+/// - **Policy checks**: Allowed/disallowed accounts, programs, signatures, data size, fee payer
+/// - **Blockhash validation**: Ensures blockhash is still valid on-chain
+/// - **Simulation**: Executes transaction simulation on-chain
+/// - **Transfer validation**: Validates lamports and token transfers
 async fn validate_sign_and_send_transaction<P: SolanaProviderTrait + Send + Sync>(
     tx: &Transaction,
     relayer: &RelayerRepoModel,
     provider: &P,
 ) -> Result<(), SolanaTransactionValidationError> {
+    use futures::{try_join, TryFutureExt};
+
     let policy = &relayer.policies.get_solana_policy();
     let relayer_pubkey = Pubkey::from_str(&relayer.address).map_err(|e| {
-        SolanaTransactionValidationError::ValidationError(format!("Invalid relayer address: {}", e))
+        SolanaTransactionValidationError::ValidationError(format!("Invalid relayer address: {e}"))
     })?;
 
+    // Group all synchronous policy validations together
     let sync_validations = async {
         SolanaTransactionValidator::validate_tx_allowed_accounts(tx, policy)?;
         SolanaTransactionValidator::validate_tx_disallowed_accounts(tx, policy)?;
@@ -197,13 +237,13 @@ async fn validate_sign_and_send_transaction<P: SolanaProviderTrait + Send + Sync
         Ok::<(), SolanaTransactionValidationError>(())
     };
 
-    // Run all validations concurrently.
+    // Run all validations concurrently for optimal performance
     try_join!(
         sync_validations,
         SolanaTransactionValidator::validate_blockhash(tx, provider),
-        SolanaTransactionValidator::simulate_transaction(tx, provider),
+        SolanaTransactionValidator::simulate_transaction(tx, provider).map_ok(|_| ()),
+        SolanaTransactionValidator::validate_token_transfers(tx, policy, provider, &relayer_pubkey),
         SolanaTransactionValidator::validate_lamports_transfers(tx, &relayer_pubkey),
-        SolanaTransactionValidator::validate_token_transfers(tx, policy, provider, &relayer_pubkey,),
     )?;
 
     Ok(())
@@ -217,10 +257,11 @@ mod tests {
         utils::mocks::mockutils::create_mock_solana_transaction,
     };
 
+    use super::super::test_setup::setup_signer_mocks;
     use super::*;
     use mockall::predicate::{self};
     use solana_sdk::{program_pack::Pack, signature::Signature, signer::Signer};
-    use spl_token::state::Account;
+    use spl_token_interface::state::Account;
 
     #[tokio::test]
     async fn test_sign_and_send_transaction_success_relayer_fee_strategy() {
@@ -234,12 +275,8 @@ mod tests {
             network,
         ) = setup_test_context();
 
-        let expected_signature = Signature::new_unique();
-
-        signer.expect_sign().returning(move |_| {
-            let signature = expected_signature;
-            Box::pin(async move { Ok(signature) })
-        });
+        // Setup signer mocks and capture the expected signature
+        let expected_signature = setup_signer_mocks(&mut signer, relayer.address.clone());
 
         provider
             .expect_is_blockhash_valid()
@@ -265,6 +302,12 @@ mod tests {
                     replacement_blockhash: None,
                     inner_instructions: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -296,7 +339,7 @@ mod tests {
             Arc::new(tx_repo_mock),
         );
 
-        let params = SignAndSendTransactionRequestParams {
+        let params = SolanaSignAndSendTransactionRequestParams {
             transaction: encoded_tx,
         };
 
@@ -324,36 +367,38 @@ mod tests {
 
                     if pubkey == ctx.relayer_token_account {
                         // Create relayer's token account
-                        let token_account = spl_token::state::Account {
+                        let token_account = spl_token_interface::state::Account {
                             mint: ctx.token_mint,
                             owner: relayer_pubkey,
                             amount: 0, // Current balance doesn't matter
-                            state: spl_token::state::AccountState::Initialized,
+                            state: spl_token_interface::state::AccountState::Initialized,
                             ..Default::default()
                         };
-                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                        spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                            .unwrap();
 
                         Ok(solana_sdk::account::Account {
                             lamports: 1_000_000,
                             data: account_data,
-                            owner: spl_token::id(),
+                            owner: spl_token_interface::id(),
                             executable: false,
                             rent_epoch: 0,
                         })
                     } else if pubkey == ctx.user_token_account {
                         // Create user's token account with sufficient balance
-                        let token_account = spl_token::state::Account {
+                        let token_account = spl_token_interface::state::Account {
                             mint: ctx.token_mint,
                             owner: user_pubkey,
                             amount: ctx.main_transfer_amount + ctx.fee_amount, // Enough for both transfers
-                            state: spl_token::state::AccountState::Initialized,
+                            state: spl_token_interface::state::AccountState::Initialized,
                             ..Default::default()
                         };
-                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                        spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                            .unwrap();
                         Ok(solana_sdk::account::Account {
                             lamports: 1_000_000,
                             data: account_data,
-                            owner: spl_token::id(),
+                            owner: spl_token_interface::id(),
                             executable: false,
                             rent_epoch: 0,
                         })
@@ -365,11 +410,8 @@ mod tests {
                 })
             });
 
-        let signature = Signature::new_unique();
-        ctx.signer.expect_sign().returning(move |_| {
-            let signature_clone = signature;
-            Box::pin(async move { Ok(signature_clone) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut ctx.signer, ctx.relayer.address.clone());
 
         ctx.provider
             .expect_is_blockhash_valid()
@@ -434,6 +476,12 @@ mod tests {
                     replacement_blockhash: None,
                     inner_instructions: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -464,7 +512,7 @@ mod tests {
             Arc::new(ctx.transaction_repository),
         );
 
-        let params = SignAndSendTransactionRequestParams {
+        let params = SolanaSignAndSendTransactionRequestParams {
             transaction: ctx.encoded_tx,
         };
 
@@ -494,36 +542,38 @@ mod tests {
 
                     if pubkey == ctx.relayer_token_account {
                         // Create relayer's token account
-                        let token_account = spl_token::state::Account {
+                        let token_account = spl_token_interface::state::Account {
                             mint: ctx.token_mint,
                             owner: relayer_pubkey,
                             amount: 0, // Current balance doesn't matter
-                            state: spl_token::state::AccountState::Initialized,
+                            state: spl_token_interface::state::AccountState::Initialized,
                             ..Default::default()
                         };
-                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                        spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                            .unwrap();
 
                         Ok(solana_sdk::account::Account {
                             lamports: 1_000_000,
                             data: account_data,
-                            owner: spl_token::id(),
+                            owner: spl_token_interface::id(),
                             executable: false,
                             rent_epoch: 0,
                         })
                     } else if pubkey == ctx.user_token_account {
                         // Create user's token account with sufficient balance
-                        let token_account = spl_token::state::Account {
+                        let token_account = spl_token_interface::state::Account {
                             mint: ctx.token_mint,
                             owner: user_pubkey,
                             amount: 1_000_000, // NOT enough for both transfers
-                            state: spl_token::state::AccountState::Initialized,
+                            state: spl_token_interface::state::AccountState::Initialized,
                             ..Default::default()
                         };
-                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                        spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                            .unwrap();
                         Ok(solana_sdk::account::Account {
                             lamports: 1_000_000,
                             data: account_data,
-                            owner: spl_token::id(),
+                            owner: spl_token_interface::id(),
                             executable: false,
                             rent_epoch: 0,
                         })
@@ -535,11 +585,8 @@ mod tests {
                 })
             });
 
-        let signature = Signature::new_unique();
-        ctx.signer.expect_sign().returning(move |_| {
-            let signature_clone = signature;
-            Box::pin(async move { Ok(signature_clone) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut ctx.signer, ctx.relayer.address.clone());
 
         ctx.provider
             .expect_is_blockhash_valid()
@@ -604,6 +651,12 @@ mod tests {
                     replacement_blockhash: None,
                     inner_instructions: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -622,7 +675,7 @@ mod tests {
             Arc::new(ctx.transaction_repository),
         );
 
-        let params = SignAndSendTransactionRequestParams {
+        let params = SolanaSignAndSendTransactionRequestParams {
             transaction: ctx.encoded_tx,
         };
 
@@ -667,36 +720,38 @@ mod tests {
 
                     if pubkey == ctx.relayer_token_account {
                         // Create relayer's token account
-                        let token_account = spl_token::state::Account {
+                        let token_account = spl_token_interface::state::Account {
                             mint: ctx.token_mint,
                             owner: relayer_pubkey,
                             amount: 0, // Current balance doesn't matter
-                            state: spl_token::state::AccountState::Initialized,
+                            state: spl_token_interface::state::AccountState::Initialized,
                             ..Default::default()
                         };
-                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                        spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                            .unwrap();
 
                         Ok(solana_sdk::account::Account {
                             lamports: 1_000_000,
                             data: account_data,
-                            owner: spl_token::id(),
+                            owner: spl_token_interface::id(),
                             executable: false,
                             rent_epoch: 0,
                         })
                     } else if pubkey == ctx.user_token_account {
                         // Create user's token account with sufficient balance
-                        let token_account = spl_token::state::Account {
+                        let token_account = spl_token_interface::state::Account {
                             mint: ctx.token_mint,
                             owner: user_pubkey,
                             amount: ctx.main_transfer_amount + ctx.fee_amount, // Enough for both transfers
-                            state: spl_token::state::AccountState::Initialized,
+                            state: spl_token_interface::state::AccountState::Initialized,
                             ..Default::default()
                         };
-                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                        spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                            .unwrap();
                         Ok(solana_sdk::account::Account {
                             lamports: 1_000_000,
                             data: account_data,
-                            owner: spl_token::id(),
+                            owner: spl_token_interface::id(),
                             executable: false,
                             rent_epoch: 0,
                         })
@@ -708,11 +763,8 @@ mod tests {
                 })
             });
 
-        let signature = Signature::new_unique();
-        ctx.signer.expect_sign().returning(move |_| {
-            let signature_clone = signature;
-            Box::pin(async move { Ok(signature_clone) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut ctx.signer, ctx.relayer.address.clone());
 
         ctx.provider
             .expect_is_blockhash_valid()
@@ -777,6 +829,12 @@ mod tests {
                     replacement_blockhash: None,
                     inner_instructions: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -795,7 +853,7 @@ mod tests {
             Arc::new(ctx.transaction_repository),
         );
 
-        let params = SignAndSendTransactionRequestParams {
+        let params = SolanaSignAndSendTransactionRequestParams {
             transaction: ctx.encoded_tx,
         };
 
@@ -821,9 +879,41 @@ mod tests {
         let (relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer, network) =
             setup_test_context();
 
+        // Blockhash validation will be triggered for multi-signer transactions
+        // and will fail, causing validation to error out
         provider
             .expect_is_blockhash_valid()
             .returning(|_, _| Box::pin(async { Ok(false) }));
+
+        // Other validations may be called concurrently even if blockhash validation fails
+        provider.expect_simulate_transaction().returning(|_| {
+            Box::pin(async {
+                Ok(solana_client::rpc_response::RpcSimulateTransactionResult {
+                    err: None,
+                    logs: None,
+                    accounts: None,
+                    units_consumed: None,
+                    return_data: None,
+                    inner_instructions: None,
+                    replacement_blockhash: None,
+                    loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
+                })
+            })
+        });
+
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(1_000_000u64) }));
+
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1_000_000_000u64) }));
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
@@ -836,7 +926,7 @@ mod tests {
         );
 
         let result = rpc
-            .sign_and_send_transaction_impl(SignAndSendTransactionRequestParams {
+            .sign_and_send_transaction_impl(SolanaSignAndSendTransactionRequestParams {
                 transaction: encoded_tx,
             })
             .await;
@@ -852,12 +942,8 @@ mod tests {
         let (relayer, mut signer, mut provider, jupiter_service, encoded_tx, job_producer, network) =
             setup_test_context();
 
-        let expected_signature = Signature::new_unique();
-
-        signer.expect_sign().returning(move |_| {
-            let signature = expected_signature;
-            Box::pin(async move { Ok(signature) })
-        });
+        // Setup signer mocks
+        setup_signer_mocks(&mut signer, relayer.address.clone());
 
         provider
             .expect_is_blockhash_valid()
@@ -886,7 +972,7 @@ mod tests {
         );
 
         let result = rpc
-            .sign_and_send_transaction_impl(SignAndSendTransactionRequestParams {
+            .sign_and_send_transaction_impl(SolanaSignAndSendTransactionRequestParams {
                 transaction: encoded_tx,
             })
             .await;
@@ -910,11 +996,8 @@ mod tests {
 
         relayer.notification_id = Some("test-webhook-id".to_string());
 
-        let signature = Signature::new_unique();
-        signer.expect_sign().returning(move |_| {
-            let signature = signature;
-            Box::pin(async move { Ok(signature) })
-        });
+        // Setup signer mocks and capture the signature
+        let signature = setup_signer_mocks(&mut signer, relayer.address.clone());
 
         provider
             .expect_is_blockhash_valid()
@@ -939,6 +1022,12 @@ mod tests {
                     replacement_blockhash: None,
                     inner_instructions: None,
                     loaded_accounts_data_size: None,
+                    fee: None,
+                    pre_balances: None,
+                    post_balances: None,
+                    pre_token_balances: None,
+                    post_token_balances: None,
+                    loaded_addresses: None,
                 })
             })
         });
@@ -980,7 +1069,7 @@ mod tests {
             Arc::new(tx_repo_mock),
         );
 
-        let params = SignAndSendTransactionRequestParams {
+        let params = SolanaSignAndSendTransactionRequestParams {
             transaction: encoded_tx,
         };
 

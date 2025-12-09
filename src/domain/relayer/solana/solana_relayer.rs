@@ -9,27 +9,44 @@
 //! in-memory repositories, and the application's domain models.
 use std::{str::FromStr, sync::Arc};
 
+use crate::constants::SOLANA_STATUS_CHECK_INITIAL_DELAY_SECONDS;
+use crate::domain::relayer::solana::rpc::SolanaRpcMethods;
+use crate::domain::{
+    create_error_response, GasAbstractionTrait, Relayer, SignDataRequest,
+    SignTransactionExternalResponse, SignTransactionRequest, SignTransactionResponse,
+    SignTransactionResponseSolana, SignTypedDataRequest, SolanaRpcHandlerType, SwapParams,
+};
+use crate::jobs::{TransactionRequest, TransactionStatusCheck};
+use crate::models::transaction::request::{
+    SponsoredTransactionBuildRequest, SponsoredTransactionQuoteRequest,
+};
+use crate::models::{
+    DeletePendingTransactionsResponse, JsonRpcRequest, JsonRpcResponse, NetworkRpcRequest,
+    NetworkRpcResult, NetworkTransactionRequest, RelayerStatus, RepositoryError, RpcErrorCodes,
+    SolanaRpcRequest, SolanaRpcResult, SolanaSignAndSendTransactionRequestParams,
+    SolanaSignTransactionRequestParams, SponsoredTransactionBuildResponse,
+    SponsoredTransactionQuoteResponse,
+};
 use crate::utils::calculate_scheduled_timestamp;
 use crate::{
     constants::{
         DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, DEFAULT_SOLANA_MIN_BALANCE,
         SOLANA_SMALLEST_UNIT_NAME, WRAPPED_SOL_MINT,
     },
-    domain::{
-        relayer::RelayerError, BalanceResponse, DexStrategy, SolanaRelayerDexTrait,
-        SolanaRelayerTrait, SolanaRpcHandlerType, SwapParams,
-    },
-    jobs::{JobProducerTrait, RelayerHealthCheck, SolanaTokenSwapRequest},
+    domain::{relayer::RelayerError, BalanceResponse, DexStrategy, SolanaRelayerDexTrait},
+    jobs::{JobProducerTrait, RelayerHealthCheck, TokenSwapRequest},
     models::{
         produce_relayer_disabled_payload, produce_solana_dex_webhook_payload, DisabledReason,
-        HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest,
-        NetworkRpcResult, NetworkType, RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy,
-        SolanaAllowedTokensPolicy, SolanaDexPayload, SolanaNetwork, TransactionRepoModel,
+        HealthCheckFailure, NetworkRepoModel, NetworkTransactionData, NetworkType,
+        RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
+        SolanaDexPayload, SolanaFeePaymentStrategy, SolanaNetwork, SolanaTransactionData,
+        TransactionRepoModel, TransactionStatus,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
-        JupiterService, JupiterServiceTrait, SolanaProvider, SolanaProviderTrait, SolanaSignTrait,
-        SolanaSigner,
+        provider::{SolanaProvider, SolanaProviderTrait},
+        signer::{Signer, SolanaSignTrait, SolanaSigner},
+        JupiterService, JupiterServiceTrait,
     },
 };
 
@@ -54,7 +71,7 @@ where
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
-    S: SolanaSignTrait + Send + Sync + 'static,
+    S: SolanaSignTrait + Signer + Send + Sync + 'static,
     JS: JupiterServiceTrait + Send + Sync + 'static,
     SP: SolanaProviderTrait + Send + Sync + 'static,
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
@@ -79,7 +96,7 @@ where
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
-    S: SolanaSignTrait + Send + Sync + 'static,
+    S: SolanaSignTrait + Signer + Send + Sync + 'static,
     JS: JupiterServiceTrait + Send + Sync + 'static,
     SP: SolanaProviderTrait + Send + Sync + 'static,
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
@@ -259,8 +276,8 @@ where
             );
 
             self.job_producer
-                .produce_solana_token_swap_request_job(
-                    SolanaTokenSwapRequest {
+                .produce_token_swap_request_job(
+                    TokenSwapRequest {
                         relayer_id: self.relayer.id.clone(),
                     },
                     None,
@@ -311,7 +328,7 @@ where
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
-    S: SolanaSignTrait + Send + Sync + 'static,
+    S: SolanaSignTrait + Signer + Send + Sync + 'static,
     JS: JupiterServiceTrait + Send + Sync + 'static,
     SP: SolanaProviderTrait + Send + Sync + 'static,
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
@@ -329,7 +346,7 @@ where
         &self,
         relayer_id: String,
     ) -> Result<Vec<SwapResult>, RelayerError> {
-        debug!("handling token swap request for relayer");
+        debug!("handling token swap request for relayer {}", relayer_id);
         let relayer = self
             .relayer_repository
             .get_by_id(relayer_id.clone())
@@ -340,7 +357,7 @@ where
         let swap_config = match policy.get_swap_config() {
             Some(config) => config,
             None => {
-                info!("No swap configuration specified; Exiting.");
+                debug!(%relayer_id, "No swap configuration specified for relayer; Exiting.");
                 return Ok(vec![]);
             }
         };
@@ -348,13 +365,13 @@ where
         match swap_config.strategy {
             Some(strategy) => strategy,
             None => {
-                info!("No swap strategy specified; Exiting.");
+                debug!(%relayer_id, "No swap strategy specified for relayer; Exiting.");
                 return Ok(vec![]);
             }
         };
 
         let relayer_pubkey = Pubkey::from_str(&relayer.address)
-            .map_err(|e| RelayerError::ProviderError(format!("Invalid relayer address: {}", e)))?;
+            .map_err(|e| RelayerError::ProviderError(format!("Invalid relayer address: {e}")))?;
 
         let tokens_to_swap = {
             let mut eligible_tokens = Vec::<TokenSwapCandidate>::new();
@@ -362,7 +379,7 @@ where
             if let Some(allowed_tokens) = policy.allowed_tokens.as_ref() {
                 for token in allowed_tokens {
                     let token_mint = Pubkey::from_str(&token.mint).map_err(|e| {
-                        RelayerError::ProviderError(format!("Invalid token mint: {}", e))
+                        RelayerError::ProviderError(format!("Invalid token mint: {e}"))
                     })?;
                     let token_account = SolanaTokenProgram::get_and_unpack_token_account(
                         &*self.provider,
@@ -371,7 +388,7 @@ where
                     )
                     .await
                     .map_err(|e| {
-                        RelayerError::ProviderError(format!("Failed to get token account: {}", e))
+                        RelayerError::ProviderError(format!("Failed to get token account: {e}"))
                     })?;
 
                     let swap_amount = self
@@ -393,7 +410,7 @@ where
                         .unwrap_or(0);
 
                     if swap_amount > 0 {
-                        debug!(token = ?token, "token swap eligible for token");
+                        debug!(%relayer_id, token = ?token, "token swap eligible for token");
 
                         // Add the token to the list of eligible tokens for swapping
                         eligible_tokens.push(TokenSwapCandidate {
@@ -505,16 +522,116 @@ where
 }
 
 #[async_trait]
-impl<RR, TR, J, S, JS, SP, NR> SolanaRelayerTrait for SolanaRelayer<RR, TR, J, S, JS, SP, NR>
+impl<RR, TR, J, S, JS, SP, NR> Relayer for SolanaRelayer<RR, TR, J, S, JS, SP, NR>
 where
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
-    S: SolanaSignTrait + Send + Sync + 'static,
+    S: SolanaSignTrait + Signer + Send + Sync + 'static,
     JS: JupiterServiceTrait + Send + Sync + 'static,
     SP: SolanaProviderTrait + Send + Sync + 'static,
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
 {
+    async fn process_transaction_request(
+        &self,
+        network_transaction: crate::models::NetworkTransactionRequest,
+    ) -> Result<TransactionRepoModel, RelayerError> {
+        let policy = self.relayer.policies.get_solana_policy();
+        let user_pays_fee = matches!(
+            policy.fee_payment_strategy.unwrap_or_default(),
+            SolanaFeePaymentStrategy::User
+        );
+
+        // For user-paid fees, delegate to RPC handler (similar to build/quote)
+        if user_pays_fee {
+            let solana_request = match &network_transaction {
+                NetworkTransactionRequest::Solana(req) => req,
+                _ => {
+                    return Err(RelayerError::ValidationError(
+                        "Expected Solana transaction request".to_string(),
+                    ));
+                }
+            };
+
+            // For user-paid fees, we need a pre-built transaction (not instructions)
+            let transaction = solana_request.transaction.as_ref().ok_or_else(|| {
+                RelayerError::ValidationError(
+                    "User-paid fees require a pre-built transaction. Use prepareTransaction RPC method first to build the transaction from instructions.".to_string(),
+                )
+            })?;
+
+            let params = SolanaSignAndSendTransactionRequestParams {
+                transaction: transaction.clone(),
+            };
+
+            let result = self
+                .rpc_handler
+                .rpc_methods()
+                .sign_and_send_transaction(params)
+                .await
+                .map_err(|e| RelayerError::Internal(e.to_string()))?;
+
+            // Fetch the transaction from repository using the ID returned by sign_and_send_transaction
+            let transaction = self
+                .transaction_repository
+                .get_by_id(result.id.clone())
+                .await
+                .map_err(|e| {
+                    RelayerError::Internal(format!(
+                        "Failed to fetch transaction after sign and send: {e}"
+                    ))
+                })?;
+
+            Ok(transaction)
+        } else {
+            // Relayer-paid fees: use the original flow
+            let network_model = self
+                .network_repository
+                .get_by_name(NetworkType::Solana, &self.relayer.network)
+                .await?
+                .ok_or_else(|| {
+                    RelayerError::NetworkConfiguration(format!(
+                        "Network {} not found",
+                        self.relayer.network
+                    ))
+                })?;
+
+            let transaction = TransactionRepoModel::try_from((
+                &network_transaction,
+                &self.relayer,
+                &network_model,
+            ))?;
+
+            self.transaction_repository
+                .create(transaction.clone())
+                .await
+                .map_err(|e| RepositoryError::TransactionFailure(e.to_string()))?;
+
+            self.job_producer
+                .produce_transaction_request_job(
+                    TransactionRequest::new(transaction.id.clone(), transaction.relayer_id.clone()),
+                    None,
+                )
+                .await?;
+
+            // Queue status check job (with initial delay)
+            self.job_producer
+                .produce_check_transaction_status_job(
+                    TransactionStatusCheck::new(
+                        transaction.id.clone(),
+                        transaction.relayer_id.clone(),
+                        NetworkType::Solana,
+                    ),
+                    Some(calculate_scheduled_timestamp(
+                        SOLANA_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+                    )),
+                )
+                .await?;
+
+            Ok(transaction)
+        }
+    }
+
     async fn get_balance(&self) -> Result<BalanceResponse, RelayerError> {
         let address = &self.relayer.address;
         let balance = self.provider.get_balance(address).await?;
@@ -525,180 +642,315 @@ where
         })
     }
 
+    async fn delete_pending_transactions(
+        &self,
+    ) -> Result<DeletePendingTransactionsResponse, RelayerError> {
+        Err(RelayerError::NotSupported(
+            "Delete pending transactions not supported for Solana relayers".to_string(),
+        ))
+    }
+
+    async fn sign_data(
+        &self,
+        _request: SignDataRequest,
+    ) -> Result<crate::domain::relayer::SignDataResponse, RelayerError> {
+        Err(RelayerError::NotSupported(
+            "Sign data not supported for Solana relayers".to_string(),
+        ))
+    }
+
+    async fn sign_typed_data(
+        &self,
+        _request: SignTypedDataRequest,
+    ) -> Result<crate::domain::relayer::SignDataResponse, RelayerError> {
+        Err(RelayerError::NotSupported(
+            "Sign typed data not supported for Solana relayers".to_string(),
+        ))
+    }
+
+    async fn sign_transaction(
+        &self,
+        request: &SignTransactionRequest,
+    ) -> Result<SignTransactionExternalResponse, RelayerError> {
+        let policy = self.relayer.policies.get_solana_policy();
+        let user_pays_fee = matches!(
+            policy.fee_payment_strategy.unwrap_or_default(),
+            SolanaFeePaymentStrategy::User
+        );
+
+        // For user-paid fees, delegate to RPC handler (similar to process_transaction_request)
+        if user_pays_fee {
+            let solana_request = match request {
+                SignTransactionRequest::Solana(req) => req,
+                _ => {
+                    error!(
+                        id = %self.relayer.id,
+                        "Invalid request type for Solana relayer",
+                    );
+                    return Err(RelayerError::NotSupported(
+                        "Invalid request type for Solana relayer".to_string(),
+                    ));
+                }
+            };
+
+            let params = SolanaSignTransactionRequestParams {
+                transaction: solana_request.transaction.clone(),
+            };
+
+            let result = self
+                .rpc_handler
+                .rpc_methods()
+                .sign_transaction(params)
+                .await
+                .map_err(|e| RelayerError::Internal(e.to_string()))?;
+
+            Ok(SignTransactionExternalResponse::Solana(
+                SignTransactionResponseSolana {
+                    transaction: result.transaction,
+                    signature: result.signature,
+                },
+            ))
+        } else {
+            // Relayer-paid fees: use the original flow
+            let transaction_bytes = match request {
+                SignTransactionRequest::Solana(req) => &req.transaction,
+                _ => {
+                    error!(
+                        id = %self.relayer.id,
+                        "Invalid request type for Solana relayer",
+                    );
+                    return Err(RelayerError::NotSupported(
+                        "Invalid request type for Solana relayer".to_string(),
+                    ));
+                }
+            };
+
+            // Prepare transaction data for signing
+            let transaction_data = NetworkTransactionData::Solana(SolanaTransactionData {
+                transaction: Some(transaction_bytes.clone().into_inner()),
+                ..Default::default()
+            });
+
+            // Sign the transaction using the signer trait
+            let response = self
+                .signer
+                .sign_transaction(transaction_data)
+                .await
+                .map_err(|e| {
+                    error!(
+                        %e,
+                        id = %self.relayer.id,
+                        "Failed to sign transaction",
+                    );
+                    RelayerError::SignerError(e)
+                })?;
+
+            // Extract Solana-specific response
+            let solana_response = match response {
+                SignTransactionResponse::Solana(resp) => resp,
+                _ => {
+                    return Err(RelayerError::ProviderError(
+                        "Unexpected response type from Solana signer".to_string(),
+                    ))
+                }
+            };
+
+            Ok(SignTransactionExternalResponse::Solana(solana_response))
+        }
+    }
+
     async fn rpc(
         &self,
         request: JsonRpcRequest<NetworkRpcRequest>,
     ) -> Result<JsonRpcResponse<NetworkRpcResult>, RelayerError> {
-        let response = self.rpc_handler.handle_request(request).await;
+        let JsonRpcRequest {
+            jsonrpc: _,
+            id,
+            params,
+        } = request;
+        let solana_request = match params {
+            NetworkRpcRequest::Solana(sol_req) => sol_req,
+            _ => {
+                return Ok(create_error_response(
+                    id.clone(),
+                    RpcErrorCodes::INVALID_PARAMS,
+                    "Invalid params",
+                    "Expected Solana network request",
+                ))
+            }
+        };
 
-        match response {
-            Ok(response) => Ok(response),
-            Err(e) => {
-                error!(error = %e, "error while processing RPC request");
-                let error_response = match e {
-                    SolanaRpcError::UnsupportedMethod(msg) => {
-                        JsonRpcResponse::error(32000, "UNSUPPORTED_METHOD", &msg)
-                    }
-                    SolanaRpcError::FeatureFetch(msg) => JsonRpcResponse::error(
-                        -32008,
-                        "FEATURE_FETCH_ERROR",
-                        &format!("Failed to retrieve the list of enabled features: {}", msg),
-                    ),
-                    SolanaRpcError::InvalidParams(msg) => {
-                        JsonRpcResponse::error(-32602, "INVALID_PARAMS", &msg)
-                    }
-                    SolanaRpcError::UnsupportedFeeToken(msg) => JsonRpcResponse::error(
-                        -32000,
-                        "UNSUPPORTED
-                        FEE_TOKEN",
-                        &format!(
-                            "The provided fee_token is not supported by the relayer: {}",
-                            msg
-                        ),
-                    ),
-                    SolanaRpcError::Estimation(msg) => JsonRpcResponse::error(
-                        -32001,
-                        "ESTIMATION_ERROR",
-                        &format!(
-                            "Failed to estimate the fee due to internal or network issues: {}",
-                            msg
-                        ),
-                    ),
-                    SolanaRpcError::InsufficientFunds(msg) => {
-                        // Trigger a token swap request if the relayer has insufficient funds
-                        self.check_balance_and_trigger_token_swap_if_needed()
-                            .await?;
+        match solana_request {
+            SolanaRpcRequest::RawRpcRequest { method, params } => {
+                // Handle raw JSON-RPC requests by forwarding to provider
+                let response = self.provider.raw_request_dyn(&method, params).await?;
 
-                        JsonRpcResponse::error(
-                            -32002,
-                            "INSUFFICIENT_FUNDS",
-                            &format!(
-                                "The sender does not have enough funds for the transfer: {}",
-                                msg
+                Ok(JsonRpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    result: Some(NetworkRpcResult::Solana(SolanaRpcResult::RawRpc(response))),
+                    error: None,
+                    id: id.clone(),
+                })
+            }
+            _ => {
+                // Handle typed requests using the existing rpc_handler
+                let response = self
+                    .rpc_handler
+                    .handle_request(JsonRpcRequest {
+                        jsonrpc: request.jsonrpc,
+                        params: NetworkRpcRequest::Solana(solana_request),
+                        id: id.clone(),
+                    })
+                    .await;
+
+                match response {
+                    Ok(response) => Ok(response),
+                    Err(e) => {
+                        error!(error = %e, "error while processing RPC request");
+                        let error_response = match e {
+                            SolanaRpcError::UnsupportedMethod(msg) => {
+                                JsonRpcResponse::error(32000, "UNSUPPORTED_METHOD", &msg)
+                            }
+                            SolanaRpcError::FeatureFetch(msg) => JsonRpcResponse::error(
+                                -32008,
+                                "FEATURE_FETCH_ERROR",
+                                &format!("Failed to retrieve the list of enabled features: {msg}"),
                             ),
-                        )
+                            SolanaRpcError::InvalidParams(msg) => {
+                                JsonRpcResponse::error(-32602, "INVALID_PARAMS", &msg)
+                            }
+                            SolanaRpcError::UnsupportedFeeToken(msg) => JsonRpcResponse::error(
+                                -32000,
+                                "UNSUPPORTED_FEE_TOKEN",
+                                &format!(
+                                    "The provided fee_token is not supported by the relayer: {msg}"
+                                ),
+                            ),
+                            SolanaRpcError::Estimation(msg) => JsonRpcResponse::error(
+                                -32001,
+                                "ESTIMATION_ERROR",
+                                &format!(
+                                    "Failed to estimate the fee due to internal or network issues: {msg}"
+                                ),
+                            ),
+                            SolanaRpcError::InsufficientFunds(msg) => {
+                                // Trigger a token swap request if the relayer has insufficient funds
+                                self.check_balance_and_trigger_token_swap_if_needed()
+                                    .await?;
+
+                                JsonRpcResponse::error(
+                                    -32002,
+                                    "INSUFFICIENT_FUNDS",
+                                    &format!(
+                                        "The sender does not have enough funds for the transfer: {msg}"
+                                    ),
+                                )
+                            }
+                            SolanaRpcError::TransactionPreparation(msg) => JsonRpcResponse::error(
+                                -32003,
+                                "TRANSACTION_PREPARATION_ERROR",
+                                &format!("Failed to prepare the transfer transaction: {msg}"),
+                            ),
+                            SolanaRpcError::Preparation(msg) => JsonRpcResponse::error(
+                                -32013,
+                                "PREPARATION_ERROR",
+                                &format!("Failed to prepare the transfer transaction: {msg}"),
+                            ),
+                            SolanaRpcError::Signature(msg) => JsonRpcResponse::error(
+                                -32005,
+                                "SIGNATURE_ERROR",
+                                &format!("Failed to sign the transaction: {msg}"),
+                            ),
+                            SolanaRpcError::Signing(msg) => JsonRpcResponse::error(
+                                -32005,
+                                "SIGNATURE_ERROR",
+                                &format!("Failed to sign the transaction: {msg}"),
+                            ),
+                            SolanaRpcError::TokenFetch(msg) => JsonRpcResponse::error(
+                                -32007,
+                                "TOKEN_FETCH_ERROR",
+                                &format!("Failed to retrieve the list of supported tokens: {msg}"),
+                            ),
+                            SolanaRpcError::BadRequest(msg) => JsonRpcResponse::error(
+                                -32007,
+                                "BAD_REQUEST",
+                                &format!("Bad request: {msg}"),
+                            ),
+                            SolanaRpcError::Send(msg) => JsonRpcResponse::error(
+                                -32006,
+                                "SEND_ERROR",
+                                &format!(
+                                    "Failed to submit the transaction to the blockchain: {msg}"
+                                ),
+                            ),
+                            SolanaRpcError::SolanaTransactionValidation(msg) => JsonRpcResponse::error(
+                                -32013,
+                                "PREPARATION_ERROR",
+                                &format!("Failed to prepare the transfer transaction: {msg}"),
+                            ),
+                            SolanaRpcError::Encoding(msg) => JsonRpcResponse::error(
+                                -32601,
+                                "INVALID_PARAMS",
+                                &format!("The transaction parameter is invalid or missing: {msg}"),
+                            ),
+                            SolanaRpcError::TokenAccount(msg) => JsonRpcResponse::error(
+                                -32601,
+                                "PREPARATION_ERROR",
+                                &format!("Invalid Token Account: {msg}"),
+                            ),
+                            SolanaRpcError::Token(msg) => JsonRpcResponse::error(
+                                -32601,
+                                "PREPARATION_ERROR",
+                                &format!("Invalid Token Account: {msg}"),
+                            ),
+                            SolanaRpcError::Provider(msg) => JsonRpcResponse::error(
+                                -32006,
+                                "PREPARATION_ERROR",
+                                &format!("Failed to prepare the transfer transaction: {msg}"),
+                            ),
+                            SolanaRpcError::Internal(_) => {
+                                JsonRpcResponse::error(-32000, "INTERNAL_ERROR", "Internal error")
+                            }
+                        };
+                        Ok(error_response)
                     }
-                    SolanaRpcError::TransactionPreparation(msg) => JsonRpcResponse::error(
-                        -32003,
-                        "TRANSACTION_PREPARATION_ERROR",
-                        &format!("Failed to prepare the transfer transaction: {}", msg),
-                    ),
-                    SolanaRpcError::Preparation(msg) => JsonRpcResponse::error(
-                        -32013,
-                        "PREPARATION_ERROR",
-                        &format!("Failed to prepare the transfer transaction: {}", msg),
-                    ),
-                    SolanaRpcError::Signature(msg) => JsonRpcResponse::error(
-                        -32005,
-                        "SIGNATURE_ERROR",
-                        &format!("Failed to sign the transaction: {}", msg),
-                    ),
-                    SolanaRpcError::Signing(msg) => JsonRpcResponse::error(
-                        -32005,
-                        "SIGNATURE_ERROR",
-                        &format!("Failed to sign the transaction: {}", msg),
-                    ),
-                    SolanaRpcError::TokenFetch(msg) => JsonRpcResponse::error(
-                        -32007,
-                        "TOKEN_FETCH_ERROR",
-                        &format!("Failed to retrieve the list of supported tokens: {}", msg),
-                    ),
-                    SolanaRpcError::BadRequest(msg) => JsonRpcResponse::error(
-                        -32007,
-                        "BAD_REQUEST",
-                        &format!("Bad request: {}", msg),
-                    ),
-                    SolanaRpcError::Send(msg) => JsonRpcResponse::error(
-                        -32006,
-                        "SEND_ERROR",
-                        &format!(
-                            "Failed to submit the transaction to the blockchain: {}",
-                            msg
-                        ),
-                    ),
-                    SolanaRpcError::SolanaTransactionValidation(msg) => JsonRpcResponse::error(
-                        -32013,
-                        "PREPARATION_ERROR",
-                        &format!("Failed to prepare the transfer transaction: {}", msg),
-                    ),
-                    SolanaRpcError::Encoding(msg) => JsonRpcResponse::error(
-                        -32601,
-                        "INVALID_PARAMS",
-                        &format!("The transaction parameter is invalid or missing: {}", msg),
-                    ),
-                    SolanaRpcError::TokenAccount(msg) => JsonRpcResponse::error(
-                        -32601,
-                        "PREPARATION_ERROR",
-                        &format!("Invalid Token Account: {}", msg),
-                    ),
-                    SolanaRpcError::Token(msg) => JsonRpcResponse::error(
-                        -32601,
-                        "PREPARATION_ERROR",
-                        &format!("Invalid Token Account: {}", msg),
-                    ),
-                    SolanaRpcError::Provider(msg) => JsonRpcResponse::error(
-                        -32006,
-                        "PREPARATION_ERROR",
-                        &format!("Failed to prepare the transfer transaction: {}", msg),
-                    ),
-                    SolanaRpcError::Internal(_) => {
-                        JsonRpcResponse::error(-32000, "INTERNAL_ERROR", "Internal error")
-                    }
-                };
-                Ok(error_response)
+                }
             }
         }
     }
 
-    async fn validate_min_balance(&self) -> Result<(), RelayerError> {
-        let balance = self
-            .provider
-            .get_balance(&self.relayer.address)
+    async fn get_status(&self) -> Result<RelayerStatus, RelayerError> {
+        let address = &self.relayer.address;
+        let balance = self.provider.get_balance(address).await?;
+
+        let pending_statuses = [TransactionStatus::Pending, TransactionStatus::Submitted];
+        let pending_transactions = self
+            .transaction_repository
+            .find_by_status(&self.relayer.id, &pending_statuses[..])
             .await
-            .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
+            .map_err(RelayerError::from)?;
+        let pending_transactions_count = pending_transactions.len() as u64;
 
-        debug!(balance = %balance, "balance for relayer");
+        let confirmed_statuses = [TransactionStatus::Confirmed];
+        let confirmed_transactions = self
+            .transaction_repository
+            .find_by_status(&self.relayer.id, &confirmed_statuses[..])
+            .await
+            .map_err(RelayerError::from)?;
 
-        let policy = self.relayer.policies.get_solana_policy();
+        let last_confirmed_transaction_timestamp = confirmed_transactions
+            .iter()
+            .filter_map(|tx| tx.confirmed_at.as_ref())
+            .max()
+            .cloned();
 
-        if balance < policy.min_balance.unwrap_or(DEFAULT_SOLANA_MIN_BALANCE) {
-            return Err(RelayerError::InsufficientBalanceError(
-                "Insufficient balance".to_string(),
-            ));
-        }
-
-        Ok(())
-    }
-
-    async fn check_health(&self) -> Result<(), Vec<HealthCheckFailure>> {
-        debug!(
-            "running health checks for Solana relayer {}",
-            self.relayer.id
-        );
-
-        let validate_rpc_result = self.validate_rpc().await;
-        let validate_min_balance_result = self.validate_min_balance().await;
-
-        // Collect all failures
-        let failures: Vec<HealthCheckFailure> = vec![
-            validate_rpc_result
-                .err()
-                .map(|e| HealthCheckFailure::RpcValidationFailed(e.to_string())),
-            validate_min_balance_result
-                .err()
-                .map(|e| HealthCheckFailure::BalanceCheckFailed(e.to_string())),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
-
-        if failures.is_empty() {
-            info!("all health checks passed");
-            Ok(())
-        } else {
-            warn!("health checks failed: {:?}", failures);
-            Err(failures)
-        }
+        Ok(RelayerStatus::Solana {
+            balance: (balance as u128).to_string(),
+            pending_transactions_count,
+            last_confirmed_transaction_timestamp,
+            system_disabled: self.relayer.system_disabled,
+            paused: self.relayer.paused,
+        })
     }
 
     async fn initialize_relayer(&self) -> Result<(), RelayerError> {
@@ -771,6 +1023,118 @@ where
 
         Ok(())
     }
+
+    async fn check_health(&self) -> Result<(), Vec<HealthCheckFailure>> {
+        debug!(
+            "running health checks for Solana relayer {}",
+            self.relayer.id
+        );
+
+        let validate_rpc_result = self.validate_rpc().await;
+        let validate_min_balance_result = self.validate_min_balance().await;
+
+        // Collect all failures
+        let failures: Vec<HealthCheckFailure> = vec![
+            validate_rpc_result
+                .err()
+                .map(|e| HealthCheckFailure::RpcValidationFailed(e.to_string())),
+            validate_min_balance_result
+                .err()
+                .map(|e| HealthCheckFailure::BalanceCheckFailed(e.to_string())),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        if failures.is_empty() {
+            info!("all health checks passed");
+            Ok(())
+        } else {
+            warn!("health checks failed: {:?}", failures);
+            Err(failures)
+        }
+    }
+
+    async fn validate_min_balance(&self) -> Result<(), RelayerError> {
+        let balance = self
+            .provider
+            .get_balance(&self.relayer.address)
+            .await
+            .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
+
+        debug!(balance = %balance, "balance for relayer");
+
+        let policy = self.relayer.policies.get_solana_policy();
+
+        if balance < policy.min_balance.unwrap_or(DEFAULT_SOLANA_MIN_BALANCE) {
+            return Err(RelayerError::InsufficientBalanceError(
+                "Insufficient balance".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl<RR, TR, J, S, JS, SP, NR> GasAbstractionTrait for SolanaRelayer<RR, TR, J, S, JS, SP, NR>
+where
+    RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    S: SolanaSignTrait + Signer + Send + Sync + 'static,
+    JS: JupiterServiceTrait + Send + Sync + 'static,
+    SP: SolanaProviderTrait + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+{
+    async fn quote_sponsored_transaction(
+        &self,
+        params: SponsoredTransactionQuoteRequest,
+    ) -> Result<SponsoredTransactionQuoteResponse, RelayerError> {
+        let params = match params {
+            SponsoredTransactionQuoteRequest::Solana(p) => p,
+            _ => {
+                return Err(RelayerError::ValidationError(
+                    "Expected Solana fee estimate request parameters".to_string(),
+                ));
+            }
+        };
+
+        let result = self
+            .rpc_handler
+            .rpc_methods()
+            .fee_estimate(params)
+            .await
+            .map_err(|e| RelayerError::Internal(e.to_string()))?;
+
+        Ok(SponsoredTransactionQuoteResponse::Solana(result))
+    }
+
+    async fn build_sponsored_transaction(
+        &self,
+        params: SponsoredTransactionBuildRequest,
+    ) -> Result<SponsoredTransactionBuildResponse, RelayerError> {
+        let params = match params {
+            SponsoredTransactionBuildRequest::Solana(p) => p,
+            _ => {
+                return Err(RelayerError::ValidationError(
+                    "Expected Solana prepare transaction request parameters".to_string(),
+                ));
+            }
+        };
+
+        let result = self
+            .rpc_handler
+            .rpc_methods()
+            .prepare_transaction(params)
+            .await
+            .map_err(|e| {
+                let error_msg = format!("{e}");
+                RelayerError::Internal(error_msg)
+            })?;
+
+        Ok(SponsoredTransactionBuildResponse::Solana(result))
+    }
 }
 
 #[cfg(test)]
@@ -778,25 +1142,29 @@ mod tests {
     use super::*;
     use crate::{
         config::{NetworkConfigCommon, SolanaNetworkConfig},
-        domain::{create_network_dex_generic, SolanaRpcHandler, SolanaRpcMethodsImpl},
+        domain::{
+            create_network_dex_generic, Relayer, SignTransactionRequestSolana, SolanaRpcHandler,
+            SolanaRpcMethodsImpl,
+        },
         jobs::MockJobProducerTrait,
         models::{
-            EncodedSerializedTransaction, FeeEstimateRequestParams,
-            GetFeaturesEnabledRequestParams, JsonRpcId, NetworkConfigData, NetworkRepoModel,
-            RelayerSolanaSwapConfig, SolanaAllowedTokensSwapConfig, SolanaRpcResult,
-            SolanaSwapStrategy,
+            EncodedSerializedTransaction, JsonRpcId, NetworkConfigData, NetworkRepoModel,
+            RelayerSolanaSwapConfig, SolanaAllowedTokensSwapConfig, SolanaFeeEstimateRequestParams,
+            SolanaGetFeaturesEnabledRequestParams, SolanaRpcResult, SolanaSwapStrategy,
         },
         repositories::{MockNetworkRepository, MockRelayerRepository, MockTransactionRepository},
         services::{
-            MockJupiterServiceTrait, MockSolanaProviderTrait, MockSolanaSignTrait, QuoteResponse,
-            RoutePlan, SolanaProviderError, SwapEvents, SwapInfo, SwapResponse,
+            provider::{MockSolanaProviderTrait, SolanaProviderError},
+            signer::MockSolanaSignTrait,
+            MockJupiterServiceTrait, QuoteResponse, RoutePlan, SwapEvents, SwapInfo, SwapResponse,
             UltraExecuteResponse, UltraOrderResponse,
         },
         utils::mocks::mockutils::create_mock_solana_network,
     };
+    use chrono::Utc;
     use mockall::predicate::*;
     use solana_sdk::{hash::Hash, program_pack::Pack, signature::Signature};
-    use spl_token::state::Account as SplAccount;
+    use spl_token_interface::state::Account as SplAccount;
 
     /// Bundles all the pieces you need to instantiate a SolanaRelayer.
     /// Default::default gives you fresh mocks, but you can override any of them.
@@ -1105,19 +1473,20 @@ mod tests {
                 Box::pin(async {
                     let mut account_data = vec![0; SplAccount::LEN];
 
-                    let token_account = spl_token::state::Account {
+                    let token_account = spl_token_interface::state::Account {
                         mint: Pubkey::new_unique(),
                         owner: Pubkey::new_unique(),
                         amount: 10000000,
-                        state: spl_token::state::AccountState::Initialized,
+                        state: spl_token_interface::state::AccountState::Initialized,
                         ..Default::default()
                     };
-                    spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                    spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                        .unwrap();
 
                     Ok(solana_sdk::account::Account {
                         lamports: 1_000_000,
                         data: account_data,
-                        owner: spl_token::id(),
+                        owner: spl_token_interface::id(),
                         executable: false,
                         rent_epoch: 0,
                     })
@@ -1267,19 +1636,20 @@ mod tests {
                 Box::pin(async {
                     let mut account_data = vec![0; SplAccount::LEN];
 
-                    let token_account = spl_token::state::Account {
+                    let token_account = spl_token_interface::state::Account {
                         mint: Pubkey::new_unique(),
                         owner: Pubkey::new_unique(),
                         amount: 10000000,
-                        state: spl_token::state::AccountState::Initialized,
+                        state: spl_token_interface::state::AccountState::Initialized,
                         ..Default::default()
                     };
-                    spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                    spl_token_interface::state::Account::pack(token_account, &mut account_data)
+                        .unwrap();
 
                     Ok(solana_sdk::account::Account {
                         lamports: 1_000_000,
                         data: account_data,
-                        owner: spl_token::id(),
+                        owner: spl_token_interface::id(),
                         executable: false,
                         rent_epoch: 0,
                     })
@@ -1320,7 +1690,7 @@ mod tests {
 
         jupiter_mock.expect_execute_ultra_order().returning(|_| {
             Box::pin(async {
-                Ok(UltraExecuteResponse {
+               Ok(UltraExecuteResponse {
                     signature: Some("2jg9xbGLtZRsiJBrDWQnz33JuLjDkiKSZuxZPdjJ3qrJbMeTEerXFAKynkPW63J88nq63cvosDNRsg9VqHtGixvP".to_string()),
                     status: "success".to_string(),
                     slot: Some("123456789".to_string()),
@@ -1361,6 +1731,7 @@ mod tests {
             )
             .unwrap(),
         );
+
         let mut job_producer = MockJobProducerTrait::new();
         job_producer
             .expect_produce_send_notification_job()
@@ -1600,7 +1971,7 @@ mod tests {
         let provider = Arc::new(raw_provider);
         let mut raw_job = MockJobProducerTrait::new();
         raw_job
-            .expect_produce_solana_token_swap_request_job()
+            .expect_produce_token_swap_request_job()
             .withf(move |req, _opts| req.relayer_id == "test-id")
             .times(0);
         let job_producer = Arc::new(raw_job);
@@ -1641,7 +2012,7 @@ mod tests {
 
         let mut raw_job = MockJobProducerTrait::new();
         raw_job
-            .expect_produce_solana_token_swap_request_job()
+            .expect_produce_token_swap_request_job()
             .times(1)
             .returning(|_, _| Box::pin(async { Ok(()) }));
         let job_producer = Arc::new(raw_job);
@@ -1797,7 +2168,7 @@ mod tests {
         let req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             params: NetworkRpcRequest::Solana(crate::models::SolanaRpcRequest::FeeEstimate(
-                FeeEstimateRequestParams {
+                SolanaFeeEstimateRequestParams {
                     transaction: EncodedSerializedTransaction::new("".to_string()),
                     fee_token: "".to_string(),
                 },
@@ -1820,7 +2191,7 @@ mod tests {
         let req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             params: NetworkRpcRequest::Solana(crate::models::SolanaRpcRequest::GetFeaturesEnabled(
-                GetFeaturesEnabledRequestParams {},
+                SolanaGetFeaturesEnabledRequestParams {},
             )),
             id: Some(JsonRpcId::Number(1)),
         };
@@ -2106,6 +2477,257 @@ mod tests {
                 assert!(msg.contains("Error while processing allowed tokens policy"));
             }
             other => panic!("Expected PolicyConfigurationError, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_transaction_success() {
+        let signer = MockSolanaSignTrait::new();
+
+        let relayer_model = RelayerRepoModel {
+            id: "test-relayer-id".to_string(),
+            address: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin".to_string(),
+            network: "devnet".to_string(),
+            policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+                fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
+                min_balance: Some(0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let ctx = TestCtx {
+            relayer_model,
+            signer: Arc::new(signer),
+            ..Default::default()
+        };
+
+        let solana_relayer = ctx.into_relayer().await;
+
+        let sign_request = SignTransactionRequest::Solana(SignTransactionRequestSolana {
+            transaction: EncodedSerializedTransaction::new("raw_transaction_data".to_string()),
+        });
+
+        let result = solana_relayer.sign_transaction(&sign_request).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        match response {
+            SignTransactionExternalResponse::Solana(solana_resp) => {
+                assert_eq!(
+                    solana_resp.transaction.into_inner(),
+                    "signed_transaction_data"
+                );
+                assert_eq!(solana_resp.signature, "signature_data");
+            }
+            _ => panic!("Expected Solana response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_status_success() {
+        let mut raw_provider = MockSolanaProviderTrait::new();
+        let mut tx_repo = MockTransactionRepository::new();
+
+        // Mock balance retrieval
+        raw_provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1000000) }));
+
+        // Mock transaction counts
+        tx_repo
+            .expect_find_by_status()
+            .with(
+                eq("test-id"),
+                eq(vec![
+                    TransactionStatus::Pending,
+                    TransactionStatus::Submitted,
+                ]),
+            )
+            .returning(|_, _| {
+                Ok(vec![
+                    TransactionRepoModel::default(),
+                    TransactionRepoModel::default(),
+                ])
+            });
+
+        // Mock recent confirmed transaction
+        let recent_tx = TransactionRepoModel {
+            id: "recent-tx".to_string(),
+            relayer_id: "test-id".to_string(),
+            network_data: NetworkTransactionData::Solana(SolanaTransactionData::default()),
+            network_type: NetworkType::Solana,
+            status: TransactionStatus::Confirmed,
+            confirmed_at: Some(Utc::now().to_string()),
+            ..Default::default()
+        };
+        tx_repo
+            .expect_find_by_status()
+            .with(eq("test-id"), eq(vec![TransactionStatus::Confirmed]))
+            .returning(move |_, _| Ok(vec![recent_tx.clone()]));
+
+        let ctx = TestCtx {
+            tx_repo: Arc::new(tx_repo),
+            provider: Arc::new(raw_provider),
+            ..Default::default()
+        };
+
+        let solana_relayer = ctx.into_relayer().await;
+
+        let result = solana_relayer.get_status().await;
+        assert!(result.is_ok());
+        let status = result.unwrap();
+
+        match status {
+            RelayerStatus::Solana {
+                balance,
+                pending_transactions_count,
+                last_confirmed_transaction_timestamp,
+                ..
+            } => {
+                assert_eq!(balance, "1000000");
+                assert_eq!(pending_transactions_count, 2);
+                assert!(last_confirmed_transaction_timestamp.is_some());
+            }
+            _ => panic!("Expected Solana status"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_status_balance_error() {
+        let mut raw_provider = MockSolanaProviderTrait::new();
+        let tx_repo = MockTransactionRepository::new();
+
+        // Mock balance error
+        raw_provider.expect_get_balance().returning(|_| {
+            Box::pin(async { Err(SolanaProviderError::RpcError("RPC error".to_string())) })
+        });
+
+        let ctx = TestCtx {
+            tx_repo: Arc::new(tx_repo),
+            provider: Arc::new(raw_provider),
+            ..Default::default()
+        };
+
+        let solana_relayer = ctx.into_relayer().await;
+
+        let result = solana_relayer.get_status().await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            RelayerError::UnderlyingSolanaProvider(err) => {
+                assert!(err.to_string().contains("RPC error"));
+            }
+            other => panic!("Expected UnderlyingSolanaProvider, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_status_no_recent_transactions() {
+        let mut raw_provider = MockSolanaProviderTrait::new();
+        let mut tx_repo = MockTransactionRepository::new();
+
+        // Mock balance retrieval
+        raw_provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(500000) }));
+
+        // Mock transaction counts
+        tx_repo
+            .expect_find_by_status()
+            .with(
+                eq("test-id"),
+                eq(vec![
+                    TransactionStatus::Pending,
+                    TransactionStatus::Submitted,
+                ]),
+            )
+            .returning(|_, _| Ok(vec![]));
+
+        tx_repo
+            .expect_find_by_status()
+            .with(eq("test-id"), eq(vec![TransactionStatus::Confirmed]))
+            .returning(|_, _| Ok(vec![]));
+
+        let ctx = TestCtx {
+            tx_repo: Arc::new(tx_repo),
+            provider: Arc::new(raw_provider),
+            ..Default::default()
+        };
+
+        let solana_relayer = ctx.into_relayer().await;
+
+        let result = solana_relayer.get_status().await;
+        assert!(result.is_ok());
+        let status = result.unwrap();
+
+        match status {
+            RelayerStatus::Solana {
+                balance,
+                pending_transactions_count,
+                last_confirmed_transaction_timestamp,
+                ..
+            } => {
+                assert_eq!(balance, "500000");
+                assert_eq!(pending_transactions_count, 0);
+                assert!(last_confirmed_transaction_timestamp.is_none());
+            }
+            _ => panic!("Expected Solana status"),
+        }
+    }
+
+    // GasAbstractionTrait tests
+    // These are passthrough methods to RPC handlers, so we verify:
+    // 1. Wrong network type returns ValidationError
+    // The actual RPC handler functionality (including method calls) is tested in the RPC handler tests
+    // Note: We can't easily mock the RPC handler here due to type constraints in TestCtx,
+    // but the passthrough behavior is verified through the RPC handler tests.
+
+    #[tokio::test]
+    async fn test_quote_sponsored_transaction_wrong_network() {
+        let ctx = TestCtx::default();
+        let solana_relayer = ctx.into_relayer().await;
+
+        // Use Stellar request instead of Solana
+        let request = SponsoredTransactionQuoteRequest::Stellar(
+            crate::models::StellarFeeEstimateRequestParams {
+                transaction_xdr: Some("test-xdr".to_string()),
+                operations: None,
+                source_account: None,
+                fee_token: "native".to_string(),
+            },
+        );
+
+        let result = solana_relayer.quote_sponsored_transaction(request).await;
+        assert!(result.is_err());
+
+        if let Err(RelayerError::ValidationError(msg)) = result {
+            assert!(msg.contains("Expected Solana fee estimate request parameters"));
+        } else {
+            panic!("Expected ValidationError for wrong network type");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_build_sponsored_transaction_wrong_network() {
+        let ctx = TestCtx::default();
+        let solana_relayer = ctx.into_relayer().await;
+
+        // Use Stellar request instead of Solana
+        let request = SponsoredTransactionBuildRequest::Stellar(
+            crate::models::StellarPrepareTransactionRequestParams {
+                transaction_xdr: Some("test-xdr".to_string()),
+                operations: None,
+                source_account: None,
+                fee_token: "native".to_string(),
+            },
+        );
+
+        let result = solana_relayer.build_sponsored_transaction(request).await;
+        assert!(result.is_err());
+
+        if let Err(RelayerError::ValidationError(msg)) = result {
+            assert!(msg.contains("Expected Solana prepare transaction request parameters"));
+        } else {
+            panic!("Expected ValidationError for wrong network type");
         }
     }
 }

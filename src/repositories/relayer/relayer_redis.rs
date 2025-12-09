@@ -189,8 +189,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
             None => {
                 debug!(relayer_id = %id, "relayer not found");
                 Err(RepositoryError::NotFound(format!(
-                    "Relayer with ID {} not found",
-                    id
+                    "Relayer with ID {id} not found"
                 )))
             }
         }
@@ -295,8 +294,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
 
         if !exists {
             return Err(RepositoryError::NotFound(format!(
-                "Relayer with ID {} not found",
-                id
+                "Relayer with ID {id} not found"
             )));
         }
 
@@ -338,8 +336,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
 
         if !exists {
             return Err(RepositoryError::NotFound(format!(
-                "Relayer with ID {} not found",
-                id
+                "Relayer with ID {id} not found"
             )));
         }
 
@@ -530,6 +527,10 @@ impl RelayerRepository for RedisRelayerRepository {
 
         // Update the relayer
         self.update(id, relayer).await
+    }
+
+    fn is_persistent_storage(&self) -> bool {
+        true
     }
 }
 

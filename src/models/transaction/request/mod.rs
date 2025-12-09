@@ -2,8 +2,12 @@ pub mod evm;
 pub mod solana;
 pub mod stellar;
 
+use crate::models::rpc::{
+    SolanaFeeEstimateRequestParams, SolanaPrepareTransactionRequestParams,
+    StellarFeeEstimateRequestParams, StellarPrepareTransactionRequestParams,
+};
 use crate::models::{ApiError, NetworkType, RelayerRepoModel};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub use evm::EvmTransactionRequest;
 pub use solana::SolanaTransactionRequest;
@@ -40,7 +44,51 @@ impl NetworkTransactionRequest {
         match self {
             NetworkTransactionRequest::Evm(request) => request.validate(relayer),
             NetworkTransactionRequest::Stellar(request) => request.validate(),
-            _ => Ok(()),
+            NetworkTransactionRequest::Solana(request) => request.validate(relayer),
+        }
+    }
+}
+
+/// Network-agnostic fee estimate request parameters for gasless transactions.
+/// Contains network-specific request parameters for fee estimation.
+/// The network type is inferred from the relayer's network configuration.
+#[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema, Clone)]
+#[serde(untagged)]
+#[schema(as = SponsoredTransactionQuoteRequest)]
+pub enum SponsoredTransactionQuoteRequest {
+    /// Solana-specific fee estimate request parameters
+    Solana(SolanaFeeEstimateRequestParams),
+    /// Stellar-specific fee estimate request parameters
+    Stellar(StellarFeeEstimateRequestParams),
+}
+
+impl SponsoredTransactionQuoteRequest {
+    pub fn validate(&self) -> Result<(), ApiError> {
+        match self {
+            SponsoredTransactionQuoteRequest::Stellar(request) => request.validate(),
+            SponsoredTransactionQuoteRequest::Solana(_) => Ok(()),
+        }
+    }
+}
+
+/// Network-agnostic prepare transaction request parameters for gasless transactions.
+/// Contains network-specific request parameters for preparing transactions with fee payments.
+/// The network type is inferred from the relayer's network configuration.
+#[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema, Clone)]
+#[serde(untagged)]
+#[schema(as = SponsoredTransactionBuildRequest)]
+pub enum SponsoredTransactionBuildRequest {
+    /// Solana-specific prepare transaction request parameters
+    Solana(SolanaPrepareTransactionRequestParams),
+    /// Stellar-specific prepare transaction request parameters
+    Stellar(StellarPrepareTransactionRequestParams),
+}
+
+impl SponsoredTransactionBuildRequest {
+    pub fn validate(&self) -> Result<(), ApiError> {
+        match self {
+            SponsoredTransactionBuildRequest::Stellar(request) => request.validate(),
+            SponsoredTransactionBuildRequest::Solana(_) => Ok(()),
         }
     }
 }

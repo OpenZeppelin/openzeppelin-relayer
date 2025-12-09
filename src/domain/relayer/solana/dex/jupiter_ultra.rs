@@ -13,8 +13,8 @@ use super::{DexStrategy, SwapParams, SwapResult};
 use crate::domain::relayer::RelayerError;
 use crate::models::EncodedSerializedTransaction;
 use crate::services::{
-    JupiterService, JupiterServiceTrait, SolanaSignTrait, SolanaSigner, UltraExecuteRequest,
-    UltraOrderRequest,
+    signer::{SolanaSignTrait, SolanaSigner},
+    JupiterService, JupiterServiceTrait, UltraExecuteRequest, UltraOrderRequest,
 };
 use async_trait::async_trait;
 use solana_sdk::transaction::VersionedTransaction;
@@ -63,7 +63,7 @@ where
             })
             .await
             .map_err(|e| {
-                RelayerError::DexError(format!("Failed to get Jupiter Ultra order: {}", e))
+                RelayerError::DexError(format!("Failed to get Jupiter Ultra order: {e}"))
             })?;
 
         debug!(order = ?order, "received order");
@@ -75,7 +75,7 @@ where
         let mut swap_tx =
             VersionedTransaction::try_from(EncodedSerializedTransaction::new(encoded_transaction))
                 .map_err(|e| {
-                    RelayerError::DexError(format!("Failed to decode swap transaction: {}", e))
+                    RelayerError::DexError(format!("Failed to decode swap transaction: {e}"))
                 })?;
 
         let signature = self
@@ -83,16 +83,14 @@ where
             .sign(&swap_tx.message.serialize())
             .await
             .map_err(|e| {
-                RelayerError::DexError(format!("Failed to sign Dex swap transaction: {}", e))
+                RelayerError::DexError(format!("Failed to sign Dex swap transaction: {e}"))
             })?;
 
         swap_tx.signatures[0] = signature;
 
         info!("Execute order transaction");
-        let serialized_transaction =
-            EncodedSerializedTransaction::try_from(&swap_tx).map_err(|e| {
-                RelayerError::DexError(format!("Failed to serialize transaction: {}", e))
-            })?;
+        let serialized_transaction = EncodedSerializedTransaction::try_from(&swap_tx)
+            .map_err(|e| RelayerError::DexError(format!("Failed to serialize transaction: {e}")))?;
         let response = self
             .jupiter_service
             .execute_ultra_order(UltraExecuteRequest {
@@ -100,7 +98,7 @@ where
                 request_id: order.request_id,
             })
             .await
-            .map_err(|e| RelayerError::DexError(format!("Failed to execute order: {}", e)))?;
+            .map_err(|e| RelayerError::DexError(format!("Failed to execute order: {e}")))?;
         debug!(response = ?response, "order executed successfully");
 
         Ok(SwapResult {
@@ -119,7 +117,7 @@ mod tests {
     use crate::{
         models::SignerError,
         services::{
-            MockJupiterServiceTrait, MockSolanaSignTrait, RoutePlan, SwapEvents, SwapInfo,
+            signer::MockSolanaSignTrait, MockJupiterServiceTrait, RoutePlan, SwapEvents, SwapInfo,
             UltraExecuteResponse, UltraOrderResponse,
         },
     };

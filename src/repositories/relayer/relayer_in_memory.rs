@@ -112,8 +112,7 @@ impl RelayerRepository for InMemoryRelayerRepository {
             Ok(relayer.clone())
         } else {
             Err(RepositoryError::NotFound(format!(
-                "Relayer with ID {} not found",
-                id
+                "Relayer with ID {id} not found"
             )))
         }
     }
@@ -124,9 +123,9 @@ impl RelayerRepository for InMemoryRelayerRepository {
         policy: RelayerNetworkPolicy,
     ) -> Result<RelayerRepoModel, RepositoryError> {
         let mut store = Self::acquire_lock(&self.store).await?;
-        let relayer = store.get_mut(&id).ok_or_else(|| {
-            RepositoryError::NotFound(format!("Relayer with ID {} not found", id))
-        })?;
+        let relayer = store
+            .get_mut(&id)
+            .ok_or_else(|| RepositoryError::NotFound(format!("Relayer with ID {id} not found")))?;
         relayer.policies = policy;
         Ok(relayer.clone())
     }
@@ -143,8 +142,7 @@ impl RelayerRepository for InMemoryRelayerRepository {
             Ok(relayer.clone())
         } else {
             Err(RepositoryError::NotFound(format!(
-                "Relayer with ID {} not found",
-                relayer_id
+                "Relayer with ID {relayer_id} not found"
             )))
         }
     }
@@ -160,10 +158,13 @@ impl RelayerRepository for InMemoryRelayerRepository {
             Ok(relayer.clone())
         } else {
             Err(RepositoryError::NotFound(format!(
-                "Relayer with ID {} not found",
-                relayer_id
+                "Relayer with ID {relayer_id} not found"
             )))
         }
+    }
+
+    fn is_persistent_storage(&self) -> bool {
+        false
     }
 }
 
@@ -186,8 +187,7 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
         match store.get(&id) {
             Some(relayer) => Ok(relayer.clone()),
             None => Err(RepositoryError::NotFound(format!(
-                "Relayer with ID {} not found",
-                id
+                "Relayer with ID {id} not found"
             ))),
         }
     }
@@ -206,8 +206,7 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
             Ok(updated_relayer)
         } else {
             Err(RepositoryError::NotFound(format!(
-                "Relayer with ID {} not found",
-                id
+                "Relayer with ID {id} not found"
             )))
         }
     }
@@ -218,8 +217,7 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
             Ok(())
         } else {
             Err(RepositoryError::NotFound(format!(
-                "Relayer with ID {} not found",
-                id
+                "Relayer with ID {id} not found"
             )))
         }
     }

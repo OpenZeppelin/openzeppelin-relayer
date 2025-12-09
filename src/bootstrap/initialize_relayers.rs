@@ -30,7 +30,7 @@ where
     relayer_service
         .initialize_relayer()
         .await
-        .wrap_err_with(|| format!("Failed to initialize relayer: {}", relayer_id))?;
+        .wrap_err_with(|| format!("Failed to initialize relayer: {relayer_id}"))?;
 
     Ok(())
 }

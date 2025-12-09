@@ -138,6 +138,7 @@ pub fn create_stellar_network(network: &str) -> StellarNetworkConfig {
             tags: Some(vec!["stellar".to_string()]),
         },
         passphrase: Some("Test Network ; September 2015".to_string()),
+        horizon_url: Some(format!("https://horizon.{}.stellar.org", network)),
     }
 }
 
@@ -153,7 +154,8 @@ pub fn create_stellar_network_with_parent(network: &str, parent: &str) -> Stella
             is_testnet: None,                 // Will inherit from parent
             tags: None,                       // Will inherit from parent
         },
-        passphrase: None, // Will inherit from parent
+        passphrase: None,  // Will inherit from parent
+        horizon_url: None, // Will inherit from parent
     }
 }
 

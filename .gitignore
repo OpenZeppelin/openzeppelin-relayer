@@ -46,11 +46,8 @@ node_modules
 .qodo
 
 
-# Ignore generated OpenAPI files
-openapi.json
-
 # Exclude generated OpenAPI files from the docs directory
-!docs/openapi.json
+!./openapi.json
 
 # Integration test artifacts
 test-results/

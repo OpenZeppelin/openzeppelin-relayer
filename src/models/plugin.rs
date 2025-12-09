@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -24,4 +24,7 @@ pub struct PluginModel {
 pub struct PluginCallRequest {
     /// Plugin parameters
     pub params: serde_json::Value,
+    /// HTTP headers from the incoming request (injected by the route handler)
+    #[serde(default, skip_deserializing)]
+    pub headers: Option<HashMap<String, Vec<String>>>,
 }

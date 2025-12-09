@@ -308,8 +308,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
             None => {
                 debug!(network_id = %id, "network not found");
                 Err(RepositoryError::NotFound(format!(
-                    "Network with ID {} not found",
-                    id
+                    "Network with ID {id} not found"
                 )))
             }
         }
@@ -686,6 +685,7 @@ mod tests {
                 let stellar_config = StellarNetworkConfig {
                     common,
                     passphrase: None,
+                    horizon_url: None,
                 };
                 NetworkRepoModel::new_stellar(stellar_config)
             }

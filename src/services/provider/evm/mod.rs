@@ -35,8 +35,11 @@ use serde_json;
 
 use super::rpc_selector::RpcSelector;
 use super::{retry_rpc_call, RetryConfig};
-use crate::models::{
-    BlockResponse, EvmTransactionData, RpcConfig, TransactionError, TransactionReceipt, U256,
+use crate::{
+    models::{
+        BlockResponse, EvmTransactionData, RpcConfig, TransactionError, TransactionReceipt, U256,
+    },
+    services::provider::{is_retriable_error, should_mark_provider_failed},
 };
 
 #[cfg(test)]
@@ -164,11 +167,11 @@ impl EvmProvider {
         }
 
         RpcConfig::validate_list(&configs)
-            .map_err(|e| ProviderError::NetworkConfiguration(format!("Invalid URL: {}", e)))?;
+            .map_err(|e| ProviderError::NetworkConfiguration(format!("Invalid URL: {e}")))?;
 
         // Create the RPC selector
         let selector = RpcSelector::new(configs).map_err(|e| {
-            ProviderError::NetworkConfiguration(format!("Failed to create RPC selector: {}", e))
+            ProviderError::NetworkConfiguration(format!("Failed to create RPC selector: {e}"))
         })?;
 
         let retry_config = RetryConfig::from_env();
@@ -180,84 +183,18 @@ impl EvmProvider {
         })
     }
 
-    // Error codes that indicate we can't use a provider
-    fn should_mark_provider_failed(error: &ProviderError) -> bool {
-        match error {
-            ProviderError::RequestError { status_code, .. } => {
-                match *status_code {
-                    // 5xx Server Errors - RPC node is having issues
-                    500..=599 => true,
-
-                    // 4xx Client Errors that indicate we can't use this provider
-                    401 => true, // Unauthorized - auth required but not provided
-                    403 => true, // Forbidden - node is blocking requests or auth issues
-                    404 => true, // Not Found - endpoint doesn't exist or misconfigured
-                    410 => true, // Gone - endpoint permanently removed
-
-                    _ => false,
-                }
-            }
-            _ => false,
-        }
-    }
-
-    // Errors that are retriable
-    fn is_retriable_error(error: &ProviderError) -> bool {
-        match error {
-            // HTTP-level errors that are retriable
-            ProviderError::Timeout | ProviderError::RateLimited | ProviderError::BadGateway => true,
-
-            // JSON-RPC error codes (EIP-1474)
-            ProviderError::RpcErrorCode { code, .. } => {
-                match code {
-                    // -32002: Resource unavailable (temporary state)
-                    -32002 => true,
-                    // -32005: Limit exceeded / rate limited
-                    -32005 => true,
-                    // -32603: Internal error (may be temporary)
-                    -32603 => true,
-                    // -32000: Invalid input
-                    -32000 => false,
-                    // -32001: Resource not found
-                    -32001 => false,
-                    // -32003: Transaction rejected
-                    -32003 => false,
-                    // -32004: Method not supported
-                    -32004 => false,
-
-                    // Standard JSON-RPC 2.0 errors (not retriable)
-                    // -32700: Parse error
-                    // -32600: Invalid request
-                    // -32601: Method not found
-                    // -32602: Invalid params
-                    -32700..=-32600 => false,
-
-                    // All other error codes: not retriable by default
-                    _ => false,
-                }
-            }
-
-            // Any other errors: check message for network-related issues
-            _ => {
-                let err_msg = format!("{}", error);
-                let msg_lower = err_msg.to_lowercase();
-                msg_lower.contains("timeout")
-                    || msg_lower.contains("connection")
-                    || msg_lower.contains("reset")
-            }
-        }
-    }
-
     /// Initialize a provider for a given URL
     fn initialize_provider(&self, url: &str) -> Result<EvmProviderType, ProviderError> {
-        let rpc_url = url.parse().map_err(|e| {
-            ProviderError::NetworkConfiguration(format!("Invalid URL format: {}", e))
-        })?;
+        let rpc_url = url
+            .parse()
+            .map_err(|e| ProviderError::NetworkConfiguration(format!("Invalid URL format: {e}")))?;
 
-        let client = ReqwestClientBuilder::default()
+        // Using use_rustls_tls() forces the use of rustls instead of native-tls to support TLS 1.3
+        let client = ReqwestClientBuilder::new()
             .timeout(Duration::from_secs(self.timeout_seconds))
+            .use_rustls_tls()
             .build()
-            .map_err(|e| ProviderError::Other(format!("Failed to build HTTP client: {}", e)))?;
+            .map_err(|e| ProviderError::Other(format!("Failed to build HTTP client: {e}")))?;
 
         let mut transport = Http::new(rpc_url);
         transport.set_client(client);
@@ -295,8 +232,8 @@ impl EvmProvider {
         retry_rpc_call(
             &self.selector,
             operation_name,
-            Self::is_retriable_error,
-            Self::should_mark_provider_failed,
+            is_retriable_error,
+            should_mark_provider_failed,
             |url| match self.initialize_provider(url) {
                 Ok(provider) => Ok(provider),
                 Err(e) => Err(e),
@@ -342,7 +279,7 @@ impl EvmProviderTrait for EvmProvider {
 
     async fn estimate_gas(&self, tx: &EvmTransactionData) -> Result<u64, ProviderError> {
         let transaction_request = TransactionRequest::try_from(tx)
-            .map_err(|e| ProviderError::Other(format!("Failed to convert transaction: {}", e)))?;
+            .map_err(|e| ProviderError::Other(format!("Failed to convert transaction: {e}")))?;
 
         self.retry_rpc_call("estimate_gas", move |provider| {
             let tx_req = transaction_request.clone();
@@ -458,7 +395,7 @@ impl EvmProviderTrait for EvmProvider {
     ) -> Result<Option<TransactionReceipt>, ProviderError> {
         let parsed_tx_hash = tx_hash
             .parse::<alloy::primitives::TxHash>()
-            .map_err(|e| ProviderError::Other(format!("Invalid transaction hash: {}", e)))?;
+            .map_err(|e| ProviderError::Other(format!("Invalid transaction hash: {e}")))?;
 
         self.retry_rpc_call("get_transaction_receipt", move |provider| async move {
             provider
@@ -492,7 +429,7 @@ impl EvmProviderTrait for EvmProvider {
             async move {
                 // Convert params to RawValue and use Cow for method
                 let params_raw = serde_json::value::to_raw_value(&params_clone).map_err(|e| {
-                    ProviderError::Other(format!("Failed to serialize params: {}", e))
+                    ProviderError::Other(format!("Failed to serialize params: {e}"))
                 })?;
 
                 let result = provider
@@ -501,9 +438,8 @@ impl EvmProviderTrait for EvmProvider {
                     .map_err(ProviderError::from)?;
 
                 // Convert RawValue back to Value
-                serde_json::from_str(result.get()).map_err(|e| {
-                    ProviderError::Other(format!("Failed to deserialize result: {}", e))
-                })
+                serde_json::from_str(result.get())
+                    .map_err(|e| ProviderError::Other(format!("Failed to deserialize result: {e}")))
             }
         })
         .await
@@ -722,226 +658,6 @@ mod tests {
             Some(Address::from_str("0x742d35Cc6634C0532925a3b844Bc454e4438f44e").unwrap())
         );
         assert_eq!(tx_request.chain_id, Some(1));
-    }
-
-    #[test]
-    fn test_should_mark_provider_failed_server_errors() {
-        // 5xx errors should mark provider as failed
-        for status_code in 500..=599 {
-            let error = ProviderError::RequestError {
-                error: format!("Server error {}", status_code),
-                status_code,
-            };
-            assert!(
-                EvmProvider::should_mark_provider_failed(&error),
-                "Status code {} should mark provider as failed",
-                status_code
-            );
-        }
-    }
-
-    #[test]
-    fn test_should_mark_provider_failed_auth_errors() {
-        // Authentication/authorization errors should mark provider as failed
-        let auth_errors = [401, 403];
-        for &status_code in &auth_errors {
-            let error = ProviderError::RequestError {
-                error: format!("Auth error {}", status_code),
-                status_code,
-            };
-            assert!(
-                EvmProvider::should_mark_provider_failed(&error),
-                "Status code {} should mark provider as failed",
-                status_code
-            );
-        }
-    }
-
-    #[test]
-    fn test_should_mark_provider_failed_not_found_errors() {
-        // 404 and 410 should mark provider as failed (endpoint issues)
-        let not_found_errors = [404, 410];
-        for &status_code in &not_found_errors {
-            let error = ProviderError::RequestError {
-                error: format!("Not found error {}", status_code),
-                status_code,
-            };
-            assert!(
-                EvmProvider::should_mark_provider_failed(&error),
-                "Status code {} should mark provider as failed",
-                status_code
-            );
-        }
-    }
-
-    #[test]
-    fn test_should_mark_provider_failed_client_errors_not_failed() {
-        // These 4xx errors should NOT mark provider as failed (client-side issues)
-        let client_errors = [400, 405, 413, 414, 415, 422, 429];
-        for &status_code in &client_errors {
-            let error = ProviderError::RequestError {
-                error: format!("Client error {}", status_code),
-                status_code,
-            };
-            assert!(
-                !EvmProvider::should_mark_provider_failed(&error),
-                "Status code {} should NOT mark provider as failed",
-                status_code
-            );
-        }
-    }
-
-    #[test]
-    fn test_should_mark_provider_failed_other_error_types() {
-        // Test non-RequestError types - these should NOT mark provider as failed
-        let errors = [
-            ProviderError::Timeout,
-            ProviderError::RateLimited,
-            ProviderError::BadGateway,
-            ProviderError::InvalidAddress("test".to_string()),
-            ProviderError::NetworkConfiguration("test".to_string()),
-            ProviderError::Other("test".to_string()),
-        ];
-
-        for error in errors {
-            assert!(
-                !EvmProvider::should_mark_provider_failed(&error),
-                "Error type {:?} should NOT mark provider as failed",
-                error
-            );
-        }
-    }
-
-    #[test]
-    fn test_should_mark_provider_failed_edge_cases() {
-        // Test some edge case status codes
-        let edge_cases = [
-            (200, false), // Success - shouldn't happen in error context but test anyway
-            (300, false), // Redirection
-            (418, false), // I'm a teapot - should not mark as failed
-            (451, false), // Unavailable for legal reasons - client issue
-            (499, false), // Client closed request - client issue
-        ];
-
-        for (status_code, should_fail) in edge_cases {
-            let error = ProviderError::RequestError {
-                error: format!("Edge case error {}", status_code),
-                status_code,
-            };
-            assert_eq!(
-                EvmProvider::should_mark_provider_failed(&error),
-                should_fail,
-                "Status code {} should {} mark provider as failed",
-                status_code,
-                if should_fail { "" } else { "NOT" }
-            );
-        }
-    }
-
-    #[test]
-    fn test_is_retriable_error_retriable_types() {
-        // These error types should be retriable
-        let retriable_errors = [
-            ProviderError::Timeout,
-            ProviderError::RateLimited,
-            ProviderError::BadGateway,
-        ];
-
-        for error in retriable_errors {
-            assert!(
-                EvmProvider::is_retriable_error(&error),
-                "Error type {:?} should be retriable",
-                error
-            );
-        }
-    }
-
-    #[test]
-    fn test_is_retriable_error_non_retriable_types() {
-        // These error types should NOT be retriable
-        let non_retriable_errors = [
-            ProviderError::InvalidAddress("test".to_string()),
-            ProviderError::NetworkConfiguration("test".to_string()),
-            ProviderError::RequestError {
-                error: "Some error".to_string(),
-                status_code: 400,
-            },
-        ];
-
-        for error in non_retriable_errors {
-            assert!(
-                !EvmProvider::is_retriable_error(&error),
-                "Error type {:?} should NOT be retriable",
-                error
-            );
-        }
-    }
-
-    #[test]
-    fn test_is_retriable_error_message_based_detection() {
-        // Test errors that should be retriable based on message content
-        let retriable_messages = [
-            "Connection timeout occurred",
-            "Network connection reset",
-            "Connection refused",
-            "TIMEOUT error happened",
-            "Connection was reset by peer",
-        ];
-
-        for message in retriable_messages {
-            let error = ProviderError::Other(message.to_string());
-            assert!(
-                EvmProvider::is_retriable_error(&error),
-                "Error with message '{}' should be retriable",
-                message
-            );
-        }
-    }
-
-    #[test]
-    fn test_is_retriable_error_message_based_non_retriable() {
-        // Test errors that should NOT be retriable based on message content
-        let non_retriable_messages = [
-            "Invalid address format",
-            "Bad request parameters",
-            "Authentication failed",
-            "Method not found",
-            "Some other error",
-        ];
-
-        for message in non_retriable_messages {
-            let error = ProviderError::Other(message.to_string());
-            assert!(
-                !EvmProvider::is_retriable_error(&error),
-                "Error with message '{}' should NOT be retriable",
-                message
-            );
-        }
-    }
-
-    #[test]
-    fn test_is_retriable_error_case_insensitive() {
-        // Test that message-based detection is case insensitive
-        let case_variations = [
-            "TIMEOUT",
-            "Timeout",
-            "timeout",
-            "CONNECTION",
-            "Connection",
-            "connection",
-            "RESET",
-            "Reset",
-            "reset",
-        ];
-
-        for message in case_variations {
-            let error = ProviderError::Other(message.to_string());
-            assert!(
-                EvmProvider::is_retriable_error(&error),
-                "Error with message '{}' should be retriable (case insensitive)",
-                message
-            );
-        }
     }
 
     #[tokio::test]
@@ -1171,7 +887,7 @@ mod tests {
                 message: message.to_string(),
             };
             assert!(
-                EvmProvider::is_retriable_error(&error),
+                is_retriable_error(&error),
                 "Error code {} should be retriable",
                 code
             );
@@ -1202,7 +918,7 @@ mod tests {
                 message: message.to_string(),
             };
             assert!(
-                !EvmProvider::is_retriable_error(&error),
+                !is_retriable_error(&error),
                 "Error code {} with message '{}' should NOT be retriable",
                 code,
                 message
@@ -1243,7 +959,7 @@ mod tests {
                 message: message.to_string(),
             };
             assert_eq!(
-                EvmProvider::is_retriable_error(&error),
+                is_retriable_error(&error),
                 should_retry,
                 "{}: -32000 with '{}' should{} be retriable",
                 description,

@@ -1,12 +1,13 @@
 use crate::constants::{
-    ARBITRUM_GAS_LIMIT, DEFAULT_GAS_LIMIT, DEFAULT_TX_VALID_TIMESPAN, MAXIMUM_NOOP_RETRY_ATTEMPTS,
-    MAXIMUM_TX_ATTEMPTS,
+    ARBITRUM_GAS_LIMIT, DEFAULT_GAS_LIMIT, DEFAULT_TX_VALID_TIMESPAN,
+    EVM_MIN_AGE_FOR_RESUBMIT_SECONDS, MAXIMUM_NOOP_RETRY_ATTEMPTS, MAXIMUM_TX_ATTEMPTS,
 };
+use crate::domain::get_age_since_created;
 use crate::models::EvmNetwork;
 use crate::models::{
     EvmTransactionData, TransactionError, TransactionRepoModel, TransactionStatus, U256,
 };
-use crate::services::EvmProviderTrait;
+use crate::services::provider::EvmProviderTrait;
 use chrono::{DateTime, Duration, Utc};
 use eyre::Result;
 
@@ -71,10 +72,76 @@ pub fn too_many_noop_attempts(tx: &TransactionRepoModel) -> bool {
     tx.noop_count.unwrap_or(0) > MAXIMUM_NOOP_RETRY_ATTEMPTS
 }
 
-pub fn is_pending_transaction(tx_status: &TransactionStatus) -> bool {
-    tx_status == &TransactionStatus::Pending
-        || tx_status == &TransactionStatus::Sent
-        || tx_status == &TransactionStatus::Submitted
+/// Validates that a transaction is in the expected state.
+///
+/// This enforces state machine invariants and prevents invalid state transitions.
+/// Used for domain-level validation to ensure business rules are always enforced.
+///
+/// # Arguments
+///
+/// * `tx` - The transaction to validate
+/// * `expected` - The expected status
+/// * `operation` - Optional operation name for better error messages (e.g., "prepare_transaction")
+///
+/// # Returns
+///
+/// `Ok(())` if the status matches, `Err(TransactionError)` otherwise
+pub fn ensure_status(
+    tx: &TransactionRepoModel,
+    expected: TransactionStatus,
+    operation: Option<&str>,
+) -> Result<(), TransactionError> {
+    if tx.status != expected {
+        let error_msg = if let Some(op) = operation {
+            format!(
+                "Invalid transaction state for {}. Current: {:?}, Expected: {:?}",
+                op, tx.status, expected
+            )
+        } else {
+            format!(
+                "Invalid transaction state. Current: {:?}, Expected: {:?}",
+                tx.status, expected
+            )
+        };
+        return Err(TransactionError::ValidationError(error_msg));
+    }
+    Ok(())
+}
+
+/// Validates that a transaction is in one of the expected states.
+///
+/// This enforces state machine invariants for operations that are valid
+/// in multiple states (e.g., cancel, replace).
+///
+/// # Arguments
+///
+/// * `tx` - The transaction to validate
+/// * `expected` - Slice of acceptable statuses
+/// * `operation` - Optional operation name for better error messages (e.g., "cancel_transaction")
+///
+/// # Returns
+///
+/// `Ok(())` if the status is one of the expected values, `Err(TransactionError)` otherwise
+pub fn ensure_status_one_of(
+    tx: &TransactionRepoModel,
+    expected: &[TransactionStatus],
+    operation: Option<&str>,
+) -> Result<(), TransactionError> {
+    if !expected.contains(&tx.status) {
+        let error_msg = if let Some(op) = operation {
+            format!(
+                "Invalid transaction state for {}. Current: {:?}, Expected one of: {:?}",
+                op, tx.status, expected
+            )
+        } else {
+            format!(
+                "Invalid transaction state. Current: {:?}, Expected one of: {:?}",
+                tx.status, expected
+            )
+        };
+        return Err(TransactionError::ValidationError(error_msg));
+    }
+    Ok(())
 }
 
 /// Helper function to check if a transaction has enough confirmations.
@@ -110,24 +177,50 @@ pub fn is_transaction_valid(created_at: &str, valid_until: &Option<String>) -> b
     }
 }
 
-/// Gets the age of a transaction since it was sent.
-pub fn get_age_of_sent_at(tx: &TransactionRepoModel) -> Result<Duration, TransactionError> {
-    let now = Utc::now();
-    let sent_at_str = tx.sent_at.as_ref().ok_or_else(|| {
-        TransactionError::UnexpectedError("Transaction sent_at time is missing".to_string())
-    })?;
-    let sent_time = DateTime::parse_from_rfc3339(sent_at_str)
-        .map_err(|_| TransactionError::UnexpectedError("Error parsing sent_at time".to_string()))?
-        .with_timezone(&Utc);
-    Ok(now.signed_duration_since(sent_time))
+/// Get age since status last changed
+/// Uses sent_at, otherwise falls back to created_at
+pub fn get_age_since_status_change(
+    tx: &TransactionRepoModel,
+) -> Result<Duration, TransactionError> {
+    // For Sent/Submitted status, use sent_at if available
+    if let Some(sent_at) = &tx.sent_at {
+        let sent = DateTime::parse_from_rfc3339(sent_at)
+            .map_err(|e| {
+                TransactionError::UnexpectedError(format!("Error parsing sent_at time: {e}"))
+            })?
+            .with_timezone(&Utc);
+        return Ok(Utc::now().signed_duration_since(sent));
+    }
+
+    // Fallback to created_at
+    get_age_since_created(tx)
+}
+
+/// Check if transaction is too young for resubmission and timeout checks.
+///
+/// Returns true if the transaction was created less than EVM_MIN_AGE_FOR_RESUBMIT_SECONDS ago.
+/// This is used to defer resubmission logic and timeout checks for newly created transactions,
+/// while still allowing basic status updates from the blockchain.
+pub fn is_too_early_to_resubmit(tx: &TransactionRepoModel) -> Result<bool, TransactionError> {
+    let age = get_age_since_created(tx)?;
+    Ok(age < Duration::seconds(EVM_MIN_AGE_FOR_RESUBMIT_SECONDS))
+}
+
+/// Deprecated: Use `is_too_early_to_resubmit` instead.
+/// This alias exists for backward compatibility.
+#[deprecated(since = "1.1.0", note = "Use `is_too_early_to_resubmit` instead")]
+pub fn is_too_early_to_check(tx: &TransactionRepoModel) -> Result<bool, TransactionError> {
+    is_too_early_to_resubmit(tx)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::constants::{ARBITRUM_BASED_TAG, ROLLUP_TAG};
-    use crate::models::{evm::Speed, NetworkTransactionData};
-    use crate::services::{MockEvmProviderTrait, ProviderError};
+    use crate::domain::transaction::evm::test_helpers::test_utils::make_test_transaction;
+    use crate::models::{evm::Speed, EvmTransactionData, NetworkTransactionData, U256};
+    use crate::services::provider::{MockEvmProviderTrait, ProviderError};
+    use crate::utils::mocks::mockutils::create_mock_transaction;
 
     fn create_standard_network() -> EvmNetwork {
         EvmNetwork {
@@ -593,155 +686,416 @@ mod tests {
     }
 
     #[test]
-    fn test_is_pending_transaction() {
-        // Test pending status
-        assert!(is_pending_transaction(&TransactionStatus::Pending));
+    fn test_ensure_status_success() {
+        let tx = make_test_transaction(TransactionStatus::Pending);
 
-        // Test sent status
-        assert!(is_pending_transaction(&TransactionStatus::Sent));
-
-        // Test submitted status
-        assert!(is_pending_transaction(&TransactionStatus::Submitted));
-
-        // Test non-pending statuses
-        assert!(!is_pending_transaction(&TransactionStatus::Confirmed));
-        assert!(!is_pending_transaction(&TransactionStatus::Failed));
-        assert!(!is_pending_transaction(&TransactionStatus::Canceled));
-        assert!(!is_pending_transaction(&TransactionStatus::Mined));
-        assert!(!is_pending_transaction(&TransactionStatus::Expired));
+        // Should succeed when status matches
+        let result = ensure_status(&tx, TransactionStatus::Pending, Some("test_operation"));
+        assert!(result.is_ok());
     }
 
     #[test]
-    fn test_get_age_of_sent_at() {
-        let now = Utc::now();
+    fn test_ensure_status_failure_with_operation() {
+        let tx = make_test_transaction(TransactionStatus::Sent);
 
-        // Test with valid sent_at timestamp (1 hour ago)
-        let sent_at_time = now - Duration::hours(1);
-        let tx = TransactionRepoModel {
-            id: "test-tx".to_string(),
-            relayer_id: "test-relayer".to_string(),
-            status: TransactionStatus::Sent,
-            status_reason: None,
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            sent_at: Some(sent_at_time.to_rfc3339()),
-            confirmed_at: None,
-            valid_until: None,
-            network_type: crate::models::NetworkType::Evm,
-            network_data: NetworkTransactionData::Evm(EvmTransactionData {
-                from: "0x1234".to_string(),
-                to: Some("0x5678".to_string()),
-                value: U256::from(0u64),
-                data: Some("0x".to_string()),
-                gas_limit: Some(21000),
-                gas_price: Some(10_000_000_000),
-                max_fee_per_gas: None,
-                max_priority_fee_per_gas: None,
-                nonce: Some(42),
-                signature: None,
-                hash: None,
-                speed: Some(Speed::Fast),
-                chain_id: 1,
-                raw: None,
-            }),
-            priced_at: None,
-            hashes: vec![],
-            noop_count: None,
-            is_canceled: Some(false),
-            delete_at: None,
-        };
-
-        let age_result = get_age_of_sent_at(&tx);
-        assert!(age_result.is_ok());
-        let age = age_result.unwrap();
-        // Age should be approximately 1 hour (with some tolerance for test execution time)
-        assert!(age.num_minutes() >= 59 && age.num_minutes() <= 61);
-    }
-
-    #[test]
-    fn test_get_age_of_sent_at_missing_sent_at() {
-        let tx = TransactionRepoModel {
-            id: "test-tx".to_string(),
-            relayer_id: "test-relayer".to_string(),
-            status: TransactionStatus::Pending,
-            status_reason: None,
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            sent_at: None, // Missing sent_at
-            confirmed_at: None,
-            valid_until: None,
-            network_type: crate::models::NetworkType::Evm,
-            network_data: NetworkTransactionData::Evm(EvmTransactionData {
-                from: "0x1234".to_string(),
-                to: Some("0x5678".to_string()),
-                value: U256::from(0u64),
-                data: Some("0x".to_string()),
-                gas_limit: Some(21000),
-                gas_price: Some(10_000_000_000),
-                max_fee_per_gas: None,
-                max_priority_fee_per_gas: None,
-                nonce: Some(42),
-                signature: None,
-                hash: None,
-                speed: Some(Speed::Fast),
-                chain_id: 1,
-                raw: None,
-            }),
-            priced_at: None,
-            hashes: vec![],
-            noop_count: None,
-            is_canceled: Some(false),
-            delete_at: None,
-        };
-
-        let result = get_age_of_sent_at(&tx);
+        // Should fail with operation context in error message
+        let result = ensure_status(&tx, TransactionStatus::Pending, Some("prepare_transaction"));
         assert!(result.is_err());
-        match result.unwrap_err() {
-            TransactionError::UnexpectedError(msg) => {
-                assert!(msg.contains("sent_at time is missing"));
-            }
-            _ => panic!("Expected UnexpectedError for missing sent_at"),
+
+        if let Err(TransactionError::ValidationError(msg)) = result {
+            assert!(msg.contains("prepare_transaction"));
+            assert!(msg.contains("Sent"));
+            assert!(msg.contains("Pending"));
+        } else {
+            panic!("Expected ValidationError");
         }
     }
 
     #[test]
-    fn test_get_age_of_sent_at_invalid_timestamp() {
+    fn test_ensure_status_failure_without_operation() {
+        let tx = make_test_transaction(TransactionStatus::Sent);
+
+        // Should fail without operation context
+        let result = ensure_status(&tx, TransactionStatus::Pending, None);
+        assert!(result.is_err());
+
+        if let Err(TransactionError::ValidationError(msg)) = result {
+            assert!(!msg.contains("for"));
+            assert!(msg.contains("Sent"));
+            assert!(msg.contains("Pending"));
+        } else {
+            panic!("Expected ValidationError");
+        }
+    }
+
+    #[test]
+    fn test_ensure_status_all_states() {
+        // Test that ensure_status works for all possible status values
+        let statuses = vec![
+            TransactionStatus::Pending,
+            TransactionStatus::Sent,
+            TransactionStatus::Submitted,
+            TransactionStatus::Mined,
+            TransactionStatus::Confirmed,
+            TransactionStatus::Failed,
+            TransactionStatus::Expired,
+            TransactionStatus::Canceled,
+        ];
+
+        for status in &statuses {
+            let tx = make_test_transaction(status.clone());
+
+            // Should succeed when expecting the same status
+            assert!(ensure_status(&tx, status.clone(), Some("test")).is_ok());
+
+            // Should fail when expecting a different status
+            for other_status in &statuses {
+                if other_status != status {
+                    assert!(ensure_status(&tx, other_status.clone(), Some("test")).is_err());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_ensure_status_one_of_success() {
+        let tx = make_test_transaction(TransactionStatus::Submitted);
+
+        // Should succeed when status is in the list
+        let result = ensure_status_one_of(
+            &tx,
+            &[TransactionStatus::Submitted, TransactionStatus::Mined],
+            Some("resubmit_transaction"),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_ensure_status_one_of_success_first_in_list() {
+        let tx = make_test_transaction(TransactionStatus::Pending);
+
+        // Should succeed when status is first in list
+        let result = ensure_status_one_of(
+            &tx,
+            &[
+                TransactionStatus::Pending,
+                TransactionStatus::Sent,
+                TransactionStatus::Submitted,
+            ],
+            Some("cancel_transaction"),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_ensure_status_one_of_success_last_in_list() {
+        let tx = make_test_transaction(TransactionStatus::Submitted);
+
+        // Should succeed when status is last in list
+        let result = ensure_status_one_of(
+            &tx,
+            &[
+                TransactionStatus::Pending,
+                TransactionStatus::Sent,
+                TransactionStatus::Submitted,
+            ],
+            Some("cancel_transaction"),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_ensure_status_one_of_failure_with_operation() {
+        let tx = make_test_transaction(TransactionStatus::Confirmed);
+
+        // Should fail with operation context when status not in list
+        let result = ensure_status_one_of(
+            &tx,
+            &[TransactionStatus::Pending, TransactionStatus::Sent],
+            Some("cancel_transaction"),
+        );
+        assert!(result.is_err());
+
+        if let Err(TransactionError::ValidationError(msg)) = result {
+            assert!(msg.contains("cancel_transaction"));
+            assert!(msg.contains("Confirmed"));
+            assert!(msg.contains("Pending"));
+            assert!(msg.contains("Sent"));
+        } else {
+            panic!("Expected ValidationError");
+        }
+    }
+
+    #[test]
+    fn test_ensure_status_one_of_failure_without_operation() {
+        let tx = make_test_transaction(TransactionStatus::Confirmed);
+
+        // Should fail without operation context
+        let result = ensure_status_one_of(
+            &tx,
+            &[TransactionStatus::Pending, TransactionStatus::Sent],
+            None,
+        );
+        assert!(result.is_err());
+
+        if let Err(TransactionError::ValidationError(msg)) = result {
+            assert!(!msg.contains("for"));
+            assert!(msg.contains("Confirmed"));
+        } else {
+            panic!("Expected ValidationError");
+        }
+    }
+
+    #[test]
+    fn test_ensure_status_one_of_single_status() {
+        let tx = make_test_transaction(TransactionStatus::Pending);
+
+        // Should work with a single status in the list
+        let result = ensure_status_one_of(&tx, &[TransactionStatus::Pending], Some("test"));
+        assert!(result.is_ok());
+
+        // Should fail when status doesn't match
+        let tx2 = make_test_transaction(TransactionStatus::Sent);
+        let result = ensure_status_one_of(&tx2, &[TransactionStatus::Pending], Some("test"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ensure_status_one_of_all_states() {
+        let all_statuses = vec![
+            TransactionStatus::Pending,
+            TransactionStatus::Sent,
+            TransactionStatus::Submitted,
+            TransactionStatus::Mined,
+            TransactionStatus::Confirmed,
+            TransactionStatus::Failed,
+            TransactionStatus::Expired,
+            TransactionStatus::Canceled,
+        ];
+
+        // Should succeed for each status when it's in the list
+        for status in &all_statuses {
+            let tx = make_test_transaction(status.clone());
+            let result = ensure_status_one_of(&tx, &all_statuses, Some("test"));
+            assert!(result.is_ok());
+        }
+    }
+
+    #[test]
+    fn test_ensure_status_one_of_empty_list() {
+        let tx = make_test_transaction(TransactionStatus::Pending);
+
+        // Should always fail with empty list
+        let result = ensure_status_one_of(&tx, &[], Some("test"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ensure_status_error_message_formatting() {
+        let tx = make_test_transaction(TransactionStatus::Confirmed);
+
+        // Test error message format for ensure_status
+        let result = ensure_status(&tx, TransactionStatus::Pending, Some("my_operation"));
+        if let Err(TransactionError::ValidationError(msg)) = result {
+            // Should have clear format: "Invalid transaction state for {operation}. Current: {current}, Expected: {expected}"
+            assert!(msg.starts_with("Invalid transaction state for my_operation"));
+            assert!(msg.contains("Current: Confirmed"));
+            assert!(msg.contains("Expected: Pending"));
+        } else {
+            panic!("Expected ValidationError");
+        }
+
+        // Test error message format for ensure_status_one_of
+        let result = ensure_status_one_of(
+            &tx,
+            &[TransactionStatus::Pending, TransactionStatus::Sent],
+            Some("another_operation"),
+        );
+        if let Err(TransactionError::ValidationError(msg)) = result {
+            // Should have clear format with list of expected states
+            assert!(msg.starts_with("Invalid transaction state for another_operation"));
+            assert!(msg.contains("Current: Confirmed"));
+            assert!(msg.contains("Expected one of:"));
+        } else {
+            panic!("Expected ValidationError");
+        }
+    }
+
+    #[test]
+    fn test_get_age_since_created() {
+        let now = Utc::now();
+
+        // Test with transaction created 2 hours ago
+        let created_time = now - Duration::hours(2);
         let tx = TransactionRepoModel {
-            id: "test-tx".to_string(),
-            relayer_id: "test-relayer".to_string(),
-            status: TransactionStatus::Sent,
-            status_reason: None,
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            sent_at: Some("invalid-timestamp".to_string()), // Invalid timestamp format
-            confirmed_at: None,
-            valid_until: None,
-            network_type: crate::models::NetworkType::Evm,
-            network_data: NetworkTransactionData::Evm(EvmTransactionData {
-                from: "0x1234".to_string(),
-                to: Some("0x5678".to_string()),
-                value: U256::from(0u64),
-                data: Some("0x".to_string()),
-                gas_limit: Some(21000),
-                gas_price: Some(10_000_000_000),
-                max_fee_per_gas: None,
-                max_priority_fee_per_gas: None,
-                nonce: Some(42),
-                signature: None,
-                hash: None,
-                speed: Some(Speed::Fast),
-                chain_id: 1,
-                raw: None,
-            }),
-            priced_at: None,
-            hashes: vec![],
-            noop_count: None,
-            is_canceled: Some(false),
-            delete_at: None,
+            created_at: created_time.to_rfc3339(),
+            ..create_mock_transaction()
         };
 
-        let result = get_age_of_sent_at(&tx);
+        let age_result = get_age_since_created(&tx);
+        assert!(age_result.is_ok());
+        let age = age_result.unwrap();
+        // Age should be approximately 2 hours (with some tolerance)
+        assert!(age.num_minutes() >= 119 && age.num_minutes() <= 121);
+    }
+
+    #[test]
+    fn test_get_age_since_created_invalid_timestamp() {
+        let tx = TransactionRepoModel {
+            created_at: "invalid-timestamp".to_string(),
+            ..create_mock_transaction()
+        };
+
+        let result = get_age_since_created(&tx);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::UnexpectedError(msg) => {
+                assert!(msg.contains("Invalid created_at timestamp"));
+            }
+            _ => panic!("Expected UnexpectedError for invalid timestamp"),
+        }
+    }
+
+    #[test]
+    fn test_get_age_since_created_recent_transaction() {
+        let now = Utc::now();
+
+        // Test with transaction created just 1 minute ago
+        let created_time = now - Duration::minutes(1);
+        let tx = TransactionRepoModel {
+            created_at: created_time.to_rfc3339(),
+            ..create_mock_transaction()
+        };
+
+        let age_result = get_age_since_created(&tx);
+        assert!(age_result.is_ok());
+        let age = age_result.unwrap();
+        // Age should be approximately 1 minute
+        assert!(age.num_seconds() >= 59 && age.num_seconds() <= 61);
+    }
+
+    #[test]
+    fn test_get_age_since_status_change_with_sent_at() {
+        let now = Utc::now();
+
+        // Test with transaction that has sent_at (1 hour ago)
+        let sent_time = now - Duration::hours(1);
+        let created_time = now - Duration::hours(3); // Created 3 hours ago
+        let tx = TransactionRepoModel {
+            status: TransactionStatus::Sent,
+            created_at: created_time.to_rfc3339(),
+            sent_at: Some(sent_time.to_rfc3339()),
+            ..create_mock_transaction()
+        };
+
+        let age_result = get_age_since_status_change(&tx);
+        assert!(age_result.is_ok());
+        let age = age_result.unwrap();
+        // Should use sent_at (1 hour), not created_at (3 hours)
+        assert!(age.num_minutes() >= 59 && age.num_minutes() <= 61);
+    }
+
+    #[test]
+    fn test_get_age_since_status_change_without_sent_at() {
+        let now = Utc::now();
+
+        // Test with transaction that doesn't have sent_at
+        let created_time = now - Duration::hours(2);
+        let tx = TransactionRepoModel {
+            created_at: created_time.to_rfc3339(),
+            ..create_mock_transaction()
+        };
+
+        let age_result = get_age_since_status_change(&tx);
+        assert!(age_result.is_ok());
+        let age = age_result.unwrap();
+        // Should fall back to created_at (2 hours)
+        assert!(age.num_minutes() >= 119 && age.num_minutes() <= 121);
+    }
+
+    #[test]
+    fn test_get_age_since_status_change_invalid_sent_at() {
+        let now = Utc::now();
+        let created_time = now - Duration::hours(2);
+
+        let tx = TransactionRepoModel {
+            status: TransactionStatus::Sent,
+            created_at: created_time.to_rfc3339(),
+            sent_at: Some("invalid-timestamp".to_string()),
+            ..create_mock_transaction()
+        };
+
+        let result = get_age_since_status_change(&tx);
         assert!(result.is_err());
         match result.unwrap_err() {
             TransactionError::UnexpectedError(msg) => {
                 assert!(msg.contains("Error parsing sent_at time"));
+            }
+            _ => panic!("Expected UnexpectedError for invalid sent_at timestamp"),
+        }
+    }
+
+    #[test]
+    fn test_is_too_early_to_resubmit_recent_transaction() {
+        let now = Utc::now();
+
+        // Test with transaction created just 1 second ago (too early)
+        let created_time = now - Duration::seconds(1);
+        let tx = TransactionRepoModel {
+            created_at: created_time.to_rfc3339(),
+            ..create_mock_transaction()
+        };
+
+        let result = is_too_early_to_resubmit(&tx);
+        assert!(result.is_ok());
+        assert!(result.unwrap()); // Should be true (too early)
+    }
+
+    #[test]
+    fn test_is_too_early_to_resubmit_old_transaction() {
+        let now = Utc::now();
+
+        // Test with transaction created well past the minimum age
+        let created_time = now - Duration::seconds(EVM_MIN_AGE_FOR_RESUBMIT_SECONDS + 10);
+        let tx = TransactionRepoModel {
+            created_at: created_time.to_rfc3339(),
+            ..create_mock_transaction()
+        };
+
+        let result = is_too_early_to_resubmit(&tx);
+        assert!(result.is_ok());
+        assert!(!result.unwrap()); // Should be false (old enough to resubmit)
+    }
+
+    #[test]
+    fn test_is_too_early_to_resubmit_boundary() {
+        let now = Utc::now();
+
+        // Test with transaction created exactly at the boundary
+        let created_time = now - Duration::seconds(EVM_MIN_AGE_FOR_RESUBMIT_SECONDS);
+        let tx = TransactionRepoModel {
+            created_at: created_time.to_rfc3339(),
+            ..create_mock_transaction()
+        };
+
+        let result = is_too_early_to_resubmit(&tx);
+        assert!(result.is_ok());
+        // At the exact boundary, should be false (not too early)
+        assert!(!result.unwrap());
+    }
+
+    #[test]
+    fn test_is_too_early_to_resubmit_invalid_timestamp() {
+        let tx = TransactionRepoModel {
+            created_at: "invalid-timestamp".to_string(),
+            ..create_mock_transaction()
+        };
+
+        let result = is_too_early_to_resubmit(&tx);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::UnexpectedError(msg) => {
+                assert!(msg.contains("Invalid created_at timestamp"));
             }
             _ => panic!("Expected UnexpectedError for invalid timestamp"),
         }

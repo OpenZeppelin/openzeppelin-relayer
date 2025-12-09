@@ -11,14 +11,19 @@ pub use app_state::*;
 mod api_response;
 pub use api_response::*;
 
-mod transaction;
+pub mod transaction;
+#[allow(ambiguous_glob_reexports)]
 pub use transaction::*;
 
 pub mod relayer;
+#[allow(ambiguous_glob_reexports)]
 pub use relayer::*;
 
 // Type aliases for backward compatibility with domain logic
-pub use relayer::{SolanaAllowedTokensPolicy, SolanaFeePaymentStrategy, SolanaSwapStrategy};
+pub use relayer::{
+    RelayerStellarSwapConfig, SolanaAllowedTokensPolicy, SolanaFeePaymentStrategy,
+    SolanaSwapStrategy, StellarAllowedTokensPolicy, StellarFeePaymentStrategy, StellarSwapStrategy,
+};
 
 mod error;
 pub use error::*;

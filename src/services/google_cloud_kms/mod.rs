@@ -34,9 +34,10 @@ use tracing::debug;
 use mockall::automock;
 
 use crate::models::{Address, GoogleCloudKmsSignerConfig};
+use crate::services::signer::evm::utils::recover_evm_signature_from_der;
 use crate::utils::{
     self, base64_decode, base64_encode, derive_ethereum_address_from_pem,
-    derive_stellar_address_from_pem, extract_public_key_from_der,
+    derive_stellar_address_from_pem,
 };
 
 #[derive(Debug, thiserror::Error, serde::Serialize)]
@@ -77,9 +78,27 @@ pub trait GoogleCloudKmsServiceTrait: Send + Sync {
 pub trait GoogleCloudKmsEvmService: Send + Sync {
     /// Returns the EVM address derived from the configured public key.
     async fn get_evm_address(&self) -> GoogleCloudKmsResult<Address>;
-    /// Signs a payload using the EVM signing scheme.
-    /// Pre-hashes the message with keccak-256.
+    /// Signs a payload using the EVM signing scheme (hashes before signing).
+    ///
+    /// This method applies keccak256 hashing before signing.
+    ///
+    /// **Use for:**
+    /// - Raw transaction data (TxLegacy, TxEip1559)
+    /// - EIP-191 personal messages
+    ///
+    /// **Note:** For EIP-712 typed data, use `sign_hash_evm()` to avoid double-hashing.
     async fn sign_payload_evm(&self, payload: &[u8]) -> GoogleCloudKmsResult<Vec<u8>>;
+
+    /// Signs a pre-computed hash using the EVM signing scheme (no hashing).
+    ///
+    /// This method signs the hash directly without applying keccak256.
+    ///
+    /// **Use for:**
+    /// - EIP-712 typed data (already hashed)
+    /// - Pre-computed message digests
+    ///
+    /// **Note:** For raw data, use `sign_payload_evm()` instead.
+    async fn sign_hash_evm(&self, hash: &[u8; 32]) -> GoogleCloudKmsResult<Vec<u8>>;
 }
 
 #[async_trait]
@@ -101,7 +120,7 @@ pub trait GoogleCloudKmsK256: Send + Sync {
     async fn sign_digest(&self, digest: [u8; 32]) -> GoogleCloudKmsResult<Vec<u8>>;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct GoogleCloudKmsService {
     pub config: GoogleCloudKmsSignerConfig,
@@ -205,13 +224,12 @@ impl GoogleCloudKmsService {
 
         if !status.is_success() {
             return Err(GoogleCloudKmsError::ApiError(format!(
-                "KMS request failed ({}): {}",
-                status, text
+                "KMS request failed ({status}): {text}"
             )));
         }
 
         serde_json::from_str(&text)
-            .map_err(|e| GoogleCloudKmsError::ParseError(format!("{}: {}", e, text)))
+            .map_err(|e| GoogleCloudKmsError::ParseError(format!("{e}: {text}")))
     }
 
     async fn kms_post(&self, url: &str, body: &Value) -> GoogleCloudKmsResult<Value> {
@@ -230,13 +248,12 @@ impl GoogleCloudKmsService {
 
         if !status.is_success() {
             return Err(GoogleCloudKmsError::ApiError(format!(
-                "KMS request failed ({}): {}",
-                status, text
+                "KMS request failed ({status}): {text}"
             )));
         }
 
         serde_json::from_str(&text)
-            .map_err(|e| GoogleCloudKmsError::ParseError(format!("{}: {}", e, text)))
+            .map_err(|e| GoogleCloudKmsError::ParseError(format!("{e}: {text}")))
     }
 
     fn get_key_path(&self) -> String {
@@ -254,7 +271,7 @@ impl GoogleCloudKmsService {
     async fn get_pem(&self) -> GoogleCloudKmsResult<String> {
         let base_url = self.get_base_url();
         let key_path = self.get_key_path();
-        let url = format!("{}/v1/{}/publicKey", base_url, key_path,);
+        let url = format!("{base_url}/v1/{key_path}/publicKey",);
         debug!(url = %url, "kms public key url");
 
         let body = self.kms_get(&url).await?;
@@ -266,36 +283,63 @@ impl GoogleCloudKmsService {
         Ok(pem_str.to_string())
     }
 
-    /// Signs a bytes with the private key stored in Google Cloud KMS.
+    /// Common signing logic for EVM signatures.
     ///
-    /// Pre-hashes the message with keccak256.
-    pub async fn sign_bytes_evm(&self, bytes: &[u8]) -> GoogleCloudKmsResult<Vec<u8>> {
-        let digest = keccak256(bytes).0;
+    /// # Parameters
+    /// * `digest` - The 32-byte hash to sign
+    /// * `original_bytes` - The original message bytes for recovery verification (if applicable)
+    /// * `use_prehash_recovery` - If true, recovers using hash directly; if false, uses original bytes
+    async fn sign_and_recover_evm(
+        &self,
+        digest: [u8; 32],
+        original_bytes: &[u8],
+        use_prehash_recovery: bool,
+    ) -> GoogleCloudKmsResult<Vec<u8>> {
         let der_signature = self.sign_digest(digest).await?;
-
-        // Parse DER into Secp256k1 format
-        let rs = k256::ecdsa::Signature::from_der(&der_signature)
-            .map_err(|e| GoogleCloudKmsError::ParseError(e.to_string()))?;
 
         let pem_str = self.get_pem().await?;
 
-        // Convert PEM to DER first, then extract public key
+        // Convert PEM to DER first
         let pem_parsed =
             pem::parse(&pem_str).map_err(|e| GoogleCloudKmsError::ParseError(e.to_string()))?;
         let der_pk = pem_parsed.contents();
 
-        let pk = extract_public_key_from_der(der_pk)
-            .map_err(|e| GoogleCloudKmsError::ConvertError(e.to_string()))?;
+        // Use shared signature recovery logic
+        recover_evm_signature_from_der(
+            &der_signature,
+            der_pk,
+            digest,
+            original_bytes,
+            use_prehash_recovery,
+        )
+        .map_err(|e| GoogleCloudKmsError::ParseError(e.to_string()))
+    }
 
-        let v = utils::recover_public_key(&pk, &rs, bytes)?;
+    /// Signs a payload using the EVM signing scheme (hashes before signing).
+    ///
+    /// This method applies keccak256 hashing before signing.
+    ///
+    /// **Use for:**
+    /// - Raw transaction data (TxLegacy, TxEip1559)
+    /// - EIP-191 personal messages
+    ///
+    /// **Note:** For EIP-712 typed data, use `sign_hash_evm()` to avoid double-hashing.
+    pub async fn sign_payload_evm(&self, bytes: &[u8]) -> GoogleCloudKmsResult<Vec<u8>> {
+        let digest = keccak256(bytes).0;
+        self.sign_and_recover_evm(digest, bytes, false).await
+    }
 
-        // Adjust v value for Ethereum legacy transaction.
-        let eth_v = 27 + v;
-
-        let mut sig_bytes = rs.to_vec();
-        sig_bytes.push(eth_v);
-
-        Ok(sig_bytes)
+    /// Signs a pre-computed hash using the EVM signing scheme (no hashing).
+    ///
+    /// This method signs the hash directly without applying keccak256.
+    ///
+    /// **Use for:**
+    /// - EIP-712 typed data (already hashed)
+    /// - Pre-computed message digests
+    ///
+    /// **Note:** For raw data, use `sign_payload_evm()` instead.
+    pub async fn sign_hash_evm(&self, hash: &[u8; 32]) -> GoogleCloudKmsResult<Vec<u8>> {
+        self.sign_and_recover_evm(*hash, hash, true).await
     }
 }
 
@@ -308,7 +352,7 @@ impl GoogleCloudKmsK256 for GoogleCloudKmsService {
     async fn sign_digest(&self, digest: [u8; 32]) -> GoogleCloudKmsResult<Vec<u8>> {
         let base_url = self.get_base_url();
         let key_path = self.get_key_path();
-        let url = format!("{}/v1/{}:asymmetricSign", base_url, key_path);
+        let url = format!("{base_url}/v1/{key_path}:asymmetricSign");
 
         let digest_b64 = base64_encode(&digest);
 
@@ -356,7 +400,7 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
         let base_url = self.get_base_url();
         let key_path = self.get_key_path();
 
-        let url = format!("{}/v1/{}:asymmetricSign", base_url, key_path,);
+        let url = format!("{base_url}/v1/{key_path}:asymmetricSign",);
 
         let body = serde_json::json!({
             "name": key_path,
@@ -378,7 +422,7 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
     async fn sign_evm(&self, message: &[u8]) -> GoogleCloudKmsResult<Vec<u8>> {
         let base_url = self.get_base_url();
         let key_path = self.get_key_path();
-        let url = format!("{}/v1/{}:asymmetricSign", base_url, key_path,);
+        let url = format!("{base_url}/v1/{key_path}:asymmetricSign",);
 
         let hash = Sha256::digest(message);
         let digest = base64_encode(&hash);
@@ -417,7 +461,7 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
         let base_url = self.get_base_url();
         let key_path = self.get_key_path();
 
-        let url = format!("{}/v1/{}:asymmetricSign", base_url, key_path);
+        let url = format!("{base_url}/v1/{key_path}:asymmetricSign",);
         debug!(url = %url, "kms asymmetric sign url for stellar");
 
         // For Ed25519, we can sign the message directly without pre-hashing
@@ -453,7 +497,12 @@ impl GoogleCloudKmsEvmService for GoogleCloudKmsService {
     }
 
     async fn sign_payload_evm(&self, payload: &[u8]) -> GoogleCloudKmsResult<Vec<u8>> {
-        self.sign_bytes_evm(payload).await
+        let digest = keccak256(payload).0;
+        self.sign_and_recover_evm(digest, payload, false).await
+    }
+
+    async fn sign_hash_evm(&self, hash: &[u8; 32]) -> GoogleCloudKmsResult<Vec<u8>> {
+        self.sign_and_recover_evm(*hash, hash, true).await
     }
 }
 
@@ -557,8 +606,8 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(serde_json::to_string(&json!({
-                "pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAVyC+iqnSu0vo6R8x0sRMhintQtoZgcLOur1VyvCrdrs=\n-----END PUBLIC KEY-----\n",
-                "algorithm": "ECDSA_P256_SHA256"
+                "pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAnUV+ReQWxMZ3Z2pC/5aOPPjcc8jzOo0ZgSl7+j4AMLo=\n-----END PUBLIC KEY-----\n",
+                "algorithm": "EC_SIGN_ED25519"
             })).unwrap())
             .create_async()
             .await
@@ -649,10 +698,10 @@ mod tests {
         let service = GoogleCloudKmsService::new(&config).unwrap();
 
         let result = service.get_solana_address().await;
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "Failed with error: {:?}", result.err());
         assert_eq!(
             result.unwrap(),
-            "6s7RsvzcdXFJi1tXeDoGfSKZWjCDNJLiu74rd72zLy6J"
+            "BavUBpkD77FABnevMkBVqV8BDHv7gX8sSoYYJY9WU9L5"
         );
     }
 

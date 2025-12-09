@@ -7,9 +7,12 @@ use super::common::{get_next_sequence, sign_stellar_transaction, simulate_if_nee
 use crate::{
     constants::STELLAR_DEFAULT_TRANSACTION_FEE,
     domain::extract_operations,
-    models::{StellarTransactionData, TransactionError, TransactionRepoModel},
+    models::{
+        RelayerStellarPolicy, StellarFeePaymentStrategy, StellarTransactionData, TransactionError,
+        TransactionRepoModel,
+    },
     repositories::TransactionCounterTrait,
-    services::{Signer, StellarProviderTrait},
+    services::{provider::StellarProviderTrait, signer::Signer},
 };
 
 /// Process operations-based transaction.
@@ -18,8 +21,9 @@ use crate::{
 /// 1. Gets the next sequence number for the relayer
 /// 2. Updates the stellar data with the sequence number
 /// 3. Builds the unsigned envelope from operations
-/// 4. Simulates the transaction if needed (for Soroban operations)
-/// 5. Signs the transaction envelope
+/// 4. Rejects gasless transactions (User fee payment strategy) - these should use unsigned_xdr path
+/// 5. Simulates the transaction if needed (for Soroban operations)
+/// 6. Signs the transaction envelope
 ///
 /// # Arguments
 /// * `counter_service` - Service for managing transaction sequence numbers
@@ -29,9 +33,11 @@ use crate::{
 /// * `stellar_data` - The stellar-specific transaction data containing operations
 /// * `provider` - Provider for Stellar RPC operations
 /// * `signer` - Service for signing transactions
+/// * `relayer_policy` - Optional relayer policy for validation
 ///
 /// # Returns
 /// The updated stellar data with simulation results (if applicable) and signature
+#[allow(clippy::too_many_arguments)]
 pub async fn process_operations<C, P, S>(
     counter_service: &C,
     relayer_id: &str,
@@ -40,12 +46,26 @@ pub async fn process_operations<C, P, S>(
     stellar_data: StellarTransactionData,
     provider: &P,
     signer: &S,
+    relayer_policy: Option<&RelayerStellarPolicy>,
 ) -> Result<StellarTransactionData, TransactionError>
 where
     C: TransactionCounterTrait + Send + Sync,
     P: StellarProviderTrait + Send + Sync,
     S: Signer + Send + Sync,
 {
+    // Reject gasless transactions (User fee payment strategy) in operations path
+    // Gasless transactions should be processed via fee bump(SignedXdr) path only.
+    if let Some(policy) = relayer_policy {
+        if matches!(
+            policy.fee_payment_strategy,
+            Some(StellarFeePaymentStrategy::User)
+        ) {
+            return Err(TransactionError::ValidationError(
+                "Gasless transactions (User fee payment strategy) are not supported via operations path. \
+                 Please use fee bump(SignedXdr) path for gasless transactions.".to_string(),
+            ));
+        }
+    }
     // Get the next sequence number
     let sequence_i64 = get_next_sequence(counter_service, relayer_id, relayer_address).await?;
 
@@ -72,8 +92,7 @@ where
                 .with_simulation_data(sim_resp, op_count)
                 .map_err(|e| {
                     TransactionError::ValidationError(format!(
-                        "Failed to apply simulation data: {}",
-                        e
+                        "Failed to apply simulation data: {e}"
                     ))
                 })?
         }
@@ -96,13 +115,19 @@ mod tests {
 
     use super::*;
     use crate::{
-        domain::{SignTransactionResponse, SignTransactionResponseStellar},
+        domain::{
+            transaction::stellar::test_helpers::TEST_PK, SignTransactionResponse,
+            SignTransactionResponseStellar,
+        },
         models::{
             AssetSpec, DecoratedSignature, NetworkTransactionData, NetworkType, OperationSpec,
             RepositoryError, TransactionInput, TransactionStatus,
         },
         repositories::MockTransactionCounterTrait,
-        services::{MockSigner, MockStellarProviderTrait},
+        services::{
+            provider::{MockStellarProviderTrait, ProviderError},
+            signer::MockSigner,
+        },
     };
     use soroban_rs::stellar_rpc_client::SimulateTransactionResponse;
     use soroban_rs::xdr::{self};
@@ -129,12 +154,12 @@ mod tests {
 
     fn create_test_stellar_data() -> StellarTransactionData {
         StellarTransactionData {
-            source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            source_account: TEST_PK.to_string(),
             network_passphrase: "Test SDF Network ; September 2015".to_string(),
             fee: None,
             sequence_number: None,
             transaction_input: TransactionInput::Operations(vec![OperationSpec::Payment {
-                destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+                destination: TEST_PK.to_string(),
                 amount: 10000000, // 1 XLM in stroops
                 asset: AssetSpec::Native,
             }]),
@@ -157,7 +182,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_operations_payment_success() {
         let relayer_id = "test-relayer";
-        let relayer_address = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+        let relayer_address = TEST_PK;
 
         let mut counter = MockTransactionCounterTrait::new();
         counter
@@ -188,6 +213,7 @@ mod tests {
             stellar_data,
             &provider,
             &signer,
+            None,
         )
         .await;
 
@@ -203,7 +229,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_operations_with_soroban_simulation() {
         let relayer_id = "test-relayer";
-        let relayer_address = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+        let relayer_address = TEST_PK;
 
         let mut counter = MockTransactionCounterTrait::new();
         counter
@@ -255,6 +281,7 @@ mod tests {
             stellar_data,
             &provider,
             &signer,
+            None,
         )
         .await;
 
@@ -271,7 +298,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_operations_sequence_failure() {
         let relayer_id = "test-relayer";
-        let relayer_address = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+        let relayer_address = TEST_PK;
 
         let mut counter = MockTransactionCounterTrait::new();
         counter.expect_get_and_increment().returning(|_, _| {
@@ -292,6 +319,7 @@ mod tests {
             stellar_data,
             &provider,
             &signer,
+            None,
         )
         .await;
 
@@ -306,7 +334,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_operations_build_envelope_failure() {
         let relayer_id = "test-relayer";
-        let relayer_address = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+        let relayer_address = TEST_PK;
 
         let mut counter = MockTransactionCounterTrait::new();
         counter
@@ -337,6 +365,7 @@ mod tests {
             stellar_data,
             &provider,
             &signer,
+            None,
         )
         .await;
 
@@ -348,7 +377,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_operations_signer_failure() {
         let relayer_id = "test-relayer";
-        let relayer_address = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+        let relayer_address = TEST_PK;
 
         let mut counter = MockTransactionCounterTrait::new();
         counter
@@ -377,6 +406,7 @@ mod tests {
             stellar_data,
             &provider,
             &signer,
+            None,
         )
         .await;
 
@@ -390,7 +420,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_operations_simulation_failure() {
         let relayer_id = "test-relayer";
-        let relayer_address = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+        let relayer_address = TEST_PK;
 
         let mut counter = MockTransactionCounterTrait::new();
         counter
@@ -402,7 +432,11 @@ mod tests {
         provider
             .expect_simulate_transaction_envelope()
             .returning(|_| {
-                Box::pin(async { Err(eyre::eyre!("Simulation failed: insufficient resources")) })
+                Box::pin(async {
+                    Err(ProviderError::Other(
+                        "Simulation failed: insufficient resources".to_string(),
+                    ))
+                })
             });
 
         let signer = MockSigner::new();
@@ -427,15 +461,64 @@ mod tests {
             stellar_data,
             &provider,
             &signer,
+            None,
         )
         .await;
 
         assert!(result.is_err());
+
         match result.unwrap_err() {
-            TransactionError::UnexpectedError(msg) => {
-                assert!(msg.contains("Simulation failed"));
-            }
+            TransactionError::UnderlyingProvider(provider_error) => match provider_error {
+                ProviderError::Other(msg) => {
+                    assert!(msg.contains("Simulation failed"));
+                }
+                _ => panic!("Expected UnexpectedError"),
+            },
             _ => panic!("Expected UnexpectedError"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_operations_rejects_user_fee_payment_strategy() {
+        use crate::models::{RelayerStellarPolicy, StellarFeePaymentStrategy};
+
+        let relayer_id = "test-relayer";
+        let relayer_address = TEST_PK;
+
+        let counter = MockTransactionCounterTrait::new();
+        let provider = MockStellarProviderTrait::new();
+        let signer = MockSigner::new();
+
+        let tx = create_test_transaction();
+        let stellar_data = create_test_stellar_data();
+
+        // Create a policy with User fee payment strategy (gasless mode)
+        let mut policy = RelayerStellarPolicy::default();
+        policy.fee_payment_strategy = Some(StellarFeePaymentStrategy::User);
+
+        let result = process_operations(
+            &counter,
+            relayer_id,
+            relayer_address,
+            &tx,
+            stellar_data,
+            &provider,
+            &signer,
+            Some(&policy),
+        )
+        .await;
+
+        // Should return a validation error
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            TransactionError::ValidationError(msg) => {
+                assert!(msg.contains("Gasless transactions"));
+                assert!(msg.contains("User fee payment strategy"));
+                assert!(msg.contains("not supported via operations path"));
+                assert!(msg.contains("fee bump"));
+            }
+            other => panic!("Expected ValidationError, got: {:?}", other),
         }
     }
 }

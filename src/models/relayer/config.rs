@@ -139,13 +139,71 @@ pub struct ConfigFileRelayerSolanaPolicy {
     pub swap_config: Option<ConfigFileRelayerSolanaSwapConfig>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ConfigFileStellarFeePaymentStrategy {
+    User,
+    Relayer,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+pub struct StellarAllowedTokenSwapConfig {
+    /// Conversion slippage percentage for token. Optional.
+    pub slippage_percentage: Option<f32>,
+    /// Minimum amount of tokens to swap. Optional.
+    pub min_amount: Option<u64>,
+    /// Maximum amount of tokens to swap. Optional.
+    pub max_amount: Option<u64>,
+    /// Minimum amount of tokens to retain after swap. Optional.
+    pub retain_min_amount: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+pub struct StellarAllowedToken {
+    pub asset: String,
+    /// Maximum supported token fee (in stroops) for a transaction. Optional.
+    pub max_allowed_fee: Option<u64>,
+    /// Swap configuration for the token. Optional.
+    pub swap_config: Option<StellarAllowedTokenSwapConfig>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConfigFileRelayerStellarSwapStrategy {
+    OrderBook,
+    Soroswap,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigFileRelayerStellarSwapConfig {
+    /// DEX strategies to use for token swaps, in priority order.
+    /// Strategies are tried sequentially until one can handle the asset.
+    #[serde(default)]
+    pub strategies: Vec<ConfigFileRelayerStellarSwapStrategy>,
+    /// Cron schedule for executing token swap logic to keep relayer funded. Optional.
+    pub cron_schedule: Option<String>,
+    /// Min XLM balance (in stroops) to execute token swap logic to keep relayer funded. Optional.
+    pub min_balance_threshold: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigFileRelayerStellarPolicy {
     pub max_fee: Option<u32>,
     pub timeout_seconds: Option<u64>,
     pub min_balance: Option<u64>,
     pub concurrent_transactions: Option<bool>,
+    /// Determines if the relayer pays the transaction fee or the user. Optional.
+    pub fee_payment_strategy: Option<ConfigFileStellarFeePaymentStrategy>,
+    /// Default slippage percentage for token conversions. Optional.
+    pub slippage_percentage: Option<f32>,
+    /// Fee margin percentage for the relayer. Optional.
+    pub fee_margin_percentage: Option<f32>,
+    /// List of allowed tokens by their asset identifiers. Only these tokens are supported if provided.
+    pub allowed_tokens: Option<Vec<StellarAllowedToken>>,
+    /// Swap configuration for converting collected tokens to XLM. Optional.
+    pub swap_config: Option<ConfigFileRelayerStellarSwapConfig>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -317,7 +375,7 @@ impl TryFrom<RelayerFileConfig> for Relayer {
             RelayerValidationError::EmptyNetwork => ConfigFileError::MissingField("network".into()),
             RelayerValidationError::InvalidPolicy(msg) => ConfigFileError::InvalidPolicy(msg),
             RelayerValidationError::InvalidRpcUrl(msg) => {
-                ConfigFileError::InvalidFormat(format!("Invalid RPC URL: {}", msg))
+                ConfigFileError::InvalidFormat(format!("Invalid RPC URL: {msg}"))
             }
             RelayerValidationError::InvalidRpcWeight => {
                 ConfigFileError::InvalidFormat("RPC URL weight must be in range 0-100".to_string())
@@ -408,11 +466,61 @@ fn convert_config_policies_to_domain(
             }))
         }
         ConfigFileRelayerNetworkPolicy::Stellar(stellar_policy) => {
+            let swap_config = if let Some(config_swap) = stellar_policy.swap_config {
+                Some(super::RelayerStellarSwapConfig {
+                    strategies: config_swap
+                        .strategies
+                        .into_iter()
+                        .map(|s| match s {
+                            ConfigFileRelayerStellarSwapStrategy::OrderBook => {
+                                super::StellarSwapStrategy::OrderBook
+                            }
+                            ConfigFileRelayerStellarSwapStrategy::Soroswap => {
+                                super::StellarSwapStrategy::Soroswap
+                            }
+                        })
+                        .collect(),
+                    cron_schedule: config_swap.cron_schedule,
+                    min_balance_threshold: config_swap.min_balance_threshold,
+                })
+            } else {
+                None
+            };
+
             Ok(RelayerNetworkPolicy::Stellar(super::RelayerStellarPolicy {
                 min_balance: stellar_policy.min_balance,
                 max_fee: stellar_policy.max_fee,
                 timeout_seconds: stellar_policy.timeout_seconds,
                 concurrent_transactions: stellar_policy.concurrent_transactions,
+                allowed_tokens: stellar_policy.allowed_tokens.map(|tokens| {
+                    tokens
+                        .into_iter()
+                        .map(|t| super::StellarAllowedTokensPolicy {
+                            asset: t.asset,
+                            metadata: None,
+                            max_allowed_fee: t.max_allowed_fee,
+                            swap_config: t.swap_config.map(|sc| {
+                                super::StellarAllowedTokensSwapConfig {
+                                    slippage_percentage: sc.slippage_percentage,
+                                    min_amount: sc.min_amount,
+                                    max_amount: sc.max_amount,
+                                    retain_min_amount: sc.retain_min_amount,
+                                }
+                            }),
+                        })
+                        .collect()
+                }),
+                fee_payment_strategy: stellar_policy.fee_payment_strategy.map(|s| match s {
+                    ConfigFileStellarFeePaymentStrategy::User => {
+                        super::StellarFeePaymentStrategy::User
+                    }
+                    ConfigFileStellarFeePaymentStrategy::Relayer => {
+                        super::StellarFeePaymentStrategy::Relayer
+                    }
+                }),
+                slippage_percentage: stellar_policy.slippage_percentage,
+                fee_margin_percentage: stellar_policy.fee_margin_percentage,
+                swap_config,
             }))
         }
     }
@@ -472,7 +580,7 @@ impl RelayersFileConfig {
                 }
                 RelayerValidationError::InvalidPolicy(msg) => ConfigFileError::InvalidPolicy(msg),
                 RelayerValidationError::InvalidRpcUrl(msg) => {
-                    ConfigFileError::InvalidFormat(format!("Invalid RPC URL: {}", msg))
+                    ConfigFileError::InvalidFormat(format!("Invalid RPC URL: {msg}"))
                 }
                 RelayerValidationError::InvalidRpcWeight => ConfigFileError::InvalidFormat(
                     "RPC URL weight must be in range 0-100".to_string(),
@@ -876,6 +984,11 @@ mod tests {
                 max_fee: Some(150000),
                 timeout_seconds: Some(60),
                 concurrent_transactions: None,
+                allowed_tokens: None,
+                fee_payment_strategy: Some(ConfigFileStellarFeePaymentStrategy::User),
+                slippage_percentage: None,
+                fee_margin_percentage: None,
+                swap_config: None,
             });
 
         let domain_policy = convert_config_policies_to_domain(config_policy).unwrap();
@@ -1002,6 +1115,11 @@ mod tests {
                     max_fee: Some(200000),
                     timeout_seconds: Some(90),
                     concurrent_transactions: None,
+                    allowed_tokens: None,
+                    fee_payment_strategy: Some(ConfigFileStellarFeePaymentStrategy::User),
+                    slippage_percentage: None,
+                    fee_margin_percentage: None,
+                    swap_config: None,
                 },
             )),
             signer_id: "test-signer".to_string(),
@@ -1225,6 +1343,11 @@ mod tests {
             max_fee: Some(250000),
             timeout_seconds: Some(120),
             concurrent_transactions: None,
+            allowed_tokens: None,
+            fee_payment_strategy: Some(ConfigFileStellarFeePaymentStrategy::Relayer),
+            slippage_percentage: None,
+            fee_margin_percentage: None,
+            swap_config: None,
         };
 
         let serialized = serde_json::to_string(&stellar_policy).unwrap();

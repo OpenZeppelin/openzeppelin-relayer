@@ -16,18 +16,21 @@ use crate::{
         RelayerRepositoryStorage, Repository, TransactionCounterRepositoryStorage,
         TransactionCounterTrait, TransactionRepository, TransactionRepositoryStorage,
     },
-    services::{Signer, StellarProvider, StellarProviderTrait, StellarSigner},
+    services::{
+        provider::{StellarProvider, StellarProviderTrait},
+        signer::{Signer, StellarSigner},
+        stellar_dex::{OrderBookService, StellarDexServiceTrait},
+    },
     utils::calculate_scheduled_timestamp,
 };
 use async_trait::async_trait;
-use eyre::Result;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{error, info};
 
 use super::lane_gate;
 
 #[allow(dead_code)]
-pub struct StellarRelayerTransaction<R, T, J, S, P, C>
+pub struct StellarRelayerTransaction<R, T, J, S, P, C, D>
 where
     R: Repository<RelayerRepoModel, String>,
     T: TransactionRepository,
@@ -35,6 +38,7 @@ where
     S: Signer,
     P: StellarProviderTrait,
     C: TransactionCounterTrait,
+    D: StellarDexServiceTrait + Send + Sync + 'static,
 {
     relayer: RelayerRepoModel,
     relayer_repository: Arc<R>,
@@ -43,10 +47,11 @@ where
     signer: Arc<S>,
     provider: P,
     transaction_counter_service: Arc<C>,
+    dex_service: Arc<D>,
 }
 
 #[allow(dead_code)]
-impl<R, T, J, S, P, C> StellarRelayerTransaction<R, T, J, S, P, C>
+impl<R, T, J, S, P, C, D> StellarRelayerTransaction<R, T, J, S, P, C, D>
 where
     R: Repository<RelayerRepoModel, String>,
     T: TransactionRepository,
@@ -54,6 +59,7 @@ where
     S: Signer,
     P: StellarProviderTrait,
     C: TransactionCounterTrait,
+    D: StellarDexServiceTrait + Send + Sync + 'static,
 {
     /// Creates a new `StellarRelayerTransaction`.
     ///
@@ -66,6 +72,7 @@ where
     /// * `signer` - The Stellar signer.
     /// * `provider` - The Stellar provider.
     /// * `transaction_counter_service` - Service for managing transaction counters.
+    /// * `dex_service` - The DEX service implementation for swap operations and validations.
     ///
     /// # Returns
     ///
@@ -79,6 +86,7 @@ where
         signer: Arc<S>,
         provider: P,
         transaction_counter_service: Arc<C>,
+        dex_service: Arc<D>,
     ) -> Result<Self, TransactionError> {
         Ok(Self {
             relayer,
@@ -88,6 +96,7 @@ where
             signer,
             provider,
             transaction_counter_service,
+            dex_service,
         })
     }
 
@@ -115,6 +124,10 @@ where
         &self.transaction_counter_service
     }
 
+    pub fn dex_service(&self) -> &D {
+        &self.dex_service
+    }
+
     pub fn concurrent_transactions_enabled(&self) -> bool {
         if let RelayerNetworkPolicy::Stellar(policy) = &self.relayer().policies {
             policy
@@ -140,22 +153,22 @@ where
     }
 
     /// Sends a transaction update notification if a notification ID is configured.
-    pub(super) async fn send_transaction_update_notification(
-        &self,
-        tx: &TransactionRepoModel,
-    ) -> Result<(), TransactionError> {
+    ///
+    /// This is a best-effort operation that logs errors but does not propagate them,
+    /// as notification failures should not affect the transaction lifecycle.
+    pub(super) async fn send_transaction_update_notification(&self, tx: &TransactionRepoModel) {
         if let Some(notification_id) = &self.relayer().notification_id {
-            self.job_producer()
+            if let Err(e) = self
+                .job_producer()
                 .produce_send_notification_job(
                     produce_transaction_update_notification_payload(notification_id, tx),
                     None,
                 )
                 .await
-                .map_err(|e| {
-                    TransactionError::UnexpectedError(format!("Failed to send notification: {}", e))
-                })?;
+            {
+                error!(error = %e, "failed to produce notification job");
+            }
         }
-        Ok(())
     }
 
     /// Helper function to update transaction status, save it, and send a notification.
@@ -169,8 +182,7 @@ where
             .partial_update(tx_id, update_req)
             .await?;
 
-        self.send_transaction_update_notification(&updated_tx)
-            .await?;
+        self.send_transaction_update_notification(&updated_tx).await;
         Ok(updated_tx)
     }
 
@@ -227,10 +239,7 @@ where
             .set(&self.relayer().id, relayer_address, next_usable_seq)
             .await
             .map_err(|e| {
-                TransactionError::UnexpectedError(format!(
-                    "Failed to update sequence counter: {}",
-                    e
-                ))
+                TransactionError::UnexpectedError(format!("Failed to update sequence counter: {e}"))
             })?;
 
         info!(sequence = %next_usable_seq, "updated local sequence counter");
@@ -260,7 +269,7 @@ where
 }
 
 #[async_trait]
-impl<R, T, J, S, P, C> Transaction for StellarRelayerTransaction<R, T, J, S, P, C>
+impl<R, T, J, S, P, C, D> Transaction for StellarRelayerTransaction<R, T, J, S, P, C, D>
 where
     R: Repository<RelayerRepoModel, String> + Send + Sync,
     T: TransactionRepository + Send + Sync,
@@ -268,6 +277,7 @@ where
     S: Signer + Send + Sync,
     P: StellarProviderTrait + Send + Sync,
     C: TransactionCounterTrait + Send + Sync,
+    D: StellarDexServiceTrait + Send + Sync + 'static,
 {
     async fn prepare_transaction(
         &self,
@@ -334,12 +344,16 @@ pub type DefaultStellarTransaction = StellarRelayerTransaction<
     StellarSigner,
     StellarProvider,
     TransactionCounterRepositoryStorage,
+    OrderBookService<StellarProvider, StellarSigner>,
 >;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{NetworkTransactionData, RepositoryError};
+    use crate::{
+        models::{NetworkTransactionData, RepositoryError},
+        services::provider::ProviderError,
+    };
     use std::sync::Arc;
 
     use crate::domain::transaction::stellar::test_helpers::*;
@@ -356,6 +370,7 @@ mod tests {
             Arc::new(mocks.signer),
             mocks.provider,
             Arc::new(mocks.counter),
+            Arc::new(mocks.dex_service),
         );
         assert!(result.is_ok());
     }
@@ -594,11 +609,9 @@ mod tests {
         let mut mocks = default_test_mocks();
 
         // Mock provider to fail
-        mocks
-            .provider
-            .expect_get_account()
-            .times(1)
-            .returning(|_| Box::pin(async { Err(eyre::eyre!("Account not found")) }));
+        mocks.provider.expect_get_account().times(1).returning(|_| {
+            Box::pin(async { Err(ProviderError::Other("Account not found".to_string())) })
+        });
 
         let handler = make_stellar_tx_handler(relayer.clone(), mocks);
 

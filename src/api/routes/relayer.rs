@@ -4,7 +4,12 @@
 use crate::{
     api::controllers::relayer,
     domain::{SignDataRequest, SignTransactionRequest, SignTypedDataRequest},
-    models::{CreateRelayerRequest, DefaultAppState, PaginationQuery},
+    models::{
+        transaction::request::{
+            SponsoredTransactionBuildRequest, SponsoredTransactionQuoteRequest,
+        },
+        CreateRelayerRequest, DefaultAppState, PaginationQuery,
+    },
 };
 use actix_web::{delete, get, patch, post, put, web, Responder};
 use serde::Deserialize;
@@ -190,10 +195,32 @@ async fn rpc(
     relayer::relayer_rpc(relayer_id.into_inner(), req.into_inner(), data).await
 }
 
+/// Estimates fees for a transaction (gas abstraction endpoint).
+#[post("/relayers/{relayer_id}/transactions/sponsored/quote")]
+async fn quote_sponsored_transaction(
+    relayer_id: web::Path<String>,
+    req: web::Json<SponsoredTransactionQuoteRequest>,
+    data: web::ThinData<DefaultAppState>,
+) -> impl Responder {
+    relayer::quote_sponsored_transaction(relayer_id.into_inner(), req.into_inner(), data).await
+}
+
+/// Prepares a transaction with fee payments (gas abstraction endpoint).
+#[post("/relayers/{relayer_id}/transactions/sponsored/build")]
+async fn build_sponsored_transaction(
+    relayer_id: web::Path<String>,
+    req: web::Json<SponsoredTransactionBuildRequest>,
+    data: web::ThinData<DefaultAppState>,
+) -> impl Responder {
+    relayer::build_sponsored_transaction(relayer_id.into_inner(), req.into_inner(), data).await
+}
+
 /// Initializes the routes for the relayer module.
 pub fn init(cfg: &mut web::ServiceConfig) {
     // Register routes with literal segments before routes with path parameters
     cfg.service(delete_pending_transactions); // /relayers/{id}/transactions/pending
+    cfg.service(quote_sponsored_transaction); // /relayers/{id}/transactions/sponsored/quote
+    cfg.service(build_sponsored_transaction); // /relayers/{id}/transactions/sponsored/build
 
     // Then register other routes
     cfg.service(cancel_transaction); // /relayers/{id}/transactions/{tx_id}
@@ -498,6 +525,34 @@ mod tests {
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // Test POST /relayers/{id}/transactions/sponsored/quote
+        let req = test::TestRequest::post()
+            .uri("/relayers/test-id/transactions/sponsored/quote")
+            .set_json(serde_json::json!({
+                "stellar": {
+                    "transaction_xdr": "test-xdr",
+                    "fee_token": "native"
+                }
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        // Route exists if status is not 404 (could be 400 for validation errors or 500 for internal errors)
+        assert_ne!(resp.status(), StatusCode::NOT_FOUND);
+
+        // Test POST /relayers/{id}/transactions/sponsored/build
+        let req = test::TestRequest::post()
+            .uri("/relayers/test-id/transactions/sponsored/build")
+            .set_json(serde_json::json!({
+                "stellar": {
+                    "transaction_xdr": "test-xdr",
+                    "fee_token": "native"
+                }
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        // Route exists if status is not 404 (could be 400 for validation errors or 500 for internal errors)
+        assert_ne!(resp.status(), StatusCode::NOT_FOUND);
 
         Ok(())
     }

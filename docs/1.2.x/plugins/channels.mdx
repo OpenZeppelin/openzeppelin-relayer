@@ -1,0 +1,618 @@
+---
+title: Channels
+---
+
+## Overview
+
+Channels is a plugin for OpenZeppelin Relayer that enables parallel transaction submission on Stellar using channel accounts with automatic fee bumping. Channel accounts provide unique sequence numbers for concurrent transaction processing, eliminating sequence number conflicts.
+
+The plugin features:
+
+* ***Parallel Transaction Processing***: Uses a pool of channel accounts for concurrent submissions
+* ***Automatic Fee Bumping***: Dedicated fund account pays transaction fees
+* ***Dynamic Pool Management***: Channel accounts acquired and released automatically
+* ***Transaction Simulation***: Automatically simulates and builds transactions with proper resources
+* ***Management API***: Dynamic configuration of channel accounts
+
+## Using the Plugin Client
+
+The fastest way to interact with Channels is through the plugin's TypeScript client, which provides a type-safe, unified interface for transaction submission and management operations.
+
+### Installation
+
+```bash
+npm install @openzeppelin/relayer-plugin-channels
+# or
+pnpm add @openzeppelin/relayer-plugin-channels
+```
+
+### Client Setup
+
+The client supports two connection modes that are automatically detected based on configuration:
+
+```typescript
+import { ChannelsClient } from '@openzeppelin/relayer-plugin-channels';
+
+// Direct HTTP connection to Channels service
+const directClient = new ChannelsClient({
+  baseUrl: 'https://channels.openzeppelin.com',        // Channels service URL
+  apiKey: process.env.CHANNELS_API_KEY,                // Service API key
+  adminSecret: process.env.CHANNELS_ADMIN,             // Optional: for management
+  timeout: 30000,                                      // Optional: request timeout
+});
+
+// Connection via OpenZeppelin Relayer plugin
+const relayerClient = new ChannelsClient({
+  pluginId: 'channels-plugin',                         // Plugin identifier (triggers relayer mode)
+  baseUrl: 'http://localhost:8080',                    // Relayer URL
+  apiKey: process.env.RELAYER_API_KEY,                 // Relayer API key
+  adminSecret: process.env.CHANNELS_ADMIN,             // Optional: for management
+});
+```
+
+### Submitting Transactions
+
+Channels provides separate methods for different transaction types:
+
+```typescript
+// Submit signed transaction (XDR)
+const result = await client.submitTransaction({
+  xdr: 'AAAAAgAAAABQEp+s8xGPrF...',  // Complete signed envelope
+});
+
+// Submit Soroban transaction (func + auth)
+const result = await client.submitSorobanTransaction({
+  func: 'AAAABAAAAAEAAAAGc3ltYm9s...',                // Host function XDR
+  auth: ['AAAACAAAAAEAAAA...', 'AAAACAAAAAEAAAB...'],  // Detached auth entries
+});
+
+console.log('Transaction:', result.transactionId, result.hash, result.status);
+```
+
+### Managing Channel Accounts
+
+For managing channel accounts, the SDK provides the following methods:
+
+```typescript
+// List configured channel accounts
+const accounts = await client.listChannelAccounts();
+console.log('Channel accounts:', accounts.relayerIds);
+
+// Update channel accounts (requires adminSecret)
+const result = await client.setChannelAccounts(['channel-001', 'channel-002', 'channel-003']);
+console.log('Update successful:', result.ok, result.appliedRelayerIds);
+```
+
+### Example Scripts
+
+For complete working examples and additional client usage details, see the [Channels Plugin README](https://github.com/OpenZeppelin/relayer-plugin-channels#plugin-client).
+
+## Prerequisites
+
+* Node.js >= 18
+* pnpm >= 10
+* OpenZeppelin Relayer (installed and configured)
+
+## Example Setup
+
+For a complete working example with Docker Compose, refer to the Channels plugin example in the OpenZeppelin Relayer repository:
+
+* ***Location***: [examples/channels-plugin-example](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples/channels-plugin-example)
+* ***Documentation***: [README.md](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples/channels-plugin-example/README.md)
+
+## Installation
+
+Channels can be added to any OpenZeppelin Relayer installation.
+
+***Resources:***
+
+* ***npm Package***: [@openzeppelin/relayer-plugin-channels](https://www.npmjs.com/package/@openzeppelin/relayer-plugin-channels)
+* ***GitHub Repository***: https://github.com/OpenZeppelin/relayer-plugin-channels
+* ***Example Setup***: [channels-plugin-example](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples/channels-plugin-example)
+
+### Install from npm
+
+```bash
+# From the root of your Relayer repository
+cd plugins
+pnpm add @openzeppelin/relayer-plugin-channels
+```
+
+### Create the plugin wrapper
+
+Inside your Relayer, create a directory for the plugin and expose its handler:
+
+```bash
+mkdir -p plugins/channels
+```
+
+Create `plugins/channels/index.ts`:
+
+```typescript
+export { handler } from '@openzeppelin/relayer-plugin-channels';
+```
+
+## Configuration
+
+### Plugin Registration
+
+Register the plugin in your `config/config.json` file:
+
+```json
+{
+  "plugins": [
+    {
+      "id": "channels-plugin",
+      "path": "channels/index.ts",
+      "timeout": 60
+    }
+  ]
+}
+```
+
+### Environment Variables
+
+Configure the required environment variables:
+
+```bash
+# Required environment variables
+export STELLAR_NETWORK="testnet"                    # or "mainnet"
+export SOROBAN_RPC_URL="https://soroban-testnet.stellar.org"
+export FUND_RELAYER_ID="channels-fund"              # ID of the fund relayer
+export PLUGIN_ADMIN_SECRET="your-secret-here"       # Required for management API
+
+# Optional environment variables
+export LOCK_TTL_SECONDS=30                          # Lock timeout (default: 30, range: 3-30)
+export MAX_FEE=1000000                              # Maximum fee in stroops (default: 1,000,000)
+```
+
+***Required Variables:***
+
+* `STELLAR_NETWORK`: Either "testnet" or "mainnet"
+* `SOROBAN_RPC_URL`: Stellar Soroban RPC endpoint URL
+* `FUND_RELAYER_ID`: Relayer ID for the account that pays transaction fees
+
+***Optional Variables:***
+
+* `PLUGIN_ADMIN_SECRET`: Secret for accessing the management API (required to manage channel accounts)
+* `LOCK_TTL_SECONDS`: TTL for channel account locks in seconds (default: 30, range: 3-30)
+* `MAX_FEE`: Maximum transaction fee in stroops (default: 1,000,000)
+
+### Relayer Configuration
+
+Channels requires two types of relayers:
+
+1. ***Fund Account***: The account that pays transaction fees (should have `concurrent_transactions: true` enabled)
+2. ***Channel Accounts***: At least one channel account (recommended: 2 or more for better throughput)
+
+Configure relayers in your `config/config.json`:
+
+```json
+{
+  "relayers": [
+    {
+      "id": "channels-fund",
+      "name": "Channels Fund Account",
+      "network": "testnet",
+      "paused": false,
+      "network_type": "stellar",
+      "signer_id": "channels-fund-signer",
+      "policies": {
+        "concurrent_transactions": true
+      }
+    },
+    {
+      "id": "channel-001",
+      "name": "Channel Account 001",
+      "network": "testnet",
+      "paused": false,
+      "network_type": "stellar",
+      "signer_id": "channel-001-signer"
+    },
+    {
+      "id": "channel-002",
+      "name": "Channel Account 002",
+      "network": "testnet",
+      "paused": false,
+      "network_type": "stellar",
+      "signer_id": "channel-002-signer"
+    }
+  ],
+  "notifications": [],
+  "signers": [
+    {
+      "id": "channels-fund-signer",
+      "type": "local",
+      "config": {
+        "path": "config/keys/channels-fund.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE_FUND"
+        }
+      }
+    },
+    {
+      "id": "channel-001-signer",
+      "type": "local",
+      "config": {
+        "path": "config/keys/channel-001.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE_CHANNEL_001"
+        }
+      }
+    },
+    {
+      "id": "channel-002-signer",
+      "type": "local",
+      "config": {
+        "path": "config/keys/channel-002.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE_CHANNEL_002"
+        }
+      }
+    }
+  ],
+  "networks": "./config/networks",
+  "plugins": [
+    {
+      "id": "channels",
+      "path": "channel/index.ts",
+      "timeout": 30,
+      "emit_logs": true,
+      "emit_traces": true
+    }
+  ]
+}
+```
+
+***Important Configuration Notes:***
+
+* ***Fund Account*** (`channels-fund`): Must have `"concurrent_transactions": true` in policies to enable parallel transaction processing
+* ***Channel Accounts***: Create at least 2 for better throughput (you can add more as `channel-003`, etc.)
+* ***Network***: Use `testnet` for testing or `mainnet` for production
+* ***Signers***: Each relayer references a signer by `signer_id`, and signers are defined separately with keystore paths
+* ***Keystore Files***: You’ll need to create keystore files for each account - see [OpenZeppelin Relayer documentation](https://docs.openzeppelin.com/relayer) for details on creating and managing keys
+* ***Plugin Registration***: The plugin `id` should match what you use in environment variables and API calls
+
+After configuration, fund these accounts on-chain and register them with Channels (see "Initializing Channel Accounts" below).
+
+## Initializing Channel Accounts
+
+After configuring your relayers in `config.json` and funding the Stellar accounts, register them with Channels via the Management API:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels-plugin/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "setChannelAccounts",
+        "adminSecret": "your-secret-here",
+        "relayerIds": ["channel-001", "channel-002"]
+      }
+    }
+  }'
+```
+
+***Response:***
+
+```json
+{
+  "success": true,
+  "data": {
+    "ok": true,
+    "appliedRelayerIds": ["channel-001", "channel-002"]
+  },
+  "error": null
+}
+```
+
+This tells Channels which relayers to use as channel accounts. All relayer IDs must match your configured relayer IDs in `config.json`.
+
+Channels is now ready to serve Soroban transactions.
+
+## Automated Setup
+
+To skip the manual configuration steps, use the provided automation script. It automates the entire setup process: creating signers and relayers via the API, funding accounts on-chain, and registering them with Channels.
+
+### Prerequisites
+
+When using the automated setup, you only need to configure and fund the ***fund account***:
+
+```json
+{
+  "relayers": [
+    {
+      "id": "channels-fund",
+      "chain": "stellar",
+      "signer": "channels-fund-signer",
+      "policies": {
+        "concurrent_transactions": true
+      }
+    }
+  ]
+}
+```
+
+The script creates all channel account signers and relayers dynamically - no config.json entries needed for channel accounts.
+
+### Running the Script
+
+```bash
+pnpm exec tsx ./scripts/create-channel-accounts.ts \
+  --total 3 \
+  --base-url http://localhost:8080 \
+  --api-key <RELAYER_API_KEY> \
+  --funding-relayer channels-fund \
+  --plugin-id channels-plugin \
+  --plugin-admin-secret <PLUGIN_ADMIN_SECRET> \
+  --network testnet
+```
+
+### What the Script Does
+
+1. ***Creates channel account signers and relayers via API***: Following the naming pattern `channel-0001`, `channel-0002`, etc.
+2. ***Funds channel accounts on-chain***: Submits funding transactions through the fund relayer and waits for confirmation
+3. ***Registers with Channels***: Automatically calls the Management API to register all channel accounts
+
+### Script Options
+
+* `--total`: Number of channel accounts to create (recommended: 2-3 for testing, more for production)
+* `--fix`: Audit and heal partially created state (use if the script was interrupted)
+* `--dry-run`: Preview actions without making changes
+* `--prefix`: Customize the naming prefix (default: `channel-`)
+* `--starting-balance`: XLM amount for each account (default: 5)
+
+### Script Location
+
+* Example directory: [`scripts/create-channel-accounts.ts`](https://github.com/OpenZeppelin/relayer-plugin-channels/blob/main/scripts/create-channel-accounts.ts)
+
+## API Usage
+
+Channels is invoked by making POST requests to the plugin endpoint:
+
+```bash
+POST /api/v1/plugins/{plugin-id}/call
+```
+
+### Submitting Transactions
+
+There are two ways to submit transactions to Channels:
+
+#### Option 1: Complete Transaction XDR
+
+Submit a complete, signed transaction envelope:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels-plugin/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "xdr": "AAAAAgAAAAA..."
+    }
+  }'
+```
+
+#### Option 2: Soroban Function + Auth
+
+Submit just the Soroban function and authorization entries:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels-plugin/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "func": "AAAABAAAAAEAAAAGc3ltYm9s...",
+      "auth": ["AAAACAAAAAEAAAA..."]
+    }
+  }'
+```
+
+### Parameters
+
+* `xdr` (string): Complete transaction envelope XDR (base64) - must be signed, not a fee-bump envelope
+* `func` (string): Soroban host function XDR (base64)
+* `auth` (array of strings): Array of Soroban authorization entry XDRs (base64)
+
+***Important Notes:***
+
+* Provide either `xdr` OR `func`+`auth`, not both
+* When using `xdr`, the transaction must be a regular signed transaction (not a fee-bump envelope)
+* When using `func`+`auth`, Channels will build and simulate the transaction automatically
+* Transactions are always submitted with fee bumping from the fund account
+
+### Generating XDR with Stellar SDK
+
+Use the `@stellar/stellar-sdk` to generate the required XDR values:
+
+#### Full Transaction Envelope XDR
+
+```typescript
+import { Networks, TransactionBuilder, rpc } from '@stellar/stellar-sdk';
+
+// Build your transaction
+const tx = new TransactionBuilder(account, {
+  fee: '100',
+  networkPassphrase: Networks.TESTNET,
+})
+  .addOperation(/* Operation.invokeHostFunction from Contract.call(...) */)
+  .setTimeout(30)
+  .build();
+
+// Sign the transaction
+tx.sign(keypair);
+
+// Export base64 envelope XDR
+const envelopeXdr = tx.toXDR();
+```
+
+#### Soroban Function + Auth XDRs
+
+```typescript
+// Build and simulate first to obtain auth
+const baseTx = /* TransactionBuilder(...).addOperation(...).build() */;
+const sim = await rpcServer.simulateTransaction(baseTx);
+
+// Apply simulation, then extract from the InvokeHostFunction operation
+const assembled = rpc.assembleTransaction(baseTx, sim).build();
+const op = assembled.operations[0]; // Operation.InvokeHostFunction
+
+const funcXdr = op.func.toXDR("base64");
+const authXdrs = (op.auth ?? []).map(a => a.toXDR("base64"));
+```
+
+## Management API
+
+Channels provides a management API to dynamically configure channel accounts. This API requires authentication via the `PLUGIN_ADMIN_SECRET` environment variable.
+
+### List Channel Accounts
+
+Get the current list of configured channel accounts:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels-plugin/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "listChannelAccounts",
+        "adminSecret": "your-secret-here"
+      }
+    }
+  }'
+```
+
+***Response:***
+
+```json
+{
+  "success": true,
+  "data": {
+    "relayerIds": ["channel-001", "channel-002"]
+  },
+  "error": null
+}
+```
+
+### Set Channel Accounts
+
+Configure the channel accounts that Channels will use. This replaces the entire list:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels-plugin/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "setChannelAccounts",
+        "adminSecret": "your-secret-here",
+        "relayerIds": ["channel-001", "channel-002", "channel-003"]
+      }
+    }
+  }'
+```
+
+***Response:***
+
+```json
+{
+  "success": true,
+  "data": {
+    "ok": true,
+    "appliedRelayerIds": ["channel-001", "channel-002", "channel-003"]
+  },
+  "error": null
+}
+```
+
+***Important Notes:***
+
+* You must configure at least one channel account before Channels can process transactions
+* The management API will prevent removing accounts that are currently locked (in use). On failure it returns HTTP 409 with code `LOCKED_CONFLICT` and `details.locked` listing the blocked IDs
+* All relayer IDs must exist in your OpenZeppelin Relayer configuration
+* The `adminSecret` must match the `PLUGIN_ADMIN_SECRET` environment variable
+
+## Responses
+
+All API responses use the standard Relayer envelope format: ` success, data, error, metadata `.
+
+### Success Response (HTTP 200)
+
+```json
+{
+  "success": true,
+  "data": {
+    "transactionId": "tx_123456",
+    "status": "confirmed",
+    "hash": "1234567890abcdef..."
+  },
+  "error": null
+}
+```
+
+***Response Fields:***
+
+* `success`: `true` when the plugin executed successfully
+* `data`: Contains the transaction result
+* `transactionId`: The OpenZeppelin Relayer transaction ID
+* `status`: Transaction status (e.g., "confirmed")
+* `hash`: The Stellar transaction hash
+* `error`: `null` on success
+
+### Error Response (HTTP 4xx)
+
+```json
+{
+  "success": false,
+  "data": {
+    "code": "POOL_CAPACITY",
+    "details": {}
+  },
+  "error": "Too many transactions queued. Please try again later",
+  "metadata": {
+    "logs": [
+      { "level": "error", "message": "All channel accounts in use" }
+    ]
+  }
+}
+```
+
+***Error Response Fields:***
+
+* `success`: `false` when the plugin encountered an error
+* `data`: Contains error details
+* `code`: Error code (e.g., "POOL_CAPACITY", "LOCKED_CONFLICT")
+* `details`: Additional context about the error
+* `error`: Human-readable error message
+* `metadata.logs`: Plugin execution logs (if `emit_logs` is enabled)
+
+### Common Error Codes
+
+* `CONFIG_MISSING`: Missing required environment variable
+* `UNSUPPORTED_NETWORK`: Invalid network type
+* `INVALID_PARAMS`: Invalid request parameters
+* `INVALID_XDR`: Failed to parse XDR
+* `INVALID_ENVELOPE_TYPE`: Not a regular transaction envelope (e.g., fee bump)
+* `INVALID_TIME_BOUNDS`: TimeBounds too far in the future
+* `NO_CHANNELS_CONFIGURED`: No channel accounts have been configured via management API
+* `POOL_CAPACITY`: All channel accounts in use
+* `RELAYER_UNAVAILABLE`: Relayer not found
+* `SIMULATION_FAILED`: Transaction simulation failed
+* `ONCHAIN_FAILED`: Transaction failed on-chain
+* `WAIT_TIMEOUT`: Transaction wait timeout
+* `MANAGEMENT_DISABLED`: Management API not enabled
+* `UNAUTHORIZED`: Invalid admin secret
+* `LOCKED_CONFLICT`: Cannot remove locked channel accounts
+
+## Additional Resources
+
+* ***Stellar SDK Documentation***: https://stellar.github.io/js-stellar-sdk/
+* ***Soroban Documentation***: https://soroban.stellar.org/docs
+* ***OpenZeppelin Relayer Documentation***: https://docs.openzeppelin.com/relayer

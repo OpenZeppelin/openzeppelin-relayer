@@ -17,7 +17,7 @@ impl FromStr for RepositoryStorageType {
         match s.to_lowercase().as_str() {
             "inmemory" | "in_memory" => Ok(Self::InMemory),
             "redis" => Ok(Self::Redis),
-            _ => Err(format!("Invalid repository storage type: {}", s)),
+            _ => Err(format!("Invalid repository storage type: {s}")),
         }
     }
 }
@@ -153,7 +153,7 @@ impl ServerConfig {
         let config_file_name =
             env::var("CONFIG_FILE_NAME").unwrap_or_else(|_| "config.json".to_string());
 
-        format!("{}{}", conf_dir, config_file_name)
+        format!("{conf_dir}{config_file_name}")
     }
 
     /// Gets the API key from environment variable (panics if not set or too short)
@@ -162,8 +162,7 @@ impl ServerConfig {
 
         if !api_key.has_minimum_length(MINIMUM_SECRET_VALUE_LENGTH) {
             panic!(
-                "Security error: API_KEY must be at least {} characters long",
-                MINIMUM_SECRET_VALUE_LENGTH
+                "Security error: API_KEY must be at least {MINIMUM_SECRET_VALUE_LENGTH} characters long"
             );
         }
 
@@ -290,6 +289,21 @@ impl ServerConfig {
             .unwrap_or_else(|_| "4".to_string())
             .parse()
             .unwrap_or(4)
+    }
+
+    /// Get worker concurrency from environment variable or use default
+    ///
+    /// Environment variable format: `BACKGROUND_WORKER_{WORKER_NAME}_CONCURRENCY`
+    /// Example: `BACKGROUND_WORKER_TRANSACTION_REQUEST_CONCURRENCY=20`
+    pub fn get_worker_concurrency(worker_name: &str, default: usize) -> usize {
+        let env_var = format!(
+            "BACKGROUND_WORKER_{}_CONCURRENCY",
+            worker_name.to_uppercase()
+        );
+        env::var(&env_var)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
     }
 }
 
@@ -722,5 +736,248 @@ mod tests {
             config.transaction_expiration_hours,
             ServerConfig::get_transaction_expiration_hours()
         );
+    }
+
+    mod get_worker_concurrency_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_not_set() {
+            let worker_name = "test_worker";
+            let env_var = format!(
+                "BACKGROUND_WORKER_{}_CONCURRENCY",
+                worker_name.to_uppercase()
+            );
+
+            // Ensure env var is not set
+            env::remove_var(&env_var);
+
+            let default_value = 42;
+            let result = ServerConfig::get_worker_concurrency(worker_name, default_value);
+
+            assert_eq!(
+                result, default_value,
+                "Should return default value when env var is not set"
+            );
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_env_value_when_set() {
+            let worker_name = "status_checker";
+            let env_var = format!(
+                "BACKGROUND_WORKER_{}_CONCURRENCY",
+                worker_name.to_uppercase()
+            );
+
+            // Set env var to a specific value
+            env::set_var(&env_var, "100");
+
+            let default_value = 10;
+            let result = ServerConfig::get_worker_concurrency(worker_name, default_value);
+
+            assert_eq!(result, 100, "Should return env var value when set");
+
+            // Cleanup
+            env::remove_var(&env_var);
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_invalid() {
+            let worker_name = "invalid_worker";
+            let env_var = format!(
+                "BACKGROUND_WORKER_{}_CONCURRENCY",
+                worker_name.to_uppercase()
+            );
+
+            // Set env var to invalid value
+            env::set_var(&env_var, "not_a_number");
+
+            let default_value = 25;
+            let result = ServerConfig::get_worker_concurrency(worker_name, default_value);
+
+            assert_eq!(
+                result, default_value,
+                "Should return default value when env var is invalid"
+            );
+
+            // Cleanup
+            env::remove_var(&env_var);
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_empty() {
+            let worker_name = "empty_worker";
+            let env_var = format!(
+                "BACKGROUND_WORKER_{}_CONCURRENCY",
+                worker_name.to_uppercase()
+            );
+
+            // Set env var to empty string
+            env::set_var(&env_var, "");
+
+            let default_value = 15;
+            let result = ServerConfig::get_worker_concurrency(worker_name, default_value);
+
+            assert_eq!(
+                result, default_value,
+                "Should return default value when env var is empty"
+            );
+
+            // Cleanup
+            env::remove_var(&env_var);
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_negative() {
+            let worker_name = "negative_worker";
+            let env_var = format!(
+                "BACKGROUND_WORKER_{}_CONCURRENCY",
+                worker_name.to_uppercase()
+            );
+
+            // Set env var to negative value
+            env::set_var(&env_var, "-5");
+
+            let default_value = 20;
+            let result = ServerConfig::get_worker_concurrency(worker_name, default_value);
+
+            assert_eq!(
+                result, default_value,
+                "Should return default value when env var is negative"
+            );
+
+            // Cleanup
+            env::remove_var(&env_var);
+        }
+
+        #[test]
+        #[serial]
+        fn test_env_var_name_formatting() {
+            // Test that worker names are properly uppercased
+            let worker_names = vec![
+                (
+                    "transaction_sender",
+                    "BACKGROUND_WORKER_TRANSACTION_SENDER_CONCURRENCY",
+                ),
+                (
+                    "status_checker_evm",
+                    "BACKGROUND_WORKER_STATUS_CHECKER_EVM_CONCURRENCY",
+                ),
+                (
+                    "notification_sender",
+                    "BACKGROUND_WORKER_NOTIFICATION_SENDER_CONCURRENCY",
+                ),
+            ];
+
+            for (worker_name, expected_env_var) in worker_names {
+                let actual_env_var = format!(
+                    "BACKGROUND_WORKER_{}_CONCURRENCY",
+                    worker_name.to_uppercase()
+                );
+                assert_eq!(
+                    actual_env_var, expected_env_var,
+                    "Env var name should be correctly formatted for worker: {}",
+                    worker_name
+                );
+            }
+        }
+
+        #[test]
+        #[serial]
+        fn test_zero_value() {
+            let worker_name = "zero_worker";
+            let env_var = format!(
+                "BACKGROUND_WORKER_{}_CONCURRENCY",
+                worker_name.to_uppercase()
+            );
+
+            // Set env var to zero
+            env::set_var(&env_var, "0");
+
+            let default_value = 30;
+            let result = ServerConfig::get_worker_concurrency(worker_name, default_value);
+
+            assert_eq!(result, 0, "Should accept zero as a valid value");
+
+            // Cleanup
+            env::remove_var(&env_var);
+        }
+
+        #[test]
+        #[serial]
+        fn test_large_value() {
+            let worker_name = "large_worker";
+            let env_var = format!(
+                "BACKGROUND_WORKER_{}_CONCURRENCY",
+                worker_name.to_uppercase()
+            );
+
+            // Set env var to a large value
+            env::set_var(&env_var, "10000");
+
+            let default_value = 50;
+            let result = ServerConfig::get_worker_concurrency(worker_name, default_value);
+
+            assert_eq!(result, 10000, "Should accept large values");
+
+            // Cleanup
+            env::remove_var(&env_var);
+        }
+
+        #[test]
+        #[serial]
+        fn test_whitespace_in_value() {
+            let worker_name = "whitespace_worker";
+            let env_var = format!(
+                "BACKGROUND_WORKER_{}_CONCURRENCY",
+                worker_name.to_uppercase()
+            );
+
+            // Set env var with leading/trailing whitespace
+            env::set_var(&env_var, "  75  ");
+
+            let default_value = 35;
+            let result = ServerConfig::get_worker_concurrency(worker_name, default_value);
+
+            // Note: String::parse::<usize>() does NOT trim whitespace, so this will fail to parse
+            // and return the default value
+            assert_eq!(
+                result, default_value,
+                "Should return default value when value has whitespace"
+            );
+
+            // Cleanup
+            env::remove_var(&env_var);
+        }
+
+        #[test]
+        #[serial]
+        fn test_float_value_returns_default() {
+            let worker_name = "float_worker";
+            let env_var = format!(
+                "BACKGROUND_WORKER_{}_CONCURRENCY",
+                worker_name.to_uppercase()
+            );
+
+            // Set env var to float value
+            env::set_var(&env_var, "12.5");
+
+            let default_value = 40;
+            let result = ServerConfig::get_worker_concurrency(worker_name, default_value);
+
+            assert_eq!(
+                result, default_value,
+                "Should return default value for float input"
+            );
+
+            // Cleanup
+            env::remove_var(&env_var);
+        }
     }
 }

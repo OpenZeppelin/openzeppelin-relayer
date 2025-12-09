@@ -137,7 +137,7 @@ impl From<Relayer> for RelayerRepoModel {
 mod tests {
     use crate::models::{
         RelayerEvmPolicy, RelayerSolanaPolicy, RelayerStellarPolicy, SolanaAllowedTokensPolicy,
-        SolanaFeePaymentStrategy,
+        SolanaFeePaymentStrategy, StellarFeePaymentStrategy,
     };
 
     use super::*;
@@ -202,6 +202,11 @@ mod tests {
                 max_fee: Some(100000),
                 timeout_seconds: Some(30),
                 concurrent_transactions: None,
+                allowed_tokens: None,
+                fee_payment_strategy: Some(StellarFeePaymentStrategy::Relayer),
+                slippage_percentage: None,
+                fee_margin_percentage: None,
+                swap_config: None,
             }),
             address: "GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string(),
             notification_id: None,
@@ -455,6 +460,11 @@ mod tests {
                 max_fee: Some(150000),
                 timeout_seconds: Some(60),
                 concurrent_transactions: None,
+                allowed_tokens: None,
+                fee_payment_strategy: Some(StellarFeePaymentStrategy::Relayer),
+                slippage_percentage: None,
+                fee_margin_percentage: None,
+                swap_config: None,
             })),
             signer_id: "test_signer".to_string(),
             notification_id: None,
@@ -723,6 +733,11 @@ mod tests {
                 max_fee: Some(200000),       // Changed
                 timeout_seconds: Some(120),  // Changed
                 concurrent_transactions: None,
+                allowed_tokens: None,
+                fee_payment_strategy: Some(StellarFeePaymentStrategy::Relayer),
+                slippage_percentage: None,
+                fee_margin_percentage: None,
+                swap_config: None,
             })),
             notification_id: None, // Changed
             custom_rpc_urls: None,
@@ -941,6 +956,11 @@ mod tests {
                 max_fee: Some(250000),
                 timeout_seconds: Some(180),
                 concurrent_transactions: None,
+                allowed_tokens: None,
+                fee_payment_strategy: Some(StellarFeePaymentStrategy::Relayer),
+                slippage_percentage: None,
+                fee_margin_percentage: None,
+                swap_config: None,
             })),
             signer_id: "stellar_signer".to_string(),
             notification_id: Some("stellar_notification".to_string()),

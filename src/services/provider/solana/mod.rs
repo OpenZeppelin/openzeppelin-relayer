@@ -16,12 +16,14 @@ use mpl_token_metadata::accounts::Metadata;
 use reqwest::Url;
 use serde::Serialize;
 use solana_client::{
+    client_error::{ClientError, ClientErrorKind},
     nonblocking::rpc_client::RpcClient,
+    rpc_request::RpcRequest,
     rpc_response::{RpcPrioritizationFee, RpcSimulateTransactionResult},
 };
+use solana_commitment_config::CommitmentConfig;
 use solana_sdk::{
     account::Account,
-    commitment_config::CommitmentConfig,
     hash::Hash,
     message::Message,
     program_pack::Pack,
@@ -29,13 +31,13 @@ use solana_sdk::{
     signature::Signature,
     transaction::{Transaction, VersionedTransaction},
 };
-use spl_token::state::Mint;
+use spl_token_interface::state::Mint;
 use std::{str::FromStr, sync::Arc, time::Duration};
 use thiserror::Error;
 
 use crate::{
     models::{RpcConfig, SolanaTransactionStatus},
-    services::retry_rpc_call,
+    services::provider::{retry_rpc_call, should_mark_provider_failed_by_status_code},
 };
 
 use super::ProviderError;
@@ -44,16 +46,308 @@ use super::{
     RetryConfig,
 };
 
+/// Utility function to match error patterns by normalizing both strings.
+/// Removes spaces and converts to lowercase for flexible matching.
+///
+/// This allows matching patterns like "invalid instruction data" against errors
+/// containing "invalidinstructiondata", "invalid instruction data", etc.
+fn matches_error_pattern(error_msg: &str, pattern: &str) -> bool {
+    let normalized_msg = error_msg.to_lowercase().replace(' ', "");
+    let normalized_pattern = pattern.to_lowercase().replace(' ', "");
+    normalized_msg.contains(&normalized_pattern)
+}
+
+/// Errors that can occur when interacting with the Solana provider.
+///
+/// Use `is_transient()` to determine if an error should be retried.
 #[derive(Error, Debug, Serialize)]
 pub enum SolanaProviderError {
-    #[error("RPC client error: {0}")]
+    /// Network/IO error (transient - connection issues, timeouts)
+    #[error("Network error: {0}")]
+    NetworkError(String),
+
+    /// RPC protocol error (transient - RPC-level issues like node lag, sync pending)
+    #[error("RPC error: {0}")]
     RpcError(String),
+
+    /// HTTP request error with status code (transient/permanent based on status code)
+    #[error("Request error (HTTP {status_code}): {error}")]
+    RequestError { error: String, status_code: u16 },
+
+    /// Invalid address format (permanent)
     #[error("Invalid address: {0}")]
     InvalidAddress(String),
+
+    /// RPC selector error (transient - can retry with different node)
     #[error("RPC selector error: {0}")]
     SelectorError(RpcSelectorError),
+
+    /// Network configuration error (permanent - missing data, unsupported operations)
     #[error("Network configuration error: {0}")]
     NetworkConfiguration(String),
+
+    /// Insufficient funds for transaction (permanent)
+    #[error("Insufficient funds for transaction: {0}")]
+    InsufficientFunds(String),
+
+    /// Blockhash not found or expired (transient - can rebuild with fresh blockhash)
+    #[error("Blockhash not found or expired: {0}")]
+    BlockhashNotFound(String),
+
+    /// Invalid transaction structure or execution (permanent)
+    #[error("Invalid transaction: {0}")]
+    InvalidTransaction(String),
+
+    /// Transaction already processed (permanent - duplicate)
+    #[error("Transaction already processed: {0}")]
+    AlreadyProcessed(String),
+}
+
+impl SolanaProviderError {
+    /// Determines if this error is transient (can retry) or permanent (should fail).
+    ///
+    /// With comprehensive error code classification in `from_rpc_response_error()`,
+    /// errors are properly categorized at the source, so we can simply match on variants.
+    ///
+    /// **Transient (can retry):**
+    /// - `NetworkError`: IO/connection errors, timeouts, network unavailable
+    /// - `RpcError`: RPC protocol issues, node lag, sync pending (-32004, -32005, -32014, -32016)
+    /// - `BlockhashNotFound`: Can rebuild transaction with fresh blockhash (-32008)
+    /// - `SelectorError`: Can retry with different RPC node
+    /// - `RequestError`: HTTP errors with retriable status codes (5xx, 408, 425, 429)
+    ///
+    /// **Permanent (fail immediately):**
+    /// - `InsufficientFunds`: Not enough balance for transaction
+    /// - `InvalidTransaction`: Malformed transaction, invalid signatures, version mismatch (-32002, -32003, -32013, -32015, -32602)
+    /// - `AlreadyProcessed`: Duplicate transaction already on-chain (-32009)
+    /// - `InvalidAddress`: Invalid public key format
+    /// - `NetworkConfiguration`: Missing data, unsupported operations (-32007, -32010)
+    /// - `RequestError`: HTTP errors with non-retriable status codes (4xx except 408, 425, 429)
+    pub fn is_transient(&self) -> bool {
+        match self {
+            // Transient errors - safe to retry
+            SolanaProviderError::NetworkError(_) => true,
+            SolanaProviderError::RpcError(_) => true,
+            SolanaProviderError::BlockhashNotFound(_) => true,
+            SolanaProviderError::SelectorError(_) => true,
+
+            // RequestError - check status code to determine if retriable
+            SolanaProviderError::RequestError { status_code, .. } => match *status_code {
+                // Non-retriable 5xx: persistent server-side issues
+                501 | 505 => false, // Not Implemented, HTTP Version Not Supported
+
+                // Retriable 5xx: temporary server-side issues
+                500 | 502..=504 | 506..=599 => true,
+
+                // Retriable 4xx: timeout or rate-limit related
+                408 | 425 | 429 => true,
+
+                // Non-retriable 4xx: client errors
+                400..=499 => false,
+
+                // Other status codes: not retriable
+                _ => false,
+            },
+
+            // Permanent errors - fail immediately
+            SolanaProviderError::InsufficientFunds(_) => false,
+            SolanaProviderError::InvalidTransaction(_) => false,
+            SolanaProviderError::AlreadyProcessed(_) => false,
+            SolanaProviderError::InvalidAddress(_) => false,
+            SolanaProviderError::NetworkConfiguration(_) => false,
+        }
+    }
+
+    /// Classifies a Solana RPC client error into the appropriate error variant.
+    ///
+    /// Uses structured error types from the Solana SDK for precise classification,
+    /// including JSON-RPC error codes for enhanced accuracy.
+    pub fn from_rpc_error(error: ClientError) -> Self {
+        match error.kind() {
+            // Network/IO errors - connection issues, timeouts (transient)
+            ClientErrorKind::Io(_) => SolanaProviderError::NetworkError(error.to_string()),
+
+            // Reqwest errors - extract status code if available
+            ClientErrorKind::Reqwest(reqwest_err) => {
+                if let Some(status) = reqwest_err.status() {
+                    SolanaProviderError::RequestError {
+                        error: error.to_string(),
+                        status_code: status.as_u16(),
+                    }
+                } else {
+                    // No status code available (e.g., connection error, timeout)
+                    SolanaProviderError::NetworkError(error.to_string())
+                }
+            }
+
+            // RPC errors - classify based on error code and message
+            ClientErrorKind::RpcError(rpc_err) => {
+                let rpc_err_str = format!("{rpc_err}");
+                Self::from_rpc_response_error(&rpc_err_str, &error)
+            }
+
+            // Transaction errors - classify based on specific error type
+            ClientErrorKind::TransactionError(tx_error) => {
+                Self::from_transaction_error(tx_error, &error)
+            }
+
+            // Custom errors from Solana client - reuse pattern matching logic
+            ClientErrorKind::Custom(msg) => {
+                // Delegate to from_rpc_response_error for consistent classification
+                Self::from_rpc_response_error(msg, &error)
+            }
+
+            // All other error types
+            _ => SolanaProviderError::RpcError(error.to_string()),
+        }
+    }
+
+    /// Classifies RPC response errors using error codes and messages.
+    ///
+    /// Solana JSON-RPC 2.0 error codes (see https://www.quicknode.com/docs/solana/error-references):
+    ///
+    /// **Transient errors (can retry):**
+    /// - `-32004`: Block not available for slot - temporary, retry recommended
+    /// - `-32005`: Node is unhealthy/behind - temporary node lag
+    /// - `-32008`: Blockhash not found - can rebuild transaction with fresh blockhash
+    /// - `-32014`: Block status not yet available - pending sync, retry later
+    /// - `-32016`: Minimum context slot not reached - future slot, retry later
+    ///
+    /// **Permanent errors (fail immediately):**
+    /// - `-32002`: Transaction simulation failed - check message for specific cause
+    /// - `-32003`: Signature verification failure - invalid signatures
+    /// - `-32007`: Slot skipped/missing (snapshot jump) - data unavailable
+    /// - `-32009`: Already processed - duplicate transaction
+    /// - `-32010`: Key excluded from secondary indexes - RPC method unavailable
+    /// - `-32013`: Transaction signature length mismatch - malformed transaction
+    /// - `-32015`: Transaction version not supported - client version mismatch
+    /// - `-32602`: Invalid params - malformed request parameters
+    fn from_rpc_response_error(rpc_err: &str, full_error: &ClientError) -> Self {
+        let error_str = rpc_err;
+
+        // Check for specific error codes in the error string
+        if error_str.contains("-32002") {
+            // Transaction simulation failed - check message for specific issues
+            if matches_error_pattern(error_str, "blockhash not found") {
+                SolanaProviderError::BlockhashNotFound(full_error.to_string())
+            } else if matches_error_pattern(error_str, "insufficient funds") {
+                SolanaProviderError::InsufficientFunds(full_error.to_string())
+            } else {
+                // Most simulation failures are permanent (invalid instruction data, etc.)
+                SolanaProviderError::InvalidTransaction(full_error.to_string())
+            }
+        } else if error_str.contains("-32003") {
+            // Signature verification failure - permanent
+            SolanaProviderError::InvalidTransaction(full_error.to_string())
+        } else if error_str.contains("-32004") {
+            // Block not available - transient, retry recommended
+            SolanaProviderError::RpcError(full_error.to_string())
+        } else if error_str.contains("-32005") {
+            // Node is behind - transient
+            SolanaProviderError::RpcError(full_error.to_string())
+        } else if error_str.contains("-32007") {
+            // Slot skipped/missing due to snapshot jump - permanent
+            SolanaProviderError::NetworkConfiguration(full_error.to_string())
+        } else if error_str.contains("-32008") {
+            // Blockhash not found - transient (can rebuild transaction)
+            SolanaProviderError::BlockhashNotFound(full_error.to_string())
+        } else if error_str.contains("-32009") {
+            // Already processed - permanent
+            SolanaProviderError::AlreadyProcessed(full_error.to_string())
+        } else if error_str.contains("-32010") {
+            // Key excluded from secondary indexes - permanent
+            SolanaProviderError::NetworkConfiguration(full_error.to_string())
+        } else if error_str.contains("-32013") {
+            // Transaction signature length mismatch - permanent
+            SolanaProviderError::InvalidTransaction(full_error.to_string())
+        } else if error_str.contains("-32014") {
+            // Block status not yet available - transient, retry later
+            SolanaProviderError::RpcError(full_error.to_string())
+        } else if error_str.contains("-32015") {
+            // Transaction version not supported - permanent
+            SolanaProviderError::InvalidTransaction(full_error.to_string())
+        } else if error_str.contains("-32016") {
+            // Minimum context slot not reached - transient, retry later
+            SolanaProviderError::RpcError(full_error.to_string())
+        } else if error_str.contains("-32602") {
+            // Invalid params - permanent
+            SolanaProviderError::InvalidTransaction(full_error.to_string())
+        } else {
+            // For other codes, fall back to string matching
+            if matches_error_pattern(error_str, "insufficient funds") {
+                SolanaProviderError::InsufficientFunds(full_error.to_string())
+            } else if matches_error_pattern(error_str, "blockhash not found") {
+                SolanaProviderError::BlockhashNotFound(full_error.to_string())
+            } else if matches_error_pattern(error_str, "already processed") {
+                SolanaProviderError::AlreadyProcessed(full_error.to_string())
+            } else {
+                // Default to transient RPC error for unknown codes
+                SolanaProviderError::RpcError(full_error.to_string())
+            }
+        }
+    }
+
+    /// Classifies a Solana TransactionError into the appropriate error variant.
+    fn from_transaction_error(
+        tx_error: &solana_sdk::transaction::TransactionError,
+        full_error: &ClientError,
+    ) -> Self {
+        use solana_sdk::transaction::TransactionError as TxErr;
+
+        match tx_error {
+            // Insufficient funds - permanent
+            TxErr::InsufficientFundsForFee | TxErr::InsufficientFundsForRent { .. } => {
+                SolanaProviderError::InsufficientFunds(full_error.to_string())
+            }
+
+            // Blockhash not found - transient (can rebuild transaction with fresh blockhash)
+            TxErr::BlockhashNotFound => {
+                SolanaProviderError::BlockhashNotFound(full_error.to_string())
+            }
+
+            // Already processed - permanent
+            TxErr::AlreadyProcessed => {
+                SolanaProviderError::AlreadyProcessed(full_error.to_string())
+            }
+
+            // Invalid transaction structure/signatures - permanent
+            TxErr::SignatureFailure
+            | TxErr::MissingSignatureForFee
+            | TxErr::InvalidAccountForFee
+            | TxErr::AccountNotFound
+            | TxErr::InvalidAccountIndex
+            | TxErr::InvalidProgramForExecution
+            | TxErr::ProgramAccountNotFound
+            | TxErr::InstructionError(_, _)
+            | TxErr::CallChainTooDeep
+            | TxErr::InvalidWritableAccount
+            | TxErr::InvalidRentPayingAccount
+            | TxErr::WouldExceedMaxBlockCostLimit
+            | TxErr::WouldExceedMaxAccountCostLimit
+            | TxErr::WouldExceedMaxVoteCostLimit
+            | TxErr::WouldExceedAccountDataBlockLimit
+            | TxErr::TooManyAccountLocks
+            | TxErr::AddressLookupTableNotFound
+            | TxErr::InvalidAddressLookupTableOwner
+            | TxErr::InvalidAddressLookupTableData
+            | TxErr::InvalidAddressLookupTableIndex
+            | TxErr::MaxLoadedAccountsDataSizeExceeded
+            | TxErr::InvalidLoadedAccountsDataSizeLimit
+            | TxErr::ResanitizationNeeded
+            | TxErr::ProgramExecutionTemporarilyRestricted { .. }
+            | TxErr::AccountBorrowOutstanding => {
+                SolanaProviderError::InvalidTransaction(full_error.to_string())
+            }
+
+            // Transient errors that might succeed on retry
+            TxErr::AccountInUse | TxErr::AccountLoadedTwice | TxErr::ClusterMaintenance => {
+                SolanaProviderError::RpcError(full_error.to_string())
+            }
+
+            // Treat unknown errors as generic RPC errors (transient by default)
+            _ => SolanaProviderError::RpcError(full_error.to_string()),
+        }
+    }
 }
 
 /// A trait that abstracts common Solana provider operations.
@@ -140,6 +434,13 @@ pub trait SolanaProviderTrait: Send + Sync {
         &self,
         signature: &Signature,
     ) -> Result<SolanaTransactionStatus, SolanaProviderError>;
+
+    /// Send a raw JSON-RPC request to the Solana node
+    async fn raw_request_dyn(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, SolanaProviderError>;
 }
 
 #[derive(Debug)]
@@ -160,25 +461,19 @@ impl From<String> for SolanaProviderError {
     }
 }
 
-const RETRIABLE_ERROR_SUBSTRINGS: &[&str] = &[
-    "timeout",
-    "connection",
-    "reset",
-    "temporarily unavailable",
-    "rate limit",
-    "too many requests",
-    "503",
-    "502",
-    "504",
-    "blockhash not found",
-    "node is behind",
-    "unhealthy",
-];
-
-fn is_retriable_error(msg: &str) -> bool {
-    RETRIABLE_ERROR_SUBSTRINGS
-        .iter()
-        .any(|substr| msg.contains(substr))
+/// Determines if a Solana provider error should mark the provider as failed.
+///
+/// This function identifies errors that indicate the RPC provider itself is having issues
+/// and should be marked as failed to trigger failover to another provider.
+///
+/// Uses the shared `should_mark_provider_failed_by_status_code` function for HTTP status code logic.
+fn should_mark_solana_provider_failed(error: &SolanaProviderError) -> bool {
+    match error {
+        SolanaProviderError::RequestError { status_code, .. } => {
+            should_mark_provider_failed_by_status_code(*status_code)
+        }
+        _ => false,
+    }
 }
 
 #[derive(Error, Debug, PartialEq)]
@@ -227,11 +522,11 @@ impl SolanaProvider {
         }
 
         RpcConfig::validate_list(&configs)
-            .map_err(|e| ProviderError::NetworkConfiguration(format!("Invalid URL: {}", e)))?;
+            .map_err(|e| ProviderError::NetworkConfiguration(format!("Invalid URL: {e}")))?;
 
         // Now create the selector with validated configs
         let selector = RpcSelector::new(configs).map_err(|e| {
-            ProviderError::NetworkConfiguration(format!("Failed to create RPC selector: {}", e))
+            ProviderError::NetworkConfiguration(format!("Failed to create RPC selector: {e}"))
         })?;
 
         let retry_config = RetryConfig::from_env();
@@ -267,7 +562,7 @@ impl SolanaProvider {
     /// Initialize a provider for a given URL
     fn initialize_provider(&self, url: &str) -> Result<Arc<RpcClient>, SolanaProviderError> {
         let rpc_url: Url = url.parse().map_err(|e| {
-            SolanaProviderError::NetworkConfiguration(format!("Invalid URL format: {}", e))
+            SolanaProviderError::NetworkConfiguration(format!("Invalid URL format: {e}"))
         })?;
 
         let client = RpcClient::new_with_timeout_and_commitment(
@@ -289,10 +584,7 @@ impl SolanaProvider {
         F: Fn(Arc<RpcClient>) -> Fut,
         Fut: std::future::Future<Output = Result<T, SolanaProviderError>>,
     {
-        let is_retriable = |e: &SolanaProviderError| match e {
-            SolanaProviderError::RpcError(msg) => is_retriable_error(msg),
-            _ => false,
-        };
+        let is_retriable = |e: &SolanaProviderError| e.is_transient();
 
         tracing::debug!(
             "Starting RPC operation '{}' with timeout: {}s",
@@ -304,7 +596,7 @@ impl SolanaProvider {
             &self.selector,
             operation_name,
             is_retriable,
-            |_| false, // TODO: implement fn to mark provider failed based on error
+            should_mark_solana_provider_failed,
             |url| match self.initialize_provider(url) {
                 Ok(provider) => Ok(provider),
                 Err(e) => Err(e),
@@ -332,7 +624,7 @@ impl SolanaProviderTrait for SolanaProvider {
             client
                 .get_balance(&pubkey)
                 .await
-                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+                .map_err(SolanaProviderError::from_rpc_error)
         })
         .await
     }
@@ -347,7 +639,7 @@ impl SolanaProviderTrait for SolanaProvider {
             client
                 .is_blockhash_valid(hash, commitment)
                 .await
-                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+                .map_err(SolanaProviderError::from_rpc_error)
         })
         .await
     }
@@ -358,7 +650,7 @@ impl SolanaProviderTrait for SolanaProvider {
             client
                 .get_latest_blockhash()
                 .await
-                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+                .map_err(SolanaProviderError::from_rpc_error)
         })
         .await
     }
@@ -373,7 +665,7 @@ impl SolanaProviderTrait for SolanaProvider {
                 client
                     .get_latest_blockhash_with_commitment(commitment)
                     .await
-                    .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+                    .map_err(SolanaProviderError::from_rpc_error)
             },
         )
         .await
@@ -388,7 +680,7 @@ impl SolanaProviderTrait for SolanaProvider {
             client
                 .send_transaction(transaction)
                 .await
-                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+                .map_err(SolanaProviderError::from_rpc_error)
         })
         .await
     }
@@ -402,7 +694,7 @@ impl SolanaProviderTrait for SolanaProvider {
             client
                 .send_transaction(transaction)
                 .await
-                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+                .map_err(SolanaProviderError::from_rpc_error)
         })
         .await
     }
@@ -416,7 +708,7 @@ impl SolanaProviderTrait for SolanaProvider {
             client
                 .confirm_transaction(signature)
                 .await
-                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+                .map_err(SolanaProviderError::from_rpc_error)
         })
         .await
     }
@@ -432,7 +724,7 @@ impl SolanaProviderTrait for SolanaProvider {
                 client
                     .get_minimum_balance_for_rent_exemption(data_size)
                     .await
-                    .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+                    .map_err(SolanaProviderError::from_rpc_error)
             },
         )
         .await
@@ -447,7 +739,7 @@ impl SolanaProviderTrait for SolanaProvider {
             client
                 .simulate_transaction(transaction)
                 .await
-                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+                .map_err(SolanaProviderError::from_rpc_error)
                 .map(|response| response.value)
         })
         .await
@@ -456,13 +748,13 @@ impl SolanaProviderTrait for SolanaProvider {
     /// Retrieves account data for the given account string.
     async fn get_account_from_str(&self, account: &str) -> Result<Account, SolanaProviderError> {
         let address = Pubkey::from_str(account).map_err(|e| {
-            SolanaProviderError::InvalidAddress(format!("Invalid pubkey {}: {}", account, e))
+            SolanaProviderError::InvalidAddress(format!("Invalid pubkey {account}: {e}"))
         })?;
         self.retry_rpc_call("get_account", |client| async move {
             client
                 .get_account(&address)
                 .await
-                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+                .map_err(SolanaProviderError::from_rpc_error)
         })
         .await
     }
@@ -476,7 +768,7 @@ impl SolanaProviderTrait for SolanaProvider {
             client
                 .get_account(pubkey)
                 .await
-                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+                .map_err(SolanaProviderError::from_rpc_error)
         })
         .await
     }
@@ -486,24 +778,31 @@ impl SolanaProviderTrait for SolanaProvider {
         &self,
         pubkey: &str,
     ) -> Result<TokenMetadata, SolanaProviderError> {
-        // Retrieve account associated with the given pubkey
-        let account = self.get_account_from_str(pubkey).await.map_err(|e| {
-            SolanaProviderError::RpcError(format!("Failed to fetch account for {}: {}", pubkey, e))
+        // Parse and validate pubkey once
+        let mint_pubkey = Pubkey::from_str(pubkey).map_err(|e| {
+            SolanaProviderError::InvalidAddress(format!("Invalid pubkey {pubkey}: {e}"))
         })?;
+
+        // Retrieve account using already-parsed pubkey (avoids re-parsing)
+        let account = self.get_account_from_pubkey(&mint_pubkey).await?;
 
         // Unpack the mint info from the account's data
-        let mint_info = Mint::unpack(&account.data).map_err(|e| {
-            SolanaProviderError::RpcError(format!("Failed to unpack mint info: {}", e))
-        })?;
-        let decimals = mint_info.decimals;
-
-        // Convert provided string into a Pubkey
-        let mint_pubkey = Pubkey::try_from(pubkey).map_err(|e| {
-            SolanaProviderError::RpcError(format!("Invalid pubkey {}: {}", pubkey, e))
-        })?;
+        let decimals = Mint::unpack(&account.data)
+            .map_err(|e| {
+                SolanaProviderError::InvalidTransaction(format!(
+                    "Failed to unpack mint info for {pubkey}: {e}"
+                ))
+            })?
+            .decimals;
 
         // Derive the PDA for the token metadata
-        let metadata_pda = Metadata::find_pda(&mint_pubkey).0;
+        // Convert bytes directly between Pubkey types (no string conversion needed)
+        let mint_pubkey_program =
+            solana_program::pubkey::Pubkey::new_from_array(mint_pubkey.to_bytes());
+        let metadata_pda_program = Metadata::find_pda(&mint_pubkey_program).0;
+
+        // Convert bytes directly (no string conversion)
+        let metadata_pda = Pubkey::new_from_array(metadata_pda_program.to_bytes());
 
         let symbol = match self.get_account_from_pubkey(&metadata_pda).await {
             Ok(metadata_account) => match Metadata::from_bytes(&metadata_account.data) {
@@ -526,7 +825,7 @@ impl SolanaProviderTrait for SolanaProvider {
             client
                 .get_fee_for_message(message)
                 .await
-                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+                .map_err(SolanaProviderError::from_rpc_error)
         })
         .await
     }
@@ -539,7 +838,7 @@ impl SolanaProviderTrait for SolanaProvider {
             client
                 .get_recent_prioritization_fees(addresses)
                 .await
-                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+                .map_err(SolanaProviderError::from_rpc_error)
         })
         .await
     }
@@ -566,10 +865,9 @@ impl SolanaProviderTrait for SolanaProvider {
                 client
                     .get_signature_statuses_with_history(&[*signature])
                     .await
-                    .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+                    .map_err(SolanaProviderError::from_rpc_error)
             })
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))?;
+            .await?;
 
         let status = result.value.first();
 
@@ -592,6 +890,31 @@ impl SolanaProviderTrait for SolanaProvider {
                 "Transaction confirmation status not available".to_string(),
             )),
         }
+    }
+
+    /// Send a raw JSON-RPC request to the Solana node
+    async fn raw_request_dyn(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, SolanaProviderError> {
+        let params_owned = params.clone();
+        let method_static: &'static str = Box::leak(method.to_string().into_boxed_str());
+        self.retry_rpc_call("raw_request_dyn", move |client| {
+            let params_for_call = params_owned.clone();
+            async move {
+                client
+                    .send(
+                        RpcRequest::Custom {
+                            method: method_static,
+                        },
+                        params_for_call,
+                    )
+                    .await
+                    .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+            }
+        })
+        .await
     }
 }
 
@@ -1006,23 +1329,148 @@ mod tests {
     }
 
     #[test]
-    fn test_is_retriable_error_true() {
-        for msg in RETRIABLE_ERROR_SUBSTRINGS {
-            assert!(is_retriable_error(msg), "Should be retriable: {}", msg);
-        }
+    fn test_matches_error_pattern() {
+        // Test exact matches
+        assert!(matches_error_pattern(
+            "blockhash not found",
+            "blockhash not found"
+        ));
+        assert!(matches_error_pattern(
+            "insufficient funds",
+            "insufficient funds"
+        ));
+
+        // Test case insensitive matching
+        assert!(matches_error_pattern(
+            "BLOCKHASH NOT FOUND",
+            "blockhash not found"
+        ));
+        assert!(matches_error_pattern(
+            "blockhash not found",
+            "BLOCKHASH NOT FOUND"
+        ));
+        assert!(matches_error_pattern(
+            "BlockHash Not Found",
+            "blockhash not found"
+        ));
+
+        // Test space insensitive matching
+        assert!(matches_error_pattern(
+            "blockhashnotfound",
+            "blockhash not found"
+        ));
+        assert!(matches_error_pattern(
+            "blockhash not found",
+            "blockhashnotfound"
+        ));
+        assert!(matches_error_pattern(
+            "insufficientfunds",
+            "insufficient funds"
+        ));
+
+        // Test mixed case and space insensitive
+        assert!(matches_error_pattern(
+            "BLOCKHASHNOTFOUND",
+            "blockhash not found"
+        ));
+        assert!(matches_error_pattern(
+            "blockhash not found",
+            "BLOCKHASHNOTFOUND"
+        ));
+        assert!(matches_error_pattern(
+            "BlockHashNotFound",
+            "blockhash not found"
+        ));
+        assert!(matches_error_pattern(
+            "INSUFFICIENTFUNDS",
+            "insufficient funds"
+        ));
+
+        // Test partial matches within longer strings
+        assert!(matches_error_pattern(
+            "transaction failed: blockhash not found",
+            "blockhash not found"
+        ));
+        assert!(matches_error_pattern(
+            "error: insufficient funds for transaction",
+            "insufficient funds"
+        ));
+        assert!(matches_error_pattern(
+            "BLOCKHASHNOTFOUND in simulation",
+            "blockhash not found"
+        ));
+
+        // Test multiple spaces handling
+        assert!(matches_error_pattern(
+            "blockhash  not   found",
+            "blockhash not found"
+        ));
+        assert!(matches_error_pattern(
+            "insufficient   funds",
+            "insufficient funds"
+        ));
+
+        // Test no matches
+        assert!(!matches_error_pattern(
+            "account not found",
+            "blockhash not found"
+        ));
+        assert!(!matches_error_pattern(
+            "invalid signature",
+            "insufficient funds"
+        ));
+        assert!(!matches_error_pattern(
+            "timeout error",
+            "blockhash not found"
+        ));
+
+        // Test empty strings
+        assert!(matches_error_pattern("", ""));
+        assert!(matches_error_pattern("blockhash not found", "")); // Empty pattern matches everything
+        assert!(!matches_error_pattern("", "blockhash not found"));
+
+        // Test special characters and numbers
+        assert!(matches_error_pattern(
+            "error code -32008: blockhash not found",
+            "-32008"
+        ));
+        assert!(matches_error_pattern("slot 123456 skipped", "slot"));
+        assert!(matches_error_pattern("RPC_ERROR_503", "rpc_error_503"));
     }
 
     #[test]
-    fn test_is_retriable_error_false() {
-        let non_retriable_cases = [
-            "account not found",
-            "invalid signature",
-            "insufficient funds",
-            "unknown error",
-        ];
-        for msg in non_retriable_cases {
-            assert!(!is_retriable_error(msg), "Should NOT be retriable: {}", msg);
-        }
+    fn test_solana_provider_error_is_transient() {
+        // Test transient errors (should return true)
+        assert!(SolanaProviderError::NetworkError("connection timeout".to_string()).is_transient());
+        assert!(SolanaProviderError::RpcError("node is behind".to_string()).is_transient());
+        assert!(
+            SolanaProviderError::BlockhashNotFound("blockhash expired".to_string()).is_transient()
+        );
+        assert!(
+            SolanaProviderError::SelectorError(RpcSelectorError::AllProvidersFailed).is_transient()
+        );
+
+        // Test permanent errors (should return false)
+        assert!(
+            !SolanaProviderError::InsufficientFunds("not enough balance".to_string())
+                .is_transient()
+        );
+        assert!(
+            !SolanaProviderError::InvalidTransaction("invalid signature".to_string())
+                .is_transient()
+        );
+        assert!(
+            !SolanaProviderError::AlreadyProcessed("duplicate transaction".to_string())
+                .is_transient()
+        );
+        assert!(
+            !SolanaProviderError::InvalidAddress("invalid pubkey format".to_string())
+                .is_transient()
+        );
+        assert!(
+            !SolanaProviderError::NetworkConfiguration("unsupported operation".to_string())
+                .is_transient()
+        );
     }
 
     #[tokio::test]
@@ -1082,5 +1530,266 @@ mod tests {
         // Blockhash should not be all zeros and block height should be > 0
         assert_ne!(blockhash, solana_sdk::hash::Hash::new_from_array([0u8; 32]));
         assert!(last_valid_block_height > 0);
+    }
+
+    #[test]
+    fn test_from_rpc_response_error_transaction_simulation_failed() {
+        // Create a simple mock ClientError for testing
+        let mock_error = create_mock_client_error();
+
+        // -32002 with "blockhash not found" should be BlockhashNotFound
+        let error_str =
+            r#"{"code": -32002, "message": "Transaction simulation failed: Blockhash not found"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::BlockhashNotFound(_)));
+
+        // -32002 with "insufficient funds" should be InsufficientFunds
+        let error_str =
+            r#"{"code": -32002, "message": "Transaction simulation failed: Insufficient funds"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::InsufficientFunds(_)));
+
+        // -32002 with other message should be InvalidTransaction
+        let error_str = r#"{"code": -32002, "message": "Transaction simulation failed: Invalid instruction data"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::InvalidTransaction(_)));
+    }
+
+    #[test]
+    fn test_from_rpc_response_error_signature_verification() {
+        let mock_error = create_mock_client_error();
+
+        // -32003 should be InvalidTransaction
+        let error_str = r#"{"code": -32003, "message": "Signature verification failure"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::InvalidTransaction(_)));
+    }
+
+    #[test]
+    fn test_from_rpc_response_error_transient_errors() {
+        let mock_error = create_mock_client_error();
+
+        // -32004: Block not available - should be RpcError (transient)
+        let error_str = r#"{"code": -32004, "message": "Block not available for slot"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::RpcError(_)));
+
+        // -32005: Node is behind - should be RpcError (transient)
+        let error_str = r#"{"code": -32005, "message": "Node is behind"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::RpcError(_)));
+
+        // -32008: Blockhash not found - should be BlockhashNotFound (transient)
+        let error_str = r#"{"code": -32008, "message": "Blockhash not found"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::BlockhashNotFound(_)));
+
+        // -32014: Block status not available - should be RpcError (transient)
+        let error_str = r#"{"code": -32014, "message": "Block status not yet available"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::RpcError(_)));
+
+        // -32016: Minimum context slot not reached - should be RpcError (transient)
+        let error_str = r#"{"code": -32016, "message": "Minimum context slot not reached"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::RpcError(_)));
+    }
+
+    #[test]
+    fn test_from_rpc_response_error_permanent_errors() {
+        let mock_error = create_mock_client_error();
+
+        // -32007: Slot skipped - should be NetworkConfiguration (permanent)
+        let error_str = r#"{"code": -32007, "message": "Slot skipped"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(
+            result,
+            SolanaProviderError::NetworkConfiguration(_)
+        ));
+
+        // -32009: Already processed - should be AlreadyProcessed (permanent)
+        let error_str = r#"{"code": -32009, "message": "Already processed"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::AlreadyProcessed(_)));
+
+        // -32010: Key excluded from secondary indexes - should be NetworkConfiguration (permanent)
+        let error_str = r#"{"code": -32010, "message": "Key excluded from secondary indexes"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(
+            result,
+            SolanaProviderError::NetworkConfiguration(_)
+        ));
+
+        // -32013: Transaction signature length mismatch - should be InvalidTransaction (permanent)
+        let error_str = r#"{"code": -32013, "message": "Transaction signature length mismatch"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::InvalidTransaction(_)));
+
+        // -32015: Transaction version not supported - should be InvalidTransaction (permanent)
+        let error_str = r#"{"code": -32015, "message": "Transaction version not supported"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::InvalidTransaction(_)));
+
+        // -32602: Invalid params - should be InvalidTransaction (permanent)
+        let error_str = r#"{"code": -32602, "message": "Invalid params"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::InvalidTransaction(_)));
+    }
+
+    #[test]
+    fn test_from_rpc_response_error_string_pattern_matching() {
+        let mock_error = create_mock_client_error();
+
+        // Test case-insensitive and space-insensitive pattern matching
+        let error_str = r#"{"code": -32000, "message": "INSUFFICIENTFUNDS for transaction"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::InsufficientFunds(_)));
+
+        let error_str = r#"{"code": -32000, "message": "BlockhashNotFound"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::BlockhashNotFound(_)));
+
+        let error_str = r#"{"code": -32000, "message": "AlreadyProcessed"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::AlreadyProcessed(_)));
+    }
+
+    #[test]
+    fn test_from_rpc_response_error_unknown_code() {
+        let mock_error = create_mock_client_error();
+
+        // Unknown error code should default to RpcError (transient)
+        let error_str = r#"{"code": -99999, "message": "Unknown error"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::RpcError(_)));
+    }
+
+    // Helper function to create a mock ClientError for testing
+    fn create_mock_client_error() -> ClientError {
+        use solana_client::rpc_request::RpcRequest;
+        // Create a simple ClientError using available constructors
+        ClientError::new_with_request(
+            ClientErrorKind::RpcError(solana_client::rpc_request::RpcError::RpcRequestError(
+                "test".to_string(),
+            )),
+            RpcRequest::GetHealth,
+        )
+    }
+
+    #[test]
+    fn test_from_rpc_error_integration() {
+        // Test that a typical RPC error string gets classified correctly
+        let mock_error = create_mock_client_error();
+
+        // Test the fallback string matching for "insufficient funds"
+        let error_str = r#"{"code": -32000, "message": "Account has insufficient funds"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::InsufficientFunds(_)));
+
+        // Test the fallback string matching for "blockhash not found"
+        let error_str = r#"{"code": -32000, "message": "Blockhash not found"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::BlockhashNotFound(_)));
+
+        // Test the fallback string matching for "already processed"
+        let error_str = r#"{"code": -32000, "message": "Transaction was already processed"}"#;
+        let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
+        assert!(matches!(result, SolanaProviderError::AlreadyProcessed(_)));
+    }
+
+    #[test]
+    fn test_request_error_is_transient() {
+        // Test retriable 5xx errors
+        let error = SolanaProviderError::RequestError {
+            error: "Server error".to_string(),
+            status_code: 500,
+        };
+        assert!(error.is_transient());
+
+        let error = SolanaProviderError::RequestError {
+            error: "Bad gateway".to_string(),
+            status_code: 502,
+        };
+        assert!(error.is_transient());
+
+        let error = SolanaProviderError::RequestError {
+            error: "Service unavailable".to_string(),
+            status_code: 503,
+        };
+        assert!(error.is_transient());
+
+        let error = SolanaProviderError::RequestError {
+            error: "Gateway timeout".to_string(),
+            status_code: 504,
+        };
+        assert!(error.is_transient());
+
+        // Test retriable 4xx errors
+        let error = SolanaProviderError::RequestError {
+            error: "Request timeout".to_string(),
+            status_code: 408,
+        };
+        assert!(error.is_transient());
+
+        let error = SolanaProviderError::RequestError {
+            error: "Too early".to_string(),
+            status_code: 425,
+        };
+        assert!(error.is_transient());
+
+        let error = SolanaProviderError::RequestError {
+            error: "Too many requests".to_string(),
+            status_code: 429,
+        };
+        assert!(error.is_transient());
+
+        // Test non-retriable 5xx errors
+        let error = SolanaProviderError::RequestError {
+            error: "Not implemented".to_string(),
+            status_code: 501,
+        };
+        assert!(!error.is_transient());
+
+        let error = SolanaProviderError::RequestError {
+            error: "HTTP version not supported".to_string(),
+            status_code: 505,
+        };
+        assert!(!error.is_transient());
+
+        // Test non-retriable 4xx errors
+        let error = SolanaProviderError::RequestError {
+            error: "Bad request".to_string(),
+            status_code: 400,
+        };
+        assert!(!error.is_transient());
+
+        let error = SolanaProviderError::RequestError {
+            error: "Unauthorized".to_string(),
+            status_code: 401,
+        };
+        assert!(!error.is_transient());
+
+        let error = SolanaProviderError::RequestError {
+            error: "Forbidden".to_string(),
+            status_code: 403,
+        };
+        assert!(!error.is_transient());
+
+        let error = SolanaProviderError::RequestError {
+            error: "Not found".to_string(),
+            status_code: 404,
+        };
+        assert!(!error.is_transient());
+    }
+
+    #[test]
+    fn test_request_error_display() {
+        let error = SolanaProviderError::RequestError {
+            error: "Server error".to_string(),
+            status_code: 500,
+        };
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("HTTP 500"));
+        assert!(error_str.contains("Server error"));
     }
 }

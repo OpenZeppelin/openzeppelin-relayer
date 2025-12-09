@@ -103,7 +103,7 @@ impl<'de> serde::Deserialize<'de> for CreateRelayerRequest {
 
 /// Policy types for create requests - deserialized based on network_type from parent request
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, untagged)]
 pub enum CreateRelayerPolicyRequest {
     Evm(RelayerEvmPolicy),
     Solana(RelayerSolanaPolicy),
@@ -142,18 +142,18 @@ pub fn deserialize_policy_for_network_type(
     match network_type {
         RelayerNetworkType::Evm => {
             let evm_policy: RelayerEvmPolicy = serde_json::from_value(policies_value.clone())
-                .map_err(|e| ApiError::BadRequest(format!("Invalid EVM policy: {}", e)))?;
+                .map_err(|e| ApiError::BadRequest(format!("Invalid EVM policy: {e}")))?;
             Ok(RelayerNetworkPolicy::Evm(evm_policy))
         }
         RelayerNetworkType::Solana => {
             let solana_policy: RelayerSolanaPolicy = serde_json::from_value(policies_value.clone())
-                .map_err(|e| ApiError::BadRequest(format!("Invalid Solana policy: {}", e)))?;
+                .map_err(|e| ApiError::BadRequest(format!("Invalid Solana policy: {e}")))?;
             Ok(RelayerNetworkPolicy::Solana(solana_policy))
         }
         RelayerNetworkType::Stellar => {
             let stellar_policy: RelayerStellarPolicy =
                 serde_json::from_value(policies_value.clone())
-                    .map_err(|e| ApiError::BadRequest(format!("Invalid Stellar policy: {}", e)))?;
+                    .map_err(|e| ApiError::BadRequest(format!("Invalid Stellar policy: {e}")))?;
             Ok(RelayerNetworkPolicy::Stellar(stellar_policy))
         }
     }
@@ -167,8 +167,10 @@ pub struct UpdateRelayerRequest {
     pub paused: Option<bool>,
     /// Raw policy JSON - will be validated against relayer's network type during application
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub policies: Option<CreateRelayerPolicyRequest>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub notification_id: Option<String>,
     pub custom_rpc_urls: Option<Vec<RpcConfig>>,
 }
@@ -257,8 +259,11 @@ impl TryFrom<CreateRelayerRequest> for Relayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::relayer::{
-        RelayerEvmPolicy, RelayerSolanaPolicy, RelayerStellarPolicy, SolanaFeePaymentStrategy,
+    use crate::models::{
+        relayer::{
+            RelayerEvmPolicy, RelayerSolanaPolicy, RelayerStellarPolicy, SolanaFeePaymentStrategy,
+        },
+        StellarFeePaymentStrategy,
     };
 
     #[test]
@@ -300,6 +305,11 @@ mod tests {
                 max_fee: Some(100000),
                 timeout_seconds: Some(30),
                 concurrent_transactions: None,
+                allowed_tokens: None,
+                fee_payment_strategy: Some(StellarFeePaymentStrategy::Relayer),
+                slippage_percentage: None,
+                fee_margin_percentage: None,
+                swap_config: None,
             })),
             signer_id: "test-signer".to_string(),
             notification_id: None,
@@ -448,6 +458,11 @@ mod tests {
                 max_fee: Some(150000),
                 timeout_seconds: Some(60),
                 concurrent_transactions: None,
+                allowed_tokens: None,
+                fee_payment_strategy: Some(StellarFeePaymentStrategy::Relayer),
+                slippage_percentage: None,
+                fee_margin_percentage: None,
+                swap_config: None,
             })),
             signer_id: "test-signer".to_string(),
             notification_id: None,
@@ -578,6 +593,7 @@ mod tests {
             "network_type": "stellar",
             "signer_id": "test-signer",
             "policies": {
+                "fee_payment_strategy": "relayer",
                 "min_balance": 25000000,
                 "max_fee": 200000,
                 "timeout_seconds": 45

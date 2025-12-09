@@ -19,18 +19,22 @@ use mockall::automock;
 use crate::{
     jobs::JobProducerTrait,
     models::{
-        AppState, DecoratedSignature, DeletePendingTransactionsResponse, EvmNetwork,
-        EvmTransactionDataSignature, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel,
-        NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest, NetworkType,
-        NotificationRepoModel, RelayerError, RelayerRepoModel, RelayerStatus, SignerRepoModel,
-        StellarNetwork, TransactionError, TransactionRepoModel,
+        transaction::request::{
+            SponsoredTransactionBuildRequest, SponsoredTransactionQuoteRequest,
+        },
+        AppState, DecoratedSignature, DeletePendingTransactionsResponse,
+        EncodedSerializedTransaction, EvmNetwork, EvmTransactionDataSignature, JsonRpcRequest,
+        JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest, NetworkRpcResult,
+        NetworkTransactionRequest, NetworkType, NotificationRepoModel, RelayerError,
+        RelayerRepoModel, RelayerStatus, SignerRepoModel, SponsoredTransactionBuildResponse,
+        SponsoredTransactionQuoteResponse, TransactionError, TransactionRepoModel,
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
         Repository, TransactionCounterTrait, TransactionRepository,
     },
     services::{
-        get_network_provider, EvmSignerFactory, StellarSignerFactory, TransactionCounterService,
+        provider::get_network_provider, signer::EvmSignerFactory, TransactionCounterService,
     },
 };
 
@@ -46,6 +50,9 @@ pub use evm::*;
 pub use solana::*;
 pub use stellar::*;
 pub use util::*;
+
+// Re-export SwapResult from solana module for use in Stellar
+pub use solana::SwapResult;
 
 /// The `Relayer` trait defines the core functionality required for a relayer
 /// in the system. Implementors of this trait are responsible for handling
@@ -191,56 +198,53 @@ pub trait SolanaRelayerDexTrait {
     ) -> Result<Vec<SwapResult>, RelayerError>;
 }
 
-/// Solana Relayer Trait
-/// Subset of methods for Solana relayer
+/// Subset of methods for Stellar relayer
 #[async_trait]
 #[allow(dead_code)]
 #[cfg_attr(test, automock)]
-pub trait SolanaRelayerTrait {
-    /// Retrieves the current balance of the relayer.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing a `BalanceResponse` on success, or a
-    /// `RelayerError` on failure.
-    async fn get_balance(&self) -> Result<BalanceResponse, RelayerError>;
+pub trait StellarRelayerDexTrait {
+    /// Handles a token swap request.
+    async fn handle_token_swap_request(
+        &self,
+        relayer_id: String,
+    ) -> Result<Vec<SwapResult>, RelayerError>;
+}
 
-    /// Executes a JSON-RPC request.
+/// Gas abstraction trait for relayers that support fee estimation and transaction preparation.
+///
+/// This trait provides a REST-friendly interface for gas abstraction operations,
+/// allowing clients to estimate fees and prepare transactions without using JSON-RPC.
+#[async_trait]
+#[allow(dead_code)]
+#[cfg_attr(test, automock)]
+pub trait GasAbstractionTrait {
+    /// Gets a quote for a gasless transaction.
     ///
     /// # Arguments
     ///
-    /// * `request` - The JSON-RPC request to be executed.
+    /// * `params` - The gasless transaction quote request parameters (network-agnostic).
     ///
     /// # Returns
     ///
-    /// A `Result` containing a `JsonRpcResponse` on success, or a
-    /// `RelayerError` on failure.
-    async fn rpc(
+    /// A `Result` containing a fee estimate result on success, or a `RelayerError` on failure.
+    async fn quote_sponsored_transaction(
         &self,
-        request: JsonRpcRequest<NetworkRpcRequest>,
-    ) -> Result<JsonRpcResponse<NetworkRpcResult>, RelayerError>;
+        params: SponsoredTransactionQuoteRequest,
+    ) -> Result<SponsoredTransactionQuoteResponse, RelayerError>;
 
-    /// Runs health checks on the relayer without side effects.
+    /// Prepares a transaction with fee payments.
+    ///
+    /// # Arguments
+    ///
+    /// * `params` - The prepare transaction request parameters (network-agnostic).
     ///
     /// # Returns
     ///
-    /// * `Ok(())` - All health checks passed
-    /// * `Err(Vec<HealthCheckFailure>)` - One or more health checks failed
-    async fn check_health(&self) -> Result<(), Vec<crate::models::HealthCheckFailure>>;
-
-    /// Initializes the relayer.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` indicating success, or a `RelayerError` on failure.
-    async fn initialize_relayer(&self) -> Result<(), RelayerError>;
-
-    /// Validates that the relayer's balance meets the minimum required.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` indicating success, or a `RelayerError` on failure.
-    async fn validate_min_balance(&self) -> Result<(), RelayerError>;
+    /// A `Result` containing a prepare transaction result on success, or a `RelayerError` on failure.
+    async fn build_sponsored_transaction(
+        &self,
+        params: SponsoredTransactionBuildRequest,
+    ) -> Result<SponsoredTransactionBuildResponse, RelayerError>;
 }
 
 pub enum NetworkRelayer<
@@ -250,7 +254,7 @@ pub enum NetworkRelayer<
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
 > {
-    Evm(DefaultEvmRelayer<J, T, RR, NR, TCR>),
+    Evm(Box<DefaultEvmRelayer<J, T, RR, NR, TCR>>),
     Solana(DefaultSolanaRelayer<J, T, RR, NR>),
     Stellar(DefaultStellarRelayer<J, T, NR, RR, TCR>),
 }
@@ -270,7 +274,9 @@ impl<
     ) -> Result<TransactionRepoModel, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.process_transaction_request(tx_request).await,
-            NetworkRelayer::Solana(_) => solana_not_supported_relayer(),
+            NetworkRelayer::Solana(relayer) => {
+                relayer.process_transaction_request(tx_request).await
+            }
             NetworkRelayer::Stellar(relayer) => {
                 relayer.process_transaction_request(tx_request).await
             }
@@ -328,7 +334,7 @@ impl<
     async fn get_status(&self) -> Result<RelayerStatus, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.get_status().await,
-            NetworkRelayer::Solana(_) => solana_not_supported_relayer(),
+            NetworkRelayer::Solana(relayer) => relayer.get_status().await,
             NetworkRelayer::Stellar(relayer) => relayer.get_status().await,
         }
     }
@@ -365,10 +371,122 @@ impl<
             NetworkRelayer::Evm(_) => Err(RelayerError::NotSupported(
                 "sign_transaction not supported for EVM".to_string(),
             )),
-            NetworkRelayer::Solana(_) => Err(RelayerError::NotSupported(
-                "sign_transaction not supported for Solana".to_string(),
-            )),
+            NetworkRelayer::Solana(relayer) => relayer.sign_transaction(request).await,
             NetworkRelayer::Stellar(relayer) => relayer.sign_transaction(request).await,
+        }
+    }
+}
+
+#[async_trait]
+impl<
+        J: JobProducerTrait + 'static,
+        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+    > GasAbstractionTrait for NetworkRelayer<J, T, RR, NR, TCR>
+{
+    async fn quote_sponsored_transaction(
+        &self,
+        params: SponsoredTransactionQuoteRequest,
+    ) -> Result<SponsoredTransactionQuoteResponse, RelayerError> {
+        match params {
+            SponsoredTransactionQuoteRequest::Solana(params) => match self {
+                NetworkRelayer::Solana(relayer) => {
+                    relayer
+                        .quote_sponsored_transaction(SponsoredTransactionQuoteRequest::Solana(
+                            params,
+                        ))
+                        .await
+                }
+                NetworkRelayer::Stellar(_) => Err(RelayerError::ValidationError(
+                    "Solana request type does not match Stellar relayer type".to_string(),
+                )),
+                NetworkRelayer::Evm(_) => Err(RelayerError::NotSupported(
+                    "Gas abstraction not supported for EVM relayers".to_string(),
+                )),
+            },
+            SponsoredTransactionQuoteRequest::Stellar(params) => match self {
+                NetworkRelayer::Stellar(relayer) => {
+                    relayer
+                        .quote_sponsored_transaction(SponsoredTransactionQuoteRequest::Stellar(
+                            params,
+                        ))
+                        .await
+                }
+                NetworkRelayer::Solana(_) => Err(RelayerError::ValidationError(
+                    "Stellar request type does not match Solana relayer type".to_string(),
+                )),
+                NetworkRelayer::Evm(_) => Err(RelayerError::NotSupported(
+                    "Gas abstraction not supported for EVM relayers".to_string(),
+                )),
+            },
+        }
+    }
+
+    async fn build_sponsored_transaction(
+        &self,
+        params: SponsoredTransactionBuildRequest,
+    ) -> Result<SponsoredTransactionBuildResponse, RelayerError> {
+        match params {
+            SponsoredTransactionBuildRequest::Solana(params) => match self {
+                NetworkRelayer::Solana(relayer) => {
+                    relayer
+                        .build_sponsored_transaction(SponsoredTransactionBuildRequest::Solana(
+                            params,
+                        ))
+                        .await
+                }
+                NetworkRelayer::Stellar(_) => Err(RelayerError::ValidationError(
+                    "Solana request type does not match Stellar relayer type".to_string(),
+                )),
+                NetworkRelayer::Evm(_) => Err(RelayerError::NotSupported(
+                    "Gas abstraction not supported for EVM relayers".to_string(),
+                )),
+            },
+            SponsoredTransactionBuildRequest::Stellar(params) => match self {
+                NetworkRelayer::Stellar(relayer) => {
+                    relayer
+                        .build_sponsored_transaction(SponsoredTransactionBuildRequest::Stellar(
+                            params,
+                        ))
+                        .await
+                }
+                NetworkRelayer::Solana(_) => Err(RelayerError::ValidationError(
+                    "Stellar request type does not match Solana relayer type".to_string(),
+                )),
+                NetworkRelayer::Evm(_) => Err(RelayerError::NotSupported(
+                    "Gas abstraction not supported for EVM relayers".to_string(),
+                )),
+            },
+        }
+    }
+}
+
+impl<
+        J: JobProducerTrait + 'static,
+        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+    > NetworkRelayer<J, T, RR, NR, TCR>
+{
+    /// Handles a token swap request for supported networks (Solana and Stellar).
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a `Vec<SwapResult>` on success, or a `RelayerError` on failure.
+    /// Returns `NotSupported` error for EVM networks.
+    pub async fn handle_token_swap_request(
+        &self,
+        relayer_id: String,
+    ) -> Result<Vec<SwapResult>, RelayerError> {
+        match self {
+            NetworkRelayer::Evm(_) => Err(RelayerError::NotSupported(
+                "Token swap not supported for EVM relayers".to_string(),
+            )),
+            NetworkRelayer::Solana(relayer) => relayer.handle_token_swap_request(relayer_id).await,
+            NetworkRelayer::Stellar(relayer) => relayer.handle_token_swap_request(relayer_id).await,
         }
     }
 }
@@ -449,7 +567,7 @@ impl<
                     state.job_producer(),
                 )?;
 
-                Ok(NetworkRelayer::Evm(relayer))
+                Ok(NetworkRelayer::Evm(Box::new(relayer)))
             }
             NetworkType::Solana => {
                 let solana_relayer = create_solana_relayer(
@@ -464,47 +582,17 @@ impl<
                 Ok(NetworkRelayer::Solana(solana_relayer))
             }
             NetworkType::Stellar => {
-                let network_repo = state
-                    .network_repository()
-                    .get_by_name(NetworkType::Stellar, &relayer.network)
-                    .await
-                    .ok()
-                    .flatten()
-                    .ok_or_else(|| {
-                        RelayerError::NetworkConfiguration(format!(
-                            "Network {} not found",
-                            relayer.network
-                        ))
-                    })?;
-
-                let network = StellarNetwork::try_from(network_repo)?;
-
-                let stellar_provider =
-                    get_network_provider(&network, relayer.custom_rpc_urls.clone())
-                        .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
-
-                let signer_service = StellarSignerFactory::create_stellar_signer(&signer.into())?;
-
-                let transaction_counter_service = Arc::new(TransactionCounterService::new(
-                    relayer.id.clone(),
-                    relayer.address.clone(),
-                    state.transaction_counter_store(),
-                ));
-
-                let relayer = DefaultStellarRelayer::<J, TR, NR, RR, TCR>::new(
+                let stellar_relayer = create_stellar_relayer(
                     relayer,
-                    signer_service,
-                    stellar_provider,
-                    stellar::StellarRelayerDependencies::new(
-                        state.relayer_repository(),
-                        state.network_repository(),
-                        state.transaction_repository(),
-                        transaction_counter_service,
-                        state.job_producer(),
-                    ),
+                    signer,
+                    state.relayer_repository(),
+                    state.network_repository(),
+                    state.transaction_repository(),
+                    state.job_producer(),
+                    state.transaction_counter_store(),
                 )
                 .await?;
-                Ok(NetworkRelayer::Stellar(relayer))
+                Ok(NetworkRelayer::Stellar(stellar_relayer))
             }
         }
     }
@@ -548,23 +636,34 @@ pub struct SignTransactionRequestStellar {
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct SignTransactionRequestSolana {
+    pub transaction: EncodedSerializedTransaction,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(untagged)]
 pub enum SignTransactionRequest {
     Stellar(SignTransactionRequestStellar),
     Evm(Vec<u8>),
-    Solana(Vec<u8>),
+    Solana(SignTransactionRequestSolana),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SignTransactionResponseEvm {
     pub hash: String,
     pub signature: EvmTransactionDataSignature,
     pub raw: Vec<u8>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SignTransactionResponseStellar {
     pub signature: DecoratedSignature,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+pub struct SignTransactionResponseSolana {
+    pub transaction: EncodedSerializedTransaction,
+    pub signature: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -574,10 +673,10 @@ pub struct SignXdrTransactionResponseStellar {
     pub signature: DecoratedSignature,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum SignTransactionResponse {
     Evm(SignTransactionResponseEvm),
-    Solana(Vec<u8>),
+    Solana(SignTransactionResponseSolana),
     Stellar(SignTransactionResponseStellar),
 }
 
@@ -595,7 +694,7 @@ pub struct SignTransactionExternalResponseStellar {
 pub enum SignTransactionExternalResponse {
     Stellar(SignTransactionExternalResponseStellar),
     Evm(Vec<u8>),
-    Solana(Vec<u8>),
+    Solana(SignTransactionResponseSolana),
 }
 
 impl SignTransactionResponse {
