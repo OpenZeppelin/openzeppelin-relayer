@@ -24,7 +24,7 @@ config.json
 **/local-signer.json
 **/config/keys/*.json
 !tests/integration/config/**/*.json
-!tests/integration/config/keys/local-signer.json
+tests/integration/config/keys/*.json
 
 !examples/**/*.json
 
