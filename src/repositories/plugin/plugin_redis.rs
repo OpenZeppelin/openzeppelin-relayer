@@ -338,6 +338,8 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: false,
             emit_traces: false,
+            raw_response: false,
+            config: None,
         }
     }
 

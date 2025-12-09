@@ -38,6 +38,7 @@ pub struct ScriptResult {
 pub struct ScriptExecutor;
 
 impl ScriptExecutor {
+    #[allow(clippy::too_many_arguments)]
     pub async fn execute_typescript(
         plugin_id: String,
         script_path: String,
@@ -46,6 +47,7 @@ impl ScriptExecutor {
         http_request_id: Option<String>,
         headers_json: Option<String>,
         route: Option<String>,
+        config_json: Option<String>,
     ) -> Result<ScriptResult, PluginError> {
         if Command::new("ts-node")
             .arg("--version")
@@ -73,6 +75,7 @@ impl ScriptExecutor {
             .arg(http_request_id.unwrap_or_default()) // HTTP x-request-id (argv[6], optional)
             .arg(headers_json.unwrap_or_default()) // HTTP headers as JSON (argv[7], optional)
             .arg(route.unwrap_or_default()) // Wildcard route (argv[8], optional)
+            .arg(config_json.unwrap_or_default()) // Plugin config as JSON (argv[9], optional)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

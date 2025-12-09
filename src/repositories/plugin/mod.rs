@@ -138,6 +138,8 @@ impl TryFrom<PluginFileConfig> for PluginModel {
             timeout,
             emit_logs: config.emit_logs,
             emit_traces: config.emit_traces,
+            raw_response: config.raw_response,
+            config: config.config,
         })
     }
 }
@@ -174,6 +176,8 @@ mod tests {
                 timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
                 emit_logs: false,
                 emit_traces: false,
+                raw_response: false,
+                config: None,
             }
         );
     }
@@ -186,6 +190,8 @@ mod tests {
             timeout: Duration::from_secs(30),
             emit_logs: false,
             emit_traces: false,
+            raw_response: false,
+            config: None,
         }
     }
 

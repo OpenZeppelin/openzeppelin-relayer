@@ -209,6 +209,7 @@ export interface PluginContext {
   kv: PluginKVStore;
   headers: PluginHeaders;
   route: string;
+  config?: Record<string, any>;
 }
 
 /**
@@ -299,7 +300,8 @@ export async function loadAndExecutePlugin<T, R>(
   kv: PluginKVStore,
   params: T,
   headers?: PluginHeaders,
-  route?: string
+  route?: string,
+  config?: Record<string, any>
 ): Promise<R> {
   try {
     // IMPORTANT: Path normalization required because executor is in plugins/lib/
@@ -336,8 +338,8 @@ export async function loadAndExecutePlugin<T, R>(
     if (handler && typeof handler === 'function') {
       // Detect handler signature by parameter count
       if (handler.length === 1) {
-        // Modern context handler - ONLY these get KV and headers access
-        const context: PluginContext = { api, params, kv, headers: headers ?? {}, route: route ?? '' };
+        // Modern context handler - ONLY these get KV, headers, and config access
+        const context: PluginContext = { api, params, kv, headers: headers ?? {}, route: route ?? '', config };
         return await handler(context);
       } else {
         // Legacy handler - NO KV or headers access, just (api, params)
@@ -546,13 +548,14 @@ export async function runUserPlugin<T = any, R = any>(
   userScriptPath: string,
   httpRequestId?: string,
   headers?: PluginHeaders,
-  route?: string
+  route?: string,
+  config?: Record<string, any>
 ): Promise<R> {
   const plugin = new DefaultPluginAPI(socketPath, httpRequestId);
   const kv = new DefaultPluginKVStore(pluginId);
 
   try {
-    const result: R = await loadAndExecutePlugin<T, R>(userScriptPath, plugin, kv, pluginParams, headers, route);
+    const result: R = await loadAndExecutePlugin<T, R>(userScriptPath, plugin, kv, pluginParams, headers, route, config);
     return result;
   } catch (error) {
     // If plugin threw an error, write normalized error to stderr

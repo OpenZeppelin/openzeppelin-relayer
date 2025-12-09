@@ -5,9 +5,9 @@ use std::collections::HashMap;
 
 use crate::{
     api::controllers::plugin,
-    models::{DefaultAppState, PaginationQuery, PluginCallRequest},
+    models::{ApiError, ApiResponse, DefaultAppState, PaginationQuery, PluginCallRequest},
 };
-use actix_web::{get, post, web, HttpRequest, Responder};
+use actix_web::{get, post, web, HttpRequest, HttpResponse, Responder};
 
 /// List plugins
 #[get("/plugins")]
@@ -37,13 +37,48 @@ fn extract_headers(http_req: &HttpRequest) -> HashMap<String, Vec<String>> {
 async fn plugin_call(
     params: web::Path<(String, String)>,
     http_req: HttpRequest,
-    req: web::Json<PluginCallRequest>,
+    body: web::Bytes,
     data: web::ThinData<DefaultAppState>,
-) -> impl Responder {
+) -> Result<HttpResponse, ApiError> {
     let (plugin_id, route) = params.into_inner();
-    let mut plugin_call_request = req.into_inner();
-    plugin_call_request.headers = Some(extract_headers(&http_req));
-    plugin_call_request.route = Some(route);
+
+    // Parse the body as generic JSON first
+    let body_json: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(json) => json,
+        Err(e) => {
+            tracing::error!("Failed to parse request body as JSON: {}", e);
+            return Ok(HttpResponse::BadRequest()
+                .json(ApiResponse::<()>::error(format!("Invalid JSON: {e}"))));
+        }
+    };
+
+    // Check if the body already has a "params" field
+    let plugin_call_request = if body_json.get("params").is_some() {
+        // Body already has params field, deserialize normally
+        match serde_json::from_value::<PluginCallRequest>(body_json) {
+            Ok(mut req) => {
+                req.headers = Some(extract_headers(&http_req));
+                req.route = Some(route);
+                req
+            }
+            Err(e) => {
+                tracing::error!("Failed to deserialize PluginCallRequest: {}", e);
+                return Ok(
+                    HttpResponse::BadRequest().json(ApiResponse::<()>::error(format!(
+                        "Invalid request format: {e}"
+                    ))),
+                );
+            }
+        }
+    } else {
+        // Body doesn't have params field, wrap entire body as params
+        PluginCallRequest {
+            params: body_json,
+            headers: Some(extract_headers(&http_req)),
+            route: Some(route),
+        }
+    };
+
     plugin::call_plugin(plugin_id, plugin_call_request, data).await
 }
 
@@ -77,6 +112,8 @@ mod tests {
                 timeout: Duration::from_secs(69),
                 emit_logs: false,
                 emit_traces: false,
+                raw_response: false,
+                config: None,
             },
             PluginModel {
                 id: "test-plugin2".to_string(),
@@ -84,6 +121,8 @@ mod tests {
                 timeout: Duration::from_secs(69),
                 emit_logs: false,
                 emit_traces: false,
+                raw_response: false,
+                config: None,
             },
         ])
     }
@@ -105,6 +144,69 @@ mod tests {
             .insert_header(("Content-Type", "application/json"))
             .set_json(serde_json::json!({
                 "params": serde_json::Value::Null,
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert!(resp.status().is_success());
+
+        let body = test::read_body(resp).await;
+        let plugin_call_response: PluginCallResponse = serde_json::from_slice(&body).unwrap();
+        assert!(plugin_call_response.result.is_null());
+    }
+
+    #[actix_web::test]
+    async fn test_plugin_call_without_params_wrapper() {
+        // Test that body without "params" field is automatically wrapped
+        let app = test::init_service(
+            App::new()
+                .service(
+                    web::resource("/plugins/{plugin_id}/call{route:.*}")
+                        .route(web::post().to(mock_plugin_call)),
+                )
+                .configure(init),
+        )
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri("/plugins/test-plugin/call")
+            .insert_header(("Content-Type", "application/json"))
+            .set_json(serde_json::json!({
+                "user": "alice",
+                "amount": 100,
+                "action": "transfer"
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert!(resp.status().is_success());
+
+        let body = test::read_body(resp).await;
+        let plugin_call_response: PluginCallResponse = serde_json::from_slice(&body).unwrap();
+        assert!(plugin_call_response.result.is_null());
+    }
+
+    #[actix_web::test]
+    async fn test_plugin_call_with_params_wrapper() {
+        // Test that body with "params" field is handled correctly
+        let app = test::init_service(
+            App::new()
+                .service(
+                    web::resource("/plugins/{plugin_id}/call{route:.*}")
+                        .route(web::post().to(mock_plugin_call)),
+                )
+                .configure(init),
+        )
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri("/plugins/test-plugin/call")
+            .insert_header(("Content-Type", "application/json"))
+            .set_json(serde_json::json!({
+                "params": {
+                    "user": "alice",
+                    "amount": 100
+                }
             }))
             .to_request();
         let resp = test::call_service(&app, req).await;

@@ -233,6 +233,9 @@ impl<R: PluginRunnerTrait> PluginService<R> {
             .headers
             .map(|h| serde_json::to_string(&h).unwrap_or_default());
         let route = plugin_call_request.route;
+        let config_json = plugin
+            .config
+            .map(|c| serde_json::to_string(&c).unwrap_or_default());
 
         let result = self
             .runner
@@ -245,6 +248,7 @@ impl<R: PluginRunnerTrait> PluginService<R> {
                 get_request_id(),
                 headers_json,
                 route,
+                config_json,
                 state,
             )
             .await;
@@ -405,6 +409,8 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: true,
             emit_traces: false,
+            raw_response: false,
+            config: None,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;
@@ -705,6 +711,8 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: true,
             emit_traces: true,
+            raw_response: false,
+            config: None,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;
@@ -761,6 +769,8 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: false,
             emit_traces: false,
+            raw_response: false,
+            config: None,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;
@@ -802,6 +812,8 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: true,
             emit_traces: true,
+            raw_response: false,
+            config: None,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;
@@ -856,6 +868,8 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: false,
             emit_traces: false,
+            raw_response: false,
+            config: None,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;
@@ -907,6 +921,8 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: false,
             emit_traces: false,
+            raw_response: false,
+            config: None,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;
@@ -985,6 +1001,8 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: false,
             emit_traces: false,
+            raw_response: false,
+            config: None,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;

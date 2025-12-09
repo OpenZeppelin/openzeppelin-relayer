@@ -1,6 +1,7 @@
 use std::{collections::HashMap, time::Duration};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Map;
 use utoipa::ToSchema;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -18,11 +19,17 @@ pub struct PluginModel {
     /// Whether to include traces in the HTTP response
     #[serde(default)]
     pub emit_traces: bool,
+    /// Whether to return raw plugin response without ApiResponse wrapper
+    #[serde(default)]
+    pub raw_response: bool,
+    /// User-defined configuration accessible to the plugin (must be a JSON object)
+    pub config: Option<Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PluginCallRequest {
-    /// Plugin parameters
+    /// Plugin parameters. If not provided, the entire request body will be used as params.
+    #[serde(default)]
     pub params: serde_json::Value,
     /// HTTP headers from the incoming request (injected by the route handler)
     #[serde(default, skip_deserializing)]
