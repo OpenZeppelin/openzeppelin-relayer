@@ -12,12 +12,10 @@ arbitrum-sepolia = "https://sepolia-rollup.arbitrum.io/rpc" # 0x90648Ae4892b346e
 linea-sepolia = "https://rpc.sepolia.linea.build"
 mantle-sepolia = "https://rpc.sepolia.mantle.xyz"
 optimism-sepolia = "https://sepolia.optimism.io"
-polygon-amoi = "https://rpc-amoy.polygon.technology"
+polygon-amoy = "https://rpc-amoy.polygon.technology"
 scroll-sepolia = "https://sepolia-rpc.scroll.io"
 sei-atlantic = "https://evm-rpc-testnet.sei-apis.com"
 sophon-testnet = "https://rpc.testnet.sophon.xyz"
-
-
 
 [etherscan]
 sepolia = { key = "${ETHERSCAN_API_KEY}" }
@@ -27,5 +25,5 @@ arbitrum-sepolia = { key = "${ETHERSCAN_API_KEY}" }
 linea-sepolia = { key = "${ETHERSCAN_API_KEY}" }
 mantle-sepolia = { key = "${ETHERSCAN_API_KEY}" }
 optimism-sepolia = { key = "${ETHERSCAN_API_KEY}" }
-polygon-amoi = { key = "${ETHERSCAN_API_KEY}" }
+polygon-amoy = { key = "${ETHERSCAN_API_KEY}" }
 scroll-sepolia = { key = "${ETHERSCAN_API_KEY}" }
