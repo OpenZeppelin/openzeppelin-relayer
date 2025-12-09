@@ -65,7 +65,7 @@ jobs:
               - '**/*.rs'
               - tests/**/*.json
   ci:
-    timeout-minutes: 680
+    timeout-minutes: 150
     if: ${{ github.event.pull_request.draft == false && always() }}
     permissions:
       contents: none

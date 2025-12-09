@@ -38,7 +38,7 @@ pub fn compute_final_log_path(base_file_path: &str, date_str: &str, max_size: u6
 // This test checks if the LOG_MAX_SIZE environment variable is set to a valid u64 value.
 #[test]
 #[should_panic(expected = "LOG_MAX_SIZE must be a valid u64 if set")]
-fn ai_test_invalid_log_max_size() {
+fn test_invalid_log_max_size() {
     let _guard = ENV_MUTEX
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
