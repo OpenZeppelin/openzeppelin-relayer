@@ -47,7 +47,9 @@ if [ ! -f "$PROJECT_ROOT/.env.integration" ]; then
 fi
 
 # Load environment variables
-export $(grep -v '^#' "$PROJECT_ROOT/.env.integration" | xargs)
+set -a
+source "$PROJECT_ROOT/.env.integration"
+set +a
 
 # Validate required variables
 if [ -z "$RELAYER_API_KEY" ] || [ "$RELAYER_API_KEY" = "your-api-key-here" ]; then
