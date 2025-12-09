@@ -12,7 +12,7 @@ use soroban_rs::xdr::{
     Limits, MuxedAccount, Operation, OperationBody, ReadXdr, TransactionEnvelope,
     TransactionV1Envelope, Uint256, VecM, WriteXdr,
 };
-use stellar_strkey::ed25519::PublicKey;
+use stellar_strkey::ed25519::{MuxedAccount as StrkeyMuxedAccount, PublicKey};
 
 /// Parse a transaction XDR string into a TransactionEnvelope
 pub fn parse_transaction_xdr(xdr: &str, expect_signed: bool) -> Result<TransactionEnvelope> {
@@ -170,7 +170,19 @@ pub fn muxed_account_to_string(muxed: &MuxedAccount) -> Result<String> {
 }
 
 /// Convert a string address to a MuxedAccount
+/// Supports both Ed25519 (G...) and MuxedEd25519 (M...) account formats
 pub fn string_to_muxed_account(address: &str) -> Result<MuxedAccount> {
+    // Try to parse as muxed account first (M... format)
+    if let Ok(muxed) = StrkeyMuxedAccount::from_string(address) {
+        return Ok(MuxedAccount::MuxedEd25519(
+            soroban_rs::xdr::MuxedAccountMed25519 {
+                id: muxed.id,
+                ed25519: Uint256(muxed.ed25519),
+            },
+        ));
+    }
+
+    // Fall back to Ed25519 (G... format)
     let pk =
         PublicKey::from_string(address).map_err(|e| eyre!("Failed to decode account ID: {}", e))?;
 
@@ -297,82 +309,23 @@ pub fn update_xdr_fee(envelope: &mut TransactionEnvelope, fee: u32) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::transaction::stellar::test_helpers::*;
     use soroban_rs::xdr::{
-        Asset, BytesM, DecoratedSignature, FeeBumpTransactionInnerTx, HostFunction,
-        InvokeContractArgs, InvokeHostFunctionOp, Limits, Memo, MuxedAccount, Operation,
-        OperationBody, PaymentOp, Preconditions, SequenceNumber, Signature, SignatureHint,
-        Transaction, TransactionEnvelope, TransactionExt, TransactionV0, TransactionV0Envelope,
-        TransactionV1Envelope, Uint256, VecM, WriteXdr,
+        Asset, FeeBumpTransactionInnerTx, HostFunction, InvokeContractArgs, InvokeHostFunctionOp,
+        Limits, Memo, MuxedAccount, Operation, OperationBody, PaymentOp, Preconditions,
+        SequenceNumber, Signature, SignatureHint, TransactionV0, TransactionV0Envelope, Uint256,
+        VecM,
     };
     use stellar_strkey::ed25519::PublicKey;
 
-    // Helper function to create test XDR
-    fn create_test_transaction_xdr(include_signature: bool) -> String {
-        // Create a test account public key
-        let source_pk =
-            PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
-                .unwrap();
-        let dest_pk =
-            PublicKey::from_string("GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ")
-                .unwrap();
-
-        // Create a payment operation
-        let payment_op = PaymentOp {
-            destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
-            asset: Asset::Native,
-            amount: 1000000, // 0.1 XLM
-        };
-
-        let operation = Operation {
-            source_account: None,
-            body: OperationBody::Payment(payment_op),
-        };
-
-        let operations: VecM<Operation, 100> = vec![operation].try_into().unwrap();
-
-        // Create the transaction
-        let tx = Transaction {
-            source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
-            fee: 100,
-            seq_num: SequenceNumber(1),
-            cond: Preconditions::None,
-            memo: Memo::None,
-            operations,
-            ext: TransactionExt::V0,
-        };
-
-        // Create the envelope
-        let mut envelope = TransactionV1Envelope {
-            tx,
-            signatures: vec![].try_into().unwrap(),
-        };
-
-        if include_signature {
-            // Add a dummy signature
-            let hint = SignatureHint([0; 4]);
-            let sig_bytes: Vec<u8> = vec![0u8; 64];
-            let sig_bytes_m: BytesM<64> = sig_bytes.try_into().unwrap();
-            let sig = DecoratedSignature {
-                hint,
-                signature: Signature(sig_bytes_m),
-            };
-            envelope.signatures = vec![sig].try_into().unwrap();
-        }
-
-        let tx_envelope = TransactionEnvelope::Tx(envelope);
-        tx_envelope.to_xdr_base64(Limits::none()).unwrap()
-    }
-
     // Helper to get test XDR
     fn get_unsigned_xdr() -> String {
-        create_test_transaction_xdr(false)
+        create_unsigned_xdr(TEST_PK, TEST_PK_2)
     }
 
     fn get_signed_xdr() -> String {
-        create_test_transaction_xdr(true)
+        create_signed_xdr(TEST_PK, TEST_PK_2)
     }
-
-    const INVALID_XDR: &str = "INVALID_BASE64_XDR_DATA";
 
     #[test]
     fn test_parse_unsigned_xdr() {
@@ -424,10 +377,7 @@ mod tests {
         let envelope = parse_transaction_xdr(&unsigned_xdr, false).unwrap();
         let source_account = extract_source_account(&envelope).unwrap();
         assert!(!source_account.is_empty(), "Should extract source account");
-        assert_eq!(
-            source_account,
-            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
-        );
+        assert_eq!(source_account, TEST_PK);
     }
 
     #[test]
@@ -454,10 +404,9 @@ mod tests {
         // This test should create a fee-bump transaction from a signed inner transaction
         let signed_xdr = get_signed_xdr();
         let inner_envelope = parse_transaction_xdr(&signed_xdr, true).unwrap();
-        let fee_source = "GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ";
         let max_fee = 10_000_000; // 1 XLM
 
-        let result = build_fee_bump_envelope(inner_envelope, fee_source, max_fee);
+        let result = build_fee_bump_envelope(inner_envelope, TEST_PK_2, max_fee);
         assert!(result.is_ok(), "Should build fee-bump envelope");
 
         let fee_bump_envelope = result.unwrap();
@@ -487,9 +436,8 @@ mod tests {
         // This test should extract the hash of the inner transaction from a fee-bump
         let signed_xdr = get_signed_xdr();
         let inner_envelope = parse_transaction_xdr(&signed_xdr, true).unwrap();
-        let fee_source = "GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ";
         let fee_bump_envelope =
-            build_fee_bump_envelope(inner_envelope.clone(), fee_source, 10_000_000).unwrap();
+            build_fee_bump_envelope(inner_envelope.clone(), TEST_PK_2, 10_000_000).unwrap();
 
         let inner_hash = extract_inner_transaction_hash(&fee_bump_envelope).unwrap();
         assert!(
@@ -501,8 +449,8 @@ mod tests {
     #[test]
     fn test_extract_operations_from_v1_envelope() {
         // Test extracting operations from a V1 envelope
-        let envelope = create_test_transaction_xdr(false);
-        let parsed = TransactionEnvelope::from_xdr_base64(envelope, Limits::none()).unwrap();
+        let envelope_xdr = get_unsigned_xdr();
+        let parsed = TransactionEnvelope::from_xdr_base64(envelope_xdr, Limits::none()).unwrap();
 
         let operations = extract_operations(&parsed).unwrap();
         assert_eq!(operations.len(), 1, "Should extract 1 operation");
@@ -518,41 +466,8 @@ mod tests {
     #[test]
     fn test_extract_operations_from_v0_envelope() {
         // Test extracting operations from a V0 envelope
-        let source_pk =
-            PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
-                .unwrap();
-        let dest_pk =
-            PublicKey::from_string("GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ")
-                .unwrap();
-
-        let payment_op = PaymentOp {
-            destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
-            asset: Asset::Native,
-            amount: 2000000, // 0.2 XLM
-        };
-
-        let operation = Operation {
-            source_account: None,
-            body: OperationBody::Payment(payment_op),
-        };
-
-        let operations: VecM<Operation, 100> = vec![operation].try_into().unwrap();
-
-        // Create V0 transaction
-        let tx_v0 = TransactionV0 {
-            source_account_ed25519: Uint256(source_pk.0),
-            fee: 100,
-            seq_num: SequenceNumber(1),
-            time_bounds: None,
-            memo: Memo::None,
-            operations,
-            ext: soroban_rs::xdr::TransactionV0Ext::V0,
-        };
-
-        let envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
-            tx: tx_v0,
-            signatures: vec![].try_into().unwrap(),
-        });
+        let payment_op = create_native_payment_operation(TEST_PK_2, 2000000);
+        let envelope = create_v0_envelope(TEST_PK, vec![payment_op], 100, 1);
 
         let operations = extract_operations(&envelope).unwrap();
         assert_eq!(operations.len(), 1, "Should extract 1 operation from V0");
@@ -569,9 +484,8 @@ mod tests {
         // Test extracting operations from a fee-bump envelope
         let signed_xdr = get_signed_xdr();
         let inner_envelope = parse_transaction_xdr(&signed_xdr, true).unwrap();
-        let fee_source = "GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ";
         let fee_bump_envelope =
-            build_fee_bump_envelope(inner_envelope, fee_source, 10_000_000).unwrap();
+            build_fee_bump_envelope(inner_envelope, TEST_PK_2, 10_000_000).unwrap();
 
         let operations = extract_operations(&fee_bump_envelope).unwrap();
         assert_eq!(
@@ -590,11 +504,6 @@ mod tests {
     #[test]
     fn test_xdr_needs_simulation_with_soroban_operation() {
         // Test that Soroban operations require simulation
-        let source_pk =
-            PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
-                .unwrap();
-
-        // Create a Soroban InvokeHostFunction operation
         let invoke_op = InvokeHostFunctionOp {
             host_function: HostFunction::InvokeContract(InvokeContractArgs {
                 contract_address: soroban_rs::xdr::ScAddress::Contract(
@@ -611,22 +520,7 @@ mod tests {
             body: OperationBody::InvokeHostFunction(invoke_op),
         };
 
-        let operations: VecM<Operation, 100> = vec![operation].try_into().unwrap();
-
-        let tx = Transaction {
-            source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
-            fee: 100,
-            seq_num: SequenceNumber(1),
-            cond: Preconditions::None,
-            memo: Memo::None,
-            operations,
-            ext: TransactionExt::V0,
-        };
-
-        let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
-            tx,
-            signatures: vec![].try_into().unwrap(),
-        });
+        let envelope = create_v1_envelope(TEST_PK, vec![operation], 100, 1);
 
         let needs_sim = xdr_needs_simulation(&envelope).unwrap();
         assert!(needs_sim, "Soroban operations should require simulation");
@@ -635,8 +529,8 @@ mod tests {
     #[test]
     fn test_xdr_needs_simulation_without_soroban() {
         // Test that non-Soroban operations don't require simulation
-        let envelope = create_test_transaction_xdr(false);
-        let parsed = TransactionEnvelope::from_xdr_base64(envelope, Limits::none()).unwrap();
+        let envelope_xdr = get_unsigned_xdr();
+        let parsed = TransactionEnvelope::from_xdr_base64(envelope_xdr, Limits::none()).unwrap();
 
         let needs_sim = xdr_needs_simulation(&parsed).unwrap();
         assert!(
@@ -648,22 +542,7 @@ mod tests {
     #[test]
     fn test_xdr_needs_simulation_with_multiple_operations() {
         // Test with multiple operations where at least one is Soroban
-        let source_pk =
-            PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
-                .unwrap();
-        let dest_pk =
-            PublicKey::from_string("GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ")
-                .unwrap();
-
-        // Create a payment operation
-        let payment_op = Operation {
-            source_account: None,
-            body: OperationBody::Payment(PaymentOp {
-                destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
-                asset: Asset::Native,
-                amount: 1000000,
-            }),
-        };
+        let payment_op = create_native_payment_operation(TEST_PK_2, 1000000);
 
         // Create a Soroban operation
         let soroban_op = Operation {
@@ -680,22 +559,7 @@ mod tests {
             }),
         };
 
-        let operations: VecM<Operation, 100> = vec![payment_op, soroban_op].try_into().unwrap();
-
-        let tx = Transaction {
-            source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
-            fee: 100,
-            seq_num: SequenceNumber(1),
-            cond: Preconditions::None,
-            memo: Memo::None,
-            operations,
-            ext: TransactionExt::V0,
-        };
-
-        let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
-            tx,
-            signatures: vec![].try_into().unwrap(),
-        });
+        let envelope = create_v1_envelope(TEST_PK, vec![payment_op, soroban_op], 100, 1);
 
         let needs_sim = xdr_needs_simulation(&envelope).unwrap();
         assert!(
@@ -735,8 +599,7 @@ mod tests {
     #[test]
     fn test_muxed_account_ed25519_variant() {
         // Test handling of regular Ed25519 accounts
-        let address = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
-        let muxed = string_to_muxed_account(address).unwrap();
+        let muxed = string_to_muxed_account(TEST_PK).unwrap();
 
         match muxed {
             MuxedAccount::Ed25519(_) => (),
@@ -744,14 +607,13 @@ mod tests {
         }
 
         let back = muxed_account_to_string(&muxed).unwrap();
-        assert_eq!(address, back);
+        assert_eq!(TEST_PK, back);
     }
 
     #[test]
     fn test_muxed_account_muxed_ed25519_variant() {
         // Test handling of MuxedEd25519 accounts
-        let pk = PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
-            .unwrap();
+        let pk = parse_public_key(TEST_PK);
 
         let muxed = MuxedAccount::MuxedEd25519(soroban_rs::xdr::MuxedAccountMed25519 {
             id: 123456789,
@@ -759,10 +621,7 @@ mod tests {
         });
 
         let address = muxed_account_to_string(&muxed).unwrap();
-        assert_eq!(
-            address,
-            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
-        );
+        assert_eq!(address, TEST_PK);
     }
 
     #[test]
@@ -1152,6 +1011,372 @@ mod tests {
             assert_eq!(text.as_slice(), "Test".as_bytes());
         } else {
             panic!("Expected text memo");
+        }
+    }
+
+    #[test]
+    fn test_update_xdr_sequence_v0() {
+        use soroban_rs::xdr::{
+            Memo, Operation, OperationBody, PaymentOp, SequenceNumber, TransactionV0,
+            TransactionV0Envelope,
+        };
+        use stellar_strkey::ed25519::PublicKey;
+
+        let source_pk =
+            PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
+                .unwrap();
+        let dest_pk =
+            PublicKey::from_string("GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ")
+                .unwrap();
+
+        let payment_op = Operation {
+            source_account: None,
+            body: OperationBody::Payment(PaymentOp {
+                destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
+                asset: soroban_rs::xdr::Asset::Native,
+                amount: 1000000,
+            }),
+        };
+
+        let operations: VecM<Operation, 100> = vec![payment_op].try_into().unwrap();
+
+        let tx_v0 = TransactionV0 {
+            source_account_ed25519: Uint256(source_pk.0),
+            fee: 100,
+            seq_num: SequenceNumber(42),
+            time_bounds: None,
+            memo: Memo::None,
+            operations,
+            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+        };
+
+        let mut envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
+            tx: tx_v0,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        // Update sequence number
+        let result = update_xdr_sequence(&mut envelope, 100);
+        assert!(result.is_ok());
+
+        // Verify the sequence was updated
+        if let TransactionEnvelope::TxV0(e) = envelope {
+            assert_eq!(e.tx.seq_num.0, 100);
+        } else {
+            panic!("Expected V0 envelope");
+        }
+    }
+
+    #[test]
+    fn test_update_xdr_sequence_v1() {
+        use soroban_rs::xdr::{
+            Memo, Operation, OperationBody, PaymentOp, SequenceNumber, Transaction,
+            TransactionV1Envelope,
+        };
+        use stellar_strkey::ed25519::PublicKey;
+
+        let source_pk =
+            PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
+                .unwrap();
+        let dest_pk =
+            PublicKey::from_string("GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ")
+                .unwrap();
+
+        let payment_op = Operation {
+            source_account: None,
+            body: OperationBody::Payment(PaymentOp {
+                destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
+                asset: soroban_rs::xdr::Asset::Native,
+                amount: 1000000,
+            }),
+        };
+
+        let operations: VecM<Operation, 100> = vec![payment_op].try_into().unwrap();
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
+            fee: 100,
+            seq_num: SequenceNumber(42),
+            cond: soroban_rs::xdr::Preconditions::None,
+            memo: Memo::None,
+            operations,
+            ext: soroban_rs::xdr::TransactionExt::V0,
+        };
+
+        let mut envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        // Update sequence number
+        let result = update_xdr_sequence(&mut envelope, 200);
+        assert!(result.is_ok());
+
+        // Verify the sequence was updated
+        if let TransactionEnvelope::Tx(e) = envelope {
+            assert_eq!(e.tx.seq_num.0, 200);
+        } else {
+            panic!("Expected V1 envelope");
+        }
+    }
+
+    #[test]
+    fn test_update_xdr_sequence_fee_bump_fails() {
+        // Create a fee-bump envelope
+        let signed_xdr = get_signed_xdr();
+        let inner_envelope = parse_transaction_xdr(&signed_xdr, true).unwrap();
+        let fee_source = "GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ";
+        let mut fee_bump_envelope =
+            build_fee_bump_envelope(inner_envelope, fee_source, 10_000_000).unwrap();
+
+        // Attempt to update sequence number on fee-bump should fail
+        let result = update_xdr_sequence(&mut fee_bump_envelope, 100);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Cannot set sequence number on fee-bump transaction"));
+    }
+
+    #[test]
+    fn test_update_xdr_fee_v0() {
+        use soroban_rs::xdr::{
+            Memo, Operation, OperationBody, PaymentOp, SequenceNumber, TransactionV0,
+            TransactionV0Envelope,
+        };
+        use stellar_strkey::ed25519::PublicKey;
+
+        let source_pk =
+            PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
+                .unwrap();
+        let dest_pk =
+            PublicKey::from_string("GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ")
+                .unwrap();
+
+        let payment_op = Operation {
+            source_account: None,
+            body: OperationBody::Payment(PaymentOp {
+                destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
+                asset: soroban_rs::xdr::Asset::Native,
+                amount: 1000000,
+            }),
+        };
+
+        let operations: VecM<Operation, 100> = vec![payment_op].try_into().unwrap();
+
+        let tx_v0 = TransactionV0 {
+            source_account_ed25519: Uint256(source_pk.0),
+            fee: 100,
+            seq_num: SequenceNumber(42),
+            time_bounds: None,
+            memo: Memo::None,
+            operations,
+            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+        };
+
+        let mut envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
+            tx: tx_v0,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        // Update fee
+        let result = update_xdr_fee(&mut envelope, 500);
+        assert!(result.is_ok());
+
+        // Verify the fee was updated
+        if let TransactionEnvelope::TxV0(e) = envelope {
+            assert_eq!(e.tx.fee, 500);
+        } else {
+            panic!("Expected V0 envelope");
+        }
+    }
+
+    #[test]
+    fn test_update_xdr_fee_v1() {
+        use soroban_rs::xdr::{
+            Memo, Operation, OperationBody, PaymentOp, SequenceNumber, Transaction,
+            TransactionV1Envelope,
+        };
+        use stellar_strkey::ed25519::PublicKey;
+
+        let source_pk =
+            PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
+                .unwrap();
+        let dest_pk =
+            PublicKey::from_string("GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ")
+                .unwrap();
+
+        let payment_op = Operation {
+            source_account: None,
+            body: OperationBody::Payment(PaymentOp {
+                destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
+                asset: soroban_rs::xdr::Asset::Native,
+                amount: 1000000,
+            }),
+        };
+
+        let operations: VecM<Operation, 100> = vec![payment_op].try_into().unwrap();
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
+            fee: 100,
+            seq_num: SequenceNumber(42),
+            cond: soroban_rs::xdr::Preconditions::None,
+            memo: Memo::None,
+            operations,
+            ext: soroban_rs::xdr::TransactionExt::V0,
+        };
+
+        let mut envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        // Update fee
+        let result = update_xdr_fee(&mut envelope, 1000);
+        assert!(result.is_ok());
+
+        // Verify the fee was updated
+        if let TransactionEnvelope::Tx(e) = envelope {
+            assert_eq!(e.tx.fee, 1000);
+        } else {
+            panic!("Expected V1 envelope");
+        }
+    }
+
+    #[test]
+    fn test_update_xdr_fee_fee_bump_fails() {
+        // Create a fee-bump envelope
+        let signed_xdr = get_signed_xdr();
+        let inner_envelope = parse_transaction_xdr(&signed_xdr, true).unwrap();
+        let fee_source = "GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ";
+        let mut fee_bump_envelope =
+            build_fee_bump_envelope(inner_envelope, fee_source, 10_000_000).unwrap();
+
+        // Attempt to update fee on fee-bump should fail
+        let result = update_xdr_fee(&mut fee_bump_envelope, 500);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Cannot set fee on fee-bump transaction"));
+    }
+
+    #[test]
+    fn test_update_xdr_sequence_preserves_other_fields() {
+        use soroban_rs::xdr::{
+            Memo, Operation, OperationBody, PaymentOp, SequenceNumber, Transaction,
+            TransactionV1Envelope,
+        };
+        use stellar_strkey::ed25519::PublicKey;
+
+        let source_pk =
+            PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
+                .unwrap();
+        let dest_pk =
+            PublicKey::from_string("GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ")
+                .unwrap();
+
+        let payment_op = Operation {
+            source_account: None,
+            body: OperationBody::Payment(PaymentOp {
+                destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
+                asset: soroban_rs::xdr::Asset::Native,
+                amount: 5000000,
+            }),
+        };
+
+        let operations: VecM<Operation, 100> = vec![payment_op].try_into().unwrap();
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
+            fee: 300,
+            seq_num: SequenceNumber(10),
+            cond: soroban_rs::xdr::Preconditions::None,
+            memo: Memo::Text("Test".as_bytes().to_vec().try_into().unwrap()),
+            operations,
+            ext: soroban_rs::xdr::TransactionExt::V0,
+        };
+
+        let mut envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        // Update sequence number
+        update_xdr_sequence(&mut envelope, 50).unwrap();
+
+        // Verify other fields are preserved
+        if let TransactionEnvelope::Tx(e) = envelope {
+            assert_eq!(e.tx.seq_num.0, 50); // Updated
+            assert_eq!(e.tx.fee, 300); // Preserved
+            assert_eq!(e.tx.operations.len(), 1); // Preserved
+            if let Memo::Text(text) = &e.tx.memo {
+                assert_eq!(text.as_slice(), "Test".as_bytes()); // Preserved
+            } else {
+                panic!("Expected text memo");
+            }
+        } else {
+            panic!("Expected V1 envelope");
+        }
+    }
+
+    #[test]
+    fn test_update_xdr_fee_preserves_other_fields() {
+        use soroban_rs::xdr::{
+            Memo, Operation, OperationBody, PaymentOp, SequenceNumber, Transaction,
+            TransactionV1Envelope,
+        };
+        use stellar_strkey::ed25519::PublicKey;
+
+        let source_pk =
+            PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
+                .unwrap();
+        let dest_pk =
+            PublicKey::from_string("GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ")
+                .unwrap();
+
+        let payment_op = Operation {
+            source_account: None,
+            body: OperationBody::Payment(PaymentOp {
+                destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
+                asset: soroban_rs::xdr::Asset::Native,
+                amount: 5000000,
+            }),
+        };
+
+        let operations: VecM<Operation, 100> = vec![payment_op].try_into().unwrap();
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
+            fee: 300,
+            seq_num: SequenceNumber(10),
+            cond: soroban_rs::xdr::Preconditions::None,
+            memo: Memo::Text("Test".as_bytes().to_vec().try_into().unwrap()),
+            operations,
+            ext: soroban_rs::xdr::TransactionExt::V0,
+        };
+
+        let mut envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        // Update fee
+        update_xdr_fee(&mut envelope, 750).unwrap();
+
+        // Verify other fields are preserved
+        if let TransactionEnvelope::Tx(e) = envelope {
+            assert_eq!(e.tx.fee, 750); // Updated
+            assert_eq!(e.tx.seq_num.0, 10); // Preserved
+            assert_eq!(e.tx.operations.len(), 1); // Preserved
+            if let Memo::Text(text) = &e.tx.memo {
+                assert_eq!(text.as_slice(), "Test".as_bytes()); // Preserved
+            } else {
+                panic!("Expected text memo");
+            }
+        } else {
+            panic!("Expected V1 envelope");
         }
     }
 }

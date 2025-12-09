@@ -49,8 +49,6 @@ pub async fn initialize_repositories(config: &ServerConfig) -> eyre::Result<Repo
             api_key: Arc::new(ApiKeyRepositoryStorage::new_in_memory()),
         },
         RepositoryStorageType::Redis => {
-            warn!("⚠️ Redis repository storage support is experimental. Use with caution.");
-
             if config.storage_encryption_key.is_none() {
                 warn!("⚠️ Storage encryption key is not set. Please set the STORAGE_ENCRYPTION_KEY environment variable.");
                 return Err(eyre::eyre!("Storage encryption key is not set. Please set the STORAGE_ENCRYPTION_KEY environment variable."));

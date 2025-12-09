@@ -448,6 +448,7 @@ mod tests {
             is_testnet: true,
             tags: vec![],
             passphrase: "Test SDF Network ; September 2015".to_string(),
+            horizon_url: Some("https://horizon-testnet.stellar.org".to_string()),
         }
     }
 

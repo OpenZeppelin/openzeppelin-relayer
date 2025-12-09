@@ -12,6 +12,7 @@
 //! The module leverages async traits to handle asynchronous operations and uses the `eyre` crate
 //! for error handling.
 use crate::{
+    constants::{STELLAR_HORIZON_MAINNET_URL, STELLAR_HORIZON_TESTNET_URL},
     jobs::JobProducer,
     models::{
         EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerRepoModel, SignerRepoModel,
@@ -28,6 +29,7 @@ use crate::{
         },
         provider::get_network_provider,
         signer::{EvmSignerFactory, SolanaSignerFactory, StellarSignerFactory},
+        stellar_dex::OrderBookService,
     },
 };
 use async_trait::async_trait;
@@ -489,8 +491,10 @@ impl RelayerTransactionFactory {
                 )?))
             }
             NetworkType::Stellar => {
-                let signer_service =
-                    Arc::new(StellarSignerFactory::create_stellar_signer(&signer.into())?);
+                // Create signer once and wrap in Arc, then clone Arc for both uses
+                // Arc implements Clone (cheap reference count increment)
+                let stellar_signer = StellarSignerFactory::create_stellar_signer(&signer.into())?;
+                let signer_service = Arc::new(stellar_signer);
 
                 let network_repo = network_repository
                     .get_by_name(NetworkType::Stellar, &relayer.network)
@@ -511,6 +515,25 @@ impl RelayerTransactionFactory {
                     get_network_provider(&network, relayer.custom_rpc_urls.clone())
                         .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
+                // Create DEX service for swap operations and validations using Horizon API
+                let horizon_url = network.horizon_url.clone().unwrap_or_else(|| {
+                    if network.is_testnet() {
+                        STELLAR_HORIZON_TESTNET_URL.to_string()
+                    } else {
+                        STELLAR_HORIZON_MAINNET_URL.to_string()
+                    }
+                });
+                let provider_arc = Arc::new(stellar_provider.clone());
+                // Clone Arc for DEX service (cheap - just increments reference count)
+                let signer_arc = signer_service.clone();
+                let dex_service = Arc::new(
+                    OrderBookService::new(horizon_url, provider_arc, signer_arc).map_err(|e| {
+                        TransactionError::NetworkConfiguration(format!(
+                            "Failed to create DEX service: {e}",
+                        ))
+                    })?,
+                );
+
                 Ok(NetworkTransaction::Stellar(DefaultStellarTransaction::new(
                     relayer,
                     relayer_repository,
@@ -519,6 +542,7 @@ impl RelayerTransactionFactory {
                     signer_service,
                     stellar_provider,
                     transaction_counter_store,
+                    dex_service,
                 )?))
             }
         }

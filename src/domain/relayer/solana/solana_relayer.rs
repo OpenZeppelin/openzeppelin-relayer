@@ -10,16 +10,22 @@
 use std::{str::FromStr, sync::Arc};
 
 use crate::constants::SOLANA_STATUS_CHECK_INITIAL_DELAY_SECONDS;
+use crate::domain::relayer::solana::rpc::SolanaRpcMethods;
 use crate::domain::{
-    create_error_response, Relayer, SignDataRequest, SignTransactionExternalResponse,
-    SignTransactionRequest, SignTransactionResponse, SignTypedDataRequest, SolanaRpcHandlerType,
-    SwapParams,
+    create_error_response, GasAbstractionTrait, Relayer, SignDataRequest,
+    SignTransactionExternalResponse, SignTransactionRequest, SignTransactionResponse,
+    SignTransactionResponseSolana, SignTypedDataRequest, SolanaRpcHandlerType, SwapParams,
 };
 use crate::jobs::{TransactionRequest, TransactionStatusCheck};
+use crate::models::transaction::request::{
+    SponsoredTransactionBuildRequest, SponsoredTransactionQuoteRequest,
+};
 use crate::models::{
     DeletePendingTransactionsResponse, JsonRpcRequest, JsonRpcResponse, NetworkRpcRequest,
-    NetworkRpcResult, RelayerStatus, RepositoryError, RpcErrorCodes, SolanaRpcRequest,
-    SolanaRpcResult,
+    NetworkRpcResult, NetworkTransactionRequest, RelayerStatus, RepositoryError, RpcErrorCodes,
+    SolanaRpcRequest, SolanaRpcResult, SolanaSignAndSendTransactionRequestParams,
+    SolanaSignTransactionRequestParams, SponsoredTransactionBuildResponse,
+    SponsoredTransactionQuoteResponse,
 };
 use crate::utils::calculate_scheduled_timestamp;
 use crate::{
@@ -28,7 +34,7 @@ use crate::{
         SOLANA_SMALLEST_UNIT_NAME, WRAPPED_SOL_MINT,
     },
     domain::{relayer::RelayerError, BalanceResponse, DexStrategy, SolanaRelayerDexTrait},
-    jobs::{JobProducerTrait, RelayerHealthCheck, SolanaTokenSwapRequest},
+    jobs::{JobProducerTrait, RelayerHealthCheck, TokenSwapRequest},
     models::{
         produce_relayer_disabled_payload, produce_solana_dex_webhook_payload, DisabledReason,
         HealthCheckFailure, NetworkRepoModel, NetworkTransactionData, NetworkType,
@@ -270,8 +276,8 @@ where
             );
 
             self.job_producer
-                .produce_solana_token_swap_request_job(
-                    SolanaTokenSwapRequest {
+                .produce_token_swap_request_job(
+                    TokenSwapRequest {
                         relayer_id: self.relayer.id.clone(),
                     },
                     None,
@@ -530,70 +536,100 @@ where
         &self,
         network_transaction: crate::models::NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, RelayerError> {
-        // Validate fee payment strategy - send transaction endpoint only supports relayer-paid fees
         let policy = self.relayer.policies.get_solana_policy();
-
-        // Send transaction endpoint only supports Relayer fee payment mode
-        // Custom RPC methods (signTransaction, signAndSendTransaction) support both User and Relayer modes
-        //
-        // Note: For safety, when fee_payment_strategy is not explicitly set (None), we default to User.
-        // This means the send transaction endpoint will reject requests unless explicitly configured
-        // with fee_payment_strategy='relayer', preventing accidental use in User mode.
-        if matches!(
-            policy
-                .fee_payment_strategy
-                .as_ref()
-                .unwrap_or(&SolanaFeePaymentStrategy::User),
+        let user_pays_fee = matches!(
+            policy.fee_payment_strategy.unwrap_or_default(),
             SolanaFeePaymentStrategy::User
-        ) {
-            return Err(RelayerError::ValidationError(
-                "Send transaction endpoint requires fee_payment_strategy to be 'relayer'. \
-                For user-paid fees, use the custom RPC methods (signTransaction, signAndSendTransaction) instead."
-                    .to_string(),
-            ));
-        }
+        );
 
-        let network_model = self
-            .network_repository
-            .get_by_name(NetworkType::Solana, &self.relayer.network)
-            .await?
-            .ok_or_else(|| {
-                RelayerError::NetworkConfiguration(format!(
-                    "Network {} not found",
-                    self.relayer.network
-                ))
+        // For user-paid fees, delegate to RPC handler (similar to build/quote)
+        if user_pays_fee {
+            let solana_request = match &network_transaction {
+                NetworkTransactionRequest::Solana(req) => req,
+                _ => {
+                    return Err(RelayerError::ValidationError(
+                        "Expected Solana transaction request".to_string(),
+                    ));
+                }
+            };
+
+            // For user-paid fees, we need a pre-built transaction (not instructions)
+            let transaction = solana_request.transaction.as_ref().ok_or_else(|| {
+                RelayerError::ValidationError(
+                    "User-paid fees require a pre-built transaction. Use prepareTransaction RPC method first to build the transaction from instructions.".to_string(),
+                )
             })?;
 
-        let transaction =
-            TransactionRepoModel::try_from((&network_transaction, &self.relayer, &network_model))?;
+            let params = SolanaSignAndSendTransactionRequestParams {
+                transaction: transaction.clone(),
+            };
 
-        self.transaction_repository
-            .create(transaction.clone())
-            .await
-            .map_err(|e| RepositoryError::TransactionFailure(e.to_string()))?;
+            let result = self
+                .rpc_handler
+                .rpc_methods()
+                .sign_and_send_transaction(params)
+                .await
+                .map_err(|e| RelayerError::Internal(e.to_string()))?;
 
-        self.job_producer
-            .produce_transaction_request_job(
-                TransactionRequest::new(transaction.id.clone(), transaction.relayer_id.clone()),
-                None,
-            )
-            .await?;
+            // Fetch the transaction from repository using the ID returned by sign_and_send_transaction
+            let transaction = self
+                .transaction_repository
+                .get_by_id(result.id.clone())
+                .await
+                .map_err(|e| {
+                    RelayerError::Internal(format!(
+                        "Failed to fetch transaction after sign and send: {e}"
+                    ))
+                })?;
 
-        // Queue status check job (with initial delay)
-        self.job_producer
-            .produce_check_transaction_status_job(
-                TransactionStatusCheck::new(
-                    transaction.id.clone(),
-                    transaction.relayer_id.clone(),
-                    NetworkType::Solana,
-                ),
-                Some(calculate_scheduled_timestamp(
-                    SOLANA_STATUS_CHECK_INITIAL_DELAY_SECONDS,
-                )),
-            )
-            .await?;
+            Ok(transaction)
+        } else {
+            // Relayer-paid fees: use the original flow
+            let network_model = self
+                .network_repository
+                .get_by_name(NetworkType::Solana, &self.relayer.network)
+                .await?
+                .ok_or_else(|| {
+                    RelayerError::NetworkConfiguration(format!(
+                        "Network {} not found",
+                        self.relayer.network
+                    ))
+                })?;
 
-        Ok(transaction)
+            let transaction = TransactionRepoModel::try_from((
+                &network_transaction,
+                &self.relayer,
+                &network_model,
+            ))?;
+
+            self.transaction_repository
+                .create(transaction.clone())
+                .await
+                .map_err(|e| RepositoryError::TransactionFailure(e.to_string()))?;
+
+            self.job_producer
+                .produce_transaction_request_job(
+                    TransactionRequest::new(transaction.id.clone(), transaction.relayer_id.clone()),
+                    None,
+                )
+                .await?;
+
+            // Queue status check job (with initial delay)
+            self.job_producer
+                .produce_check_transaction_status_job(
+                    TransactionStatusCheck::new(
+                        transaction.id.clone(),
+                        transaction.relayer_id.clone(),
+                        NetworkType::Solana,
+                    ),
+                    Some(calculate_scheduled_timestamp(
+                        SOLANA_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+                    )),
+                )
+                .await?;
+
+            Ok(transaction)
+        }
     }
 
     async fn get_balance(&self) -> Result<BalanceResponse, RelayerError> {
@@ -637,67 +673,90 @@ where
         request: &SignTransactionRequest,
     ) -> Result<SignTransactionExternalResponse, RelayerError> {
         let policy = self.relayer.policies.get_solana_policy();
-
-        // For safety, default to User mode when not explicitly configured
-        // This ensures sign_transaction endpoint requires explicit relayer mode configuration
-        if matches!(
-            policy
-                .fee_payment_strategy
-                .as_ref()
-                .unwrap_or(&SolanaFeePaymentStrategy::User),
+        let user_pays_fee = matches!(
+            policy.fee_payment_strategy.unwrap_or_default(),
             SolanaFeePaymentStrategy::User
-        ) {
-            return Err(RelayerError::ValidationError(
-                "Sign transaction endpoint requires fee_payment_strategy to be 'relayer'. \
-                For user-paid fees, use the custom RPC methods (signTransaction, signAndSendTransaction) instead."
-                    .to_string(),
-            ));
+        );
+
+        // For user-paid fees, delegate to RPC handler (similar to process_transaction_request)
+        if user_pays_fee {
+            let solana_request = match request {
+                SignTransactionRequest::Solana(req) => req,
+                _ => {
+                    error!(
+                        id = %self.relayer.id,
+                        "Invalid request type for Solana relayer",
+                    );
+                    return Err(RelayerError::NotSupported(
+                        "Invalid request type for Solana relayer".to_string(),
+                    ));
+                }
+            };
+
+            let params = SolanaSignTransactionRequestParams {
+                transaction: solana_request.transaction.clone(),
+            };
+
+            let result = self
+                .rpc_handler
+                .rpc_methods()
+                .sign_transaction(params)
+                .await
+                .map_err(|e| RelayerError::Internal(e.to_string()))?;
+
+            Ok(SignTransactionExternalResponse::Solana(
+                SignTransactionResponseSolana {
+                    transaction: result.transaction,
+                    signature: result.signature,
+                },
+            ))
+        } else {
+            // Relayer-paid fees: use the original flow
+            let transaction_bytes = match request {
+                SignTransactionRequest::Solana(req) => &req.transaction,
+                _ => {
+                    error!(
+                        id = %self.relayer.id,
+                        "Invalid request type for Solana relayer",
+                    );
+                    return Err(RelayerError::NotSupported(
+                        "Invalid request type for Solana relayer".to_string(),
+                    ));
+                }
+            };
+
+            // Prepare transaction data for signing
+            let transaction_data = NetworkTransactionData::Solana(SolanaTransactionData {
+                transaction: Some(transaction_bytes.clone().into_inner()),
+                ..Default::default()
+            });
+
+            // Sign the transaction using the signer trait
+            let response = self
+                .signer
+                .sign_transaction(transaction_data)
+                .await
+                .map_err(|e| {
+                    error!(
+                        %e,
+                        id = %self.relayer.id,
+                        "Failed to sign transaction",
+                    );
+                    RelayerError::SignerError(e)
+                })?;
+
+            // Extract Solana-specific response
+            let solana_response = match response {
+                SignTransactionResponse::Solana(resp) => resp,
+                _ => {
+                    return Err(RelayerError::ProviderError(
+                        "Unexpected response type from Solana signer".to_string(),
+                    ))
+                }
+            };
+
+            Ok(SignTransactionExternalResponse::Solana(solana_response))
         }
-
-        let transaction_bytes = match request {
-            SignTransactionRequest::Solana(req) => &req.transaction,
-            _ => {
-                error!(
-                    id = %self.relayer.id,
-                    "Invalid request type for Solana relayer",
-                );
-                return Err(RelayerError::NotSupported(
-                    "Invalid request type for Solana relayer".to_string(),
-                ));
-            }
-        };
-
-        // Prepare transaction data for signing
-        let transaction_data = NetworkTransactionData::Solana(SolanaTransactionData {
-            transaction: Some(transaction_bytes.clone().into_inner()),
-            ..Default::default()
-        });
-
-        // Sign the transaction using the signer trait
-        let response = self
-            .signer
-            .sign_transaction(transaction_data)
-            .await
-            .map_err(|e| {
-                error!(
-                    %e,
-                    id = %self.relayer.id,
-                    "Failed to sign transaction",
-                );
-                RelayerError::SignerError(e)
-            })?;
-
-        // Extract Solana-specific response
-        let solana_response = match response {
-            SignTransactionResponse::Solana(resp) => resp,
-            _ => {
-                return Err(RelayerError::ProviderError(
-                    "Unexpected response type from Solana signer".to_string(),
-                ))
-            }
-        };
-
-        Ok(SignTransactionExternalResponse::Solana(solana_response))
     }
 
     async fn rpc(
@@ -1017,6 +1076,67 @@ where
     }
 }
 
+#[async_trait]
+impl<RR, TR, J, S, JS, SP, NR> GasAbstractionTrait for SolanaRelayer<RR, TR, J, S, JS, SP, NR>
+where
+    RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    S: SolanaSignTrait + Signer + Send + Sync + 'static,
+    JS: JupiterServiceTrait + Send + Sync + 'static,
+    SP: SolanaProviderTrait + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+{
+    async fn quote_sponsored_transaction(
+        &self,
+        params: SponsoredTransactionQuoteRequest,
+    ) -> Result<SponsoredTransactionQuoteResponse, RelayerError> {
+        let params = match params {
+            SponsoredTransactionQuoteRequest::Solana(p) => p,
+            _ => {
+                return Err(RelayerError::ValidationError(
+                    "Expected Solana fee estimate request parameters".to_string(),
+                ));
+            }
+        };
+
+        let result = self
+            .rpc_handler
+            .rpc_methods()
+            .fee_estimate(params)
+            .await
+            .map_err(|e| RelayerError::Internal(e.to_string()))?;
+
+        Ok(SponsoredTransactionQuoteResponse::Solana(result))
+    }
+
+    async fn build_sponsored_transaction(
+        &self,
+        params: SponsoredTransactionBuildRequest,
+    ) -> Result<SponsoredTransactionBuildResponse, RelayerError> {
+        let params = match params {
+            SponsoredTransactionBuildRequest::Solana(p) => p,
+            _ => {
+                return Err(RelayerError::ValidationError(
+                    "Expected Solana prepare transaction request parameters".to_string(),
+                ));
+            }
+        };
+
+        let result = self
+            .rpc_handler
+            .rpc_methods()
+            .prepare_transaction(params)
+            .await
+            .map_err(|e| {
+                let error_msg = format!("{e}");
+                RelayerError::Internal(error_msg)
+            })?;
+
+        Ok(SponsoredTransactionBuildResponse::Solana(result))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1028,10 +1148,9 @@ mod tests {
         },
         jobs::MockJobProducerTrait,
         models::{
-            EncodedSerializedTransaction, FeeEstimateRequestParams,
-            GetFeaturesEnabledRequestParams, JsonRpcId, NetworkConfigData, NetworkRepoModel,
-            RelayerSolanaSwapConfig, SolanaAllowedTokensSwapConfig, SolanaRpcResult,
-            SolanaSwapStrategy,
+            EncodedSerializedTransaction, JsonRpcId, NetworkConfigData, NetworkRepoModel,
+            RelayerSolanaSwapConfig, SolanaAllowedTokensSwapConfig, SolanaFeeEstimateRequestParams,
+            SolanaGetFeaturesEnabledRequestParams, SolanaRpcResult, SolanaSwapStrategy,
         },
         repositories::{MockNetworkRepository, MockRelayerRepository, MockTransactionRepository},
         services::{
@@ -1852,7 +1971,7 @@ mod tests {
         let provider = Arc::new(raw_provider);
         let mut raw_job = MockJobProducerTrait::new();
         raw_job
-            .expect_produce_solana_token_swap_request_job()
+            .expect_produce_token_swap_request_job()
             .withf(move |req, _opts| req.relayer_id == "test-id")
             .times(0);
         let job_producer = Arc::new(raw_job);
@@ -1893,7 +2012,7 @@ mod tests {
 
         let mut raw_job = MockJobProducerTrait::new();
         raw_job
-            .expect_produce_solana_token_swap_request_job()
+            .expect_produce_token_swap_request_job()
             .times(1)
             .returning(|_, _| Box::pin(async { Ok(()) }));
         let job_producer = Arc::new(raw_job);
@@ -2049,7 +2168,7 @@ mod tests {
         let req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             params: NetworkRpcRequest::Solana(crate::models::SolanaRpcRequest::FeeEstimate(
-                FeeEstimateRequestParams {
+                SolanaFeeEstimateRequestParams {
                     transaction: EncodedSerializedTransaction::new("".to_string()),
                     fee_token: "".to_string(),
                 },
@@ -2072,7 +2191,7 @@ mod tests {
         let req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             params: NetworkRpcRequest::Solana(crate::models::SolanaRpcRequest::GetFeaturesEnabled(
-                GetFeaturesEnabledRequestParams {},
+                SolanaGetFeaturesEnabledRequestParams {},
             )),
             id: Some(JsonRpcId::Number(1)),
         };
@@ -2405,31 +2524,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sign_transaction_fee_payment_mismatch() {
-        let relayer_model = create_test_relayer(); // Uses default fee_payment_strategy (User)
-
-        let ctx = TestCtx {
-            relayer_model,
-            ..Default::default()
-        };
-
-        let solana_relayer = ctx.into_relayer().await;
-
-        let sign_request = SignTransactionRequest::Solana(SignTransactionRequestSolana {
-            transaction: EncodedSerializedTransaction::new("raw_transaction_data".to_string()),
-        });
-
-        let result = solana_relayer.sign_transaction(&sign_request).await;
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            RelayerError::ValidationError(msg) => {
-                assert!(msg.contains("fee_payment_strategy"));
-            }
-            other => panic!("Expected ValidationError, got {:?}", other),
-        }
-    }
-
-    #[tokio::test]
     async fn test_get_status_success() {
         let mut raw_provider = MockSolanaProviderTrait::new();
         let mut tx_repo = MockTransactionRepository::new();
@@ -2577,6 +2671,63 @@ mod tests {
                 assert!(last_confirmed_transaction_timestamp.is_none());
             }
             _ => panic!("Expected Solana status"),
+        }
+    }
+
+    // GasAbstractionTrait tests
+    // These are passthrough methods to RPC handlers, so we verify:
+    // 1. Wrong network type returns ValidationError
+    // The actual RPC handler functionality (including method calls) is tested in the RPC handler tests
+    // Note: We can't easily mock the RPC handler here due to type constraints in TestCtx,
+    // but the passthrough behavior is verified through the RPC handler tests.
+
+    #[tokio::test]
+    async fn test_quote_sponsored_transaction_wrong_network() {
+        let ctx = TestCtx::default();
+        let solana_relayer = ctx.into_relayer().await;
+
+        // Use Stellar request instead of Solana
+        let request = SponsoredTransactionQuoteRequest::Stellar(
+            crate::models::StellarFeeEstimateRequestParams {
+                transaction_xdr: Some("test-xdr".to_string()),
+                operations: None,
+                source_account: None,
+                fee_token: "native".to_string(),
+            },
+        );
+
+        let result = solana_relayer.quote_sponsored_transaction(request).await;
+        assert!(result.is_err());
+
+        if let Err(RelayerError::ValidationError(msg)) = result {
+            assert!(msg.contains("Expected Solana fee estimate request parameters"));
+        } else {
+            panic!("Expected ValidationError for wrong network type");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_build_sponsored_transaction_wrong_network() {
+        let ctx = TestCtx::default();
+        let solana_relayer = ctx.into_relayer().await;
+
+        // Use Stellar request instead of Solana
+        let request = SponsoredTransactionBuildRequest::Stellar(
+            crate::models::StellarPrepareTransactionRequestParams {
+                transaction_xdr: Some("test-xdr".to_string()),
+                operations: None,
+                source_account: None,
+                fee_token: "native".to_string(),
+            },
+        );
+
+        let result = solana_relayer.build_sponsored_transaction(request).await;
+        assert!(result.is_err());
+
+        if let Err(RelayerError::ValidationError(msg)) = result {
+            assert!(msg.contains("Expected Solana prepare transaction request parameters"));
+        } else {
+            panic!("Expected ValidationError for wrong network type");
         }
     }
 }

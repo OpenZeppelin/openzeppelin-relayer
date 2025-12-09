@@ -15,7 +15,9 @@
 //! (e.g., "gasless").
 use crate::{
     jobs::JobProducerTrait,
-    models::{GetFeaturesEnabledRequestParams, GetFeaturesEnabledResult, TransactionRepoModel},
+    models::{
+        SolanaGetFeaturesEnabledRequestParams, SolanaGetFeaturesEnabledResult, TransactionRepoModel,
+    },
     repositories::{Repository, TransactionRepository},
     services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
 };
@@ -32,10 +34,10 @@ where
 {
     pub(crate) async fn get_features_enabled_impl(
         &self,
-        _params: GetFeaturesEnabledRequestParams,
-    ) -> Result<GetFeaturesEnabledResult, SolanaRpcError> {
+        _params: SolanaGetFeaturesEnabledRequestParams,
+    ) -> Result<SolanaGetFeaturesEnabledResult, SolanaRpcError> {
         // gasless is enabled out of the box to be compliant with the spec
-        Ok(GetFeaturesEnabledResult {
+        Ok(SolanaGetFeaturesEnabledResult {
             features: vec!["gasless".to_string()],
         })
     }
@@ -61,7 +63,7 @@ mod tests {
         );
 
         let result = rpc
-            .get_features_enabled_impl(GetFeaturesEnabledRequestParams {})
+            .get_features_enabled_impl(SolanaGetFeaturesEnabledRequestParams {})
             .await;
 
         assert!(result.is_ok(), "Should return Ok result");

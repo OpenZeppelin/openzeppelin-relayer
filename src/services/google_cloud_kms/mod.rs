@@ -606,8 +606,8 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(serde_json::to_string(&json!({
-                "pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAVyC+iqnSu0vo6R8x0sRMhintQtoZgcLOur1VyvCrdrs=\n-----END PUBLIC KEY-----\n",
-                "algorithm": "ECDSA_P256_SHA256"
+                "pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAnUV+ReQWxMZ3Z2pC/5aOPPjcc8jzOo0ZgSl7+j4AMLo=\n-----END PUBLIC KEY-----\n",
+                "algorithm": "EC_SIGN_ED25519"
             })).unwrap())
             .create_async()
             .await
@@ -698,10 +698,10 @@ mod tests {
         let service = GoogleCloudKmsService::new(&config).unwrap();
 
         let result = service.get_solana_address().await;
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "Failed with error: {:?}", result.err());
         assert_eq!(
             result.unwrap(),
-            "6s7RsvzcdXFJi1tXeDoGfSKZWjCDNJLiu74rd72zLy6J"
+            "BavUBpkD77FABnevMkBVqV8BDHv7gX8sSoYYJY9WU9L5"
         );
     }
 

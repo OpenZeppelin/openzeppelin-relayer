@@ -33,8 +33,8 @@ use crate::{
     domain::relayer::solana::rpc::methods::utils::FeeQuote,
     models::{
         produce_solana_rpc_webhook_payload, EncodedSerializedTransaction, SolanaFeePaymentStrategy,
-        SolanaWebhookRpcPayload, TransactionRepoModel, TransferTransactionRequestParams,
-        TransferTransactionResult,
+        SolanaTransferTransactionRequestParams, SolanaTransferTransactionResult,
+        SolanaWebhookRpcPayload, TransactionRepoModel,
     },
     repositories::{Repository, TransactionRepository},
     services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
@@ -52,8 +52,8 @@ where
 {
     pub(crate) async fn transfer_transaction_impl(
         &self,
-        params: TransferTransactionRequestParams,
-    ) -> Result<TransferTransactionResult, SolanaRpcError> {
+        params: SolanaTransferTransactionRequestParams,
+    ) -> Result<SolanaTransferTransactionResult, SolanaRpcError> {
         info!(
             "Processing transfer transaction for: {} and amount {}",
             params.token, params.amount
@@ -105,7 +105,7 @@ where
 
         let encoded_tx = EncodedSerializedTransaction::try_from(&transaction)?;
 
-        let result = TransferTransactionResult {
+        let result = SolanaTransferTransactionResult {
             transaction: encoded_tx,
             fee_in_spl: fee_quote.fee_in_spl.to_string(),
             fee_in_lamports: fee_quote.fee_in_lamports.to_string(),
@@ -335,7 +335,7 @@ mod tests {
             Arc::new(MockTransactionRepository::new()),
         );
 
-        let params = TransferTransactionRequestParams {
+        let params = SolanaTransferTransactionRequestParams {
             token: test_token.to_string(),
             source: Pubkey::new_unique().to_string(),
             destination: Pubkey::new_unique().to_string(),
@@ -428,7 +428,7 @@ mod tests {
             Arc::new(MockTransactionRepository::new()),
         );
 
-        let params = TransferTransactionRequestParams {
+        let params = SolanaTransferTransactionRequestParams {
             token: test_token.to_string(),
             source: Pubkey::new_unique().to_string(),
             destination: Pubkey::new_unique().to_string(),
@@ -557,7 +557,7 @@ mod tests {
             Arc::new(MockTransactionRepository::new()),
         );
 
-        let params = TransferTransactionRequestParams {
+        let params = SolanaTransferTransactionRequestParams {
             token: test_token.to_string(),
             source: Pubkey::new_unique().to_string(),
             destination: Pubkey::new_unique().to_string(),
@@ -719,7 +719,7 @@ mod tests {
             Arc::new(ctx.transaction_repository),
         );
 
-        let params = TransferTransactionRequestParams {
+        let params = SolanaTransferTransactionRequestParams {
             token: ctx.token.to_string(),
             source: source_pubkey.to_string(),
             destination: destination_pubkey.to_string(),
@@ -818,7 +818,7 @@ mod tests {
             Arc::new(MockTransactionRepository::new()),
         );
 
-        let params = TransferTransactionRequestParams {
+        let params = SolanaTransferTransactionRequestParams {
             token: test_token.to_string(),
             source: Pubkey::new_unique().to_string(),
             destination: Pubkey::new_unique().to_string(),

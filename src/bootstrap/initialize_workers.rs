@@ -6,23 +6,22 @@ use crate::{
     config::ServerConfig,
     constants::{
         DEFAULT_CONCURRENCY_HEALTH_CHECK, DEFAULT_CONCURRENCY_NOTIFICATION,
-        DEFAULT_CONCURRENCY_SOLANA_SWAP, DEFAULT_CONCURRENCY_STATUS_CHECKER,
-        DEFAULT_CONCURRENCY_STATUS_CHECKER_EVM, DEFAULT_CONCURRENCY_STATUS_CHECKER_STELLAR,
+        DEFAULT_CONCURRENCY_STATUS_CHECKER, DEFAULT_CONCURRENCY_STATUS_CHECKER_EVM,
+        DEFAULT_CONCURRENCY_STATUS_CHECKER_STELLAR, DEFAULT_CONCURRENCY_TOKEN_SWAP,
         DEFAULT_CONCURRENCY_TRANSACTION_REQUEST, DEFAULT_CONCURRENCY_TRANSACTION_SENDER,
         WORKER_NOTIFICATION_SENDER_RETRIES, WORKER_RELAYER_HEALTH_CHECK_RETRIES,
-        WORKER_SOLANA_TOKEN_SWAP_REQUEST_RETRIES, WORKER_TRANSACTION_CLEANUP_RETRIES,
+        WORKER_TOKEN_SWAP_REQUEST_RETRIES, WORKER_TRANSACTION_CLEANUP_RETRIES,
         WORKER_TRANSACTION_REQUEST_RETRIES, WORKER_TRANSACTION_STATUS_CHECKER_RETRIES,
         WORKER_TRANSACTION_SUBMIT_RETRIES,
     },
     jobs::{
-        notification_handler, relayer_health_check_handler, solana_token_swap_cron_handler,
-        solana_token_swap_request_handler, transaction_cleanup_handler,
-        transaction_request_handler, transaction_status_handler, transaction_submission_handler,
-        JobProducerTrait,
+        notification_handler, relayer_health_check_handler, token_swap_cron_handler,
+        token_swap_request_handler, transaction_cleanup_handler, transaction_request_handler,
+        transaction_status_handler, transaction_submission_handler, JobProducerTrait,
     },
     models::{
-        NetworkRepoModel, NotificationRepoModel, RelayerRepoModel, SignerRepoModel,
-        ThinDataAppState, TransactionRepoModel,
+        NetworkRepoModel, NotificationRepoModel, RelayerNetworkPolicy, RelayerRepoModel,
+        SignerRepoModel, ThinDataAppState, TransactionRepoModel,
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
@@ -52,7 +51,7 @@ const TRANSACTION_STATUS_CHECKER: &str = "transaction_status_checker";
 const TRANSACTION_STATUS_CHECKER_EVM: &str = "transaction_status_checker_evm";
 const TRANSACTION_STATUS_CHECKER_STELLAR: &str = "transaction_status_checker_stellar";
 const NOTIFICATION_SENDER: &str = "notification_sender";
-const SOLANA_TOKEN_SWAP_REQUEST: &str = "solana_token_swap_request";
+const TOKEN_SWAP_REQUEST: &str = "token_swap_request";
 const TRANSACTION_CLEANUP: &str = "transaction_cleanup";
 const RELAYER_HEALTH_CHECK: &str = "relayer_health_check";
 
@@ -195,21 +194,21 @@ where
         .backend(queue.notification_queue.clone())
         .build_fn(notification_handler);
 
-    let solana_token_swap_request_queue_worker = WorkerBuilder::new(SOLANA_TOKEN_SWAP_REQUEST)
+    let token_swap_request_queue_worker = WorkerBuilder::new(TOKEN_SWAP_REQUEST)
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
         .catch_panic()
         .retry(
-            RetryPolicy::retries(WORKER_SOLANA_TOKEN_SWAP_REQUEST_RETRIES)
+            RetryPolicy::retries(WORKER_TOKEN_SWAP_REQUEST_RETRIES)
                 .with_backoff(create_backoff(5000, 20000, 0.99)?.make_backoff()),
         )
         .concurrency(ServerConfig::get_worker_concurrency(
-            SOLANA_TOKEN_SWAP_REQUEST,
-            DEFAULT_CONCURRENCY_SOLANA_SWAP,
+            TOKEN_SWAP_REQUEST,
+            DEFAULT_CONCURRENCY_TOKEN_SWAP,
         ))
         .data(app_state.clone())
-        .backend(queue.solana_token_swap_request_queue.clone())
-        .build_fn(solana_token_swap_request_handler);
+        .backend(queue.token_swap_request_queue.clone())
+        .build_fn(token_swap_request_handler);
 
     let transaction_cleanup_queue_worker = WorkerBuilder::new(TRANSACTION_CLEANUP)
         .layer(ErrorHandlingLayer::new())
@@ -250,7 +249,7 @@ where
         .register(transaction_status_queue_worker_evm)
         .register(transaction_status_queue_worker_stellar)
         .register(notification_queue_worker)
-        .register(solana_token_swap_request_queue_worker)
+        .register(token_swap_request_queue_worker)
         .register(transaction_cleanup_queue_worker)
         .register(relayer_health_check_worker)
         .on_event(monitor_handle_event)
@@ -279,39 +278,62 @@ where
         }
     });
     debug!("Workers monitor shutdown complete");
+
     Ok(())
 }
 
-/// Filters relayers to find those eligible for swap workers
+/// Filters relayers to find those eligible for swap workers (Solana or Stellar)
 /// Returns relayers that have:
-/// 1. Solana network type
+/// 1. Solana or Stellar network type
 /// 2. Swap configuration
 /// 3. Cron schedule defined
 fn filter_relayers_for_swap(relayers: Vec<RelayerRepoModel>) -> Vec<RelayerRepoModel> {
     relayers
         .into_iter()
         .filter(|relayer| {
-            let policy = relayer.policies.get_solana_policy();
-            let swap_config = match policy.get_swap_config() {
-                Some(config) => config,
-                None => {
-                    debug!(relayer_id = %relayer.id, "No swap configuration specified; skipping");
-                    return false;
-                }
-            };
+            match &relayer.policies {
+                RelayerNetworkPolicy::Solana(policy) => {
+                    let swap_config = match policy.get_swap_config() {
+                        Some(config) => config,
+                        None => {
+                            debug!(relayer_id = %relayer.id, "No Solana swap configuration specified; skipping");
+                            return false;
+                        }
+                    };
 
-            if swap_config.cron_schedule.is_none() {
-                debug!(relayer_id = %relayer.id, "No cron schedule specified; skipping");
-                return false;
+                    if swap_config.cron_schedule.is_none() {
+                        debug!(relayer_id = %relayer.id, "No cron schedule specified; skipping");
+                        return false;
+                    }
+                    true
+                }
+                RelayerNetworkPolicy::Stellar(policy) => {
+                    let swap_config = match policy.get_swap_config() {
+                        Some(config) => config,
+                        None => {
+                            debug!(relayer_id = %relayer.id, "No Stellar swap configuration specified; skipping");
+                            return false;
+                        }
+                    };
+
+                    if swap_config.cron_schedule.is_none() {
+                        debug!(relayer_id = %relayer.id, "No cron schedule specified; skipping");
+                        return false;
+                    }
+                    true
+                }
+                _ => {
+                    debug!(relayer_id = %relayer.id, "Network type does not support swap; skipping");
+                    false
+                }
             }
-            true
         })
         .collect()
 }
 
-/// Initializes the Solana swap workers
-/// This function creates and registers workers for Solana relayers that have swap enabled and cron schedule set.
-pub async fn initialize_solana_swap_workers<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+/// Initializes swap workers for Solana and Stellar relayers
+/// This function creates and registers workers for relayers that have swap enabled and cron schedule set.
+pub async fn initialize_token_swap_workers<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     app_state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
 ) -> Result<()>
 where
@@ -326,60 +348,89 @@ where
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
     let active_relayers = app_state.relayer_repository.list_active().await?;
-    let solena_relayers_with_swap_enabled = filter_relayers_for_swap(active_relayers);
+    let relayers_with_swap_enabled = filter_relayers_for_swap(active_relayers);
 
-    if solena_relayers_with_swap_enabled.is_empty() {
-        debug!("No solana relayers with swap enabled");
+    if relayers_with_swap_enabled.is_empty() {
+        debug!("No relayers with swap enabled");
         return Ok(());
     }
     info!(
-        "Found {} solana relayers with swap enabled",
-        solena_relayers_with_swap_enabled.len()
+        "Found {} relayers with swap enabled",
+        relayers_with_swap_enabled.len()
     );
 
     let mut workers = Vec::new();
 
     let swap_backoff = create_backoff(2000, 5000, 0.99)?.make_backoff();
 
-    for relayer in solena_relayers_with_swap_enabled {
-        debug!(relayer = ?relayer, "found solana relayer with swap enabled");
+    for relayer in relayers_with_swap_enabled {
+        debug!(relayer = ?relayer, "found relayer with swap enabled");
 
-        let policy = relayer.policies.get_solana_policy();
-        let swap_config = match policy.get_swap_config() {
-            Some(config) => config,
-            None => {
-                debug!("No swap configuration specified; skipping validation.");
+        let (cron_schedule, network_type) = match &relayer.policies {
+            RelayerNetworkPolicy::Solana(policy) => match policy.get_swap_config() {
+                Some(config) => match config.cron_schedule {
+                    Some(schedule) => (schedule, "solana".to_string()),
+                    None => {
+                        debug!(relayer_id = %relayer.id, "No cron schedule specified for Solana relayer; skipping");
+                        continue;
+                    }
+                },
+                None => {
+                    debug!(relayer_id = %relayer.id, "No swap configuration specified for Solana relayer; skipping");
+                    continue;
+                }
+            },
+            RelayerNetworkPolicy::Stellar(policy) => match policy.get_swap_config() {
+                Some(config) => match config.cron_schedule {
+                    Some(schedule) => (schedule, "stellar".to_string()),
+                    None => {
+                        debug!(relayer_id = %relayer.id, "No cron schedule specified for Stellar relayer; skipping");
+                        continue;
+                    }
+                },
+                None => {
+                    debug!(relayer_id = %relayer.id, "No swap configuration specified for Stellar relayer; skipping");
+                    continue;
+                }
+            },
+            RelayerNetworkPolicy::Evm(_) => {
+                debug!(relayer_id = %relayer.id, "EVM relayers do not support swap; skipping");
                 continue;
             }
         };
 
-        let calendar_schedule = match swap_config.cron_schedule {
-            Some(schedule) => apalis_cron::Schedule::from_str(&schedule).unwrap(),
-            None => {
-                debug!(relayer = ?relayer, "no swap cron schedule found for relayer");
+        let calendar_schedule = match apalis_cron::Schedule::from_str(&cron_schedule) {
+            Ok(schedule) => schedule,
+            Err(e) => {
+                error!(relayer_id = %relayer.id, error = %e, "Failed to parse cron schedule; skipping");
                 continue;
             }
         };
 
         // Create worker and add to the workers vector
-        let worker = WorkerBuilder::new(format!("solana-swap-schedule-{}", relayer.id.clone()))
-            .layer(ErrorHandlingLayer::new())
-            .enable_tracing()
-            .catch_panic()
-            .retry(
-                RetryPolicy::retries(WORKER_SOLANA_TOKEN_SWAP_REQUEST_RETRIES)
-                    .with_backoff(swap_backoff.clone()),
-            )
-            .concurrency(1)
-            .data(relayer.id.clone())
-            .data(app_state.clone())
-            .backend(CronStream::new(calendar_schedule))
-            .build_fn(solana_token_swap_cron_handler);
+        let worker = WorkerBuilder::new(format!(
+            "{}-swap-schedule-{}",
+            network_type,
+            relayer.id.clone()
+        ))
+        .layer(ErrorHandlingLayer::new())
+        .enable_tracing()
+        .catch_panic()
+        .retry(
+            RetryPolicy::retries(WORKER_TOKEN_SWAP_REQUEST_RETRIES)
+                .with_backoff(swap_backoff.clone()),
+        )
+        .concurrency(1)
+        .data(relayer.id.clone())
+        .data(app_state.clone())
+        .backend(CronStream::new(calendar_schedule))
+        .build_fn(token_swap_cron_handler);
 
         workers.push(worker);
         debug!(
-            "Created worker for solana relayer with swap enabled: {:?}",
-            relayer
+            relayer_id = %relayer.id,
+            network_type = %network_type,
+            "Created worker for relayer with swap enabled"
         );
     }
 
@@ -398,14 +449,14 @@ where
         let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
             .expect("Failed to create SIGTERM signal");
 
-        debug!("Solana Swap Monitor started");
+        debug!("Swap Monitor started");
 
         tokio::select! {
             _ = sigint.recv() => debug!("Received SIGINT."),
             _ = sigterm.recv() => debug!("Received SIGTERM."),
         };
 
-        debug!("Solana Swap Monitor shutting down");
+        debug!("Swap Monitor shutting down");
 
         Ok(())
     });
@@ -447,7 +498,8 @@ mod tests {
     use super::*;
     use crate::models::{
         NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy,
-        RelayerSolanaSwapConfig,
+        RelayerSolanaSwapConfig, RelayerStellarPolicy, RelayerStellarSwapConfig,
+        StellarFeePaymentStrategy, StellarSwapStrategy,
     };
 
     fn create_test_evm_relayer(id: &str) -> RelayerRepoModel {
@@ -500,6 +552,38 @@ mod tests {
         }
     }
 
+    fn create_test_stellar_relayer_with_swap(
+        id: &str,
+        cron_schedule: Option<String>,
+    ) -> RelayerRepoModel {
+        RelayerRepoModel {
+            id: id.to_string(),
+            name: format!("Stellar Relayer {}", id),
+            network: "testnet".to_string(),
+            paused: false,
+            network_type: NetworkType::Stellar,
+            policies: RelayerNetworkPolicy::Stellar(RelayerStellarPolicy {
+                min_balance: Some(1000000000),
+                max_fee: None,
+                timeout_seconds: None,
+                concurrent_transactions: None,
+                allowed_tokens: None,
+                fee_payment_strategy: Some(StellarFeePaymentStrategy::User),
+                slippage_percentage: None,
+                fee_margin_percentage: None,
+                swap_config: Some(RelayerStellarSwapConfig {
+                    strategies: vec![StellarSwapStrategy::OrderBook],
+                    cron_schedule,
+                    min_balance_threshold: Some(5000000000),
+                }),
+            }),
+            signer_id: "test-signer".to_string(),
+            address: "GABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCDEFGH".to_string(),
+            system_disabled: false,
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn test_filter_relayers_for_swap_with_empty_list() {
         let relayers = vec![];
@@ -513,7 +597,7 @@ mod tests {
     }
 
     #[test]
-    fn test_filter_relayers_for_swap_filters_non_solana() {
+    fn test_filter_relayers_for_swap_filters_non_solana_stellar() {
         let relayers = vec![
             create_test_evm_relayer("evm-1"),
             create_test_evm_relayer("evm-2"),
@@ -524,7 +608,7 @@ mod tests {
         assert_eq!(
             filtered.len(),
             0,
-            "Should filter out all non-Solana relayers"
+            "Should filter out all non-Solana/Stellar relayers"
         );
     }
 
@@ -533,6 +617,8 @@ mod tests {
         let relayers = vec![
             create_test_solana_relayer_with_swap("solana-1", None),
             create_test_solana_relayer_with_swap("solana-2", None),
+            create_test_stellar_relayer_with_swap("stellar-1", None),
+            create_test_stellar_relayer_with_swap("stellar-2", None),
         ];
 
         let filtered = filter_relayers_for_swap(relayers);
@@ -540,7 +626,7 @@ mod tests {
         assert_eq!(
             filtered.len(),
             0,
-            "Should filter out Solana relayers without cron schedule"
+            "Should filter out Solana and Stellar relayers without cron schedule"
         );
     }
 
@@ -549,17 +635,22 @@ mod tests {
         let relayers = vec![
             create_test_solana_relayer_with_swap("solana-1", Some("0 0 * * * *".to_string())),
             create_test_solana_relayer_with_swap("solana-2", Some("0 */2 * * * *".to_string())),
+            create_test_stellar_relayer_with_swap("stellar-1", Some("0 0 * * * *".to_string())),
+            create_test_stellar_relayer_with_swap("stellar-2", Some("0 */2 * * * *".to_string())),
         ];
 
         let filtered = filter_relayers_for_swap(relayers);
 
         assert_eq!(
             filtered.len(),
-            2,
-            "Should include all Solana relayers with cron schedule"
+            4,
+            "Should include all Solana and Stellar relayers with cron schedule"
         );
-        assert_eq!(filtered[0].id, "solana-1");
-        assert_eq!(filtered[1].id, "solana-2");
+        let ids: Vec<&str> = filtered.iter().map(|r| r.id.as_str()).collect();
+        assert!(ids.contains(&"solana-1"), "Should include solana-1");
+        assert!(ids.contains(&"solana-2"), "Should include solana-2");
+        assert!(ids.contains(&"stellar-1"), "Should include stellar-1");
+        assert!(ids.contains(&"stellar-2"), "Should include stellar-2");
     }
 
     #[test]
@@ -576,14 +667,23 @@ mod tests {
                 "solana-with-cron-2",
                 Some("0 */3 * * * *".to_string()),
             ),
+            create_test_stellar_relayer_with_swap("stellar-no-cron", None),
+            create_test_stellar_relayer_with_swap(
+                "stellar-with-cron-1",
+                Some("0 0 * * * *".to_string()),
+            ),
+            create_test_stellar_relayer_with_swap(
+                "stellar-with-cron-2",
+                Some("0 */3 * * * *".to_string()),
+            ),
         ];
 
         let filtered = filter_relayers_for_swap(relayers);
 
         assert_eq!(
             filtered.len(),
-            2,
-            "Should only include Solana relayers with cron schedule"
+            4,
+            "Should only include Solana and Stellar relayers with cron schedule"
         );
 
         // Verify the correct relayers were included
@@ -596,15 +696,27 @@ mod tests {
             ids.contains(&"solana-with-cron-2"),
             "Should include solana-with-cron-2"
         );
+        assert!(
+            ids.contains(&"stellar-with-cron-1"),
+            "Should include stellar-with-cron-1"
+        );
+        assert!(
+            ids.contains(&"stellar-with-cron-2"),
+            "Should include stellar-with-cron-2"
+        );
         assert!(!ids.contains(&"evm-1"), "Should not include EVM relayers");
         assert!(
             !ids.contains(&"solana-no-cron"),
             "Should not include Solana without cron"
         );
+        assert!(
+            !ids.contains(&"stellar-no-cron"),
+            "Should not include Stellar without cron"
+        );
     }
 
     #[test]
-    fn test_filter_relayers_for_swap_preserves_relayer_data() {
+    fn test_filter_relayers_for_swap_preserves_solana_relayer_data() {
         let cron = "0 1 * * * *".to_string();
         let relayers = vec![create_test_solana_relayer_with_swap(
             "test-relayer",
@@ -624,5 +736,276 @@ mod tests {
         let policy = relayer.policies.get_solana_policy();
         let swap_config = policy.get_swap_config().expect("Should have swap config");
         assert_eq!(swap_config.cron_schedule.as_ref(), Some(&cron));
+    }
+
+    #[test]
+    fn test_filter_relayers_for_swap_preserves_stellar_relayer_data() {
+        let cron = "0 1 * * * *".to_string();
+        let relayers = vec![create_test_stellar_relayer_with_swap(
+            "test-relayer",
+            Some(cron.clone()),
+        )];
+
+        let filtered = filter_relayers_for_swap(relayers);
+
+        assert_eq!(filtered.len(), 1);
+
+        let relayer = &filtered[0];
+        assert_eq!(relayer.id, "test-relayer");
+        assert_eq!(relayer.name, "Stellar Relayer test-relayer");
+        assert_eq!(relayer.network_type, NetworkType::Stellar);
+
+        // Verify swap config is preserved
+        let policy = relayer.policies.get_stellar_policy();
+        let swap_config = policy.get_swap_config().expect("Should have swap config");
+        assert_eq!(swap_config.cron_schedule.as_ref(), Some(&cron));
+    }
+
+    fn create_test_solana_relayer_without_swap_config(id: &str) -> RelayerRepoModel {
+        RelayerRepoModel {
+            id: id.to_string(),
+            name: format!("Solana Relayer {}", id),
+            network: "mainnet-beta".to_string(),
+            paused: false,
+            network_type: NetworkType::Solana,
+            policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+                min_balance: Some(1000000000),
+                allowed_tokens: None,
+                allowed_programs: None,
+                max_signatures: None,
+                max_tx_data_size: None,
+                fee_payment_strategy: None,
+                fee_margin_percentage: None,
+                allowed_accounts: None,
+                disallowed_accounts: None,
+                max_allowed_fee_lamports: None,
+                swap_config: None, // No swap config
+            }),
+            signer_id: "test-signer".to_string(),
+            address: "5zWma6gn4QxRfC6xZk6KfpXWXXgV3Xt6VzPpXMKCMYW5".to_string(),
+            system_disabled: false,
+            ..Default::default()
+        }
+    }
+
+    fn create_test_stellar_relayer_without_swap_config(id: &str) -> RelayerRepoModel {
+        RelayerRepoModel {
+            id: id.to_string(),
+            name: format!("Stellar Relayer {}", id),
+            network: "testnet".to_string(),
+            paused: false,
+            network_type: NetworkType::Stellar,
+            policies: RelayerNetworkPolicy::Stellar(RelayerStellarPolicy {
+                min_balance: Some(1000000000),
+                max_fee: None,
+                timeout_seconds: None,
+                concurrent_transactions: None,
+                allowed_tokens: None,
+                fee_payment_strategy: Some(StellarFeePaymentStrategy::User),
+                slippage_percentage: None,
+                fee_margin_percentage: None,
+                swap_config: None, // No swap config
+            }),
+            signer_id: "test-signer".to_string(),
+            address: "GABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCDEFGH".to_string(),
+            system_disabled: false,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_filter_relayers_for_swap_filters_solana_without_swap_config() {
+        let relayers = vec![
+            create_test_solana_relayer_without_swap_config("solana-1"),
+            create_test_solana_relayer_without_swap_config("solana-2"),
+        ];
+
+        let filtered = filter_relayers_for_swap(relayers);
+
+        assert_eq!(
+            filtered.len(),
+            0,
+            "Should filter out Solana relayers without swap config"
+        );
+    }
+
+    #[test]
+    fn test_filter_relayers_for_swap_filters_stellar_without_swap_config() {
+        let relayers = vec![
+            create_test_stellar_relayer_without_swap_config("stellar-1"),
+            create_test_stellar_relayer_without_swap_config("stellar-2"),
+        ];
+
+        let filtered = filter_relayers_for_swap(relayers);
+
+        assert_eq!(
+            filtered.len(),
+            0,
+            "Should filter out Stellar relayers without swap config"
+        );
+    }
+
+    #[test]
+    fn test_filter_relayers_for_swap_with_mixed_swap_configs() {
+        let relayers = vec![
+            create_test_solana_relayer_without_swap_config("solana-no-config"),
+            create_test_solana_relayer_with_swap("solana-no-cron", None),
+            create_test_solana_relayer_with_swap(
+                "solana-with-cron",
+                Some("0 0 * * * *".to_string()),
+            ),
+            create_test_stellar_relayer_without_swap_config("stellar-no-config"),
+            create_test_stellar_relayer_with_swap("stellar-no-cron", None),
+            create_test_stellar_relayer_with_swap(
+                "stellar-with-cron",
+                Some("0 0 * * * *".to_string()),
+            ),
+        ];
+
+        let filtered = filter_relayers_for_swap(relayers);
+
+        assert_eq!(
+            filtered.len(),
+            2,
+            "Should only include relayers with swap config and cron schedule"
+        );
+
+        let ids: Vec<&str> = filtered.iter().map(|r| r.id.as_str()).collect();
+        assert!(
+            ids.contains(&"solana-with-cron"),
+            "Should include solana-with-cron"
+        );
+        assert!(
+            ids.contains(&"stellar-with-cron"),
+            "Should include stellar-with-cron"
+        );
+        assert!(
+            !ids.contains(&"solana-no-config"),
+            "Should not include solana without config"
+        );
+        assert!(
+            !ids.contains(&"solana-no-cron"),
+            "Should not include solana without cron"
+        );
+        assert!(
+            !ids.contains(&"stellar-no-config"),
+            "Should not include stellar without config"
+        );
+        assert!(
+            !ids.contains(&"stellar-no-cron"),
+            "Should not include stellar without cron"
+        );
+    }
+
+    #[test]
+    fn test_create_backoff_with_valid_parameters() {
+        let result = create_backoff(200, 5000, 0.99);
+        assert!(
+            result.is_ok(),
+            "Should create backoff with valid parameters"
+        );
+    }
+
+    #[test]
+    fn test_create_backoff_with_zero_initial() {
+        let result = create_backoff(0, 5000, 0.99);
+        assert!(
+            result.is_ok(),
+            "Should handle zero initial delay (edge case)"
+        );
+    }
+
+    #[test]
+    fn test_create_backoff_with_equal_initial_and_max() {
+        let result = create_backoff(1000, 1000, 0.5);
+        assert!(result.is_ok(), "Should handle equal initial and max delays");
+    }
+
+    #[test]
+    fn test_create_backoff_with_zero_jitter() {
+        let result = create_backoff(500, 5000, 0.0);
+        assert!(result.is_ok(), "Should handle zero jitter");
+    }
+
+    #[test]
+    fn test_create_backoff_with_max_jitter() {
+        let result = create_backoff(500, 5000, 1.0);
+        assert!(result.is_ok(), "Should handle maximum jitter (1.0)");
+    }
+
+    #[test]
+    fn test_create_backoff_with_small_values() {
+        let result = create_backoff(1, 10, 0.5);
+        assert!(result.is_ok(), "Should handle very small delay values");
+    }
+
+    #[test]
+    fn test_create_backoff_with_large_values() {
+        let result = create_backoff(10000, 60000, 0.99);
+        assert!(result.is_ok(), "Should handle large delay values");
+    }
+
+    #[test]
+    fn test_filter_relayers_preserves_order() {
+        let relayers = vec![
+            create_test_solana_relayer_with_swap("solana-1", Some("0 0 * * * *".to_string())),
+            create_test_stellar_relayer_with_swap("stellar-1", Some("0 0 * * * *".to_string())),
+            create_test_solana_relayer_with_swap("solana-2", Some("0 0 * * * *".to_string())),
+            create_test_stellar_relayer_with_swap("stellar-2", Some("0 0 * * * *".to_string())),
+        ];
+
+        let filtered = filter_relayers_for_swap(relayers);
+
+        assert_eq!(filtered.len(), 4);
+        assert_eq!(filtered[0].id, "solana-1");
+        assert_eq!(filtered[1].id, "stellar-1");
+        assert_eq!(filtered[2].id, "solana-2");
+        assert_eq!(filtered[3].id, "stellar-2");
+    }
+
+    #[test]
+    fn test_filter_relayers_with_different_cron_formats() {
+        let relayers = vec![
+            create_test_solana_relayer_with_swap("solana-1", Some("0 0 * * * *".to_string())), // Every hour
+            create_test_solana_relayer_with_swap("solana-2", Some("*/5 * * * * *".to_string())), // Every 5 seconds
+            create_test_stellar_relayer_with_swap("stellar-1", Some("0 0 12 * * *".to_string())), // Daily at noon
+            create_test_stellar_relayer_with_swap("stellar-2", Some("0 */15 * * * *".to_string())), // Every 15 minutes
+        ];
+
+        let filtered = filter_relayers_for_swap(relayers);
+
+        assert_eq!(
+            filtered.len(),
+            4,
+            "Should accept various valid cron schedule formats"
+        );
+    }
+
+    #[test]
+    fn test_filter_relayers_with_all_network_types() {
+        let relayers = vec![
+            create_test_evm_relayer("evm-1"),
+            create_test_solana_relayer_with_swap("solana-1", Some("0 0 * * * *".to_string())),
+            create_test_stellar_relayer_with_swap("stellar-1", Some("0 0 * * * *".to_string())),
+        ];
+
+        let filtered = filter_relayers_for_swap(relayers);
+
+        assert_eq!(filtered.len(), 2, "Should only include Solana and Stellar");
+
+        let network_types: Vec<NetworkType> =
+            filtered.iter().map(|r| r.network_type.clone()).collect();
+        assert!(
+            network_types.contains(&NetworkType::Solana),
+            "Should include Solana"
+        );
+        assert!(
+            network_types.contains(&NetworkType::Stellar),
+            "Should include Stellar"
+        );
+        assert!(
+            !network_types.contains(&NetworkType::Evm),
+            "Should not include EVM"
+        );
     }
 }

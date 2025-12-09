@@ -29,8 +29,8 @@ use crate::{
     domain::SolanaRpcError,
     jobs::JobProducerTrait,
     models::{
-        FeeEstimateRequestParams, FeeEstimateResult, RelayerRepoModel, SolanaFeePaymentStrategy,
-        TransactionRepoModel,
+        RelayerRepoModel, SolanaFeeEstimateRequestParams, SolanaFeeEstimateResult,
+        SolanaFeePaymentStrategy, TransactionRepoModel,
     },
     repositories::{Repository, TransactionRepository},
     services::{provider::SolanaProviderTrait, signer::SolanaSignTrait, JupiterServiceTrait},
@@ -71,8 +71,8 @@ where
     /// * `conversion_rate` - A string with the conversion rate from SOL to the specified token.
     pub(crate) async fn fee_estimate_impl(
         &self,
-        params: FeeEstimateRequestParams,
-    ) -> Result<FeeEstimateResult, SolanaRpcError> {
+        params: SolanaFeeEstimateRequestParams,
+    ) -> Result<SolanaFeeEstimateResult, SolanaRpcError> {
         info!(
             "Processing fee estimate request for token: {}",
             params.fee_token
@@ -105,7 +105,7 @@ where
             &self.relayer.policies.get_solana_policy(),
         )?;
 
-        Ok(FeeEstimateResult {
+        Ok(SolanaFeeEstimateResult {
             estimated_fee: fee_quote.fee_in_spl_ui,
             conversion_rate: fee_quote.conversion_rate.to_string(),
         })
@@ -316,7 +316,7 @@ mod tests {
             Arc::new(MockTransactionRepository::new()),
         );
 
-        let params = FeeEstimateRequestParams {
+        let params = SolanaFeeEstimateRequestParams {
             transaction: encoded_tx,
             fee_token: "USDC".to_string(),
         };
@@ -486,7 +486,7 @@ mod tests {
 
         let token_test = &ctx.token;
 
-        let params = FeeEstimateRequestParams {
+        let params = SolanaFeeEstimateRequestParams {
             transaction: ctx.encoded_tx,
             fee_token: token_test.clone(),
         };
@@ -588,7 +588,7 @@ mod tests {
             Arc::new(MockTransactionRepository::new()),
         );
 
-        let params = FeeEstimateRequestParams {
+        let params = SolanaFeeEstimateRequestParams {
             transaction: encoded_tx,
             // noboost
             fee_token: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB".to_string(), // noboost
@@ -687,7 +687,7 @@ mod tests {
             Arc::new(MockTransactionRepository::new()),
         );
 
-        let params = FeeEstimateRequestParams {
+        let params = SolanaFeeEstimateRequestParams {
             transaction: encoded_tx,
             // noboost
             fee_token: "8qJSyQprMC57TWKaYEmetUR3UUiTP2M3hXW6D2evU9Tt".to_string(), // noboost
@@ -742,7 +742,7 @@ mod tests {
             Arc::new(MockTransactionRepository::new()),
         );
 
-        let params = FeeEstimateRequestParams {
+        let params = SolanaFeeEstimateRequestParams {
             transaction: encoded_tx,
             fee_token: WRAPPED_SOL_MINT.to_string(),
         };

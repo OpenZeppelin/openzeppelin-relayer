@@ -13,9 +13,8 @@
   "author": "",
   "license": "",
   "dependencies": {
-    "@openzeppelin/relayer-plugin-channels": "^0.3.1",
-    "@openzeppelin/relayer-sdk": "^1.7.0",
-    "stellar-sdk": "^12.3.0"
+    "@openzeppelin/relayer-plugin-channels": "^0.5.0",
+    "@openzeppelin/relayer-sdk": "^1.7.0"
   },
   "devDependencies": {
     "@types/jest": "^29.5.12",
