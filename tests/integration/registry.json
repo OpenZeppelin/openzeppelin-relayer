@@ -29,6 +29,21 @@
       "min_balance": "0.1",
       "tags": ["quick", "ci", "evm", "baseline"],
       "enabled": true
+    },
+    "base-sepolia": {
+      "network_name": "base-sepolia",
+      "network_type": "evm",
+      "signer": {
+        "id": "local-signer",
+        "address": "0x35661d4402cd42d7be8952fb425fede407ef7f0e"
+      },
+      "contracts": {
+        "simple_storage": "0xFa36681305B4b47A7398faFcF449FeAA80af97F7",
+        "test_erc20": "0x0000000000000000000000000000000000000000"
+      },
+      "min_balance": "0.1",
+      "tags": ["quick", "ci", "evm", "baseline"],
+      "enabled": true
     }
   },
   "_metadata": {
