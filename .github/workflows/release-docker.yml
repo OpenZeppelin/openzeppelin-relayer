@@ -117,7 +117,7 @@ jobs:
           script: |
             const res = await github.rest.actions.listRepoWorkflows({
               owner: 'OpenZeppelin',
-              repo: 'openzeppelin-relayer-infra',
+              repo: 'ui-builder',
             });
 
             console.log('Workflows visible to this token:');
