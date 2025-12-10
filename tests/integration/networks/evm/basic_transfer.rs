@@ -172,8 +172,8 @@ mod tests {
         assert!(BURN_ADDRESS.starts_with("0x"));
         assert_eq!(BURN_ADDRESS.len(), 42);
 
-        // Verify transfer value is reasonable (0.0001 ETH)
+        // Verify transfer value is reasonable (0.000001 ETH)
         let value: u128 = TRANSFER_VALUE.parse().unwrap();
-        assert_eq!(value, 100_000_000_000_000); // 0.0001 ETH in wei
+        assert_eq!(value, 1_000_000_000_000); // 0.000001 ETH in wei
     }
 }
