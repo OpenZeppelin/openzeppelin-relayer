@@ -4,7 +4,9 @@
 # ============================================================================
 # Builder Stage - Compile integration tests
 # ============================================================================
-FROM cgr.dev/chainguard/rust:latest-dev@sha256:faf49718aaa95c798ed1dfdf3e4edee2cdbc3790c8994705ca6ef35972128459 AS builder
+# Rustc v1.91.1
+# The digest needs to be updated everytime the minimum version is changed, and if the version is above 1.91.1
+FROM cgr.dev/chainguard/rust:latest-dev@sha256:33faad9a26e8437ed9725bea3eb2d1e85facd1c035a31af8d485ea8c0a935532 AS builder
 
 USER root
 RUN apk update && apk --no-cache add \
@@ -34,9 +36,14 @@ COPY src ./src
 COPY tests ./tests
 
 # Build integration tests
+# Clear cached integration test artifacts to force recompilation when source changes.
+# This ensures changes to test files are always reflected in the binary while still
+# keeping dependency compilation cached for fast builds.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \
+    rm -rf /app/target/release/deps/integration-* \
+           /app/target/release/.fingerprint/*integration* && \
     cargo test --test integration --release --no-run && \
     TEST_BINARY=$(find target/release/deps -name 'integration-*' -type f -executable | head -n 1) && \
     cp "$TEST_BINARY" /app/integration-test-binary

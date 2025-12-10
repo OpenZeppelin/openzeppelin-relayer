@@ -33,6 +33,9 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379
       - IN_DOCKER=true
+      # Reduce log verbosity during tests - only show WARN and ERROR
+      # This filters out verbose OpenTelemetry traces
+      - RUST_LOG=warn,openzeppelin_relayer=warn,actix_web=warn,tracing_actix_web=error
     volumes:
       - ./tests/integration/config:/app/config:ro
       - ./config/networks:/app/networks:ro
@@ -50,8 +53,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.integration
-      args:
-        - RUST_VERSION=${RUST_VERSION:-1.86}
     container_name: integration-tests
     depends_on:
       relayer:
@@ -62,6 +63,9 @@ services:
       - .env.integration
     environment:
       - RELAYER_BASE_URL=http://relayer:8080
+      # Test logging configuration
+      # Default to INFO level for clean output, can be overridden with RUST_LOG
+      - RUST_LOG=${RUST_LOG:-integration=info}
     volumes:
       - ./tests/integration/config:/app/config:ro
       - ./config/networks:/app/networks:ro
