@@ -110,6 +110,27 @@ jobs:
       #     echo "Image tags: ${{ steps.meta.outputs.tags }}" >> "${GITHUB_STEP_SUMMARY}"
       #     echo "Image labels: ${{ steps.meta.outputs.labels }}" >> "${GITHUB_STEP_SUMMARY}"
 
+      - name: List workflows in openzeppelin-relayer-infra
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ steps.gh-app-token.outputs.token }}
+          script: |
+            const res = await github.rest.actions.listRepoWorkflows({
+              owner: 'OpenZeppelin',
+              repo: 'openzeppelin-relayer-infra',
+            });
+
+            console.log('Workflows visible to this token:');
+            for (const wf of res.data.workflows) {
+              console.log({
+                id: wf.id,
+                name: wf.name,
+                path: wf.path,
+                state: wf.state,
+              });
+            }
+
+
       - name: Trigger external workflows
         uses: actions/github-script@v6
         with:
