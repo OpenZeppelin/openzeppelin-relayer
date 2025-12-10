@@ -119,5 +119,5 @@ jobs:
               owner: 'OpenZeppelin',
               repo: 'openzeppelin-relayer-infra',
               workflow_id: 'stg.yml',
-              ref: 'aws-infra'
+              ref: 'main'
             })
