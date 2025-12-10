@@ -113,7 +113,7 @@ jobs:
       - name: List workflows in openzeppelin-relayer-infra
         uses: actions/github-script@v6
         with:
-          github-token: ${{ steps.gh-app-token.outputs.token }}
+          github-token: ${{ secrets.TEMP_TOKEN }}
           script: |
             const res = await github.rest.actions.listRepoWorkflows({
               owner: 'OpenZeppelin',
@@ -134,7 +134,7 @@ jobs:
       - name: Trigger external workflows
         uses: actions/github-script@v6
         with:
-          github-token: ${{ steps.gh-app-token.outputs.token }}
+          github-token: ${{ secrets.TEMP_TOKEN }}
           script: |
             await github.rest.actions.createWorkflowDispatch({
               owner: 'OpenZeppelin',
