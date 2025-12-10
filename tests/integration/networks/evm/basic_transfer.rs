@@ -3,29 +3,41 @@
 use crate::integration::common::{
     client::RelayerClient,
     confirmation::{wait_for_receipt, ReceiptConfig},
+    logging::init_test_logging,
     network_selection::get_test_networks,
     registry::TestRegistry,
 };
 use serial_test::serial;
+use tracing::{debug, error, info, info_span};
 
 use super::helpers::{setup_test_relayer, verify_network_ready};
 
 /// Burn address for test transfers
 const BURN_ADDRESS: &str = "0x000000000000000000000000000000000000dEaD";
 
-/// Test value for transfers (0.0001 ETH in wei)
-const TRANSFER_VALUE: &str = "100000000000000";
+/// Test value for transfers (0.000001 ETH in wei)
+const TRANSFER_VALUE: &str = "1000000000000";
 
 async fn run_basic_transfer_test(network: &str) -> eyre::Result<()> {
-    println!("\n{}", "=".repeat(60));
-    println!("Testing basic transfer on: {}", network);
-    println!("{}\n", "=".repeat(60));
+    let _span = info_span!("basic_transfer", network = %network).entered();
+    info!("Starting basic transfer test");
 
     let registry = TestRegistry::load()?;
     verify_network_ready(&registry, network)?;
 
     let client = RelayerClient::from_env()?;
     let relayer = setup_test_relayer(&client, &registry, network).await?;
+
+    // INFO: Condensed relayer info
+    info!(relayer_id = %relayer.id, address = ?relayer.address, "Relayer ready");
+
+    // DEBUG: Detailed test parameters (only shown with RUST_LOG=debug)
+    debug!(relayer = ?relayer, "Full relayer details");
+    debug!(
+        burn_address = BURN_ADDRESS,
+        transfer_value = TRANSFER_VALUE,
+        "Test parameters"
+    );
 
     let tx_request = serde_json::json!({
         "to": BURN_ADDRESS,
@@ -36,23 +48,27 @@ async fn run_basic_transfer_test(network: &str) -> eyre::Result<()> {
     });
 
     let tx_response = client.send_transaction(&relayer.id, tx_request).await?;
-    println!(
-        "Sent transaction {} with status {}",
-        tx_response.id, tx_response.status
+    info!(
+        tx_id = %tx_response.id,
+        status = %tx_response.status,
+        "Transaction submitted"
     );
 
     let receipt_config = ReceiptConfig::from_network(network)?;
-    println!(
-        "Waiting for confirmation (poll: {}ms, max wait: {}ms)",
-        receipt_config.poll_interval_ms, receipt_config.max_wait_ms
+    debug!(
+        poll_interval_ms = receipt_config.poll_interval_ms,
+        max_wait_ms = receipt_config.max_wait_ms,
+        "Waiting for confirmation"
     );
 
     wait_for_receipt(&client, &relayer.id, &tx_response.id, &receipt_config).await?;
 
     let final_tx = client.get_transaction(&relayer.id, &tx_response.id).await?;
-    println!(
-        "Transaction confirmed! Hash: {:?}, Status: {}",
-        final_tx.hash, final_tx.status
+    info!(
+        tx_id = %final_tx.id,
+        hash = ?final_tx.hash,
+        status = %final_tx.status,
+        "Transaction confirmed"
     );
 
     if final_tx.status != "confirmed" && final_tx.status != "mined" {
@@ -66,7 +82,7 @@ async fn run_basic_transfer_test(network: &str) -> eyre::Result<()> {
         return Err(eyre::eyre!("Confirmed transaction should have a hash"));
     }
 
-    println!("Test completed successfully for {}\n", network);
+    info!("Test completed successfully");
     Ok(())
 }
 
@@ -75,6 +91,10 @@ async fn run_basic_transfer_test(network: &str) -> eyre::Result<()> {
 #[ignore = "Requires running relayer and funded signer"]
 #[serial]
 async fn test_evm_basic_transfer() {
+    init_test_logging();
+
+    let _span = info_span!("test_evm_basic_transfer").entered();
+
     let networks = get_test_networks().expect("Failed to get test networks");
 
     if networks.is_empty() {
@@ -94,14 +114,14 @@ async fn test_evm_basic_transfer() {
         .collect();
 
     if evm_networks.is_empty() {
-        println!("No EVM networks in selection, skipping test");
+        info!("No EVM networks in selection, skipping test");
         return;
     }
 
-    println!(
-        "Testing {} EVM networks: {:?}",
-        evm_networks.len(),
-        evm_networks
+    info!(
+        count = evm_networks.len(),
+        networks = ?evm_networks,
+        "Testing EVM networks"
     );
 
     let mut failures = Vec::new();
@@ -110,29 +130,27 @@ async fn test_evm_basic_transfer() {
     for network in &evm_networks {
         match run_basic_transfer_test(network).await {
             Ok(()) => {
-                println!("PASS: {}", network);
+                info!(network = %network, "PASS");
             }
             Err(e) => {
-                eprintln!("FAIL: {} - {}", network, e);
+                error!(network = %network, error = %e, "FAIL");
                 failures.push((network.clone(), e.to_string()));
             }
         }
     }
 
     // Report results
-    println!("\n{}", "=".repeat(60));
-    println!("Test Summary");
-    println!("{}", "=".repeat(60));
-    println!(
-        "Passed: {}/{}",
-        evm_networks.len() - failures.len(),
-        evm_networks.len()
+    info!("Test Summary");
+    info!(
+        passed = evm_networks.len() - failures.len(),
+        total = evm_networks.len(),
+        "Results"
     );
 
     if !failures.is_empty() {
-        println!("\nFailures:");
+        error!("Failures:");
         for (network, error) in &failures {
-            println!("  - {}: {}", network, error);
+            error!(network = %network, error = %error, "Test failed");
         }
         panic!(
             "{} of {} EVM network tests failed",
@@ -141,7 +159,7 @@ async fn test_evm_basic_transfer() {
         );
     }
 
-    println!("\nAll EVM basic transfer tests passed!");
+    info!("All EVM basic transfer tests passed!");
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@ use crate::integration::common::{
 };
 use eyre::Result;
 use openzeppelin_relayer::models::relayer::RelayerNetworkType;
+use tracing::{info, warn};
 
 /// Setup a relayer for testing on a specific network
 pub async fn setup_test_relayer(
@@ -29,9 +30,10 @@ pub async fn setup_test_relayer(
 
     let relayer = client.get_or_create_relayer(create_request).await?;
 
-    println!(
-        "Relayer {} ready with address {:?}",
-        relayer.id, relayer.address
+    info!(
+        relayer_id = %relayer.id,
+        address = ?relayer.address,
+        "Relayer ready"
     );
 
     // Check for disabled status and warn
@@ -41,9 +43,10 @@ pub async fn setup_test_relayer(
             .as_ref()
             .map(|r| format!("{:?}", r))
             .unwrap_or_else(|| "unknown".to_string());
-        println!(
-            "Warning: Relayer marked as disabled: {}. Attempting test anyway...",
-            reason
+        warn!(
+            relayer_id = %relayer.id,
+            reason = %reason,
+            "Relayer marked as disabled, attempting test anyway"
         );
 
         // Wait for health check, then verify status again
@@ -56,9 +59,10 @@ pub async fn setup_test_relayer(
                 .as_ref()
                 .map(|r| format!("{:?}", r))
                 .unwrap_or_else(|| "unknown".to_string());
-            println!(
-                "Warning: Relayer disabled after health check: {}. Attempting test anyway...",
-                reason
+            warn!(
+                relayer_id = %relayer.id,
+                reason = %reason,
+                "Relayer disabled after health check, attempting test anyway"
             );
         }
     }
@@ -71,7 +75,7 @@ pub fn verify_network_ready(registry: &TestRegistry, network: &str) -> Result<()
     let network_config = registry.get_network(network)?;
 
     if network_config.network_type != "evm" {
-        println!("Skipping {} - not an EVM network", network);
+        info!(network = %network, "Skipping - not an EVM network");
         return Ok(());
     }
 

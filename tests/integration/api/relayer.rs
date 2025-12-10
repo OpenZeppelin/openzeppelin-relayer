@@ -2,17 +2,23 @@
 
 use crate::integration::common::{
     client::{CreateRelayerRequest, RelayerClient},
+    logging::init_test_logging,
     network_selection::get_test_networks,
     registry::TestRegistry,
 };
 use openzeppelin_relayer::models::relayer::RelayerNetworkType;
 use serial_test::serial;
+use tracing::{debug, info, info_span, warn};
 
 /// Test creating and getting relayer details
 #[tokio::test]
 #[ignore = "Requires running relayer and funded signer"]
 #[serial]
 async fn test_relayer_crud() {
+    init_test_logging();
+
+    let _span = info_span!("test_relayer_crud").entered();
+
     let networks = get_test_networks().expect("Failed to get test networks");
 
     if networks.is_empty() {
@@ -35,7 +41,7 @@ async fn test_relayer_crud() {
         .get_network(network)
         .expect("Network not found in registry");
 
-    println!("Testing relayer CRUD on: {}", network);
+    info!(network = %network, "Testing relayer CRUD");
 
     let client = RelayerClient::from_env().expect("Failed to create RelayerClient");
 
@@ -45,9 +51,10 @@ async fn test_relayer_crud() {
         .expect("Failed to clean up existing relayers");
 
     if cleanup_count > 0 {
-        println!(
-            "Cleaned up {} existing relayers for {}",
-            cleanup_count, network
+        debug!(
+            count = cleanup_count,
+            network = %network,
+            "Cleaned up existing relayers"
         );
     }
 
@@ -69,7 +76,7 @@ async fn test_relayer_crud() {
         .await
         .expect("Failed to create relayer");
 
-    println!("Created relayer: {}", created.id);
+    info!(relayer_id = %created.id, "Created relayer");
     assert_eq!(created.id, relayer_id);
     assert_eq!(created.network, network.to_string());
     assert_eq!(created.network_type, RelayerNetworkType::Evm);
@@ -80,12 +87,18 @@ async fn test_relayer_crud() {
         .await
         .expect("Failed to get relayer");
 
-    println!("Fetched relayer: {}", fetched.id);
-    println!("  Name: {}", fetched.name);
-    println!("  Network: {}", fetched.network);
-    println!("  Address: {:?}", fetched.address);
-    println!("  System disabled: {:?}", fetched.system_disabled);
-    println!("  Disabled reason: {:?}", fetched.disabled_reason);
+    info!(
+        relayer_id = %fetched.id,
+        name = %fetched.name,
+        network = %fetched.network,
+        address = ?fetched.address,
+        "Fetched relayer"
+    );
+    debug!(
+        system_disabled = ?fetched.system_disabled,
+        disabled_reason = ?fetched.disabled_reason,
+        "Relayer status details"
+    );
 
     assert_eq!(fetched.id, relayer_id);
     assert_eq!(fetched.network, network.to_string());
@@ -96,12 +109,12 @@ async fn test_relayer_crud() {
         .delete_relayer(&relayer_id)
         .await
         .expect("Failed to delete relayer");
-    println!("Deleted relayer: {}", relayer_id);
+    info!(relayer_id = %relayer_id, "Deleted relayer");
 
     let result = client.get_relayer(&relayer_id).await;
     assert!(result.is_err(), "Relayer should not exist after deletion");
 
-    println!("Relayer CRUD test passed!");
+    info!("Relayer CRUD test passed");
 }
 
 /// Test that getting a non-existent relayer returns an error
@@ -109,6 +122,10 @@ async fn test_relayer_crud() {
 #[ignore = "Requires running relayer"]
 #[serial]
 async fn test_get_nonexistent_relayer() {
+    init_test_logging();
+
+    let _span = info_span!("test_get_nonexistent_relayer").entered();
+
     let client = RelayerClient::from_env().expect("Failed to create RelayerClient");
 
     let fake_id = uuid::Uuid::new_v4().to_string();
@@ -123,7 +140,7 @@ async fn test_get_nonexistent_relayer() {
         err
     );
 
-    println!("Non-existent relayer test passed!");
+    info!("Non-existent relayer test passed");
 }
 
 /// Test deleting all relayers for a specific network
@@ -131,6 +148,10 @@ async fn test_get_nonexistent_relayer() {
 #[ignore = "Requires running relayer and funded signer"]
 #[serial]
 async fn test_delete_all_relayers_by_network() {
+    init_test_logging();
+
+    let _span = info_span!("test_delete_all_relayers_by_network").entered();
+
     let networks = get_test_networks().expect("Failed to get test networks");
 
     if networks.is_empty() {
@@ -153,7 +174,7 @@ async fn test_delete_all_relayers_by_network() {
         .get_network(network)
         .expect("Network not found in registry");
 
-    println!("Testing cleanup on: {}", network);
+    info!(network = %network, "Testing cleanup");
 
     let client = RelayerClient::from_env().expect("Failed to create RelayerClient");
 
@@ -163,9 +184,10 @@ async fn test_delete_all_relayers_by_network() {
         .expect("Failed to clean up existing relayers");
 
     if initial_cleanup > 0 {
-        println!(
-            "Cleaned up {} existing relayers for {}",
-            initial_cleanup, network
+        debug!(
+            count = initial_cleanup,
+            network = %network,
+            "Cleaned up existing relayers"
         );
     }
 
@@ -187,7 +209,7 @@ async fn test_delete_all_relayers_by_network() {
         .await
         .expect("Failed to create relayer");
 
-    println!("Created relayer: {}", created.id);
+    info!(relayer_id = %created.id, "Created relayer");
 
     let all_relayers = client
         .list_relayers()
@@ -198,7 +220,11 @@ async fn test_delete_all_relayers_by_network() {
         .iter()
         .filter(|r| r.network == *network)
         .count();
-    println!("Total relayers for {}: {}", network, network_relayers_count);
+    info!(
+        network = %network,
+        count = network_relayers_count,
+        "Total relayers for network"
+    );
     assert!(
         network_relayers_count >= 1,
         "Should have at least 1 relayer for the network"
@@ -209,7 +235,11 @@ async fn test_delete_all_relayers_by_network() {
         .await
         .expect("Failed to delete relayers");
 
-    println!("Deleted {} relayers for {}", deleted_count, network);
+    info!(
+        count = deleted_count,
+        network = %network,
+        "Deleted relayers"
+    );
     assert!(deleted_count >= 1, "Should have deleted at least 1 relayer");
 
     let remaining_relayers = client
@@ -232,5 +262,5 @@ async fn test_delete_all_relayers_by_network() {
             .collect::<Vec<_>>()
     );
 
-    println!("Delete all relayers by network test passed!");
+    info!("Delete all relayers by network test passed");
 }

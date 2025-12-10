@@ -11,6 +11,7 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
+use tracing::warn;
 
 /// Configuration for receipt polling based on network characteristics
 #[derive(Debug, Clone)]
@@ -236,9 +237,11 @@ pub async fn wait_for_receipt(
             }
             None => {
                 // Log unknown status but continue polling
-                eprintln!(
-                    "Unknown transaction status '{}' for {} on {}, continuing to poll...",
-                    tx_response.status, tx_id, config.network
+                warn!(
+                    status = %tx_response.status,
+                    tx_id = %tx_id,
+                    network = %config.network,
+                    "Unknown transaction status, continuing to poll"
                 );
                 tokio::time::sleep(poll_interval).await;
             }

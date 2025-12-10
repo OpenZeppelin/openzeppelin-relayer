@@ -11,6 +11,7 @@ use openzeppelin_relayer::models::{
 use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
 use std::env;
+use tracing::{debug, error, info};
 use uuid::Uuid;
 
 /// HTTP client for OpenZeppelin Relayer API
@@ -320,7 +321,7 @@ impl RelayerClient {
 
         for relayer in network_relayers {
             if let Err(e) = self.delete_relayer(&relayer.id).await {
-                eprintln!("Failed to delete relayer {}: {}", relayer.id, e);
+                error!(relayer_id = %relayer.id, error = %e, "Failed to delete relayer");
             }
         }
 
@@ -366,9 +367,11 @@ impl RelayerClient {
         // Try to get existing relayer by deterministic ID
         match self.get_relayer(&relayer_id).await {
             Ok(relayer) => {
-                println!(
-                    "Using existing relayer {} for {} with signer {}",
-                    relayer_id, network, signer_id
+                info!(
+                    relayer_id = %relayer_id,
+                    network = %network,
+                    signer_id = %signer_id,
+                    "Using existing relayer"
                 );
                 return Ok(relayer);
             }
@@ -380,9 +383,11 @@ impl RelayerClient {
         // Try to create the relayer
         match self.create_relayer(request).await {
             Ok(relayer) => {
-                println!(
-                    "Created new relayer {} for {} with signer {}",
-                    relayer_id, network, signer_id
+                info!(
+                    relayer_id = %relayer_id,
+                    network = %network,
+                    signer_id = %signer_id,
+                    "Created new relayer"
                 );
                 Ok(relayer)
             }
@@ -391,9 +396,10 @@ impl RelayerClient {
 
                 // Check if error is due to signer already in use (list and find by network+signer)
                 if error_msg.contains("signer") && error_msg.contains("already in use") {
-                    println!(
-                        "Signer {} already in use on {}, searching for existing relayer...",
-                        signer_id, network
+                    debug!(
+                        signer_id = %signer_id,
+                        network = %network,
+                        "Signer already in use, searching for existing relayer"
                     );
 
                     // List all relayers and find the one with matching network+signer
@@ -403,9 +409,11 @@ impl RelayerClient {
                         .iter()
                         .find(|r| r.network == network && r.signer_id == signer_id)
                     {
-                        println!(
-                            "Found existing relayer {} for {} with signer {}",
-                            existing.id, network, signer_id
+                        info!(
+                            relayer_id = %existing.id,
+                            network = %network,
+                            signer_id = %signer_id,
+                            "Found existing relayer by network and signer"
                         );
                         return Ok(existing.clone());
                     }
@@ -415,13 +423,15 @@ impl RelayerClient {
                 // This can happen if there was a transient error during the GET request
                 if error_msg.contains("already exists") || error_msg.contains("Constraint violated")
                 {
-                    println!("Relayer {} may already exist, retrying GET...", relayer_id);
+                    debug!(relayer_id = %relayer_id, "Relayer may already exist, retrying GET");
 
                     // Retry getting the relayer
                     if let Ok(existing) = self.get_relayer(&relayer_id).await {
-                        println!(
-                            "Successfully retrieved existing relayer {} for {} with signer {}",
-                            relayer_id, network, signer_id
+                        info!(
+                            relayer_id = %relayer_id,
+                            network = %network,
+                            signer_id = %signer_id,
+                            "Successfully retrieved existing relayer on retry"
                         );
                         return Ok(existing);
                     }
@@ -432,9 +442,11 @@ impl RelayerClient {
                         .iter()
                         .find(|r| r.network == network && r.signer_id == signer_id)
                     {
-                        println!(
-                            "Found existing relayer {} via list for {} with signer {}",
-                            existing.id, network, signer_id
+                        info!(
+                            relayer_id = %existing.id,
+                            network = %network,
+                            signer_id = %signer_id,
+                            "Found existing relayer via list"
                         );
                         return Ok(existing.clone());
                     }

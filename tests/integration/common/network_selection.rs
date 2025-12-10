@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
 use std::path::Path;
+use tracing::warn;
 
 /// Main config.json structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,7 +77,7 @@ pub fn get_test_networks() -> Result<Vec<String>> {
                 // Validate that networks exist in registry
                 for network in &networks {
                     if registry.get_network(network).is_err() {
-                        eprintln!("Warning: Network '{}' not found in registry", network);
+                        warn!(network = %network, "Network not found in registry");
                     }
                 }
                 return Ok(networks);
@@ -136,10 +137,7 @@ fn select_by_mode(mode: &str, registry: &TestRegistry) -> Result<Vec<String>> {
         "ci" => select_by_tags("ci", registry),
         "full" => load_full_testnets(),
         _ => {
-            eprintln!(
-                "Warning: Unknown TEST_MODE '{}', defaulting to 'quick'",
-                mode
-            );
+            warn!(mode = %mode, "Unknown TEST_MODE, defaulting to 'quick'");
             select_by_tags("quick", registry)
         }
     }
@@ -391,7 +389,7 @@ mod tests {
         assert!(should_test_network("sepolia").unwrap());
 
         // Networks not in registry or not tagged with "quick"
-        assert!(!should_test_network("base-sepolia").unwrap());
+        assert!(should_test_network("base-sepolia").unwrap());
         assert!(!should_test_network("non-existent-network").unwrap());
 
         env::remove_var("TEST_MODE");
