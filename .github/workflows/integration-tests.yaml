@@ -14,50 +14,53 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write  # Required for OIDC authentication with AWS
     steps:
       - name: Harden the runner (Audit all outbound calls)
         uses: step-security/harden-runner@df199fb7be9f65074067a9eb93f12bb4c5547cf2  # v2.13.3
         with:
           egress-policy: audit
       - name: Checkout Code
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
-      - name: Setup Node.js
-        uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f  # v6.1.0
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502  # v4.0.2
         with:
-          node-version: '20'
-      - name: Install pnpm and plugin dependencies
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Create integration test config
         run: |
-          npm install -g pnpm
-          cd plugins
-          pnpm install
-      - name: Install TypeScript and ts-node
+          cat > .env.integration << EOF
+          API_KEY=${{ secrets.INTEGRATION_API_KEY }}
+          RELAYER_API_KEY=${{ secrets.INTEGRATION_API_KEY }}
+          TEST_MODE=ci
+          TEST_NETWORKS=${{ secrets.INTEGRATION_TEST_NETWORKS }}
+          LOG_LEVEL=info
+          AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+          AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+          AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
+          AWS_REGION=${{ secrets.AWS_REGION }}
+          EOF
+      - name: Create relayer config with AWS KMS signer
         run: |
-          npm install -g typescript ts-node
-          ts-node --version
-          tsc --version
-      - name: Prepare
-        id: init
-        uses: ./.github/actions/prepare
-        with:
-          components: llvm-tools-preview
-      - name: Get cache-hit output
-        run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
-      - name: Install cargo hack and cargo-llvm-cov
-        uses: taiki-e/install-action@92e6dd1c202153a204d471a3c509bf1e03dcfa44  # v2.62.61
-        with:
-          tool: cargo-hack,cargo-llvm-cov
-      - name: Run Integration Tests and Generate Coverage Report
+          cat > tests/integration/config/config.json << EOF
+          {
+            "relayers": [],
+            "notifications": [],
+            "signers": [
+              {
+                "id": "aws-kms-signer",
+                "type": "aws_kms",
+                "config": {
+                  "region": "${{ secrets.AWS_REGION }}",
+                  "key_id": "${{ secrets.AWS_KMS_KEY_ID }}"
+                }
+              }
+            ],
+            "networks": "/app/networks",
+            "plugins": []
+          }
+          EOF
+      - name: Run Integration Tests
+        run: ./scripts/run-integration-docker.sh
         env:
-          LLVM_PROFILE_FILE: integration.profraw
-          RUSTFLAGS: -Cinstrument-coverage
-          RUST_TEST_THREADS: 1
-          CARGO_PROFILE_DEV_DEBUG: 1
-        run: cargo hack llvm-cov --locked --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path integration-lcov.info --test integration
-      - name: Upload Integration Coverage to Codecov
-        uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          name: integration-coverage
-          files: integration-lcov.info
-          flags: integration
-          fail_ci_if_error: true
+          TEST_MODE: ci
