@@ -22,6 +22,9 @@ pub struct PluginModel {
     /// Whether to return raw plugin response without ApiResponse wrapper
     #[serde(default)]
     pub raw_response: bool,
+    /// Whether to allow GET requests to invoke plugin logic
+    #[serde(default)]
+    pub allow_get_invocation: bool,
     /// User-defined configuration accessible to the plugin (must be a JSON object)
     pub config: Option<Map<String, serde_json::Value>>,
 }

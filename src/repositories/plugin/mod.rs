@@ -139,6 +139,7 @@ impl TryFrom<PluginFileConfig> for PluginModel {
             emit_logs: config.emit_logs,
             emit_traces: config.emit_traces,
             raw_response: config.raw_response,
+            allow_get_invocation: config.allow_get_invocation,
             config: config.config,
         })
     }
@@ -166,6 +167,7 @@ mod tests {
             emit_logs: false,
             emit_traces: false,
             raw_response: false,
+            allow_get_invocation: false,
             config: None,
         };
         let result = PluginModel::try_from(plugin);
@@ -179,6 +181,7 @@ mod tests {
                 emit_logs: false,
                 emit_traces: false,
                 raw_response: false,
+                allow_get_invocation: false,
                 config: None,
             }
         );
@@ -193,6 +196,7 @@ mod tests {
             emit_logs: false,
             emit_traces: false,
             raw_response: false,
+            allow_get_invocation: false,
             config: None,
         }
     }

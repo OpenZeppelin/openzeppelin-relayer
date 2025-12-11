@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use crate::{
     api::controllers::plugin,
     models::{ApiError, ApiResponse, DefaultAppState, PaginationQuery, PluginCallRequest},
+    repositories::PluginRepositoryTrait,
 };
 use actix_web::{get, post, web, HttpRequest, HttpResponse, Responder};
 
@@ -129,6 +130,19 @@ async fn plugin_call_get(
 ) -> Result<HttpResponse, ApiError> {
     let (plugin_id, route) = params.into_inner();
 
+    // Check if GET requests are allowed for this plugin
+    let plugin = data
+        .plugin_repository
+        .get_by_id(&plugin_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Plugin with id {plugin_id} not found")))?;
+
+    if !plugin.allow_get_invocation {
+        return Ok(HttpResponse::MethodNotAllowed().json(ApiResponse::<()>::error(
+            "GET requests are not enabled for this plugin. Set 'allow_get_invocation: true' in plugin configuration to enable.",
+        )));
+    }
+
     // For GET requests, use empty params object
     let plugin_call_request = PluginCallRequest {
         params: serde_json::json!({}),
@@ -175,6 +189,7 @@ mod tests {
                 emit_logs: false,
                 emit_traces: false,
                 raw_response: false,
+                allow_get_invocation: false,
                 config: None,
             },
             PluginModel {
@@ -184,6 +199,7 @@ mod tests {
                 emit_logs: false,
                 emit_traces: false,
                 raw_response: false,
+                allow_get_invocation: false,
                 config: None,
             },
         ])

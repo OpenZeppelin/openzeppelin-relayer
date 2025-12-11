@@ -36,6 +36,7 @@
       "emit_logs": false,
       "emit_traces": false,
       "raw_response": true,
+      "allow_get_invocation": true,
       "config": {
         "networks": [
           {

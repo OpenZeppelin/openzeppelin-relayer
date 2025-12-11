@@ -339,6 +339,7 @@ mod tests {
             emit_logs: false,
             emit_traces: false,
             raw_response: false,
+            allow_get_invocation: false,
             config: None,
         }
     }

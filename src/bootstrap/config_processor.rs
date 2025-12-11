@@ -1073,6 +1073,7 @@ mod tests {
                 emit_traces: false,
                 config: None,
                 raw_response: false,
+                allow_get_invocation: false,
             },
             PluginFileConfig {
                 id: "test-plugin-2".to_string(),
@@ -1082,6 +1083,7 @@ mod tests {
                 emit_traces: false,
                 config: None,
                 raw_response: false,
+                allow_get_invocation: false,
             },
         ];
 
@@ -1194,6 +1196,7 @@ mod tests {
             timeout: None,
             emit_logs: false,
             emit_traces: false,
+            allow_get_invocation: false,
             config: None,
             raw_response: false,
         }];

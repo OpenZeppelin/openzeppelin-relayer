@@ -139,6 +139,7 @@ The x402 facilitator plugin is configured for the `stellar-example` relayer on t
       "emit_logs": false,
       "emit_traces": false,
       "raw_response": true,
+      "allow_get_invocation": true,
       "config": {
         "networks": [
           {

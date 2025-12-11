@@ -129,6 +129,7 @@ mod tests {
             emit_logs: false,
             emit_traces: false,
             raw_response: false,
+            allow_get_invocation: false,
             config: None,
         };
         plugin_repository.add(plugin.clone()).await.unwrap();
@@ -155,6 +156,7 @@ mod tests {
             emit_logs: false,
             emit_traces: false,
             raw_response: false,
+            allow_get_invocation: false,
             config: None,
         };
         let result = PluginModel::try_from(plugin);
@@ -168,6 +170,7 @@ mod tests {
                 emit_logs: false,
                 emit_traces: false,
                 raw_response: false,
+                allow_get_invocation: false,
                 config: None,
             }
         );
@@ -184,6 +187,7 @@ mod tests {
             emit_logs: false,
             emit_traces: false,
             raw_response: false,
+            allow_get_invocation: false,
             config: None,
         };
         plugin_repository.add(plugin.clone()).await.unwrap();
@@ -204,6 +208,7 @@ mod tests {
             emit_logs: false,
             emit_traces: false,
             raw_response: false,
+            allow_get_invocation: false,
             config: None,
         };
 
@@ -214,6 +219,7 @@ mod tests {
             emit_logs: false,
             emit_traces: false,
             raw_response: false,
+            allow_get_invocation: false,
             config: None,
         };
 
@@ -243,6 +249,7 @@ mod tests {
                 emit_logs: false,
                 emit_traces: false,
                 raw_response: false,
+                allow_get_invocation: false,
                 config: None,
             })
             .await
@@ -264,6 +271,7 @@ mod tests {
                 emit_logs: false,
                 emit_traces: false,
                 raw_response: false,
+                allow_get_invocation: false,
                 config: None,
             })
             .await

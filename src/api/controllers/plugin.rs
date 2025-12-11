@@ -188,6 +188,7 @@ mod tests {
             emit_logs: false,
             emit_traces: false,
             raw_response: false,
+            allow_get_invocation: false,
             config: None,
         };
         let app_state =
@@ -245,6 +246,7 @@ mod tests {
             emit_logs: true,
             emit_traces: true,
             raw_response: false,
+            allow_get_invocation: false,
             config: None,
         };
         let app_state =
@@ -275,6 +277,7 @@ mod tests {
             emit_logs: false,
             emit_traces: false,
             raw_response: false,
+            allow_get_invocation: false,
             config: None,
         };
         let plugin2 = PluginModel {
@@ -284,6 +287,7 @@ mod tests {
             emit_logs: true,
             emit_traces: true,
             raw_response: false,
+            allow_get_invocation: false,
             config: None,
         };
         let app_state =
@@ -326,6 +330,7 @@ mod tests {
             emit_logs: false,
             emit_traces: false,
             raw_response: true,
+            allow_get_invocation: false,
             config: None,
         };
         let app_state =
@@ -362,6 +367,7 @@ mod tests {
             emit_logs: false,
             emit_traces: false,
             raw_response: false,
+            allow_get_invocation: false,
             config: config_value.as_object().map(|m| m.clone()),
         };
         let app_state =
@@ -397,6 +403,7 @@ mod tests {
             emit_logs: false,
             emit_traces: false,
             raw_response: true,
+            allow_get_invocation: false,
             config: config_value.as_object().map(|m| m.clone()),
         };
         let app_state =
