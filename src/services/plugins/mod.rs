@@ -236,6 +236,10 @@ impl<R: PluginRunnerTrait> PluginService<R> {
         let config_json = plugin
             .config
             .map(|c| serde_json::to_string(&c).unwrap_or_default());
+        let method = plugin_call_request.method;
+        let query_json = plugin_call_request
+            .query
+            .map(|q| serde_json::to_string(&q).unwrap_or_default());
 
         let result = self
             .runner
@@ -249,6 +253,8 @@ impl<R: PluginRunnerTrait> PluginService<R> {
                 headers_json,
                 route,
                 config_json,
+                method,
+                query_json,
                 state,
             )
             .await;

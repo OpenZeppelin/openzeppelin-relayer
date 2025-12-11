@@ -32,6 +32,36 @@ fn extract_headers(http_req: &HttpRequest) -> HashMap<String, Vec<String>> {
     headers
 }
 
+/// Extracts query parameters from the request into a HashMap.
+/// Supports multiple values for the same key (e.g., ?tag=a&tag=b)
+fn extract_query_params(http_req: &HttpRequest) -> HashMap<String, Vec<String>> {
+    let mut query_params: HashMap<String, Vec<String>> = HashMap::new();
+    let query_string = http_req.query_string();
+
+    if query_string.is_empty() {
+        return query_params;
+    }
+
+    // Parse query string to support multiple values for same key
+    // Note: actix-web's Query<HashMap> only keeps last value, so we parse manually
+    for pair in query_string.split('&') {
+        if let Some((key, value)) = pair.split_once('=') {
+            // Basic URL decoding - actix-web handles most cases
+            let key_str = key.to_string();
+            let value_str = value.to_string();
+            query_params.entry(key_str).or_default().push(value_str);
+        } else if !pair.is_empty() {
+            // Handle keys without values (e.g., ?flag)
+            query_params
+                .entry(pair.to_string())
+                .or_default()
+                .push(String::new());
+        }
+    }
+
+    query_params
+}
+
 /// Calls a plugin method.
 #[post("/plugins/{plugin_id}/call{route:.*}")]
 async fn plugin_call(
@@ -76,16 +106,48 @@ async fn plugin_call(
             params: body_json,
             headers: Some(extract_headers(&http_req)),
             route: Some(route),
+            method: None,
+            query: None,
         }
     };
 
+    let mut plugin_call_request = plugin_call_request;
+    plugin_call_request.method = Some("POST".to_string());
+    plugin_call_request.query = Some(extract_query_params(&http_req));
+
+    tracing::debug!("Plugin call request: {:?}", plugin_call_request);
+    tracing::debug!("id: {:?}", plugin_id);
+    plugin::call_plugin(plugin_id, plugin_call_request, data).await
+}
+
+/// Calls a plugin method via GET request.
+#[get("/plugins/{plugin_id}/call{route:.*}")]
+async fn plugin_call_get(
+    params: web::Path<(String, String)>,
+    http_req: HttpRequest,
+    data: web::ThinData<DefaultAppState>,
+) -> Result<HttpResponse, ApiError> {
+    let (plugin_id, route) = params.into_inner();
+
+    // For GET requests, use empty params object
+    let plugin_call_request = PluginCallRequest {
+        params: serde_json::json!({}),
+        headers: Some(extract_headers(&http_req)),
+        route: Some(route),
+        method: Some("GET".to_string()),
+        query: Some(extract_query_params(&http_req)),
+    };
+
+    tracing::debug!("Plugin GET call request: {:?}", plugin_call_request);
+    tracing::debug!("id: {:?}", plugin_id);
     plugin::call_plugin(plugin_id, plugin_call_request, data).await
 }
 
 /// Initializes the routes for the plugins module.
 pub fn init(cfg: &mut web::ServiceConfig) {
     // Register routes with literal segments before routes with path parameters
-    cfg.service(plugin_call); // /plugins/{plugin_id}/call
+    cfg.service(plugin_call); // POST /plugins/{plugin_id}/call
+    cfg.service(plugin_call_get); // GET /plugins/{plugin_id}/call
     cfg.service(list_plugins); // /plugins
 }
 
@@ -373,5 +435,137 @@ mod tests {
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert!(resp.status().is_success());
+    }
+
+    #[actix_web::test]
+    async fn test_plugin_call_get() {
+        // Test GET request handling
+        let app = test::init_service(
+            App::new()
+                .service(
+                    web::resource("/plugins/{plugin_id}/call{route:.*}")
+                        .route(web::get().to(mock_plugin_call))
+                        .route(web::post().to(mock_plugin_call)),
+                )
+                .configure(init),
+        )
+        .await;
+
+        let req = test::TestRequest::get()
+            .uri("/plugins/test-plugin/call")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert!(resp.status().is_success());
+    }
+
+    #[actix_web::test]
+    async fn test_plugin_call_get_with_query_params() {
+        // Test GET request with query parameters
+        let app = test::init_service(
+            App::new()
+                .service(
+                    web::resource("/plugins/{plugin_id}/call{route:.*}")
+                        .route(web::get().to(mock_plugin_call))
+                        .route(web::post().to(mock_plugin_call)),
+                )
+                .configure(init),
+        )
+        .await;
+
+        let req = test::TestRequest::get()
+            .uri("/plugins/test-plugin/call?token=abc123&challenge=xyz")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert!(resp.status().is_success());
+    }
+
+    #[actix_web::test]
+    async fn test_plugin_call_get_with_multiple_query_values() {
+        // Test GET request with multiple values for same query parameter
+        let app = test::init_service(
+            App::new()
+                .service(
+                    web::resource("/plugins/{plugin_id}/call{route:.*}")
+                        .route(web::get().to(mock_plugin_call))
+                        .route(web::post().to(mock_plugin_call)),
+                )
+                .configure(init),
+        )
+        .await;
+
+        let req = test::TestRequest::get()
+            .uri("/plugins/test-plugin/call?tag=a&tag=b&tag=c")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert!(resp.status().is_success());
+    }
+
+    #[actix_web::test]
+    async fn test_plugin_call_get_with_route() {
+        // Test GET request with wildcard route
+        let app = test::init_service(
+            App::new()
+                .service(
+                    web::resource("/plugins/{plugin_id}/call{route:.*}")
+                        .route(web::get().to(mock_plugin_call))
+                        .route(web::post().to(mock_plugin_call)),
+                )
+                .configure(init),
+        )
+        .await;
+
+        let req = test::TestRequest::get()
+            .uri("/plugins/test-plugin/call/verify?token=abc")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert!(resp.status().is_success());
+    }
+
+    #[actix_web::test]
+    async fn test_extract_query_params() {
+        use actix_web::test::TestRequest;
+
+        // Test basic query parameters
+        let req = TestRequest::default()
+            .uri("/test?foo=bar&baz=qux")
+            .to_http_request();
+
+        let query_params = extract_query_params(&req);
+
+        assert_eq!(query_params.get("foo"), Some(&vec!["bar".to_string()]));
+        assert_eq!(query_params.get("baz"), Some(&vec!["qux".to_string()]));
+    }
+
+    #[actix_web::test]
+    async fn test_extract_query_params_multiple_values() {
+        use actix_web::test::TestRequest;
+
+        // Test multiple values for same key
+        let req = TestRequest::default()
+            .uri("/test?tag=a&tag=b&tag=c")
+            .to_http_request();
+
+        let query_params = extract_query_params(&req);
+
+        assert_eq!(
+            query_params.get("tag"),
+            Some(&vec!["a".to_string(), "b".to_string(), "c".to_string()])
+        );
+    }
+
+    #[actix_web::test]
+    async fn test_extract_query_params_empty() {
+        use actix_web::test::TestRequest;
+
+        // Test empty query string
+        let req = TestRequest::default().uri("/test").to_http_request();
+
+        let query_params = extract_query_params(&req);
+
+        assert!(query_params.is_empty());
     }
 }

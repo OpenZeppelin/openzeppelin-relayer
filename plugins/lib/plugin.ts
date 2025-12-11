@@ -210,6 +210,8 @@ export interface PluginContext {
   headers: PluginHeaders;
   route: string;
   config?: Record<string, any>;
+  method: string;
+  query: Record<string, string[]>;
 }
 
 /**
@@ -301,7 +303,9 @@ export async function loadAndExecutePlugin<T, R>(
   params: T,
   headers?: PluginHeaders,
   route?: string,
-  config?: Record<string, any>
+  config?: Record<string, any>,
+  method?: string,
+  query?: Record<string, string[]>
 ): Promise<R> {
   try {
     // IMPORTANT: Path normalization required because executor is in plugins/lib/
@@ -338,8 +342,17 @@ export async function loadAndExecutePlugin<T, R>(
     if (handler && typeof handler === 'function') {
       // Detect handler signature by parameter count
       if (handler.length === 1) {
-        // Modern context handler - ONLY these get KV, headers, and config access
-        const context: PluginContext = { api, params, kv, headers: headers ?? {}, route: route ?? '', config };
+        // Modern context handler - ONLY these get KV, headers, config, method, and query access
+        const context: PluginContext = {
+          api,
+          params,
+          kv,
+          headers: headers ?? {},
+          route: route ?? '',
+          config,
+          method: method ?? 'POST',
+          query: query ?? {}
+        };
         return await handler(context);
       } else {
         // Legacy handler - NO KV or headers access, just (api, params)
@@ -549,13 +562,15 @@ export async function runUserPlugin<T = any, R = any>(
   httpRequestId?: string,
   headers?: PluginHeaders,
   route?: string,
-  config?: Record<string, any>
+  config?: Record<string, any>,
+  method?: string,
+  query?: Record<string, string[]>
 ): Promise<R> {
   const plugin = new DefaultPluginAPI(socketPath, httpRequestId);
   const kv = new DefaultPluginKVStore(pluginId);
 
   try {
-    const result: R = await loadAndExecutePlugin<T, R>(userScriptPath, plugin, kv, pluginParams, headers, route, config);
+    const result: R = await loadAndExecutePlugin<T, R>(userScriptPath, plugin, kv, pluginParams, headers, route, config, method, query);
     return result;
   } catch (error) {
     // If plugin threw an error, write normalized error to stderr
