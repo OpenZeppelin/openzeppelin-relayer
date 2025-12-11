@@ -232,7 +232,7 @@ jobs:
           RUSTFLAGS: -Cinstrument-coverage
           RUST_TEST_THREADS: 1
           CARGO_PROFILE_DEV_DEBUG: 1
-        run: cargo hack llvm-cov --locked --lib --no-cfg-coverage --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path unit-lcov.info
+        run: cargo hack llvm-cov --locked --lib --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path unit-lcov.info
       - name: Upload Unit Coverage to Codecov
         uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
         with:
@@ -287,7 +287,7 @@ jobs:
           RUSTFLAGS: -Cinstrument-coverage
           RUST_TEST_THREADS: 1
           CARGO_PROFILE_DEV_DEBUG: 1
-        run: cargo hack llvm-cov --locked --no-cfg-coverage --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path integration-lcov.info --test integration
+        run: cargo hack llvm-cov --locked --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path integration-lcov.info --test integration
       - name: Upload Integration Coverage to Codecov
         uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
         with:
@@ -342,7 +342,7 @@ jobs:
           RUSTFLAGS: -Cinstrument-coverage
           RUST_TEST_THREADS: 1
           CARGO_PROFILE_DEV_DEBUG: 1
-        run: cargo hack llvm-cov --locked --no-cfg-coverage --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path properties-lcov.info --test properties
+        run: cargo hack llvm-cov --locked --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path properties-lcov.info --test properties
       - name: Upload Properties Coverage to Codecov
         uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
         with:
