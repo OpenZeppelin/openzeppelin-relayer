@@ -1,7 +1,6 @@
 //! Health endpoint integration tests
 
 use crate::integration::common::{client::RelayerClient, logging::init_test_logging};
-use tracing::info;
 
 /// Test that the health endpoint returns OK
 #[tokio::test]
@@ -14,6 +13,4 @@ async fn test_health_endpoint() {
     let health = client.health().await.expect("Health check failed");
 
     assert_eq!(health.status, "ok", "Health status should be 'ok'");
-
-    info!(status = %health.status, "Health check passed");
 }

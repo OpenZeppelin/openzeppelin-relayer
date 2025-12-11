@@ -1,12 +1,10 @@
 //! Relayer API integration tests
 
 use crate::integration::common::{
-    client::{CreateRelayerRequest, RelayerClient},
-    logging::init_test_logging,
-    network_selection::get_test_networks,
+    client::RelayerClient, logging::init_test_logging, network_selection::get_test_networks,
     registry::TestRegistry,
 };
-use openzeppelin_relayer::models::relayer::RelayerNetworkType;
+use openzeppelin_relayer::models::relayer::{CreateRelayerRequest, RelayerNetworkType};
 use serial_test::serial;
 use tracing::{debug, info, info_span};
 

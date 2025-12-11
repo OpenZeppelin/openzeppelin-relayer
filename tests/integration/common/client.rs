@@ -5,7 +5,7 @@
 
 use eyre::{Context, Result};
 use openzeppelin_relayer::models::{
-    relayer::{DisabledReason, RelayerNetworkType, RpcConfig},
+    relayer::{CreateRelayerRequest, RelayerResponse},
     ApiResponse,
 };
 use reqwest::Client as HttpClient;
@@ -19,6 +19,20 @@ pub struct RelayerClient {
     base_url: String,
     api_key: String,
     client: HttpClient,
+}
+
+/// Generates a deterministic relayer ID from network and signer using UUID v5
+///
+/// Uses UUID v5 with OID namespace to generate a deterministic UUID from
+/// the network and signer_id combination. This ensures:
+/// - Same network+signer always generates the same UUID (deterministic)
+/// - ID is exactly 36 characters (meets validation requirement)
+/// - Different network+signer combinations generate different UUIDs
+///
+/// Format: UUID v5 based on "{network}:{signer_id}"
+fn generate_relayer_id(network: &str, signer_id: &str) -> String {
+    let name = format!("{}:{}", network, signer_id);
+    Uuid::new_v5(&Uuid::NAMESPACE_OID, name.as_bytes()).to_string()
 }
 
 impl RelayerClient {
@@ -328,20 +342,6 @@ impl RelayerClient {
         Ok(count)
     }
 
-    /// Generates a deterministic relayer ID from network and signer using UUID v5
-    ///
-    /// Uses UUID v5 with OID namespace to generate a deterministic UUID from
-    /// the network and signer_id combination. This ensures:
-    /// - Same network+signer always generates the same UUID (deterministic)
-    /// - ID is exactly 36 characters (meets validation requirement)
-    /// - Different network+signer combinations generate different UUIDs
-    ///
-    /// Format: UUID v5 based on "{network}:{signer_id}"
-    fn generate_relayer_id(network: &str, signer_id: &str) -> String {
-        let name = format!("{}:{}", network, signer_id);
-        Uuid::new_v5(&Uuid::NAMESPACE_OID, name.as_bytes()).to_string()
-    }
-
     /// Gets an existing relayer or creates it if it doesn't exist
     ///
     /// This method uses a deterministic UUID v5 based on network and signer_id to enable
@@ -361,7 +361,7 @@ impl RelayerClient {
         let signer_id = request.signer_id.clone();
 
         // Generate deterministic ID
-        let relayer_id = Self::generate_relayer_id(&network, &signer_id);
+        let relayer_id = generate_relayer_id(&network, &signer_id);
         request.id = Some(relayer_id.clone());
 
         // Try to get existing relayer by deterministic ID
@@ -463,54 +463,16 @@ impl RelayerClient {
 // Request/Response Models
 // ============================================================================
 
-/// Health check response
+// Note: CreateRelayerRequest and RelayerResponse are imported from
+// openzeppelin_relayer::models::relayer to avoid duplication
+
+/// Health check response (not available in src, specific to health endpoint)
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HealthResponse {
     pub status: String,
 }
 
-/// Request to create a new relayer
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CreateRelayerRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    pub name: String,
-    pub network: String,
-    pub paused: bool,
-    pub network_type: RelayerNetworkType,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub policies: Option<serde_json::Value>,
-    pub signer_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub notification_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub custom_rpc_urls: Option<Vec<RpcConfig>>,
-}
-
-/// Relayer response from API
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct RelayerResponse {
-    pub id: String,
-    pub name: String,
-    pub network: String,
-    pub network_type: RelayerNetworkType,
-    pub paused: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub policies: Option<serde_json::Value>,
-    pub signer_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub notification_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub custom_rpc_urls: Option<Vec<RpcConfig>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub address: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub system_disabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub disabled_reason: Option<DisabledReason>,
-}
-
-/// Transaction response from API
+/// Transaction response from API (simplified version for integration tests)
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TransactionResponse {
     pub id: String,
@@ -537,18 +499,18 @@ mod tests {
     #[test]
     fn test_generate_relayer_id_deterministic() {
         // Same inputs should always generate the same UUID
-        let id1 = RelayerClient::generate_relayer_id("sepolia", "test-signer");
-        let id2 = RelayerClient::generate_relayer_id("sepolia", "test-signer");
+        let id1 = generate_relayer_id("sepolia", "test-signer");
+        let id2 = generate_relayer_id("sepolia", "test-signer");
         assert_eq!(id1, id2, "Same network+signer should generate same UUID");
 
         // Different inputs should generate different UUIDs
-        let id3 = RelayerClient::generate_relayer_id("mainnet", "test-signer");
+        let id3 = generate_relayer_id("mainnet", "test-signer");
         assert_ne!(
             id1, id3,
             "Different networks should generate different UUIDs"
         );
 
-        let id4 = RelayerClient::generate_relayer_id("sepolia", "other-signer");
+        let id4 = generate_relayer_id("sepolia", "other-signer");
         assert_ne!(
             id1, id4,
             "Different signers should generate different UUIDs"
@@ -557,7 +519,7 @@ mod tests {
 
     #[test]
     fn test_generate_relayer_id_format() {
-        let id = RelayerClient::generate_relayer_id("sepolia", "test-signer");
+        let id = generate_relayer_id("sepolia", "test-signer");
 
         // Should be a valid UUID format (36 characters with hyphens)
         assert_eq!(id.len(), 36, "UUID should be exactly 36 characters");
@@ -577,7 +539,7 @@ mod tests {
         let long_network = "polygon-zkevm-cardona-testnet-super-long-name";
         let long_signer = "very-long-signer-id-that-exceeds-normal-length";
 
-        let id = RelayerClient::generate_relayer_id(long_network, long_signer);
+        let id = generate_relayer_id(long_network, long_signer);
 
         // Should still be exactly 36 characters regardless of input length
         assert_eq!(
@@ -587,7 +549,7 @@ mod tests {
         );
 
         // Should be deterministic even with long names
-        let id2 = RelayerClient::generate_relayer_id(long_network, long_signer);
+        let id2 = generate_relayer_id(long_network, long_signer);
         assert_eq!(
             id, id2,
             "Long names should still generate deterministic UUIDs"

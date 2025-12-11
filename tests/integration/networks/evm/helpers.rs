@@ -1,11 +1,10 @@
 //! Helper functions for EVM network tests
 
-use crate::integration::common::{
-    client::{CreateRelayerRequest, RelayerClient, RelayerResponse},
-    registry::TestRegistry,
-};
+use crate::integration::common::{client::RelayerClient, registry::TestRegistry};
 use eyre::Result;
-use openzeppelin_relayer::models::relayer::RelayerNetworkType;
+use openzeppelin_relayer::models::relayer::{
+    CreateRelayerRequest, RelayerNetworkType, RelayerResponse,
+};
 use tracing::{info, warn};
 
 /// Setup a relayer for testing on a specific network
