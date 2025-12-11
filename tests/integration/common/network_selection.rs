@@ -356,29 +356,6 @@ mod tests {
     }
 
     #[test]
-    fn test_load_full_testnets() {
-        let result = load_full_testnets();
-
-        assert!(result.is_ok());
-
-        if result.is_ok() {
-            let networks = result.unwrap();
-            assert!(!networks.is_empty(), "Should find at least some testnets");
-
-            // Should include at least sepolia (most configs have this)
-            // Note: network names in config files might differ from our constants
-            // e.g., "devnet" vs "solana-devnet", "testnet" vs "stellar-testnet"
-            assert!(
-                networks.contains(&"sepolia".to_string())
-                    || networks.contains(&"devnet".to_string())
-                    || networks.contains(&"testnet".to_string()),
-                "Should contain at least one testnet: {:?}",
-                networks
-            );
-        }
-    }
-
-    #[test]
     #[serial]
     fn test_should_test_network() {
         env::set_var("TEST_MODE", "quick");

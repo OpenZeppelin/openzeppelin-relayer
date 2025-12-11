@@ -8,7 +8,7 @@ use crate::integration::common::{
 };
 use openzeppelin_relayer::models::relayer::RelayerNetworkType;
 use serial_test::serial;
-use tracing::{debug, info, info_span, warn};
+use tracing::{debug, info, info_span};
 
 /// Test creating and getting relayer details
 #[tokio::test]
