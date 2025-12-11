@@ -196,6 +196,8 @@ mod tests {
             params: serde_json::json!({"key":"value"}),
             headers: None,
             route: None,
+            method: Some("POST".to_string()),
+            query: None,
         };
         let response = call_plugin(
             "test-plugin".to_string(),
@@ -217,6 +219,8 @@ mod tests {
             params: serde_json::json!({"key":"value"}),
             headers: None,
             route: None,
+            method: Some("POST".to_string()),
+            query: None,
         };
         let response = call_plugin(
             "non-existent".to_string(),
@@ -249,6 +253,8 @@ mod tests {
             params: serde_json::json!({}),
             headers: None,
             route: None,
+            method: Some("POST".to_string()),
+            query: None,
         };
         let response = call_plugin(
             "test-plugin-logs".to_string(),
@@ -328,6 +334,8 @@ mod tests {
             params: serde_json::json!({"test": "data"}),
             headers: None,
             route: None,
+            method: Some("POST".to_string()),
+            query: None,
         };
         let response = call_plugin(
             "test-plugin-raw".to_string(),
@@ -354,7 +362,7 @@ mod tests {
             emit_logs: false,
             emit_traces: false,
             raw_response: false,
-            config: Some(config_value),
+            config: config_value.as_object().map(|m| m.clone()),
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin]), None).await;
@@ -362,6 +370,8 @@ mod tests {
             params: serde_json::json!({"action": "test"}),
             headers: None,
             route: None,
+            method: Some("POST".to_string()),
+            query: None,
         };
         let response = call_plugin(
             "test-plugin-config".to_string(),
@@ -387,7 +397,7 @@ mod tests {
             emit_logs: false,
             emit_traces: false,
             raw_response: true,
-            config: Some(config_value),
+            config: config_value.as_object().map(|m| m.clone()),
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin]), None).await;
@@ -395,6 +405,8 @@ mod tests {
             params: serde_json::json!({"data": "test"}),
             headers: None,
             route: None,
+            method: Some("POST".to_string()),
+            query: None,
         };
         let response = call_plugin(
             "test-plugin-raw-config".to_string(),

@@ -165,6 +165,8 @@ mod tests {
             timeout: None,
             emit_logs: false,
             emit_traces: false,
+            raw_response: false,
+            config: None,
         };
         let result = PluginModel::try_from(plugin);
         assert!(result.is_ok());

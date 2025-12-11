@@ -425,7 +425,7 @@ mod tests {
 
         plugin_runner
             .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
-            .returning(|_, _, _, _, _, _, _, _, _| {
+            .returning(|_, _, _, _, _, _, _, _, _, _, _, _| {
                 Ok(ScriptResult {
                     logs: vec![LogEntry {
                         level: LogLevel::Log,
@@ -445,6 +445,8 @@ mod tests {
                     params: serde_json::Value::Null,
                     headers: None,
                     route: None,
+                    method: Some("POST".to_string()),
+                    query: None,
                 },
                 Arc::new(web::ThinData(app_state)),
             )
@@ -727,7 +729,7 @@ mod tests {
 
         plugin_runner
             .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
-            .returning(move |_, _, _, _, _, _, _, _, _| {
+            .returning(move |_, _, _, _, _, _, _, _, _, _, _, _| {
                 Err(PluginError::HandlerError(Box::new(PluginHandlerPayload {
                     status: 400,
                     message: "Plugin handler error".to_string(),
@@ -749,6 +751,8 @@ mod tests {
                     params: serde_json::Value::Null,
                     headers: None,
                     route: None,
+                    method: Some("POST".to_string()),
+                    query: None,
                 },
                 Arc::new(web::ThinData(app_state)),
             )
@@ -785,7 +789,7 @@ mod tests {
 
         plugin_runner
             .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
-            .returning(|_, _, _, _, _, _, _, _, _| {
+            .returning(|_, _, _, _, _, _, _, _, _, _, _, _| {
                 Err(PluginError::PluginExecutionError("Fatal error".to_string()))
             });
 
@@ -797,6 +801,8 @@ mod tests {
                     params: serde_json::Value::Null,
                     headers: None,
                     route: None,
+                    method: Some("POST".to_string()),
+                    query: None,
                 },
                 Arc::new(web::ThinData(app_state)),
             )
@@ -828,7 +834,7 @@ mod tests {
 
         plugin_runner
             .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
-            .returning(|_, _, _, _, _, _, _, _, _| {
+            .returning(|_, _, _, _, _, _, _, _, _, _, _, _| {
                 Ok(ScriptResult {
                     logs: vec![LogEntry {
                         level: LogLevel::Log,
@@ -848,6 +854,8 @@ mod tests {
                     params: serde_json::Value::Null,
                     headers: None,
                     route: None,
+                    method: Some("POST".to_string()),
+                    query: None,
                 },
                 Arc::new(web::ThinData(app_state)),
             )
@@ -884,7 +892,7 @@ mod tests {
 
         plugin_runner
             .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
-            .returning(|_, _, _, _, _, _, _, _, _| {
+            .returning(|_, _, _, _, _, _, _, _, _, _, _, _| {
                 Ok(ScriptResult {
                     logs: vec![],
                     error: "".to_string(),
@@ -901,6 +909,8 @@ mod tests {
                     params: serde_json::Value::Null,
                     headers: None,
                     route: None,
+                    method: Some("POST".to_string()),
+                    query: None,
                 },
                 Arc::new(web::ThinData(app_state)),
             )
@@ -941,7 +951,7 @@ mod tests {
 
         plugin_runner
             .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
-            .returning(move |_, _, _, _, _, _, headers_json, _, _| {
+            .returning(move |_, _, _, _, _, _, headers_json, _, _, _, _, _| {
                 // Capture the headers_json parameter
                 *captured_headers_clone.lock().unwrap() = headers_json;
                 Ok(ScriptResult {
@@ -971,6 +981,8 @@ mod tests {
                     params: serde_json::json!({"test": "data"}),
                     headers: Some(headers_map.clone()),
                     route: None,
+                    method: Some("POST".to_string()),
+                    query: None,
                 },
                 Arc::new(web::ThinData(app_state)),
             )
@@ -1020,7 +1032,7 @@ mod tests {
 
         plugin_runner
             .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
-            .returning(move |_, _, _, _, _, _, headers_json, _, _| {
+            .returning(move |_, _, _, _, _, _, headers_json, _, _, _, _, _| {
                 *captured_headers_clone.lock().unwrap() = headers_json;
                 Ok(ScriptResult {
                     logs: vec![],
@@ -1038,6 +1050,8 @@ mod tests {
                     params: serde_json::json!({}),
                     headers: None, // No headers
                     route: None,
+                    method: Some("POST".to_string()),
+                    query: None,
                 },
                 Arc::new(web::ThinData(app_state)),
             )

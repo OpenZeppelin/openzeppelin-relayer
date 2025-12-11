@@ -213,6 +213,9 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
         )
         .await;
 
@@ -257,6 +260,9 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
         )
         .await;
 
@@ -288,6 +294,9 @@ mod tests {
             script_path.display().to_string(),
             socket_path.display().to_string(),
             "{}".to_string(),
+            None,
+            None,
+            None,
             None,
             None,
             None,
@@ -341,6 +350,9 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
         )
         .await;
 
@@ -379,6 +391,9 @@ mod tests {
             script_path.display().to_string(),
             socket_path.display().to_string(),
             "{}".to_string(),
+            None,
+            None,
+            None,
             None,
             None,
             None,
@@ -431,6 +446,9 @@ mod tests {
             r#"{"foo":"bar"}"#.to_string(),
             None,
             Some(headers_json.to_string()),
+            None,
+            None,
+            None,
             None,
         )
         .await;
@@ -489,6 +507,9 @@ mod tests {
             None,
             None,
             Some("/verify".to_string()),
+            None,
+            None,
+            None,
         )
         .await;
 
