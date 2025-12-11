@@ -4,7 +4,6 @@ use crate::integration::common::{client::RelayerClient, logging::init_test_loggi
 
 /// Test that the health endpoint returns OK
 #[tokio::test]
-#[ignore = "Requires running relayer"]
 async fn test_health_endpoint() {
     init_test_logging();
 

@@ -10,7 +10,6 @@ use tracing::{debug, info, info_span};
 
 /// Test creating and getting relayer details
 #[tokio::test]
-#[ignore = "Requires running relayer and funded signer"]
 #[serial]
 async fn test_relayer_crud() {
     init_test_logging();
@@ -117,7 +116,6 @@ async fn test_relayer_crud() {
 
 /// Test that getting a non-existent relayer returns an error
 #[tokio::test]
-#[ignore = "Requires running relayer"]
 #[serial]
 async fn test_get_nonexistent_relayer() {
     init_test_logging();
@@ -143,7 +141,6 @@ async fn test_get_nonexistent_relayer() {
 
 /// Test deleting all relayers for a specific network
 #[tokio::test]
-#[ignore = "Requires running relayer and funded signer"]
 #[serial]
 async fn test_delete_all_relayers_by_network() {
     init_test_logging();

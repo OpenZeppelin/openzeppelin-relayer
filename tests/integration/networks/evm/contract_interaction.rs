@@ -117,7 +117,6 @@ async fn run_contract_interaction_test(network: &str) -> eyre::Result<()> {
 
 /// Test SimpleStorage contract interaction on all selected EVM networks
 #[tokio::test]
-#[ignore = "Requires running relayer, funded signer, and deployed contract"]
 #[serial]
 async fn test_evm_contract_interaction() {
     init_test_logging();

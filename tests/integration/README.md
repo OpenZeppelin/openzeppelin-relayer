@@ -55,22 +55,22 @@ Create `.env.integration` from the example:
 cp .env.integration.example .env.integration
 ```
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `API_KEY` | Relayer API authentication key | `ecaa0daa-f87e-4044-96b8-986638bf92d5` |
-| `RELAYER_API_KEY` | Same as API_KEY (used by tests) | `ecaa0daa-f87e-4044-96b8-986638bf92d5` |
-| `KEYSTORE_PASSPHRASE` | Password for local signer keystore | `your-secure-passphrase` |
-| `TEST_MODE` | Test scope: `quick`, `ci`, `full` | `quick` |
-| `TEST_NETWORKS` | Comma-separated network list | `sepolia,arbitrum-sepolia` |
-| `LOG_LEVEL` | Logging verbosity | `info` |
+| Variable              | Description                        | Example                                |
+| --------------------- | ---------------------------------- | -------------------------------------- |
+| `API_KEY`             | Relayer API authentication key     | `ecaa0daa-f87e-4044-96b8-986638bf92d5` |
+| `RELAYER_API_KEY`     | Same as API_KEY (used by tests)    | `ecaa0daa-f87e-4044-96b8-986638bf92d5` |
+| `KEYSTORE_PASSPHRASE` | Password for local signer keystore | `your-secure-passphrase`               |
+| `TEST_MODE`           | Test scope: `quick`, `ci`, `full`  | `quick`                                |
+| `TEST_NETWORKS`       | Comma-separated network list       | `sepolia,arbitrum-sepolia`             |
+| `LOG_LEVEL`           | Logging verbosity                  | `info`                                 |
 
 ### Test Modes
 
-| Mode | Networks | Duration |
-|------|----------|----------|
-| `quick` | 3 networks (sepolia, solana-devnet, stellar-testnet) | ~5 min |
-| `ci` | 6 networks (CI selection) | ~15 min |
-| `full` | All non-deprecated testnets | ~30 min |
+| Mode    | Networks                                             | Duration |
+| ------- | ---------------------------------------------------- | -------- |
+| `quick` | 3 networks (sepolia, solana-devnet, stellar-testnet) | ~5 min   |
+| `ci`    | 6 networks (CI selection)                            | ~15 min  |
+| `full`  | All non-deprecated testnets                          | ~30 min  |
 
 ### Local Signer
 
@@ -135,13 +135,13 @@ docker run -d --name redis -p 6379:6379 redis:7-alpine
 cargo run
 
 # Run integration tests
-RELAYER_API_KEY="your-key" cargo test --test integration -- --ignored --nocapture
+RELAYER_API_KEY="your-key" cargo test --features integration-tests --test integration -- --nocapture
 
 # Run specific test
-RELAYER_API_KEY="your-key" cargo test --test integration test_evm_basic_transfer -- --ignored --nocapture
+RELAYER_API_KEY="your-key" cargo test --features integration-tests --test integration test_evm_basic_transfer -- --nocapture
 
 # Run with specific networks
-TEST_NETWORKS=sepolia RELAYER_API_KEY="your-key" cargo test --test integration -- --ignored --nocapture
+TEST_NETWORKS=sepolia RELAYER_API_KEY="your-key" cargo test --features integration-tests --test integration -- --nocapture
 ```
 
 ---
@@ -180,23 +180,23 @@ tests/integration/
 
 - Test files: `snake_case.rs`
 - Test functions: `test_<feature>_<scenario>`
-- Use `#[ignore]` attribute for tests requiring external services
+- Integration tests are gated behind the `integration-tests` feature flag
 
 ### Test Categories
 
-| Category | Location | Description |
-|----------|----------|-------------|
-| API Tests | `tests/integration/api/` | Test REST endpoints |
-| EVM Tests | `tests/integration/networks/evm/` | EVM chain operations |
-| Solana Tests | `tests/integration/networks/solana/` | Solana operations |
-| Stellar Tests | `tests/integration/networks/stellar/` | Stellar operations |
+| Category      | Location                              | Description          |
+| ------------- | ------------------------------------- | -------------------- |
+| API Tests     | `tests/integration/api/`              | Test REST endpoints  |
+| EVM Tests     | `tests/integration/networks/evm/`     | EVM chain operations |
+| Solana Tests  | `tests/integration/networks/solana/`  | Solana operations    |
+| Stellar Tests | `tests/integration/networks/stellar/` | Stellar operations   |
 
 ### Test Contracts
 
 Pre-deployed test contracts are in `tests/integration/contracts/`:
 
-| Contract | Address (Sepolia) | Purpose |
-|----------|-------------------|---------|
+| Contract      | Address (Sepolia)                            | Purpose                |
+| ------------- | -------------------------------------------- | ---------------------- |
 | SimpleStorage | `0x5379E27d181a94550318d4A44124eCd056678879` | Basic read/write tests |
 
 ---
@@ -217,18 +217,18 @@ tests/integration/registry.json
 {
   "networks": {
     "<network-key>": {
-      "network_name": "string",      // Network identifier used by relayer
-      "network_type": "string",      // "evm", "solana", or "stellar"
+      "network_name": "string", // Network identifier used by relayer
+      "network_type": "string", // "evm", "solana", or "stellar"
       "signer": {
-        "id": "string",              // Signer ID from config.json
-        "address": "string"          // Derived wallet address
+        "id": "string", // Signer ID from config.json
+        "address": "string" // Derived wallet address
       },
       "contracts": {
         "<contract_name>": "address" // Deployed contract addresses
       },
-      "min_balance": "string",       // Minimum balance required (in native token)
-      "tags": ["string"],            // Selection tags: "quick", "ci", "evm", etc.
-      "enabled": true                // Whether network is active for testing
+      "min_balance": "string", // Minimum balance required (in native token)
+      "tags": ["string"], // Selection tags: "quick", "ci", "evm", etc.
+      "enabled": true // Whether network is active for testing
     }
   },
   "_metadata": {
@@ -267,22 +267,20 @@ tests/integration/registry.json
 
 Tags control which networks are included in different test modes:
 
-| Tag | Description |
-|-----|-------------|
-| `quick` | Included in quick test mode (~5 min) |
-| `ci` | Included in CI test mode (~15 min) |
-| `evm` | EVM-compatible network |
-| `solana` | Solana network |
-| `stellar` | Stellar network |
-| `baseline` | Primary test network for each type |
+| Tag        | Description                          |
+| ---------- | ------------------------------------ |
+| `quick`    | Included in quick test mode (~5 min) |
+| `ci`       | Included in CI test mode (~15 min)   |
+| `evm`      | EVM-compatible network               |
+| `solana`   | Solana network                       |
+| `stellar`  | Stellar network                      |
+| `baseline` | Primary test network for each type   |
 
 ### Placeholder Addresses
 
 Use placeholder addresses for contracts not yet deployed:
 
 - **EVM:** `0x0000000000000000000000000000000000000000`
-- **Solana:** `1111111111111111111111111111111111111111111`
-- **Stellar:** `GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF`
 
 The registry automatically detects placeholders and skips tests requiring those contracts.
 
@@ -367,6 +365,7 @@ Error: Transaction confirmation timeout
 ```
 
 **Fix:**
+
 - Check network RPC is accessible
 - Increase timeout in test
 - Verify the network isn't congested
@@ -394,7 +393,7 @@ docker-compose -f docker-compose.integration.yml logs integration-tests
 
 ```bash
 RUST_LOG=debug TEST_NETWORKS=sepolia RELAYER_API_KEY="key" \
-  cargo test --test integration test_name -- --ignored --nocapture
+  cargo test --features integration-tests --test integration test_name -- --nocapture
 ```
 
 ### Cleanup
@@ -420,5 +419,6 @@ TEST_MODE=ci ./scripts/run-integration-docker.sh
 ```
 
 The script returns appropriate exit codes:
+
 - `0` - All tests passed
 - `1` - Tests failed or configuration error

@@ -2,6 +2,8 @@
 //!
 //! Contains tests for relayer functionality
 
+#![cfg(feature = "integration-tests")]
+
 mod integration {
     mod api;
     mod authorization;

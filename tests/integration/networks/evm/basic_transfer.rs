@@ -88,7 +88,6 @@ async fn run_basic_transfer_test(network: &str) -> eyre::Result<()> {
 
 /// Test basic ETH transfer on all selected EVM networks
 #[tokio::test]
-#[ignore = "Requires running relayer and funded signer"]
 #[serial]
 async fn test_evm_basic_transfer() {
     init_test_logging();
