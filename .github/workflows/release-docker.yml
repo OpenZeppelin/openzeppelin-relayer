@@ -75,12 +75,12 @@ jobs:
       #     sbom: true
       #     tags: ${{ steps.meta.outputs.tags }}
       #     labels: ${{ steps.meta.outputs.labels }}
-      - name: Get github app token
-        uses: actions/create-github-app-token@7e473efe3cb98aa54f8d4bac15400b15fad77d94  # v2.2.0
-        id: gh-app-token
-        with:
-          app-id: ${{ vars.GH_APP_ID }}
-          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+      # - name: Get github app token
+      #   uses: actions/create-github-app-token@7e473efe3cb98aa54f8d4bac15400b15fad77d94  # v2.2.0
+      #   id: gh-app-token
+      #   with:
+      #     app-id: ${{ vars.GH_APP_ID }}
+      #     private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
       # - name: Attest
       #   uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a  # v3.0.0
       #   id: attest
@@ -109,27 +109,6 @@ jobs:
       #   run: |-
       #     echo "Image tags: ${{ steps.meta.outputs.tags }}" >> "${GITHUB_STEP_SUMMARY}"
       #     echo "Image labels: ${{ steps.meta.outputs.labels }}" >> "${GITHUB_STEP_SUMMARY}"
-
-      - name: List workflows in openzeppelin-relayer-infra
-        uses: actions/github-script@v6
-        with:
-          github-token: ${{ secrets.TEMP_TOKEN }}
-          script: |
-            const res = await github.rest.actions.listRepoWorkflows({
-              owner: 'OpenZeppelin',
-              repo: 'ui-builder',
-            });
-
-            console.log('Workflows visible to this token:');
-            for (const wf of res.data.workflows) {
-              console.log({
-                id: wf.id,
-                name: wf.name,
-                path: wf.path,
-                state: wf.state,
-              });
-            }
-
 
       - name: Trigger external workflows
         uses: actions/github-script@v6
