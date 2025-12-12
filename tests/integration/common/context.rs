@@ -1,16 +1,6 @@
 //! Test context utilities for integration tests
 //!
-//! Provides reusable test context structs and utilities that bundle common setup logic,
-//! reducing boilerplate in individual tests.
-//!
-//! ## Single-Network Tests
-//!
-//! Use [`EvmTestContext`] for simple tests that only need one EVM network:
-//!
-//! ```ignore
-//! let ctx = EvmTestContext::new().expect("Failed to setup test");
-//! ctx.client.create_relayer(...).await?;
-//! ```
+//! Provides utilities for running test functions across all eligible networks.
 //!
 //! ## Multi-Network Tests
 //!
@@ -21,91 +11,11 @@
 //! ```
 
 use super::{
-    client::RelayerClient,
-    logging::init_test_logging,
-    network_selection::get_test_networks,
-    registry::{NetworkConfig, TestRegistry},
+    logging::init_test_logging, network_selection::get_test_networks, registry::TestRegistry,
 };
-use eyre::{ensure, Result};
+use eyre::Result;
 use std::future::Future;
 use tracing::{error, info, info_span};
-
-/// Test context for EVM network integration tests
-///
-/// Bundles the common setup needed for EVM tests:
-/// - Network selection and validation
-/// - Registry loading
-/// - Client initialization
-///
-/// # Example
-///
-/// ```ignore
-/// let ctx = EvmTestContext::new().expect("Failed to setup test");
-/// ctx.client.delete_all_relayers_by_network(&ctx.network).await?;
-/// // ... test logic using ctx.client, ctx.network, ctx.network_config
-/// ```
-#[derive(Debug)]
-pub struct EvmTestContext {
-    /// HTTP client for the relayer API
-    pub client: RelayerClient,
-    /// Selected EVM network name (e.g., "sepolia")
-    pub network: String,
-    /// Network configuration from the registry
-    pub network_config: NetworkConfig,
-}
-
-impl EvmTestContext {
-    /// Creates a new EVM test context
-    ///
-    /// This performs the following setup:
-    /// 1. Loads test networks from environment/config
-    /// 2. Loads the test registry
-    /// 3. Finds the first EVM network from the selection
-    /// 4. Creates the relayer client
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - No networks are selected for testing
-    /// - No EVM network is found in the selection
-    /// - The registry cannot be loaded
-    /// - The client cannot be initialized
-    pub fn new() -> Result<Self> {
-        let networks = get_test_networks()?;
-        ensure!(!networks.is_empty(), "No networks selected for testing");
-
-        let registry = TestRegistry::load()?;
-
-        let network = networks
-            .iter()
-            .find(|n| {
-                registry
-                    .get_network(n)
-                    .map(|c| c.network_type == "evm")
-                    .unwrap_or(false)
-            })
-            .ok_or_else(|| eyre::eyre!("No EVM network found in selection"))?
-            .clone();
-
-        let network_config = registry.get_network(&network)?.clone();
-        let client = RelayerClient::from_env()?;
-
-        Ok(Self {
-            client,
-            network,
-            network_config,
-        })
-    }
-
-    /// Cleans up all relayers for the test network
-    ///
-    /// Returns the number of relayers deleted
-    pub async fn cleanup_relayers(&self) -> Result<usize> {
-        self.client
-            .delete_all_relayers_by_network(&self.network)
-            .await
-    }
-}
 
 // =============================================================================
 // Multi-Network Test Runner

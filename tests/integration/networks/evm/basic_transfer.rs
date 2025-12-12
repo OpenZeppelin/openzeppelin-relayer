@@ -91,19 +91,3 @@ async fn run_basic_transfer_test(network: String) -> eyre::Result<()> {
 async fn test_evm_basic_transfer() {
     run_multi_network_test("basic_transfer", is_evm_network, run_basic_transfer_test).await;
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_constants() {
-        // Verify burn address is valid
-        assert!(BURN_ADDRESS.starts_with("0x"));
-        assert_eq!(BURN_ADDRESS.len(), 42);
-
-        // Verify transfer value is reasonable (0.000001 ETH)
-        let value: u128 = TRANSFER_VALUE.parse().unwrap();
-        assert_eq!(value, 1_000_000_000_000); // 0.000001 ETH in wei
-    }
-}

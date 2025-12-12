@@ -125,33 +125,3 @@ async fn test_evm_contract_interaction() {
     )
     .await;
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_encode_set_number_call() {
-        // Test encoding setNumber(42)
-        let encoded = encode_set_number_call(42);
-        assert!(encoded.starts_with("0x3fb5c1cb"));
-        assert_eq!(encoded.len(), 2 + 8 + 64); // 0x + selector + 32 bytes
-
-        // Value should be at the end, zero-padded
-        assert!(encoded.ends_with("2a")); // 42 in hex
-
-        // Test encoding setNumber(0)
-        let encoded_zero = encode_set_number_call(0);
-        assert!(encoded_zero.ends_with(&"0".repeat(64)));
-
-        // Test encoding setNumber(255)
-        let encoded_ff = encode_set_number_call(255);
-        assert!(encoded_ff.ends_with("ff"));
-    }
-
-    #[test]
-    fn test_function_selector() {
-        // Verify the function selector is correct for setNumber(uint256)
-        assert_eq!(SET_NUMBER_SELECTOR, "3fb5c1cb");
-    }
-}

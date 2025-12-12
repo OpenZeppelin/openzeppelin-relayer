@@ -19,11 +19,3 @@ pub fn get_test_networks() -> Result<Vec<String>> {
 
     Ok(networks)
 }
-
-/// Check if the current test run should test a specific network
-///
-/// This is useful for conditional test execution based on the selected networks
-pub fn should_test_network(network: &str) -> Result<bool> {
-    let selected_networks = get_test_networks()?;
-    Ok(selected_networks.contains(&network.to_string()))
-}

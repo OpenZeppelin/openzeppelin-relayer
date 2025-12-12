@@ -7,7 +7,6 @@
 mod integration {
     mod authorization;
     pub mod common;
-    mod logging;
     mod networks;
 
     // Initialize logging before any tests run

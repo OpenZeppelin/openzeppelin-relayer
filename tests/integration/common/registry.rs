@@ -156,19 +156,6 @@ impl TestRegistry {
         Ok(!is_placeholder)
     }
 
-    /// Get networks filtered by tags
-    ///
-    /// Returns networks that have ALL of the specified tags and are enabled
-    pub fn networks_by_tags(&self, tags: &[String]) -> Vec<String> {
-        self.networks
-            .iter()
-            .filter(|(_, config)| {
-                config.enabled && tags.iter().all(|tag| config.tags.contains(tag))
-            })
-            .map(|(name, _)| name.clone())
-            .collect()
-    }
-
     /// Validate if a network is ready for testing
     ///
     /// A network is ready if:
