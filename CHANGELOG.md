@@ -6,8 +6,8 @@
 ### 🚀 Features
 
 * Add AWS KMS Ed25519 support ([#567](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/567)) ([d87d41b](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/d87d41bf4b819ac0bfd2c11dd1e7ac053fd7797f))
-* add evm intristic gas_limit validation ([dd1b2d6](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/dd1b2d6768d09f051791d0db68c912a38d273715))
-* Pass arbitrary payloads to script exectution ([#312](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/312)) ([adecaf5](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/adecaf5d73c3df9083c6a3fcf62ed669bc90b25c))
+* add evm intrinsic gas_limit validation ([dd1b2d6](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/dd1b2d6768d09f051791d0db68c912a38d273715))
+* Pass arbitrary payloads to script execution ([#312](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/312)) ([adecaf5](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/adecaf5d73c3df9083c6a3fcf62ed669bc90b25c))
 * Stellar sponsored transactions (gas abstraction) ([#563](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/563)) ([9a38990](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/9a3899073cc3a73d6f2c3501b7af572d23cddba7))
 * Transactions list endpoint - sort improvements ([#573](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/573)) ([63433ad](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/63433ad71208cbdb6bd1508d7df2c66b6839e81d))
 * Update plugin system to support HTTP headers ([#566](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/566)) ([26e66a2](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/26e66a228d155917c87691774c234cbe346d2990))
@@ -15,8 +15,8 @@
 
 ### 🐛 Bug Fixes
 
-* plat-6480 allow transfering wrapped sol tokens ([#132](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/132)) ([f04e66a](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/f04e66a568c877c2a4c5c5378fb6017c2e41d2c6))
-* stellar tx data persistance ([#500](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/500)) ([d60a019](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/d60a01958582aa5ab70b2dc369b1531d493db637))
+* plat-6480 allow transferring wrapped sol tokens ([#132](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/132)) ([f04e66a](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/f04e66a568c877c2a4c5c5378fb6017c2e41d2c6))
+* stellar tx data persistence ([#500](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/500)) ([d60a019](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/d60a01958582aa5ab70b2dc369b1531d493db637))
 
 ## [1.2.0](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v1.1.0...v1.2.0) (2025-11-11)
 
