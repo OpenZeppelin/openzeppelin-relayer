@@ -30,7 +30,6 @@ jobs:
         with:
           role-for-oidc: ${{ secrets.ROLE_FOR_OIDC_TESTS }}
           role-to-assume: ${{ secrets.ROLE_TO_ASSUME_TESTS }}
-          aws-account-id: ${{ secrets.DEV_ACCOUNT_ID }}
           aws-region: ${{ vars.AWS_REGION_KMS_KEY }}
       - name: Create integration test config
         run: |
