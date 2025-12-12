@@ -65,7 +65,7 @@ case "$COMMAND" in
         log_info "Starting integration test environment..."
 
         cd "$PROJECT_ROOT"
-        docker-compose -f docker-compose.integration.yml up --build --abort-on-container-exit
+        docker compose -f docker-compose.integration.yml up --build --abort-on-container-exit
         EXIT_CODE=$?
 
         if [ $EXIT_CODE -eq 0 ]; then
@@ -76,7 +76,7 @@ case "$COMMAND" in
 
         # Cleanup
         log_info "Cleaning up containers..."
-        docker-compose -f docker-compose.integration.yml down
+        docker compose -f docker-compose.integration.yml down
 
         exit $EXIT_CODE
         ;;
@@ -84,32 +84,32 @@ case "$COMMAND" in
     build)
         log_info "Building integration test images..."
         cd "$PROJECT_ROOT"
-        docker-compose -f docker-compose.integration.yml build
+        docker compose -f docker-compose.integration.yml build
         log_success "Build complete!"
         ;;
 
     down|stop)
         log_info "Stopping integration test environment..."
         cd "$PROJECT_ROOT"
-        docker-compose -f docker-compose.integration.yml down
+        docker compose -f docker-compose.integration.yml down
         log_success "Stopped!"
         ;;
 
     logs)
         cd "$PROJECT_ROOT"
-        docker-compose -f docker-compose.integration.yml logs -f
+        docker compose -f docker-compose.integration.yml logs -f
         ;;
 
     shell)
         log_info "Opening shell in integration-tests container..."
         cd "$PROJECT_ROOT"
-        docker-compose -f docker-compose.integration.yml run --rm integration-tests bash
+        docker compose -f docker-compose.integration.yml run --rm integration-tests bash
         ;;
 
     clean)
         log_info "Cleaning up Docker resources..."
         cd "$PROJECT_ROOT"
-        docker-compose -f docker-compose.integration.yml down -v --remove-orphans
+        docker compose -f docker-compose.integration.yml down -v --remove-orphans
         log_success "Cleanup complete!"
         ;;
 
