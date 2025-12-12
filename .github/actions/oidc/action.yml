@@ -8,6 +8,9 @@ inputs:
   role-to-assume:
     description: The role that should be finally assumed
     required: true
+  aws-account-id:
+    description: The AWS account ID (required if role names are used instead of ARNs)
+    required: false
   role-session-name:
     description: The session name that should be used when assuming roles
     required: false
@@ -30,6 +33,7 @@ runs:
         role-to-assume: ${{ inputs.role-for-oidc }}
         role-session-name: ${{ inputs.role-session-name }}
         role-duration-seconds: 900
+        role-arn-account-id: ${{ inputs.aws-account-id }}
     - name: assume target role
       uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502  # v4.0.2
       id: assume-target-role
@@ -42,3 +46,4 @@ runs:
         role-to-assume: ${{ inputs.role-to-assume }}
         role-session-name: ${{ inputs.role-session-name }}
         role-duration-seconds: ${{ inputs.role-duration-seconds }}
+        role-arn-account-id: ${{ inputs.aws-account-id }}
