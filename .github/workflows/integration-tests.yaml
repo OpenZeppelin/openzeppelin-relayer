@@ -28,8 +28,8 @@ jobs:
       - name: Set up AWS credentials via OIDC and role chaining
         uses: ./.github/actions/oidc
         with:
-          role-for-oidc: arn:aws:iam::${{ secrets.DEV_ACCOUNT_ID }}:role/${{ secrets.ROLE_FOR_OIDC }}
-          role-to-assume: arn:aws:iam::${{ secrets.DEV_ACCOUNT_ID }}:role/${{ secrets.ROLE_TO_ASSUME }}
+          role-for-oidc: ${{ secrets.ROLE_FOR_OIDC }}
+          role-to-assume: ${{ secrets.ROLE_TO_ASSUME }}
           aws-region: ${{ vars.AWS_REGION_KMS_KEY }}
       - name: Create integration test config
         run: |
