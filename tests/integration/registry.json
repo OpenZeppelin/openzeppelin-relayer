@@ -6,7 +6,7 @@
       "relayer_id": "sepolia-test-relayer",
       "signer": {
         "id": "aws-kms-signer",
-        "address": "0x0a427c6ffdc5588f9dc155c4e89ad0c15daa2655"
+        "address": "0x64434bf56259852451c28bb3477bc2811e18b620"
       },
       "contracts": {
         "simple_storage": "0x5379E27d181a94550318d4A44124eCd056678879",
@@ -22,7 +22,7 @@
       "relayer_id": "bsc-testnet-test-relayer",
       "signer": {
         "id": "aws-kms-signer",
-        "address": "0x0a427c6ffdc5588s9dc155c4e89ad0c15daa2655"
+        "address": "0x64434bf56259852451c28bb3477bc2811e18b620"
       },
       "contracts": {
         "simple_storage": "0x652496dd1344a0bdC4D43b3b7d661486A4E94a68",
@@ -38,7 +38,7 @@
       "relayer_id": "base-sepolia-test-relayer",
       "signer": {
         "id": "aws-kms-signer",
-        "address": "0x35661d4402cd42d7be8952fb425fede407ef7f0e"
+        "address": "0x64434bf56259852451c28bb3477bc2811e18b620"
       },
       "contracts": {
         "simple_storage": "0xFa36681305B4b47A7398faFcF449FeAA80af97F7",

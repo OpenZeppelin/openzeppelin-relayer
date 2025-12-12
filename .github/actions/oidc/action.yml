@@ -1,0 +1,44 @@
+---
+name: AWS OIDC Credentials via Role Assume Chaining
+description: Retrieve AWS credentials by chaining role assumes
+inputs:
+  role-for-oidc:
+    description: The role that should be used for GitHub OIDC authentication
+    required: true
+  role-to-assume:
+    description: The role that should be finally assumed
+    required: true
+  role-session-name:
+    description: The session name that should be used when assuming roles
+    required: false
+    default: github-actions
+  role-duration-seconds:
+    description: Duration of the credentials validity
+    required: false
+    default: '3600'
+  aws-region:
+    description: The AWS region
+    required: false
+    default: us-east-1
+runs:
+  using: composite
+  steps:
+    - name: assume oidc role
+      uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502  # v4.0.2
+      with:
+        aws-region: us-east-1
+        role-to-assume: ${{ inputs.role-for-oidc }}
+        role-session-name: ${{ inputs.role-session-name }}
+        role-duration-seconds: 900
+    - name: assume target role
+      uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502  # v4.0.2
+      id: assume-target-role
+      with:
+        aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+        aws-session-token: ${{ env.AWS_SESSION_TOKEN }}
+        aws-region: ${{ inputs.aws-region }}
+        role-chaining: true
+        role-to-assume: ${{ inputs.role-to-assume }}
+        role-session-name: ${{ inputs.role-session-name }}
+        role-duration-seconds: ${{ inputs.role-duration-seconds }}

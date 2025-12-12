@@ -1,6 +1,9 @@
 ---
 name: Integration Tests
 on:
+  push:  # TEMPORARY: Remove this after testing
+    branches:
+      - integration-tests
   # Uncomment to run once per day at 2:00 AM UTC
   # schedule:
   #   - cron: "0 2 * * *"
@@ -22,26 +25,26 @@ jobs:
           egress-policy: audit
       - name: Checkout Code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
-      - name: Configure AWS credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502  # v4.0.2
+      - name: Set up AWS credentials via OIDC and role chaining
+        uses: ./.github/actions/oidc
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          role-for-oidc: ${{ secrets.ROLE_FOR_OIDC }}
+          role-to-assume: ${{ secrets.ROLE_TO_ASSUME }}
+          aws-region: ${{ vars.AWS_REGION_KMS_KEY }}
       - name: Create integration test config
         run: |
           cat > .env.integration << EOF
-          API_KEY=${{ secrets.INTEGRATION_API_KEY }}
-          RELAYER_API_KEY=${{ secrets.INTEGRATION_API_KEY }}
+          API_KEY=${{ secrets.INTEGRATION_TESTS_API_KEY }}
+          RELAYER_API_KEY=${{ secrets.INTEGRATION_TESTS_API_KEY }}
           LOG_LEVEL=info
           AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
           AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
           AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
-          AWS_REGION=${{ secrets.AWS_REGION }}
-          AWS_KMS_KEY_ID=${{ secrets.AWS_KMS_KEY_ID }}
+          AWS_REGION=${{ vars.AWS_REGION_KMS_KEY }}
           EOF
       - name: Inject AWS KMS secrets into relayer signer config
         run: |
-          sed -i 's/"region": "AWS_REGION"/"region": "${{ secrets.AWS_REGION }}"/g' tests/integration/config/config.json
-          sed -i 's/"key_id": "AWS_KMS_KEY_ID"/"key_id": "${{ secrets.AWS_KMS_KEY_ID }}"/g' tests/integration/config/config.json
+          sed -i 's/"region": "AWS_REGION"/"region": "${{ vars.AWS_REGION_KMS_KEY }}"/g' tests/integration/config/config.json
+          sed -i 's/"key_id": "AWS_KMS_KEY_ID"/"key_id": "${{ secrets.STG_TESTNET_AWS_KMS_KEY_ID }}"/g' tests/integration/config/config.json
       - name: Run Integration Tests
         run: ./scripts/run-integration-docker.sh
