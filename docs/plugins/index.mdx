@@ -15,6 +15,7 @@ The plugin system features:
 - **_Plugin API_**: Clean interface for interacting with relayers
 - **_Key-Value Storage_**: Persistent state and locking for plugins
 - **_HTTP Headers_**: Access request headers for authentication and metadata
+- **_Route-Based Invocation_**: Optional route suffix (`/call/<route>`) for multi-endpoint plugins
 - **_Docker Integration_**: Seamless development and deployment
 - **_Comprehensive Error Handling_**: Detailed logging and debugging capabilities
 
@@ -133,19 +134,34 @@ export async function handler(api: PluginAPI, params: any): Promise<any> {
 
 Plugins are configured in the `./config/config.json` file, under the `plugins` key.
 
-The file contains a list of plugins, each with an id, path and timeout in seconds (optional).
+The file contains a list of plugins. Each plugin supports the following configuration fields:
+
+- `id` (string, required): Unique identifier for the plugin.
+- `path` (string, required): Plugin entrypoint path relative to the relayer `plugins/` directory.
+- `timeout` (number, optional): Maximum execution time in seconds. Defaults to 300.
+- `emit_logs` (boolean, optional): When `true`, include plugin logs in `metadata.logs` in the HTTP response.
+- `emit_traces` (boolean, optional): When `true`, include relayer API traces in `metadata.traces` in the HTTP response.
+- `raw_response` (boolean, optional): When `true`, return the plugin result directly (no `ApiResponse` envelope).
+- `allow_get_invocation` (boolean, optional): When `true`, allow `GET` requests to invoke the plugin.
+- `config` (object, optional): User-defined configuration (a JSON object) exposed to the plugin as `context.config`.
 
 <Callout>The plugin path is relative to the `/plugins` directory</Callout>
 
 Example:
 
 ```json
-
 "plugins": [
   {
     "id": "my-plugin",
     "path": "my-plugin.ts",
-    "timeout": 30
+    "timeout": 30,
+    "emit_logs": false,
+    "emit_traces": false,
+    "raw_response": false,
+    "allow_get_invocation": false,
+    "config": {
+      "featureFlagExample": true
+    }
   }
 ]
 ```
@@ -207,9 +223,28 @@ console.log(result);
 
 ## Invocation
 
-Plugins are invoked by hitting the `api/v1/plugins/plugin-id/call` endpoint.
+Plugins are invoked by hitting the `api/v1/plugins/{plugin-id}/call{route}` endpoint.
 
-The endpoint accepts a `POST` request. Example post request body:
+- `route` is optional. Use `/call` for a single endpoint, or `/call/<route>` to expose multiple routes from the same plugin.
+- The plugin receives the route as `context.route`.
+- You can implement your own routing by branching on `context.route` (for example, `"/verify"`, `"/settle"`, `""`).
+
+Example (route-based invocation):
+
+```bash
+# Calls the plugin with context.route = "/verify"
+curl -X POST http://localhost:8080/api/v1/plugins/my-plugin/call/verify \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{"params":{}}'
+```
+
+The endpoint accepts a `POST` request.
+
+- If the request body contains a top-level `params` field, that value is used as `context.params`.
+- If the request body does not contain `params`, the entire JSON body is treated as `params`.
+
+Example `POST` request body:
 
 ```json
 {
@@ -223,9 +258,18 @@ The endpoint accepts a `POST` request. Example post request body:
 
 The parameters are passed directly to your plugin’s `handler` function.
 
+### GET invocation (optional)
+
+By default, plugins can only be called with `POST`. To allow `GET` requests, set `allow_get_invocation: true` in the plugin configuration.
+
+- `GET` requests invoke the plugin with an empty params object (`context.params = {}`).
+- Query parameters are available to plugins via `context.query` as `Record<string, string[]>`.
+
 ## Responses
 
-API responses use the `ApiResponse` envelope: `success, data, error, metadata`.
+By default, API responses use the `ApiResponse` envelope: `success, data, error, metadata`.
+
+If `raw_response: true` is set for a plugin, the Relayer bypasses the envelope and returns the plugin result (or plugin error) directly.
 
 ### Success responses (HTTP 200)
 
@@ -239,6 +283,12 @@ API responses use the `ApiResponse` envelope: `success, data, error, metadata`.
 - `error` provides the client-facing message, derived from the thrown error or from log output when the message is empty.
 - `data` carries `code?: string, details?: any` reported by the plugin.
 - `metadata` follows the same visibility rules (`emit_logs` / `emit_traces`).
+
+### Raw responses (`raw_response: true`)
+
+- **Success**: the response body is the value returned by your plugin handler.
+- **Error**: the response body is the plugin error payload (typically `{ "code": string | null, "details": any | null }`) and the HTTP status is taken from the error.
+- **No metadata envelope**: when `raw_response` is enabled, the response does not include `metadata` even if `emit_logs` / `emit_traces` are enabled.
 
 ### Complete Example
 

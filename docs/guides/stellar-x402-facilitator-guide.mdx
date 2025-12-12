@@ -8,11 +8,11 @@ x402 Facilitator is a plugin for OpenZeppelin Relayer that enables payment verif
 
 The plugin features:
 
-- **_Payment Verification_**: Validates payment payloads against payment requirements
-- **_Transaction Settlement_**: Submits verified payments on-chain via relayer or channel service
-- **_Auth Entry Validation_**: Verifies authorization entries are properly signed
-- **_Multi-Network Support_**: Configure multiple Stellar networks and assets
-- **_Channel Service Integration_**: Optional integration with Channels plugin for high-throughput settlement
+- **Payment verification**: Validates payment payloads against payment requirements
+- **Transaction settlement**: Submits verified payments on-chain via the relayer or an optional channel service
+- **Auth entry validation**: Verifies authorization entries are properly signed
+- **Multi-network support**: Configure multiple Stellar networks and assets
+- **Channel service integration**: Optional integration with the Channels plugin for high-throughput settlement
 
 ## Prerequisites
 
@@ -25,18 +25,18 @@ The plugin features:
 
 For a complete working example with Docker Compose, refer to the x402 Facilitator plugin example in the OpenZeppelin Relayer repository:
 
-- **_Location_**: [examples/x402-facilitator-plugin-example](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples/x402-facilitator-plugin-example)
-- **_Documentation_**: [README.md](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples/x402-facilitator-plugin-example/README.md)
+- **Location**: [examples/x402-facilitator-plugin-example](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples/x402-facilitator-plugin-example)
+- **Documentation**: [README.md](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples/x402-facilitator-plugin-example/README.md)
 
 ## Installation
 
 x402 Facilitator can be added to any OpenZeppelin Relayer installation.
 
-**_Resources:_**
+**Resources:**
 
-- **_npm Package_**: [@openzeppelin/relayer-plugin-x402-facilitator](https://www.npmjs.com/package/@openzeppelin/relayer-plugin-x402-facilitator)
-- **_GitHub Repository_**: https://github.com/OpenZeppelin/relayer-plugin-x402-facilitator
-- **_Example Setup_**: [x402-facilitator-plugin-example](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples/x402-facilitator-plugin-example)
+- **npm package**: [@openzeppelin/relayer-plugin-x402-facilitator](https://www.npmjs.com/package/@openzeppelin/relayer-plugin-x402-facilitator)
+- **GitHub repository**: https://github.com/OpenZeppelin/relayer-plugin-x402-facilitator
+- **Example setup**: [x402-facilitator-plugin-example](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples/x402-facilitator-plugin-example)
 
 ### Install from npm
 
@@ -94,6 +94,11 @@ Register the plugin in your `config/config.json` file:
 }
 ```
 
+Note on `path`: this is the plugin entrypoint path as seen by the running Relayer process.
+
+- If you run Relayer locally, ensure the file exists at that path under your `plugins/` directory.
+- If you run Relayer in Docker, ensure the file exists at that path inside the container (for example by mounting your plugin folder into `/app/plugins/x402-facilitator` in the container).
+
 **_Configuration Options:_**
 
 - `id`: Unique identifier for the plugin
@@ -146,13 +151,13 @@ The plugin requires at least one Stellar relayer configured for transaction subm
 }
 ```
 
-**_Important Configuration Notes:_**
+**Important configuration notes:**
 
-- **_Relayer Account_**: Must be configured with `network_type: "stellar"` and a valid signer
-- **_Network_**: Use `testnet` for testing or `mainnet` for production
-- **_Signers_**: Each relayer references a signer by `signer_id`, and signers are defined separately with keystore paths
-- **_Keystore Files_**: You'll need to create keystore files for each account - see [OpenZeppelin Relayer documentation](https://docs.openzeppelin.com/relayer) for details on creating and managing keys
-- **_Assets_**: Configure the contract addresses of assets you want to accept payments in (e.g., USDC contract address)
+- **Relayer account**: Must be configured with `network_type: "stellar"` and a valid signer
+- **Network**: Use `testnet` for testing or `mainnet` for production
+- **Signers**: Each relayer references a signer by `signer_id`; signers are defined separately with keystore paths
+- **Keystore files**: Create keystore files for each account; see the [OpenZeppelin Relayer documentation](https://docs.openzeppelin.com/relayer) for key management
+- **Assets**: Configure the contract addresses of assets you want to accept payments in (for example, a USDC contract address)
 
 ### Channel Service Integration (Optional)
 
@@ -202,9 +207,9 @@ POST /api/v1/plugins/{plugin-id}/call/{route}
 ```
 
 Where `{route}` is one of:
-- `/verify` - Payment verification
-- `/settle` - Payment settlement
-- `/supported` - Supported payment kinds
+- `verify` - Payment verification
+- `settle` - Payment settlement
+- `supported` - Supported payment kinds
 
 ### Verify Payment
 
@@ -395,7 +400,7 @@ The plugin supports two settlement methods:
 
 ## Responses
 
-When `raw_response: true` is set (recommended), the plugin returns responses directly without the standard Relayer `ApiResponse` wrapper, making it compatible with x402 clients.
+When `raw_response: true` is set (recommended), the plugin returns responses directly without the standard Relayer `ApiResponse` wrapper. This matches what most x402 client libraries expect.
 
 ### Success Response (HTTP 200)
 

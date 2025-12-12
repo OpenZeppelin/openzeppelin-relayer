@@ -20,11 +20,11 @@ cd openzeppelin-relayer/examples/x402-facilitator-plugin-example
 
 ## Overview
 
-The x402 Facilitator plugin implements the X402 payment facilitation protocol for Stellar. It provides three main endpoints:
+The x402 Facilitator plugin implements the X402 payment facilitation protocol for Stellar. In this Relayer example, it exposes three plugin routes (invoked via `/api/v1/plugins/x402-facilitator/call/{route}`):
 
-- **`/verify`**: Verifies a payment payload against payment requirements
-- **`/settle`**: Settles a verified payment by submitting the transaction on-chain
-- **`/supported`**: Returns supported payment kinds with current max ledger information
+- **`verify`**: Verifies a payment payload against payment requirements
+- **`settle`**: Settles a verified payment by submitting the transaction on-chain
+- **`supported`**: Returns supported payment kinds with current max ledger information
 
 The plugin supports:
 - Payment verification with auth entry validation
@@ -61,7 +61,7 @@ The x402 Facilitator plugin requires relayer keys for submitting transactions:
 
 - **Relayer account**: Pays transaction fees and submits transactions
 
-From this directory (`examples/x402-facilitator-plugin-example`), run these commands:
+From this directory (`examples/x402-facilitator-plugin-example`), run these commands.
 
 #### Create relayer account
 
@@ -87,7 +87,11 @@ cargo run --example generate_uuid
 
 #### Create environment file
 
-Create `.env` in this directory:
+Create `.env` in this directory (or start from the provided `.env.example`):
+
+```bash
+cp .env.example .env
+```
 
 ```env
 REDIS_URL=redis://redis:6379
@@ -198,7 +202,7 @@ The plugin implements the API defined by the x402 v1 spec, so it works with any 
 
 To use OpenZeppelin Relayer and its x402-facilitator plugin with x402-express (and similar packages), point the facilitator to your Relayer plugin URL and pass the Relayer API key via `createAuthHeaders`.
 
-```
+```typescript
 import { paymentMiddleware } from "x402-express";
 
 const facilitatorUrl = "https://your-relayer-host/api/v1/plugins/x402-facilitator/call";
