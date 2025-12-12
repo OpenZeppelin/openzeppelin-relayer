@@ -32,35 +32,16 @@ jobs:
           cat > .env.integration << EOF
           API_KEY=${{ secrets.INTEGRATION_API_KEY }}
           RELAYER_API_KEY=${{ secrets.INTEGRATION_API_KEY }}
-          TEST_MODE=ci
-          TEST_NETWORKS=${{ secrets.INTEGRATION_TEST_NETWORKS }}
           LOG_LEVEL=info
           AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
           AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
           AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
           AWS_REGION=${{ secrets.AWS_REGION }}
+          AWS_KMS_KEY_ID=${{ secrets.AWS_KMS_KEY_ID }}
           EOF
-      - name: Create relayer config with AWS KMS signer
+      - name: Inject AWS KMS secrets into relayer signer config
         run: |
-          cat > tests/integration/config/config.json << EOF
-          {
-            "relayers": [],
-            "notifications": [],
-            "signers": [
-              {
-                "id": "aws-kms-signer",
-                "type": "aws_kms",
-                "config": {
-                  "region": "${{ secrets.AWS_REGION }}",
-                  "key_id": "${{ secrets.AWS_KMS_KEY_ID }}"
-                }
-              }
-            ],
-            "networks": "/app/networks",
-            "plugins": []
-          }
-          EOF
+          sed -i 's/"region": "AWS_REGION"/"region": "${{ secrets.AWS_REGION }}"/g' tests/integration/config/config.json
+          sed -i 's/"key_id": "AWS_KMS_KEY_ID"/"key_id": "${{ secrets.AWS_KMS_KEY_ID }}"/g' tests/integration/config/config.json
       - name: Run Integration Tests
         run: ./scripts/run-integration-docker.sh
-        env:
-          TEST_MODE: ci
