@@ -2,32 +2,22 @@
 
 use crate::integration::common::{client::RelayerClient, registry::TestRegistry};
 use eyre::Result;
-use openzeppelin_relayer::models::relayer::{
-    CreateRelayerRequest, RelayerNetworkType, RelayerResponse,
-};
+use openzeppelin_relayer::models::relayer::RelayerResponse;
 use tracing::{info, warn};
 
-/// Setup a relayer for testing on a specific network
+/// Get the pre-configured relayer for testing on a specific network
+///
+/// Uses the relayer defined in config.json, referenced by relayer_id in registry.json.
+/// This avoids creating relayers programmatically since they're already configured.
 pub async fn setup_test_relayer(
     client: &RelayerClient,
     registry: &TestRegistry,
     network: &str,
 ) -> Result<RelayerResponse> {
     let network_config = registry.get_network(network)?;
+    let relayer_id = &network_config.relayer_id;
 
-    let create_request = CreateRelayerRequest {
-        id: None,
-        name: format!("Test - {} - {}", network, network_config.signer.id),
-        network: network_config.network_name.to_string(),
-        paused: false,
-        network_type: RelayerNetworkType::Evm,
-        policies: None,
-        signer_id: network_config.signer.id.clone(),
-        notification_id: None,
-        custom_rpc_urls: None,
-    };
-
-    let relayer = client.get_or_create_relayer(create_request).await?;
+    let relayer = client.get_relayer(relayer_id).await?;
 
     info!(
         relayer_id = %relayer.id,

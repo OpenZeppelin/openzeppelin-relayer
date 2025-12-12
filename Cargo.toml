@@ -102,6 +102,7 @@ reqwest-middleware = { version = "0.4.2", default-features = false, features = [
 
 [dev-dependencies]
 cargo-llvm-cov = "0.6"
+ctor = "0.2"
 mockall = { version = "0.13" }
 mockito = "1.7.1"
 proptest = "1.6.0"

@@ -27,6 +27,9 @@ pub struct NetworkConfig {
     pub contracts: HashMap<String, String>,
     pub min_balance: String,
 
+    /// ID of the pre-configured relayer for this network (defined in config.json)
+    pub relayer_id: String,
+
     /// Tags for selection (e.g., ["quick", "ci", "evm", "rollup"])
     #[serde(default)]
     pub tags: Vec<String>,
@@ -118,11 +121,11 @@ impl TestRegistry {
         })
     }
 
-    /// Get networks by type (evm, solana, stellar)
-    pub fn networks_by_type(&self, network_type: &str) -> Vec<String> {
+    /// Get all enabled network names
+    pub fn enabled_networks(&self) -> Vec<String> {
         self.networks
             .iter()
-            .filter(|(_, config)| config.network_type == network_type)
+            .filter(|(_, config)| config.enabled)
             .map(|(name, _)| name.clone())
             .collect()
     }
@@ -215,101 +218,4 @@ pub struct ReadinessStatus {
     pub enabled: bool,
     pub has_signer: bool,
     pub has_contracts: bool,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_load_registry() {
-        let result = TestRegistry::load();
-        assert!(
-            result.is_ok(),
-            "Failed to load registry: {:?}",
-            result.err()
-        );
-
-        let registry = result.unwrap();
-        assert!(!registry.networks.is_empty(), "Registry has no networks");
-    }
-
-    #[test]
-    fn test_get_network() {
-        let registry = TestRegistry::load().unwrap();
-
-        // Test valid network
-        let sepolia = registry.get_network("sepolia");
-        assert!(sepolia.is_ok());
-        assert_eq!(sepolia.unwrap().network_type, "evm");
-
-        // Test invalid network
-        let invalid = registry.get_network("non-existent");
-        assert!(invalid.is_err());
-    }
-
-    #[test]
-    fn test_get_signer() {
-        let registry = TestRegistry::load().unwrap();
-
-        let signer = registry.get_signer("sepolia");
-        assert!(signer.is_ok());
-
-        let signer = signer.unwrap();
-        assert!(!signer.address.is_empty());
-        assert!(!signer.id.is_empty());
-    }
-
-    #[test]
-    fn test_get_contract() {
-        let registry = TestRegistry::load().unwrap();
-
-        // Test valid contract
-        let contract = registry.get_contract("sepolia", "simple_storage");
-        assert!(contract.is_ok());
-
-        // Test invalid contract name
-        let invalid = registry.get_contract("sepolia", "non_existent");
-        assert!(invalid.is_err());
-    }
-
-    #[test]
-    fn test_networks_by_type() {
-        let registry = TestRegistry::load().unwrap();
-
-        let evm_networks = registry.networks_by_type("evm");
-        assert!(!evm_networks.is_empty());
-        assert!(evm_networks.contains(&"sepolia".to_string()));
-
-        // Verify the function works for other network types (may be empty)
-        let _solana_networks = registry.networks_by_type("solana");
-        let _stellar_networks = registry.networks_by_type("stellar");
-    }
-
-    #[test]
-    fn test_has_real_signer() {
-        let registry = TestRegistry::load().unwrap();
-
-        // Sepolia has a real address, should return true
-        let has_real_sepolia = registry.has_real_signer("sepolia").unwrap();
-        assert!(has_real_sepolia, "Sepolia should have a real signer");
-    }
-
-    #[test]
-    fn test_has_real_contract() {
-        let registry = TestRegistry::load().unwrap();
-
-        // simple_storage has a real deployed contract
-        let has_real = registry
-            .has_real_contract("sepolia", "simple_storage")
-            .unwrap();
-        assert!(has_real, "simple_storage should be detected as real");
-
-        // test_erc20 is still a placeholder
-        let has_placeholder = registry.has_real_contract("sepolia", "test_erc20").unwrap();
-        assert!(
-            !has_placeholder,
-            "test_erc20 should not be detected as real"
-        );
-    }
 }

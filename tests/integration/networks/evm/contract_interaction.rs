@@ -3,8 +3,7 @@
 use crate::integration::common::{
     client::RelayerClient,
     confirmation::{wait_for_receipt, ReceiptConfig},
-    logging::init_test_logging,
-    network_selection::get_test_networks,
+    context::{evm_with_contract, run_multi_network_test},
     registry::TestRegistry,
 };
 use serial_test::serial;
@@ -22,14 +21,14 @@ fn encode_set_number_call(value: u64) -> String {
     format!("0x{}{:064x}", SET_NUMBER_SELECTOR, value)
 }
 
-async fn run_contract_interaction_test(network: &str) -> eyre::Result<()> {
+async fn run_contract_interaction_test(network: String) -> eyre::Result<()> {
     let _span = info_span!("contract_interaction", network = %network).entered();
     info!("Starting contract interaction test");
 
     let registry = TestRegistry::load()?;
-    verify_network_ready(&registry, network)?;
+    verify_network_ready(&registry, &network)?;
 
-    let contract_address = match registry.get_contract(network, "simple_storage") {
+    let contract_address = match registry.get_contract(&network, "simple_storage") {
         Ok(addr) => {
             if addr.starts_with("0x0000000000000000") {
                 return Err(eyre::eyre!(
@@ -50,7 +49,7 @@ async fn run_contract_interaction_test(network: &str) -> eyre::Result<()> {
     info!(contract = %contract_address, "SimpleStorage contract");
 
     let client = RelayerClient::from_env()?;
-    let relayer = setup_test_relayer(&client, &registry, network).await?;
+    let relayer = setup_test_relayer(&client, &registry, &network).await?;
 
     let test_value = rand::random::<u64>() % 1_000_000;
     let call_data = encode_set_number_call(test_value);
@@ -73,7 +72,7 @@ async fn run_contract_interaction_test(network: &str) -> eyre::Result<()> {
         "Transaction submitted"
     );
 
-    let receipt_config = ReceiptConfig::from_network(network)?;
+    let receipt_config = ReceiptConfig::from_network(&network)?;
     debug!(
         poll_interval_ms = receipt_config.poll_interval_ms,
         max_wait_ms = receipt_config.max_wait_ms,
@@ -119,81 +118,12 @@ async fn run_contract_interaction_test(network: &str) -> eyre::Result<()> {
 #[tokio::test]
 #[serial]
 async fn test_evm_contract_interaction() {
-    init_test_logging();
-
-    let _span = info_span!("test_evm_contract_interaction").entered();
-
-    let networks = get_test_networks().expect("Failed to get test networks");
-
-    if networks.is_empty() {
-        panic!("No networks selected for testing");
-    }
-
-    let registry = TestRegistry::load().expect("Failed to load test registry");
-
-    let eligible_networks: Vec<String> = networks
-        .into_iter()
-        .filter(|network| {
-            let is_evm = registry
-                .get_network(network)
-                .map(|config| config.network_type == "evm")
-                .unwrap_or(false);
-
-            let has_contract = registry
-                .has_real_contract(network, "simple_storage")
-                .unwrap_or(false);
-
-            is_evm && has_contract
-        })
-        .collect();
-
-    if eligible_networks.is_empty() {
-        info!("No EVM networks with deployed SimpleStorage contract, skipping test");
-        return;
-    }
-
-    info!(
-        count = eligible_networks.len(),
-        networks = ?eligible_networks,
-        "Testing EVM networks with SimpleStorage"
-    );
-
-    let mut failures = Vec::new();
-
-    // Run test for each eligible network
-    for network in &eligible_networks {
-        match run_contract_interaction_test(network).await {
-            Ok(()) => {
-                info!(network = %network, "PASS");
-            }
-            Err(e) => {
-                error!(network = %network, error = %e, "FAIL");
-                failures.push((network.clone(), e.to_string()));
-            }
-        }
-    }
-
-    // Report results
-    info!("Contract Interaction Test Summary");
-    info!(
-        passed = eligible_networks.len() - failures.len(),
-        total = eligible_networks.len(),
-        "Results"
-    );
-
-    if !failures.is_empty() {
-        error!("Failures:");
-        for (network, error) in &failures {
-            error!(network = %network, error = %error, "Test failed");
-        }
-        panic!(
-            "{} of {} contract interaction tests failed",
-            failures.len(),
-            eligible_networks.len()
-        );
-    }
-
-    info!("All contract interaction tests passed!");
+    run_multi_network_test(
+        "contract_interaction",
+        evm_with_contract("simple_storage"),
+        run_contract_interaction_test,
+    )
+    .await;
 }
 
 #[cfg(test)]
