@@ -44,7 +44,7 @@ jobs:
           EOF
       - name: Inject AWS KMS secrets into relayer signer config
         run: |
-          sed -i 's/"region": "AWS_REGION"/"region": "${{ vars.AWS_REGION_KMS_KEY }}"/g' tests/integration/config/config.json
-          sed -i 's/"key_id": "AWS_KMS_KEY_ID"/"key_id": "${{ secrets.TESTNET_AWS_KMS_KEY_ID }}"/g' tests/integration/config/config.json
+          sed -i 's|"region": "AWS_REGION"|"region": "${{ vars.AWS_REGION_KMS_KEY }}"|g' tests/integration/config/config.json
+          sed -i 's|"key_id": "AWS_KMS_KEY_ID"|"key_id": "${{ secrets.TESTNET_AWS_KMS_KEY_ID }}"|g' tests/integration/config/config.json
       - name: Run Integration Tests
         run: ./scripts/run-integration-docker.sh
