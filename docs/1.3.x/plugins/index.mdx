@@ -242,7 +242,7 @@ API responses use the `ApiResponse` envelope: `success, data, error, metadata`.
 
 ### Complete Example
 
-1. **_Plugin Code_** (`plugins/example.ts`):
+1. **Plugin Code** (`plugins/example.ts`):
 
 ```typescript
 import { Speed, PluginContext, pluginError } from '@openzeppelin/relayer-sdk';
@@ -295,7 +295,7 @@ export async function handler(context: PluginContext): Promise<ExampleResult> {
 }
 ```
 
-1. **_Plugin Configuration_** (`config/config.json`):
+2. **Plugin Configuration** (`config/config.json`):
 
 ```json
 {
@@ -309,7 +309,7 @@ export async function handler(context: PluginContext): Promise<ExampleResult> {
 }
 ```
 
-1. **_API Invocation_**:
+3. **API Invocation**:
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/plugins/example-plugin/call \
@@ -324,7 +324,7 @@ curl -X POST http://localhost:8080/api/v1/plugins/example-plugin/call \
 }'
 ```
 
-1. **_API Response (Success)_**:
+4. **API Response (Success)**:
 
 ```json
 {
@@ -350,7 +350,7 @@ curl -X POST http://localhost:8080/api/v1/plugins/example-plugin/call \
 }
 ```
 
-2. **API Response (Error)**:
+5. **API Response (Error)**:
 
 ```json
 {
@@ -366,30 +366,30 @@ curl -X POST http://localhost:8080/api/v1/plugins/example-plugin/call \
 }
 ```
 
-== Response Fields
+## Response Fields
 
 - **`data`**: The value returned by your plugin's handler function (decoded from JSON when possible)
 - **`metadata.logs`**: Terminal output from the plugin (console.log, console.error, etc.) when `emit_logs` is true
 - **`metadata.traces`**: Messages exchanged between the plugin and the Relayer via PluginAPI when `emit_traces` is true
 - **`error`**: Error message if the plugin execution failed (business errors)
 
-== Key-Value Storage
+## Key-Value Storage
 
 The Relayer provides a built-in key-value store for plugins to maintain persistent state across invocations. This addresses the core problem of enabling persistent state management and programmatic configuration updates for plugins.
 
-=== Why a KV store?
+### Why a KV store?
 
 - Plugins execute as isolated processes with no persistent memory
 - No mechanism exists to maintain state between invocations
 - Plugins requiring shared state or coordination need safe concurrency primitives
 
-=== Configuration
+### Configuration
 
 - Reuses the same Redis URL as the Relayer via the `REDIS_URL` environment variable
 - No extra configuration is required
 - Keys are namespaced per plugin ID to prevent collisions
 
-=== Usage
+### Usage
 
 Access the KV store through the `kv` property in the `PluginContext`:
 
@@ -415,7 +415,7 @@ export async function handler(context: PluginContext) {
 
 ```
 
-=== Available Methods
+### Available Methods
 
 - `get<T>(key: string): Promise<T | null>`
 - `set(key: string, value: unknown, opts?:  ttlSec?: number ): Promise<boolean>`
@@ -427,11 +427,11 @@ export async function handler(context: PluginContext) {
 
 Keys must match `[A-Za-z0-9:_-]1,512` and are automatically namespaced per plugin.
 
-== HTTP Headers
+## HTTP Headers
 
 Plugins can access HTTP headers from the incoming request through the `headers` property in `PluginContext`. This enables authentication validation, custom header processing, and request metadata inspection.
 
-=== Header Format
+### Header Format
 
 Headers are provided as `Record<string, string[]>` (object with string keys and string array values):
 
@@ -439,7 +439,7 @@ Headers are provided as `Record<string, string[]>` (object with string keys and 
 - Each header value is an **array** to support multi-value headers (e.g., multiple `Set-Cookie` headers)
 - Access the first value with `headers['header-name']?.[0]`
 
-=== Usage
+### Usage
 
 [source,typescript]
 
@@ -465,29 +465,29 @@ export async function handler(context: PluginContext) {
 }
 ```
 
-=== Common Use Cases
+### Common Use Cases
 
 - **Authentication**: Validate `Authorization` or custom API key headers
 - **Request Tracing**: Read `X-Request-Id` or correlation IDs
 - **Content Negotiation**: Check `Accept` or `Content-Type` headers
 - **Custom Metadata**: Access application-specific headers passed by clients
 
-=== Important Notes
+### Important Notes
 
 - Headers are only available in the **modern context pattern** (single-parameter handler)
 - Legacy two-parameter handlers do not receive headers
 - Header names are always lowercase regardless of how they were sent
 
-== Migration from Legacy Patterns
+## Migration from Legacy Patterns
 
-=== Current Status
+### Current Status
 
 - ✅ **Legacy plugins still work** - No immediate action required
 - ⚠️ **Deprecation warnings** - Legacy plugins will show console warnings
 - 📅 **Future removal** - The legacy `runPlugin` and two-parameter `handler(api, params)` will be removed in a future major version
 - 🎯 **Recommended action** - Migrate to single-parameter `PluginContext` handler for new plugins and KV access
 
-=== Migration Steps
+### Migration Steps
 
 If you have existing plugins using `runPlugin()` or the two-parameter handler, migration is simple:
 
@@ -530,7 +530,7 @@ export async function handler(context: PluginContext): Promise<any>
 
 ```
 
-=== Step-by-Step Migration
+### Step-by-Step Migration
 
 1. **Remove the `runPlugin()` call** at the bottom of your file
 2. **Rename your function to `handler`** (or create a new handler export)
@@ -539,7 +539,7 @@ export async function handler(context: PluginContext): Promise<any>
 5. **Test your plugin** to ensure it works with the new pattern
 6. **Update your documentation** to reflect the new pattern
 
-=== Backwards Compatibility
+### Backwards Compatibility
 
 The relayer will automatically detect which pattern your plugin uses:
 
