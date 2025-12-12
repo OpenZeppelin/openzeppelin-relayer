@@ -9,6 +9,7 @@ use crate::{
     repositories::PluginRepositoryTrait,
 };
 use actix_web::{get, post, web, HttpRequest, HttpResponse, Responder};
+use url::form_urlencoded;
 
 /// List plugins
 #[get("/plugins")]
@@ -43,24 +44,62 @@ fn extract_query_params(http_req: &HttpRequest) -> HashMap<String, Vec<String>> 
         return query_params;
     }
 
-    // Parse query string to support multiple values for same key
-    // Note: actix-web's Query<HashMap> only keeps last value, so we parse manually
-    for pair in query_string.split('&') {
-        if let Some((key, value)) = pair.split_once('=') {
-            // Basic URL decoding - actix-web handles most cases
-            let key_str = key.to_string();
-            let value_str = value.to_string();
-            query_params.entry(key_str).or_default().push(value_str);
-        } else if !pair.is_empty() {
-            // Handle keys without values (e.g., ?flag)
-            query_params
-                .entry(pair.to_string())
-                .or_default()
-                .push(String::new());
-        }
+    // Parse query string to support multiple values for same key (e.g., ?tag=a&tag=b)
+    // This also URL-decodes percent-encoded sequences and '+' characters.
+    // Note: actix-web's Query<HashMap> only keeps the last value, so we parse manually.
+    for (key, value) in form_urlencoded::parse(query_string.as_bytes()) {
+        query_params
+            .entry(key.into_owned())
+            .or_default()
+            .push(value.into_owned());
     }
 
     query_params
+}
+
+fn build_plugin_call_request_from_post_body(
+    route: &str,
+    http_req: &HttpRequest,
+    body: &[u8],
+) -> Result<PluginCallRequest, HttpResponse> {
+    // Parse the body as generic JSON first
+    let body_json: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(json) => json,
+        Err(e) => {
+            tracing::error!("Failed to parse request body as JSON: {}", e);
+            return Err(HttpResponse::BadRequest()
+                .json(ApiResponse::<()>::error(format!("Invalid JSON: {e}"))));
+        }
+    };
+
+    // Check if the body already has a "params" field
+    if body_json.get("params").is_some() {
+        // Body already has params field, deserialize normally
+        match serde_json::from_value::<PluginCallRequest>(body_json) {
+            Ok(mut req) => {
+                req.headers = Some(extract_headers(http_req));
+                req.route = Some(route.to_string());
+                Ok(req)
+            }
+            Err(e) => {
+                tracing::error!("Failed to deserialize PluginCallRequest: {}", e);
+                Err(
+                    HttpResponse::BadRequest().json(ApiResponse::<()>::error(format!(
+                        "Invalid request format: {e}"
+                    ))),
+                )
+            }
+        }
+    } else {
+        // Body doesn't have params field, wrap entire body as params
+        Ok(PluginCallRequest {
+            params: body_json,
+            headers: Some(extract_headers(http_req)),
+            route: Some(route.to_string()),
+            method: None,
+            query: None,
+        })
+    }
 }
 
 /// Calls a plugin method.
@@ -73,46 +112,11 @@ async fn plugin_call(
 ) -> Result<HttpResponse, ApiError> {
     let (plugin_id, route) = params.into_inner();
 
-    // Parse the body as generic JSON first
-    let body_json: serde_json::Value = match serde_json::from_slice(&body) {
-        Ok(json) => json,
-        Err(e) => {
-            tracing::error!("Failed to parse request body as JSON: {}", e);
-            return Ok(HttpResponse::BadRequest()
-                .json(ApiResponse::<()>::error(format!("Invalid JSON: {e}"))));
-        }
-    };
-
-    // Check if the body already has a "params" field
-    let plugin_call_request = if body_json.get("params").is_some() {
-        // Body already has params field, deserialize normally
-        match serde_json::from_value::<PluginCallRequest>(body_json) {
-            Ok(mut req) => {
-                req.headers = Some(extract_headers(&http_req));
-                req.route = Some(route);
-                req
-            }
-            Err(e) => {
-                tracing::error!("Failed to deserialize PluginCallRequest: {}", e);
-                return Ok(
-                    HttpResponse::BadRequest().json(ApiResponse::<()>::error(format!(
-                        "Invalid request format: {e}"
-                    ))),
-                );
-            }
-        }
-    } else {
-        // Body doesn't have params field, wrap entire body as params
-        PluginCallRequest {
-            params: body_json,
-            headers: Some(extract_headers(&http_req)),
-            route: Some(route),
-            method: None,
-            query: None,
-        }
-    };
-
-    let mut plugin_call_request = plugin_call_request;
+    let mut plugin_call_request =
+        match build_plugin_call_request_from_post_body(&route, &http_req, body.as_ref()) {
+            Ok(req) => req,
+            Err(resp) => return Ok(resp),
+        };
     plugin_call_request.method = Some("POST".to_string());
     plugin_call_request.query = Some(extract_query_params(&http_req));
 
@@ -403,6 +407,23 @@ mod tests {
     }
 
     #[actix_web::test]
+    async fn test_extract_headers_skips_non_utf8_value() {
+        use actix_web::http::header::{HeaderName, HeaderValue};
+        use actix_web::test::TestRequest;
+
+        let non_utf8 = HeaderValue::from_bytes(&[0x80]).unwrap();
+        let req = TestRequest::default()
+            .insert_header((HeaderName::from_static("x-non-utf8"), non_utf8))
+            .insert_header(("X-Ok", "ok"))
+            .to_http_request();
+
+        let headers = extract_headers(&req);
+
+        assert_eq!(headers.get("x-ok"), Some(&vec!["ok".to_string()]));
+        assert!(headers.get("x-non-utf8").is_none());
+    }
+
+    #[actix_web::test]
     async fn test_plugin_call_with_wildcard_route() {
         // Test that wildcard routes are captured correctly
         let app = test::init_service(
@@ -579,5 +600,93 @@ mod tests {
         let query_params = extract_query_params(&req);
 
         assert!(query_params.is_empty());
+    }
+
+    #[actix_web::test]
+    async fn test_extract_query_params_decoding_and_flags() {
+        use actix_web::test::TestRequest;
+
+        // percent decoding + '+' decoding + duplicate keys + keys without values
+        let req = TestRequest::default()
+            .uri("/test?foo=hello%20world&bar=a+b&tag=a%2Bb&flag&tag=c")
+            .to_http_request();
+
+        let query_params = extract_query_params(&req);
+
+        assert_eq!(
+            query_params.get("foo"),
+            Some(&vec!["hello world".to_string()])
+        );
+        assert_eq!(query_params.get("bar"), Some(&vec!["a b".to_string()]));
+        assert_eq!(
+            query_params.get("tag"),
+            Some(&vec!["a+b".to_string(), "c".to_string()])
+        );
+        assert_eq!(query_params.get("flag"), Some(&vec!["".to_string()]));
+    }
+
+    #[actix_web::test]
+    async fn test_extract_query_params_decodes_keys_and_handles_empty_values() {
+        use actix_web::test::TestRequest;
+
+        let req = TestRequest::default()
+            .uri("/test?na%6De=al%69ce&empty=&=noval&tag=a&tag=")
+            .to_http_request();
+
+        let query_params = extract_query_params(&req);
+
+        assert_eq!(query_params.get("name"), Some(&vec!["alice".to_string()]));
+        assert_eq!(query_params.get("empty"), Some(&vec!["".to_string()]));
+        assert_eq!(query_params.get(""), Some(&vec!["noval".to_string()]));
+        assert_eq!(
+            query_params.get("tag"),
+            Some(&vec!["a".to_string(), "".to_string()])
+        );
+    }
+
+    #[actix_web::test]
+    async fn test_build_plugin_call_request_invalid_json() {
+        use actix_web::test::TestRequest;
+
+        let http_req = TestRequest::default().to_http_request();
+
+        let result = build_plugin_call_request_from_post_body("/verify", &http_req, b"{bad");
+        assert!(result.is_err());
+        assert_eq!(
+            result.err().unwrap().status(),
+            actix_web::http::StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[actix_web::test]
+    async fn test_build_plugin_call_request_wraps_body_without_params_field() {
+        use actix_web::test::TestRequest;
+
+        let http_req = TestRequest::default()
+            .insert_header(("X-Custom", "v1"))
+            .to_http_request();
+
+        let body = serde_json::to_vec(&serde_json::json!({"user": "alice"})).unwrap();
+        let req = build_plugin_call_request_from_post_body("/route", &http_req, &body).unwrap();
+
+        assert_eq!(req.params, serde_json::json!({"user": "alice"}));
+        assert_eq!(req.route, Some("/route".to_string()));
+        assert!(req.headers.as_ref().unwrap().contains_key("x-custom"));
+    }
+
+    #[actix_web::test]
+    async fn test_build_plugin_call_request_uses_params_field_when_present() {
+        use actix_web::test::TestRequest;
+
+        let http_req = TestRequest::default()
+            .insert_header(("X-Custom", "v1"))
+            .to_http_request();
+
+        let body = serde_json::to_vec(&serde_json::json!({"params": {"k": "v"}})).unwrap();
+        let req = build_plugin_call_request_from_post_body("/route", &http_req, &body).unwrap();
+
+        assert_eq!(req.params, serde_json::json!({"k": "v"}));
+        assert_eq!(req.route, Some("/route".to_string()));
+        assert!(req.headers.as_ref().unwrap().contains_key("x-custom"));
     }
 }

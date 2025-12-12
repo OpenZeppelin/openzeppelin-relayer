@@ -19,7 +19,7 @@ use crate::{
 /// The route is passed to the plugin handler via the `context.route` field.
 #[utoipa::path(
     post,
-    path = "/api/v1/plugins/{plugin_id}/call",
+    path = "/api/v1/plugins/{plugin_id}/call{route}",
     tag = "Plugins",
     operation_id = "callPlugin",
     summary = "Execute a plugin with optional wildcard route routing",
@@ -27,7 +27,13 @@ use crate::{
         ("bearer_auth" = [])
     ),
     params(
-        ("plugin_id" = String, Path, description = "The unique identifier of the plugin")
+        ("plugin_id" = String, Path, description = "The unique identifier of the plugin"),
+        (
+            "route" = String,
+            Path,
+            description = "Optional route suffix captured by the server. Use an empty string for the default route, or include a leading slash (e.g. '/verify'). May include additional slashes for nested routes (e.g. '/api/v1/action').",
+            example = "/verify"
+        )
     ),
     request_body = PluginCallRequest,
     responses(
@@ -130,7 +136,7 @@ fn doc_call_plugin() {}
 /// - wildcard route routing is supported the same way as POST (see `doc_call_plugin`)
 #[utoipa::path(
     get,
-    path = "/api/v1/plugins/{plugin_id}/call",
+    path = "/api/v1/plugins/{plugin_id}/call{route}",
     tag = "Plugins",
     operation_id = "callPluginGet",
     summary = "Execute a plugin via GET (must be enabled per plugin)",
@@ -138,7 +144,13 @@ fn doc_call_plugin() {}
         ("bearer_auth" = [])
     ),
     params(
-        ("plugin_id" = String, Path, description = "The unique identifier of the plugin")
+        ("plugin_id" = String, Path, description = "The unique identifier of the plugin"),
+        (
+            "route" = String,
+            Path,
+            description = "Optional route suffix captured by the server. Use an empty string for the default route, or include a leading slash (e.g. '/supported'). May include additional slashes for nested routes.",
+            example = "/supported"
+        )
     ),
     responses(
         (

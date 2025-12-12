@@ -628,7 +628,7 @@
         ]
       }
     },
-    "/api/v1/plugins/{plugin_id}/call": {
+    "/api/v1/plugins/{plugin_id}/call{route}": {
       "get": {
         "tags": [
           "Plugins"
@@ -645,6 +645,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "route",
+            "in": "path",
+            "description": "Optional route suffix captured by the server. Use an empty string for the default route, or include a leading slash (e.g. '/supported'). May include additional slashes for nested routes.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "/supported"
           }
         ],
         "responses": {
@@ -756,6 +766,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "route",
+            "in": "path",
+            "description": "Optional route suffix captured by the server. Use an empty string for the default route, or include a leading slash (e.g. '/verify'). May include additional slashes for nested routes (e.g. '/api/v1/action').",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "/verify"
           }
         ],
         "requestBody": {

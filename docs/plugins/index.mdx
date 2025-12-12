@@ -256,7 +256,7 @@ console.log(result);
 
 ## Invocation
 
-Plugins are invoked by hitting the `api/v1/plugins/{plugin-id}/call{route}` endpoint.
+Plugins are invoked by hitting the `/api/v1/plugins/{plugin-id}/call{route}` endpoint.
 
 - `route` is optional. Use `/call` for a single endpoint, or `/call/<route>` to expose multiple routes from the same plugin.
 - The plugin receives the route as `context.route`.
