@@ -3098,7 +3098,7 @@ mod tests {
         mock_price_calculator
             .expect_calculate_bumped_gas_price()
             .times(1)
-            .returning(|_, _| {
+            .returning(|_, _, _| {
                 Ok(PriceParams {
                     gas_price: Some(25000000000), // 25 Gwei (25% bump)
                     max_fee_per_gas: None,
