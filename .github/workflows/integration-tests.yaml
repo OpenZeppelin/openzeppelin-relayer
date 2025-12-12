@@ -28,8 +28,8 @@ jobs:
       - name: Set up AWS credentials via OIDC and role chaining
         uses: ./.github/actions/oidc
         with:
-          role-for-oidc: ${{ secrets.ROLE_FOR_OIDC }}
-          role-to-assume: ${{ secrets.ROLE_TO_ASSUME }}
+          role-for-oidc: ${{ secrets.ROLE_FOR_OIDC_TESTS }}
+          role-to-assume: ${{ secrets.ROLE_TO_ASSUME_TESTS }}
           aws-region: ${{ vars.AWS_REGION_KMS_KEY }}
       - name: Create integration test config
         run: |
@@ -45,6 +45,6 @@ jobs:
       - name: Inject AWS KMS secrets into relayer signer config
         run: |
           sed -i 's/"region": "AWS_REGION"/"region": "${{ vars.AWS_REGION_KMS_KEY }}"/g' tests/integration/config/config.json
-          sed -i 's/"key_id": "AWS_KMS_KEY_ID"/"key_id": "${{ secrets.STG_TESTNET_AWS_KMS_KEY_ID }}"/g' tests/integration/config/config.json
+          sed -i 's/"key_id": "AWS_KMS_KEY_ID"/"key_id": "${{ secrets.TESTNET_AWS_KMS_KEY_ID }}"/g' tests/integration/config/config.json
       - name: Run Integration Tests
         run: ./scripts/run-integration-docker.sh
