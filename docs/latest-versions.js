@@ -6,12 +6,13 @@
  * @property {boolean} isStable - Whether this is a stable release
  */
 
-export const latestStable = "1.2.x";
+export const latestStable = "1.3.x";
 
 /** @type {VersionConfig[]} */
 
 export const allVersions = [
-  { label: "v1.2.x (latest stable)", value: "1.2.x", path: "/relayer/1.2.x", isStable: true },
+  { label: "v1.3.x (latest stable)", value: "1.3.x", path: "/relayer/1.3.x", isStable: true },
+  { label: "v1.2.x", value: "1.2.x", path: "/relayer/1.2.x", isStable: true },
   { label: "v1.1.x", value: "1.1.x", path: "/relayer/1.1.x", isStable: true },
   { label: "v1.0.x", value: "1.0.x", path: "/relayer/1.0.x", isStable: true },
   { label: "Development", value: "development", path: "/relayer", isStable: false }
