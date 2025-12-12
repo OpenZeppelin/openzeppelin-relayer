@@ -1,16 +1,47 @@
 {
-  "relayers": [],
-  "notifications": [],
-  "signers": [
+  "relayers": [
     {
-      "id": "local-signer",
-      "type": "local",
+      "id": "sepolia-test-relayer",
+      "name": "Sepolia Test Relayer",
+      "network": "sepolia",
+      "paused": false,
+      "signer_id": "aws-kms-signer",
+      "network_type": "evm",
+      "policies": {
+        "min_balance": 0
+      }
+    },
+    {
+      "id": "bsc-testnet-test-relayer",
+      "name": "BSC Testnet Test Relayer",
+      "network": "binance-smart-chain-testnet",
+      "paused": false,
+      "signer_id": "aws-kms-signer",
+      "network_type": "evm",
+      "policies": {
+        "min_balance": 0
+      }
+    },
+    {
+      "id": "base-sepolia-test-relayer",
+      "name": "Base Sepolia Test Relayer",
+      "network": "base-sepolia",
+      "paused": false,
+      "signer_id": "aws-kms-signer",
+      "network_type": "evm",
+      "policies": {
+        "min_balance": 0
+      }
+    }
+  ],
+  "notifications": [],
+   "signers": [
+    {
+      "id": "aws-kms-signer",
+      "type": "aws_kms",
       "config": {
-        "path": "./config/keys/local-signer.json",
-        "passphrase": {
-          "type": "env",
-          "value": "KEYSTORE_PASSPHRASE"
-        }
+        "region": "AWS_REGION",
+        "key_id": "AWS_KMS_KEY_ID"
       }
     }
   ],

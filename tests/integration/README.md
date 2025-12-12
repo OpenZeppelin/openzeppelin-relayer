@@ -55,22 +55,59 @@ Create `.env.integration` from the example:
 cp .env.integration.example .env.integration
 ```
 
+The `.env.integration` file is used **only for API keys and secrets**:
+
 | Variable              | Description                        | Example                                |
 | --------------------- | ---------------------------------- | -------------------------------------- |
 | `API_KEY`             | Relayer API authentication key     | `ecaa0daa-f87e-4044-96b8-986638bf92d5` |
 | `RELAYER_API_KEY`     | Same as API_KEY (used by tests)    | `ecaa0daa-f87e-4044-96b8-986638bf92d5` |
 | `KEYSTORE_PASSPHRASE` | Password for local signer keystore | `your-secure-passphrase`               |
-| `TEST_MODE`           | Test scope: `quick`, `ci`, `full`  | `quick`                                |
-| `TEST_NETWORKS`       | Comma-separated network list       | `sepolia,arbitrum-sepolia`             |
+| `WEBHOOK_SIGNING_KEY` | Webhook signing key (UUID)         | `your-webhook-signing-key-here`        |
 | `LOG_LEVEL`           | Logging verbosity                  | `info`                                 |
 
-### Test Modes
+### Network Selection
 
-| Mode    | Networks                                             | Duration |
-| ------- | ---------------------------------------------------- | -------- |
-| `quick` | 3 networks (sepolia, solana-devnet, stellar-testnet) | ~5 min   |
-| `ci`    | 6 networks (CI selection)                            | ~15 min  |
-| `full`  | All non-deprecated testnets                          | ~30 min  |
+**Network selection is controlled via `tests/integration/registry.json`**, not environment variables.
+
+To enable or disable networks for testing, edit the `enabled` flag in `registry.json`:
+
+```json
+{
+  "networks": {
+    "sepolia": {
+      "enabled": true  // ✅ This network will run
+    },
+    "base-sepolia": {
+      "enabled": true  // ✅ This network will run
+    },
+    "bsc-testnet": {
+      "enabled": false  // ❌ This network will be skipped
+    }
+  }
+}
+```
+
+Only networks with `"enabled": true` will be included in test runs.
+
+### Test Logging
+
+Test output is controlled by the `RUST_LOG` environment variable:
+
+```bash
+# Default: Show info-level logs from all test modules
+cargo test --features integration-tests --test integration
+
+# Show debug logs for more detail
+RUST_LOG=debug cargo test --features integration-tests --test integration -- --nocapture
+
+# Show only warnings and errors
+RUST_LOG=warn cargo test --features integration-tests --test integration
+
+# Show specific module logs
+RUST_LOG=integration::common::context=debug cargo test --features integration-tests --test integration -- --nocapture
+```
+
+**Note:** Use `--nocapture` flag to see logs in real-time during test execution.
 
 ### Local Signer
 
@@ -115,12 +152,19 @@ The Docker setup handles Redis, Relayer, and test execution automatically.
 
 #### Testing Specific Networks
 
-```bash
-# Single network
-TEST_NETWORKS=sepolia ./scripts/run-integration-docker.sh
+To test specific networks, edit `tests/integration/registry.json` and set `"enabled": true` only for the networks you want to test:
 
-# Multiple networks
-TEST_NETWORKS=sepolia,arbitrum-sepolia ./scripts/run-integration-docker.sh
+```json
+{
+  "networks": {
+    "sepolia": {
+      "enabled": true  // Only this network will run
+    },
+    "base-sepolia": {
+      "enabled": false  // Disabled
+    }
+  }
+}
 ```
 
 ### Via Cargo (Local)
@@ -140,8 +184,7 @@ RELAYER_API_KEY="your-key" cargo test --features integration-tests --test integr
 # Run specific test
 RELAYER_API_KEY="your-key" cargo test --features integration-tests --test integration test_evm_basic_transfer -- --nocapture
 
-# Run with specific networks
-TEST_NETWORKS=sepolia RELAYER_API_KEY="your-key" cargo test --features integration-tests --test integration -- --nocapture
+# Note: Network selection is controlled via registry.json, not environment variables
 ```
 
 ---
@@ -265,16 +308,18 @@ tests/integration/registry.json
 
 ### Tags
 
-Tags control which networks are included in different test modes:
+Tags provide metadata and categorization for networks:
 
-| Tag        | Description                          |
-| ---------- | ------------------------------------ |
-| `quick`    | Included in quick test mode (~5 min) |
-| `ci`       | Included in CI test mode (~15 min)   |
-| `evm`      | EVM-compatible network               |
-| `solana`   | Solana network                       |
-| `stellar`  | Stellar network                      |
-| `baseline` | Primary test network for each type   |
+| Tag        | Description                        |
+| ---------- | ---------------------------------- |
+| `evm`      | EVM-compatible network             |
+| `solana`   | Solana network                     |
+| `stellar`  | Stellar network                    |
+| `baseline` | Primary test network for each type |
+| `rollup`   | Layer 2 rollup network             |
+| `testnet`  | Testnet environment                |
+
+**Note:** Tags are informational only. Network selection is controlled solely by the `enabled` flag.
 
 ### Placeholder Addresses
 
@@ -313,7 +358,9 @@ The registry automatically detects placeholders and skips tests requiring those 
 
 3. Fund the signer wallet on the new network
 
-4. Run tests: `TEST_NETWORKS=arbitrum-sepolia ./scripts/run-integration-docker.sh`
+4. Ensure `"enabled": true` is set for the new network
+
+5. Run tests: `./scripts/run-integration-docker.sh`
 
 ---
 
@@ -392,7 +439,7 @@ docker-compose -f docker-compose.integration.yml logs integration-tests
 #### Run Single Test with Verbose Output
 
 ```bash
-RUST_LOG=debug TEST_NETWORKS=sepolia RELAYER_API_KEY="key" \
+RUST_LOG=debug RELAYER_API_KEY="key" \
   cargo test --features integration-tests --test integration test_name -- --nocapture
 ```
 
@@ -412,13 +459,24 @@ docker-compose -f docker-compose.integration.yml down -v --remove-orphans
 
 ## CI Integration
 
-For CI pipelines, use:
+The integration tests run automatically in CI using the network configuration from `registry.json`.
 
-```bash
-TEST_MODE=ci ./scripts/run-integration-docker.sh
+Control which networks run in CI by setting their `enabled` flags in `registry.json`:
+
+```json
+{
+  "networks": {
+    "base-sepolia": {
+      "enabled": true  // ✅ Runs in CI
+    },
+    "sepolia": {
+      "enabled": false  // ❌ Skipped in CI
+    }
+  }
+}
 ```
 
-The script returns appropriate exit codes:
+The test script returns appropriate exit codes:
 
 - `0` - All tests passed
 - `1` - Tests failed or configuration error

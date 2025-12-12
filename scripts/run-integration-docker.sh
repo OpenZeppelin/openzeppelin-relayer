@@ -59,12 +59,10 @@ fi
 
 # Parse command line arguments
 COMMAND=${1:-up}
-NETWORKS=${TEST_NETWORKS:-sepolia}
 
 case "$COMMAND" in
     up|run)
         log_info "Starting integration test environment..."
-        log_info "Networks: $NETWORKS"
 
         cd "$PROJECT_ROOT"
         docker-compose -f docker-compose.integration.yml up --build --abort-on-container-exit
@@ -129,14 +127,15 @@ case "$COMMAND" in
         echo ""
         echo "Environment variables (set in .env.integration):"
         echo "  RELAYER_API_KEY     API key for relayer service"
-        echo "  TEST_NETWORKS       Networks to test (comma-separated)"
-        echo "  TEST_MODE           Test mode: quick, ci, or full"
+        echo ""
+        echo "Network selection:"
+        echo "  Controlled via tests/integration/registry.json"
+        echo "  Enable/disable networks by setting 'enabled': true/false"
         echo ""
         echo "Examples:"
-        echo "  $0 up                           # Run tests with default config"
-        echo "  TEST_NETWORKS=sepolia $0 up     # Test only sepolia"
-        echo "  $0 build                        # Build images only"
-        echo "  $0 logs                         # View logs"
+        echo "  $0 up       # Run tests with networks enabled in registry.json"
+        echo "  $0 build    # Build images only"
+        echo "  $0 logs     # View logs"
         ;;
 
     *)

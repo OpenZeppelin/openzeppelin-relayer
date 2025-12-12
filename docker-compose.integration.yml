@@ -65,7 +65,7 @@ services:
       - RELAYER_BASE_URL=http://relayer:8080
       # Test logging configuration
       # Default to INFO level for clean output, can be overridden with RUST_LOG
-      - RUST_LOG=${RUST_LOG:-integration=info}
+      - RUST_LOG=${RUST_LOG:-info}
     volumes:
       - ./tests/integration/config:/app/config:ro
       - ./config/networks:/app/networks:ro

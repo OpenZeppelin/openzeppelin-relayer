@@ -3,8 +3,9 @@
     "sepolia": {
       "network_name": "sepolia",
       "network_type": "evm",
+      "relayer_id": "sepolia-test-relayer",
       "signer": {
-        "id": "local-signer",
+        "id": "aws-kms-signer",
         "address": "0x0a427c6ffdc5588f9dc155c4e89ad0c15daa2655"
       },
       "contracts": {
@@ -13,13 +14,14 @@
       },
       "min_balance": "0.1",
       "tags": ["quick", "ci", "evm", "baseline"],
-      "enabled": true
+      "enabled": false
     },
     "bsc-testnet": {
       "network_name": "binance-smart-chain-testnet",
       "network_type": "evm",
+      "relayer_id": "bsc-testnet-test-relayer",
       "signer": {
-        "id": "local-signer",
+        "id": "aws-kms-signer",
         "address": "0x0a427c6ffdc5588s9dc155c4e89ad0c15daa2655"
       },
       "contracts": {
@@ -28,13 +30,14 @@
       },
       "min_balance": "0.1",
       "tags": ["quick", "ci", "evm", "baseline"],
-      "enabled": true
+      "enabled": false
     },
     "base-sepolia": {
       "network_name": "base-sepolia",
       "network_type": "evm",
+      "relayer_id": "base-sepolia-test-relayer",
       "signer": {
-        "id": "local-signer",
+        "id": "aws-kms-signer",
         "address": "0x35661d4402cd42d7be8952fb425fede407ef7f0e"
       },
       "contracts": {
