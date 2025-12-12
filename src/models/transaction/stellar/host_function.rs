@@ -8,7 +8,6 @@ use soroban_rs::xdr::{
     PublicKey as XdrPublicKey, ScAddress, ScSymbol, ScVal, Uint256, VecM,
 };
 use std::convert::TryFrom;
-use tracing::debug;
 use utoipa::ToSchema;
 
 /// HACK: Temporary fix for stellar-xdr bug where u64/i64 values are expected as numbers
@@ -289,12 +288,6 @@ fn convert_invoke_contract(
     function_name: String,
     args: Vec<serde_json::Value>,
 ) -> Result<HostFunction, SignerError> {
-    debug!(
-        "convert_invoke_contract: contract_address: {}",
-        contract_address
-    );
-    debug!("convert_invoke_contract: function_name: {}", function_name);
-    debug!("convert_invoke_contract: args: {:?}", args);
     // Parse contract address
     let contract = stellar_strkey::Contract::from_string(&contract_address)
         .map_err(|e| SignerError::ConversionError(format!("Invalid contract address: {e}")))?;

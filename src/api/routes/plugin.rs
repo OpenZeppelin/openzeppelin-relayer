@@ -116,8 +116,6 @@ async fn plugin_call(
     plugin_call_request.method = Some("POST".to_string());
     plugin_call_request.query = Some(extract_query_params(&http_req));
 
-    tracing::debug!("Plugin call request: {:?}", plugin_call_request);
-    tracing::debug!("id: {:?}", plugin_id);
     plugin::call_plugin(plugin_id, plugin_call_request, data).await
 }
 
@@ -152,8 +150,6 @@ async fn plugin_call_get(
         query: Some(extract_query_params(&http_req)),
     };
 
-    tracing::debug!("Plugin GET call request: {:?}", plugin_call_request);
-    tracing::debug!("id: {:?}", plugin_id);
     plugin::call_plugin(plugin_id, plugin_call_request, data).await
 }
 

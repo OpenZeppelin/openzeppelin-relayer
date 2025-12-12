@@ -82,6 +82,8 @@ impl Modify for SecurityAddon {
         metrics::metric_detail,
         metrics::scrape_metrics,
         plugin_docs::doc_call_plugin,
+        plugin_docs::doc_call_plugin_get,
+        plugin_docs::doc_list_plugins,
         notification_docs::doc_list_notifications,
         notification_docs::doc_get_notification,
         notification_docs::doc_create_notification,

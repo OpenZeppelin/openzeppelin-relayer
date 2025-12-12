@@ -99,6 +99,39 @@ export async function handler(context: PluginContext): Promise<MyPluginResult> {
 }
 ```
 
+#### Handler Context (`PluginContext`)
+
+All modern plugins export a single function with the signature:
+
+```typescript
+import type { PluginContext } from '@openzeppelin/relayer-sdk';
+
+export async function handler(context: PluginContext) {
+  const { api, params, kv, headers, route, method, query, config } = context;
+
+  // ...your logic
+  return { ok: true };
+}
+```
+
+The `handler` receives a `PluginContext` object with these commonly-used fields:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `context.api` | `PluginAPI` | Client for interacting with Relayers (e.g. `api.useRelayer(...)`). |
+| `context.params` | `any` | The input parameters for the plugin invocation. For `POST`, this comes from the request body; for `GET`, it is `{}`. |
+| `context.kv` | KV store client | Persistent key/value store (namespaced per plugin). Only available in the modern context handler. |
+| `context.headers` | `Record<string, string[]>` | Incoming HTTP headers (lowercased keys; values are arrays). |
+| `context.route` | `string` | The route suffix, including the leading slash, e.g. `""`, `"/verify"`, `"/settle"`. |
+| `context.method` | `"GET" \| "POST"` | The HTTP method used to invoke the plugin. |
+| `context.query` | `Record<string, string[]>` | Query parameters parsed from the request URL. Most useful for `GET` invocations. |
+| `context.config` | `unknown` | User-defined plugin configuration object from `plugins[].config` in the Relayer config file. |
+
+<Callout>
+  `context.params` is user-provided input. Prefer defining a `type` for your params, validating required fields, and using
+  `pluginError(...)` to return structured 4xx errors.
+</Callout>
+
 #### Legacy Patterns (Deprecated, but supported)
 
 <Callout type="warn">
