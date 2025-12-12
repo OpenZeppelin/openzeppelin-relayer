@@ -22,14 +22,14 @@ inputs:
   aws-region:
     description: The AWS region
     required: false
-    default: us-east-1
+    default: us-west-2
 runs:
   using: composite
   steps:
     - name: assume oidc role
       uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502  # v4.0.2
       with:
-        aws-region: us-east-1
+        aws-region: us-west-2
         role-to-assume: ${{ inputs.role-for-oidc }}
         role-session-name: ${{ inputs.role-session-name }}
         role-duration-seconds: 900
