@@ -39,13 +39,10 @@
   "signers": [
     {
       "id": "aws-kms-signer",
-      "type": "local",
+      "type": "aws_kms",
       "config": {
-        "path": "./config/keys/local-signer.json",
-        "passphrase": {
-          "type": "env",
-          "value": "KEYSTORE_PASSPHRASE"
-        }
+        "region": "AWS_REGION",
+        "key_id": "AWS_KMS_KEY_ID"
       }
     }
   ],
