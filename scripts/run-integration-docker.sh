@@ -57,20 +57,32 @@ if [ -z "$API_KEY" ] || [ "$API_KEY" = "your-api-key-here" ]; then
     exit 1
 fi
 
-# Validate config.json exists
+# Check if config.json exists
 if [ ! -f "$PROJECT_ROOT/tests/integration/config/config.json" ]; then
-    log_error "config.json not found in tests/integration/config/"
-    log_info "Copy from config.example.json and configure for your environment:"
-    log_info "  cp tests/integration/config/config.example.json tests/integration/config/config.json"
-    exit 1
+    log_warn "config.json not found in tests/integration/config/"
+    log_info "Creating from config.example.json..."
+
+    if [ -f "$PROJECT_ROOT/tests/integration/config/config.example.json" ]; then
+        cp "$PROJECT_ROOT/tests/integration/config/config.example.json" "$PROJECT_ROOT/tests/integration/config/config.json"
+        log_success "Created config.json from example"
+    else
+        log_error "config.example.json not found!"
+        exit 1
+    fi
 fi
 
-# Validate registry.json exists
+# Check if registry.json exists
 if [ ! -f "$PROJECT_ROOT/tests/integration/config/registry.json" ]; then
-    log_error "registry.json not found in tests/integration/config/"
-    log_info "Copy from registry.example.json and configure for your environment:"
-    log_info "  cp tests/integration/config/registry.example.json tests/integration/config/registry.json"
-    exit 1
+    log_warn "registry.json not found in tests/integration/config/"
+    log_info "Creating from registry.example.json..."
+
+    if [ -f "$PROJECT_ROOT/tests/integration/config/registry.example.json" ]; then
+        cp "$PROJECT_ROOT/tests/integration/config/registry.example.json" "$PROJECT_ROOT/tests/integration/config/registry.json"
+        log_success "Created registry.json from example"
+    else
+        log_error "registry.example.json not found!"
+        exit 1
+    fi
 fi
 
 # Parse command line arguments
