@@ -5,9 +5,8 @@
 #![cfg(feature = "integration-tests")]
 
 mod integration {
-    mod authorization;
     pub mod common;
-    mod networks;
+    mod tests;
 
     // Initialize logging before any tests run
     // This ensures our enhanced network selection logs are visible

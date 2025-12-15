@@ -212,29 +212,38 @@ cargo test --features integration-tests --test integration test_evm_basic_transf
 
 ## Writing Tests
 
-### Test File Location
+### Directory Structure
+
+The integration tests are organized for easy navigation:
 
 ```
 tests/integration/
-├── mod.rs                 # Main module, declares submodules
-├── common/                # Shared utilities
+├── README.md              # This file
+├── tests/                 # ✅ ALL test files go here
+│   ├── mod.rs
+│   ├── authorization.rs   # API authorization tests
+│   └── evm/               # EVM network tests
+│       ├── mod.rs
+│       ├── basic_transfer.rs
+│       └── contract_interaction.rs
+├── common/                # 🔧 Shared utilities and helpers
 │   ├── mod.rs
 │   ├── client.rs          # RelayerClient for API calls
-│   ├── registry.rs        # RelayerRegistry for test isolation
+│   ├── confirmation.rs    # Transaction confirmation helpers
+│   ├── context.rs         # Multi-network test runner
+│   ├── evm_helpers.rs     # EVM-specific utilities
 │   ├── network_selection.rs
-│   └── confirmation.rs    # Transaction confirmation helpers
-├── api/                   # API endpoint tests
-│   ├── mod.rs
-│   ├── health.rs
-│   └── relayer.rs
-└── networks/              # Network-specific tests
-    ├── mod.rs
-    └── evm/
-        ├── mod.rs
-        ├── helpers.rs     # EVM-specific utilities
-        ├── basic_transfer.rs
-        └── contract_interaction.rs
+│   └── registry.rs        # Test registry utilities
+├── config/                # ⚙️ Configuration files
+│   ├── config.example.json
+│   └── registry.example.json
+└── contracts/             # 📜 Smart contracts (Foundry)
+    ├── README.md
+    ├── foundry.toml
+    └── src/
 ```
+
+**Key principle:** Look in `tests/` for test files, `common/` for helpers.
 
 ---
 
@@ -248,12 +257,12 @@ tests/integration/
 
 ### Test Categories
 
-| Category      | Location                              | Description          |
-| ------------- | ------------------------------------- | -------------------- |
-| API Tests     | `tests/integration/api/`              | Test REST endpoints  |
-| EVM Tests     | `tests/integration/networks/evm/`     | EVM chain operations |
-| Solana Tests  | `tests/integration/networks/solana/`  | Solana operations    |
-| Stellar Tests | `tests/integration/networks/stellar/` | Stellar operations   |
+| Category      | Location                           | Description          |
+| ------------- | ---------------------------------- | -------------------- |
+| API Tests     | `tests/integration/tests/`         | Test REST endpoints  |
+| EVM Tests     | `tests/integration/tests/evm/`     | EVM chain operations |
+| Solana Tests  | `tests/integration/tests/solana/`  | Solana operations    |
+| Stellar Tests | `tests/integration/tests/stellar/` | Stellar operations   |
 
 ### Test Contracts
 

@@ -1,11 +1,18 @@
-//! Sample integration test for file logging.
+//! Integration tests for file logging.
+//!
+//! This is a SEPARATE test binary to avoid conflicts with the global tracing subscriber
+//! initialized by the main integration tests.
 //!
 //! Environment variables used:
 //! - LOG_MODE: "stdout" (default) or "file"
 //! - LOG_LEVEL: log level ("trace", "debug", "info", "warn", "error"); default is "info"
 //! - LOG_DATA_DIR: when using file mode, the path of the log file (default "logs/relayer.log")
 //!   Refer to `src/logging/mod.rs` for more details.
+
+#![cfg(feature = "integration-tests")]
+
 use chrono::Utc;
+use lazy_static::lazy_static;
 use openzeppelin_relayer::logging::{setup_logging, space_based_rolling, time_based_rolling};
 use std::{
     env, fs,
@@ -18,8 +25,6 @@ use std::{
 };
 use tempfile::TempDir;
 
-use lazy_static::lazy_static;
-
 static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
 // Global lazy_static that initializes logging only once.
@@ -30,7 +35,7 @@ lazy_static! {
     };
 }
 
-pub fn compute_final_log_path(base_file_path: &str, date_str: &str, max_size: u64) -> String {
+fn compute_final_log_path(base_file_path: &str, date_str: &str, max_size: u64) -> String {
     let time_based_path = time_based_rolling(base_file_path, date_str, 1);
     space_based_rolling(&time_based_path, base_file_path, date_str, max_size)
 }
@@ -80,7 +85,7 @@ fn test_setup_logging_file_mode_creates_log_file() {
     create_dir_all(temp_log_dir).expect("Failed to create log directory");
 
     // Force the lazy_static to initialize logging.
-    *INIT_LOGGING;
+    let _ = *INIT_LOGGING;
 
     // Sleep for the logger to flush.
     thread::sleep(Duration::from_millis(200));

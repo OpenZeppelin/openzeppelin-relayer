@@ -4,12 +4,11 @@ use crate::integration::common::{
     client::RelayerClient,
     confirmation::{wait_for_receipt, ReceiptConfig},
     context::{is_evm_network, run_multi_network_test},
+    evm_helpers::{setup_test_relayer, verify_network_ready},
     registry::{RelayerInfo, TestRegistry},
 };
 use serial_test::serial;
 use tracing::{debug, info, info_span};
-
-use super::helpers::{setup_test_relayer, verify_network_ready};
 
 /// Burn address for test transfers
 const BURN_ADDRESS: &str = "0x000000000000000000000000000000000000dEaD";

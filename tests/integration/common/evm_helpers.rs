@@ -1,6 +1,6 @@
 //! Helper functions for EVM network tests
 
-use crate::integration::common::{
+use super::{
     client::RelayerClient,
     registry::{RelayerInfo, TestRegistry},
 };

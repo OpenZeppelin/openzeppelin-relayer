@@ -4,12 +4,11 @@ use crate::integration::common::{
     client::RelayerClient,
     confirmation::{wait_for_receipt, ReceiptConfig},
     context::{evm_with_contract, run_multi_network_test},
+    evm_helpers::{setup_test_relayer, verify_network_ready},
     registry::{RelayerInfo, TestRegistry},
 };
 use serial_test::serial;
 use tracing::{debug, error, info, info_span};
-
-use super::helpers::{setup_test_relayer, verify_network_ready};
 
 /// SimpleStorage contract function selector for setNumber(uint256)
 /// keccak256("setNumber(uint256)")[0:4] = 0x3fb5c1cb
