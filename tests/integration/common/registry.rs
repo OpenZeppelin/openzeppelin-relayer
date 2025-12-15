@@ -23,12 +23,8 @@ pub struct TestRegistry {
 pub struct NetworkConfig {
     pub network_name: String,
     pub network_type: String,
-    pub signer: SignerConfig,
     pub contracts: HashMap<String, String>,
     pub min_balance: String,
-
-    /// ID of the pre-configured relayer for this network (defined in config.json)
-    pub relayer_id: String,
 
     /// Tags for selection (e.g., ["quick", "ci", "evm", "rollup"])
     #[serde(default)]
@@ -43,11 +39,58 @@ fn default_true() -> bool {
     true
 }
 
-/// Signer configuration
+/// Relayer information from config.json
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SignerConfig {
+pub struct RelayerInfo {
     pub id: String,
-    pub address: String,
+    pub name: String,
+    pub network: String,
+    pub signer_id: String,
+    pub network_type: String,
+    #[serde(default)]
+    pub paused: bool,
+}
+
+/// Config file structure
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Config {
+    relayers: Vec<RelayerInfo>,
+    #[serde(default)]
+    signers: Vec<serde_json::Value>,
+}
+
+/// Relayer discovery from config.json
+pub struct RelayerDiscovery;
+
+impl RelayerDiscovery {
+    /// Find all enabled relayers for a network from config.json
+    /// Filters by: network name match + !paused
+    pub fn find_relayers_for_network(network: &str) -> Result<Vec<RelayerInfo>> {
+        let config_path = Self::get_config_path();
+        let contents = fs::read_to_string(&config_path)
+            .wrap_err_with(|| format!("Failed to read config file: {}", config_path.display()))?;
+
+        let config: Config = serde_json::from_str(&contents).wrap_err_with(|| {
+            format!(
+                "Failed to parse config JSON from: {}",
+                config_path.display()
+            )
+        })?;
+
+        // Filter relayers: network match AND not paused
+        let relayers: Vec<RelayerInfo> = config
+            .relayers
+            .into_iter()
+            .filter(|r| r.network == network && !r.paused)
+            .collect();
+
+        Ok(relayers)
+    }
+
+    /// Get the path to config.json
+    fn get_config_path() -> std::path::PathBuf {
+        std::path::PathBuf::from("tests/integration/config/config.json")
+    }
 }
 
 /// Registry metadata
@@ -59,13 +102,13 @@ pub struct RegistryMetadata {
 }
 
 impl TestRegistry {
-    /// Load the test registry from the default location
+    /// Load the test registry from the default location (config/registry.json)
     ///
     /// # Errors
     ///
     /// Returns an error if the registry file cannot be read or parsed
     pub fn load() -> Result<Self> {
-        Self::load_from_path("tests/integration/registry.json")
+        Self::load_from_path("tests/integration/config/registry.json")
     }
 
     /// Load the test registry from a specific path
@@ -95,16 +138,6 @@ impl TestRegistry {
             .ok_or_else(|| eyre::eyre!("Network '{}' not found in registry", network))
     }
 
-    /// Get signer configuration for a network
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the network is not found in the registry
-    pub fn get_signer(&self, network: &str) -> Result<&SignerConfig> {
-        let network_config = self.get_network(network)?;
-        Ok(&network_config.signer)
-    }
-
     /// Get contract address for a network
     ///
     /// # Errors
@@ -130,22 +163,6 @@ impl TestRegistry {
             .collect()
     }
 
-    /// Check if a signer has been configured (non-placeholder address)
-    pub fn has_real_signer(&self, network: &str) -> Result<bool> {
-        let signer = self.get_signer(network)?;
-
-        // Check for placeholder or not-yet-derived addresses
-        let is_placeholder = signer.address.starts_with("0x0000000000000000")
-            || signer.address.starts_with("1111111111111111")
-            || signer.address == "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
-            || signer.address == "TO_BE_DERIVED_FROM_KEYSTORE"
-            || signer.address == "TO_BE_EXTRACTED"
-            || signer.address == "TO_BE_IMPLEMENTED"
-            || signer.address.starts_with("PLACEHOLDER_");
-
-        Ok(!is_placeholder)
-    }
-
     /// Check if a contract has been deployed (non-placeholder address)
     pub fn has_real_contract(&self, network: &str, contract_name: &str) -> Result<bool> {
         let address = self.get_contract(network, contract_name)?;
@@ -160,26 +177,22 @@ impl TestRegistry {
     ///
     /// A network is ready if:
     /// - It's enabled
-    /// - It has a real (non-placeholder) signer address
     /// - It has at least one deployed contract (optional for non-EVM networks)
+    ///
+    /// Note: Signer validation is now done via RelayerDiscovery from config.json
     pub fn validate_readiness(&self, network: &str) -> Result<ReadinessStatus> {
         let config = self.get_network(network)?;
 
-        let has_real_signer = self.has_real_signer(network).unwrap_or(false);
-
         // Check which contracts are deployed
-        let mut missing_contracts = Vec::new();
         let mut has_any_contract = false;
 
-        for (name, address) in &config.contracts {
-            if address.starts_with("0x0000000000000000") {
-                missing_contracts.push(name.clone());
-            } else {
+        for (_name, address) in &config.contracts {
+            if !address.starts_with("0x0000000000000000") {
                 has_any_contract = true;
             }
         }
 
-        // For non-EVM networks without contracts (Solana, Stellar), just check signer
+        // For non-EVM networks without contracts (Solana, Stellar), contracts are optional
         let requires_contracts = !config.contracts.is_empty();
         let has_contracts = if requires_contracts {
             has_any_contract
@@ -187,12 +200,11 @@ impl TestRegistry {
             true // Non-contract networks are OK
         };
 
-        let ready = config.enabled && has_real_signer && has_contracts;
+        let ready = config.enabled && has_contracts;
 
         Ok(ReadinessStatus {
             ready,
             enabled: config.enabled,
-            has_signer: has_real_signer,
             has_contracts,
         })
     }
@@ -203,6 +215,5 @@ impl TestRegistry {
 pub struct ReadinessStatus {
     pub ready: bool,
     pub enabled: bool,
-    pub has_signer: bool,
     pub has_contracts: bool,
 }

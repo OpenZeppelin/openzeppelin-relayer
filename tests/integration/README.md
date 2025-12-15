@@ -23,7 +23,15 @@ This guide covers how to run, create, and maintain integration tests for the Ope
 cp .env.integration.example .env.integration
 # Edit .env.integration with your API key and passphrase
 
-# 2. Run tests via Docker
+# 2. Copy and configure the relayer config
+cp tests/integration/config/config.example.json tests/integration/config/config.json
+# Edit config.json with your relayer and signer settings
+
+# 3. Copy and configure the test registry
+cp tests/integration/config/registry.example.json tests/integration/config/registry.json
+# Edit registry.json to enable the networks you want to test
+
+# 4. Run tests via Docker
 ./scripts/run-integration-docker.sh
 ```
 
@@ -35,6 +43,8 @@ cp .env.integration.example .env.integration
 
 - Docker and Docker Compose
 - `.env.integration` file configured
+- `tests/integration/config/config.json` configured (copy from `config.example.json`)
+- `tests/integration/config/registry.json` configured (copy from `registry.example.json`)
 
 ### Local Testing
 
@@ -64,11 +74,23 @@ The `.env.integration` file is used **only for API keys and secrets**:
 | `WEBHOOK_SIGNING_KEY` | Webhook signing key (UUID)         | `your-webhook-signing-key-here`        |
 | `LOG_LEVEL`           | Logging verbosity                  | `info`                                 |
 
+### Test Registry Setup
+
+Create `registry.json` from the example template:
+
+```bash
+cp tests/integration/config/registry.example.json tests/integration/config/registry.json
+```
+
+The example file comes with all networks disabled by default (except `base-sepolia`). Enable the networks you want to test by setting `"enabled": true`.
+
+> **Note:** `registry.json` is gitignored to allow local customization without affecting the repository.
+
 ### Network Selection
 
-**Network selection is controlled via `tests/integration/registry.json`**, not environment variables.
+**Network selection is controlled via `tests/integration/config/registry.json`**, not environment variables.
 
-To enable or disable networks for testing, edit the `enabled` flag in `registry.json`:
+To enable or disable networks for testing, edit the `enabled` flag in `tests/integration/config/registry.json`:
 
 ```json
 {
@@ -151,7 +173,7 @@ The Docker setup handles Redis, Relayer, and test execution automatically.
 
 #### Testing Specific Networks
 
-To test specific networks, edit `tests/integration/registry.json` and set `"enabled": true` only for the networks you want to test:
+To test specific networks, edit `tests/integration/config/registry.json` and set `"enabled": true` only for the networks you want to test:
 
 ```json
 {
@@ -183,7 +205,7 @@ cargo test --features integration-tests --test integration -- --nocapture
 # Run specific test
 cargo test --features integration-tests --test integration test_evm_basic_transfer -- --nocapture
 
-# Note: Network selection is controlled via registry.json, not environment variables
+# Note: Network selection is controlled via config/registry.json, not environment variables
 ```
 
 ---
@@ -250,7 +272,17 @@ The test registry is a centralized configuration file that stores network-specif
 ### Location
 
 ```
-tests/integration/registry.json
+tests/integration/config/config.json            # Your local relayer config (gitignored)
+tests/integration/config/config.example.json    # Template file (tracked in git)
+tests/integration/config/registry.json          # Your local registry config (gitignored)
+tests/integration/config/registry.example.json  # Template file (tracked in git)
+```
+
+Create your local config files from the examples:
+
+```bash
+cp tests/integration/config/config.example.json tests/integration/config/config.json
+cp tests/integration/config/registry.example.json tests/integration/config/registry.json
 ```
 
 ### Schema
@@ -330,7 +362,7 @@ The registry automatically detects placeholders and skips tests requiring those 
 
 ### Adding a New Network
 
-1. Add entry to `registry.json`:
+1. Add entry to `tests/integration/config/registry.json`:
 
 ```json
 {
@@ -458,9 +490,9 @@ docker-compose -f docker-compose.integration.yml down -v --remove-orphans
 
 ## CI Integration
 
-The integration tests run automatically in CI using the network configuration from `registry.json`.
+The integration tests run automatically in CI using the network configuration from `tests/integration/config/registry.json`.
 
-Control which networks run in CI by setting their `enabled` flags in `registry.json`:
+Control which networks run in CI by setting their `enabled` flags in `tests/integration/config/registry.json`:
 
 ```json
 {

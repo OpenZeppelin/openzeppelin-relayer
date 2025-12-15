@@ -1,23 +1,22 @@
 //! Helper functions for EVM network tests
 
-use crate::integration::common::{client::RelayerClient, registry::TestRegistry};
+use crate::integration::common::{
+    client::RelayerClient,
+    registry::{RelayerInfo, TestRegistry},
+};
 use eyre::Result;
 use openzeppelin_relayer::models::relayer::RelayerResponse;
 use tracing::{info, warn};
 
-/// Get the pre-configured relayer for testing on a specific network
+/// Get the pre-configured relayer for testing
 ///
-/// Uses the relayer defined in config.json, referenced by relayer_id in registry.json.
+/// Uses the relayer information from config.json discovered by RelayerDiscovery.
 /// This avoids creating relayers programmatically since they're already configured.
 pub async fn setup_test_relayer(
     client: &RelayerClient,
-    registry: &TestRegistry,
-    network: &str,
+    relayer_info: &RelayerInfo,
 ) -> Result<RelayerResponse> {
-    let network_config = registry.get_network(network)?;
-    let relayer_id = &network_config.relayer_id;
-
-    let relayer = client.get_relayer(relayer_id).await?;
+    let relayer = client.get_relayer(&relayer_info.id).await?;
 
     info!(
         relayer_id = %relayer.id,
@@ -60,7 +59,14 @@ pub async fn setup_test_relayer(
 }
 
 /// Verify network readiness for testing
-pub fn verify_network_ready(registry: &TestRegistry, network: &str) -> Result<()> {
+///
+/// Checks that the network is enabled and has required contracts deployed.
+/// Signer validation is handled via RelayerDiscovery from config.json.
+pub fn verify_network_ready(
+    registry: &TestRegistry,
+    network: &str,
+    _relayer_info: &RelayerInfo,
+) -> Result<()> {
     let network_config = registry.get_network(network)?;
 
     if network_config.network_type != "evm" {
@@ -71,10 +77,9 @@ pub fn verify_network_ready(registry: &TestRegistry, network: &str) -> Result<()
     let readiness = registry.validate_readiness(network)?;
     if !readiness.ready {
         return Err(eyre::eyre!(
-            "Network {} not ready: enabled={}, has_signer={}, has_contracts={}",
+            "Network {} not ready: enabled={}, has_contracts={}",
             network,
             readiness.enabled,
-            readiness.has_signer,
             readiness.has_contracts
         ));
     }

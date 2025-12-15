@@ -4,7 +4,7 @@ use crate::integration::common::{
     client::RelayerClient,
     confirmation::{wait_for_receipt, ReceiptConfig},
     context::{evm_with_contract, run_multi_network_test},
-    registry::TestRegistry,
+    registry::{RelayerInfo, TestRegistry},
 };
 use serial_test::serial;
 use tracing::{debug, error, info, info_span};
@@ -21,12 +21,16 @@ fn encode_set_number_call(value: u64) -> String {
     format!("0x{}{:064x}", SET_NUMBER_SELECTOR, value)
 }
 
-async fn run_contract_interaction_test(network: String) -> eyre::Result<()> {
-    let _span = info_span!("contract_interaction", network = %network).entered();
+async fn run_contract_interaction_test(
+    network: String,
+    relayer_info: RelayerInfo,
+) -> eyre::Result<()> {
+    let _span = info_span!("contract_interaction", network = %network, relayer = %relayer_info.id)
+        .entered();
     info!("Starting contract interaction test");
 
     let registry = TestRegistry::load()?;
-    verify_network_ready(&registry, &network)?;
+    verify_network_ready(&registry, &network, &relayer_info)?;
 
     let contract_address = match registry.get_contract(&network, "simple_storage") {
         Ok(addr) => {
@@ -49,7 +53,7 @@ async fn run_contract_interaction_test(network: String) -> eyre::Result<()> {
     info!(contract = %contract_address, "SimpleStorage contract");
 
     let client = RelayerClient::from_env()?;
-    let relayer = setup_test_relayer(&client, &registry, &network).await?;
+    let relayer = setup_test_relayer(&client, &relayer_info).await?;
 
     let test_value = rand::random::<u64>() % 1_000_000;
     let call_data = encode_set_number_call(test_value);

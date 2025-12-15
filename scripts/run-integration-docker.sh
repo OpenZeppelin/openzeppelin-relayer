@@ -57,6 +57,22 @@ if [ -z "$API_KEY" ] || [ "$API_KEY" = "your-api-key-here" ]; then
     exit 1
 fi
 
+# Validate config.json exists
+if [ ! -f "$PROJECT_ROOT/tests/integration/config/config.json" ]; then
+    log_error "config.json not found in tests/integration/config/"
+    log_info "Copy from config.example.json and configure for your environment:"
+    log_info "  cp tests/integration/config/config.example.json tests/integration/config/config.json"
+    exit 1
+fi
+
+# Validate registry.json exists
+if [ ! -f "$PROJECT_ROOT/tests/integration/config/registry.json" ]; then
+    log_error "registry.json not found in tests/integration/config/"
+    log_info "Copy from registry.example.json and configure for your environment:"
+    log_info "  cp tests/integration/config/registry.example.json tests/integration/config/registry.json"
+    exit 1
+fi
+
 # Parse command line arguments
 COMMAND=${1:-up}
 
@@ -128,12 +144,18 @@ case "$COMMAND" in
         echo "Environment variables (set in .env.integration):"
         echo "  API_KEY             API key for relayer service"
         echo ""
-        echo "Network selection:"
-        echo "  Controlled via tests/integration/registry.json"
-        echo "  Enable/disable networks by setting 'enabled': true/false"
+        echo "Configuration:"
+        echo "  config.json         Relayer and signer configurations (tests/integration/config/)"
+        echo "  registry.json       Network configurations (tests/integration/config/)"
+        echo "  Both files are git-ignored. Copy from .example files to set up."
+        echo ""
+        echo "Network and relayer selection:"
+        echo "  - Networks: Enable/disable in registry.json (enabled: true/false)"
+        echo "  - Relayers: Pause/unpause in config.json (paused: true/false)"
+        echo "  - Tests run on ALL active (unpaused) relayers for each enabled network"
         echo ""
         echo "Examples:"
-        echo "  $0 up       # Run tests with networks enabled in registry.json"
+        echo "  $0 up       # Run tests with enabled networks and active relayers"
         echo "  $0 build    # Build images only"
         echo "  $0 logs     # View logs"
         ;;

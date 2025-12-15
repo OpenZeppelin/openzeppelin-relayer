@@ -4,7 +4,7 @@ use crate::integration::common::{
     client::RelayerClient,
     confirmation::{wait_for_receipt, ReceiptConfig},
     context::{is_evm_network, run_multi_network_test},
-    registry::TestRegistry,
+    registry::{RelayerInfo, TestRegistry},
 };
 use serial_test::serial;
 use tracing::{debug, info, info_span};
@@ -17,15 +17,16 @@ const BURN_ADDRESS: &str = "0x000000000000000000000000000000000000dEaD";
 /// Test value for transfers (0.000001 ETH in wei)
 const TRANSFER_VALUE: &str = "1000000000000";
 
-async fn run_basic_transfer_test(network: String) -> eyre::Result<()> {
-    let _span = info_span!("basic_transfer", network = %network).entered();
+async fn run_basic_transfer_test(network: String, relayer_info: RelayerInfo) -> eyre::Result<()> {
+    let _span =
+        info_span!("basic_transfer", network = %network, relayer = %relayer_info.id).entered();
     info!("Starting basic transfer test");
 
     let registry = TestRegistry::load()?;
-    verify_network_ready(&registry, &network)?;
+    verify_network_ready(&registry, &network, &relayer_info)?;
 
     let client = RelayerClient::from_env()?;
-    let relayer = setup_test_relayer(&client, &registry, &network).await?;
+    let relayer = setup_test_relayer(&client, &relayer_info).await?;
 
     // INFO: Condensed relayer info
     info!(relayer_id = %relayer.id, address = ?relayer.address, "Relayer ready");

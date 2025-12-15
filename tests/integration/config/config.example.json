@@ -1,4 +1,5 @@
 {
+  "_comment": "COPY this file to config.json and configure for your environment",
   "relayers": [
     {
       "id": "sepolia-test-relayer",
@@ -35,13 +36,16 @@
     }
   ],
   "notifications": [],
-   "signers": [
+  "signers": [
     {
       "id": "aws-kms-signer",
-      "type": "aws_kms",
+      "type": "local",
       "config": {
-        "region": "AWS_REGION",
-        "key_id": "AWS_KMS_KEY_ID"
+        "path": "./config/keys/local-signer.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE"
+        }
       }
     }
   ],

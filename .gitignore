@@ -26,6 +26,10 @@ config.json
 !tests/integration/config/**/*.json
 tests/integration/config/keys/*.json
 
+# Integration test config files (git-ignored, use .example files as templates)
+tests/integration/config/config.json
+tests/integration/config/registry.json
+
 !examples/**/*.json
 
 

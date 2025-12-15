@@ -11,11 +11,13 @@
 //! ```
 
 use super::{
-    logging::init_test_logging, network_selection::get_test_networks, registry::TestRegistry,
+    logging::init_test_logging,
+    network_selection::get_test_networks,
+    registry::{RelayerDiscovery, RelayerInfo, TestRegistry},
 };
 use eyre::Result;
 use std::future::Future;
-use tracing::{error, info, info_span};
+use tracing::{error, info, info_span, warn};
 
 // =============================================================================
 // Multi-Network Test Runner
@@ -27,7 +29,8 @@ use tracing::{error, info, info_span};
 /// - Initializes test logging
 /// - Loads networks and registry
 /// - Filters networks using the provided predicate
-/// - Runs the test for each eligible network
+/// - Discovers ALL active relayers for each eligible network
+/// - Runs the test for each network × relayer combination
 /// - Collects and reports failures
 /// - Panics if any test failed
 ///
@@ -35,7 +38,7 @@ use tracing::{error, info, info_span};
 ///
 /// * `test_name` - Name of the test for logging purposes
 /// * `network_filter` - Predicate that determines if a network should be tested
-/// * `test_fn` - Async function that runs the actual test for a single network
+/// * `test_fn` - Async function that runs the actual test for a network and relayer
 ///
 /// # Example
 ///
@@ -55,7 +58,7 @@ pub async fn run_multi_network_test<F, Fut>(
     network_filter: impl Fn(&str, &TestRegistry) -> bool,
     test_fn: F,
 ) where
-    F: Fn(String) -> Fut,
+    F: Fn(String, RelayerInfo) -> Fut,
     Fut: Future<Output = Result<()>>,
 {
     init_test_logging();
@@ -113,12 +116,51 @@ pub async fn run_multi_network_test<F, Fut>(
     info!("========================================");
 
     let mut failures = Vec::new();
+    let mut total_tests = 0;
+
     for network in &eligible {
-        match test_fn(network.clone()).await {
-            Ok(()) => info!(network = %network, "PASS"),
+        // Discover ALL active relayers for this network
+        let relayers = match RelayerDiscovery::find_relayers_for_network(network) {
+            Ok(relayers) => relayers,
             Err(e) => {
-                error!(network = %network, error = %e, "FAIL");
-                failures.push((network.clone(), e.to_string()));
+                error!(network = %network, error = %e, "Failed to discover relayers");
+                failures.push((network.clone(), "N/A".to_string(), e.to_string()));
+                continue;
+            }
+        };
+
+        if relayers.is_empty() {
+            warn!(network = %network, "No active relayers found, skipping");
+            continue;
+        }
+
+        info!(
+            network = %network,
+            count = relayers.len(),
+            relayers = ?relayers.iter().map(|r| &r.id).collect::<Vec<_>>(),
+            "Testing with ALL active relayers"
+        );
+
+        // Test each relayer sequentially
+        for relayer in relayers {
+            total_tests += 1;
+            match test_fn(network.clone(), relayer.clone()).await {
+                Ok(()) => {
+                    info!(
+                        network = %network,
+                        relayer = %relayer.id,
+                        "PASS"
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        network = %network,
+                        relayer = %relayer.id,
+                        error = %e,
+                        "FAIL"
+                    );
+                    failures.push((network.clone(), relayer.id.clone(), e.to_string()));
+                }
             }
         }
     }
@@ -128,22 +170,27 @@ pub async fn run_multi_network_test<F, Fut>(
     info!("{} Test Results", test_name);
     info!("========================================");
     info!(
-        passed = eligible.len() - failures.len(),
+        passed = total_tests - failures.len(),
         failed = failures.len(),
-        total = eligible.len(),
+        total = total_tests,
         "Summary"
     );
 
     if !failures.is_empty() {
-        error!("Failed networks:");
-        for (network, error) in &failures {
-            error!(network = %network, error = %error, "Test failed");
+        error!("Failed tests:");
+        for (network, relayer_id, error) in &failures {
+            error!(
+                network = %network,
+                relayer = %relayer_id,
+                error = %error,
+                "Test failed"
+            );
         }
         info!("========================================");
         panic!(
             "{} of {} {} tests failed",
             failures.len(),
-            eligible.len(),
+            total_tests,
             test_name
         );
     }
