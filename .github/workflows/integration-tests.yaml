@@ -41,6 +41,10 @@ jobs:
           AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
           AWS_REGION=${{ vars.AWS_REGION_KMS_KEY }}
           EOF
+      - name: Create config files from examples
+        run: |
+          cp tests/integration/config/config.example.json tests/integration/config/config.json
+          cp tests/integration/config/registry.example.json tests/integration/config/registry.json
       - name: Inject AWS KMS secrets into relayer signer config
         run: |
           sed -i 's|"region": "AWS_REGION"|"region": "${{ vars.AWS_REGION_KMS_KEY }}"|g' tests/integration/config/config.json
