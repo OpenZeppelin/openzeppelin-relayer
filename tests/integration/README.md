@@ -310,7 +310,6 @@ cp tests/integration/config/registry.example.json tests/integration/config/regis
         "<contract_name>": "address" // Deployed contract addresses
       },
       "min_balance": "string", // Minimum balance required (in native token)
-      "tags": ["string"], // Selection tags: "quick", "ci", "evm", etc.
       "enabled": true // Whether network is active for testing
     }
   },
@@ -339,27 +338,11 @@ cp tests/integration/config/registry.example.json tests/integration/config/regis
         "test_erc20": "0x0000000000000000000000000000000000000000"
       },
       "min_balance": "0.1",
-      "tags": ["quick", "ci", "evm", "baseline"],
       "enabled": true
     }
   }
 }
 ```
-
-### Tags
-
-Tags provide metadata and categorization for networks:
-
-| Tag        | Description                        |
-| ---------- | ---------------------------------- |
-| `evm`      | EVM-compatible network             |
-| `solana`   | Solana network                     |
-| `stellar`  | Stellar network                    |
-| `baseline` | Primary test network for each type |
-| `rollup`   | Layer 2 rollup network             |
-| `testnet`  | Testnet environment                |
-
-**Note:** Tags are informational only. Network selection is controlled solely by the `enabled` flag.
 
 ### Placeholder Addresses
 
@@ -387,7 +370,6 @@ The registry automatically detects placeholders and skips tests requiring those 
         "simple_storage": "0x0000000000000000000000000000000000000000"
       },
       "min_balance": "0.01",
-      "tags": ["ci", "evm", "rollup"],
       "enabled": true
     }
   }

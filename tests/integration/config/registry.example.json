@@ -9,7 +9,6 @@
         "test_erc20": "0x0000000000000000000000000000000000000000"
       },
       "min_balance": "0.1",
-      "tags": ["quick", "ci", "evm", "baseline"],
       "enabled": false
     },
     "bsc-testnet": {
@@ -20,7 +19,6 @@
         "test_erc20": "0x0000000000000000000000000000000000000000"
       },
       "min_balance": "0.1",
-      "tags": ["quick", "ci", "evm", "baseline"],
       "enabled": false
     },
     "base-sepolia": {
@@ -31,13 +29,7 @@
         "test_erc20": "0x0000000000000000000000000000000000000000"
       },
       "min_balance": "0.1",
-      "tags": ["quick", "ci", "evm", "baseline"],
       "enabled": true
     }
-  },
-  "_metadata": {
-    "description": "Integration test network configurations - ALL active relayers from config.json are tested",
-    "version": "2.0.0",
-    "last_updated": "2025-12-15"
   }
 }

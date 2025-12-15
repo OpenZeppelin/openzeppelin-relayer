@@ -49,7 +49,7 @@ jobs:
         run: |
           jq --arg region "${{ vars.AWS_REGION_KMS_KEY }}" \
              --arg key_id "${{ secrets.TESTNET_AWS_KMS_KEY_ID }}" \
-             '.signers = [{"id": "aws-kms-signer", "type": "aws_kms", "config": {"region": $region, "key_id": $key_id}}]' \
+             '.signers = [{"id": "local-signer", "type": "aws_kms", "config": {"region": $region, "key_id": $key_id}}]' \
              tests/integration/config/config.json > tests/integration/config/config.tmp.json && \
           mv tests/integration/config/config.tmp.json tests/integration/config/config.json
       - name: Run Integration Tests
