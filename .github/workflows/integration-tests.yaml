@@ -1,12 +1,6 @@
 ---
 name: Integration Tests
 on:
-  push:  # TEMPORARY: Remove this after testing
-    branches:
-      - integration-tests
-  # Uncomment to run once per day at 2:00 AM UTC
-  # schedule:
-  #   - cron: "0 2 * * *"
   workflow_dispatch:  # Allow manual triggering from GitHub UI
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
