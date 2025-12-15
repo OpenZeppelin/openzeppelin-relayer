@@ -140,14 +140,15 @@ The file contains a list of plugins, each with an id, path and timeout in second
 Example:
 
 ```json
-
-"plugins": [
-  {
-    "id": "my-plugin",
-    "path": "my-plugin.ts",
-    "timeout": 30
-  }
-]
+{
+  "plugins": [
+   {
+     "id": "my-plugin",
+     "path": "my-plugin.ts",
+     "timeout": 30
+   }
+ ]
+}
 ```
 
 ### Timeout
@@ -418,14 +419,14 @@ export async function handler(context: PluginContext) {
 ### Available Methods
 
 - `get<T>(key: string): Promise<T | null>`
-- `set(key: string, value: unknown, opts?:  ttlSec?: number ): Promise<boolean>`
+- `set(key: string, value: unknown, opts?: { ttlSec?: number }): Promise<boolean>`
 - `del(key: string): Promise<boolean>`
 - `exists(key: string): Promise<boolean>`
 - `listKeys(pattern?: string, batch?: number): Promise<string[]>`
 - `clear(): Promise<number>`
-- `withLock<T>(key: string, fn: () => Promise<T>, opts?:  ttlSec?: number; onBusy?: 'throw' | 'skip' ): Promise<T | null>`
+- `withLock<T>(key: string, fn: () => Promise<T>, opts?: { ttlSec?: number; onBusy?: 'throw' | 'skip' }): Promise<T | null>`
 
-Keys must match `[A-Za-z0-9:_-]1,512` and are automatically namespaced per plugin.
+Keys must match `[A-Za-z0-9:_-]{1,512}` and are automatically namespaced per plugin.
 
 ## HTTP Headers
 
