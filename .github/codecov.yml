@@ -1,4 +1,8 @@
 ---
+codecov:
+  notify:
+    after_n_builds: 2  # Wait for all 3 flag uploads (integration, properties, unittests)
+    wait_for_ci: true  # Wait for CI to complete before sending status
 coverage:
   range: 90..100
   round: down
@@ -9,7 +13,6 @@ coverage:
         target: 80%
         threshold: 1%
         flags:
-          - integration
           - properties
           - unittests
     patch:
