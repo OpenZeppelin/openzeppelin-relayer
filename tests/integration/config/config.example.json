@@ -6,7 +6,7 @@
       "name": "Sepolia Test Relayer",
       "network": "sepolia",
       "paused": false,
-      "signer_id": "aws-kms-signer",
+      "signer_id": "local-signer",
       "network_type": "evm",
       "policies": {
         "min_balance": 0
@@ -17,7 +17,7 @@
       "name": "BSC Testnet Test Relayer",
       "network": "binance-smart-chain-testnet",
       "paused": false,
-      "signer_id": "aws-kms-signer",
+      "signer_id": "local-signer",
       "network_type": "evm",
       "policies": {
         "min_balance": 0
@@ -28,7 +28,7 @@
       "name": "Base Sepolia Test Relayer",
       "network": "base-sepolia",
       "paused": false,
-      "signer_id": "aws-kms-signer",
+      "signer_id": "local-signer",
       "network_type": "evm",
       "policies": {
         "min_balance": 0
@@ -38,11 +38,14 @@
   "notifications": [],
   "signers": [
     {
-      "id": "aws-kms-signer",
-      "type": "aws_kms",
+      "id": "local-signer",
+      "type": "local",
       "config": {
-        "region": "AWS_REGION",
-        "key_id": "AWS_KMS_KEY_ID"
+        "path": "./config/keys/local-signer.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE"
+        }
       }
     }
   ],

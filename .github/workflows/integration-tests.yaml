@@ -45,9 +45,12 @@ jobs:
         run: |
           cp tests/integration/config/config.example.json tests/integration/config/config.json
           cp tests/integration/config/registry.example.json tests/integration/config/registry.json
-      - name: Inject AWS KMS secrets into relayer signer config
+      - name: Inject AWS KMS signer config
         run: |
-          sed -i 's|"region": "AWS_REGION"|"region": "${{ vars.AWS_REGION_KMS_KEY }}"|g' tests/integration/config/config.json
-          sed -i 's|"key_id": "AWS_KMS_KEY_ID"|"key_id": "${{ secrets.TESTNET_AWS_KMS_KEY_ID }}"|g' tests/integration/config/config.json
+          jq --arg region "${{ vars.AWS_REGION_KMS_KEY }}" \
+             --arg key_id "${{ secrets.TESTNET_AWS_KMS_KEY_ID }}" \
+             '.signers = [{"id": "aws-kms-signer", "type": "aws_kms", "config": {"region": $region, "key_id": $key_id}}]' \
+             tests/integration/config/config.json > tests/integration/config/config.tmp.json && \
+          mv tests/integration/config/config.tmp.json tests/integration/config/config.json
       - name: Run Integration Tests
         run: ./scripts/run-integration-docker.sh
