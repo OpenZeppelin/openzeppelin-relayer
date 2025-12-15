@@ -1,0 +1,349 @@
+---
+title: Solana Integration
+---
+
+## Overview
+
+OpenZeppelin Relayer provides robust support for Solana networks, enabling secure transaction relaying, automated token swaps, gasless transactions, and advanced fee management. This page covers everything you need to get started and make the most of Solana-specific features.
+
+## Features
+
+* Automated token swaps via Jupiter DEX (mainnet-beta only)
+* Gasless transactions (user or relayer pays fees)
+* Secure transaction signing with multiple signer backends
+* Transaction status monitoring and nonce management
+* Custom RPC endpoints and network policies
+* Metrics and observability
+
+## Supported Networks
+
+Solana networks are defined via JSON configuration files, providing flexibility to:
+
+* Configure standard Solana clusters: `mainnet-beta`, `devnet`, `testnet`
+* Set up custom Solana-compatible networks with specific RPC endpoints
+* Create network variants using inheritance from base configurations
+
+Example Solana network configurations:
+
+```json
+{
+  "networks": [
+    {
+      "type": "solana",
+      "network": "solana-mainnet",
+      "rpc_urls": ["https://api.mainnet-beta.solana.com"],
+      "explorer_urls": ["https://explorer.solana.com"],
+      "is_testnet": false,
+      "tags": ["mainnet", "solana"]
+    },
+    {
+      "type": "solana",
+      "network": "solana-devnet",
+      "rpc_urls": ["https://api.devnet.solana.com"],
+      "explorer_urls": ["https://explorer.solana.com?cluster=devnet"],
+      "is_testnet": true,
+      "tags": ["devnet", "solana"]
+    },
+    {
+      "type": "solana",
+      "network": "solana-custom",
+      "rpc_urls": ["https://your-custom-solana-rpc.example.com"],
+      "tags": ["custom", "solana"]
+    }
+  ]
+}
+```
+
+For detailed network configuration options, see the [Network Configuration](/relayer/network_configuration) guide.
+
+## Supported Signers
+
+* `vault_transit` (hosted)
+* `turnkey` (hosted)
+* `google_cloud_kms` (hosted)
+* `local` (local)
+* `vault` (local)
+* `cdp` (hosted)
+
+<Callout>
+
+
+In production systems, hosted signers are recommended for the best security model.
+
+</Callout>
+
+## Quickstart
+
+For a step-by-step setup, see [Quick Start Guide](/relayer/quickstart).
+Key prerequisites:
+
+* Rust 2021, version `1.88` or later
+* Redis
+* Docker (optional)
+
+Example configuration for a Solana relayer:
+```json
+{
+  "id": "solana-example",
+  "name": "Solana Example",
+  "network": "devnet",
+  "paused": false,
+  "notification_id": "notification-example",
+  "signer_id": "local-signer",
+  "network_type": "solana",
+  "custom_rpc_urls": [
+    { "url": "https://primary-solana-rpc.example.com", "weight": 100 },
+    { "url": "https://backup-solana-rpc.example.com", "weight": 100 }
+  ],
+  "policies": {
+    "fee_payment_strategy": "user",
+    "min_balance": 0,
+    "allowed_tokens": [
+      { "mint": "So111...", "max_allowed_fee": 100000000 }
+    ],
+    "swap_config": {
+      "strategy": "jupiter-swap",
+      "cron_schedule": "0 0 * * * *",
+      "min_balance_threshold": 1000000,
+      "jupiter_swap_options": {
+        "dynamic_compute_unit_limit": true,
+        "priority_level": "high",
+        "priority_fee_max_lamports": 1000000000
+      }
+    }
+  }
+}
+```
+
+For more configuration examples, visit the [OpenZeppelin Relayer examples repository, window=_blank](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples).
+
+## Configuration
+
+### Relayer Policies
+
+In addition to standard relayer configuration and policies, Solana relayers support additional options:
+
+| Feature | User Pays (Default) | Relayer Pays |
+|---------|---------------------|--------------|
+| **Who pays fees** | Users pay in SPL tokens | Relayer pays in SOL |
+| **Transaction format** | Pre-signed transactions only | Encoded transactions OR instruction arrays |
+| **Best endpoint** | RPC methods (Paymaster spec) | REST API `POST /transactions` |
+| **Use case** | Gasless UX, user-controlled signing | Simplified UX, backend automation |
+
+<Callout type="warning">
+
+***Future Breaking Change:***
+
+In future versions, `fee_payment_strategy` will be a **mandatory field** in the relayer configuration. This change is being made to prevent misconfigurations and misunderstandings. Please ensure your relayer configurations explicitly specify `fee_payment_strategy` as either `"user"` or `"relayer"` to avoid issues when upgrading.
+
+</Callout>
+
+#### User Pays Fees (Default)
+
+**fee_payment_strategy**: `user` (default when not specified)
+
+In this mode:
+* Users pay transaction fees in SPL tokens
+* The relayer receives fee payment from the user as part of the transaction
+* Users submit **fully-formed, pre-signed transactions** via the API
+* The relayer validates and relays the transaction to the network
+
+#### Relayer Pays Fees
+
+**fee_payment_strategy**: `relayer`
+
+In this mode:
+* ***The relayer pays all transaction fees in SOL***
+* Users can submit either:
+  * **Encoded transactions** (base64-encoded, pre-signed)
+  * **Array of instructions** (relayer builds and signs the full transaction)
+
+**Use Cases**:
+* Simplified user experience (no fee token management)
+* Backend-controlled transaction execution
+* Automated workflows and scheduled operations
+* Applications where the relayer subsidizes transaction costs
+
+### Additional Relayer Policies
+
+* `allowed_tokens`: List of SPL tokens supported for swaps and fee payments. Optional.
+  * ***When not set or empty, all tokens are allowed*** for transactions and fee payments
+  * When configured, only tokens in this list can be used for transfers and fee payments
+* `allowed_programs`, `allowed_accounts`, `disallowed_accounts`: Restrict relayer operations to specific programs/accounts
+* `swap_config`: Automated token swap settings (see below)
+
+You can check all options in [User Documentation - Relayers](/relayer#3_relayers).
+
+### Automated token swap configuration options:
+
+* `strategy`: The swap engine to use. Supported values: `"jupiter-swap"` (Jupiter Swap API), `"jupiter-ultra"` (Jupiter Ultra API).
+* `cron_schedule`: Cron expression defining how often scheduled swaps should run (e.g., `"0 0 * * * *"` for every hour).
+* `min_balance_threshold`: Minimum token balance (in lamports) that triggers a swap. If the relayer’s balance drops below this, a swap is attempted.
+* `jupiter_swap_options`: Advanced options for Jupiter swaps, such as:
+  * `dynamic_compute_unit_limit`: If `true`, dynamically adjusts compute units for swap transactions.
+  * `priority_level`: Priority for the swap transaction. Supported values: `"medium"`, `"high"`, `"veryHigh"`.
+  * `priority_fee_max_lamports`: Maximum priority fee (in lamports) to pay for a swap transaction.
+* Per-token swap limits:
+  * `min_amount`: Minimum amount of a token to swap in a single operation.
+  * `max_amount`: Maximum amount of a token to swap in a single operation.
+  * `retain_min_amount`: Minimum amount of a token to retain in the relayer account after a swap (prevents swapping the entire balance).
+
+## Automated Token Swaps
+
+The relayer can perform automated token swaps on Solana when user fee_payment_strategy is used for relayer using:
+
+* ***jupiter-swap*** – via the Jupiter Swap API
+* ***jupiter-ultra*** – via the Jupiter Ultra API
+
+Swaps can be set to work as:
+
+* ***Scheduled Swaps***: Background jobs run swaps based on your cron schedule.
+* ***On-Demand Swaps***: If a transaction fails due to insufficient funds, the relayer attempts a swap before returning an error.
+
+## API Reference
+
+The Solana relayer provides two API interfaces that support fee estimation, transaction preparation, signing, and sending:
+
+1. **RPC Endpoint** (JSON-RPC 2.0) - Conforms to the [Paymaster spec](https://docs.google.com/document/d/1lweO5WH12QJaSAu5RG_wUistyk_nFeT6gy1CdvyCEHg/edit?tab=t.0#heading=h.4yldgprkuvav)
+   * **Best for**: User fee payment mode
+   * **URL**: `POST /api/v1/relayers/<relayer_id>/rpc`
+   * **Works in**: Both fee payment modes
+   * **Supports**: `feeEstimate`, `prepareTransaction`, `signTransaction`, `signAndSendTransaction`, `transferTransaction`, `getSupportedTokens` and `getSupportedFeatures`
+
+2. **REST Endpoints** - Direct transaction operations
+   * **Fee Estimation**: `POST /api/v1/relayers/<relayer_id>/transactions/sponsored/quote` (matches `feeEstimate` RPC method)
+   * **Transaction Preparation**: `POST /api/v1/relayers/<relayer_id>/transactions/sponsored/build` (matches `prepareTransaction` RPC method)
+   * **Sign Transaction**: `POST /api/v1/relayers/<relayer_id>/sign-transaction`
+   * **Send Transaction**: `POST /api/v1/relayers/<relayer_id>/transactions`
+
+<Callout>
+
+**Base URL**: `POST /api/v1/relayers/<relayer_id>/rpc`
+
+This endpoint can be used in **both fee payment modes**, but provides the best experience for **user fee payment mode**.
+
+</Callout>
+
+#### RPC Methods
+
+* `feeEstimate` - Estimate transaction fees
+* `getSupportedTokens` - Get list of supported tokens
+* `getSupportedFeatures` - Get list of available features
+* `prepareTransaction` - Prepare transaction with fee payments
+* `transferTransaction` - Execute token transfers with fee payments
+* `signTransaction` - Sign user-provided transactions
+* `signAndSendTransaction` - Sign and send transactions (combines signing and submission)
+
+For complete RPC examples, see the [SDK Solana examples](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/solana).
+
+
+<Callout type="info">
+
+***Fee Token Parameter Behavior:***
+
+When using `fee_payment_strategy: "relayer"`, the `fee_token` parameter in RPC methods becomes ***informational only***. The relayer pays all transaction fees in SOL regardless of the specified fee token. In this mode, you can use either `"So11111111111111111111111111111112"` (WSOL) or `"11111111111111111111111111111111"` (native SOL) as the fee_token value.
+
+When using `fee_payment_strategy: "user"`, the `fee_token` parameter determines which token the user will pay fees in, and must be a supported token from the `allowed_tokens` list (if configured).
+
+</Callout>
+
+### REST Endpoints
+
+#### Fee Estimation (Quote)
+
+**Base URL**: `POST /api/v1/relayers/<relayer_id>/transactions/sponsored/quote`
+
+**Available in**: `user` payment mode.
+
+**Matches RPC method**: `feeEstimate`
+
+Estimates transaction fees for a given transaction. Returns the fee amount in both the native currency (SOL) and the specified fee token. This endpoint helps users understand the cost before building or submitting a transaction.
+
+#### Transaction Preparation (Build)
+
+**Base URL**: `POST /api/v1/relayers/<relayer_id>/transactions/sponsored/build`
+
+**Available in**: `user` payment mode.
+
+**Matches RPC method**: `prepareTransaction`
+
+Prepares a transaction with fee payments. This endpoint builds a transaction that includes the necessary fee payment instructions based on the fee payment strategy. Returns a prepared transaction ready for signing.
+
+#### Sign Transaction
+
+**Base URL**: `POST /api/v1/relayers/<relayer_id>/sign-transaction`
+
+**Available in**: Both fee payment modes
+
+**Matches RPC method**: `signTransaction`
+
+Signs a user-provided transaction without submitting it to the network. This is useful when you want to sign a transaction and handle submission separately.
+
+#### Send Transaction
+
+**Base URL**: `POST /api/v1/relayers/<relayer_id>/transactions`
+
+**Matches RPC method**: `signAndSendTransaction`
+
+This endpoint provides two ways to submit transactions:
+
+#### Option 1: Encoded Transaction (Pre-signed)
+
+Submit a base64-encoded, pre-signed transaction that the relayer will relay to the network. When in user payment mode, the relayer optionally validates that the transaction contains user payment to the relayer.
+
+#### Option 2: Array of Instructions (Relayer Builds Transaction)
+
+Submit an array of Solana instructions. The relayer will:
+1. Build a complete transaction from the provided instructions
+2. Add necessary compute budget and priority fee instructions
+3. Optionally validate that the transaction contains user payment to the relayer when in user payment mode
+4. Sign the transaction with the relayer's signer
+5. Submit the transaction to the Solana network
+
+For complete REST API examples with both options, see the [SDK Solana examples](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/solana).
+
+### API Summary
+
+**For User Fee Payment Mode** (`fee_payment_strategy: "user"`):
+* **RPC endpoint**: `POST /api/v1/relayers/<relayer_id>/rpc`
+  * Full Paymaster specification support
+  * Methods: `feeEstimate`, `prepareTransaction`, `signTransaction`, `signAndSendTransaction`, etc.
+* **REST endpoints**:
+  * `POST /api/v1/relayers/<relayer_id>/transactions/sponsored/quote` - Estimate fees (matches `feeEstimate`)
+  * `POST /api/v1/relayers/<relayer_id>/transactions/sponsored/build` - Prepare transaction (matches `prepareTransaction`)
+  * `POST /api/v1/relayers/<relayer_id>/sign-transaction` - Sign transactions without submitting
+  * `POST /api/v1/relayers/<relayer_id>/transactions` - Send transactions (accepts encoded transactions or instruction arrays)
+
+**For Relayer Fee Payment Mode** (`fee_payment_strategy: "relayer"`):
+* **REST endpoints**:
+  * `POST /api/v1/relayers/<relayer_id>/transactions` - Send transactions (accepts encoded transactions or instruction arrays)
+  * `POST /api/v1/relayers/<relayer_id>/sign-transaction` - Sign transactions without submitting
+* **RPC endpoint**: `POST /api/v1/relayers/<relayer_id>/rpc`
+  * Alternative: RPC methods also work but REST is recommended for sending transactions
+
+**Additional Resources**:
+* [API Reference Documentation](https://docs.openzeppelin.com/relayer/1.3.x/api) - Complete API specification
+* [SDK Solana Examples](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/solana) - Working code examples for both RPC and REST endpoints
+
+## Security
+
+* Do not expose the relayer directly to the public internet.
+* Deploy behind a secure backend (reverse proxy, firewall).
+* Use hosted signers in production systems.
+
+## Troubleshooting
+
+* Check environment variables and configuration files for errors
+* Review container logs for issues
+
+## Roadmap
+
+* See [Project Roadmap](/relayer/roadmap) for upcoming features
+
+## Support
+
+For help, join our [Telegram](https://t.me/openzeppelin_tg/2) or open an issue on GitHub.
+
+## License
+
+This project is licensed under the GNU Affero General Public License v3.0.
