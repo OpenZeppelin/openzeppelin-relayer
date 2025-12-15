@@ -52,8 +52,8 @@ source "$PROJECT_ROOT/.env.integration"
 set +a
 
 # Validate required variables
-if [ -z "$RELAYER_API_KEY" ] || [ "$RELAYER_API_KEY" = "your-api-key-here" ]; then
-    log_error "RELAYER_API_KEY not set in .env.integration"
+if [ -z "$API_KEY" ] || [ "$API_KEY" = "your-api-key-here" ]; then
+    log_error "API_KEY not set in .env.integration"
     exit 1
 fi
 
@@ -126,7 +126,7 @@ case "$COMMAND" in
         echo "  help        Show this help message"
         echo ""
         echo "Environment variables (set in .env.integration):"
-        echo "  RELAYER_API_KEY     API key for relayer service"
+        echo "  API_KEY             API key for relayer service"
         echo ""
         echo "Network selection:"
         echo "  Controlled via tests/integration/registry.json"

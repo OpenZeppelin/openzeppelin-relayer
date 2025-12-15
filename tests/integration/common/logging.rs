@@ -14,7 +14,8 @@ static INIT: Once = Once::new();
 /// will only happen once thanks to `std::sync::Once`.
 ///
 /// Note: The `.env.integration` file is used for API keys and secrets only
-/// (e.g., `RELAYER_API_KEY`, `KEYSTORE_PASSPHRASE`, `WEBHOOK_SIGNING_KEY`).
+/// (e.g., `API_KEY`, `KEYSTORE_PASSPHRASE`, `WEBHOOK_SIGNING_KEY`).
+/// This file will be automatically loaded if present.
 ///
 /// Configuration is controlled by the `RUST_LOG` environment variable.
 /// Default: Shows info-level logs from all integration test modules
@@ -32,6 +33,9 @@ static INIT: Once = Once::new();
 /// ```
 pub fn init_test_logging() {
     INIT.call_once(|| {
+        // Load .env.integration file if it exists (for local testing)
+        // Ignore errors - in CI/Docker, env vars are set directly
+        let _ = dotenvy::from_filename(".env.integration");
         // Default filter: show info-level logs from all integration test modules
         // Covers both the module path (integration::*) and the test binary name
         let default_filter = "info";

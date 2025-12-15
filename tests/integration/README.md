@@ -60,7 +60,6 @@ The `.env.integration` file is used **only for API keys and secrets**:
 | Variable              | Description                        | Example                                |
 | --------------------- | ---------------------------------- | -------------------------------------- |
 | `API_KEY`             | Relayer API authentication key     | `ecaa0daa-f87e-4044-96b8-986638bf92d5` |
-| `RELAYER_API_KEY`     | Same as API_KEY (used by tests)    | `ecaa0daa-f87e-4044-96b8-986638bf92d5` |
 | `KEYSTORE_PASSPHRASE` | Password for local signer keystore | `your-secure-passphrase`               |
 | `WEBHOOK_SIGNING_KEY` | Webhook signing key (UUID)         | `your-webhook-signing-key-here`        |
 | `LOG_LEVEL`           | Logging verbosity                  | `info`                                 |
@@ -75,13 +74,13 @@ To enable or disable networks for testing, edit the `enabled` flag in `registry.
 {
   "networks": {
     "sepolia": {
-      "enabled": true  // ✅ This network will run
+      "enabled": true // ✅ This network will run
     },
     "base-sepolia": {
-      "enabled": true  // ✅ This network will run
+      "enabled": true // ✅ This network will run
     },
     "bsc-testnet": {
-      "enabled": false  // ❌ This network will be skipped
+      "enabled": false // ❌ This network will be skipped
     }
   }
 }
@@ -158,10 +157,10 @@ To test specific networks, edit `tests/integration/registry.json` and set `"enab
 {
   "networks": {
     "sepolia": {
-      "enabled": true  // Only this network will run
+      "enabled": true // Only this network will run
     },
     "base-sepolia": {
-      "enabled": false  // Disabled
+      "enabled": false // Disabled
     }
   }
 }
@@ -179,10 +178,10 @@ docker run -d --name redis -p 6379:6379 redis:7-alpine
 cargo run
 
 # Run integration tests
-RELAYER_API_KEY="your-key" cargo test --features integration-tests --test integration -- --nocapture
+cargo test --features integration-tests --test integration -- --nocapture
 
 # Run specific test
-RELAYER_API_KEY="your-key" cargo test --features integration-tests --test integration test_evm_basic_transfer -- --nocapture
+cargo test --features integration-tests --test integration test_evm_basic_transfer -- --nocapture
 
 # Note: Network selection is controlled via registry.json, not environment variables
 ```
@@ -439,7 +438,7 @@ docker-compose -f docker-compose.integration.yml logs integration-tests
 #### Run Single Test with Verbose Output
 
 ```bash
-RUST_LOG=debug RELAYER_API_KEY="key" \
+RUST_LOG=debug \
   cargo test --features integration-tests --test integration test_name -- --nocapture
 ```
 
@@ -467,10 +466,10 @@ Control which networks run in CI by setting their `enabled` flags in `registry.j
 {
   "networks": {
     "base-sepolia": {
-      "enabled": true  // ✅ Runs in CI
+      "enabled": true // ✅ Runs in CI
     },
     "sepolia": {
-      "enabled": false  // ❌ Skipped in CI
+      "enabled": false // ❌ Skipped in CI
     }
   }
 }

@@ -23,15 +23,14 @@ impl RelayerClient {
     /// # Environment Variables
     ///
     /// - `RELAYER_BASE_URL`: Base URL for the relayer API (e.g., "http://localhost:8080")
-    /// - `RELAYER_API_KEY`: API key for authentication
+    /// - `API_KEY`: API key for authentication
     ///
     /// # Errors
     ///
     /// Returns an error if environment variables are not set or if the HTTP client fails to initialize
     pub fn from_env() -> Result<Self> {
         let base_url = env::var("RELAYER_BASE_URL").unwrap_or("http://localhost:8080".to_string());
-        let api_key =
-            env::var("RELAYER_API_KEY").wrap_err("RELAYER_API_KEY environment variable not set")?;
+        let api_key = env::var("API_KEY").wrap_err("API_KEY environment variable not set")?;
 
         Ok(Self {
             base_url: base_url.trim_end_matches('/').to_string(),
