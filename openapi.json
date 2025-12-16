@@ -8175,6 +8175,9 @@
               "string",
               "null"
             ]
+          },
+          "transaction_result_xdr": {
+            "type": "string"
           }
         }
       },

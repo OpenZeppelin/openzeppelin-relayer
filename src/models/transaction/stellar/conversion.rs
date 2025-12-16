@@ -150,6 +150,7 @@ mod tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
 
         let tx = Transaction::try_from(data).unwrap();
@@ -178,6 +179,7 @@ mod tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
 
         let tx = Transaction::try_from(data).unwrap();
