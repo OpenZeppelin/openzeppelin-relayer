@@ -138,6 +138,7 @@ impl TryFrom<PluginFileConfig> for PluginModel {
             timeout,
             emit_logs: config.emit_logs,
             emit_traces: config.emit_traces,
+            forward_logs: config.forward_logs,
         })
     }
 }
@@ -163,6 +164,7 @@ mod tests {
             timeout: None,
             emit_logs: false,
             emit_traces: false,
+            forward_logs: false,
         };
         let result = PluginModel::try_from(plugin);
         assert!(result.is_ok());
@@ -174,6 +176,7 @@ mod tests {
                 timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
                 emit_logs: false,
                 emit_traces: false,
+                forward_logs: false,
             }
         );
     }
@@ -186,6 +189,7 @@ mod tests {
             timeout: Duration::from_secs(30),
             emit_logs: false,
             emit_traces: false,
+            forward_logs: false,
         }
     }
 

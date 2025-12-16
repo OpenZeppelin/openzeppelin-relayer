@@ -18,6 +18,9 @@ pub struct PluginModel {
     /// Whether to include traces in the HTTP response
     #[serde(default)]
     pub emit_traces: bool,
+    /// Whether to forward plugin logs into the relayer's tracing output
+    #[serde(default)]
+    pub forward_logs: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
