@@ -1,0 +1,36 @@
+---
+    name: Trigger external stg workflow
+    on:
+      push:
+        branches: ["main"]
+    jobs:
+      build-push-image:
+        name: Build and Push Docker Image
+        runs-on: ubuntu:latest
+        steps:
+          - name: Harden the runner (Audit all outbound calls)
+            uses: step-security/harden-runner@df199fb7be9f65074067a9eb93f12bb4c5547cf2  # v2.13.3
+            with:
+              egress-policy: audit
+
+          - name: Checkout
+            uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+
+          - name: Get github app token
+            uses: actions/create-github-app-token@7e473efe3cb98aa54f8d4bac15400b15fad77d94  # v2.2.0
+            id: gh-app-token
+            with:
+              app-id: ${{ vars.GH_APP_ID }}
+              private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
+          - name: Trigger external workflow
+            uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+            with:
+              github-token: ${{ steps.gh-app-token.outputs.token }}
+              script: |
+                await github.rest.actions.createWorkflowDispatch({
+                  owner: 'OpenZeppelin',
+                  repo: 'openzeppelin-relayer-infra',
+                  workflow_id: 'stg.yml',
+                  ref: 'main'
+                })
