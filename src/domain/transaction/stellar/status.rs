@@ -18,7 +18,6 @@ use crate::{
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
     services::{provider::StellarProviderTrait, signer::Signer},
 };
-use base64::{engine::general_purpose::STANDARD, Engine};
 
 impl<R, T, J, S, P, C, D> StellarRelayerTransaction<R, T, J, S, P, C, D>
 where
@@ -194,10 +193,11 @@ where
                     // Extract transaction result XDR from result_meta if available
                     if let Some(result_meta) = provider_response.result_meta.as_ref() {
                         if let Some(return_value) = extract_return_value_from_meta(result_meta) {
-                            // Serialize SCVal to XDR base64 string using WriteXdr trait
-                            if let Ok(xdr_bytes) = return_value.to_xdr(Limits::none()) {
-                                let xdr_base64 = STANDARD.encode(xdr_bytes);
+                            let xdr_base64 = return_value.to_xdr_base64(Limits::none());
+                            if let Ok(xdr_base64) = xdr_base64 {
                                 stellar_data = stellar_data.with_transaction_result_xdr(xdr_base64);
+                            } else {
+                                warn!("Failed to serialize return value to XDR base64");
                             }
                         }
                     }
@@ -273,6 +273,7 @@ mod tests {
     use chrono::Duration;
     use mockall::predicate::eq;
     use soroban_rs::stellar_rpc_client::GetTransactionResponse;
+    use soroban_rs::xdr::ReadXdr;
 
     use crate::domain::transaction::stellar::test_helpers::*;
 
