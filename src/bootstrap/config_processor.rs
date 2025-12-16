@@ -1600,6 +1600,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ai_process_config_file_skips_when_redis_populated() -> Result<()> {
+        let config = create_minimal_test_config();
+        let server_config = Arc::new(create_test_server_config_with_settings(
+            RepositoryStorageType::Redis,
+            false,
+        ));
+
+        let app_state = ThinData(create_test_app_state());
+
+        app_state
+            .relayer_repository
+            .create(create_mock_relayer("existing-relayer".to_string(), false))
+            .await?;
+
+        process_config_file(config, server_config, &app_state).await?;
+
+        let stored_relayers = app_state.relayer_repository.list_all().await?;
+        assert_eq!(stored_relayers.len(), 1);
+        assert_eq!(stored_relayers[0].id, "existing-relayer");
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_should_not_process_config_file_redis_storage_populated_repositories() -> Result<()>
     {
         let config = create_minimal_test_config();
