@@ -1,6 +1,9 @@
 ---
 name: Integration Tests
 on:
+  push:
+    branches:
+      - local-node-anvil
   workflow_dispatch:  # Allow manual triggering from GitHub UI
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -28,6 +31,7 @@ jobs:
       - name: Create integration test config
         run: |
           cat > .env.integration << EOF
+          MODE=testnet
           API_KEY=${{ secrets.INTEGRATION_TESTS_API_KEY }}
           LOG_LEVEL=info
           AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
@@ -37,14 +41,15 @@ jobs:
           EOF
       - name: Create config files from examples
         run: |
-          cp tests/integration/config/config.example.json tests/integration/config/config.json
-          cp tests/integration/config/registry.example.json tests/integration/config/registry.json
+          mkdir -p tests/integration/config/testnet
+          cp tests/integration/config/config.example.json tests/integration/config/testnet/config.json
+          cp tests/integration/config/registry.example.json tests/integration/config/testnet/registry.json
       - name: Inject AWS KMS signer config
         run: |
           jq --arg region "${{ vars.AWS_REGION_KMS_KEY }}" \
              --arg key_id "${{ secrets.TESTNET_AWS_KMS_KEY_ID }}" \
              '.signers = [{"id": "local-signer", "type": "aws_kms", "config": {"region": $region, "key_id": $key_id}}]' \
-             tests/integration/config/config.json > tests/integration/config/config.tmp.json && \
-          mv tests/integration/config/config.tmp.json tests/integration/config/config.json
+             tests/integration/config/testnet/config.json > tests/integration/config/testnet/config.tmp.json && \
+          mv tests/integration/config/testnet/config.tmp.json tests/integration/config/testnet/config.json
       - name: Run Integration Tests
         run: ./scripts/run-integration-docker.sh
