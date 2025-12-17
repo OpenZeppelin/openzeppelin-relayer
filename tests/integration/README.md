@@ -25,9 +25,9 @@ Uses local Anvil node - no testnet funds needed!
 ```bash
 # 1. One-time setup: Create Anvil keystore
 cast wallet import anvil-test \
-  --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
+  --private-key PK \
   --keystore-dir tests/integration/config/local/keys \
-  --unsafe-password ""
+  --unsafe-password "test"
 
 mv tests/integration/config/local/keys/anvil-test \
    tests/integration/config/local/keys/anvil-test.json
@@ -47,6 +47,10 @@ For faster iteration with `cargo run` and `cargo test`:
 ```bash
 # 1. Start Anvil and deploy contracts
 ./scripts/start-anvil-local.sh
+
+# 2. Before running the relayer, check this file:
+
+`config/networks/local-anvil.json` and make sure contains this value: "rpc_urls": ["http://localhost:8545"],
 
 # 2. In another terminal, run relayer
 CONFIG_PATH=tests/integration/config/local-standalone/config.json cargo run
