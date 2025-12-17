@@ -13,6 +13,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     constants::{DEFAULT_EVM_GAS_LIMIT_ESTIMATION, GAS_LIMIT_BUFFER_MULTIPLIER},
     domain::{
+        evm::is_noop,
         transaction::{
             evm::{ensure_status, ensure_status_one_of, PriceCalculator, PriceCalculatorTrait},
             Transaction,
@@ -762,13 +763,13 @@ where
             return Ok(tx);
         }
 
+        let evm_data = tx.network_data.get_evm_transaction_data()?;
+
         // Calculate bumped gas price
+        // For noop transactions, force_bump=true to skip gas price cap and ensure bump succeeds
         let bumped_price_params = self
             .price_calculator
-            .calculate_bumped_gas_price(
-                &tx.network_data.get_evm_transaction_data()?,
-                self.relayer(),
-            )
+            .calculate_bumped_gas_price(&evm_data, self.relayer(), is_noop(&evm_data))
             .await?;
 
         if !bumped_price_params.is_min_bumped.is_some_and(|b| b) {
@@ -779,9 +780,6 @@ where
         // Validate the relayer has sufficient balance
         self.ensure_sufficient_balance(bumped_price_params.total_cost)
             .await?;
-
-        // Get transaction data
-        let evm_data = tx.network_data.get_evm_transaction_data()?;
 
         // Create new transaction data with bumped gas price
         let updated_evm_data = evm_data.with_price_params(bumped_price_params.clone());
@@ -1128,6 +1126,7 @@ mod tests {
                 &self,
                 tx: &EvmTransactionData,
                 relayer: &RelayerRepoModel,
+                force_bump: bool,
             ) -> Result<PriceParams, TransactionError>;
         }
     }
@@ -2730,7 +2729,7 @@ mod tests {
         mock_price_calculator
             .expect_calculate_bumped_gas_price()
             .times(1)
-            .returning(|_, _| {
+            .returning(|_, _, _| {
                 Ok(PriceParams {
                     gas_price: Some(25000000000), // 25% bump
                     max_fee_per_gas: None,
@@ -3099,7 +3098,7 @@ mod tests {
         mock_price_calculator
             .expect_calculate_bumped_gas_price()
             .times(1)
-            .returning(|_, _| {
+            .returning(|_, _, _| {
                 Ok(PriceParams {
                     gas_price: Some(25000000000), // 25 Gwei (25% bump)
                     max_fee_per_gas: None,

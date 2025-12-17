@@ -1,0 +1,552 @@
+---
+title: Plugins
+---
+
+## Overview
+
+OpenZeppelin Relayer supports plugins to extend the functionality of the relayer.
+
+Plugins are `TypeScript` functions running in the Relayer server that can include any arbitrary logic defined by the Relayer operator.
+
+The plugin system features:
+
+- **_Handler Pattern_**: Simple export-based plugin development
+- **_TypeScript Support_**: Full type safety and IntelliSense
+- **_Plugin API_**: Clean interface for interacting with relayers
+- **_Key-Value Storage_**: Persistent state and locking for plugins
+- **_HTTP Headers_**: Access request headers for authentication and metadata
+- **_Docker Integration_**: Seamless development and deployment
+- **_Comprehensive Error Handling_**: Detailed logging and debugging capabilities
+
+## Configuration
+
+### Writing a Plugin
+
+Plugins are declared under `plugins` directory, and are expected to be TypeScript files (`.ts` extension).
+
+```bash
+openzeppelin-relayer/
+├── plugins/
+│   └── my-plugin.ts    # Plugin code
+└── config/
+    └── config.json     # Plugins in configuration file
+```
+
+#### Handler Pattern (Recommended)
+
+This approach uses a simple `handler` export pattern with a single context parameter:
+
+```typescript
+/// Required imports.
+import { Speed, PluginContext, pluginError } from '@openzeppelin/relayer-sdk';
+
+/// Define your plugin parameters interface
+type MyPluginParams = {
+  destinationAddress: string;
+  amount?: number;
+  message?: string;
+  relayerId?: string;
+};
+
+/// Define your plugin return type
+type MyPluginResult = {
+  transactionId: string;
+  confirmed: boolean;
+  note?: string;
+};
+
+/// Export a handler function - that's it!
+export async function handler(context: PluginContext): Promise<MyPluginResult> {
+  const { api, params, kv, headers } = context;
+  console.info('🚀 Plugin started...');
+
+  // Validate parameters
+  if (!params.destinationAddress) {
+    throw pluginError('destinationAddress is required', {
+      code: 'MISSING_PARAM',
+      status: 400,
+      details: { field: 'destinationAddress' },
+    });
+  }
+
+  // Use the relayer API
+  const relayer = api.useRelayer(params.relayerId || 'my-relayer');
+
+  const result = await relayer.sendTransaction({
+    to: params.destinationAddress,
+    value: params.amount || 1,
+    data: '0x',
+    gas_limit: 21000,
+    speed: Speed.FAST,
+  });
+
+  console.info(`Transaction submitted: ${result.id}`);
+
+  // Optionally store something in KV
+  await kv.set('last_tx_id', result.id);
+
+  // Wait for confirmation
+  await result.wait({
+    interval: 5000, // Check every 5 seconds
+    timeout: 120000, // Timeout after 2 minutes
+  });
+
+  return {
+    transactionId: result.id,
+    message: `Successfully sent ${params.amount || 1} wei to ${params.destinationAddress}`,
+  };
+}
+```
+
+#### Legacy Patterns (Deprecated, but supported)
+
+<Callout type="warn">
+  The legacy patterns below are deprecated and will be removed in a future version. Please migrate to the single-context
+  handler pattern. Legacy plugins continue to work but will show deprecation warnings. The two-parameter handler does
+  not have access to the KV store.
+</Callout>
+
+```typescript
+// Legacy: runPlugin pattern (deprecated)
+import { runPlugin, PluginAPI } from '../lib/plugin';
+
+async function myPlugin(api: PluginAPI, params: any) {
+  // Plugin logic here (no KV access)
+  return 'result';
+}
+
+runPlugin(myPlugin);
+```
+
+**_Legacy handler (two-parameter, deprecated, no KV)_**:
+
+```typescript
+import { PluginAPI } from '@openzeppelin/relayer-sdk';
+
+export async function handler(api: PluginAPI, params: any): Promise<any> {
+  // Same logic as before, but no KV access in this form
+  return 'done!';
+}
+```
+
+### Declaring in config file
+
+Plugins are configured in the `./config/config.json` file, under the `plugins` key.
+
+The file contains a list of plugins, each with an id, path and timeout in seconds (optional).
+
+<Callout>The plugin path is relative to the `/plugins` directory</Callout>
+
+Example:
+
+```json
+{
+  "plugins": [
+   {
+     "id": "my-plugin",
+     "path": "my-plugin.ts",
+     "timeout": 30
+   }
+ ]
+}
+```
+
+### Timeout
+
+The timeout is the maximum time **in seconds** that the plugin can run. If the plugin exceeds the timeout, it will be terminated with an error.
+
+The timeout is optional, and if not provided, the default is 300 seconds (5 minutes).
+
+## Plugin Development Guidelines
+
+### TypeScript Best Practices
+
+- **_Define Parameter Types_**: Always create interfaces or types for your plugin parameters
+- **_Define Return Types_**: Specify what your plugin returns for better developer experience
+- **_Handle Errors Gracefully_**: Use try-catch blocks and return structured error responses
+- **_Validate Input_**: Check required parameters and provide meaningful error messages
+- **_Use Async/Await_**: Modern async patterns for better readability
+
+### Testing Your Plugin
+
+You can test your handler function directly with a mocked context:
+
+```typescript
+import { handler } from './my-plugin';
+import type { PluginContext } from '@openzeppelin/relayer-sdk';
+
+const mockContext = {
+  api: {
+    useRelayer: (_id: string) => ({
+      sendTransaction: async () => ({ id: 'test-tx-123', wait: async () => ({ hash: '0xhash' }) }),
+    }),
+  },
+  params: {
+    destinationAddress: '0x742d35Cc6640C21a1c7656d2c9C8F6bF5e7c3F8A',
+    amount: 1000,
+  },
+  kv: {
+    set: async () => true,
+    get: async () => null,
+    del: async () => true,
+    exists: async () => false,
+    scan: async () => [],
+    clear: async () => 0,
+    withLock: async (_k: string, fn: () => Promise<any>) => fn(),
+    connect: async () => {},
+    disconnect: async () => {},
+  },
+  headers: {
+    'content-type': ['application/json'],
+    authorization: ['Bearer test-token'],
+  },
+} as unknown as PluginContext;
+
+const result = await handler(mockContext);
+console.log(result);
+```
+
+## Invocation
+
+Plugins are invoked by hitting the `api/v1/plugins/plugin-id/call` endpoint.
+
+The endpoint accepts a `POST` request. Example post request body:
+
+```json
+{
+  "params": {
+    "destinationAddress": "0x742d35Cc6640C21a1c7656d2c9C8F6bF5e7c3F8A",
+    "amount": 1000000000000000,
+    "message": "Hello from OpenZeppelin Relayer!"
+  }
+}
+```
+
+The parameters are passed directly to your plugin’s `handler` function.
+
+## Responses
+
+API responses use the `ApiResponse` envelope: `success, data, error, metadata`.
+
+### Success responses (HTTP 200)
+
+- `data` contains your handler return value (decoded from JSON when possible).
+- `metadata.logs?` and `metadata.traces?` are only populated if the plugin configuration enables `emit_logs` / `emit_traces`.
+- `error` is `null`.
+
+### Plugin errors (HTTP 4xx)
+
+- Throwing `pluginError(...)` (or any `Error`) is normalized into a consistent HTTP payload.
+- `error` provides the client-facing message, derived from the thrown error or from log output when the message is empty.
+- `data` carries `code?: string, details?: any` reported by the plugin.
+- `metadata` follows the same visibility rules (`emit_logs` / `emit_traces`).
+
+### Complete Example
+
+1. **Plugin Code** (`plugins/example.ts`):
+
+```typescript
+import { Speed, PluginContext, pluginError } from '@openzeppelin/relayer-sdk';
+
+type ExampleResult = {
+  transactionId: string;
+  transactionHash: string | null;
+  message: string;
+  timestamp: string;
+};
+
+export async function handler(context: PluginContext): Promise<ExampleResult> {
+  const { api, params, kv, headers } = context;
+  console.info('🚀 Example plugin started');
+  console.info(`📋 Parameters:`, JSON.stringify(params, null, 2));
+
+  if (!params.destinationAddress) {
+    throw pluginError('destinationAddress is required', {
+      code: 'MISSING_PARAM',
+      status: 400,
+      details: { field: 'destinationAddress' },
+    });
+  }
+
+  const amount = params.amount || 1;
+  const message = params.message || 'Hello from OpenZeppelin Relayer!';
+
+  console.info(`💰 Sending ${amount} wei to ${params.destinationAddress}`);
+
+  const relayer = api.useRelayer('my-relayer');
+  const result = await relayer.sendTransaction({
+    to: params.destinationAddress,
+    value: amount,
+    data: '0x',
+    gas_limit: 21000,
+    speed: Speed.FAST,
+  });
+
+  // Example persistence
+  await kv.set('last_transaction', result.id);
+
+  const confirmation = await result.wait({ interval: 5000, timeout: 120000 });
+
+  return {
+    transactionId: result.id,
+    transactionHash: confirmation.hash || null,
+    message: `Successfully sent ${amount} wei to ${params.destinationAddress}. ${message}`,
+    timestamp: new Date().toISOString(),
+  };
+}
+```
+
+2. **Plugin Configuration** (`config/config.json`):
+
+```json
+{
+  "plugins": [
+    {
+      "id": "example-plugin",
+      "path": "example-plugin.ts",
+      "timeout": 30
+    }
+  ]
+}
+```
+
+3. **API Invocation**:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/example-plugin/call \
+-H "Content-Type: application/json" \
+-H "Authorization: Bearer YOUR_API_KEY" \
+-d '{
+  "params": {
+    "destinationAddress": "0x742d35Cc6640C21a1c7656d2c9C8F6bF5e7c3F8A",
+    "amount": 1000000000000000,
+    "message": "Test transaction from plugin"
+  }
+}'
+```
+
+4. **API Response (Success)**:
+
+```json
+{
+  "success": true,
+  "data": {
+    "transactionId": "tx-123456",
+    "confirmed": true,
+    "note": "Sent 1000000000000000 wei to 0x742d35Cc..."
+  },
+  "metadata": {
+    "logs": [{ "level": "info", "message": "🚀 Example plugin started" }],
+    "traces": [
+      {
+        "relayerId": "my-relayer",
+        "method": "sendTransaction",
+        "payload": {
+          /* ... */
+        }
+      }
+    ]
+  },
+  "error": null
+}
+```
+
+5. **API Response (Error)**:
+
+```json
+{
+  "success": false,
+  "data": {
+    "code": "MISSING_PARAM",
+    "details": { "field": "destinationAddress" }
+  },
+  "metadata": {
+    "logs": [{ "level": "error", "message": "destinationAddress is required" }]
+  },
+  "error": "destinationAddress is required"
+}
+```
+
+## Response Fields
+
+- **`data`**: The value returned by your plugin's handler function (decoded from JSON when possible)
+- **`metadata.logs`**: Terminal output from the plugin (console.log, console.error, etc.) when `emit_logs` is true
+- **`metadata.traces`**: Messages exchanged between the plugin and the Relayer via PluginAPI when `emit_traces` is true
+- **`error`**: Error message if the plugin execution failed (business errors)
+
+## Key-Value Storage
+
+The Relayer provides a built-in key-value store for plugins to maintain persistent state across invocations. This addresses the core problem of enabling persistent state management and programmatic configuration updates for plugins.
+
+### Why a KV store?
+
+- Plugins execute as isolated processes with no persistent memory
+- No mechanism exists to maintain state between invocations
+- Plugins requiring shared state or coordination need safe concurrency primitives
+
+### Configuration
+
+- Reuses the same Redis URL as the Relayer via the `REDIS_URL` environment variable
+- No extra configuration is required
+- Keys are namespaced per plugin ID to prevent collisions
+
+### Usage
+
+Access the KV store through the `kv` property in the `PluginContext`:
+
+[source,typescript]
+
+```
+export async function handler(context: PluginContext) {
+  const { kv } = context;
+  // Set a value (with optional TTL in seconds)
+  await kv.set('my-key', { data: 'value' }, { ttlSec: 3600 });
+  // Get a value
+  const value = await kv.get<{ data: string }>('my-key');
+  // Atomic update with lock
+  const updated = await kv.withLock('counter-lock', async () => {
+    const count = (await kv.get<number>('counter')) ?? 0;
+    const next = count + 1;
+    await kv.set('counter', next);
+    return next;
+  }, { ttlSec: 10 });
+
+  return { value, updated };
+}
+
+```
+
+### Available Methods
+
+- `get<T>(key: string): Promise<T | null>`
+- `set(key: string, value: unknown, opts?: { ttlSec?: number }): Promise<boolean>`
+- `del(key: string): Promise<boolean>`
+- `exists(key: string): Promise<boolean>`
+- `listKeys(pattern?: string, batch?: number): Promise<string[]>`
+- `clear(): Promise<number>`
+- `withLock<T>(key: string, fn: () => Promise<T>, opts?: { ttlSec?: number; onBusy?: 'throw' | 'skip' }): Promise<T | null>`
+
+Keys must match `[A-Za-z0-9:_-]{1,512}` and are automatically namespaced per plugin.
+
+## HTTP Headers
+
+Plugins can access HTTP headers from the incoming request through the `headers` property in `PluginContext`. This enables authentication validation, custom header processing, and request metadata inspection.
+
+### Header Format
+
+Headers are provided as `Record<string, string[]>` (object with string keys and string array values):
+
+- Header names are **lowercase** (normalized by the HTTP server)
+- Each header value is an **array** to support multi-value headers (e.g., multiple `Set-Cookie` headers)
+- Access the first value with `headers['header-name']?.[0]`
+
+### Usage
+
+[source,typescript]
+
+```
+export async function handler(context: PluginContext) {
+  const { headers } = context;
+
+  // Access a single-value header
+  const authToken = headers['authorization']?.[0];
+
+  // Access a custom header
+  const requestId = headers['x-request-id']?.[0];
+
+  // Check if header exists
+  if (!headers['x-api-key']?.[0]) {
+    throw pluginError('API key required', { code: 'MISSING_HEADER', status: 401 });
+  }
+
+  // Handle multi-value headers
+  const acceptTypes = headers['accept'] || [];
+
+  return { receivedHeaders: Object.keys(headers).length };
+}
+```
+
+### Common Use Cases
+
+- **Authentication**: Validate `Authorization` or custom API key headers
+- **Request Tracing**: Read `X-Request-Id` or correlation IDs
+- **Content Negotiation**: Check `Accept` or `Content-Type` headers
+- **Custom Metadata**: Access application-specific headers passed by clients
+
+### Important Notes
+
+- Headers are only available in the **modern context pattern** (single-parameter handler)
+- Legacy two-parameter handlers do not receive headers
+- Header names are always lowercase regardless of how they were sent
+
+## Migration from Legacy Patterns
+
+### Current Status
+
+- ✅ **Legacy plugins still work** - No immediate action required
+- ⚠️ **Deprecation warnings** - Legacy plugins will show console warnings
+- 📅 **Future removal** - The legacy `runPlugin` and two-parameter `handler(api, params)` will be removed in a future major version
+- 🎯 **Recommended action** - Migrate to single-parameter `PluginContext` handler for new plugins and KV access
+
+### Migration Steps
+
+If you have existing plugins using `runPlugin()` or the two-parameter handler, migration is simple:
+
+**Before (Legacy runPlugin - still works)**:
+[source,typescript]
+
+```
+import  runPlugin, PluginAPI  from "./lib/plugin";
+
+async function myPlugin(api: PluginAPI, params: any): Promise<any>
+    // Your plugin logic
+    return result;
+
+
+runPlugin(myPlugin); // ⚠️ Shows deprecation warning
+```
+
+**Intermediate (Legacy two-parameter - still works, no KV)**:
+[source,typescript]
+
+```
+import  PluginAPI  from "@openzeppelin/relayer-sdk";
+
+export async function handler(api: PluginAPI, params: any): Promise<any>
+  // Same plugin logic - ⚠️ Deprecated, no KV access
+  return result;
+
+```
+
+**After (Modern context - recommended, with KV and headers)**:
+[source,typescript]
+
+```
+import  PluginContext  from "@openzeppelin/relayer-sdk";
+
+export async function handler(context: PluginContext): Promise<any>
+  const  api, params, kv, headers  = context;
+  // Same plugin logic plus KV and headers access!
+  return result;
+
+```
+
+### Step-by-Step Migration
+
+1. **Remove the `runPlugin()` call** at the bottom of your file
+2. **Rename your function to `handler`** (or create a new handler export)
+3. **Export the `handler` function** using `export async function handler`
+4. **Add proper TypeScript types** for better development experience
+5. **Test your plugin** to ensure it works with the new pattern
+6. **Update your documentation** to reflect the new pattern
+
+### Backwards Compatibility
+
+The relayer will automatically detect which pattern your plugin uses:
+
+- If handler accepts one parameter → modern context pattern (with KV and headers)
+- If handler accepts two parameters → legacy pattern (no KV or headers, with warning)
+- If `runPlugin()` was called → legacy pattern (no KV or headers, with warning)
+- If neither → shows clear error message
+
+This ensures a smooth transition period where both patterns work simultaneously.

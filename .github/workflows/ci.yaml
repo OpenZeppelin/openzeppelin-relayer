@@ -65,6 +65,7 @@ jobs:
               - '**/*.rs'
               - tests/**/*.json
   ci:
+    timeout-minutes: 150
     if: ${{ github.event.pull_request.draft == false && always() }}
     permissions:
       contents: none
@@ -73,7 +74,7 @@ jobs:
       - msrv
       - rustfmt
       - clippy
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04-oz-8core
     steps:
       - name: Harden the runner (Audit all outbound calls)
         uses: step-security/harden-runner@df199fb7be9f65074067a9eb93f12bb4c5547cf2  # v2.13.3
@@ -182,7 +183,7 @@ jobs:
       contents: read
     needs:
       - changed_files
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04-oz-8core
     steps:
       - name: Harden the runner (Audit all outbound calls)
         uses: step-security/harden-runner@df199fb7be9f65074067a9eb93f12bb4c5547cf2  # v2.13.3
@@ -233,6 +234,26 @@ jobs:
           RUST_TEST_THREADS: 1
           CARGO_PROFILE_DEV_DEBUG: 1
         run: cargo hack llvm-cov --locked --lib --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path unit-lcov.info
+      - name: Run Developer Tests (excluding AI) and Generate Coverage Report
+        id: dev_coverage
+        timeout-minutes: 45
+        env:
+          LLVM_PROFILE_FILE: dev-%p-%m.profraw
+          RUSTFLAGS: -Cinstrument-coverage
+          RUST_TEST_THREADS: 1
+        run: |
+          cargo hack llvm-cov --locked --lib --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path dev-lcov.info --tests -- --skip ai_
+      - name: Run AI Tests and Generate Coverage Report
+        id: ai_coverage
+        timeout-minutes: 45
+        env:
+          LLVM_PROFILE_FILE: ai-%p-%m.profraw
+          RUSTFLAGS: -Cinstrument-coverage
+          RUST_TEST_THREADS: 1
+        run: |
+          cargo hack llvm-cov --locked --lib --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path ai-lcov.info --tests -- ai_
+
+      # Upload unit coverage
       - name: Upload Unit Coverage to Codecov
         uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
         with:
@@ -240,6 +261,22 @@ jobs:
           name: unit-coverage
           files: unit-lcov.info
           flags: unittests
+          fail_ci_if_error: true
+      - name: Upload AI Coverage to Codecov
+        uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          name: ai-coverage
+          files: ai-lcov.info
+          flags: ai
+          fail_ci_if_error: true
+      - name: Upload Developer Coverage to Codecov
+        uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          name: dev-coverage
+          files: dev-lcov.info
+          flags: dev
           fail_ci_if_error: true
   test-properties:
     name: Properties Tests
