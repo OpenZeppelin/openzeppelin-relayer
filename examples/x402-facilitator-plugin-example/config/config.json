@@ -1,0 +1,54 @@
+{
+  "relayers": [
+    {
+      "id": "stellar-example",
+      "name": "Stellar Example",
+      "network": "testnet",
+      "paused": false,
+      "network_type": "stellar",
+      "signer_id": "local-signer",
+      "policies": {
+        "fee_payment_strategy": "relayer",
+        "min_balance": 0
+      }
+    }
+  ],
+  "notifications": [],
+  "signers": [
+    {
+      "id": "local-signer",
+      "type": "local",
+      "config": {
+        "path": "config/keys/local-signer.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE"
+        }
+      }
+    }
+  ],
+  "networks": "./config/networks",
+  "plugins": [
+    {
+      "id": "x402-facilitator",
+      "path": "x402-facilitator/index.ts",
+      "timeout": 30,
+      "emit_logs": false,
+      "emit_traces": false,
+      "raw_response": true,
+      "allow_get_invocation": true,
+      "config": {
+        "networks": [
+          {
+            "network": "stellar-testnet",
+            "type": "stellar",
+            "relayer_id": "stellar-example",
+            "assets": [
+              "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
