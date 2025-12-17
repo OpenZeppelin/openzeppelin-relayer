@@ -1,5 +1,5 @@
 use crate::constants::{
-    ARBITRUM_GAS_LIMIT, DEFAULT_GAS_LIMIT, DEFAULT_TX_VALID_TIMESPAN,
+    ARBITRUM_GAS_LIMIT, DEFAULT_GAS_LIMIT, DEFAULT_TRANSACTION_SPEED, DEFAULT_TX_VALID_TIMESPAN,
     EVM_MIN_AGE_FOR_RESUBMIT_SECONDS, MAXIMUM_NOOP_RETRY_ATTEMPTS, MAXIMUM_TX_ATTEMPTS,
 };
 use crate::domain::get_age_since_created;
@@ -23,6 +23,7 @@ pub async fn make_noop<P: EvmProviderTrait>(
     evm_data.value = U256::from(0u64);
     evm_data.data = Some("0x".to_string());
     evm_data.to = Some(evm_data.from.clone());
+    evm_data.speed = Some(DEFAULT_TRANSACTION_SPEED);
 
     // Set gas limit based on network type
     if network.is_arbitrum() {
@@ -299,6 +300,7 @@ mod tests {
         assert_eq!(evm_data.value, U256::from(0u64)); // Zero value
         assert_eq!(evm_data.data.unwrap(), "0x"); // Empty data
         assert_eq!(evm_data.nonce, Some(42)); // Original nonce preserved
+        assert_eq!(evm_data.speed, Some(DEFAULT_TRANSACTION_SPEED));
     }
 
     #[tokio::test]

@@ -206,7 +206,8 @@ jobs:
         run: |-
           OPENAPI_SPEC_FILE="./openapi.json"
           cargo generate_openapi
-          if ! git diff --quiet "$OPENAPI_SPEC_FILE"; then
+          git add "$OPENAPI_SPEC_FILE"
+          if ! git diff --cached --quiet "$OPENAPI_SPEC_FILE"; then
             echo "openapi_changed=true" >> $GITHUB_OUTPUT
           else
             echo "openapi_changed=false" >> $GITHUB_OUTPUT

@@ -65,3 +65,4 @@ node_modules
 
 # Integration test artifacts
 test-results/
+**/*lcov.info
