@@ -26,6 +26,7 @@ pub struct PluginModel {
     #[serde(default)]
     pub allow_get_invocation: bool,
     /// User-defined configuration accessible to the plugin (must be a JSON object)
+    #[serde(default)]
     pub config: Option<Map<String, serde_json::Value>>,
 }
 
