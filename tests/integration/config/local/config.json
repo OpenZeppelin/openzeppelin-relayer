@@ -1,0 +1,26 @@
+{
+  "relayers": [
+    {
+      "id": "anvil-relayer",
+      "name": "Local Anvil Relayer",
+      "network": "localhost",
+      "paused": false,
+      "signer_id": "anvil-signer",
+      "network_type": "evm",
+      "policies": { "min_balance": 0 }
+    }
+  ],
+  "notifications": [],
+  "signers": [
+    {
+      "id": "anvil-signer",
+      "type": "local",
+      "config": {
+        "path": "./config/keys/anvil-test.json",
+        "passphrase": { "type": "plain", "value": "test" }
+      }
+    }
+  ],
+  "networks": "/app/networks",
+  "plugins": []
+}

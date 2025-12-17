@@ -51,49 +51,174 @@ set -a
 source "$PROJECT_ROOT/.env.integration"
 set +a
 
+# MODE handling (local/testnet)
+MODE=${MODE:-local}  # Default to local
+
+if [ "$MODE" = "local" ]; then
+    PROFILE="--profile local"
+    CONFIG_SOURCE="./tests/integration/config/local"
+    export TEST_REGISTRY_PATH="tests/integration/config/local/registry.json"
+    export TEST_CONFIG_PATH="tests/integration/config/local/config.json"
+
+    # Verify keystore exists
+    if [ ! -f "$PROJECT_ROOT/tests/integration/config/local/keys/anvil-test.json" ]; then
+        log_error "Anvil keystore not found!"
+        log_info "Please create the keystore by running:"
+        echo ""
+        echo "cast wallet import anvil-test \\"
+        echo "  --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \\"
+        echo "  --keystore-dir tests/integration/config/local/keys \\"
+        echo "  --unsafe-password \"test\""
+        echo ""
+        echo "mv tests/integration/config/local/keys/anvil-test \\"
+        echo "   tests/integration/config/local/keys/anvil-test.json"
+        echo ""
+        exit 1
+    fi
+
+elif [ "$MODE" = "testnet" ]; then
+    PROFILE=""
+    CONFIG_SOURCE="./tests/integration/config/testnet"
+    export TEST_REGISTRY_PATH="tests/integration/config/testnet/registry.json"
+    export TEST_CONFIG_PATH="tests/integration/config/testnet/config.json"
+    # Create from examples if needed
+    if [ ! -f "$PROJECT_ROOT/tests/integration/config/testnet/config.json" ]; then
+        log_warn "testnet config.json not found, creating from example..."
+        mkdir -p "$PROJECT_ROOT/tests/integration/config/testnet"
+        if [ -f "$PROJECT_ROOT/tests/integration/config/config.example.json" ]; then
+            cp "$PROJECT_ROOT/tests/integration/config/config.example.json" "$PROJECT_ROOT/tests/integration/config/testnet/config.json"
+        fi
+    fi
+    if [ ! -f "$PROJECT_ROOT/tests/integration/config/testnet/registry.json" ]; then
+        log_warn "testnet registry.json not found, creating from example..."
+        mkdir -p "$PROJECT_ROOT/tests/integration/config/testnet"
+        if [ -f "$PROJECT_ROOT/tests/integration/config/registry.example.json" ]; then
+            cp "$PROJECT_ROOT/tests/integration/config/registry.example.json" "$PROJECT_ROOT/tests/integration/config/testnet/registry.json"
+        fi
+    fi
+
+    # Ensure keys directory exists
+    mkdir -p "$PROJECT_ROOT/tests/integration/config/testnet/keys"
+
+    # Verify signer keystore exists
+    if [ ! -f "$PROJECT_ROOT/tests/integration/config/testnet/keys/local-signer.json" ]; then
+        log_error "Testnet signer keystore not found!"
+        log_info "Please create the keystore by running:"
+        echo ""
+        echo "mkdir -p tests/integration/config/testnet/keys"
+        echo ""
+        echo "cargo run --example create_key -- \\"
+        echo "  --password \"\${KEYSTORE_PASSPHRASE}\" \\"
+        echo "  --output-dir tests/integration/config/testnet/keys \\"
+        echo "  --filename local-signer.json"
+        echo ""
+        echo "Or use an existing keystore file and update the path in config.json"
+        echo ""
+        exit 1
+    fi
+else
+    log_error "Invalid MODE: $MODE (must be 'local' or 'testnet')"
+    exit 1
+fi
+
+export CONFIG_SOURCE
+
 # Validate required variables
 if [ -z "$API_KEY" ] || [ "$API_KEY" = "your-api-key-here" ]; then
     log_error "API_KEY not set in .env.integration"
     exit 1
 fi
 
-# Check if config.json exists
-if [ ! -f "$PROJECT_ROOT/tests/integration/config/config.json" ]; then
-    log_warn "config.json not found in tests/integration/config/"
-    log_info "Creating from config.example.json..."
-
-    if [ -f "$PROJECT_ROOT/tests/integration/config/config.example.json" ]; then
-        cp "$PROJECT_ROOT/tests/integration/config/config.example.json" "$PROJECT_ROOT/tests/integration/config/config.json"
-        log_success "Created config.json from example"
-    else
-        log_error "config.example.json not found!"
-        exit 1
-    fi
-fi
-
-# Check if registry.json exists
-if [ ! -f "$PROJECT_ROOT/tests/integration/config/registry.json" ]; then
-    log_warn "registry.json not found in tests/integration/config/"
-    log_info "Creating from registry.example.json..."
-
-    if [ -f "$PROJECT_ROOT/tests/integration/config/registry.example.json" ]; then
-        cp "$PROJECT_ROOT/tests/integration/config/registry.example.json" "$PROJECT_ROOT/tests/integration/config/registry.json"
-        log_success "Created registry.json from example"
-    else
-        log_error "registry.example.json not found!"
-        exit 1
-    fi
-fi
+# For local mode, config files should already exist (committed to git)
+# For testnet mode, they are created above if needed
 
 # Parse command line arguments
 COMMAND=${1:-up}
 
+# Helper function to wait for container health
+wait_for_health() {
+    local container_name=$1
+    local max_attempts=30
+    local attempt=0
+
+    log_info "Waiting for $container_name to be healthy..."
+    while [ $attempt -lt $max_attempts ]; do
+        if docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null | grep -q "healthy"; then
+            log_success "$container_name is healthy!"
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+
+    log_error "$container_name did not become healthy after $max_attempts attempts"
+    return 1
+}
+
 case "$COMMAND" in
     up|run)
-        log_info "Starting integration test environment..."
+        log_info "Starting integration test environment (MODE: $MODE)..."
 
         cd "$PROJECT_ROOT"
-        docker compose -f docker-compose.integration.yml up --build --abort-on-container-exit
+
+        # Start services based on mode
+        if [ "$MODE" = "local" ]; then
+            log_info "Starting Anvil and Redis..."
+            docker compose $PROFILE -f docker-compose.integration.yml up -d anvil redis
+        else
+            log_info "Starting Redis..."
+            docker compose $PROFILE -f docker-compose.integration.yml up -d redis
+        fi
+
+        # If local mode, wait for Anvil and deploy contracts before starting relayer
+        if [ "$MODE" = "local" ]; then
+            # Wait for Anvil healthy
+            if wait_for_health integration-anvil; then
+                # Give Anvil a moment to fully initialize RPC endpoint
+                sleep 2
+                # Deploy contracts
+                log_info "Deploying contracts to Anvil..."
+                ANVIL_CONTAINER="integration-anvil" \
+                RPC_URL="http://localhost:8545" \
+                REGISTRY_PATH="tests/integration/config/local/registry.json" \
+                "$PROJECT_ROOT/scripts/deploy-local-contracts.sh"
+
+                log_info "Using local config files:"
+                log_info "  Registry: $TEST_REGISTRY_PATH"
+                log_info "  Config: $TEST_CONFIG_PATH"
+
+                # Verify Anvil RPC is accessible before starting relayer
+                log_info "Verifying Anvil RPC connectivity..."
+                max_attempts=10
+                attempt=0
+                while [ $attempt -lt $max_attempts ]; do
+                    if docker exec integration-anvil cast client --rpc-url http://localhost:8545 2>/dev/null | grep -q "anvil"; then
+                        log_success "Anvil RPC is ready!"
+                        break
+                    fi
+                    attempt=$((attempt + 1))
+                    sleep 1
+                done
+
+                if [ $attempt -eq $max_attempts ]; then
+                    log_error "Anvil RPC did not become ready"
+                    docker compose $PROFILE -f docker-compose.integration.yml down
+                    exit 1
+                fi
+            else
+                log_error "Failed to start Anvil"
+                docker compose $PROFILE -f docker-compose.integration.yml down
+                exit 1
+            fi
+        fi
+
+        # Now start the relayer (after Anvil is ready in local mode)
+        log_info "Starting relayer..."
+        docker compose $PROFILE -f docker-compose.integration.yml up -d relayer
+
+        # Run tests
+        log_info "Running integration tests..."
+        docker compose $PROFILE -f docker-compose.integration.yml up --build --abort-on-container-exit integration-tests
         EXIT_CODE=$?
 
         if [ $EXIT_CODE -eq 0 ]; then
@@ -153,13 +278,17 @@ case "$COMMAND" in
         echo "  clean       Remove all containers, networks, and volumes"
         echo "  help        Show this help message"
         echo ""
-        echo "Environment variables (set in .env.integration):"
+        echo "Environment variables (set in .env.integration or command line):"
+        echo "  MODE                Test mode: 'local' (default) or 'testnet'"
         echo "  API_KEY             API key for relayer service"
         echo ""
+        echo "Modes:"
+        echo "  local (default)     Use local Anvil node (no testnet funds needed)"
+        echo "  testnet            Use live testnet networks"
+        echo ""
         echo "Configuration:"
-        echo "  config.json         Relayer and signer configurations (tests/integration/config/)"
-        echo "  registry.json       Network configurations (tests/integration/config/)"
-        echo "  Both files are git-ignored. Copy from .example files to set up."
+        echo "  Local mode:         tests/integration/config/local/ (committed to git)"
+        echo "  Testnet mode:       tests/integration/config/testnet/ (git-ignored)"
         echo ""
         echo "Network and relayer selection:"
         echo "  - Networks: Enable/disable in registry.json (enabled: true/false)"
@@ -167,9 +296,11 @@ case "$COMMAND" in
         echo "  - Tests run on ALL active (unpaused) relayers for each enabled network"
         echo ""
         echo "Examples:"
-        echo "  $0 up       # Run tests with enabled networks and active relayers"
-        echo "  $0 build    # Build images only"
-        echo "  $0 logs     # View logs"
+        echo "  $0 up                    # Local mode (default)"
+        echo "  MODE=local $0 up         # Explicit local mode"
+        echo "  MODE=testnet $0 up       # Testnet mode"
+        echo "  $0 build                 # Build images only"
+        echo "  $0 logs                  # View logs"
         ;;
 
     *)

@@ -30,6 +30,16 @@ tests/integration/config/keys/*.json
 tests/integration/config/config.json
 tests/integration/config/registry.json
 
+# Local Anvil keystore
+tests/integration/config/local/keys/*.json
+!tests/integration/config/local/keys/.gitkeep
+
+# Standalone config (auto-generated)
+tests/integration/config/local-standalone/
+
+# Testnet configs
+tests/integration/config/testnet/
+
 !examples/**/*.json
 
 

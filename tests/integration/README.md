@@ -18,22 +18,62 @@ This guide covers how to run, create, and maintain integration tests for the Ope
 
 ## Quick Start
 
+### Local Mode (Default)
+
+Uses local Anvil node - no testnet funds needed!
+
+```bash
+# 1. One-time setup: Create Anvil keystore
+cast wallet import anvil-test \
+  --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
+  --keystore-dir tests/integration/config/local/keys \
+  --unsafe-password ""
+
+mv tests/integration/config/local/keys/anvil-test \
+   tests/integration/config/local/keys/anvil-test.json
+
+# 2. Copy and configure environment
+cp .env.integration.example .env.integration
+# Edit .env.integration with your API key (any value works for local mode)
+
+# 3. Run tests via Docker
+./scripts/run-integration-docker.sh
+```
+
+### Standalone Mode (Local Development)
+
+For faster iteration with `cargo run` and `cargo test`:
+
+```bash
+# 1. Start Anvil and deploy contracts
+./scripts/start-anvil-local.sh
+
+# 2. In another terminal, run relayer
+CONFIG_PATH=tests/integration/config/local-standalone/config.json cargo run
+
+# 3. In another terminal, run tests
+cargo test --features integration-tests --test integration
+```
+
+### Testnet Mode
+
+For testing against live testnet networks:
+
 ```bash
 # 1. Copy and configure environment
 cp .env.integration.example .env.integration
 # Edit .env.integration with your API key and passphrase
 
-# 2. Copy and configure the relayer config
-cp tests/integration/config/config.example.json tests/integration/config/config.json
-# Edit config.json with your relayer and signer settings
-
-# 3. Copy and configure the test registry
-cp tests/integration/config/registry.example.json tests/integration/config/registry.json
+# 2. Copy and configure the testnet config
+cp tests/integration/config/config.example.json tests/integration/config/testnet/config.json
+cp tests/integration/config/registry.example.json tests/integration/config/testnet/registry.json
 # Edit registry.json to enable the networks you want to test
 
-# 4. Run tests via Docker
-./scripts/run-integration-docker.sh
+# 3. Run tests via Docker
+MODE=testnet ./scripts/run-integration-docker.sh
 ```
+
+See [docs/LOCAL_TESTING.md](../../docs/LOCAL_TESTING.md) for detailed documentation.
 
 ---
 
