@@ -100,21 +100,27 @@ elif [ "$MODE" = "testnet" ]; then
     # Ensure keys directory exists
     mkdir -p "$PROJECT_ROOT/tests/integration/config/testnet/keys"
 
-    # Verify signer keystore exists
-    if [ ! -f "$PROJECT_ROOT/tests/integration/config/testnet/keys/local-signer.json" ]; then
-        log_error "Testnet signer keystore not found!"
-        log_info "Please create the keystore by running:"
-        echo ""
-        echo "mkdir -p tests/integration/config/testnet/keys"
-        echo ""
-        echo "cargo run --example create_key -- \\"
-        echo "  --password \"\${KEYSTORE_PASSPHRASE}\" \\"
-        echo "  --output-dir tests/integration/config/testnet/keys \\"
-        echo "  --filename local-signer.json"
-        echo ""
-        echo "Or use an existing keystore file and update the path in config.json"
-        echo ""
-        exit 1
+    # Verify signer keystore exists (skip if using KMS)
+    if [ -z "$USE_KMS" ] || [ "$USE_KMS" != "true" ]; then
+        if [ ! -f "$PROJECT_ROOT/tests/integration/config/testnet/keys/local-signer.json" ]; then
+            log_error "Testnet signer keystore not found!"
+            log_info "Please create the keystore by running:"
+            echo ""
+            echo "mkdir -p tests/integration/config/testnet/keys"
+            echo ""
+            echo "cargo run --example create_key -- \\"
+            echo "  --password \"\${KEYSTORE_PASSPHRASE}\" \\"
+            echo "  --output-dir tests/integration/config/testnet/keys \\"
+            echo "  --filename local-signer.json"
+            echo ""
+            echo "Or use an existing keystore file and update the path in config.json"
+            echo ""
+            echo "Alternatively, set USE_KMS=true to use KMS signers instead"
+            echo ""
+            exit 1
+        fi
+    else
+        log_info "Using KMS signers (USE_KMS=true), skipping keystore check"
     fi
 else
     log_error "Invalid MODE: $MODE (must be 'local' or 'testnet')"
@@ -281,6 +287,7 @@ case "$COMMAND" in
         echo "Environment variables (set in .env.integration or command line):"
         echo "  MODE                Test mode: 'local' (default) or 'testnet'"
         echo "  API_KEY             API key for relayer service"
+        echo "  USE_KMS             Set to 'true' to use KMS signers (skips keystore check)"
         echo ""
         echo "Modes:"
         echo "  local (default)     Use local Anvil node (no testnet funds needed)"
