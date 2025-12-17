@@ -48,3 +48,5 @@ node_modules
 
 !examples/**/pnpm-lock.yaml
 !examples/**/package-lock.json
+
+**/*lcov.info
