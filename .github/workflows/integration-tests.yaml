@@ -1,9 +1,6 @@
 ---
 name: Integration Tests
 on:
-  push:
-    branches:
-      - local-node-anvil
   workflow_dispatch:  # Allow manual triggering from GitHub UI
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
