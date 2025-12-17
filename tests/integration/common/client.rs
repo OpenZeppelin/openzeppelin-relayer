@@ -12,7 +12,6 @@ use openzeppelin_relayer::models::{
 use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
 use std::env;
-use tracing::error;
 
 /// HTTP client for OpenZeppelin Relayer API
 #[derive(Debug)]
@@ -349,25 +348,6 @@ impl RelayerClient {
         api_response
             .data
             .ok_or_else(|| eyre::eyre!("API response missing data field"))
-    }
-
-    /// Deletes all relayers for a specific network
-    ///
-    /// This is a convenience method that lists all relayers and deletes those matching the network
-    pub async fn delete_all_relayers_by_network(&self, network: &str) -> Result<usize> {
-        let relayers = self.list_relayers().await?;
-
-        let network_relayers: Vec<_> = relayers.iter().filter(|r| r.network == network).collect();
-
-        let count = network_relayers.len();
-
-        for relayer in network_relayers {
-            if let Err(e) = self.delete_relayer(&relayer.id).await {
-                error!(relayer_id = %relayer.id, error = %e, "Failed to delete relayer");
-            }
-        }
-
-        Ok(count)
     }
 
     /// Creates a new signer

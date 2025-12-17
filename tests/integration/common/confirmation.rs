@@ -121,7 +121,13 @@ fn load_network_timing(network: &str) -> Result<(u64, u32)> {
         let entry = entry?;
         let path = entry.path();
 
+        // Skip if not a JSON file
         if path.extension().is_none_or(|ext| ext != "json") {
+            continue;
+        }
+
+        // Skip if it's a directory (not a file)
+        if !path.is_file() {
             continue;
         }
 

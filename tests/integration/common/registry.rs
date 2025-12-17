@@ -88,8 +88,18 @@ impl RelayerDiscovery {
     }
 
     /// Get the path to config.json
+    ///
+    /// Checks TEST_CONFIG_PATH environment variable first.
+    /// Defaults to `tests/integration/config/local/config.json` (local mode).
+    /// Set TEST_CONFIG_PATH env var to override (e.g., for testnet mode).
     fn get_config_path() -> std::path::PathBuf {
-        std::path::PathBuf::from("tests/integration/config/config.json")
+        // Check if explicitly set via environment variable
+        if let Ok(path) = std::env::var("TEST_CONFIG_PATH") {
+            return std::path::PathBuf::from(path);
+        }
+
+        // Default to local config (matches MODE=local default)
+        std::path::PathBuf::from("tests/integration/config/local/config.json")
     }
 }
 
@@ -102,13 +112,18 @@ pub struct RegistryMetadata {
 }
 
 impl TestRegistry {
-    /// Load the test registry from the default location (config/registry.json)
+    /// Load the test registry from the default location
+    ///
+    /// Defaults to `tests/integration/config/local/registry.json` (local mode).
+    /// Set TEST_REGISTRY_PATH env var to override (e.g., for testnet mode).
     ///
     /// # Errors
     ///
     /// Returns an error if the registry file cannot be read or parsed
     pub fn load() -> Result<Self> {
-        Self::load_from_path("tests/integration/config/registry.json")
+        let path = std::env::var("TEST_REGISTRY_PATH")
+            .unwrap_or_else(|_| "tests/integration/config/local/registry.json".to_string());
+        Self::load_from_path(path)
     }
 
     /// Load the test registry from a specific path

@@ -41,7 +41,7 @@ async fn test_health_endpoint() {
 /// Helper to create a test relayer for CRUD operations
 ///
 /// This function:
-/// 1. Uses the `sepolia` network for CRUD testing
+/// 1. Dynamically selects an enabled network from the registry (prefers "sepolia" if available, otherwise uses the first enabled network)
 /// 2. Creates a new signer with a unique ID
 /// 3. Creates a new test relayer with a unique ID using that signer
 /// 4. Returns info that can be used to clean up the relayer and signer
@@ -54,11 +54,32 @@ struct CrudTestRelayer {
 impl CrudTestRelayer {
     /// Creates a new test relayer for CRUD operations
     async fn create(client: &RelayerClient) -> eyre::Result<Self> {
-        const CRUD_TEST_NETWORK: &str = "sepolia";
-        const REGISTRY_KEY: &str = "sepolia";
-
         let registry = TestRegistry::load()?;
-        let network_config = registry.get_network(REGISTRY_KEY)?;
+
+        // Get all enabled networks from the registry
+        let enabled_networks = registry.enabled_networks();
+
+        if enabled_networks.is_empty() {
+            return Err(eyre::eyre!(
+                "No enabled networks found in registry. At least one network must be enabled for CRUD tests."
+            ));
+        }
+
+        // Prefer "sepolia" if available (for backward compatibility with testnet mode),
+        // otherwise use the first enabled network (works with local Anvil which uses "localhost")
+        let selected_network = enabled_networks
+            .iter()
+            .find(|n| *n == "sepolia")
+            .or_else(|| enabled_networks.first())
+            .ok_or_else(|| eyre::eyre!("Failed to select a network"))?;
+
+        info!(
+            selected = %selected_network,
+            available = ?enabled_networks,
+            "Selected network for CRUD test"
+        );
+
+        let network_config = registry.get_network(selected_network)?;
 
         let network_type = match network_config.network_type.as_str() {
             "evm" => RelayerNetworkType::Evm,
@@ -87,7 +108,7 @@ impl CrudTestRelayer {
             }
         });
 
-        info!(id = %signer_id, "Creating test signer for CRUD operations");
+        info!(id = %signer_id, network = %selected_network, "Creating test signer for CRUD operations");
         client.create_signer(signer_request).await?;
 
         // Create a unique test relayer ID
@@ -137,7 +158,7 @@ impl CrudTestRelayer {
         let request = CreateRelayerRequest {
             id: Some(relayer_id.clone()),
             name: "CRUD Test Relayer".to_string(),
-            network: CRUD_TEST_NETWORK.to_string(),
+            network: selected_network.clone(),
             paused: false,
             network_type,
             policies,
@@ -146,12 +167,12 @@ impl CrudTestRelayer {
             custom_rpc_urls: None,
         };
 
-        info!(id = %relayer_id, network = %CRUD_TEST_NETWORK, signer_id = %signer_id, "Creating test relayer for CRUD operations");
+        info!(id = %relayer_id, network = %selected_network, signer_id = %signer_id, "Creating test relayer for CRUD operations");
         client.create_relayer(request).await?;
 
         Ok(Self {
             relayer_id,
-            network_name: CRUD_TEST_NETWORK.to_string(),
+            network_name: selected_network.clone(),
             signer_id,
         })
     }
@@ -321,70 +342,56 @@ async fn test_update_relayer() {
     info!("Update relayer test completed successfully");
 }
 
-/// Tests deleting all relayers by network
+/// Tests deleting a relayer via the API
 ///
-/// Creates multiple test relayers on the fly and tests deleting all relayers by network.
+/// Creates a test relayer on the fly and tests deleting it.
+/// This test is isolated and does not affect pre-configured relayers.
 #[tokio::test]
 #[serial]
-async fn test_delete_all_relayers_by_network() {
+async fn test_delete_relayer() {
     init_test_logging();
-    let _span = info_span!("test_delete_all_relayers_by_network").entered();
-    info!("Starting delete all relayers by network test");
+    let _span = info_span!("test_delete_relayer").entered();
+    info!("Starting delete relayer test");
 
     let client = RelayerClient::from_env().expect("Failed to create client");
 
-    // Create multiple test relayers to test bulk deletion
-    info!("Creating test relayers for bulk delete test");
-    let test_relayer1 = CrudTestRelayer::create(&client)
+    // Create a test relayer on the fly
+    let test_relayer = CrudTestRelayer::create(&client)
         .await
-        .expect("Failed to create test relayer 1");
-    let test_relayer2 = CrudTestRelayer::create(&client)
+        .expect("Failed to create test relayer");
+
+    let relayer_id = test_relayer.id();
+
+    // Verify the relayer exists before deletion
+    let relayer = client
+        .get_relayer(relayer_id)
         .await
-        .expect("Failed to create test relayer 2");
-    let test_relayer3 = CrudTestRelayer::create(&client)
+        .expect("Failed to get relayer before deletion");
+
+    assert_eq!(relayer.id, relayer_id);
+    info!(id = %relayer.id, "Relayer exists before deletion");
+
+    // Delete the relayer
+    client
+        .delete_relayer(relayer_id)
         .await
-        .expect("Failed to create test relayer 3");
+        .expect("Failed to delete relayer");
 
-    let network_name = test_relayer1.network();
+    info!(id = %relayer_id, "Relayer deleted successfully");
 
-    // Store created relayer IDs for verification
-    let created_ids = vec![
-        test_relayer1.id().to_string(),
-        test_relayer2.id().to_string(),
-        test_relayer3.id().to_string(),
-    ];
-
-    info!(
-        network = %network_name,
-        count = created_ids.len(),
-        "Created test relayers for bulk delete"
-    );
-
-    // Delete all relayers for the network
-    let deleted_count = client
-        .delete_all_relayers_by_network(network_name)
-        .await
-        .expect("Failed to delete relayers by network");
-
-    info!(deleted = deleted_count, network = %network_name, "Deleted relayers by network");
-
-    // Verify we deleted at least the ones we created (there may have been others)
+    // Verify the relayer no longer exists
+    let result = client.get_relayer(relayer_id).await;
     assert!(
-        deleted_count >= created_ids.len(),
-        "Should have deleted at least {} relayers, deleted {}",
-        created_ids.len(),
-        deleted_count
+        result.is_err(),
+        "Relayer {} should have been deleted",
+        relayer_id
     );
 
-    // Verify each of our test relayers is actually gone
-    for relayer_id in &created_ids {
-        let result = client.get_relayer(relayer_id).await;
-        assert!(
-            result.is_err(),
-            "Relayer {} should have been deleted",
-            relayer_id
-        );
-    }
+    // Cleanup: also delete the signer (cleanup method handles this, but we already deleted the relayer)
+    test_relayer
+        .cleanup(&client)
+        .await
+        .expect("Failed to cleanup test signer");
 
-    info!("Delete all relayers by network test completed successfully");
+    info!("Delete relayer test completed successfully");
 }
