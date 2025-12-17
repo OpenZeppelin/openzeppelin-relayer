@@ -77,10 +77,8 @@ echo "Copying contracts to writable directory..."
 docker exec "$ANVIL_CONTAINER" sh -c "rm -rf /tmp/contracts && cp -r /contracts /tmp/contracts" > /dev/null 2>&1
 
 echo "Deploying Counter contract..."
-counter_output=$(docker exec "$ANVIL_CONTAINER" sh -c \
-    "cd /tmp/contracts && forge create src/Counter.sol:Counter --rpc-url http://localhost:8545 --from $ANVIL_ACCOUNT_0 --unlocked --broadcast --legacy" 2>&1)
-
-if [ $? -ne 0 ]; then
+if ! counter_output=$(docker exec "$ANVIL_CONTAINER" sh -c \
+    "cd /tmp/contracts && forge create src/Counter.sol:Counter --rpc-url http://localhost:8545 --from $ANVIL_ACCOUNT_0 --unlocked --broadcast --legacy" 2>&1); then
     echo "Error: Failed to deploy Counter contract"
     echo "$counter_output"
     exit 1

@@ -100,19 +100,16 @@ mkdir -p "$STANDALONE_CONFIG_DIR"
 # Generate standalone config.json (same as local but RPC: http://localhost:8545)
 log_info "Generating standalone config..."
 if command -v jq &> /dev/null; then
-    jq '.relayers[0].custom_rpc_urls[0].url = "http://localhost:8545" |
-        .relayers[0].name = "Standalone Anvil Relayer"' \
+    jq '.relayers[0].name = "Standalone Anvil Relayer"' \
         "$PROJECT_ROOT/tests/integration/config/local/config.json" > \
         "$STANDALONE_CONFIG_DIR/config.json"
 else
     python3 << EOF
 import json
-import sys
 
 with open("$PROJECT_ROOT/tests/integration/config/local/config.json", "r") as f:
     config = json.load(f)
 
-config["relayers"][0]["custom_rpc_urls"][0]["url"] = "http://localhost:8545"
 config["relayers"][0]["name"] = "Standalone Anvil Relayer"
 
 with open("$STANDALONE_CONFIG_DIR/config.json", "w") as f:

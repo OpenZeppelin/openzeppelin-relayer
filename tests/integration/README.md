@@ -88,7 +88,7 @@ See [docs/LOCAL_TESTING.md](../../docs/LOCAL_TESTING.md) for detailed documentat
 
 ### Local Testing
 
-- Rust 1.86+
+- Rust 1.88+
 - Running Redis instance
 - Running Relayer service
 - Funded test wallet on target networks

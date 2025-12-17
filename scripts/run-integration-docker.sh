@@ -63,15 +63,8 @@ if [ "$MODE" = "local" ]; then
     # Verify keystore exists
     if [ ! -f "$PROJECT_ROOT/tests/integration/config/local/keys/anvil-test.json" ]; then
         log_error "Anvil keystore not found!"
-        log_info "Please create the keystore by running:"
-        echo ""
-        echo "cast wallet import anvil-test \\"
-        echo "  --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \\"
-        echo "  --keystore-dir tests/integration/config/local/keys \\"
-        echo "  --unsafe-password \"test\""
-        echo ""
-        echo "mv tests/integration/config/local/keys/anvil-test \\"
-        echo "   tests/integration/config/local/keys/anvil-test.json"
+        log_info "Please create the keystore using Anvil's default test account (account 0)."
+        log_info "See: tests/integration/README.md for setup instructions"
         echo ""
         exit 1
     fi

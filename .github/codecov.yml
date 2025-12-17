@@ -1,7 +1,7 @@
 ---
 codecov:
   notify:
-    after_n_builds: 2  # Wait for all 3 flag uploads (integration, properties, unittests)
+    after_n_builds: 2  # Wait for all 2 flag uploads (integration, properties, unittests)
     wait_for_ci: true  # Wait for CI to complete before sending status
 coverage:
   precision: 2
