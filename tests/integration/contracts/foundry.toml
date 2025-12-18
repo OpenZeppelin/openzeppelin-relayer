@@ -1,0 +1,29 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+
+# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
+[rpc_endpoints]
+sepolia = "https://sepolia.drpc.org" # 0x5379E27d181a94550318d4A44124eCd056678879
+bsc-testnet = "https://bsc-testnet-dataseed.bnbchain.org" # 0x652496dd1344a0bdC4D43b3b7d661486A4E94a68
+abstract-sepolia = "https://api.testnet.abs.xyz" #  0x0E6379b15E6A804FfEbeD186D5443fcCB7169d17
+arbitrum-sepolia = "https://sepolia-rollup.arbitrum.io/rpc" # 0x90648Ae4892b346eb1fF1A7B96884a71027b4aF1
+linea-sepolia = "https://rpc.sepolia.linea.build"
+mantle-sepolia = "https://rpc.sepolia.mantle.xyz"
+optimism-sepolia = "https://sepolia.optimism.io"
+polygon-amoy = "https://rpc-amoy.polygon.technology"
+scroll-sepolia = "https://sepolia-rpc.scroll.io"
+sei-atlantic = "https://evm-rpc-testnet.sei-apis.com"
+sophon-testnet = "https://rpc.testnet.sophon.xyz"
+
+[etherscan]
+sepolia = { key = "${ETHERSCAN_API_KEY}" }
+bsc-testnet = { key = "${ETHERSCAN_API_KEY}" }
+abstract-sepolia = { key = "${ETHERSCAN_API_KEY}" }
+arbitrum-sepolia = { key = "${ETHERSCAN_API_KEY}" }
+linea-sepolia = { key = "${ETHERSCAN_API_KEY}" }
+mantle-sepolia = { key = "${ETHERSCAN_API_KEY}" }
+optimism-sepolia = { key = "${ETHERSCAN_API_KEY}" }
+polygon-amoy = { key = "${ETHERSCAN_API_KEY}" }
+scroll-sepolia = { key = "${ETHERSCAN_API_KEY}" }

@@ -1,0 +1,77 @@
+# Multi-stage Dockerfile for Integration Tests
+# Uses Chainguard images for security and minimal footprint
+
+# ============================================================================
+# Builder Stage - Compile integration tests
+# ============================================================================
+# Rustc v1.91.1
+# The digest needs to be updated everytime the minimum version is changed, and if the version is above 1.91.1
+FROM cgr.dev/chainguard/rust:latest-dev@sha256:33faad9a26e8437ed9725bea3eb2d1e85facd1c035a31af8d485ea8c0a935532 AS builder
+
+USER root
+RUN apk update && apk --no-cache add \
+    openssl-dev \
+    perl \
+    libsodium-dev
+
+WORKDIR /app
+
+# Copy manifests
+COPY Cargo.toml Cargo.lock ./
+
+# Create dummy source to cache dependencies
+RUN mkdir -p src/bin tests/integration && \
+    echo "fn main() {}" > src/bin/dummy.rs && \
+    echo "#[test] fn dummy() {}" > tests/integration.rs
+
+# Build dependencies (this layer will be cached)
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/app/target \
+    cargo build --features integration-tests --test integration --release 2>/dev/null || true && \
+    rm -rf src tests
+
+# Copy actual source
+COPY src ./src
+COPY tests ./tests
+
+# Build integration tests
+# Clear cached integration test artifacts to force recompilation when source changes.
+# This ensures changes to test files are always reflected in the binary while still
+# keeping dependency compilation cached for fast builds.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/app/target \
+    rm -rf /app/target/release/deps/integration-* \
+           /app/target/release/.fingerprint/*integration* && \
+    cargo test --features integration-tests --test integration --release --no-run && \
+    TEST_BINARY=$(find target/release/deps -name 'integration-*' -type f -executable | head -n 1) && \
+    cp "$TEST_BINARY" /app/integration-test-binary
+
+# ============================================================================
+# Runtime Stage - Minimal image with only what's needed to run tests
+# ============================================================================
+FROM cgr.dev/chainguard/wolfi-base
+
+WORKDIR /app
+
+# Copy test binary from builder
+COPY --from=builder /app/integration-test-binary ./integration-tests
+
+# Copy SSL libraries from builder
+COPY --from=builder /usr/lib/libssl.so.3 /usr/lib/libssl.so.3
+COPY --from=builder /usr/lib/libcrypto.so.3 /usr/lib/libcrypto.so.3
+
+# Copy test data files (contracts, etc.)
+COPY tests/integration ./tests/integration
+
+# Create config and networks directory structure (will be mounted via docker-compose)
+# Networks is mounted separately at /app/networks to avoid nested mount issues
+RUN mkdir -p /app/config /app/networks
+
+# Create directory for test results
+RUN mkdir -p /app/test-results
+
+# Default test command
+# Can be overridden via docker-compose or docker run
+CMD ["./integration-tests", "--nocapture", "--test-threads=1"]
