@@ -5,11 +5,14 @@ set -euo pipefail
 ANVIL_CONTAINER="${ANVIL_CONTAINER:-integration-anvil}"
 RPC_URL="${RPC_URL:-http://localhost:8545}"
 REGISTRY_PATH="${REGISTRY_PATH:-tests/integration/config/local/registry.json}"
+# Network name to update in registry - defaults to localhost-integration for Docker mode
+NETWORK_NAME="${NETWORK_NAME:-localhost-integration}"
 
 echo "Deploying contracts to Anvil..."
 echo "Container: $ANVIL_CONTAINER"
 echo "RPC URL: $RPC_URL"
 echo "Registry: $REGISTRY_PATH"
+echo "Network: $NETWORK_NAME"
 
 # Wait for Anvil RPC to be ready
 echo "Waiting for Anvil RPC to be ready..."
@@ -97,8 +100,8 @@ echo "Counter deployed at: $counter_address"
 # Update registry.json with jq (or Python fallback)
 if command -v jq &> /dev/null; then
     echo "Updating registry.json with jq..."
-    jq --arg counter "$counter_address" \
-        '.networks.localhost.contracts.simple_storage = $counter' \
+    jq --arg counter "$counter_address" --arg network "$NETWORK_NAME" \
+        '.networks[$network].contracts.simple_storage = $counter' \
         "$REGISTRY_PATH" > "${REGISTRY_PATH}.tmp" && \
         mv "${REGISTRY_PATH}.tmp" "$REGISTRY_PATH"
 else
@@ -110,7 +113,13 @@ import sys
 with open("$REGISTRY_PATH", "r") as f:
     registry = json.load(f)
 
-registry["networks"]["localhost"]["contracts"]["simple_storage"] = "$counter_address"
+# Ensure network exists
+if "$NETWORK_NAME" not in registry["networks"]:
+    registry["networks"]["$NETWORK_NAME"] = {"contracts": {}}
+elif "contracts" not in registry["networks"]["$NETWORK_NAME"]:
+    registry["networks"]["$NETWORK_NAME"]["contracts"] = {}
+
+registry["networks"]["$NETWORK_NAME"]["contracts"]["simple_storage"] = "$counter_address"
 
 with open("$REGISTRY_PATH", "w") as f:
     json.dump(registry, f, indent=2)

@@ -96,9 +96,8 @@ services:
       # Test logging configuration
       # Default to INFO level for clean output, can be overridden with RUST_LOG
       - RUST_LOG=${RUST_LOG:-info}
-      # Local mode: use local config files
+      # Test registry path (tests discover relayers via API)
       - TEST_REGISTRY_PATH=${TEST_REGISTRY_PATH:-tests/integration/config/registry.json}
-      - TEST_CONFIG_PATH=${TEST_CONFIG_PATH:-tests/integration/config/config.json}
     volumes:
       - ./tests/integration/config:/app/config:ro
       - ./config/networks:/app/networks:ro

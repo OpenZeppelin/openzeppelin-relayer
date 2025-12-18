@@ -13,9 +13,10 @@
 use super::{
     logging::init_test_logging,
     network_selection::get_test_networks,
-    registry::{RelayerDiscovery, RelayerInfo, TestRegistry},
+    registry::{RelayerDiscovery, TestRegistry},
 };
 use eyre::Result;
+use openzeppelin_relayer::models::relayer::RelayerResponse;
 use std::future::Future;
 use tracing::{error, info, info_span, warn};
 
@@ -58,7 +59,7 @@ pub async fn run_multi_network_test<F, Fut>(
     network_filter: impl Fn(&str, &TestRegistry) -> bool,
     test_fn: F,
 ) where
-    F: Fn(String, RelayerInfo) -> Fut,
+    F: Fn(String, RelayerResponse) -> Fut,
     Fut: Future<Output = Result<()>>,
 {
     init_test_logging();
@@ -120,10 +121,10 @@ pub async fn run_multi_network_test<F, Fut>(
 
     for network in &eligible {
         // Discover ALL active relayers for this network
-        let relayers = match RelayerDiscovery::find_relayers_for_network(network) {
+        let relayers = match RelayerDiscovery::find_relayers_for_network(network).await {
             Ok(relayers) => relayers,
             Err(e) => {
-                error!(network = %network, error = %e, "Failed to discover relayers");
+                error!(network = %network, error = %e, "Failed to discover relayers via API");
                 failures.push((network.clone(), "N/A".to_string(), e.to_string()));
                 continue;
             }

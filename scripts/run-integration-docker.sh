@@ -58,7 +58,6 @@ if [ "$MODE" = "local" ]; then
     PROFILE="--profile local"
     CONFIG_SOURCE="./tests/integration/config/local"
     export TEST_REGISTRY_PATH="tests/integration/config/local/registry.json"
-    export TEST_CONFIG_PATH="tests/integration/config/local/config.json"
 
     # Verify keystore exists
     if [ ! -f "$PROJECT_ROOT/tests/integration/config/local/keys/anvil-test.json" ]; then
@@ -73,7 +72,6 @@ elif [ "$MODE" = "testnet" ]; then
     PROFILE=""
     CONFIG_SOURCE="./tests/integration/config/testnet"
     export TEST_REGISTRY_PATH="tests/integration/config/testnet/registry.json"
-    export TEST_CONFIG_PATH="tests/integration/config/testnet/config.json"
     # Create from examples if needed
     if [ ! -f "$PROJECT_ROOT/tests/integration/config/testnet/config.json" ]; then
         log_warn "testnet config.json not found, creating from example..."
@@ -180,11 +178,13 @@ case "$COMMAND" in
                 ANVIL_CONTAINER="integration-anvil" \
                 RPC_URL="http://localhost:8545" \
                 REGISTRY_PATH="tests/integration/config/local/registry.json" \
+                NETWORK_NAME="localhost-integration" \
                 "$PROJECT_ROOT/scripts/deploy-local-contracts.sh"
 
                 log_info "Using local config files:"
-                log_info "  Registry: $TEST_REGISTRY_PATH"
-                log_info "  Config: $TEST_CONFIG_PATH"
+                log_info "  Registry (for tests): $TEST_REGISTRY_PATH"
+                log_info "  Config (for relayer): config/config.json"
+                log_info "  Tests discover relayers via API (GET /api/v1/relayers)"
 
                 # Verify Anvil RPC is accessible before starting relayer
                 log_info "Verifying Anvil RPC connectivity..."
@@ -290,9 +290,14 @@ case "$COMMAND" in
         echo "  Local mode:         tests/integration/config/local/ (committed to git)"
         echo "  Testnet mode:       tests/integration/config/testnet/ (git-ignored)"
         echo ""
+        echo "How tests discover relayers:"
+        echo "  - Tests query the running relayer API (GET /api/v1/relayers)"
+        echo "  - config.json is used to START the relayer, not by tests"
+        echo "  - registry.json provides network metadata for tests"
+        echo ""
         echo "Network and relayer selection:"
         echo "  - Networks: Enable/disable in registry.json (enabled: true/false)"
-        echo "  - Relayers: Pause/unpause in config.json (paused: true/false)"
+        echo "  - Relayers: Discovered via API, filtered by network + !paused"
         echo "  - Tests run on ALL active (unpaused) relayers for each enabled network"
         echo ""
         echo "Examples:"

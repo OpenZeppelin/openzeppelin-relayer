@@ -4,7 +4,9 @@
 //! including signer addresses, keystore paths, and deployed contract addresses
 //! for each test network.
 
+use crate::integration::common::client::RelayerClient;
 use eyre::{Context, Result};
+use openzeppelin_relayer::models::relayer::RelayerResponse;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -39,67 +41,23 @@ fn default_true() -> bool {
     true
 }
 
-/// Relayer information from config.json
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RelayerInfo {
-    pub id: String,
-    pub name: String,
-    pub network: String,
-    pub signer_id: String,
-    pub network_type: String,
-    #[serde(default)]
-    pub paused: bool,
-}
-
-/// Config file structure
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Config {
-    relayers: Vec<RelayerInfo>,
-    #[serde(default)]
-    signers: Vec<serde_json::Value>,
-}
-
-/// Relayer discovery from config.json
+/// Relayer discovery via API
 pub struct RelayerDiscovery;
 
 impl RelayerDiscovery {
-    /// Find all enabled relayers for a network from config.json
+    /// Find all enabled relayers for a network by querying the API
     /// Filters by: network name match + !paused
-    pub fn find_relayers_for_network(network: &str) -> Result<Vec<RelayerInfo>> {
-        let config_path = Self::get_config_path();
-        let contents = fs::read_to_string(&config_path)
-            .wrap_err_with(|| format!("Failed to read config file: {}", config_path.display()))?;
-
-        let config: Config = serde_json::from_str(&contents).wrap_err_with(|| {
-            format!(
-                "Failed to parse config JSON from: {}",
-                config_path.display()
-            )
-        })?;
+    pub async fn find_relayers_for_network(network: &str) -> Result<Vec<RelayerResponse>> {
+        let client = RelayerClient::from_env()?;
+        let all_relayers = client.list_relayers().await?;
 
         // Filter relayers: network match AND not paused
-        let relayers: Vec<RelayerInfo> = config
-            .relayers
+        let relayers: Vec<RelayerResponse> = all_relayers
             .into_iter()
             .filter(|r| r.network == network && !r.paused)
             .collect();
 
         Ok(relayers)
-    }
-
-    /// Get the path to config.json
-    ///
-    /// Checks TEST_CONFIG_PATH environment variable first.
-    /// Defaults to `tests/integration/config/local/config.json` (local mode).
-    /// Set TEST_CONFIG_PATH env var to override (e.g., for testnet mode).
-    fn get_config_path() -> std::path::PathBuf {
-        // Check if explicitly set via environment variable
-        if let Ok(path) = std::env::var("TEST_CONFIG_PATH") {
-            return std::path::PathBuf::from(path);
-        }
-
-        // Default to local config (matches MODE=local default)
-        std::path::PathBuf::from("tests/integration/config/local/config.json")
     }
 }
 

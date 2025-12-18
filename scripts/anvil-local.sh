@@ -114,43 +114,43 @@ start_anvil() {
     log_info "Deploying contracts..."
     ANVIL_CONTAINER="$CONTAINER_NAME" \
     RPC_URL="$RPC_URL" \
-    REGISTRY_PATH="tests/integration/config/local/registry.json" \
+    REGISTRY_PATH="tests/integration/config/local-standalone/registry.json" \
+    NETWORK_NAME="localhost" \
     "$PROJECT_ROOT/scripts/deploy-local-contracts.sh"
 
     # Create standalone config directory
     STANDALONE_CONFIG_DIR="$PROJECT_ROOT/tests/integration/config/local-standalone"
     mkdir -p "$STANDALONE_CONFIG_DIR"
 
-    # Generate standalone config.json (same as local but RPC: http://localhost:8545)
-    log_info "Generating standalone config..."
-    if command -v jq &> /dev/null; then
-        jq '.relayers[0].name = "Standalone Anvil Relayer"' \
-            "$PROJECT_ROOT/tests/integration/config/local/config.json" > \
-            "$STANDALONE_CONFIG_DIR/config.json"
-    else
-        python3 << EOF
-import json
-
-with open("$PROJECT_ROOT/tests/integration/config/local/config.json", "r") as f:
-    config = json.load(f)
-
-config["relayers"][0]["name"] = "Standalone Anvil Relayer"
-
-with open("$STANDALONE_CONFIG_DIR/config.json", "w") as f:
-    json.dump(config, f, indent=2)
+    # Create standalone registry.json if it doesn't exist
+    if [ ! -f "$STANDALONE_CONFIG_DIR/registry.json" ]; then
+        log_info "Creating standalone registry.json..."
+        cat > "$STANDALONE_CONFIG_DIR/registry.json" << 'EOF'
+{
+  "networks": {
+    "localhost": {
+      "network_name": "localhost",
+      "network_type": "evm",
+      "contracts": {
+        "simple_storage": "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+      },
+      "min_balance": "0.01",
+      "enabled": true
+    }
+  }
+}
 EOF
     fi
-
-    # Create symlink to registry.json
-    log_info "Creating registry symlink..."
-    ln -sf "../local/registry.json" "$STANDALONE_CONFIG_DIR/registry.json"
 
     log_success "Standalone Anvil setup complete!"
     echo ""
     echo "Next steps:"
-    echo "  1. Set CONFIG_PATH=tests/integration/config/local-standalone/config.json"
+    echo "  1. Add the Anvil relayer config to your config/config.json"
+    echo "     (see tests/integration/README.md for details)"
     echo "  2. Run relayer: cargo run"
-    echo "  3. Run tests: cargo test --features integration-tests --test integration"
+    echo "  3. Run tests (tests will discover relayers via API):"
+    echo "     TEST_REGISTRY_PATH=tests/integration/config/local-standalone/registry.json \\"
+    echo "     cargo test --features integration-tests --test integration"
     echo ""
     echo "To stop Anvil: $0 stop"
 }
