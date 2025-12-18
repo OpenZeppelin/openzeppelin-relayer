@@ -255,8 +255,8 @@ Then update the `KEYSTORE_PASSPHRASE` field in your `.env.integration` file with
 The Docker setup handles Redis, Relayer, and test execution automatically.
 
 ```bash
-# Run all tests
-./scripts/run-integration-docker.sh
+# Run all tests (Default MODE=local)
+MODE=testnet ./scripts/run-integration-docker.sh
 
 # Build images only
 ./scripts/run-integration-docker.sh build
