@@ -38,6 +38,9 @@ cp .env.integration.example .env.integration
 
 # 3. Run tests via Docker
 ./scripts/run-integration-docker.sh
+
+# Note: Docker mode uses "anvil:8545" for RPC URL (Docker service name).
+# The config at tests/integration/config/local/config.json is already set up correctly.
 ```
 
 ### Standalone Mode (Local Development)
@@ -45,21 +48,52 @@ cp .env.integration.example .env.integration
 For faster iteration with `cargo run` and `cargo test`:
 
 ```bash
-# 1. Start Anvil and deploy contracts
+# 1. Configure RPC URL for standalone mode
+# Edit config/networks/local-anvil.json to use localhost instead of Docker service:
+# Change "rpc_urls": ["http://anvil:8545"]
+# To:     "rpc_urls": ["http://localhost:8545"]
+#
+# Note: This is only needed for standalone mode. Docker mode uses "anvil:8545"
+
+# 2. Add Anvil relayer to your config/config.json
+# You can copy the relayer and signer configuration from:
+# tests/integration/config/local-standalone/config.json
+#
+# Add the relayer entry to the "relayers" array in config/config.json:
+# {
+#   "id": "anvil-relayer",
+#   "name": "Standalone Anvil Relayer",
+#   "network": "localhost",
+#   "paused": false,
+#   "signer_id": "anvil-signer",
+#   "network_type": "evm",
+#   "policies": { "min_balance": 0 }
+# }
+#
+# Also add the signer entry to the "signers" array:
+# {
+#   "id": "anvil-signer",
+#   "type": "local",
+#   "config": {
+#     "path": "tests/integration/config/local/keys/anvil-test.json",
+#     "passphrase": { "type": "plain", "value": "test" }
+#   }
+# }
+
+# 3. Start Anvil and deploy contracts
 ./scripts/anvil-local.sh start
 
-# 2. Before running the relayer, check this file:
+# 4. In another terminal, run relayer
+cargo run
 
-`config/networks/local-anvil.json` and make sure contains this value: "rpc_urls": ["http://localhost:8545"],
-
-# 2. In another terminal, run relayer
-CONFIG_PATH=tests/integration/config/local-standalone/config.json cargo run
-
-# 3. In another terminal, run tests
+# 5. In another terminal, run tests
 cargo test --features integration-tests --test integration
 
-# 4. When done, stop Anvil
+# 6. When done, stop Anvil
 ./scripts/anvil-local.sh stop
+
+# 7. Don't forget to revert config/networks/local-anvil.json back to "anvil:8545"
+#    if you want to use Docker mode again
 ```
 
 ### Testnet Mode
@@ -80,8 +114,6 @@ cp tests/integration/config/registry.example.json tests/integration/config/testn
 MODE=testnet ./scripts/run-integration-docker.sh
 ```
 
-See [docs/LOCAL_TESTING.md](../../docs/LOCAL_TESTING.md) for detailed documentation.
-
 ---
 
 ## Prerequisites
@@ -90,8 +122,10 @@ See [docs/LOCAL_TESTING.md](../../docs/LOCAL_TESTING.md) for detailed documentat
 
 - Docker and Docker Compose
 - `.env.integration` file configured
-- `tests/integration/config/config.json` configured (copy from `config.example.json`)
-- `tests/integration/config/registry.json` configured (copy from `registry.example.json`)
+- Config files set up for your mode:
+  - **Local Mode (Anvil)**: `tests/integration/config/local/config.json` and `registry.json`
+  - **Testnet Mode**: `tests/integration/config/testnet/config.json` and `registry.json`
+  - Copy from `config.example.json` and `registry.example.json` as needed
 
 ### Local Testing
 
@@ -123,21 +157,28 @@ The `.env.integration` file is used **only for API keys and secrets**:
 
 ### Test Registry Setup
 
-Create `registry.json` from the example template:
+Create mode-specific `registry.json` from the example template:
 
 ```bash
-cp tests/integration/config/registry.example.json tests/integration/config/registry.json
+# For Local Mode (Anvil with Docker)
+cp tests/integration/config/registry.example.json tests/integration/config/local/registry.json
+
+# For Testnet Mode
+cp tests/integration/config/registry.example.json tests/integration/config/testnet/registry.json
 ```
 
 The example file comes with all networks disabled by default (except `base-sepolia`). Enable the networks you want to test by setting `"enabled": true`.
 
-> **Note:** `registry.json` is gitignored to allow local customization without affecting the repository.
+> **Note:** Mode-specific `registry.json` files (`local/registry.json`, `testnet/registry.json`) are gitignored to allow local customization without affecting the repository.
 
 ### Network Selection
 
-**Network selection is controlled via `tests/integration/config/registry.json`**, not environment variables.
+**Network selection is controlled via mode-specific `registry.json` files**, not environment variables.
 
-To enable or disable networks for testing, edit the `enabled` flag in `tests/integration/config/registry.json`:
+To enable or disable networks for testing, edit the `enabled` flag in the appropriate registry file:
+
+- Local Mode: `tests/integration/config/local/registry.json`
+- Testnet Mode: `tests/integration/config/testnet/registry.json`
 
 ```json
 {
@@ -170,25 +211,40 @@ RUST_LOG=debug cargo test --features integration-tests --test integration -- --n
 
 # Show only warnings and errors
 RUST_LOG=warn cargo test --features integration-tests --test integration
-
-# Show specific module logs
-RUST_LOG=integration::common::context=debug cargo test --features integration-tests --test integration -- --nocapture
 ```
 
 **Note:** Use `--nocapture` flag to see logs in real-time during test execution.
 
 ### Local Signer
 
-The test signer keystore is located at `tests/integration/config/keys/local-signer.json`. This is an Ethereum keystore file encrypted with the `KEYSTORE_PASSPHRASE`.
+Test signer keystores are located in mode-specific directories:
 
-To create a new signer:
+- **Local Mode (Anvil)**: `tests/integration/config/local/keys/anvil-test.json`
+- **Testnet Mode**: `tests/integration/config/testnet/keys/local-signer.json`
+
+These are Ethereum keystore files encrypted with their respective passphrases.
+
+To create a new signer keystore:
 
 ```bash
+# For Local Mode (Anvil) - using cast wallet import
+cast wallet import anvil-test \
+  --private-key YOUR_PRIVATE_KEY \
+  --keystore-dir tests/integration/config/local/keys \
+  --unsafe-password "PASSWORD"
+
+# Rename to .json extension
+mv tests/integration/config/local/keys/anvil-test \
+   tests/integration/config/local/keys/anvil-test.json
+
+# For Testnet Mode - using the recommended key generation tool
 cargo run --example create_key -- \
-  --password "your-passphrase" \
-  --output-dir tests/integration/config/keys \
+  --password "DEFINE_YOUR_PASSWORD" \
+  --output-dir tests/integration/config/testnet/keys \
   --filename local-signer.json
 ```
+
+Then update the `KEYSTORE_PASSPHRASE` field in your `.env.integration` file with the password you used.
 
 ---
 
@@ -235,24 +291,6 @@ To test specific networks, edit `tests/integration/config/registry.json` and set
 }
 ```
 
-### Via Cargo (Local)
-
-Requires Redis and Relayer running locally.
-
-```bash
-# Start Redis
-docker run -d --name redis -p 6379:6379 redis:7-alpine
-
-# Start Relayer (in another terminal)
-cargo run
-
-# Run integration tests
-cargo test --features integration-tests --test integration -- --nocapture
-
-# Run specific test
-cargo test --features integration-tests --test integration test_evm_basic_transfer -- --nocapture
-
-# Note: Network selection is controlled via config/registry.json, not environment variables
 ```
 
 ---
@@ -264,30 +302,32 @@ cargo test --features integration-tests --test integration test_evm_basic_transf
 The integration tests are organized for easy navigation:
 
 ```
+
 tests/integration/
-├── README.md              # This file
-├── tests/                 # ✅ ALL test files go here
-│   ├── mod.rs
-│   ├── authorization.rs   # API authorization tests
-│   └── evm/               # EVM network tests
-│       ├── mod.rs
-│       ├── basic_transfer.rs
-│       └── contract_interaction.rs
-├── common/                # 🔧 Shared utilities and helpers
-│   ├── mod.rs
-│   ├── client.rs          # RelayerClient for API calls
-│   ├── confirmation.rs    # Transaction confirmation helpers
-│   ├── context.rs         # Multi-network test runner
-│   ├── evm_helpers.rs     # EVM-specific utilities
-│   ├── network_selection.rs
-│   └── registry.rs        # Test registry utilities
-├── config/                # ⚙️ Configuration files
-│   ├── config.example.json
-│   └── registry.example.json
-└── contracts/             # 📜 Smart contracts (Foundry)
-    ├── README.md
-    ├── foundry.toml
-    └── src/
+├── README.md # This file
+├── tests/ # ✅ ALL test files go here
+│ ├── mod.rs
+│ ├── authorization.rs # API authorization tests
+│ └── evm/ # EVM network tests
+│ ├── mod.rs
+│ ├── basic_transfer.rs
+│ └── contract_interaction.rs
+├── common/ # 🔧 Shared utilities and helpers
+│ ├── mod.rs
+│ ├── client.rs # RelayerClient for API calls
+│ ├── confirmation.rs # Transaction confirmation helpers
+│ ├── context.rs # Multi-network test runner
+│ ├── evm_helpers.rs # EVM-specific utilities
+│ ├── network_selection.rs
+│ └── registry.rs # Test registry utilities
+├── config/ # ⚙️ Configuration files
+│ ├── config.example.json
+│ └── registry.example.json
+└── contracts/ # 📜 Smart contracts (Foundry)
+├── README.md
+├── foundry.toml
+└── src/
+
 ```
 
 **Key principle:** Look in `tests/` for test files, `common/` for helpers.
@@ -328,18 +368,36 @@ The test registry is a centralized configuration file that stores network-specif
 ### Location
 
 ```
-tests/integration/config/config.json            # Your local relayer config (gitignored)
-tests/integration/config/config.example.json    # Template file (tracked in git)
-tests/integration/config/registry.json          # Your local registry config (gitignored)
-tests/integration/config/registry.example.json  # Template file (tracked in git)
-```
 
-Create your local config files from the examples:
+tests/integration/config/
+├── config.example.json # Template relayer config (tracked in git)
+├── registry.example.json # Template registry config (tracked in git)
+├── local/ # Local Mode (Anvil + Docker) configs
+│ ├── config.json # Relayer config (gitignored)
+│ ├── registry.json # Registry config (gitignored)
+│ └── keys/
+│ └── anvil-test.json # Anvil keystore (gitignored)
+├── local-standalone/ # Standalone Mode config reference
+│ └── config.json # Reference config for copying to main config
+└── testnet/ # Testnet Mode configs
+├── config.json # Relayer config (gitignored)
+├── registry.json # Registry config (gitignored)
+└── keys/
+└── local-signer.json # Testnet keystore (gitignored)
+
+````
+
+Create your mode-specific config files from the examples:
 
 ```bash
-cp tests/integration/config/config.example.json tests/integration/config/config.json
-cp tests/integration/config/registry.example.json tests/integration/config/registry.json
-```
+# For Local Mode (Anvil + Docker)
+cp tests/integration/config/config.example.json tests/integration/config/local/config.json
+cp tests/integration/config/registry.example.json tests/integration/config/local/registry.json
+
+# For Testnet Mode
+cp tests/integration/config/config.example.json tests/integration/config/testnet/config.json
+cp tests/integration/config/registry.example.json tests/integration/config/testnet/registry.json
+````
 
 ### Schema
 
@@ -349,21 +407,12 @@ cp tests/integration/config/registry.example.json tests/integration/config/regis
     "<network-key>": {
       "network_name": "string", // Network identifier used by relayer
       "network_type": "string", // "evm", "solana", or "stellar"
-      "signer": {
-        "id": "string", // Signer ID from config.json
-        "address": "string" // Derived wallet address
-      },
       "contracts": {
         "<contract_name>": "address" // Deployed contract addresses
       },
       "min_balance": "string", // Minimum balance required (in native token)
       "enabled": true // Whether network is active for testing
     }
-  },
-  "_metadata": {
-    "description": "string",
-    "version": "string",
-    "last_updated": "YYYY-MM-DD"
   }
 }
 ```
@@ -376,10 +425,6 @@ cp tests/integration/config/registry.example.json tests/integration/config/regis
     "sepolia": {
       "network_name": "sepolia",
       "network_type": "evm",
-      "signer": {
-        "id": "local-signer",
-        "address": "0x0a427c6ffdc5588f9dc155c4e89ad0c15daa2655"
-      },
       "contracts": {
         "simple_storage": "0x5379E27d181a94550318d4A44124eCd056678879",
         "test_erc20": "0x0000000000000000000000000000000000000000"
@@ -401,7 +446,9 @@ The registry automatically detects placeholders and skips tests requiring those 
 
 ### Adding a New Network
 
-1. Add entry to `tests/integration/config/registry.json`:
+1. Add entry to the appropriate `registry.json` file:
+   - Local Mode: `tests/integration/config/local/registry.json`
+   - Testnet Mode: `tests/integration/config/testnet/registry.json`
 
 ```json
 {
@@ -409,10 +456,6 @@ The registry automatically detects placeholders and skips tests requiring those 
     "arbitrum-sepolia": {
       "network_name": "arbitrum-sepolia",
       "network_type": "evm",
-      "signer": {
-        "id": "local-signer",
-        "address": "0x0a427c6ffdc5588f9dc155c4e89ad0c15daa2655"
-      },
       "contracts": {
         "simple_storage": "0x0000000000000000000000000000000000000000"
       },
@@ -423,13 +466,15 @@ The registry automatically detects placeholders and skips tests requiring those 
 }
 ```
 
-2. Deploy test contracts and update addresses
+2. Add a corresponding relayer entry to your `config.json` file with the appropriate signer configuration
 
-3. Fund the signer wallet on the new network
+3. Deploy test contracts and update addresses in the registry
 
-4. Ensure `"enabled": true` is set for the new network
+4. Fund the signer wallet on the new network
 
-5. Run tests: `./scripts/run-integration-docker.sh`
+5. Ensure `"enabled": true` is set for the new network
+
+6. Run tests: `./scripts/run-integration-docker.sh`
 
 ---
 
