@@ -3,7 +3,7 @@
     {
       "id": "anvil-relayer",
       "name": "Local Anvil Relayer",
-      "network": "localhost",
+      "network": "localhost-integration",
       "paused": false,
       "signer_id": "anvil-signer",
       "network_type": "evm",

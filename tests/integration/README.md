@@ -39,8 +39,8 @@ cp .env.integration.example .env.integration
 # 3. Run tests via Docker
 ./scripts/run-integration-docker.sh
 
-# Note: Docker mode uses "anvil:8545" for RPC URL (Docker service name).
-# The config at tests/integration/config/local/config.json is already set up correctly.
+# Note: Docker mode uses the local-anvil-integration network config with "anvil:8545" RPC URL.
+# The integration test config is already set up correctly.
 ```
 
 ### Standalone Mode (Local Development)
@@ -48,14 +48,7 @@ cp .env.integration.example .env.integration
 For faster iteration with `cargo run` and `cargo test`:
 
 ```bash
-# 1. Configure RPC URL for standalone mode
-# Edit config/networks/local-anvil.json to use localhost instead of Docker service:
-# Change "rpc_urls": ["http://anvil:8545"]
-# To:     "rpc_urls": ["http://localhost:8545"]
-#
-# Note: This is only needed for standalone mode. Docker mode uses "anvil:8545"
-
-# 2. Add Anvil relayer to your config/config.json
+# 1. Add Anvil relayer to your config/config.json
 # You can copy the relayer and signer configuration from:
 # tests/integration/config/local-standalone/config.json
 #
@@ -79,21 +72,23 @@ For faster iteration with `cargo run` and `cargo test`:
 #     "passphrase": { "type": "plain", "value": "test" }
 #   }
 # }
+#
+# Note: Standalone mode uses the "localhost" network which points to http://localhost:8545
+# Docker integration tests use "localhost-integration" which points to http://anvil:8545
 
-# 3. Start Anvil and deploy contracts
+# 2. Start Anvil and deploy contracts
 ./scripts/anvil-local.sh start
 
-# 4. In another terminal, run relayer
+# 3. In another terminal, run relayer
 cargo run
 
-# 5. In another terminal, run tests
+# 4. In another terminal, run tests
+# Tests will automatically discover relayers via the API
+TEST_REGISTRY_PATH=tests/integration/config/local-standalone/registry.json \
 cargo test --features integration-tests --test integration
 
-# 6. When done, stop Anvil
+# 5. When done, stop Anvil
 ./scripts/anvil-local.sh stop
-
-# 7. Don't forget to revert config/networks/local-anvil.json back to "anvil:8545"
-#    if you want to use Docker mode again
 ```
 
 ### Testnet Mode
@@ -123,9 +118,10 @@ MODE=testnet ./scripts/run-integration-docker.sh
 - Docker and Docker Compose
 - `.env.integration` file configured
 - Config files set up for your mode:
-  - **Local Mode (Anvil)**: `tests/integration/config/local/config.json` and `registry.json`
-  - **Testnet Mode**: `tests/integration/config/testnet/config.json` and `registry.json`
+  - **Local Mode (Anvil)**: `tests/integration/config/local/config.json` (to start relayer) and `registry.json` (for test metadata)
+  - **Testnet Mode**: `tests/integration/config/testnet/config.json` (to start relayer) and `registry.json` (for test metadata)
   - Copy from `config.example.json` and `registry.example.json` as needed
+  - **Note**: Tests discover relayers via the API, not config files
 
 ### Local Testing
 
@@ -170,6 +166,18 @@ cp tests/integration/config/registry.example.json tests/integration/config/testn
 The example file comes with all networks disabled by default (except `base-sepolia`). Enable the networks you want to test by setting `"enabled": true`.
 
 > **Note:** Mode-specific `registry.json` files (`local/registry.json`, `testnet/registry.json`) are gitignored to allow local customization without affecting the repository.
+
+### Relayer Discovery
+
+**Tests automatically discover relayers by querying the running relayer's API** (`GET /api/v1/relayers`).
+
+- **Single source of truth**: Tests discover what's actually running, not what's in config files
+- **No duplication**: Eliminates the need for separate test-specific config files
+- **Works everywhere**: Docker and standalone modes work identically
+- The relayer must be running before tests start
+- Tests filter relayers by network name and paused status
+
+The `config.json` file is only used to **start the relayer service**, not by the tests themselves.
 
 ### Network Selection
 
@@ -373,15 +381,15 @@ tests/integration/config/
 ├── config.example.json # Template relayer config (tracked in git)
 ├── registry.example.json # Template registry config (tracked in git)
 ├── local/ # Local Mode (Anvil + Docker) configs
-│ ├── config.json # Relayer config (gitignored)
-│ ├── registry.json # Registry config (gitignored)
+│ ├── config.json # Relayer config for starting service (gitignored)
+│ ├── registry.json # Network metadata for tests (gitignored)
 │ └── keys/
 │ └── anvil-test.json # Anvil keystore (gitignored)
-├── local-standalone/ # Standalone Mode config reference
-│ └── config.json # Reference config for copying to main config
+├── local-standalone/ # Standalone Mode - registry only
+│ └── registry.json # Network metadata for standalone tests (gitignored)
 └── testnet/ # Testnet Mode configs
-├── config.json # Relayer config (gitignored)
-├── registry.json # Registry config (gitignored)
+├── config.json # Relayer config for starting service (gitignored)
+├── registry.json # Network metadata for tests (gitignored)
 └── keys/
 └── local-signer.json # Testnet keystore (gitignored)
 
