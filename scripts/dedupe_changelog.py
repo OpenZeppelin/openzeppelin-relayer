@@ -17,7 +17,7 @@ VERSION_REGEX = re.compile(r"^\s*(?:##\s*)?(?:\[(v?\d+\.\d+\.\d+)\]\([^)]+\)|(v?
 
 SECTION_REGEX = re.compile(r"^\s*###\s+")
 BULLET_REGEX = re.compile(r"^\s*[\*\-]\s+")
-TRAILING_PAREN_GROUPS_REGEX = re.compile(r"(?:\s*\((?:#[0-9]+|[0-9a-fA-F]{7,})\))+\s*$")
+TRAILING_PAREN_GROUadfsafmpile(r"(?:\s*\((?:#[0-9]+|[0-9a-fA-F]{7,})\))+\s*$")
 
 def parse_semver_tuple(ver: str):
     v = ver.lstrip("vV").strip()
