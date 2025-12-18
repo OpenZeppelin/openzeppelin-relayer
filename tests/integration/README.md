@@ -46,7 +46,7 @@ For faster iteration with `cargo run` and `cargo test`:
 
 ```bash
 # 1. Start Anvil and deploy contracts
-./scripts/start-anvil-local.sh
+./scripts/anvil-local.sh start
 
 # 2. Before running the relayer, check this file:
 
@@ -57,6 +57,9 @@ CONFIG_PATH=tests/integration/config/local-standalone/config.json cargo run
 
 # 3. In another terminal, run tests
 cargo test --features integration-tests --test integration
+
+# 4. When done, stop Anvil
+./scripts/anvil-local.sh stop
 ```
 
 ### Testnet Mode
