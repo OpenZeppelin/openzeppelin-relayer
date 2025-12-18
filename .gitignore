@@ -54,7 +54,6 @@ logs/
 # env
 .env
 .env.integration
-.env.integration
 
 # Ignore node_modules
 node_modules
@@ -64,8 +63,6 @@ node_modules
 # Exclude generated OpenAPI files from the docs directory
 !./openapi.json
 
-# Integration test artifacts
-test-results/
 # Integration test artifacts
 test-results/
 **/*lcov.info
