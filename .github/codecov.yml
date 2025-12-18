@@ -1,7 +1,7 @@
 ---
 codecov:
   notify:
-    after_n_builds: 4  # Wait for all 4 flag uploads (properties, unittests, ai, dev)
+    after_n_builds: 3  # Wait for all 3 flag uploads (ai, dev, properties)
     wait_for_ci: true  # Wait for CI to complete before sending status
 coverage:
   precision: 2
@@ -13,8 +13,9 @@ coverage:
         target: 85%
         threshold: 2%
         flags:
+          - ai
+          - dev
           - properties
-          - unittests
     patch:
       default:
         target: auto
