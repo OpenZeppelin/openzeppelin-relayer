@@ -540,7 +540,7 @@ Error: Transaction confirmation timeout
 ./scripts/run-integration-docker.sh logs
 
 # Specific service
-docker-compose -f docker-compose.integration.yml logs relayer
+docker-compose -f docker-compose.integration.yml logs integration-relayer
 docker-compose -f docker-compose.integration.yml logs integration-tests
 ```
 
@@ -568,29 +568,3 @@ If tests leave behind resources:
 # Or manually
 docker-compose -f docker-compose.integration.yml down -v --remove-orphans
 ```
-
----
-
-## CI Integration
-
-The integration tests run automatically in CI using the network configuration from `tests/integration/config/registry.json`.
-
-Control which networks run in CI by setting their `enabled` flags in `tests/integration/config/registry.json`:
-
-```json
-{
-  "networks": {
-    "base-sepolia": {
-      "enabled": true // ✅ Runs in CI
-    },
-    "sepolia": {
-      "enabled": false // ❌ Skipped in CI
-    }
-  }
-}
-```
-
-The test script returns appropriate exit codes:
-
-- `0` - All tests passed
-- `1` - Tests failed or configuration error
