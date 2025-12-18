@@ -19,17 +19,10 @@ WORKDIR /app
 # Copy manifests
 COPY Cargo.toml Cargo.lock ./
 
-# Create dummy source to cache dependencies
-RUN mkdir -p src/bin tests/integration && \
-    echo "fn main() {}" > src/bin/dummy.rs && \
-    echo "#[test] fn dummy() {}" > tests/integration.rs
-
-# Build dependencies (this layer will be cached)
+# Fetch dependencies (this layer will be cached)
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/app/target \
-    cargo build --features integration-tests --test integration --release 2>/dev/null || true && \
-    rm -rf src tests
+    cargo fetch --locked
 
 # Copy actual source
 COPY src ./src
