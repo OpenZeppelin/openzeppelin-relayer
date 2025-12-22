@@ -3,8 +3,10 @@ services:
   redis:
     image: redis:7-alpine
     container_name: integration-redis
-    ports:
-      - 6379:6379
+    command:
+      - redis-server
+      - --protected-mode
+      - 'yes'
     networks:
       - integration
     healthcheck:
