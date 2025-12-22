@@ -24,7 +24,7 @@ Uses local Anvil node - no testnet funds needed!
 
 ```bash
 # 1. One-time setup: Create Anvil keystore
-# Replace PK with one of Anvil's pre-funded account private keys.
+# Replace ANVIL_PRIVATE_KEY with one of Anvil's pre-funded account private keys.
 # Anvil starts with 10 funded test accounts. Example (Account 0):
 # Run `anvil` to see all available accounts and their private keys.
 cast wallet import anvil-test \
@@ -239,7 +239,7 @@ To create a new signer keystore:
 
 ```bash
 # For Local Mode (Anvil) - using cast wallet import
-# Replace PK with one of Anvil's pre-funded account private keys.
+# Replace ANVIL_PRIVATE_KEY with one of Anvil's pre-funded account private keys.
 # Anvil starts with 10 funded test accounts. Example (Account 0):
 # Run `anvil` to see all available accounts and their private keys.
 cast wallet import anvil-test \
