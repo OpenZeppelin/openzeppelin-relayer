@@ -15,7 +15,7 @@ use std::{
 use tracing::info;
 use tracing_appender::non_blocking;
 use tracing_error::ErrorLayer;
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
 
 use crate::constants::{
     DEFAULT_LOG_DIR, DEFAULT_LOG_FORMAT, DEFAULT_LOG_LEVEL, DEFAULT_LOG_MODE,
@@ -64,6 +64,50 @@ pub fn space_based_rolling(
     final_path
 }
 
+/// Converts a log level string to a LevelFilter.
+/// Falls back to INFO if the level string is invalid.
+fn parse_level_filter(level: &str) -> LevelFilter {
+    match level.to_lowercase().as_str() {
+        "trace" => LevelFilter::TRACE,
+        "debug" => LevelFilter::DEBUG,
+        "info" => LevelFilter::INFO,
+        "warn" => LevelFilter::WARN,
+        "error" => LevelFilter::ERROR,
+        "off" => LevelFilter::OFF,
+        _ => {
+            tracing::warn!("Invalid log level '{level}', falling back to INFO");
+            LevelFilter::INFO
+        }
+    }
+}
+
+/// Builds filter directives string by combining user configuration with default suppressions
+/// for noisy crates. Only adds suppressions for crates not explicitly configured by the user.
+fn build_filter_directives() -> String {
+    const NOISY_CRATES: &[&str] = &[
+        "reqwest",
+        "hyper",
+        "rustls",
+        "h2",
+        "alloy_transport_http",
+        "aws_sdk_kms",
+        "solana_client",
+        "solana_program",
+    ];
+
+    let rust_log = env::var("RUST_LOG").unwrap_or_else(|_| DEFAULT_LOG_LEVEL.to_string());
+
+    let suppressions: Vec<String> = NOISY_CRATES
+        .iter()
+        .filter(|&crate_name| !rust_log.contains(crate_name))
+        .map(|name| format!("{name}=warn"))
+        .collect();
+
+    let mut directives = suppressions;
+    directives.push(rust_log);
+    directives.join(",")
+}
+
 /// Sets up logging by reading configuration from environment variables.
 pub fn setup_logging() {
     // Set RUST_LOG from LOG_LEVEL if RUST_LOG is not already set
@@ -75,66 +119,11 @@ pub fn setup_logging() {
 
     // Configure filter, format, and mode from environment
     // Suppress noisy HTTP/TLS debug logs by default unless explicitly configured
-    let env_filter = match EnvFilter::try_from_default_env() {
-        Ok(mut filter) => {
-            // Check if these crates are already explicitly configured in RUST_LOG
-            let rust_log = std::env::var("RUST_LOG").unwrap_or_default();
+    let default_level = parse_level_filter(DEFAULT_LOG_LEVEL);
+    let env_filter = EnvFilter::builder()
+        .with_default_directive(default_level.into())
+        .parse_lossy(build_filter_directives());
 
-            // Suppress reqwest and its dependencies
-            if !rust_log.contains("reqwest") {
-                if let Ok(directive) = "reqwest=warn".parse() {
-                    filter = filter.add_directive(directive);
-                }
-            }
-            if !rust_log.contains("hyper") {
-                if let Ok(directive) = "hyper=warn".parse() {
-                    filter = filter.add_directive(directive);
-                }
-            }
-            if !rust_log.contains("rustls") {
-                if let Ok(directive) = "rustls=warn".parse() {
-                    filter = filter.add_directive(directive);
-                }
-            }
-            if !rust_log.contains("h2") {
-                if let Ok(directive) = "h2=warn".parse() {
-                    filter = filter.add_directive(directive);
-                }
-            }
-            // Suppress alloy transport logs (ReqwestTransport)
-            if !rust_log.contains("alloy") {
-                if let Ok(directive) = "alloy_transport_http=warn".parse() {
-                    filter = filter.add_directive(directive);
-                }
-            }
-            // Suppress AWS SDK logs
-            if !rust_log.contains("aws_sdk_kms") {
-                if let Ok(directive) = "aws_sdk_kms=warn".parse() {
-                    filter = filter.add_directive(directive);
-                }
-            }
-            // Suppress Solana client logs
-            if !rust_log.contains("solana_client") {
-                if let Ok(directive) = "solana_client=warn".parse() {
-                    filter = filter.add_directive(directive);
-                }
-            }
-            // Suppress Solana program logs
-            if !rust_log.contains("solana_program") {
-                if let Ok(directive) = "solana_program=warn".parse() {
-                    filter = filter.add_directive(directive);
-                }
-            }
-            filter
-        }
-        Err(_) => {
-            // If RUST_LOG is not set, create filter with default level and suppress noisy debug logs
-            let filter_str = format!(
-                "{DEFAULT_LOG_LEVEL},reqwest=warn,hyper=warn,rustls=warn,h2=warn,alloy_transport_http=warn,aws_sdk_kms=warn,solana_client=warn,solana_program=warn"
-            );
-            EnvFilter::try_new(&filter_str).unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_LEVEL))
-        }
-    };
     let format = env::var("LOG_FORMAT").unwrap_or_else(|_| DEFAULT_LOG_FORMAT.to_string());
     let log_mode = env::var("LOG_MODE").unwrap_or_else(|_| DEFAULT_LOG_MODE.to_string());
 
@@ -471,11 +460,10 @@ mod tests {
         env::remove_var("RUST_LOG");
 
         // Create the filter that would be used by setup_logging
-        let filter_str = format!(
-            "{},reqwest=warn,hyper=warn,rustls=warn,h2=warn,alloy_transport_http=warn,aws_sdk_kms=warn,solana_client=warn,solana_program=warn",
-            DEFAULT_LOG_LEVEL
-        );
-        let filter = EnvFilter::try_new(&filter_str).expect("Failed to create filter");
+        let default_level = parse_level_filter(DEFAULT_LOG_LEVEL);
+        let filter = EnvFilter::builder()
+            .with_default_directive(default_level.into())
+            .parse_lossy(build_filter_directives());
 
         // Create test subscriber and capture buffer
         let (_subscriber_guard, buffer) = test_helpers::create_test_subscriber(filter);
@@ -538,34 +526,10 @@ mod tests {
         env::set_var("RUST_LOG", "info");
 
         // Create filter using the same logic as setup_logging
-        let mut filter = EnvFilter::try_from_default_env().expect("Failed to create filter");
-
-        // Add HTTP/TLS suppressions (as setup_logging does)
-        let rust_log = env::var("RUST_LOG").unwrap();
-        if !rust_log.contains("reqwest") {
-            filter = filter.add_directive("reqwest=warn".parse().unwrap());
-        }
-        if !rust_log.contains("hyper") {
-            filter = filter.add_directive("hyper=warn".parse().unwrap());
-        }
-        if !rust_log.contains("rustls") {
-            filter = filter.add_directive("rustls=warn".parse().unwrap());
-        }
-        if !rust_log.contains("h2") {
-            filter = filter.add_directive("h2=warn".parse().unwrap());
-        }
-        if !rust_log.contains("alloy") {
-            filter = filter.add_directive("alloy_transport_http=warn".parse().unwrap());
-        }
-        if !rust_log.contains("aws_sdk_kms") {
-            filter = filter.add_directive("aws_sdk_kms=warn".parse().unwrap());
-        }
-        if !rust_log.contains("solana_client") {
-            filter = filter.add_directive("solana_client=warn".parse().unwrap());
-        }
-        if !rust_log.contains("solana_program") {
-            filter = filter.add_directive("solana_program=warn".parse().unwrap());
-        }
+        let default_level = parse_level_filter(DEFAULT_LOG_LEVEL);
+        let filter = EnvFilter::builder()
+            .with_default_directive(default_level.into())
+            .parse_lossy(build_filter_directives());
 
         // Create test subscriber and capture buffer
         let (_subscriber_guard, buffer) = test_helpers::create_test_subscriber(filter);
@@ -621,29 +585,10 @@ mod tests {
         env::set_var("RUST_LOG", "info,reqwest=debug");
 
         // Create filter using the same logic as setup_logging
-        let mut filter = EnvFilter::try_from_default_env().expect("Failed to create filter");
-
-        // Simulate setup_logging logic: check if reqwest is already configured
-        let rust_log = env::var("RUST_LOG").unwrap();
-
-        // Should NOT add reqwest=warn since user configured it
-        if !rust_log.contains("reqwest") {
-            filter = filter.add_directive("reqwest=warn".parse().unwrap());
-        }
-
-        // Add other suppressions (user didn't configure these)
-        if !rust_log.contains("hyper") {
-            filter = filter.add_directive("hyper=warn".parse().unwrap());
-        }
-        if !rust_log.contains("rustls") {
-            filter = filter.add_directive("rustls=warn".parse().unwrap());
-        }
-        if !rust_log.contains("h2") {
-            filter = filter.add_directive("h2=warn".parse().unwrap());
-        }
-        if !rust_log.contains("alloy") {
-            filter = filter.add_directive("alloy_transport_http=warn".parse().unwrap());
-        }
+        let default_level = parse_level_filter(DEFAULT_LOG_LEVEL);
+        let filter = EnvFilter::builder()
+            .with_default_directive(default_level.into())
+            .parse_lossy(build_filter_directives());
 
         // Create test subscriber and capture buffer
         let (_subscriber_guard, buffer) = test_helpers::create_test_subscriber(filter);
@@ -690,28 +635,11 @@ mod tests {
         // Set RUST_LOG with user wanting to see ALL hyper logs (even trace level)
         env::set_var("RUST_LOG", "info,hyper=trace");
 
-        // Create filter
-        let mut filter = EnvFilter::try_from_default_env().expect("Failed to create filter");
-
-        // Apply suppressions conditionally (simulating setup_logging logic)
-        let rust_log = env::var("RUST_LOG").unwrap();
-
-        if !rust_log.contains("reqwest") {
-            filter = filter.add_directive("reqwest=warn".parse().unwrap());
-        }
-        if !rust_log.contains("hyper") {
-            // This should NOT execute since hyper is in RUST_LOG
-            filter = filter.add_directive("hyper=warn".parse().unwrap());
-        }
-        if !rust_log.contains("rustls") {
-            filter = filter.add_directive("rustls=warn".parse().unwrap());
-        }
-        if !rust_log.contains("h2") {
-            filter = filter.add_directive("h2=warn".parse().unwrap());
-        }
-        if !rust_log.contains("alloy") {
-            filter = filter.add_directive("alloy_transport_http=warn".parse().unwrap());
-        }
+        // Create filter using the same logic as setup_logging
+        let default_level = parse_level_filter(DEFAULT_LOG_LEVEL);
+        let filter = EnvFilter::builder()
+            .with_default_directive(default_level.into())
+            .parse_lossy(build_filter_directives());
 
         // Create test subscriber and capture buffer
         let (_subscriber_guard, buffer) = test_helpers::create_test_subscriber(filter);
@@ -768,27 +696,11 @@ mod tests {
         // User configures some crates explicitly, others should get defaults
         env::set_var("RUST_LOG", "debug,reqwest=error,rustls=info");
 
-        // Create filter
-        let mut filter = EnvFilter::try_from_default_env().expect("Failed to create filter");
-
-        // Apply suppressions conditionally (simulating setup_logging logic)
-        let rust_log = env::var("RUST_LOG").unwrap();
-
-        if !rust_log.contains("reqwest") {
-            filter = filter.add_directive("reqwest=warn".parse().unwrap());
-        }
-        if !rust_log.contains("hyper") {
-            filter = filter.add_directive("hyper=warn".parse().unwrap());
-        }
-        if !rust_log.contains("rustls") {
-            filter = filter.add_directive("rustls=warn".parse().unwrap());
-        }
-        if !rust_log.contains("h2") {
-            filter = filter.add_directive("h2=warn".parse().unwrap());
-        }
-        if !rust_log.contains("alloy") {
-            filter = filter.add_directive("alloy_transport_http=warn".parse().unwrap());
-        }
+        // Create filter using the same logic as setup_logging
+        let default_level = parse_level_filter(DEFAULT_LOG_LEVEL);
+        let filter = EnvFilter::builder()
+            .with_default_directive(default_level.into())
+            .parse_lossy(build_filter_directives());
 
         // Create test subscriber and capture buffer
         let (_subscriber_guard, buffer) = test_helpers::create_test_subscriber(filter);
@@ -885,5 +797,201 @@ mod tests {
         assert!("solana_program=warn"
             .parse::<tracing_subscriber::filter::Directive>()
             .is_ok());
+    }
+
+    #[test]
+    fn test_parse_level_filter() {
+        // Test all valid log levels
+        assert_eq!(parse_level_filter("trace"), LevelFilter::TRACE);
+        assert_eq!(parse_level_filter("debug"), LevelFilter::DEBUG);
+        assert_eq!(parse_level_filter("info"), LevelFilter::INFO);
+        assert_eq!(parse_level_filter("warn"), LevelFilter::WARN);
+        assert_eq!(parse_level_filter("error"), LevelFilter::ERROR);
+        assert_eq!(parse_level_filter("off"), LevelFilter::OFF);
+
+        // Test case insensitivity
+        assert_eq!(parse_level_filter("TRACE"), LevelFilter::TRACE);
+        assert_eq!(parse_level_filter("Debug"), LevelFilter::DEBUG);
+        assert_eq!(parse_level_filter("INFO"), LevelFilter::INFO);
+        assert_eq!(parse_level_filter("WaRn"), LevelFilter::WARN);
+
+        // Test invalid levels fall back to INFO
+        assert_eq!(parse_level_filter("invalid"), LevelFilter::INFO);
+        assert_eq!(parse_level_filter(""), LevelFilter::INFO);
+        assert_eq!(parse_level_filter("warning"), LevelFilter::INFO);
+    }
+
+    #[test]
+    fn test_build_filter_directives_no_rust_log() {
+        // Lock mutex to prevent test interference
+        let _guard = ENV_MUTEX.lock().unwrap();
+
+        // Save original RUST_LOG
+        let original_rust_log = env::var("RUST_LOG").ok();
+
+        // Remove RUST_LOG to test default behavior
+        env::remove_var("RUST_LOG");
+
+        let result = build_filter_directives();
+
+        // Should contain all noisy crate suppressions
+        assert!(result.contains("reqwest=warn"));
+        assert!(result.contains("hyper=warn"));
+        assert!(result.contains("rustls=warn"));
+        assert!(result.contains("h2=warn"));
+        assert!(result.contains("alloy_transport_http=warn"));
+        assert!(result.contains("aws_sdk_kms=warn"));
+        assert!(result.contains("solana_client=warn"));
+        assert!(result.contains("solana_program=warn"));
+
+        // Should end with the default level
+        assert!(result.ends_with(DEFAULT_LOG_LEVEL));
+
+        // Restore original RUST_LOG
+        env::remove_var("RUST_LOG");
+        if let Some(val) = original_rust_log {
+            env::set_var("RUST_LOG", val);
+        }
+    }
+
+    #[test]
+    fn test_build_filter_directives_with_rust_log() {
+        // Lock mutex to prevent test interference
+        let _guard = ENV_MUTEX.lock().unwrap();
+
+        // Save original RUST_LOG
+        let original_rust_log = env::var("RUST_LOG").ok();
+
+        // Set RUST_LOG to a custom value
+        env::set_var("RUST_LOG", "debug");
+
+        let result = build_filter_directives();
+
+        // Should contain all noisy crate suppressions
+        assert!(result.contains("reqwest=warn"));
+        assert!(result.contains("hyper=warn"));
+
+        // Should end with the user's RUST_LOG value
+        assert!(result.ends_with("debug"));
+
+        // Restore original RUST_LOG
+        env::remove_var("RUST_LOG");
+        if let Some(val) = original_rust_log {
+            env::set_var("RUST_LOG", val);
+        }
+    }
+
+    #[test]
+    fn test_build_filter_directives_respects_user_overrides() {
+        // Lock mutex to prevent test interference
+        let _guard = ENV_MUTEX.lock().unwrap();
+
+        // Save original RUST_LOG
+        let original_rust_log = env::var("RUST_LOG").ok();
+
+        // Set RUST_LOG with explicit reqwest configuration
+        env::set_var("RUST_LOG", "info,reqwest=debug");
+
+        let result = build_filter_directives();
+
+        // Should NOT contain reqwest=warn since user configured it
+        assert!(
+            !result.contains("reqwest=warn"),
+            "Should not add reqwest=warn when user configured reqwest. Result: {}",
+            result
+        );
+
+        // Should still contain other suppressions
+        assert!(result.contains("hyper=warn"));
+        assert!(result.contains("rustls=warn"));
+
+        // Should contain the user's RUST_LOG value
+        assert!(result.contains("info,reqwest=debug"));
+
+        // Restore original RUST_LOG
+        env::remove_var("RUST_LOG");
+        if let Some(val) = original_rust_log {
+            env::set_var("RUST_LOG", val);
+        }
+    }
+
+    #[test]
+    fn test_build_filter_directives_multiple_user_overrides() {
+        // Lock mutex to prevent test interference
+        let _guard = ENV_MUTEX.lock().unwrap();
+
+        // Save original RUST_LOG
+        let original_rust_log = env::var("RUST_LOG").ok();
+
+        // Set RUST_LOG with multiple explicit configurations
+        env::set_var("RUST_LOG", "debug,reqwest=error,hyper=trace,rustls=info");
+
+        let result = build_filter_directives();
+
+        // Should NOT contain suppressions for user-configured crates
+        assert!(
+            !result.contains("reqwest=warn"),
+            "Should not add reqwest=warn when user configured it"
+        );
+        assert!(
+            !result.contains("hyper=warn"),
+            "Should not add hyper=warn when user configured it"
+        );
+        assert!(
+            !result.contains("rustls=warn"),
+            "Should not add rustls=warn when user configured it"
+        );
+
+        // Should still contain suppressions for non-configured crates
+        assert!(result.contains("h2=warn"));
+        assert!(result.contains("alloy_transport_http=warn"));
+        assert!(result.contains("aws_sdk_kms=warn"));
+        assert!(result.contains("solana_client=warn"));
+        assert!(result.contains("solana_program=warn"));
+
+        // Should contain the user's RUST_LOG value
+        assert!(result.contains("debug,reqwest=error,hyper=trace,rustls=info"));
+
+        // Restore original RUST_LOG
+        env::remove_var("RUST_LOG");
+        if let Some(val) = original_rust_log {
+            env::set_var("RUST_LOG", val);
+        }
+    }
+
+    #[test]
+    fn test_build_filter_directives_format() {
+        // Lock mutex to prevent test interference
+        let _guard = ENV_MUTEX.lock().unwrap();
+
+        // Save original RUST_LOG
+        let original_rust_log = env::var("RUST_LOG").ok();
+
+        // Remove RUST_LOG
+        env::remove_var("RUST_LOG");
+
+        let result = build_filter_directives();
+
+        // Should be a valid comma-separated list
+        let parts: Vec<&str> = result.split(',').collect();
+        assert!(
+            parts.len() >= 8,
+            "Should have at least 8 parts (suppressions)"
+        );
+
+        // Should not have empty parts
+        for part in &parts {
+            assert!(!part.is_empty(), "Should not have empty parts");
+        }
+
+        // Should not start or end with comma
+        assert!(!result.starts_with(','));
+        assert!(!result.ends_with(','));
+
+        // Restore original RUST_LOG
+        env::remove_var("RUST_LOG");
+        if let Some(val) = original_rust_log {
+            env::set_var("RUST_LOG", val);
+        }
     }
 }
