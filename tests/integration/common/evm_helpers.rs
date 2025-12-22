@@ -1,20 +1,17 @@
 //! Helper functions for EVM network tests
 
-use super::{
-    client::RelayerClient,
-    registry::{RelayerInfo, TestRegistry},
-};
+use super::{client::RelayerClient, registry::TestRegistry};
 use eyre::Result;
 use openzeppelin_relayer::models::relayer::RelayerResponse;
 use tracing::{info, warn};
 
 /// Get the pre-configured relayer for testing
 ///
-/// Uses the relayer information from config.json discovered by RelayerDiscovery.
+/// Uses the relayer information from the API discovered by RelayerDiscovery.
 /// This avoids creating relayers programmatically since they're already configured.
 pub async fn setup_test_relayer(
     client: &RelayerClient,
-    relayer_info: &RelayerInfo,
+    relayer_info: &RelayerResponse,
 ) -> Result<RelayerResponse> {
     let relayer = client.get_relayer(&relayer_info.id).await?;
 
@@ -61,11 +58,11 @@ pub async fn setup_test_relayer(
 /// Verify network readiness for testing
 ///
 /// Checks that the network is enabled and has required contracts deployed.
-/// Signer validation is handled via RelayerDiscovery from config.json.
+/// Signer validation is handled via RelayerDiscovery from the API.
 pub fn verify_network_ready(
     registry: &TestRegistry,
     network: &str,
-    _relayer_info: &RelayerInfo,
+    _relayer_info: &RelayerResponse,
 ) -> Result<()> {
     let network_config = registry.get_network(network)?;
 

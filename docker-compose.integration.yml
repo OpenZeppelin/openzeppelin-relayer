@@ -18,6 +18,33 @@ services:
       timeout: 2s
       retries: 5
       start_period: 5s
+  anvil:
+    profiles:
+      - local
+    image: ghcr.io/foundry-rs/foundry:stable
+    container_name: integration-anvil
+    entrypoint: ''
+    command:
+      - sh
+      - -c
+      - anvil --host 0.0.0.0 --chain-id 31337 --block-time 1
+    ports:
+      - 0.0.0.0:8545:8545
+    networks:
+      - integration
+    volumes:
+      - ./tests/integration/contracts:/contracts:ro
+    healthcheck:
+      test:
+        - CMD
+        - cast
+        - client
+        - --rpc-url
+        - http://localhost:8545
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 3s
   relayer:
     build:
       context: .
@@ -26,6 +53,9 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      anvil:
+        condition: service_healthy
+        required: false  # Only when local profile is active, but we handle startup order in script
     ports:
       - 8080:8080
     networks:
@@ -39,7 +69,7 @@ services:
       # This filters out verbose OpenTelemetry traces
       - RUST_LOG=warn,openzeppelin_relayer=warn,actix_web=warn,tracing_actix_web=error
     volumes:
-      - ./tests/integration/config:/app/config:ro
+      - ${CONFIG_SOURCE:-./tests/integration/config/local}:/app/config:ro
       - ./config/networks:/app/networks:ro
     healthcheck:
       test:
@@ -68,6 +98,8 @@ services:
       # Test logging configuration
       # Default to INFO level for clean output, can be overridden with RUST_LOG
       - RUST_LOG=${RUST_LOG:-info}
+      # Test registry path (tests discover relayers via API)
+      - TEST_REGISTRY_PATH=${TEST_REGISTRY_PATH:-tests/integration/config/registry.json}
     volumes:
       - ./tests/integration/config:/app/config:ro
       - ./config/networks:/app/networks:ro

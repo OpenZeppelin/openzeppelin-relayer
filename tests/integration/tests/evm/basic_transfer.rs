@@ -5,8 +5,9 @@ use crate::integration::common::{
     confirmation::{wait_for_receipt, ReceiptConfig},
     context::{is_evm_network, run_multi_network_test},
     evm_helpers::{setup_test_relayer, verify_network_ready},
-    registry::{RelayerInfo, TestRegistry},
+    registry::TestRegistry,
 };
+use openzeppelin_relayer::models::relayer::RelayerResponse;
 use serial_test::serial;
 use tracing::{debug, info, info_span};
 
@@ -16,7 +17,10 @@ const BURN_ADDRESS: &str = "0x000000000000000000000000000000000000dEaD";
 /// Test value for transfers (0.000001 ETH in wei)
 const TRANSFER_VALUE: &str = "1000000000000";
 
-async fn run_basic_transfer_test(network: String, relayer_info: RelayerInfo) -> eyre::Result<()> {
+async fn run_basic_transfer_test(
+    network: String,
+    relayer_info: RelayerResponse,
+) -> eyre::Result<()> {
     let _span =
         info_span!("basic_transfer", network = %network, relayer = %relayer_info.id).entered();
     info!("Starting basic transfer test");

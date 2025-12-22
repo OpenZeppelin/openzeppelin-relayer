@@ -5,8 +5,9 @@ use crate::integration::common::{
     confirmation::{wait_for_receipt, ReceiptConfig},
     context::{evm_with_contract, run_multi_network_test},
     evm_helpers::{setup_test_relayer, verify_network_ready},
-    registry::{RelayerInfo, TestRegistry},
+    registry::TestRegistry,
 };
+use openzeppelin_relayer::models::relayer::RelayerResponse;
 use serial_test::serial;
 use tracing::{debug, error, info, info_span};
 
@@ -22,7 +23,7 @@ fn encode_set_number_call(value: u64) -> String {
 
 async fn run_contract_interaction_test(
     network: String,
-    relayer_info: RelayerInfo,
+    relayer_info: RelayerResponse,
 ) -> eyre::Result<()> {
     let _span = info_span!("contract_interaction", network = %network, relayer = %relayer_info.id)
         .entered();

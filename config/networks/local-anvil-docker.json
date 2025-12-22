@@ -1,0 +1,16 @@
+{
+  "networks": [
+    {
+      "type": "evm",
+      "network": "localhost-anvil-docker",
+      "chain_id": 31337,
+      "required_confirmations": 1,
+      "symbol": "ETH",
+      "rpc_urls": ["http://anvil:8545"],
+      "explorer_urls": [],
+      "average_blocktime_ms": 1000,
+      "is_testnet": true,
+      "features": ["eip1559"]
+    }
+  ]
+}
