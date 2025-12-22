@@ -294,6 +294,7 @@ mod tests {
             simulation_transaction_data: None,
             transaction_input: TransactionInput::Operations(create_test_operations()),
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         }
     }
 
@@ -328,6 +329,7 @@ mod tests {
             simulation_transaction_data: None,
             transaction_input: TransactionInput::UnsignedXdr(xdr_string),
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         }
     }
 
