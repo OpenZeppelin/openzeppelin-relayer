@@ -273,7 +273,6 @@ mod tests {
     use chrono::Duration;
     use mockall::predicate::eq;
     use soroban_rs::stellar_rpc_client::GetTransactionResponse;
-    use soroban_rs::xdr::ReadXdr;
 
     use crate::domain::transaction::stellar::test_helpers::*;
 
