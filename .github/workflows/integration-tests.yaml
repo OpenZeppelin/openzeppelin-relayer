@@ -42,6 +42,7 @@ jobs:
           AWS_KMS_REGION: ${{ vars.AWS_REGION_KMS_KEY }}
           AWS_KMS_KEY_ID: ${{ secrets.TESTNET_AWS_KMS_KEY_ID }}
         run: |
+          mkdir -p tests/integration/config/testnet
           echo '${{ vars.INTEGRATION_CONFIG_JSON }}' | envsubst > tests/integration/config/testnet/config.json
           echo '${{ vars.INTEGRATION_REGISTRY_JSON }}' > tests/integration/config/testnet/registry.json
       - name: Run Integration Tests
