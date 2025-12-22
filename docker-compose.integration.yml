@@ -1,0 +1,81 @@
+---
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: integration-redis
+    ports:
+      - 6379:6379
+    networks:
+      - integration
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 3s
+      timeout: 2s
+      retries: 5
+      start_period: 5s
+  relayer:
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+    container_name: integration-relayer
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - 8080:8080
+    networks:
+      - integration
+    env_file:
+      - .env.integration
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - IN_DOCKER=true
+      # Reduce log verbosity during tests - only show WARN and ERROR
+      # This filters out verbose OpenTelemetry traces
+      - RUST_LOG=warn,openzeppelin_relayer=warn,actix_web=warn,tracing_actix_web=error
+    volumes:
+      - ./tests/integration/config:/app/config:ro
+      - ./config/networks:/app/networks:ro
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get({hostname:'localhost',port:8080,path:'/api/v1/health',headers:{'Authorization':'Bearer '+process.env.API_KEY}}, r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 15
+      start_period: 10s
+  integration-tests:
+    build:
+      context: .
+      dockerfile: Dockerfile.integration
+    container_name: integration-tests
+    depends_on:
+      relayer:
+        condition: service_healthy
+    networks:
+      - integration
+    env_file:
+      - .env.integration
+    environment:
+      - RELAYER_BASE_URL=http://relayer:8080
+      # Test logging configuration
+      # Default to INFO level for clean output, can be overridden with RUST_LOG
+      - RUST_LOG=${RUST_LOG:-info}
+    volumes:
+      - ./tests/integration/config:/app/config:ro
+      - ./config/networks:/app/networks:ro
+      # Optional: mount test results output
+      - ./test-results:/app/test-results
+    # Uses the pre-built binary from Dockerfile.integration
+    # The binary runs with --ignored --nocapture --test-threads=1 by default
+networks:
+  integration:
+    driver: bridge
+    name: openzeppelin-integration
+volumes:
+  test-results:

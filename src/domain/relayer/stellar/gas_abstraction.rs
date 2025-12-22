@@ -403,6 +403,7 @@ where
             simulation_transaction_data: None,
             transaction_input: TransactionInput::Operations(ops.clone()),
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
 
         // Build unsigned envelope from operations

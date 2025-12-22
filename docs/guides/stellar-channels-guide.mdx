@@ -12,7 +12,7 @@ OpenZeppelin Stellar Channels Service is a managed infrastructure for submitting
 - **_Automatic Fee Payment_**: Gas fees paid by the service on your behalf
 - **_Parallel Processing_**: High throughput via managed pool of channel accounts
 - **_Simple Integration_**: Type-safe SDK with minimal setup
-- **_Free to Use_**: No credits, subscriptions, or payment systems
+- **_Free to Use_**: No credits, subscriptions, or payment systems (subject to fair use policy)
 
 ## Service Endpoints
 
@@ -150,6 +150,18 @@ All successful submissions return:
 }
 ```
 
+## Fair Use Policy
+
+The Channels service is free to use, subject to a fair use policy that ensures equitable access for all users.
+
+**How it works:**
+
+- Each API key has a fee consumption limit (measured in stroops)
+- The limit resets automatically 24 hours after your first transaction
+- If you exceed the limit, requests return `FEE_LIMIT_EXCEEDED` until the reset
+
+This policy allows generous usage for development and production while preventing abuse. If you have higher throughput requirements, consider [self-hosting the Channels plugin](/relayer/plugins/channels).
+
 ## Error Handling
 
 The SDK provides structured error handling with three error types:
@@ -191,6 +203,7 @@ try {
 | `SIMULATION_FAILED`   | Transaction simulation failed         | Check contract address and function arguments             |
 | `ONCHAIN_FAILED`      | Transaction failed on-chain           | Review transaction logic and on-chain state               |
 | `INVALID_TIME_BOUNDS` | Transaction timeout too far in future | Set timeout to ≤30 seconds                                |
+| `FEE_LIMIT_EXCEEDED`  | API key exceeded fair use fee limit   | Wait for 24-hour reset or contact support                 |
 
 ## TypeScript Support
 

@@ -553,6 +553,7 @@ pub struct StellarTransactionData {
     pub simulation_transaction_data: Option<String>,
     pub transaction_input: TransactionInput,
     pub signed_envelope_xdr: Option<String>,
+    pub transaction_result_xdr: Option<String>,
 }
 
 impl StellarTransactionData {
@@ -599,6 +600,18 @@ impl StellarTransactionData {
     /// The updated `StellarTransactionData` with the specified fee
     pub fn with_fee(mut self, fee: u32) -> Self {
         self.fee = Some(fee);
+        self
+    }
+
+    /// Updates the Stellar transaction data with the transaction result XDR.
+    ///
+    /// # Arguments
+    /// * `transaction_result_xdr` - The XDR-encoded transaction result return value
+    ///
+    /// # Returns
+    /// The updated `StellarTransactionData` with the specified transaction result
+    pub fn with_transaction_result_xdr(mut self, transaction_result_xdr: String) -> Self {
+        self.transaction_result_xdr = Some(transaction_result_xdr);
         self
     }
 
@@ -882,6 +895,7 @@ impl
                     transaction_input: TransactionInput::from_stellar_request(stellar_request)
                         .map_err(|e| RelayerError::ValidationError(e.to_string()))?,
                     signed_envelope_xdr: None,
+                    transaction_result_xdr: None,
                 };
 
                 Ok(Self {
@@ -1126,6 +1140,7 @@ mod tests {
                 asset: AssetSpec::Native,
             }]),
             signed_envelope_xdr: Some("signed-xdr".to_string()),
+            transaction_result_xdr: None,
         };
 
         let reset_data = stellar_data.clone().reset_to_pre_prepare_state();
@@ -1166,6 +1181,7 @@ mod tests {
             simulation_transaction_data: None,
             transaction_input: TransactionInput::Operations(vec![]),
             signed_envelope_xdr: Some("signed-xdr".to_string()),
+            transaction_result_xdr: None,
         };
 
         let tx = TransactionRepoModel {
@@ -1446,6 +1462,7 @@ mod tests {
                 asset: AssetSpec::Native,
             }]),
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
         let network_data = NetworkTransactionData::Stellar(stellar_tx_data.clone());
 
@@ -1534,6 +1551,7 @@ mod tests {
                 asset: AssetSpec::Native,
             }]),
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         }
     }
 
@@ -2175,6 +2193,7 @@ mod tests {
                 asset: AssetSpec::Native,
             }]),
             signed_envelope_xdr: Some("signed-xdr-data".to_string()),
+            transaction_result_xdr: None,
         };
 
         // Serialize to JSON

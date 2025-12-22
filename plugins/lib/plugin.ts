@@ -37,7 +37,7 @@ import {
   SignTransactionResponse,
   TransactionResponse,
   TransactionStatus,
-  pluginError
+  pluginError,
 } from '@openzeppelin/relayer-sdk';
 
 import { DefaultPluginKVStore } from './kv';
@@ -195,12 +195,19 @@ export interface PluginAPI {
 }
 
 /**
+ * HTTP headers from the incoming request.
+ * Each header name maps to an array of values (since HTTP headers can have multiple values).
+ */
+export type PluginHeaders = Record<string, string[]>;
+
+/**
  * Plugin context with KV always available for modern plugins
  */
 export interface PluginContext {
   api: PluginAPI;
   params: any;
   kv: PluginKVStore;
+  headers: PluginHeaders;
 }
 
 /**
@@ -282,12 +289,14 @@ export async function runPlugin<T, R>(main: Plugin<T, R>): Promise<void> {
  * @param api - Plugin API instance
  * @param kv - KV store instance for plugins
  * @param params - Plugin parameters
+ * @param headers - HTTP headers from the incoming request (optional)
  */
 export async function loadAndExecutePlugin<T, R>(
   userScriptPath: string,
   api: PluginAPI,
   kv: PluginKVStore,
-  params: T
+  params: T,
+  headers?: PluginHeaders
 ): Promise<R> {
   try {
     // IMPORTANT: Path normalization required because executor is in plugins/lib/
@@ -324,11 +333,11 @@ export async function loadAndExecutePlugin<T, R>(
     if (handler && typeof handler === 'function') {
       // Detect handler signature by parameter count
       if (handler.length === 1) {
-        // Modern context handler - ONLY these get KV access
-        const context: PluginContext = { api, params, kv };
+        // Modern context handler - ONLY these get KV and headers access
+        const context: PluginContext = { api, params, kv, headers: headers ?? {} };
         return await handler(context);
       } else {
-        // Legacy handler - NO KV access, just (api, params)
+        // Legacy handler - NO KV or headers access, just (api, params)
         // This keeps PluginAPI interface unchanged
         return await handler(api, params);
       }
@@ -427,7 +436,8 @@ export class DefaultPluginAPI implements PluginAPI {
       signTransaction: (payload: SignTransactionRequest) =>
         this._send<SignTransactionResponse>(relayerId, 'signTransaction', payload),
       getRelayer: () => this._send<ApiResponseRelayerResponseData>(relayerId, 'getRelayer', {}),
-      rpc: (payload: JsonRpcRequestNetworkRpcRequest) => this._send<JsonRpcResponseNetworkRpcResult>(relayerId, 'rpc', payload),
+      rpc: (payload: JsonRpcRequestNetworkRpcRequest) =>
+        this._send<JsonRpcResponseNetworkRpcResult>(relayerId, 'rpc', payload),
     };
   }
 
@@ -522,19 +532,22 @@ export class DefaultPluginAPI implements PluginAPI {
  * @param pluginId - Plugin ID for namespacing KV storage
  * @param pluginParams - Parsed plugin parameters object
  * @param userScriptPath - Path to the user's plugin file to execute
+ * @param httpRequestId - HTTP request ID for tracing (optional)
+ * @param headers - HTTP headers from the incoming request (optional)
  */
 export async function runUserPlugin<T = any, R = any>(
   socketPath: string,
   pluginId: string,
   pluginParams: T,
   userScriptPath: string,
-  httpRequestId?: string
+  httpRequestId?: string,
+  headers?: PluginHeaders
 ): Promise<R> {
   const plugin = new DefaultPluginAPI(socketPath, httpRequestId);
   const kv = new DefaultPluginKVStore(pluginId);
 
   try {
-    const result: R = await loadAndExecutePlugin<T, R>(userScriptPath, plugin, kv, pluginParams);
+    const result: R = await loadAndExecutePlugin<T, R>(userScriptPath, plugin, kv, pluginParams, headers);
     return result;
   } catch (error) {
     // If plugin threw an error, write normalized error to stderr

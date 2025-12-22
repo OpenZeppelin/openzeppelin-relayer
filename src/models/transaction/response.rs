@@ -109,6 +109,9 @@ pub struct StellarTransactionResponse {
     pub fee: u32,
     pub sequence_number: i64,
     pub relayer_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub transaction_result_xdr: Option<String>,
 }
 
 impl From<TransactionRepoModel> for TransactionResponse {
@@ -163,6 +166,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     fee: stellar_data.fee.unwrap_or(0),
                     sequence_number: stellar_data.sequence_number.unwrap_or(0),
                     relayer_id: model.relayer_id,
+                    transaction_result_xdr: stellar_data.transaction_result_xdr,
                 }))
             }
         }
@@ -326,6 +330,7 @@ mod tests {
                 signatures: Vec::new(),
                 simulation_transaction_data: None,
                 signed_envelope_xdr: None,
+                transaction_result_xdr: None,
             }),
             valid_until: None,
             network_type: NetworkType::Stellar,
@@ -381,6 +386,7 @@ mod tests {
                 signatures: Vec::new(),
                 simulation_transaction_data: None,
                 signed_envelope_xdr: None,
+                transaction_result_xdr: None,
             }),
             valid_until: None,
             network_type: NetworkType::Stellar,

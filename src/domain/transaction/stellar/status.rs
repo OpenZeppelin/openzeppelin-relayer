@@ -3,10 +3,11 @@
 //! ensuring proper transaction state management and lane cleanup.
 
 use chrono::Utc;
-use soroban_rs::xdr::{Error, Hash};
+use soroban_rs::xdr::{Error, Hash, Limits, WriteXdr};
 use tracing::{debug, info, warn};
 
 use super::{is_final_state, StellarRelayerTransaction};
+use crate::domain::transaction::stellar::utils::extract_return_value_from_meta;
 use crate::{
     domain::is_unsubmitted_transaction,
     jobs::JobProducerTrait,
@@ -178,17 +179,31 @@ where
         tx: TransactionRepoModel,
         provider_response: soroban_rs::stellar_rpc_client::GetTransactionResponse,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        // Extract the actual fee charged from the transaction result and update network data
-        let updated_network_data = provider_response.result.as_ref().and_then(|tx_result| {
+        // Extract the actual fee charged and transaction result from the transaction response
+        let updated_network_data =
             tx.network_data
                 .get_stellar_transaction_data()
                 .ok()
-                .map(|stellar_data| {
-                    NetworkTransactionData::Stellar(
-                        stellar_data.with_fee(tx_result.fee_charged as u32),
-                    )
-                })
-        });
+                .map(|mut stellar_data| {
+                    // Update fee if available
+                    if let Some(tx_result) = provider_response.result.as_ref() {
+                        stellar_data = stellar_data.with_fee(tx_result.fee_charged as u32);
+                    }
+
+                    // Extract transaction result XDR from result_meta if available
+                    if let Some(result_meta) = provider_response.result_meta.as_ref() {
+                        if let Some(return_value) = extract_return_value_from_meta(result_meta) {
+                            let xdr_base64 = return_value.to_xdr_base64(Limits::none());
+                            if let Ok(xdr_base64) = xdr_base64 {
+                                stellar_data = stellar_data.with_transaction_result_xdr(xdr_base64);
+                            } else {
+                                warn!("Failed to serialize return value to XDR base64");
+                            }
+                        }
+                    }
+
+                    NetworkTransactionData::Stellar(stellar_data)
+                });
 
         let update_request = TransactionUpdateRequest {
             status: Some(TransactionStatus::Confirmed),
@@ -258,6 +273,7 @@ mod tests {
     use chrono::Duration;
     use mockall::predicate::eq;
     use soroban_rs::stellar_rpc_client::GetTransactionResponse;
+    use soroban_rs::xdr::ReadXdr;
 
     use crate::domain::transaction::stellar::test_helpers::*;
 
@@ -268,6 +284,45 @@ mod tests {
             envelope: None,
             result: None,
             result_meta: None,
+            events: soroban_rs::stellar_rpc_client::GetTransactionEvents {
+                contract_events: vec![],
+                diagnostic_events: vec![],
+                transaction_events: vec![],
+            },
+        }
+    }
+
+    fn dummy_get_transaction_response_with_result_meta(
+        status: &str,
+        has_return_value: bool,
+    ) -> GetTransactionResponse {
+        use soroban_rs::xdr::{ScVal, SorobanTransactionMeta, TransactionMeta, TransactionMetaV3};
+
+        let result_meta = if has_return_value {
+            // Create a dummy ScVal for testing (using I32(42) as a simple test value)
+            let return_value = ScVal::I32(42);
+            Some(TransactionMeta::V3(TransactionMetaV3 {
+                ext: soroban_rs::xdr::ExtensionPoint::V0,
+                tx_changes_before: soroban_rs::xdr::LedgerEntryChanges::default(),
+                operations: soroban_rs::xdr::VecM::default(),
+                tx_changes_after: soroban_rs::xdr::LedgerEntryChanges::default(),
+                soroban_meta: Some(SorobanTransactionMeta {
+                    ext: soroban_rs::xdr::SorobanTransactionMetaExt::V0,
+                    return_value,
+                    events: soroban_rs::xdr::VecM::default(),
+                    diagnostic_events: soroban_rs::xdr::VecM::default(),
+                }),
+            }))
+        } else {
+            None
+        };
+
+        GetTransactionResponse {
+            status: status.to_string(),
+            ledger: None,
+            envelope: None,
+            result: None,
+            result_meta,
             events: soroban_rs::stellar_rpc_client::GetTransactionEvents {
                 contract_events: vec![],
                 diagnostic_events: vec![],
@@ -822,6 +877,183 @@ mod tests {
             // Provider errors are now propagated as errors (retriable)
             assert!(result.is_err());
             matches!(result.unwrap_err(), TransactionError::UnderlyingProvider(_));
+        }
+
+        #[tokio::test]
+        async fn handle_transaction_status_extracts_transaction_result_xdr() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx_to_handle = create_test_transaction(&relayer.id);
+            tx_to_handle.id = "tx-with-result".to_string();
+            tx_to_handle.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
+            let tx_hash_bytes = [9u8; 32];
+            let tx_hash_hex = hex::encode(tx_hash_bytes);
+            if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx_to_handle.network_data
+            {
+                stellar_data.hash = Some(tx_hash_hex.clone());
+            } else {
+                panic!("Expected Stellar network data");
+            }
+            tx_to_handle.status = TransactionStatus::Submitted;
+
+            let expected_stellar_hash = soroban_rs::xdr::Hash(tx_hash_bytes);
+
+            // Mock provider to return SUCCESS with result_meta containing return_value
+            mocks
+                .provider
+                .expect_get_transaction()
+                .with(eq(expected_stellar_hash.clone()))
+                .times(1)
+                .returning(move |_| {
+                    Box::pin(async {
+                        Ok(dummy_get_transaction_response_with_result_meta(
+                            "SUCCESS", true,
+                        ))
+                    })
+                });
+
+            // Mock partial_update - verify that transaction_result_xdr is stored
+            let tx_to_handle_clone = tx_to_handle.clone();
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(move |id, update| {
+                    id == "tx-with-result"
+                        && update.status == Some(TransactionStatus::Confirmed)
+                        && update.confirmed_at.is_some()
+                        && update.network_data.as_ref().map_or(false, |and| {
+                            if let NetworkTransactionData::Stellar(stellar_data) = and {
+                                // Verify transaction_result_xdr is present
+                                stellar_data.transaction_result_xdr.is_some()
+                            } else {
+                                false
+                            }
+                        })
+                })
+                .times(1)
+                .returning(move |id, update| {
+                    let mut updated_tx = tx_to_handle_clone.clone();
+                    updated_tx.id = id;
+                    updated_tx.status = update.status.unwrap();
+                    updated_tx.confirmed_at = update.confirmed_at;
+                    if let Some(network_data) = update.network_data {
+                        updated_tx.network_data = network_data;
+                    }
+                    Ok(updated_tx)
+                });
+
+            // Mock notification
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            // Mock find_by_status
+            mocks
+                .tx_repo
+                .expect_find_by_status()
+                .returning(move |_, _| Ok(vec![]));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let result = handler.handle_transaction_status_impl(tx_to_handle).await;
+
+            assert!(result.is_ok());
+            let handled_tx = result.unwrap();
+            assert_eq!(handled_tx.id, "tx-with-result");
+            assert_eq!(handled_tx.status, TransactionStatus::Confirmed);
+
+            // Verify transaction_result_xdr is stored
+            if let NetworkTransactionData::Stellar(stellar_data) = handled_tx.network_data {
+                assert!(
+                    stellar_data.transaction_result_xdr.is_some(),
+                    "transaction_result_xdr should be stored when result_meta contains return_value"
+                );
+            } else {
+                panic!("Expected Stellar network data");
+            }
+        }
+
+        #[tokio::test]
+        async fn handle_transaction_status_no_result_meta_does_not_store_xdr() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx_to_handle = create_test_transaction(&relayer.id);
+            tx_to_handle.id = "tx-no-result-meta".to_string();
+            tx_to_handle.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
+            let tx_hash_bytes = [10u8; 32];
+            let tx_hash_hex = hex::encode(tx_hash_bytes);
+            if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx_to_handle.network_data
+            {
+                stellar_data.hash = Some(tx_hash_hex.clone());
+            } else {
+                panic!("Expected Stellar network data");
+            }
+            tx_to_handle.status = TransactionStatus::Submitted;
+
+            let expected_stellar_hash = soroban_rs::xdr::Hash(tx_hash_bytes);
+
+            // Mock provider to return SUCCESS without result_meta
+            mocks
+                .provider
+                .expect_get_transaction()
+                .with(eq(expected_stellar_hash.clone()))
+                .times(1)
+                .returning(move |_| {
+                    Box::pin(async {
+                        Ok(dummy_get_transaction_response_with_result_meta(
+                            "SUCCESS", false,
+                        ))
+                    })
+                });
+
+            // Mock partial_update
+            let tx_to_handle_clone = tx_to_handle.clone();
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .times(1)
+                .returning(move |id, update| {
+                    let mut updated_tx = tx_to_handle_clone.clone();
+                    updated_tx.id = id;
+                    updated_tx.status = update.status.unwrap();
+                    updated_tx.confirmed_at = update.confirmed_at;
+                    if let Some(network_data) = update.network_data {
+                        updated_tx.network_data = network_data;
+                    }
+                    Ok(updated_tx)
+                });
+
+            // Mock notification
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            // Mock find_by_status
+            mocks
+                .tx_repo
+                .expect_find_by_status()
+                .returning(move |_, _| Ok(vec![]));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let result = handler.handle_transaction_status_impl(tx_to_handle).await;
+
+            assert!(result.is_ok());
+            let handled_tx = result.unwrap();
+
+            // Verify transaction_result_xdr is None when result_meta is missing
+            if let NetworkTransactionData::Stellar(stellar_data) = handled_tx.network_data {
+                assert!(
+                    stellar_data.transaction_result_xdr.is_none(),
+                    "transaction_result_xdr should be None when result_meta is missing"
+                );
+            } else {
+                panic!("Expected Stellar network data");
+            }
         }
     }
 }

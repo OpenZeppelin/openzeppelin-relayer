@@ -248,6 +248,7 @@ pub fn create_test_transaction(relayer_id: &str) -> TransactionRepoModel {
         simulation_transaction_data: None,
         transaction_input: crate::models::TransactionInput::Operations(vec![payment_op(TEST_PK)]),
         signed_envelope_xdr: None,
+        transaction_result_xdr: None,
     };
     TransactionRepoModel {
         id: "tx-1".to_string(),

@@ -1,0 +1,50 @@
+---
+name: Integration Tests
+on:
+  workflow_dispatch:  # Allow manual triggering from GitHub UI
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test-integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # Required for OIDC authentication with AWS
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@df199fb7be9f65074067a9eb93f12bb4c5547cf2  # v2.13.3
+        with:
+          egress-policy: audit
+      - name: Checkout Code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - name: Set up AWS credentials via OIDC and role chaining
+        uses: ./.github/actions/oidc
+        with:
+          role-for-oidc: ${{ secrets.ROLE_FOR_OIDC_TESTS }}
+          role-to-assume: ${{ secrets.ROLE_TO_ASSUME_TESTS }}
+          aws-region: ${{ vars.AWS_REGION_KMS_KEY }}
+      - name: Create integration test config
+        run: |
+          cat > .env.integration << EOF
+          API_KEY=${{ secrets.INTEGRATION_TESTS_API_KEY }}
+          LOG_LEVEL=info
+          AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+          AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+          AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
+          AWS_REGION=${{ vars.AWS_REGION_KMS_KEY }}
+          EOF
+      - name: Create config files from examples
+        run: |
+          cp tests/integration/config/config.example.json tests/integration/config/config.json
+          cp tests/integration/config/registry.example.json tests/integration/config/registry.json
+      - name: Inject AWS KMS signer config
+        run: |
+          jq --arg region "${{ vars.AWS_REGION_KMS_KEY }}" \
+             --arg key_id "${{ secrets.TESTNET_AWS_KMS_KEY_ID }}" \
+             '.signers = [{"id": "local-signer", "type": "aws_kms", "config": {"region": $region, "key_id": $key_id}}]' \
+             tests/integration/config/config.json > tests/integration/config/config.tmp.json && \
+          mv tests/integration/config/config.tmp.json tests/integration/config/config.json
+      - name: Run Integration Tests
+        run: ./scripts/run-integration-docker.sh

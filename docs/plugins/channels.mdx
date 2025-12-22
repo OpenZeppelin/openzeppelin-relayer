@@ -45,7 +45,8 @@ const directClient = new ChannelsClient({
 const relayerClient = new ChannelsClient({
   pluginId: 'channels-plugin', // Plugin identifier (triggers relayer mode)
   baseUrl: 'http://localhost:8080', // Relayer URL
-  apiKey: process.env.RELAYER_API_KEY, // Relayer API key
+  apiKey: process.env.RELAYER_API_KEY, // Relayer API key (sent as Bearer AND custom header)
+  apiKeyHeader: 'x-api-key', // Optional: header for fee tracking (default: x-api-key)
   adminSecret: process.env.CHANNELS_ADMIN, // Optional: for management
 });
 ```
@@ -81,6 +82,10 @@ console.log('Channel accounts:', accounts.relayerIds);
 // Update channel accounts (requires adminSecret)
 const result = await client.setChannelAccounts(['channel-001', 'channel-002', 'channel-003']);
 console.log('Update successful:', result.ok, result.appliedRelayerIds);
+
+// Query fee usage (requires adminSecret)
+const usage = await client.getFeeUsage('client-api-key');
+console.log('Fee usage:', usage);
 ```
 
 ### Example Scripts
@@ -157,7 +162,6 @@ Configure the required environment variables:
 ```bash
 # Required environment variables
 export STELLAR_NETWORK="testnet"                    # or "mainnet"
-export SOROBAN_RPC_URL="https://soroban-testnet.stellar.org"
 export FUND_RELAYER_ID="channels-fund"              # ID of the fund relayer
 export PLUGIN_ADMIN_SECRET="your-secret-here"       # Required for management API
 
@@ -169,7 +173,6 @@ export MAX_FEE=1000000                              # Maximum fee in stroops (de
 **_Required Variables:_**
 
 - `STELLAR_NETWORK`: Either "testnet" or "mainnet"
-- `SOROBAN_RPC_URL`: Stellar Soroban RPC endpoint URL
 - `FUND_RELAYER_ID`: Relayer ID for the account that pays transaction fees
 
 **_Optional Variables:_**
@@ -177,6 +180,9 @@ export MAX_FEE=1000000                              # Maximum fee in stroops (de
 - `PLUGIN_ADMIN_SECRET`: Secret for accessing the management API (required to manage channel accounts)
 - `LOCK_TTL_SECONDS`: TTL for channel account locks in seconds (default: 30, range: 3-30)
 - `MAX_FEE`: Maximum transaction fee in stroops (default: 1,000,000)
+- `FEE_LIMIT`: Fair use limit for fee consumption per API key in stroops. When exceeded, requests are rejected with `FEE_LIMIT_EXCEEDED` error (when not set, fee tracking is disabled)
+- `FEE_RESET_PERIOD_SECONDS`: Reset fee consumption every N seconds (e.g., 86400 = 24 hours). When configured, each API key's fee consumption resets automatically after the period expires
+- `API_KEY_HEADER`: HTTP header name used to extract the client API key for fee tracking (default: x-api-key)
 
 ### Relayer Configuration
 
@@ -539,6 +545,148 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels-plugin/call \
 - All relayer IDs must exist in your OpenZeppelin Relayer configuration
 - The `adminSecret` must match the `PLUGIN_ADMIN_SECRET` environment variable
 
+### Get Fee Usage
+
+Query fee consumption for a specific API key (requires `FEE_LIMIT` to be configured):
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels-plugin/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "getFeeUsage",
+        "adminSecret": "your-secret-here",
+        "apiKey": "client-api-key-to-check"
+      }
+    }
+  }'
+```
+
+**_Response:_**
+
+```json
+{
+  "success": true,
+  "data": {
+    "consumed": 500000,
+    "limit": 1000000,
+    "remaining": 500000,
+    "periodStartAt": "2024-01-15T00:00:00.000Z",
+    "periodEndsAt": "2024-01-16T00:00:00.000Z"
+  },
+  "error": null
+}
+```
+
+**_Response Fields:_**
+
+- `consumed`: Fee used in stroops
+- `limit`: Effective fee limit (custom if set, otherwise default) - undefined if unlimited
+- `remaining`: Remaining fee budget - undefined if unlimited
+- `periodStartAt`: ISO 8601 timestamp when current period started (if reset period configured)
+- `periodEndsAt`: ISO 8601 timestamp when period will reset (if reset period configured)
+
+### Get Fee Limit
+
+Query fee limit configuration for an API key:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels-plugin/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "getFeeLimit",
+        "adminSecret": "your-secret-here",
+        "apiKey": "client-api-key-to-query"
+      }
+    }
+  }'
+```
+
+**_Response:_**
+
+```json
+{
+  "success": true,
+  "data": {
+    "limit": 500000
+  },
+  "error": null
+}
+```
+
+**_Response Fields:_**
+
+- `limit`: Fee limit (custom if set, otherwise default), undefined if unlimited
+
+### Set Fee Limit
+
+Set a custom fee limit for an API key:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels-plugin/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "setFeeLimit",
+        "adminSecret": "your-secret-here",
+        "apiKey": "client-api-key",
+        "limit": 500000
+      }
+    }
+  }'
+```
+
+**_Response:_**
+
+```json
+{
+  "success": true,
+  "data": {
+    "ok": true,
+    "limit": 500000
+  },
+  "error": null
+}
+```
+
+### Delete Fee Limit
+
+Remove custom limit for an API key (reverts to default):
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels-plugin/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "deleteFeeLimit",
+        "adminSecret": "your-secret-here",
+        "apiKey": "client-api-key"
+      }
+    }
+  }'
+```
+
+**_Response:_**
+
+```json
+{
+  "success": true,
+  "data": {
+    "ok": true
+  },
+  "error": null
+}
+```
+
 ## Responses
 
 All API responses use the standard Relayer envelope format: `success, data, error, metadata`.
@@ -608,6 +756,8 @@ All API responses use the standard Relayer envelope format: `success, data, erro
 - `MANAGEMENT_DISABLED`: Management API not enabled
 - `UNAUTHORIZED`: Invalid admin secret
 - `LOCKED_CONFLICT`: Cannot remove locked channel accounts
+- `FEE_LIMIT_EXCEEDED`: API key has exceeded its fair use fee limit
+- `API_KEY_REQUIRED`: Fee tracking is enabled but request is missing the API key header
 
 ## Additional Resources
 

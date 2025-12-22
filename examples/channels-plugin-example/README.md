@@ -102,10 +102,13 @@ API_KEY=<api_key_from_above>
 # Channels Configuration
 STELLAR_NETWORK=testnet
 PLUGIN_ADMIN_SECRET=<admin_secret_for_channels_mgmt_api>
-SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
 FUND_RELAYER_ID=channels-fund
 LOCK_TTL_SECONDS=30
 LOG_LEVEL=info
+# Fee Tracking (optional)
+FEE_LIMIT=100000000                 # Max fee per API key in stroops (optional)
+FEE_RESET_PERIOD_SECONDS=86400      # Reset fee consumption every N seconds (e.g., 86400 = 24 hours)
+API_KEY_HEADER=x-api-key            # Header for fee tracking (default: x-api-key)
 ```
 
 ### 3. Verify Configuration
@@ -124,7 +127,6 @@ The Channels plugin and relayer configurations are already set up for testnet. T
 Channels is configured through environment variables in your `.env` file:
 
 - `STELLAR_NETWORK=testnet` - Sets the Stellar network
-- `SOROBAN_RPC_URL=https://soroban-testnet.stellar.org` - RPC endpoint
 - `FUND_RELAYER_ID=channels-fund` - ID of the fund relayer
 - `PLUGIN_ADMIN_SECRET` - Admin secret for Channels operations
 - `LOCK_TTL_SECONDS=30` - Lock timeout for sequence management
@@ -302,17 +304,17 @@ pnpm -C $CHANNELS_PLUGIN_DIR build
 
 ### Start with the dev override
 
-`docker-compose.plugin-dev.yaml` mounts your local plugin's `dist/` over the installed package's `dist/` in the container.
+`docker-compose.plugin-dev.yaml` mounts your entire local plugin directory over the installed package in the container.
 
 ```bash
-export CHANNELS_PLUGIN_LOCAL_DIST=$CHANNELS_PLUGIN_DIR/dist
+export CHANNELS_PLUGIN_LOCAL=$CHANNELS_PLUGIN_DIR
 docker compose -f docker-compose.yaml -f docker-compose.plugin-dev.yaml up -d --build
 ```
 
 Under the hood:
 
-- Your local `dist/` is mounted at `/app/plugins/channel/node_modules/@openzeppelin/relayer-plugin-channels/dist` inside the container.
-- Dependencies remain intact from the installed npm package; only the runtime JS is swapped.
+- Your local plugin directory is mounted at `/app/plugins/channel/node_modules/@openzeppelin/relayer-plugin-channels` inside the container.
+- This includes `dist/`, `node_modules/`, and `package.json` from your local build.
 
 ### Iterating on code
 
@@ -362,6 +364,138 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
 - You must configure at least one channel account before Channels can process `func`+`auth` transactions
 - The management API will prevent removing accounts that are currently locked (in use)
 - All relayer IDs must exist in your OpenZeppelin Relayer configuration
+
+### Fee Tracking
+
+The plugin supports per-API-key fee consumption tracking with a fair use policy. The API key used for authentication is also used for fee tracking. When an API key exceeds its fee limit, requests will be rejected with a `FEE_LIMIT_EXCEEDED` error.
+
+**Environment Variables:**
+
+- `FEE_LIMIT`: Maximum fee consumption per API key in stroops (when not set, fee tracking is disabled)
+- `FEE_RESET_PERIOD_SECONDS`: Reset fee consumption every N seconds (e.g., 86400 = 24 hours). When configured, each API key's fee consumption resets automatically after the period expires.
+- `API_KEY_HEADER`: HTTP header name used to extract the client API key for fee tracking (default: x-api-key)
+
+#### Query Fee Usage
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "getFeeUsage",
+        "adminSecret": "YOUR_ADMIN_SECRET",
+        "apiKey": "client-api-key-to-check"
+      }
+    }
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "consumed": 500000,
+  "limit": 1000000,
+  "remaining": 500000,
+  "periodStartAt": "2024-01-15T00:00:00.000Z",
+  "periodEndsAt": "2024-01-16T00:00:00.000Z"
+}
+```
+
+**Response Fields:**
+
+- `consumed`: Fee used in stroops
+- `limit`: Effective fee limit (custom if set, otherwise default) - undefined if unlimited
+- `remaining`: Remaining fee budget - undefined if unlimited
+- `periodStartAt`: ISO 8601 timestamp when current period started (if reset period configured)
+- `periodEndsAt`: ISO 8601 timestamp when period will reset (if reset period configured)
+
+#### Get Fee Limit
+
+Query fee limit configuration for an API key:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "getFeeLimit",
+        "adminSecret": "YOUR_ADMIN_SECRET",
+        "apiKey": "client-api-key-to-query"
+      }
+    }
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "limit": 500000
+}
+```
+
+- `limit`: Fee limit (custom if set, otherwise default), undefined if unlimited
+
+#### Set Fee Limit
+
+Set a custom fee limit for an API key:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "setFeeLimit",
+        "adminSecret": "YOUR_ADMIN_SECRET",
+        "apiKey": "client-api-key",
+        "limit": 500000
+      }
+    }
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "ok": true,
+  "limit": 500000
+}
+```
+
+#### Delete Fee Limit
+
+Remove custom limit for an API key (reverts to default):
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "deleteFeeLimit",
+        "adminSecret": "YOUR_ADMIN_SECRET",
+        "apiKey": "client-api-key"
+      }
+    }
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "ok": true
+}
+```
 
 ### Generating XDR for the Relayer
 

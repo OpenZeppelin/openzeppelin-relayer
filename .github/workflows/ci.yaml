@@ -65,6 +65,7 @@ jobs:
               - '**/*.rs'
               - tests/**/*.json
   ci:
+    timeout-minutes: 150
     if: ${{ github.event.pull_request.draft == false && always() }}
     permissions:
       contents: none
@@ -73,7 +74,7 @@ jobs:
       - msrv
       - rustfmt
       - clippy
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04-oz-8core
     steps:
       - name: Harden the runner (Audit all outbound calls)
         uses: step-security/harden-runner@df199fb7be9f65074067a9eb93f12bb4c5547cf2  # v2.13.3
@@ -175,15 +176,15 @@ jobs:
           wait-for-processing: true
       - name: Report status
         run: cargo clippy --all-features --workspace --lib --bins --no-deps -- -D warnings --allow deprecated
-  test:
+  test-unit:
+    name: Unit Tests
     if: ${{ github.event.pull_request.draft == false && needs.changed_files.outputs.changed-tests-files == 'true' }}
     permissions:
       contents: read
     needs:
       - changed_files
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04-oz-8core
     steps:
-      # Checkout the repository
       - name: Harden the runner (Audit all outbound calls)
         uses: step-security/harden-runner@df199fb7be9f65074067a9eb93f12bb4c5547cf2  # v2.13.3
         with:
@@ -202,7 +203,6 @@ jobs:
       - name: Install TypeScript and ts-node
         run: |
           npm install -g typescript ts-node
-          # Verify installation
           ts-node --version
           tsc --version
       - name: free disk space
@@ -221,61 +221,95 @@ jobs:
         uses: ./.github/actions/prepare
         with:
           components: llvm-tools-preview
-
-      # Get the output of the prepare composite action
       - name: Get cache-hit output
         run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
       - name: Install cargo hack and cargo-llvm-cov
         uses: taiki-e/install-action@92e6dd1c202153a204d471a3c509bf1e03dcfa44  # v2.62.61
         with:
           tool: cargo-hack,cargo-llvm-cov
-      - name: Build
-        run: cargo test --no-run --locked
+      - name: Run Developer Tests (excluding AI) and Generate Coverage Report
+        id: dev_coverage
+        timeout-minutes: 45
+        env:
+          LLVM_PROFILE_FILE: dev-%p-%m.profraw
+          RUSTFLAGS: -Cinstrument-coverage
+          RUST_TEST_THREADS: 1
+        run: |
+          cargo hack llvm-cov --locked --lib --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path dev-lcov.info --tests -- --skip ai_
+      - name: Run AI Tests and Generate Coverage Report
+        id: ai_coverage
+        timeout-minutes: 45
+        env:
+          LLVM_PROFILE_FILE: ai-%p-%m.profraw
+          RUSTFLAGS: -Cinstrument-coverage
+          RUST_TEST_THREADS: 1
+        run: |
+          cargo hack llvm-cov --locked --lib --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path ai-lcov.info --tests -- ai_
 
-      # Unit tests coverage
-      - name: Run Unit Tests and Generate Coverage Report
+      # Upload coverage reports
+      - name: Upload AI Coverage to Codecov
+        uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          name: ai-coverage
+          files: ai-lcov.info
+          flags: ai
+          fail_ci_if_error: true
+      - name: Upload Developer Coverage to Codecov
+        uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          name: dev-coverage
+          files: dev-lcov.info
+          flags: dev
+          fail_ci_if_error: true
+  test-properties:
+    name: Properties Tests
+    if: ${{ github.event.pull_request.draft == false && needs.changed_files.outputs.changed-tests-files == 'true' }}
+    permissions:
+      contents: read
+    needs:
+      - changed_files
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@df199fb7be9f65074067a9eb93f12bb4c5547cf2  # v2.13.3
+        with:
+          egress-policy: audit
+      - name: Checkout Code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+      - name: Setup Node.js
+        uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f  # v6.1.0
+        with:
+          node-version: '20'
+      - name: Install pnpm and plugin dependencies
+        run: |
+          npm install -g pnpm
+          cd plugins
+          pnpm install
+      - name: Install TypeScript and ts-node
+        run: |
+          npm install -g typescript ts-node
+          ts-node --version
+          tsc --version
+      - name: Prepare
+        id: init
+        uses: ./.github/actions/prepare
+        with:
+          components: llvm-tools-preview
+      - name: Get cache-hit output
+        run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
+      - name: Install cargo hack and cargo-llvm-cov
+        uses: taiki-e/install-action@92e6dd1c202153a204d471a3c509bf1e03dcfa44  # v2.62.61
+        with:
+          tool: cargo-hack,cargo-llvm-cov
+      - name: Run Properties Tests and Generate Coverage Report
         env:
-          LLVM_PROFILE_FILE: unit-%p-%m.profraw
+          LLVM_PROFILE_FILE: properties.profraw
           RUSTFLAGS: -Cinstrument-coverage
           RUST_TEST_THREADS: 1
-        run: cargo hack llvm-cov --locked --lib --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path unit-lcov.info
-      # Integration tests coverage
-      - name: Run Integration Tests and Generate Coverage Report
-        env:
-          LLVM_PROFILE_FILE: integration-%p-%m.profraw
-          RUSTFLAGS: -Cinstrument-coverage
-          RUST_TEST_THREADS: 1
-        run: cargo hack llvm-cov --locked --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path integration-lcov.info --test integration
-
-      # Properties tests coverage
-      - name: Run Properties Tests
-        env:
-          LLVM_PROFILE_FILE: properties-%p-%m.profraw
-          RUSTFLAGS: -Cinstrument-coverage
-          RUST_TEST_THREADS: 1
+          CARGO_PROFILE_DEV_DEBUG: 1
         run: cargo hack llvm-cov --locked --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path properties-lcov.info --test properties
-
-      # Upload unit coverage
-      - name: Upload Unit Coverage to Codecov
-        uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          name: unit-coverage
-          files: unit-lcov.info
-          flags: unittests
-          fail_ci_if_error: true
-
-      # Upload integration coverage
-      - name: Upload Integration Coverage to Codecov
-        uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          name: integration-coverage
-          files: integration-lcov.info
-          flags: integration
-          fail_ci_if_error: true
-
-      # Upload properties coverage
       - name: Upload Properties Coverage to Codecov
         uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
         with:

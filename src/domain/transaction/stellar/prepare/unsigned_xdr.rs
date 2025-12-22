@@ -421,6 +421,7 @@ mod tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
 
         let dex_service = MockStellarDexServiceTrait::new();
@@ -504,6 +505,7 @@ mod tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
 
         let dex_service = MockStellarDexServiceTrait::new();
@@ -591,6 +593,7 @@ mod tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
 
         let dex_service = MockStellarDexServiceTrait::new();
@@ -664,6 +667,7 @@ mod tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
 
         let dex_service = MockStellarDexServiceTrait::new();
@@ -716,6 +720,7 @@ mod tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
 
         let dex_service = MockStellarDexServiceTrait::new();
@@ -796,6 +801,7 @@ mod tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
 
         let policy = RelayerStellarPolicy {

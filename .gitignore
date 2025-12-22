@@ -19,7 +19,16 @@ target/
 .DS_Store
 
 config.json
-local-signer.json
+
+# Ignore local signer keystore files everywhere except for the integration tests directory
+**/local-signer.json
+**/config/keys/*.json
+!tests/integration/config/**/*.json
+tests/integration/config/keys/*.json
+
+# Integration test config files (git-ignored, use .example files as templates)
+tests/integration/config/config.json
+tests/integration/config/registry.json
 
 !examples/**/*.json
 
@@ -34,14 +43,16 @@ logs/
 
 # env
 .env
+.env.integration
 
 # Ignore node_modules
 node_modules
 .qodo
 
-# Ignore local signer keystore files everywhere
-**/local-signer.json
-**/config/keys/*.json
 
 # Exclude generated OpenAPI files from the docs directory
 !./openapi.json
+
+# Integration test artifacts
+test-results/
+**/*lcov.info

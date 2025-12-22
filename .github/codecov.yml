@@ -1,20 +1,38 @@
 ---
+codecov:
+  notify:
+    after_n_builds: 3  # Wait for all 3 flag uploads (ai, dev, properties)
+    wait_for_ci: true  # Wait for CI to complete before sending status
 coverage:
-  range: 90..100
+  precision: 2
   round: down
-  precision: 1
+  range: 70..100
   status:
     project:
       default:
-        target: 80%
-        threshold: 1%
+        target: 85%
+        threshold: 2%
         flags:
-          - integration
+          - ai
+          - dev
           - properties
-          - unittests
     patch:
       default:
-        target: 90%
+        target: auto
         threshold: 1%
+flags:
+  ai:
+    paths:
+      - src/
+    carryforward: true
+  dev:
+    paths:
+      - src/
+    carryforward: true
+comment:
+  layout: flags, diff, files
+  require_changes: false
+  behavior: default
 ignore:
-  - tests/**/*
+  - tests/*
+  - target/*

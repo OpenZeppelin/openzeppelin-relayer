@@ -13,6 +13,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     constants::{DEFAULT_EVM_GAS_LIMIT_ESTIMATION, GAS_LIMIT_BUFFER_MULTIPLIER},
     domain::{
+        evm::is_noop,
         transaction::{
             evm::{ensure_status, ensure_status_one_of, PriceCalculator, PriceCalculatorTrait},
             Transaction,
@@ -762,13 +763,13 @@ where
             return Ok(tx);
         }
 
+        let evm_data = tx.network_data.get_evm_transaction_data()?;
+
         // Calculate bumped gas price
+        // For noop transactions, force_bump=true to skip gas price cap and ensure bump succeeds
         let bumped_price_params = self
             .price_calculator
-            .calculate_bumped_gas_price(
-                &tx.network_data.get_evm_transaction_data()?,
-                self.relayer(),
-            )
+            .calculate_bumped_gas_price(&evm_data, self.relayer(), is_noop(&evm_data))
             .await?;
 
         if !bumped_price_params.is_min_bumped.is_some_and(|b| b) {
@@ -779,9 +780,6 @@ where
         // Validate the relayer has sufficient balance
         self.ensure_sufficient_balance(bumped_price_params.total_cost)
             .await?;
-
-        // Get transaction data
-        let evm_data = tx.network_data.get_evm_transaction_data()?;
 
         // Create new transaction data with bumped gas price
         let updated_evm_data = evm_data.with_price_params(bumped_price_params.clone());
@@ -841,6 +839,7 @@ where
             TransactionUpdateRequest {
                 network_data: Some(NetworkTransactionData::Evm(final_evm_data)),
                 hashes: Some(hashes),
+                status: Some(TransactionStatus::Submitted),
                 priced_at: Some(Utc::now().to_rfc3339()),
                 sent_at: Some(Utc::now().to_rfc3339()),
                 ..Default::default()
@@ -1127,6 +1126,7 @@ mod tests {
                 &self,
                 tx: &EvmTransactionData,
                 relayer: &RelayerRepoModel,
+                force_bump: bool,
             ) -> Result<PriceParams, TransactionError>;
         }
     }
@@ -2729,7 +2729,7 @@ mod tests {
         mock_price_calculator
             .expect_calculate_bumped_gas_price()
             .times(1)
-            .returning(|_, _| {
+            .returning(|_, _, _| {
                 Ok(PriceParams {
                     gas_price: Some(25000000000), // 25% bump
                     max_fee_per_gas: None,
@@ -3066,5 +3066,122 @@ mod tests {
             }
             _ => panic!("Expected UnexpectedError"),
         }
+    }
+
+    /// Test resubmit_transaction successfully transitions from Sent to Submitted status
+    #[tokio::test]
+    async fn test_resubmit_transaction_sent_to_submitted() {
+        let mut mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mut mock_signer = MockSigner::new();
+        let mock_job_producer = MockJobProducerTrait::new();
+        let mut mock_price_calculator = MockPriceCalculator::new();
+        let counter_service = MockTransactionCounterTrait::new();
+        let mock_network = MockNetworkRepository::new();
+
+        let relayer = create_test_relayer();
+        let mut test_tx = create_test_transaction();
+        test_tx.status = TransactionStatus::Sent;
+        test_tx.sent_at = Some(Utc::now().to_rfc3339());
+        let original_hash = "0xoriginal_hash".to_string();
+        test_tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+            nonce: Some(42),
+            hash: Some(original_hash.clone()),
+            raw: Some(vec![1, 2, 3]),
+            gas_price: Some(20000000000), // 20 Gwei
+            ..test_tx.network_data.get_evm_transaction_data().unwrap()
+        });
+        test_tx.hashes = vec![original_hash.clone()];
+
+        // Price calculator returns bumped price
+        mock_price_calculator
+            .expect_calculate_bumped_gas_price()
+            .times(1)
+            .returning(|_, _, _| {
+                Ok(PriceParams {
+                    gas_price: Some(25000000000), // 25 Gwei (25% bump)
+                    max_fee_per_gas: None,
+                    max_priority_fee_per_gas: None,
+                    is_min_bumped: Some(true),
+                    extra_fee: None,
+                    total_cost: U256::from(525000000000000u64),
+                })
+            });
+
+        // Mock balance check
+        mock_provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(ready(Ok(U256::from(1000000000000000000u64)))));
+
+        // Mock signer to return new signed transaction
+        mock_signer.expect_sign_transaction().returning(|_| {
+            Box::pin(ready(Ok(
+                crate::domain::relayer::SignTransactionResponse::Evm(
+                    crate::domain::relayer::SignTransactionResponseEvm {
+                        hash: "0xnew_hash".to_string(),
+                        signature: crate::models::EvmTransactionDataSignature {
+                            r: "r".to_string(),
+                            s: "s".to_string(),
+                            v: 1,
+                            sig: "0xsignature".to_string(),
+                        },
+                        raw: vec![4, 5, 6],
+                    },
+                ),
+            )))
+        });
+
+        // Provider successfully sends the resubmitted transaction
+        mock_provider
+            .expect_send_raw_transaction()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok("0xnew_hash".to_string()) }));
+
+        // Should update to Submitted status with new hash
+        let test_tx_clone = test_tx.clone();
+        mock_transaction
+            .expect_partial_update()
+            .times(1)
+            .withf(|_, update| {
+                update.status == Some(TransactionStatus::Submitted)
+                    && update.sent_at.is_some()
+                    && update.priced_at.is_some()
+                    && update.hashes.is_some()
+            })
+            .returning(move |_, update| {
+                let mut updated_tx = test_tx_clone.clone();
+                updated_tx.status = update.status.unwrap();
+                updated_tx.sent_at = update.sent_at.clone();
+                updated_tx.priced_at = update.priced_at.clone();
+                if let Some(hashes) = update.hashes.clone() {
+                    updated_tx.hashes = hashes;
+                }
+                if let Some(network_data) = update.network_data.clone() {
+                    updated_tx.network_data = network_data;
+                }
+                Ok(updated_tx)
+            });
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(mock_network),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.resubmit_transaction(test_tx.clone()).await;
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+        let updated_tx = result.unwrap();
+        assert_eq!(
+            updated_tx.status,
+            TransactionStatus::Submitted,
+            "Transaction status should transition from Sent to Submitted"
+        );
     }
 }

@@ -226,6 +226,7 @@ mod tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
 
         let result = extract_inner_transaction(&stellar_data);
@@ -256,6 +257,7 @@ mod tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
 
         let result = extract_inner_transaction(&stellar_data);
@@ -283,6 +285,7 @@ mod tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
 
         let result = extract_inner_transaction(&stellar_data);
@@ -744,6 +747,7 @@ mod signed_xdr_tests {
                     max_fee: 1_000_000,
                 },
                 signed_envelope_xdr: None,
+                transaction_result_xdr: None,
             };
 
             let result = process_fee_bump(
@@ -857,6 +861,7 @@ mod signed_xdr_tests {
                     max_fee: 1_000_000,
                 },
                 signed_envelope_xdr: None,
+                transaction_result_xdr: None,
             };
 
             let result = process_fee_bump(
@@ -990,6 +995,7 @@ mod signed_xdr_tests {
                     max_fee: 1_000_000,
                 },
                 signed_envelope_xdr: None,
+                transaction_result_xdr: None,
             };
 
             let result = process_fee_bump(
@@ -1093,6 +1099,7 @@ mod signed_xdr_tests {
                     max_fee: 1_000_000,
                 },
                 signed_envelope_xdr: None,
+                transaction_result_xdr: None,
             };
 
             let result = process_fee_bump(
@@ -1228,6 +1235,7 @@ mod signed_xdr_tests {
                     max_fee: 1_000_000,
                 },
                 signed_envelope_xdr: None,
+                transaction_result_xdr: None,
             };
 
             let result = process_fee_bump(
