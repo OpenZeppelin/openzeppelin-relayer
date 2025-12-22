@@ -6,7 +6,7 @@
       "contracts": {
         "simple_storage": "0x5FbDB2315678afecb367f032d93F642f64180aa3"
       },
-      "min_balance": "0.01",
+      "min_balance": "0",
       "enabled": true
     }
   }

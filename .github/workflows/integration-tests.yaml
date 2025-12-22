@@ -37,17 +37,12 @@ jobs:
           AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
           AWS_REGION=${{ vars.AWS_REGION_KMS_KEY }}
           EOF
-      - name: Create config files from examples
+      - name: Inject config files
+        env:
+          AWS_KMS_REGION: ${{ vars.AWS_REGION_KMS_KEY }}
+          AWS_KMS_KEY_ID: ${{ secrets.TESTNET_AWS_KMS_KEY_ID }}
         run: |
-          mkdir -p tests/integration/config/testnet
-          cp tests/integration/config/config.example.json tests/integration/config/testnet/config.json
-          cp tests/integration/config/registry.example.json tests/integration/config/testnet/registry.json
-      - name: Inject AWS KMS signer config
-        run: |
-          jq --arg region "${{ vars.AWS_REGION_KMS_KEY }}" \
-             --arg key_id "${{ secrets.TESTNET_AWS_KMS_KEY_ID }}" \
-             '.signers = [{"id": "local-signer", "type": "aws_kms", "config": {"region": $region, "key_id": $key_id}}]' \
-             tests/integration/config/testnet/config.json > tests/integration/config/testnet/config.tmp.json && \
-          mv tests/integration/config/testnet/config.tmp.json tests/integration/config/testnet/config.json
+          echo '${{ vars.INTEGRATION_CONFIG_JSON }}' | envsubst > tests/integration/config/testnet/config.json
+          echo '${{ vars.INTEGRATION_REGISTRY_JSON }}' > tests/integration/config/testnet/registry.json
       - name: Run Integration Tests
         run: ./scripts/run-integration-docker.sh

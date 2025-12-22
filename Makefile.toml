@@ -16,3 +16,9 @@ script = [
   "chmod +x ./scripts/docker_compose.sh",
   "./scripts/docker_compose.sh down"
 ]
+
+[tasks.integration-test-local]
+description = "Run integration tests against local standalone Anvil"
+env = { "TEST_REGISTRY_PATH" = "tests/integration/config/local-standalone/registry.json" }
+command = "cargo"
+args = ["test", "--features", "integration-tests", "--test", "integration"]

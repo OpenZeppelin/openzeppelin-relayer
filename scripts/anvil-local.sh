@@ -118,39 +118,14 @@ start_anvil() {
     NETWORK_NAME="localhost" \
     "$PROJECT_ROOT/scripts/deploy-local-contracts.sh"
 
-    # Create standalone config directory
-    STANDALONE_CONFIG_DIR="$PROJECT_ROOT/tests/integration/config/local-standalone"
-    mkdir -p "$STANDALONE_CONFIG_DIR"
-
-    # Create standalone registry.json if it doesn't exist
-    if [ ! -f "$STANDALONE_CONFIG_DIR/registry.json" ]; then
-        log_info "Creating standalone registry.json..."
-        cat > "$STANDALONE_CONFIG_DIR/registry.json" << 'EOF'
-{
-  "networks": {
-    "localhost": {
-      "network_name": "localhost",
-      "network_type": "evm",
-      "contracts": {
-        "simple_storage": "0x5FbDB2315678afecb367f032d93F642f64180aa3"
-      },
-      "min_balance": "0.01",
-      "enabled": true
-    }
-  }
-}
-EOF
-    fi
-
     log_success "Standalone Anvil setup complete!"
     echo ""
     echo "Next steps:"
     echo "  1. Add the Anvil relayer config to your config/config.json"
     echo "     (see tests/integration/README.md for details)"
     echo "  2. Run relayer: cargo run"
-    echo "  3. Run tests (tests will discover relayers via API):"
-    echo "     TEST_REGISTRY_PATH=tests/integration/config/local-standalone/registry.json \\"
-    echo "     cargo test --features integration-tests --test integration"
+    echo "  3. Run tests:"
+    echo "     cargo make integration-test-local"
     echo ""
     echo "To stop Anvil: $0 stop"
 }

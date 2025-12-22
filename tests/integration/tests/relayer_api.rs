@@ -192,6 +192,11 @@ impl CrudTestRelayer {
         info!(id = %self.relayer_id, network = %self.network_name, "Cleaning up test relayer");
         let _ = client.delete_relayer(&self.relayer_id).await;
 
+        self.cleanup_signer_only(client).await
+    }
+
+    /// Clean up only the signer (use when relayer has already been deleted)
+    async fn cleanup_signer_only(&self, client: &RelayerClient) -> eyre::Result<()> {
         info!(id = %self.signer_id, "Cleaning up test signer");
         let _ = client.delete_signer(&self.signer_id).await;
 
@@ -387,9 +392,9 @@ async fn test_delete_relayer() {
         relayer_id
     );
 
-    // Cleanup: also delete the signer (cleanup method handles this, but we already deleted the relayer)
+    // Cleanup: only delete the signer since relayer was already deleted above
     test_relayer
-        .cleanup(&client)
+        .cleanup_signer_only(&client)
         .await
         .expect("Failed to cleanup test signer");
 
