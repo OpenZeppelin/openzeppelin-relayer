@@ -42,8 +42,6 @@ services:
     restart: on-failure:5
   redis:
     image: redis:bookworm
-    ports:
-      - 6379:6379/tcp
     security_opt:
       - no-new-privileges
     volumes:
@@ -55,6 +53,8 @@ services:
       - --save
       - '60'
       - '1'
+      - --protected-mode
+      - 'yes'
     networks:
       - relayer-network
       - metrics-network
