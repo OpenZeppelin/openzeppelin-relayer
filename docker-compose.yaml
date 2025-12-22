@@ -47,8 +47,6 @@ services:
       - metrics-network
   redis:
     image: redis:bookworm
-    ports:
-      - 6379:6379/tcp
     security_opt:
       - no-new-privileges
     volumes:
