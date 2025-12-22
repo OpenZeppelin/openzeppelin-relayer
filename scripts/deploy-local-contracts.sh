@@ -5,8 +5,8 @@ set -euo pipefail
 ANVIL_CONTAINER="${ANVIL_CONTAINER:-integration-anvil}"
 RPC_URL="${RPC_URL:-http://localhost:8545}"
 REGISTRY_PATH="${REGISTRY_PATH:-tests/integration/config/local/registry.json}"
-# Network name to update in registry - defaults to localhost-integration for Docker mode
-NETWORK_NAME="${NETWORK_NAME:-localhost-integration}"
+# Network name to update in registry - defaults to localhost-anvil-docker for Docker mode
+NETWORK_NAME="${NETWORK_NAME:-localhost-anvil-docker}"
 
 echo "Deploying contracts to Anvil..."
 echo "Container: $ANVIL_CONTAINER"

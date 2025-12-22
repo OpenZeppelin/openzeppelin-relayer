@@ -178,7 +178,7 @@ case "$COMMAND" in
                 ANVIL_CONTAINER="integration-anvil" \
                 RPC_URL="http://localhost:8545" \
                 REGISTRY_PATH="tests/integration/config/local/registry.json" \
-                NETWORK_NAME="localhost-integration" \
+                NETWORK_NAME="localhost-anvil-docker" \
                 "$PROJECT_ROOT/scripts/deploy-local-contracts.sh"
 
                 log_info "Using local config files:"

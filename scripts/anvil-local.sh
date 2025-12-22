@@ -124,8 +124,7 @@ start_anvil() {
     echo "  1. Add the Anvil relayer config to your config/config.json"
     echo "     (see tests/integration/README.md for details)"
     echo "  2. Run relayer: cargo run"
-    echo "  3. Run tests:"
-    echo "     cargo make integration-test-local"
+    echo "  3. Run tests: cargo make integration-test-standalone"
     echo ""
     echo "To stop Anvil: $0 stop"
 }

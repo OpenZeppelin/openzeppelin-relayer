@@ -2,7 +2,7 @@
   "networks": [
     {
       "type": "evm",
-      "network": "localhost",
+      "network": "localhost-anvil",
       "chain_id": 31337,
       "required_confirmations": 1,
       "symbol": "ETH",
