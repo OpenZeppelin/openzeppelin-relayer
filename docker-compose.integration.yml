@@ -80,6 +80,7 @@ services:
       retries: 15
       start_period: 10s
   integration-tests:
+    image: openzeppelin-relayer-integration:latest
     build:
       context: .
       dockerfile: Dockerfile.integration
