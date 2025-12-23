@@ -78,7 +78,7 @@ services:
       - metrics-network
       - relayer-network
     volumes:
-      - ./cmd/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../../cmd/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     tmpfs:
       - /tmp
@@ -97,9 +97,9 @@ services:
       - metrics-network
       - relayer-network
     volumes:
-      - ./cmd/prometheus/grafana.ini:/etc/grafana/grafana.ini:ro
-      - ./cmd/prometheus/datasources:/etc/grafana/provisioning/datasources:ro
-      - ./cmd/prometheus/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ../../cmd/prometheus/grafana.ini:/etc/grafana/grafana.ini:ro
+      - ../../cmd/prometheus/datasources:/etc/grafana/provisioning/datasources:ro
+      - ../../cmd/prometheus/dashboards:/etc/grafana/provisioning/dashboards:ro
       - grafana_data:/var/lib/grafana
     tmpfs:
       - /tmp
