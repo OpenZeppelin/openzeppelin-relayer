@@ -75,6 +75,7 @@ mod tests {
                 timeout: Duration::from_secs(69),
                 emit_logs: false,
                 emit_traces: false,
+                forward_logs: false,
             },
             PluginModel {
                 id: "test-plugin2".to_string(),
@@ -82,6 +83,7 @@ mod tests {
                 timeout: Duration::from_secs(69),
                 emit_logs: false,
                 emit_traces: false,
+                forward_logs: false,
             },
         ])
     }

@@ -244,6 +244,7 @@ mod tests {
                 timeout: None,
                 emit_logs: false,
                 emit_traces: false,
+                forward_logs: false,
             }]),
         }
     }
@@ -1150,6 +1151,7 @@ mod tests {
                 timeout: None,
                 emit_logs: false,
                 emit_traces: false,
+                forward_logs: false,
             }]),
         };
         let result = config.validate_plugins();

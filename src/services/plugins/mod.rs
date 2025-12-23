@@ -179,6 +179,26 @@ fn build_metadata(
     }
 }
 
+fn forward_logs_to_tracing(plugin_id: &str, logs: &[LogEntry], request_id: Option<String>) {
+    for entry in logs {
+        match entry.level {
+            LogLevel::Error => {
+                tracing::error!(target: "plugin", plugin_id = %plugin_id, request_id = ?request_id, "{}", entry.message)
+            }
+            LogLevel::Warn => {
+                tracing::warn!(target: "plugin", plugin_id = %plugin_id, request_id = ?request_id, "{}", entry.message)
+            }
+            LogLevel::Info | LogLevel::Log => {
+                tracing::info!(target: "plugin", plugin_id = %plugin_id, request_id = ?request_id, "{}", entry.message)
+            }
+            LogLevel::Debug => {
+                tracing::debug!(target: "plugin", plugin_id = %plugin_id, request_id = ?request_id, "{}", entry.message)
+            }
+            LogLevel::Result => {}
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum PluginCallResult {
     Success(PluginCallResponse),
@@ -233,6 +253,8 @@ impl<R: PluginRunnerTrait> PluginService<R> {
             .headers
             .map(|h| serde_json::to_string(&h).unwrap_or_default());
 
+        let request_id = get_request_id();
+        let request_id_for_logs = request_id.clone();
         let result = self
             .runner
             .run(
@@ -241,7 +263,7 @@ impl<R: PluginRunnerTrait> PluginService<R> {
                 script_path,
                 plugin.timeout,
                 script_params,
-                get_request_id(),
+                request_id,
                 headers_json,
                 state,
             )
@@ -249,6 +271,13 @@ impl<R: PluginRunnerTrait> PluginService<R> {
 
         match result {
             Ok(script_result) => {
+                if plugin.forward_logs {
+                    forward_logs_to_tracing(
+                        &plugin.id,
+                        &script_result.logs,
+                        request_id_for_logs.clone(),
+                    );
+                }
                 // Include logs/traces only if enabled via plugin config
                 let logs = if plugin.emit_logs {
                     Some(script_result.logs)
@@ -274,6 +303,11 @@ impl<R: PluginRunnerTrait> PluginService<R> {
             }
             Err(e) => match e {
                 PluginError::HandlerError(payload) => {
+                    if plugin.forward_logs {
+                        if let Some(logs) = payload.logs.as_deref() {
+                            forward_logs_to_tracing(&plugin.id, logs, request_id_for_logs.clone());
+                        }
+                    }
                     let failure = payload.into_response(plugin.emit_logs, plugin.emit_traces);
                     let has_logs = failure
                         .metadata
@@ -361,7 +395,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{io::Write, time::Duration};
 
     use crate::{
         constants::DEFAULT_PLUGIN_TIMEOUT_SECONDS,
@@ -403,6 +437,7 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: true,
             emit_traces: false,
+            forward_logs: false,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;
@@ -702,6 +737,7 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: true,
             emit_traces: true,
+            forward_logs: false,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;
@@ -757,6 +793,7 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: false,
             emit_traces: false,
+            forward_logs: false,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;
@@ -797,6 +834,7 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: true,
             emit_traces: true,
+            forward_logs: false,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;
@@ -842,6 +880,224 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct VecWriter {
+        buffer: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl Write for VecWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let mut buffer = self.buffer.lock().unwrap();
+            buffer.push(String::from_utf8_lossy(buf).to_string());
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn init_capturing_subscriber(
+        buffer: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    ) -> tracing::subscriber::DefaultGuard {
+        use tracing_subscriber::filter::LevelFilter;
+        let writer = VecWriter { buffer };
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .with_target(true)
+            .without_time()
+            .with_max_level(LevelFilter::DEBUG)
+            .finish();
+        tracing::subscriber::set_default(subscriber)
+    }
+
+    #[tokio::test]
+    async fn test_forward_logs_to_tracing_when_enabled_all_levels() {
+        use std::sync::{Arc as StdArc, Mutex};
+
+        let logs_buffer: StdArc<Mutex<Vec<String>>> = StdArc::new(Mutex::new(Vec::new()));
+        let _guard = init_capturing_subscriber(logs_buffer.clone());
+
+        let plugin = PluginModel {
+            id: "test-plugin-levels".to_string(),
+            path: "test-path".to_string(),
+            timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+            emit_logs: false,
+            emit_traces: false,
+            forward_logs: true,
+        };
+        let app_state =
+            create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;
+
+        let mut plugin_runner = MockPluginRunnerTrait::default();
+
+        plugin_runner
+            .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
+            .returning(|_, _, _, _, _, _, _, _| {
+                Ok(ScriptResult {
+                    logs: vec![
+                        LogEntry {
+                            level: LogLevel::Error,
+                            message: "err-log".to_string(),
+                        },
+                        LogEntry {
+                            level: LogLevel::Warn,
+                            message: "warn-log".to_string(),
+                        },
+                        LogEntry {
+                            level: LogLevel::Info,
+                            message: "info-log".to_string(),
+                        },
+                        LogEntry {
+                            level: LogLevel::Log,
+                            message: "log-log".to_string(),
+                        },
+                        LogEntry {
+                            level: LogLevel::Debug,
+                            message: "debug-log".to_string(),
+                        },
+                        LogEntry {
+                            level: LogLevel::Result,
+                            message: "result-log".to_string(),
+                        },
+                    ],
+                    error: "".to_string(),
+                    return_value: "{}".to_string(),
+                    trace: vec![],
+                })
+            });
+
+        let plugin_service = PluginService::<MockPluginRunnerTrait>::new(plugin_runner);
+        let _ = plugin_service
+            .call_plugin(
+                plugin,
+                PluginCallRequest {
+                    params: serde_json::json!({}),
+                    headers: None,
+                },
+                Arc::new(web::ThinData(app_state)),
+            )
+            .await;
+
+        let captured = logs_buffer.lock().unwrap().join("\n");
+
+        assert!(captured.contains("err-log"));
+        assert!(captured.contains("warn-log"));
+        assert!(captured.contains("info-log"));
+        assert!(captured.contains("log-log"));
+        assert!(captured.contains("debug-log"));
+        assert!(!captured.contains("result-log"));
+        assert!(captured.contains("plugin_id=test-plugin-levels"));
+        assert!(captured.contains("ERROR"));
+        assert!(captured.contains("WARN"));
+    }
+
+    #[tokio::test]
+    async fn test_forward_logs_not_emitted_when_disabled() {
+        use std::sync::{Arc as StdArc, Mutex};
+
+        let logs_buffer: StdArc<Mutex<Vec<String>>> = StdArc::new(Mutex::new(Vec::new()));
+        let _guard = init_capturing_subscriber(logs_buffer.clone());
+
+        let plugin = PluginModel {
+            id: "test-plugin-disabled".to_string(),
+            path: "test-path".to_string(),
+            timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+            emit_logs: false,
+            emit_traces: false,
+            forward_logs: false,
+        };
+        let app_state =
+            create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;
+
+        let mut plugin_runner = MockPluginRunnerTrait::default();
+        plugin_runner
+            .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
+            .returning(|_, _, _, _, _, _, _, _| {
+                Ok(ScriptResult {
+                    logs: vec![LogEntry {
+                        level: LogLevel::Warn,
+                        message: "should-not-emit".to_string(),
+                    }],
+                    error: "".to_string(),
+                    return_value: "{}".to_string(),
+                    trace: vec![],
+                })
+            });
+
+        let plugin_service = PluginService::<MockPluginRunnerTrait>::new(plugin_runner);
+        let _ = plugin_service
+            .call_plugin(
+                plugin,
+                PluginCallRequest {
+                    params: serde_json::json!({}),
+                    headers: None,
+                },
+                Arc::new(web::ThinData(app_state)),
+            )
+            .await;
+
+        let captured = logs_buffer.lock().unwrap().join("\n");
+        assert!(
+            captured.is_empty(),
+            "logs should not be forwarded when disabled"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_forward_logs_on_handler_error() {
+        use std::sync::{Arc as StdArc, Mutex};
+
+        let logs_buffer: StdArc<Mutex<Vec<String>>> = StdArc::new(Mutex::new(Vec::new()));
+        let _guard = init_capturing_subscriber(logs_buffer.clone());
+
+        let plugin = PluginModel {
+            id: "test-plugin-error".to_string(),
+            path: "test-path".to_string(),
+            timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+            emit_logs: true,
+            emit_traces: false,
+            forward_logs: true,
+        };
+        let app_state =
+            create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;
+
+        let mut plugin_runner = MockPluginRunnerTrait::default();
+        plugin_runner
+            .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
+            .returning(|_, _, _, _, _, _, _, _| {
+                Err(PluginError::HandlerError(Box::new(PluginHandlerPayload {
+                    status: 400,
+                    message: "handler failed".to_string(),
+                    code: None,
+                    details: None,
+                    logs: Some(vec![LogEntry {
+                        level: LogLevel::Error,
+                        message: "handler-log".to_string(),
+                    }]),
+                    traces: None,
+                })))
+            });
+
+        let plugin_service = PluginService::<MockPluginRunnerTrait>::new(plugin_runner);
+        let _ = plugin_service
+            .call_plugin(
+                plugin,
+                PluginCallRequest {
+                    params: serde_json::json!({}),
+                    headers: None,
+                },
+                Arc::new(web::ThinData(app_state)),
+            )
+            .await;
+
+        let captured = logs_buffer.lock().unwrap().join("\n");
+        assert!(captured.contains("handler-log"));
+        assert!(captured.contains("plugin_id=test-plugin-error"));
+        assert!(captured.contains("ERROR"));
+    }
+
     #[tokio::test]
     async fn test_call_plugin_success_with_undefined_result() {
         let plugin = PluginModel {
@@ -850,6 +1106,7 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: false,
             emit_traces: false,
+            forward_logs: false,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;
@@ -900,6 +1157,7 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: false,
             emit_traces: false,
+            forward_logs: false,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;
@@ -977,6 +1235,7 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: false,
             emit_traces: false,
+            forward_logs: false,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;

@@ -18,6 +18,8 @@ pub struct PluginFileConfig {
     pub emit_logs: bool,
     #[serde(default)]
     pub emit_traces: bool,
+    #[serde(default)]
+    pub forward_logs: bool,
 }
 
 pub struct PluginsFileConfig {

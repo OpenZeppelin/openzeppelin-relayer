@@ -174,6 +174,7 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: false,
             emit_traces: false,
+            forward_logs: false,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin]), None).await;
@@ -223,6 +224,7 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: true,
             emit_traces: true,
+            forward_logs: false,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin]), None).await;
@@ -248,6 +250,7 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: false,
             emit_traces: false,
+            forward_logs: false,
         };
         let plugin2 = PluginModel {
             id: "plugin2".to_string(),
@@ -255,6 +258,7 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: true,
             emit_traces: true,
+            forward_logs: false,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin1, plugin2]), None).await;

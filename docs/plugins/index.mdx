@@ -133,7 +133,7 @@ export async function handler(api: PluginAPI, params: any): Promise<any> {
 
 Plugins are configured in the `./config/config.json` file, under the `plugins` key.
 
-The file contains a list of plugins, each with an id, path and timeout in seconds (optional).
+The file contains a list of plugins, each with an id, path, timeout in seconds (optional), and logging configuration options.
 
 <Callout>The plugin path is relative to the `/plugins` directory</Callout>
 
@@ -145,16 +145,40 @@ Example:
   {
     "id": "my-plugin",
     "path": "my-plugin.ts",
-    "timeout": 30
+    "timeout": 30,
+    "emit_logs": false,
+    "emit_traces": false,
+    "forward_logs": false
   }
 ]
 ```
 
-### Timeout
+### Configuration Options
+
+#### Timeout
 
 The timeout is the maximum time **in seconds** that the plugin can run. If the plugin exceeds the timeout, it will be terminated with an error.
 
 The timeout is optional, and if not provided, the default is 300 seconds (5 minutes).
+
+#### Logging Configuration
+
+Plugins support three logging configuration options that control how plugin output is handled:
+
+- **`emit_logs`** (default: `false`): When `true`, includes plugin console output (console.log, console.error, etc.) in the HTTP response `metadata.logs` field. Useful for client-side debugging and inspection.
+
+- **`emit_traces`** (default: `false`): When `true`, includes API interaction traces (messages exchanged between the plugin and Relayer) in the HTTP response `metadata.traces` field. Useful for understanding plugin-relayer communication.
+
+- **`forward_logs`** (default: `false`): When `true`, forwards plugin console logs to the Relayer's Rust tracing system, making them appear in the Relayer's unified log output. This enables server-side debugging and monitoring through your existing log aggregation infrastructure. Log levels are automatically mapped (error → error!, warn → warn!, info/log → info!, debug → debug!).
+
+**Use Cases:**
+
+- **Development/Debugging**: Enable `forward_logs: true` to see plugin logs alongside Relayer logs in your development environment
+- **Production Monitoring**: Use `forward_logs: true` for critical plugins to monitor their execution in production logs
+- **Client Debugging**: Enable `emit_logs: true` to return logs in API responses for client-side inspection
+- **API Tracing**: Enable `emit_traces: true` to debug plugin-relayer interactions
+
+**Note**: These options are independent and can be used together. For example, you can enable `forward_logs` for server-side monitoring while keeping `emit_logs` disabled to avoid exposing logs to API clients.
 
 ## Plugin Development Guidelines
 
@@ -232,6 +256,7 @@ API responses use the `ApiResponse` envelope: `success, data, error, metadata`.
 - `data` contains your handler return value (decoded from JSON when possible).
 - `metadata.logs?` and `metadata.traces?` are only populated if the plugin configuration enables `emit_logs` / `emit_traces`.
 - `error` is `null`.
+- Plugin logs are forwarded to the Relayer's tracing system if `forward_logs` is enabled (appears in server logs, not in HTTP response).
 
 ### Plugin errors (HTTP 4xx)
 
@@ -239,6 +264,7 @@ API responses use the `ApiResponse` envelope: `success, data, error, metadata`.
 - `error` provides the client-facing message, derived from the thrown error or from log output when the message is empty.
 - `data` carries `code?: string, details?: any` reported by the plugin.
 - `metadata` follows the same visibility rules (`emit_logs` / `emit_traces`).
+- Plugin error logs are also forwarded to the Relayer's tracing system if `forward_logs` is enabled.
 
 ### Complete Example
 
@@ -303,7 +329,10 @@ export async function handler(context: PluginContext): Promise<ExampleResult> {
     {
       "id": "example-plugin",
       "path": "example-plugin.ts",
-      "timeout": 30
+      "timeout": 30,
+      "emit_logs": true,
+      "emit_traces": true,
+      "forward_logs": true
     }
   ]
 }
@@ -369,9 +398,75 @@ curl -X POST http://localhost:8080/api/v1/plugins/example-plugin/call \
 ## Response Fields
 
 - **`data`**: The value returned by your plugin's handler function (decoded from JSON when possible)
-- **`metadata.logs`**: Terminal output from the plugin (console.log, console.error, etc.) when `emit_logs` is true
+- **`metadata.logs`**: Terminal output from the plugin (console.log, console.error, etc.) when `emit_logs` is true. These logs are also forwarded to the Relayer's tracing system when `forward_logs` is enabled.
 - **`metadata.traces`**: Messages exchanged between the plugin and the Relayer via PluginAPI when `emit_traces` is true
 - **`error`**: Error message if the plugin execution failed (business errors)
+
+## Logging and Debugging
+
+The Relayer provides multiple ways to access plugin logs and debug information:
+
+### Server-Side Logging (`forward_logs`)
+
+When `forward_logs: true` is enabled in your plugin configuration, all plugin console output is forwarded to the Relayer's Rust tracing system. This means:
+
+- Plugin logs appear in the same log stream as Relayer logs
+- Logs are automatically mapped to appropriate tracing levels (error → error!, warn → warn!, info/log → info!, debug → debug!)
+- Logs include plugin context (plugin ID) for easy filtering
+- Works with your existing log aggregation infrastructure (e.g., CloudWatch, Datadog, ELK stack)
+- Logs are forwarded for both successful executions and errors
+
+**Example**: With `forward_logs: true`, a plugin's `console.error('Transaction failed')` will appear in your Relayer logs as:
+
+```
+ERROR plugin_id=my-plugin Transaction failed
+```
+
+This is particularly useful for:
+- **Production monitoring**: Monitor plugin execution alongside Relayer operations
+- **Debugging**: See plugin logs in real-time during development
+- **Troubleshooting**: Correlate plugin behavior with Relayer events in unified logs
+
+### Client-Side Logging (`emit_logs`)
+
+When `emit_logs: true` is enabled, plugin logs are included in the HTTP response `metadata.logs` field. This allows clients to inspect plugin execution without accessing server logs.
+
+**Example**: With `emit_logs: true`, the API response includes:
+
+```json
+{
+  "success": true,
+  "data": { ... },
+  "metadata": {
+    "logs": [
+      { "level": "info", "message": "🚀 Plugin started..." },
+      { "level": "error", "message": "Validation failed" }
+    ]
+  }
+}
+```
+
+### API Tracing (`emit_traces`)
+
+When `emit_traces: true` is enabled, API interaction traces are included in the HTTP response `metadata.traces` field. This shows the messages exchanged between your plugin and the Relayer API.
+
+**Example**: With `emit_traces: true`, the API response includes:
+
+```json
+{
+  "success": true,
+  "data": { ... },
+  "metadata": {
+    "traces": [
+      {
+        "relayerId": "my-relayer",
+        "method": "sendTransaction",
+        "payload": { ... }
+      }
+    ]
+  }
+}
+```
 
 ## Key-Value Storage
 
