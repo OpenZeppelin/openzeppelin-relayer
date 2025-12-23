@@ -83,7 +83,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.integration
-      target: coverage  # Use coverage stage to always collect coverage
+      target: runtime  # Use runtime stage that executes pre-built binary with coverage
     container_name: integration-tests
     depends_on:
       relayer:
@@ -104,6 +104,8 @@ services:
       - ./config/networks:/app/networks:ro
       # Mount coverage output directory
       - ./coverage:/app/coverage
+      # Mount profraw directory for debugging raw coverage data
+      - ./profraw:/app/profraw
 networks:
   integration:
     driver: bridge

@@ -51,6 +51,9 @@ set -a
 source "$PROJECT_ROOT/.env.integration"
 set +a
 
+# Detect if running in CI
+CI=${CI:-false}
+
 # MODE handling (local/testnet)
 MODE=${MODE:-local}  # Default to local
 
@@ -215,10 +218,33 @@ case "$COMMAND" in
         log_info "Starting relayer..."
         docker compose $PROFILE -f docker-compose.integration.yml up -d relayer
 
-        # Run tests
+        # Create coverage directories
+        mkdir -p "$PROJECT_ROOT/coverage" "$PROJECT_ROOT/profraw"
+        chmod 777 "$PROJECT_ROOT/coverage" "$PROJECT_ROOT/profraw"
+
+        # Run tests - different behavior for CI vs local
         log_info "Running integration tests..."
-        docker compose $PROFILE -f docker-compose.integration.yml up --build --abort-on-container-exit integration-tests
+        if [ "$CI" = "true" ]; then
+            # CI: Use pre-built images (already built by workflow)
+            docker compose $PROFILE -f docker-compose.integration.yml up \
+                --no-build \
+                --abort-on-container-exit \
+                integration-tests
+        else
+            # Local: Build if needed
+            docker compose $PROFILE -f docker-compose.integration.yml up \
+                --build \
+                --abort-on-container-exit \
+                integration-tests
+        fi
         EXIT_CODE=$?
+
+        # Verify coverage was generated
+        if [ -f "$PROJECT_ROOT/coverage/integration-lcov.info" ]; then
+            log_success "Coverage generated: $(wc -l < "$PROJECT_ROOT/coverage/integration-lcov.info") lines"
+        else
+            log_warn "Coverage file not found at $PROJECT_ROOT/coverage/integration-lcov.info"
+        fi
 
         if [ $EXIT_CODE -eq 0 ]; then
             log_success "Integration tests passed!"
