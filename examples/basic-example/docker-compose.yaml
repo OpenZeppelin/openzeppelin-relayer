@@ -42,8 +42,6 @@ services:
       - --save
       - '60'
       - '1'
-      - --protected-mode
-      - 'yes'
     networks:
       - relayer-network
       - metrics-network

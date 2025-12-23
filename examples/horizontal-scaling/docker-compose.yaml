@@ -248,8 +248,6 @@ services:
       - '511'  # Max number of connections in the backlog
       - --timeout
       - '300'  # Connection timeout in seconds
-      - --protected-mode
-      - 'yes'
     networks:
       - relayer-network
     restart: on-failure:5
