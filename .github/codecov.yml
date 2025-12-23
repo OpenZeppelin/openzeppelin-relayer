@@ -29,6 +29,11 @@ flags:
     paths:
       - src/
     carryforward: true
+  integration:
+    paths:
+      - src/
+    carryforward: true
+    informational: true
 comment:
   layout: flags, diff, files
   require_changes: false

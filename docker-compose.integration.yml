@@ -83,6 +83,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.integration
+      target: coverage  # Use coverage stage to always collect coverage
     container_name: integration-tests
     depends_on:
       relayer:
@@ -101,10 +102,8 @@ services:
     volumes:
       - ./tests/integration/config:/app/config:ro
       - ./config/networks:/app/networks:ro
-      # Optional: mount test results output
-      - ./test-results:/app/test-results
-    # Uses the pre-built binary from Dockerfile.integration
-    # The binary runs with --ignored --nocapture --test-threads=1 by default
+      # Mount coverage output directory
+      - ./coverage:/app/coverage
 networks:
   integration:
     driver: bridge

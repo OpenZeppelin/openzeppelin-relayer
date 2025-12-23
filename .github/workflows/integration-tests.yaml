@@ -47,3 +47,12 @@ jobs:
           echo '${{ vars.INTEGRATION_REGISTRY_JSON }}' > tests/integration/config/testnet/registry.json
       - name: Run Integration Tests
         run: ./scripts/run-integration-docker.sh
+      - name: Upload Integration Coverage to Codecov
+        if: always()  # Upload coverage even if tests fail
+        uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          name: integration-coverage
+          files: ./coverage/integration-lcov.info
+          flags: integration
+          fail_ci_if_error: false

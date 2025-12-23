@@ -16,6 +16,11 @@ RUN apk update && apk --no-cache add \
 
 WORKDIR /app
 
+# Install llvm-tools-preview component and cargo-llvm-cov for coverage
+RUN rustup default stable && \
+    rustup component add llvm-tools-preview && \
+    cargo install cargo-llvm-cov --locked
+
 # Copy manifests
 COPY Cargo.toml Cargo.lock ./
 
@@ -40,6 +45,33 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo test --features integration-tests --test integration --release --no-run && \
     TEST_BINARY=$(find target/release/deps -name 'integration-*' -type f -executable | head -n 1) && \
     cp "$TEST_BINARY" /app/integration-test-binary
+
+# ============================================================================
+# Coverage Stage - Full toolchain for coverage collection
+# ============================================================================
+FROM builder AS coverage
+
+WORKDIR /app
+
+# Create directory for coverage output
+RUN mkdir -p /app/coverage
+
+# Set environment variables for LLVM tools so cargo-llvm-cov can find them
+ENV LLVM_COV=/root/.rustup/toolchains/stable-aarch64-unknown-linux-gnu/lib/rustlib/aarch64-unknown-linux-gnu/bin/llvm-cov
+ENV LLVM_PROFDATA=/root/.rustup/toolchains/stable-aarch64-unknown-linux-gnu/lib/rustlib/aarch64-unknown-linux-gnu/bin/llvm-profdata
+
+# Add cargo bin to PATH so cargo-llvm-cov can be found
+ENV PATH=/root/.cargo/bin:$PATH
+
+# Reset entrypoint from base image (which sets it to rustc)
+ENTRYPOINT []
+
+# Default command runs tests with coverage
+CMD ["cargo", "llvm-cov", \
+     "--lcov", "--output-path", "/app/coverage/integration-lcov.info", \
+     "--features", "integration-tests", \
+     "--test", "integration", \
+     "--", "--nocapture", "--test-threads=1"]
 
 # ============================================================================
 # Runtime Stage - Minimal image with only what's needed to run tests
