@@ -5,8 +5,6 @@ services:
     container_name: integration-redis
     command:
       - redis-server
-      - --protected-mode
-      - 'yes'
     networks:
       - integration
     healthcheck:
