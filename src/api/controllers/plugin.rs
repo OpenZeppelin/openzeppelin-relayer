@@ -190,6 +190,7 @@ mod tests {
             raw_response: false,
             allow_get_invocation: false,
             config: None,
+            forward_logs: false,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin]), None).await;
@@ -248,6 +249,7 @@ mod tests {
             raw_response: false,
             allow_get_invocation: false,
             config: None,
+            forward_logs: false,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin]), None).await;
@@ -279,6 +281,7 @@ mod tests {
             raw_response: false,
             allow_get_invocation: false,
             config: None,
+            forward_logs: false,
         };
         let plugin2 = PluginModel {
             id: "plugin2".to_string(),
@@ -289,6 +292,7 @@ mod tests {
             raw_response: false,
             allow_get_invocation: false,
             config: None,
+            forward_logs: false,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin1, plugin2]), None).await;
@@ -332,6 +336,7 @@ mod tests {
             raw_response: true,
             allow_get_invocation: false,
             config: None,
+            forward_logs: false,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin]), None).await;
@@ -369,6 +374,7 @@ mod tests {
             raw_response: false,
             allow_get_invocation: false,
             config: config_value.as_object().map(|m| m.clone()),
+            forward_logs: false,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin]), None).await;
@@ -405,6 +411,7 @@ mod tests {
             raw_response: true,
             allow_get_invocation: false,
             config: config_value.as_object().map(|m| m.clone()),
+            forward_logs: false,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin]), None).await;

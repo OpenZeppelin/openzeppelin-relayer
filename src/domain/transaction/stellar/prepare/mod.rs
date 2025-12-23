@@ -1047,6 +1047,7 @@ mod refactoring_tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: Some("test-xdr".to_string()),
+            transaction_result_xdr: None,
         };
 
         let expected_xdr = expected_stellar_data.signed_envelope_xdr.clone();

@@ -1074,6 +1074,7 @@ mod tests {
                 config: None,
                 raw_response: false,
                 allow_get_invocation: false,
+                forward_logs: false,
             },
             PluginFileConfig {
                 id: "test-plugin-2".to_string(),
@@ -1084,6 +1085,7 @@ mod tests {
                 config: None,
                 raw_response: false,
                 allow_get_invocation: false,
+                forward_logs: false,
             },
         ];
 
@@ -1199,6 +1201,7 @@ mod tests {
             allow_get_invocation: false,
             config: None,
             raw_response: false,
+            forward_logs: false,
         }];
 
         // Create config

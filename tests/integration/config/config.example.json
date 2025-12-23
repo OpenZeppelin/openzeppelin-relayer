@@ -1,0 +1,54 @@
+{
+  "_comment": "COPY this file to config.json and configure for your environment",
+  "relayers": [
+    {
+      "id": "sepolia-test-relayer",
+      "name": "Sepolia Test Relayer",
+      "network": "sepolia",
+      "paused": false,
+      "signer_id": "local-signer",
+      "network_type": "evm",
+      "policies": {
+        "min_balance": 0
+      }
+    },
+    {
+      "id": "bsc-testnet-test-relayer",
+      "name": "BSC Testnet Test Relayer",
+      "network": "binance-smart-chain-testnet",
+      "paused": false,
+      "signer_id": "local-signer",
+      "network_type": "evm",
+      "policies": {
+        "min_balance": 0
+      }
+    },
+    {
+      "id": "base-sepolia-test-relayer",
+      "name": "Base Sepolia Test Relayer",
+      "network": "base-sepolia",
+      "paused": false,
+      "signer_id": "local-signer",
+      "network_type": "evm",
+      "policies": {
+        "min_balance": 0
+      }
+    }
+  ],
+  "notifications": [],
+  "signers": [
+    {
+      "id": "local-signer",
+      "type": "local",
+      "config": {
+        "path": "./config/keys/local-signer.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE"
+        }
+      }
+    }
+  ],
+  "networks": "/app/networks",
+  "plugins": []
+}

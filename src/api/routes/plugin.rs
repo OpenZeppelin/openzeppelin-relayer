@@ -167,6 +167,8 @@ pub fn init(cfg: &mut web::ServiceConfig) {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     use crate::{models::PluginModel, services::plugins::PluginCallResponse};
     use actix_web::{test, App, HttpResponse};
@@ -243,6 +245,121 @@ mod tests {
     // ============================================================================
     // UNIT TESTS FOR HELPER FUNCTIONS
     // ============================================================================
+    async fn mock_list_plugins() -> impl Responder {
+        HttpResponse::Ok().json(vec![
+            PluginModel {
+                id: "test-plugin".to_string(),
+                path: "test-path".to_string(),
+                timeout: Duration::from_secs(69),
+                emit_logs: false,
+                emit_traces: false,
+                forward_logs: false,
+                allow_get_invocation: false,
+                config: None,
+                raw_response: false,
+            },
+            PluginModel {
+                id: "test-plugin2".to_string(),
+                path: "test-path2".to_string(),
+                timeout: Duration::from_secs(69),
+                emit_logs: false,
+                emit_traces: false,
+                forward_logs: false,
+                allow_get_invocation: false,
+                config: None,
+                raw_response: false,
+            },
+        ])
+    }
+
+    async fn mock_plugin_call() -> impl Responder {
+        HttpResponse::Ok().json(PluginCallResponse {
+            result: serde_json::Value::Null,
+            metadata: None,
+        })
+    }
+
+    #[actix_web::test]
+    async fn test_plugin_call() {
+        let app = test::init_service(
+            App::new()
+                .service(
+                    web::resource("/plugins/{plugin_id}/call")
+                        .route(web::post().to(mock_plugin_call)),
+                )
+                .configure(init),
+        )
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri("/plugins/test-plugin/call")
+            .insert_header(("Content-Type", "application/json"))
+            .set_json(serde_json::json!({
+                "params": serde_json::Value::Null,
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert!(resp.status().is_success());
+
+        let body = test::read_body(resp).await;
+        let plugin_call_response: PluginCallResponse = serde_json::from_slice(&body).unwrap();
+        assert!(plugin_call_response.result.is_null());
+    }
+
+    #[actix_web::test]
+    async fn test_list_plugins() {
+        let app = test::init_service(
+            App::new()
+                .service(web::resource("/plugins").route(web::get().to(mock_list_plugins)))
+                .configure(init),
+        )
+        .await;
+
+        let req = test::TestRequest::get().uri("/plugins").to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert!(resp.status().is_success());
+
+        let body = test::read_body(resp).await;
+        let plugin_call_response: Vec<PluginModel> = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(plugin_call_response.len(), 2);
+        assert_eq!(plugin_call_response[0].id, "test-plugin");
+        assert_eq!(plugin_call_response[0].path, "test-path");
+        assert_eq!(plugin_call_response[1].id, "test-plugin2");
+        assert_eq!(plugin_call_response[1].path, "test-path2");
+    }
+
+    #[actix_web::test]
+    async fn test_plugin_call_extracts_headers() {
+        // Test that custom headers are extracted and passed to the plugin
+        let app = test::init_service(
+            App::new()
+                .service(
+                    web::resource("/plugins/{plugin_id}/call")
+                        .route(web::post().to(mock_plugin_call)),
+                )
+                .configure(init),
+        )
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri("/plugins/test-plugin/call")
+            .insert_header(("Content-Type", "application/json"))
+            .insert_header(("X-Custom-Header", "custom-value"))
+            .insert_header(("Authorization", "Bearer test-token"))
+            .insert_header(("X-Request-Id", "req-12345"))
+            // Add duplicate header to test multi-value
+            .insert_header(("Accept", "application/json"))
+            .set_json(serde_json::json!({
+                "params": {"test": "data"},
+            }))
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+    }
 
     #[actix_web::test]
     async fn test_extract_headers_unit() {
@@ -559,6 +676,7 @@ mod tests {
             raw_response: false,
             allow_get_invocation: true,
             config: None,
+            forward_logs: false,
         };
 
         let app_state =
@@ -1061,6 +1179,7 @@ mod tests {
             raw_response: false,
             allow_get_invocation: false,
             config: None,
+            forward_logs: false,
         };
 
         // Create plugin with allow_get_invocation = true
@@ -1073,6 +1192,7 @@ mod tests {
             raw_response: false,
             allow_get_invocation: true,
             config: None,
+            forward_logs: false,
         };
 
         let app_state = create_mock_app_state(
@@ -1484,6 +1604,7 @@ mod tests {
             raw_response: false,
             allow_get_invocation: false,
             config: None,
+            forward_logs: false,
         };
 
         let app_state =
@@ -1529,6 +1650,7 @@ mod tests {
             raw_response: false,
             allow_get_invocation: true, // GET allowed
             config: None,
+            forward_logs: false,
         };
 
         let app_state =

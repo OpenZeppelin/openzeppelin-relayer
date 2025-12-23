@@ -1,0 +1,13 @@
+{
+  "networks": {
+    "localhost-anvil-docker": {
+      "network_name": "localhost-anvil-docker",
+      "network_type": "evm",
+      "contracts": {
+        "simple_storage": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
+      },
+      "min_balance": "0",
+      "enabled": true
+    }
+  }
+}

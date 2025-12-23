@@ -141,6 +141,7 @@ impl TryFrom<PluginFileConfig> for PluginModel {
             raw_response: config.raw_response,
             allow_get_invocation: config.allow_get_invocation,
             config: config.config,
+            forward_logs: config.forward_logs,
         })
     }
 }
@@ -169,6 +170,7 @@ mod tests {
             raw_response: false,
             allow_get_invocation: false,
             config: None,
+            forward_logs: false,
         };
         let result = PluginModel::try_from(plugin);
         assert!(result.is_ok());
@@ -183,6 +185,7 @@ mod tests {
                 raw_response: false,
                 allow_get_invocation: false,
                 config: None,
+                forward_logs: false,
             }
         );
     }
@@ -198,6 +201,7 @@ mod tests {
             raw_response: false,
             allow_get_invocation: false,
             config: None,
+            forward_logs: false,
         }
     }
 

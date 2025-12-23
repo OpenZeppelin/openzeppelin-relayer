@@ -131,6 +131,7 @@ mod tests {
             raw_response: false,
             allow_get_invocation: false,
             config: None,
+            forward_logs: false,
         };
         plugin_repository.add(plugin.clone()).await.unwrap();
         assert_eq!(
@@ -158,6 +159,7 @@ mod tests {
             raw_response: false,
             allow_get_invocation: false,
             config: None,
+            forward_logs: false,
         };
         let result = PluginModel::try_from(plugin);
         assert!(result.is_ok());
@@ -172,6 +174,7 @@ mod tests {
                 raw_response: false,
                 allow_get_invocation: false,
                 config: None,
+                forward_logs: false,
             }
         );
     }
@@ -189,6 +192,7 @@ mod tests {
             raw_response: false,
             allow_get_invocation: false,
             config: None,
+            forward_logs: false,
         };
         plugin_repository.add(plugin.clone()).await.unwrap();
         assert_eq!(
@@ -210,6 +214,7 @@ mod tests {
             raw_response: false,
             allow_get_invocation: false,
             config: None,
+            forward_logs: false,
         };
 
         let plugin2 = PluginModel {
@@ -221,6 +226,7 @@ mod tests {
             raw_response: false,
             allow_get_invocation: false,
             config: None,
+            forward_logs: false,
         };
 
         plugin_repository.add(plugin1.clone()).await.unwrap();
@@ -251,6 +257,7 @@ mod tests {
                 raw_response: false,
                 allow_get_invocation: false,
                 config: None,
+                forward_logs: false,
             })
             .await
             .unwrap();
@@ -273,6 +280,7 @@ mod tests {
                 raw_response: false,
                 allow_get_invocation: false,
                 config: None,
+                forward_logs: false,
             })
             .await
             .unwrap();

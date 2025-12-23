@@ -380,6 +380,7 @@ impl StellarProvider {
     fn initialize_raw_provider(&self, url: &str) -> Result<ReqwestClient, ProviderError> {
         ReqwestClient::builder()
             .timeout(self.timeout_seconds)
+            .use_rustls_tls()
             .build()
             .map_err(|e| {
                 ProviderError::NetworkConfiguration(format!(

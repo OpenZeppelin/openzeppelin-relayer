@@ -27,6 +27,8 @@ pub struct PluginFileConfig {
     pub allow_get_invocation: bool,
     /// User-defined configuration accessible to the plugin (must be a JSON object)
     pub config: Option<Map<String, serde_json::Value>>,
+    #[serde(default)]
+    pub forward_logs: bool,
 }
 
 pub struct PluginsFileConfig {

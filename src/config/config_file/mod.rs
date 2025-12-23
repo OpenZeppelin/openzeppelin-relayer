@@ -247,6 +247,7 @@ mod tests {
                 emit_traces: false,
                 config: None,
                 raw_response: false,
+                forward_logs: false,
             }]),
         }
     }
@@ -1156,6 +1157,7 @@ mod tests {
                 allow_get_invocation: false,
                 config: None,
                 raw_response: false,
+                forward_logs: false,
             }]),
         };
         let result = config.validate_plugins();

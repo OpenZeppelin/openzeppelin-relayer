@@ -341,6 +341,7 @@ mod tests {
             raw_response: false,
             allow_get_invocation: false,
             config: None,
+            forward_logs: false,
         }
     }
 

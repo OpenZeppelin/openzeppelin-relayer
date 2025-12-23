@@ -1,0 +1,15 @@
+# Compiler files
+cache/
+out/
+
+# Dependencies (installed via forge install)
+lib/
+
+# Broadcast/deployment logs
+broadcast/
+
+# Docs
+docs/
+
+# Dotenv file
+.env

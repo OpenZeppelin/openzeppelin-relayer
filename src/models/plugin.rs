@@ -28,6 +28,9 @@ pub struct PluginModel {
     /// User-defined configuration accessible to the plugin (must be a JSON object)
     #[serde(default)]
     pub config: Option<Map<String, serde_json::Value>>,
+    /// Whether to forward plugin logs into the relayer's tracing output
+    #[serde(default)]
+    pub forward_logs: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
