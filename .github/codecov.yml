@@ -16,11 +16,12 @@ coverage:
           - ai
           - dev
           - properties
-      integration:
-        informational: true
-        target: auto
-        flags:
-          - integration
+      # TODO: Integration tests will be included in the future when test cases are considerable enough
+      # integration:
+      #   informational: true
+      #   target: auto
+      #   flags:
+      #     - integration
     patch:
       default:
         target: auto
@@ -42,10 +43,11 @@ flags:
     paths:
       - src/
     carryforward: true
-  integration:
-    paths:
-      - src/
-    carryforward: false  # Don't carry forward manual test coverage
+  # TODO: Integration flag will be re-enabled when test cases are considerable enough to include
+  # integration:
+  #   paths:
+  #     - src/
+  #   carryforward: false  # Don't carry forward manual test coverage
 comment:
   layout: flags, diff, files
   require_changes: false

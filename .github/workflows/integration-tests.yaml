@@ -65,13 +65,14 @@ jobs:
             echo "✗ Coverage file not found!"
             exit 1
           fi
-      - name: Upload Integration Coverage to Codecov
-        if: always()  # Upload coverage even if tests fail
-        uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          name: integration-coverage
-          files: ./coverage/integration-lcov.info
-          flags: integration
-          fail_ci_if_error: false
-          verbose: true
+      # TODO: Integration test coverage will be included in the future when test cases are considerable enough to include
+      # - name: Upload Integration Coverage to Codecov
+      #   if: always()  # Upload coverage even if tests fail
+      #   uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
+      #   with:
+      #     token: ${{ secrets.CODECOV_TOKEN }}
+      #     name: integration-coverage
+      #     files: ./coverage/integration-lcov.info
+      #     flags: integration
+      #     fail_ci_if_error: false
+      #     verbose: true
