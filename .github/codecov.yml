@@ -18,12 +18,17 @@ coverage:
           - properties
       integration:
         informational: true
+        target: auto
         flags:
           - integration
     patch:
       default:
         target: auto
         threshold: 1%
+        flags:
+          - ai
+          - dev
+          - properties
 flags:
   ai:
     paths:
@@ -40,7 +45,7 @@ flags:
   integration:
     paths:
       - src/
-    carryforward: true
+    carryforward: false  # Don't carry forward manual test coverage
 comment:
   layout: flags, diff, files
   require_changes: false
