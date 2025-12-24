@@ -1,14 +1,23 @@
 //! This module is the orchestrator of the plugin execution.
 //!
 //! 1. Initiates a socket connection to the relayer server - socket.rs
-//! 2. Executes the plugin script - script_executor.rs
+//! 2. Executes the plugin script - script_executor.rs OR pool_executor.rs
 //! 3. Sends the shutdown signal to the relayer server - socket.rs
 //! 4. Waits for the relayer server to finish the execution - socket.rs
 //! 5. Returns the output of the script - script_executor.rs
 //!
-use std::{sync::Arc, time::Duration};
+//! ## Execution Modes
+//!
+//! - **ts-node mode** (default): Spawns ts-node per request. Simple but slower.
+//! - **Pool mode** (`PLUGIN_USE_POOL=true`): Uses persistent Piscina worker pool.
+//!   Faster execution with precompilation and worker reuse.
+//!
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use crate::services::plugins::{RelayerApi, ScriptExecutor, ScriptResult, SocketService};
+use crate::services::plugins::{
+    ensure_shared_socket_started, get_pool_manager, get_shared_socket_service, RelayerApi,
+    ScriptExecutor, ScriptResult, SocketService,
+};
 use crate::{
     jobs::JobProducerTrait,
     models::{
@@ -22,11 +31,31 @@ use crate::{
 };
 
 use super::PluginError;
+use crate::constants::DEFAULT_TRACE_TIMEOUT_SECS;
 use async_trait::async_trait;
 use tokio::{sync::oneshot, time::timeout};
+use tracing::warn;
+use uuid::Uuid;
 
 #[cfg(test)]
 use mockall::automock;
+
+/// Check if pool-based execution is enabled via environment variable
+fn use_pool_executor() -> bool {
+    std::env::var("PLUGIN_USE_POOL")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false)
+}
+
+/// Get trace timeout duration - defaults to 5s but configurable
+fn get_trace_timeout() -> Duration {
+    Duration::from_secs(
+        std::env::var("PLUGIN_TRACE_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(DEFAULT_TRACE_TIMEOUT_SECS)
+    )
+}
 
 #[cfg_attr(test, automock)]
 #[async_trait]
@@ -65,6 +94,66 @@ pub struct PluginRunner;
 #[async_trait]
 impl PluginRunnerTrait for PluginRunner {
     async fn run<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+        &self,
+        plugin_id: String,
+        socket_path: &str,
+        script_path: String,
+        timeout_duration: Duration,
+        script_params: String,
+        http_request_id: Option<String>,
+        headers_json: Option<String>,
+        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
+    ) -> Result<ScriptResult, PluginError>
+    where
+        J: JobProducerTrait + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        TR: TransactionRepository
+            + Repository<TransactionRepoModel, String>
+            + Send
+            + Sync
+            + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
+        AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+    {
+        // Choose execution mode based on environment variable
+        if use_pool_executor() {
+            return self
+                .run_with_pool(
+                    plugin_id,
+                    socket_path,
+                    script_path,
+                    timeout_duration,
+                    script_params,
+                    http_request_id,
+                    headers_json,
+                    state,
+                )
+                .await;
+        }
+
+        // Default: ts-node execution
+        self.run_with_tsnode(
+            plugin_id,
+            socket_path,
+            script_path,
+            timeout_duration,
+            script_params,
+            http_request_id,
+            headers_json,
+            state,
+        )
+        .await
+    }
+}
+
+impl PluginRunner {
+    /// Execute plugin using ts-node (legacy mode)
+    #[allow(clippy::too_many_arguments)]
+    async fn run_with_tsnode<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         &self,
         plugin_id: String,
         socket_path: &str,
@@ -139,6 +228,113 @@ impl PluginRunnerTrait for PluginRunner {
                 Ok(script_result)
             }
             Err(err) => Err(err.with_traces(traces)),
+        }
+    }
+
+    /// Execute plugin using worker pool (new high-performance mode)
+    /// Uses shared socket service for better scalability
+    #[allow(clippy::too_many_arguments)]
+    async fn run_with_pool<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+        &self,
+        plugin_id: String,
+        _socket_path: &str, // Unused - we use shared socket instead
+        script_path: String,
+        timeout_duration: Duration,
+        script_params: String,
+        http_request_id: Option<String>,
+        headers_json: Option<String>,
+        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
+    ) -> Result<ScriptResult, PluginError>
+    where
+        J: JobProducerTrait + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        TR: TransactionRepository
+            + Repository<TransactionRepoModel, String>
+            + Send
+            + Sync
+            + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
+        AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+    {
+        // Ensure shared socket service is started
+        ensure_shared_socket_started(Arc::clone(&state)).await?;
+        
+        // Get shared socket service
+        let shared_socket = get_shared_socket_service()?;
+        let shared_socket_path = shared_socket.socket_path().to_string();
+
+        // Generate execution ID (use http_request_id if available, otherwise generate one)
+        let execution_id = http_request_id.clone().unwrap_or_else(|| {
+            format!("exec-{}", Uuid::new_v4())
+        });
+
+        // Register execution to receive traces
+        let mut traces_rx = shared_socket.register_execution(execution_id.clone());
+
+        // Execute via pool manager (using shared socket path)
+        let pool_manager = get_pool_manager();
+
+        // Parse params as JSON Value
+        let params: serde_json::Value = serde_json::from_str(&script_params)
+            .unwrap_or(serde_json::Value::String(script_params.clone()));
+
+        // Parse headers if present
+        let headers: Option<HashMap<String, Vec<String>>> = headers_json
+            .as_ref()
+            .and_then(|h| serde_json::from_str(h).ok());
+
+        let exec_outcome = match timeout(
+            timeout_duration,
+            pool_manager.execute_plugin(
+                plugin_id.clone(),
+                None,                   // compiled_code - will be fetched from cache
+                Some(script_path),      // plugin_path
+                params,
+                headers,
+                shared_socket_path,     // Use shared socket path instead of unique one
+                http_request_id,
+                Some(timeout_duration.as_secs()),
+            ),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => {
+                shared_socket.unregister_execution(&execution_id);
+                return Err(PluginError::ScriptTimeout(timeout_duration.as_secs()));
+            }
+        };
+
+        // Wait for traces with configurable timeout
+        // Use minimum of trace_timeout and timeout_duration to not exceed execution timeout
+        let trace_timeout = get_trace_timeout().min(timeout_duration);
+        let traces = match timeout(trace_timeout, traces_rx.recv()).await {
+            Ok(Some(traces)) => traces,
+            Ok(None) => {
+                warn!("Traces channel closed before receiving traces");
+                Vec::new()
+            }
+            Err(_) => {
+                warn!(
+                    timeout_secs = trace_timeout.as_secs(),
+                    "Timeout waiting for traces - consider increasing PLUGIN_TRACE_TIMEOUT_SECS"
+                );
+                Vec::new()
+            }
+        };
+
+        shared_socket.unregister_execution(&execution_id);
+
+        match exec_outcome {
+            Ok(mut script_result) => {
+                script_result.trace = traces;
+                Ok(script_result)
+            }
+            Err(e) => Err(e.with_traces(traces)),
         }
     }
 }

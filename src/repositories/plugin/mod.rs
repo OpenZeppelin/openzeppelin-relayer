@@ -10,6 +10,7 @@
 //! - **Path Resolution**: Manage plugin script paths for execution
 //! - **Duplicate Prevention**: Ensure unique plugin IDs
 //! - **Configuration Loading**: Convert from file configurations to repository models
+//! - **Compiled Code Caching**: Cache pre-compiled JavaScript code for performance
 //!
 //! ## Repository Implementations
 //!
@@ -46,6 +47,7 @@ use crate::{
 #[allow(dead_code)]
 #[cfg_attr(test, automock)]
 pub trait PluginRepositoryTrait {
+    // Plugin CRUD operations
     async fn get_by_id(&self, id: &str) -> Result<Option<PluginModel>, RepositoryError>;
     async fn add(&self, plugin: PluginModel) -> Result<(), RepositoryError>;
     async fn list_paginated(
@@ -55,6 +57,25 @@ pub trait PluginRepositoryTrait {
     async fn count(&self) -> Result<usize, RepositoryError>;
     async fn has_entries(&self) -> Result<bool, RepositoryError>;
     async fn drop_all_entries(&self) -> Result<(), RepositoryError>;
+
+    // Compiled code cache operations
+    /// Get compiled JavaScript code for a plugin
+    async fn get_compiled_code(&self, plugin_id: &str) -> Result<Option<String>, RepositoryError>;
+    /// Store compiled JavaScript code for a plugin
+    async fn store_compiled_code(
+        &self,
+        plugin_id: &str,
+        compiled_code: &str,
+        source_hash: Option<&str>,
+    ) -> Result<(), RepositoryError>;
+    /// Invalidate cached code for a plugin
+    async fn invalidate_compiled_code(&self, plugin_id: &str) -> Result<(), RepositoryError>;
+    /// Invalidate all cached plugin code
+    async fn invalidate_all_compiled_code(&self) -> Result<(), RepositoryError>;
+    /// Check if a plugin has cached compiled code
+    async fn has_compiled_code(&self, plugin_id: &str) -> Result<bool, RepositoryError>;
+    /// Get the source hash for cache validation
+    async fn get_source_hash(&self, plugin_id: &str) -> Result<Option<String>, RepositoryError>;
 }
 
 /// Enum wrapper for different plugin repository implementations
@@ -122,6 +143,57 @@ impl PluginRepositoryTrait for PluginRepositoryStorage {
         match self {
             PluginRepositoryStorage::InMemory(repo) => repo.drop_all_entries().await,
             PluginRepositoryStorage::Redis(repo) => repo.drop_all_entries().await,
+        }
+    }
+
+    async fn get_compiled_code(&self, plugin_id: &str) -> Result<Option<String>, RepositoryError> {
+        match self {
+            PluginRepositoryStorage::InMemory(repo) => repo.get_compiled_code(plugin_id).await,
+            PluginRepositoryStorage::Redis(repo) => repo.get_compiled_code(plugin_id).await,
+        }
+    }
+
+    async fn store_compiled_code(
+        &self,
+        plugin_id: &str,
+        compiled_code: &str,
+        source_hash: Option<&str>,
+    ) -> Result<(), RepositoryError> {
+        match self {
+            PluginRepositoryStorage::InMemory(repo) => {
+                repo.store_compiled_code(plugin_id, compiled_code, source_hash).await
+            }
+            PluginRepositoryStorage::Redis(repo) => {
+                repo.store_compiled_code(plugin_id, compiled_code, source_hash).await
+            }
+        }
+    }
+
+    async fn invalidate_compiled_code(&self, plugin_id: &str) -> Result<(), RepositoryError> {
+        match self {
+            PluginRepositoryStorage::InMemory(repo) => repo.invalidate_compiled_code(plugin_id).await,
+            PluginRepositoryStorage::Redis(repo) => repo.invalidate_compiled_code(plugin_id).await,
+        }
+    }
+
+    async fn invalidate_all_compiled_code(&self) -> Result<(), RepositoryError> {
+        match self {
+            PluginRepositoryStorage::InMemory(repo) => repo.invalidate_all_compiled_code().await,
+            PluginRepositoryStorage::Redis(repo) => repo.invalidate_all_compiled_code().await,
+        }
+    }
+
+    async fn has_compiled_code(&self, plugin_id: &str) -> Result<bool, RepositoryError> {
+        match self {
+            PluginRepositoryStorage::InMemory(repo) => repo.has_compiled_code(plugin_id).await,
+            PluginRepositoryStorage::Redis(repo) => repo.has_compiled_code(plugin_id).await,
+        }
+    }
+
+    async fn get_source_hash(&self, plugin_id: &str) -> Result<Option<String>, RepositoryError> {
+        match self {
+            PluginRepositoryStorage::InMemory(repo) => repo.get_source_hash(plugin_id).await,
+            PluginRepositoryStorage::Redis(repo) => repo.get_source_hash(plugin_id).await,
         }
     }
 }

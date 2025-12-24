@@ -49,6 +49,7 @@ use openzeppelin_relayer::{
     bootstrap::{
         initialize_app_state, initialize_relayers, initialize_token_swap_workers,
         initialize_workers, process_config_file,
+        initialize_plugin_pool, precompile_plugins, shutdown_plugin_pool,
     },
     config,
     constants::PUBLIC_ENDPOINTS,
@@ -97,6 +98,33 @@ async fn main() -> Result<()> {
 
     // Setup workers for processing jobs
     initialize_workers(app_state.clone()).await?;
+
+    // Initialize plugin worker pool if pool execution is enabled
+    let pool_manager = if std::env::var("PLUGIN_USE_POOL")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false)
+    {
+        info!("Pool-based plugin execution enabled, initializing plugin pool");
+        match initialize_plugin_pool(app_state.plugin_repository.as_ref()).await {
+            Ok(Some(pm)) => {
+                // Precompile all plugins
+                if let Err(e) = precompile_plugins(
+                    app_state.plugin_repository.as_ref(),
+                    pm.as_ref(),
+                ).await {
+                    tracing::warn!(error = %e, "Failed to precompile some plugins");
+                }
+                Some(pm)
+            }
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to initialize plugin pool");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // Rate limit configuration
     let rate_limit_config = GovernorConfigBuilder::default()
@@ -176,6 +204,13 @@ async fn main() -> Result<()> {
         futures::try_join!(app_server, metrics_server)?;
     } else {
         app_server.await?;
+    }
+
+    // Graceful shutdown: cleanup plugin pool if it was started
+    if pool_manager.is_some() {
+        if let Err(e) = shutdown_plugin_pool().await {
+            tracing::warn!(error = %e, "Failed to shutdown plugin pool gracefully");
+        }
     }
 
     Ok(())

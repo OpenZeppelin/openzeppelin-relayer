@@ -1,7 +1,7 @@
 //! This module provides an in-memory implementation of plugins.
 //!
 //! The `InMemoryPluginRepository` struct is used to store and retrieve plugins
-//! script paths for further execution.
+//! script paths for further execution. Also provides compiled code caching.
 use crate::{
     models::{PaginationQuery, PluginModel},
     repositories::{PaginatedResult, PluginRepositoryTrait, RepositoryError},
@@ -12,9 +12,17 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use tokio::sync::{Mutex, MutexGuard};
 
+/// Compiled plugin code entry
+#[derive(Debug, Clone)]
+struct CompiledCodeEntry {
+    code: String,
+    source_hash: Option<String>,
+}
+
 #[derive(Debug)]
 pub struct InMemoryPluginRepository {
     store: Mutex<HashMap<String, PluginModel>>,
+    compiled_cache: Mutex<HashMap<String, CompiledCodeEntry>>,
 }
 
 impl Clone for InMemoryPluginRepository {
@@ -25,9 +33,16 @@ impl Clone for InMemoryPluginRepository {
             .try_lock()
             .map(|guard| guard.clone())
             .unwrap_or_else(|_| HashMap::new());
+        
+        let compiled = self
+            .compiled_cache
+            .try_lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|_| HashMap::new());
 
         Self {
             store: Mutex::new(data),
+            compiled_cache: Mutex::new(compiled),
         }
     }
 }
@@ -36,6 +51,7 @@ impl InMemoryPluginRepository {
     pub fn new() -> Self {
         Self {
             store: Mutex::new(HashMap::new()),
+            compiled_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -107,6 +123,52 @@ impl PluginRepositoryTrait for InMemoryPluginRepository {
         let mut store = Self::acquire_lock(&self.store).await?;
         store.clear();
         Ok(())
+    }
+
+    // Compiled code cache methods
+
+    async fn get_compiled_code(&self, plugin_id: &str) -> Result<Option<String>, RepositoryError> {
+        let cache = Self::acquire_lock(&self.compiled_cache).await?;
+        Ok(cache.get(plugin_id).map(|e| e.code.clone()))
+    }
+
+    async fn store_compiled_code(
+        &self,
+        plugin_id: &str,
+        compiled_code: &str,
+        source_hash: Option<&str>,
+    ) -> Result<(), RepositoryError> {
+        let mut cache = Self::acquire_lock(&self.compiled_cache).await?;
+        cache.insert(
+            plugin_id.to_string(),
+            CompiledCodeEntry {
+                code: compiled_code.to_string(),
+                source_hash: source_hash.map(|s| s.to_string()),
+            },
+        );
+        Ok(())
+    }
+
+    async fn invalidate_compiled_code(&self, plugin_id: &str) -> Result<(), RepositoryError> {
+        let mut cache = Self::acquire_lock(&self.compiled_cache).await?;
+        cache.remove(plugin_id);
+        Ok(())
+    }
+
+    async fn invalidate_all_compiled_code(&self) -> Result<(), RepositoryError> {
+        let mut cache = Self::acquire_lock(&self.compiled_cache).await?;
+        cache.clear();
+        Ok(())
+    }
+
+    async fn has_compiled_code(&self, plugin_id: &str) -> Result<bool, RepositoryError> {
+        let cache = Self::acquire_lock(&self.compiled_cache).await?;
+        Ok(cache.contains_key(plugin_id))
+    }
+
+    async fn get_source_hash(&self, plugin_id: &str) -> Result<Option<String>, RepositoryError> {
+        let cache = Self::acquire_lock(&self.compiled_cache).await?;
+        Ok(cache.get(plugin_id).and_then(|e| e.source_hash.clone()))
     }
 }
 

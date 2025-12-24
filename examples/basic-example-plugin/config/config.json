@@ -5,7 +5,6 @@
       "name": "Sepolia Example",
       "network": "sepolia",
       "paused": false,
-      "notification_id": "notification-example",
       "signer_id": "local-signer",
       "network_type": "evm",
       "policies": {
@@ -14,15 +13,6 @@
     }
   ],
   "notifications": [
-    {
-      "id": "notification-example",
-      "type": "webhook",
-      "url": "",
-      "signing_key": {
-        "type": "env",
-        "value": "WEBHOOK_SIGNING_KEY"
-      }
-    }
   ],
   "signers": [
     {

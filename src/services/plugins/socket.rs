@@ -134,27 +134,63 @@ impl SocketService {
 
         let mut traces = Vec::new();
 
+        debug!("Plugin API socket: listen loop started");
+
         loop {
             let state = Arc::clone(&state);
             let relayer_api = Arc::clone(&relayer_api);
-            tokio::select! {
-                Ok((stream, _)) = self.listener.accept() => {
-                    let result = tokio::spawn(Self::handle_connection::<RA, J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(stream, state, relayer_api))
-                        .await
-                        .map_err(|e| PluginError::SocketError(e.to_string()))?;
+            debug!("Plugin API socket: waiting for connection or shutdown");
 
-                    match result {
-                        Ok(trace) => traces.extend(trace),
-                        Err(e) => return Err(e),
+            // First, wait for either a connection or shutdown
+            let stream = tokio::select! {
+                biased;
+
+                _ = &mut shutdown => {
+                    debug!("Plugin API socket: shutdown signal received (while waiting for connection)");
+                    break;
+                }
+
+                accept_result = self.listener.accept() => {
+                    match accept_result {
+                        Ok((stream, _)) => {
+                            debug!("Plugin API socket: accepted connection");
+                            stream
+                        }
+                        Err(e) => {
+                            debug!("Plugin API socket: accept error: {}", e);
+                            continue;
+                        }
                     }
                 }
+            };
+
+            // Now handle the connection, but also listen for shutdown
+            // We spawn the handler and then select between it finishing or shutdown
+            let handle = tokio::spawn(Self::handle_connection::<RA, J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(stream, state, relayer_api));
+            tokio::pin!(handle);
+
+            tokio::select! {
+                biased;
+
                 _ = &mut shutdown => {
-                    debug!("Shutdown signal received. Closing listener.");
+                    debug!("Plugin API socket: shutdown signal received (while handling connection)");
+                    // Abort the handler - it will be cancelled
+                    handle.abort();
                     break;
+                }
+
+                result = &mut handle => {
+                    debug!("Plugin API socket: connection handler completed");
+                    match result {
+                        Ok(Ok(trace)) => traces.extend(trace),
+                        Ok(Err(e)) => return Err(e),
+                        Err(e) => return Err(PluginError::SocketError(e.to_string())),
+                    }
                 }
             }
         }
 
+        debug!("Plugin API socket: listen loop exited");
         Ok(traces)
     }
 
@@ -195,7 +231,10 @@ impl SocketService {
         let mut reader = BufReader::new(r).lines();
         let mut traces = Vec::new();
 
+        debug!("Plugin API socket: handle_connection started");
+
         while let Ok(Some(line)) = reader.next_line().await {
+            debug!("Plugin API socket: received request");
             let trace: serde_json::Value = serde_json::from_str(&line)
                 .map_err(|e| PluginError::PluginError(format!("Failed to parse trace: {e}")))?;
             traces.push(trace);
@@ -210,8 +249,10 @@ impl SocketService {
                 + "\n";
 
             let _ = w.write_all(response_str.as_bytes()).await;
+            debug!("Plugin API socket: sent response");
         }
 
+        debug!("Plugin API socket: handle_connection finished (client closed)");
         Ok(traces)
     }
 }
@@ -327,6 +368,12 @@ mod tests {
         );
         let bytes_read = read_result.unwrap().unwrap();
         assert!(bytes_read > 0, "No data received");
+        
+        // Close the client first, then wait a bit for the handler to complete
+        // before sending shutdown. This ensures the handler loop processes the
+        // connection closure and collects the traces.
+        client.shutdown().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
         shutdown_tx.send(()).unwrap();
 
         let response: Response = serde_json::from_str(&response_str).unwrap();
@@ -337,8 +384,6 @@ mod tests {
             response.request_id, request.request_id,
             "Request id mismatch"
         );
-
-        client.shutdown().await.unwrap();
 
         let traces = listen_handle.await.unwrap().unwrap();
 

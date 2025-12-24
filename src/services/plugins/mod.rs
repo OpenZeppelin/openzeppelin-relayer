@@ -29,8 +29,14 @@ pub use relayer_api::*;
 pub mod script_executor;
 pub use script_executor::*;
 
+pub mod pool_executor;
+pub use pool_executor::*;
+
 pub mod socket;
 pub use socket::*;
+
+pub mod shared_socket;
+pub use shared_socket::*;
 
 #[cfg(test)]
 use mockall::automock;
@@ -1039,9 +1045,12 @@ mod tests {
             .await;
 
         let captured = logs_buffer.lock().unwrap().join("\n");
+        // When forward_logs is disabled, plugin log messages should not appear in tracing output
+        // (internal framework logs like "Calling plugin" may still appear)
         assert!(
-            captured.is_empty(),
-            "logs should not be forwarded when disabled"
+            !captured.contains("should-not-emit"),
+            "plugin logs should not be forwarded when disabled, but found: {}",
+            captured
         );
     }
 
