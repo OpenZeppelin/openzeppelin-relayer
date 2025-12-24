@@ -16,6 +16,10 @@ coverage:
           - ai
           - dev
           - properties
+      integration:
+        informational: true
+        flags:
+          - integration
     patch:
       default:
         target: auto
