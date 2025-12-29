@@ -24,8 +24,9 @@ use crate::constants::{
     DEFAULT_POOL_HEALTH_CHECK_INTERVAL_SECS, DEFAULT_POOL_IDLE_TIMEOUT_MS,
     DEFAULT_POOL_MAX_CONNECTIONS, DEFAULT_POOL_MAX_QUEUE_SIZE, DEFAULT_POOL_MAX_THREADS_FLOOR,
     DEFAULT_POOL_MIN_THREADS, DEFAULT_POOL_QUEUE_SEND_TIMEOUT_MS, DEFAULT_POOL_REQUEST_TIMEOUT_SECS,
-    DEFAULT_SOCKET_IDLE_TIMEOUT_SECS, DEFAULT_SOCKET_MAX_CONCURRENT_CONNECTIONS,
-    DEFAULT_SOCKET_READ_TIMEOUT_SECS, DEFAULT_TRACE_TIMEOUT_MS,
+    DEFAULT_POOL_SOCKET_BACKLOG, DEFAULT_SOCKET_IDLE_TIMEOUT_SECS,
+    DEFAULT_SOCKET_MAX_CONCURRENT_CONNECTIONS, DEFAULT_SOCKET_READ_TIMEOUT_SECS,
+    DEFAULT_TRACE_TIMEOUT_MS,
 };
 use std::sync::OnceLock;
 
@@ -72,6 +73,10 @@ pub struct PluginConfig {
     pub nodejs_pool_concurrent_tasks: usize,
     /// Worker idle timeout in milliseconds
     pub nodejs_pool_idle_timeout_ms: u64,
+
+    // === Socket Backlog (derived from max_concurrency) ===
+    /// Socket connection backlog for pending connections
+    pub pool_socket_backlog: usize,
 
     // === Health & Monitoring ===
     /// Minimum seconds between health checks
@@ -147,17 +152,19 @@ impl PluginConfig {
         let derived_min_threads = DEFAULT_POOL_MIN_THREADS.max(cpu_count / 2);
         let nodejs_pool_min_threads = env_parse("PLUGIN_POOL_MIN_THREADS", derived_min_threads);
 
-        // maxThreads = min(cpuCount * 2, concurrency / 50, 64)
-        // - For 1000 concurrency: ~20 threads
-        // - For 3000 concurrency: ~60 threads
-        // - For 5000+ concurrency: 64 threads (capped)
+        // maxThreads = min(max(cpuCount * 2, concurrency / 50), 64)
+        // Goal: Scale threads with concurrency, but cap at 64 for efficiency
+        // - For 1000 concurrency: max(cpu*2, 20) capped at 64 = ~20 threads
+        // - For 3000 concurrency: max(cpu*2, 60) capped at 64 = ~60 threads
+        // - For 6000+ concurrency: max(cpu*2, 120) capped at 64 = 64 threads
+        let scaling_threads = max_concurrency / 50; // 6000 VUs -> 120 threads (before cap)
         let derived_max_threads = (cpu_count * 2)
+            .max(scaling_threads)
             .max(DEFAULT_POOL_MAX_THREADS_FLOOR)
-            .min(max_concurrency / 50)
-            .min(64);
+            .min(64); // Final cap at 64
         let nodejs_pool_max_threads = env_parse(
             "PLUGIN_POOL_MAX_THREADS",
-            derived_max_threads.max(DEFAULT_POOL_MAX_THREADS_FLOOR),
+            derived_max_threads,
         );
 
         // concurrentTasksPerWorker: Node.js async can handle many concurrent tasks
@@ -175,6 +182,12 @@ impl PluginConfig {
         let nodejs_pool_idle_timeout_ms =
             env_parse("PLUGIN_POOL_IDLE_TIMEOUT", DEFAULT_POOL_IDLE_TIMEOUT_MS);
 
+        // Socket backlog = max_concurrency (enough to absorb connection bursts)
+        let pool_socket_backlog = env_parse(
+            "PLUGIN_POOL_SOCKET_BACKLOG",
+            max_concurrency.max(DEFAULT_POOL_SOCKET_BACKLOG as usize),
+        );
+
         Self {
             max_concurrency,
             pool_max_connections,
@@ -190,6 +203,7 @@ impl PluginConfig {
             nodejs_pool_max_threads,
             nodejs_pool_concurrent_tasks,
             nodejs_pool_idle_timeout_ms,
+            pool_socket_backlog,
             health_check_interval_secs,
             trace_timeout_ms,
         }
@@ -204,6 +218,7 @@ impl PluginConfig {
             socket_max_connections = self.socket_max_connections,
             nodejs_max_threads = self.nodejs_pool_max_threads,
             nodejs_concurrent_tasks = self.nodejs_pool_concurrent_tasks,
+            socket_backlog = self.pool_socket_backlog,
             "Plugin configuration loaded (Rust + Node.js)"
         );
     }
@@ -226,6 +241,7 @@ impl Default for PluginConfig {
             nodejs_pool_max_threads: DEFAULT_POOL_MAX_THREADS_FLOOR,
             nodejs_pool_concurrent_tasks: DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER,
             nodejs_pool_idle_timeout_ms: DEFAULT_POOL_IDLE_TIMEOUT_MS,
+            pool_socket_backlog: DEFAULT_POOL_SOCKET_BACKLOG as usize,
             health_check_interval_secs: DEFAULT_POOL_HEALTH_CHECK_INTERVAL_SECS,
             trace_timeout_ms: DEFAULT_TRACE_TIMEOUT_MS,
         }

@@ -8,10 +8,7 @@
 //! go back over that same connection. The connection itself provides isolation,
 //! so we don't need complex routing - just handle each connection independently.
 
-use crate::constants::{
-    DEFAULT_SOCKET_IDLE_TIMEOUT_SECS, DEFAULT_SOCKET_MAX_CONCURRENT_CONNECTIONS,
-    DEFAULT_SOCKET_READ_TIMEOUT_SECS,
-};
+use super::config::get_config;
 use crate::jobs::JobProducerTrait;
 use crate::models::{
     NetworkRepoModel, NotificationRepoModel, RelayerRepoModel, SignerRepoModel, ThinDataAppState,
@@ -64,20 +61,11 @@ impl SharedSocketService {
         let _ = std::fs::remove_file(socket_path);
 
         let (shutdown_tx, _) = watch::channel(false);
-        
-        let idle_timeout = Duration::from_secs(
-            std::env::var("PLUGIN_SOCKET_IDLE_TIMEOUT_SECS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(DEFAULT_SOCKET_IDLE_TIMEOUT_SECS)
-        );
-        
-        let read_timeout = Duration::from_secs(
-            std::env::var("PLUGIN_SOCKET_READ_TIMEOUT_SECS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(DEFAULT_SOCKET_READ_TIMEOUT_SECS)
-        );
+
+        // Use centralized config
+        let config = get_config();
+        let idle_timeout = Duration::from_secs(config.socket_idle_timeout_secs);
+        let read_timeout = Duration::from_secs(config.socket_read_timeout_secs);
 
         Ok(Self {
             socket_path: socket_path.to_string(),
@@ -95,12 +83,13 @@ impl SharedSocketService {
     }
 
     /// Register an execution and return a receiver for traces
-    pub fn register_execution(&self, execution_id: String) -> mpsc::Receiver<Vec<serde_json::Value>> {
+    pub fn register_execution(
+        &self,
+        execution_id: String,
+    ) -> mpsc::Receiver<Vec<serde_json::Value>> {
         let (tx, rx) = mpsc::channel(1);
-        self.executions.insert(
-            execution_id,
-            ExecutionContext { traces_tx: tx },
-        );
+        self.executions
+            .insert(execution_id, ExecutionContext { traces_tx: tx });
         rx
     }
 
@@ -108,12 +97,12 @@ impl SharedSocketService {
     pub fn unregister_execution(&self, execution_id: &str) {
         self.executions.remove(execution_id);
     }
-    
+
     /// Get current active connection count
     pub fn active_connection_count(&self) -> usize {
         self.active_connections.load(Ordering::Relaxed)
     }
-    
+
     /// Signal shutdown to the listener
     pub fn shutdown(&self) {
         let _ = self.shutdown_tx.send(true);
@@ -146,7 +135,7 @@ impl SharedSocketService {
         if self.started.swap(true, Ordering::Acquire) {
             return Ok(());
         }
-        
+
         // Create the listener and move it into the task
         let listener = UnixListener::bind(&self.socket_path)
             .map_err(|e| PluginError::SocketError(format!("Failed to bind listener: {}", e)))?;
@@ -157,8 +146,12 @@ impl SharedSocketService {
         let active_connections = self.active_connections.clone();
         let idle_timeout = self.idle_timeout;
         let read_timeout = self.read_timeout;
+        let max_connections = get_config().socket_max_connections;
 
-        info!("Shared socket service: starting listener on {}", socket_path);
+        debug!(
+            "Shared socket service: starting listener on {}",
+            socket_path
+        );
 
         // Spawn the listener task
         tokio::spawn(async move {
@@ -178,22 +171,23 @@ impl SharedSocketService {
                             Ok((stream, _)) => {
                                 // Check connection limit
                                 let current = active_connections.load(Ordering::Relaxed);
-                                if current >= DEFAULT_SOCKET_MAX_CONCURRENT_CONNECTIONS {
+                                if current >= max_connections {
                                     warn!(
                                         current_connections = current,
-                                        max_connections = DEFAULT_SOCKET_MAX_CONCURRENT_CONNECTIONS,
-                                        "Connection limit reached, rejecting new connection"
+                                        max_connections = max_connections,
+                                        "Connection limit reached, rejecting new connection. \
+                                        Consider increasing PLUGIN_MAX_CONCURRENCY or PLUGIN_SOCKET_MAX_CONCURRENT_CONNECTIONS."
                                     );
                                     drop(stream);
                                     continue;
                                 }
-                                
+
                                 active_connections.fetch_add(1, Ordering::Relaxed);
                                 debug!(
                                     active_connections = active_connections.load(Ordering::Relaxed),
                                     "Shared socket service: accepted new connection"
                                 );
-                                
+
                                 let relayer_api_clone = relayer_api.clone();
                                 let state_clone = Arc::clone(&state);
                                 let executions_clone = executions.clone();
@@ -209,10 +203,10 @@ impl SharedSocketService {
                                         read_timeout,
                                     )
                                     .await;
-                                    
+
                                     // Always decrement connection count
                                     active_connections_clone.fetch_sub(1, Ordering::Relaxed);
-                                    
+
                                     if let Err(e) = result {
                                         debug!("Connection handler finished with error: {}", e);
                                     }
@@ -225,7 +219,7 @@ impl SharedSocketService {
                     }
                 }
             }
-            
+
             // Cleanup on shutdown
             let _ = std::fs::remove_file(&socket_path);
             info!("Shared socket service: listener stopped");
@@ -233,7 +227,7 @@ impl SharedSocketService {
 
         Ok(())
     }
-    
+
     /// Handle connection with overall idle timeout
     async fn handle_connection_with_timeout<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         stream: UnixStream,
@@ -326,10 +320,10 @@ impl SharedSocketService {
                     continue;
                 }
             };
-            
+
             // Store raw JSON for traces
             traces.push(json_value.clone());
-            
+
             // Deserialize into Request from the already-parsed Value
             let request: Request = match serde_json::from_value(json_value) {
                 Ok(req) => req,
@@ -378,27 +372,29 @@ impl Drop for SharedSocketService {
 }
 
 /// Global shared socket service instance with proper error handling
-static SHARED_SOCKET: std::sync::OnceLock<Result<Arc<SharedSocketService>, String>> = std::sync::OnceLock::new();
+static SHARED_SOCKET: std::sync::OnceLock<Result<Arc<SharedSocketService>, String>> =
+    std::sync::OnceLock::new();
 
 /// Get or create the global shared socket service
 /// Returns error if initialization fails instead of panicking
 pub fn get_shared_socket_service() -> Result<Arc<SharedSocketService>, PluginError> {
     let socket_path = "/tmp/relayer-plugin-shared.sock";
-    
+
     let result = SHARED_SOCKET.get_or_init(|| {
         // Remove existing socket file if it exists (from previous runs)
         let _ = std::fs::remove_file(socket_path);
-        
+
         match SharedSocketService::new(socket_path) {
             Ok(service) => Ok(Arc::new(service)),
             Err(e) => Err(e.to_string()),
         }
     });
-    
+
     match result {
         Ok(service) => Ok(service.clone()),
         Err(e) => Err(PluginError::SocketError(format!(
-            "Failed to create shared socket service: {}", e
+            "Failed to create shared socket service: {}",
+            e
         ))),
     }
 }
@@ -410,11 +406,7 @@ pub async fn ensure_shared_socket_started<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
 where
     J: JobProducerTrait + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
-    TR: TransactionRepository
-        + Repository<TransactionRepoModel, String>
-        + Send
-        + Sync
-        + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,

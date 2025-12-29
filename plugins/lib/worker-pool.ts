@@ -17,8 +17,8 @@ import {
   DEFAULT_POOL_MIN_THREADS,
   DEFAULT_POOL_IDLE_TIMEOUT_MS,
   DEFAULT_POOL_EXECUTION_TIMEOUT_MS,
-  DEFAULT_WORKER_POOL_MAX_THREADS_FLOOR,
-  DEFAULT_WORKER_POOL_CONCURRENT_TASKS_PER_WORKER,
+  DEFAULT_POOL_MAX_THREADS_FLOOR,
+  DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER,
 } from './constants';
 
 /**
@@ -33,6 +33,8 @@ export interface WorkerPoolOptions {
   concurrentTasksPerWorker?: number;
   /** Idle timeout before shutting down excess workers (ms) */
   idleTimeout?: number;
+  /** Task-level timeout to prevent stuck workers (ms). Defaults to execution timeout + 5s buffer. */
+  taskTimeout?: number;
 }
 
 /**
@@ -76,14 +78,18 @@ export interface PluginExecutionResult {
   logs: LogEntry[];
 }
 
+const DEFAULT_TIMEOUT = DEFAULT_POOL_EXECUTION_TIMEOUT_MS;
+
+// Task timeout includes a 5s buffer over execution timeout for cleanup overhead
+const DEFAULT_TASK_TIMEOUT = DEFAULT_TIMEOUT + 5000;
+
 const DEFAULT_OPTIONS: Required<WorkerPoolOptions> = {
   minThreads: DEFAULT_POOL_MIN_THREADS,
-  maxThreads: Math.max(os.cpus().length, DEFAULT_WORKER_POOL_MAX_THREADS_FLOOR),
-  concurrentTasksPerWorker: DEFAULT_WORKER_POOL_CONCURRENT_TASKS_PER_WORKER,
+  maxThreads: Math.max(os.cpus().length, DEFAULT_POOL_MAX_THREADS_FLOOR),
+  concurrentTasksPerWorker: DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER,
   idleTimeout: DEFAULT_POOL_IDLE_TIMEOUT_MS,
+  taskTimeout: DEFAULT_TASK_TIMEOUT,
 };
-
-const DEFAULT_TIMEOUT = DEFAULT_POOL_EXECUTION_TIMEOUT_MS;
 
 /**
  * Path to the pre-compiled sandbox executor.
@@ -147,6 +153,26 @@ function createInitialMetrics(): PluginMetrics {
 }
 
 /**
+ * Increment a counter in a bounded Map.
+ * If the map exceeds maxSize, removes the oldest entry (FIFO eviction).
+ */
+function incrementBoundedMap(
+  map: Map<string, number>,
+  key: string,
+  maxSize: number
+): void {
+  map.set(key, (map.get(key) || 0) + 1);
+
+  // Evict oldest entries if over limit
+  if (map.size > maxSize) {
+    const firstKey = map.keys().next().value;
+    if (firstKey !== undefined) {
+      map.delete(firstKey);
+    }
+  }
+}
+
+/**
  * In-memory cache for compiled plugin code
  */
 class CompiledCodeCache {
@@ -194,18 +220,48 @@ class CompiledCodeCache {
  * Manages plugin execution using a Piscina worker pool.
  * Handles compilation caching, task routing, and pool lifecycle.
  */
+/** Maximum entries in metrics Maps to prevent unbounded growth */
+const MAX_METRICS_ENTRIES = 1000;
+
 export class WorkerPoolManager {
   private pool: Piscina | null = null;
   private options: Required<WorkerPoolOptions>;
   private compiledCache: CompiledCodeCache;
   private initialized: boolean = false;
+  /** Promise for in-flight initialization to prevent race conditions */
+  private initPromise: Promise<void> | null = null;
   private compiledWorkerPath: string | null = null;
+  /** Whether compiledWorkerPath is a temp file that should be cleaned up */
+  private isTemporaryWorkerFile: boolean = false;
   private metrics: PluginMetrics;
 
   constructor(options: WorkerPoolOptions = {}) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
     this.compiledCache = new CompiledCodeCache();
     this.metrics = createInitialMetrics();
+
+    // Register cleanup handlers for unclean shutdown (temp file leak prevention)
+    this.registerCleanupHandlers();
+  }
+
+  /**
+   * Register process handlers to clean up temp files on unexpected exit.
+   */
+  private registerCleanupHandlers(): void {
+    const cleanup = () => {
+      if (this.isTemporaryWorkerFile && this.compiledWorkerPath) {
+        try {
+          fs.unlinkSync(this.compiledWorkerPath);
+        } catch {
+          // Ignore - best effort cleanup
+        }
+      }
+    };
+
+    // Handle various exit scenarios
+    process.once('beforeExit', cleanup);
+    process.once('SIGINT', cleanup);
+    process.once('SIGTERM', cleanup);
   }
 
   /**
@@ -214,13 +270,38 @@ export class WorkerPoolManager {
    * 
    * Uses pre-compiled sandbox-executor.js if available,
    * otherwise compiles it on-the-fly (slower first startup).
+   * 
+   * Thread-safe: multiple concurrent calls will await the same initialization.
    */
   async initialize(): Promise<void> {
+    // Already initialized
     if (this.initialized) return;
 
+    // Another call is initializing - await it (prevents race condition)
+    if (this.initPromise) {
+      await this.initPromise;
+      return;
+    }
+
+    // Start initialization and store promise for concurrent callers
+    this.initPromise = this.doInitialize();
+
+    try {
+      await this.initPromise;
+    } finally {
+      // Clear promise after completion (success or failure)
+      this.initPromise = null;
+    }
+  }
+
+  /**
+   * Internal initialization logic.
+   */
+  private async doInitialize(): Promise<void> {
     // Use pre-compiled sandbox-executor.js if it exists
     if (fs.existsSync(PRECOMPILED_EXECUTOR_PATH)) {
       this.compiledWorkerPath = PRECOMPILED_EXECUTOR_PATH;
+      this.isTemporaryWorkerFile = false;
     } else {
       // Fallback: compile on-the-fly (for fresh checkouts, dev mode, etc.)
       console.warn(
@@ -228,6 +309,7 @@ export class WorkerPoolManager {
         `Compiling on-the-fly. Run 'npm run build:executor' in plugins/ for faster startup.`
       );
       this.compiledWorkerPath = await this.compileExecutorOnTheFly();
+      this.isTemporaryWorkerFile = true;
     }
 
     this.pool = new Piscina({
@@ -385,7 +467,7 @@ export class WorkerPoolManager {
       this.metrics.totalExecutions++;
       this.metrics.failedExecutions++;
       const errorCode = 'NO_COMPILED_CODE';
-      this.metrics.errorsByType.set(errorCode, (this.metrics.errorsByType.get(errorCode) || 0) + 1);
+      incrementBoundedMap(this.metrics.errorsByType, errorCode, MAX_METRICS_ENTRIES);
       return {
         success: false,
         error: {
@@ -409,14 +491,24 @@ export class WorkerPoolManager {
       timeout: request.timeout ?? DEFAULT_TIMEOUT,
     };
 
-    // Track per-plugin execution
-    this.metrics.pluginExecutions.set(
-      request.pluginId, 
-      (this.metrics.pluginExecutions.get(request.pluginId) || 0) + 1
-    );
+    // Track per-plugin execution (bounded to prevent memory leak)
+    incrementBoundedMap(this.metrics.pluginExecutions, request.pluginId, MAX_METRICS_ENTRIES);
+
+    // Use task timeout to prevent permanently stuck workers
+    // This is a safety net beyond the handler-level timeout in sandbox-executor
+    const taskTimeout = this.options.taskTimeout;
+    let timeoutId: NodeJS.Timeout | undefined;
 
     try {
-      const result: SandboxResult = await this.pool!.run(task);
+      const runPromise = this.pool!.run(task);
+      
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new Error(`Task timed out after ${taskTimeout}ms (worker may be stuck)`));
+        }, taskTimeout);
+      });
+      
+      const result: SandboxResult = await Promise.race([runPromise, timeoutPromise]);
       
       // Update execution metrics
       const executionTime = Date.now() - executionStartTime;
@@ -431,10 +523,7 @@ export class WorkerPoolManager {
       } else {
         this.metrics.failedExecutions++;
         if (result.error?.code) {
-          this.metrics.errorsByType.set(
-            result.error.code,
-            (this.metrics.errorsByType.get(result.error.code) || 0) + 1
-          );
+          incrementBoundedMap(this.metrics.errorsByType, result.error.code, MAX_METRICS_ENTRIES);
         }
       }
       
@@ -455,7 +544,7 @@ export class WorkerPoolManager {
       this.metrics.totalExecutionTime += executionTime;
       this.metrics.minExecutionTime = Math.min(this.metrics.minExecutionTime, executionTime);
       this.metrics.maxExecutionTime = Math.max(this.metrics.maxExecutionTime, executionTime);
-      this.metrics.errorsByType.set('WORKER_ERROR', (this.metrics.errorsByType.get('WORKER_ERROR') || 0) + 1);
+      incrementBoundedMap(this.metrics.errorsByType, 'WORKER_ERROR', MAX_METRICS_ENTRIES);
       
       return {
         success: false,
@@ -466,6 +555,11 @@ export class WorkerPoolManager {
         },
         logs: [],
       };
+    } finally {
+      // Clear timeout to prevent timer leak
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
     }
   }
 
@@ -588,7 +682,6 @@ export class WorkerPoolManager {
   /**
    * Shutdown the worker pool.
    * Call this when the application is shutting down.
-   * Note: Cached compiled workers are NOT deleted as they can be reused.
    */
   async shutdown(): Promise<void> {
     if (this.pool) {
@@ -597,10 +690,17 @@ export class WorkerPoolManager {
       this.initialized = false;
     }
     
-    // Don't delete the compiled worker - it's cached for reuse
-    // Just clear the reference
-    this.compiledWorkerPath = null;
+    // Clean up temporary compiled worker file to prevent disk space leak
+    if (this.isTemporaryWorkerFile && this.compiledWorkerPath) {
+      try {
+        fs.unlinkSync(this.compiledWorkerPath);
+      } catch {
+        // Ignore errors - file may already be deleted or inaccessible
+      }
+    }
     
+    this.compiledWorkerPath = null;
+    this.isTemporaryWorkerFile = false;
     this.compiledCache.clear();
   }
 }

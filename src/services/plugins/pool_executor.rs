@@ -19,9 +19,8 @@ use tokio::process::{Child, Command};
 use tokio::sync::{oneshot, RwLock, Semaphore};
 use uuid::Uuid;
 
-use super::{LogEntry, LogLevel, PluginError, PluginHandlerPayload, ScriptResult};
-use crate::constants::{
-    DEFAULT_POOL_MAX_CONNECTIONS, DEFAULT_POOL_MAX_QUEUE_SIZE, DEFAULT_POOL_REQUEST_TIMEOUT_SECS,
+use super::{
+    config::get_config, LogEntry, LogLevel, PluginError, PluginHandlerPayload, ScriptResult,
 };
 
 /// Health status information from the pool server
@@ -147,33 +146,57 @@ struct PoolConnection {
 
 impl PoolConnection {
     async fn new(socket_path: &str, id: usize) -> Result<Self, PluginError> {
-        // Retry connection with backoff - socket might not be ready immediately after READY signal
+        // Retry connection with backoff - socket might not be ready or server might be busy
         let mut attempts = 0;
-        let max_attempts = 10;
-        let mut delay_ms = 10;
+        let max_attempts = get_config().pool_connect_retries;
+        let mut delay_ms: u64 = 10;
+        let max_delay_ms: u64 = 1000; // Max 1 second between retries
 
         tracing::debug!(connection_id = id, socket_path = %socket_path, "Connecting to pool server");
         loop {
             match UnixStream::connect(socket_path).await {
                 Ok(stream) => {
-                    tracing::debug!(connection_id = id, "Connected to pool server");
+                    if attempts > 0 {
+                        tracing::debug!(
+                            connection_id = id,
+                            attempts = attempts,
+                            "Connected to pool server after retries"
+                        );
+                    }
                     return Ok(Self { stream, id });
                 }
                 Err(e) => {
                     attempts += 1;
+
+                    // Check if it's a temporary error (EAGAIN, ECONNREFUSED, etc)
+                    let is_temporary = matches!(
+                        e.kind(),
+                        std::io::ErrorKind::ConnectionRefused
+                            | std::io::ErrorKind::WouldBlock
+                            | std::io::ErrorKind::TimedOut
+                            | std::io::ErrorKind::Interrupted
+                    );
+
                     if attempts >= max_attempts {
                         return Err(PluginError::SocketError(format!(
-                            "Failed to connect to pool after {max_attempts} attempts: {e}"
+                            "Failed to connect to pool after {max_attempts} attempts: {e}. \
+                            Consider increasing PLUGIN_POOL_CONNECT_RETRIES or PLUGIN_POOL_MAX_CONNECTIONS."
                         )));
                     }
-                    tracing::debug!(
-                        connection_id = id,
-                        attempt = attempts,
-                        delay_ms = delay_ms,
-                        "Retrying connection to pool server"
-                    );
+
+                    // Only log at debug level to reduce noise under load
+                    if attempts <= 3 || attempts % 5 == 0 {
+                        tracing::debug!(
+                            connection_id = id,
+                            attempt = attempts,
+                            max_attempts = max_attempts,
+                            delay_ms = delay_ms,
+                            is_temporary = is_temporary,
+                            "Retrying connection to pool server"
+                        );
+                    }
                     tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                    delay_ms = std::cmp::min(delay_ms * 2, 500);
+                    delay_ms = std::cmp::min(delay_ms * 2, max_delay_ms);
                 }
             }
         }
@@ -185,11 +208,15 @@ impl PoolConnection {
 
         // Write request and flush
         if let Err(e) = self.stream.write_all(format!("{json}\n").as_bytes()).await {
-            return Err(PluginError::SocketError(format!("Failed to send request: {e}")));
+            return Err(PluginError::SocketError(format!(
+                "Failed to send request: {e}"
+            )));
         }
 
         if let Err(e) = self.stream.flush().await {
-            return Err(PluginError::SocketError(format!("Failed to flush request: {e}")));
+            return Err(PluginError::SocketError(format!(
+                "Failed to flush request: {e}"
+            )));
         }
 
         // Read response using BufReader on a reference to the stream
@@ -197,7 +224,9 @@ impl PoolConnection {
         let mut line = String::new();
 
         if let Err(e) = reader.read_line(&mut line).await {
-            return Err(PluginError::SocketError(format!("Failed to read response: {e}")));
+            return Err(PluginError::SocketError(format!(
+                "Failed to read response: {e}"
+            )));
         }
 
         tracing::debug!(response_len = line.len(), "Received response from pool");
@@ -212,9 +241,12 @@ impl PoolConnection {
         request: &PoolRequest,
         timeout_secs: u64,
     ) -> Result<PoolResponse, PluginError> {
-        tokio::time::timeout(Duration::from_secs(timeout_secs), self.send_request(request))
-            .await
-            .map_err(|_| PluginError::SocketError("Request timed out".to_string()))?
+        tokio::time::timeout(
+            Duration::from_secs(timeout_secs),
+            self.send_request(request),
+        )
+        .await
+        .map_err(|_| PluginError::SocketError("Request timed out".to_string()))?
     }
 }
 
@@ -249,22 +281,37 @@ impl ConnectionPool {
     /// Get a connection from the pool or create a new one
     /// Uses semaphore for proper concurrency limiting
     async fn acquire(&self) -> Result<PooledConnection<'_>, PluginError> {
+        let available_permits = self.semaphore.available_permits();
+        if available_permits == 0 {
+            tracing::warn!(
+                max_connections = self.max_connections,
+                "All connection permits exhausted - waiting for connection"
+            );
+        }
+
         // Acquire permit first - this limits total concurrent connections
-        let permit = self.semaphore.clone().acquire_owned().await.map_err(|_| {
-            PluginError::PluginError("Connection semaphore closed".to_string())
-        })?;
+        let permit = self
+            .semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| PluginError::PluginError("Connection semaphore closed".to_string()))?;
 
         // Try to find a healthy connection in the pool
         let mut candidate_ids = Vec::new();
-        
+
         for entry in self.connections.iter() {
             let conn_id = *entry.key();
-            let is_healthy = self.health.get(&conn_id).map(|h| *h.value()).unwrap_or(false);
+            let is_healthy = self
+                .health
+                .get(&conn_id)
+                .map(|h| *h.value())
+                .unwrap_or(false);
             if is_healthy {
                 candidate_ids.push(conn_id);
             }
         }
-        
+
         // Try to remove one of the candidates
         for conn_id in candidate_ids {
             if let Some((_, conn)) = self.connections.remove(&conn_id) {
@@ -276,14 +323,14 @@ impl ConnectionPool {
                 });
             }
         }
-        
+
         // No available connection, create a new one
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         tracing::debug!(connection_id = id, "Creating new pool connection");
-        
+
         let conn = PoolConnection::new(&self.socket_path, id).await?;
         self.health.insert(id, true);
-        
+
         Ok(PooledConnection {
             conn: Some(conn),
             pool: self,
@@ -294,15 +341,22 @@ impl ConnectionPool {
     /// Return a connection to the pool
     fn release(&self, conn: PoolConnection) {
         let conn_id = conn.id;
-        let is_healthy = self.health.get(&conn_id).map(|h| *h.value()).unwrap_or(false);
+        let is_healthy = self
+            .health
+            .get(&conn_id)
+            .map(|h| *h.value())
+            .unwrap_or(false);
         let pool_size = self.connections.len();
-        
+
         if is_healthy && pool_size < self.max_connections {
             self.connections.insert(conn_id, conn);
             tracing::debug!(connection_id = conn_id, "Connection returned to pool");
         } else {
             self.health.remove(&conn_id);
-            tracing::debug!(connection_id = conn_id, "Connection dropped (unhealthy or pool full)");
+            tracing::debug!(
+                connection_id = conn_id,
+                "Connection dropped (unhealthy or pool full)"
+            );
         }
     }
 
@@ -344,7 +398,9 @@ impl<'a> PooledConnection<'a> {
                 }
             }
         } else {
-            Err(PluginError::PluginError("Connection already released".to_string()))
+            Err(PluginError::PluginError(
+                "Connection already released".to_string(),
+            ))
         }
     }
 
@@ -382,12 +438,18 @@ pub struct PoolManager {
     socket_path: String,
     process: tokio::sync::Mutex<Option<Child>>,
     initialized: RwLock<bool>,
+    /// Lock to prevent concurrent restarts (thundering herd)
+    restart_lock: tokio::sync::Mutex<()>,
     /// Connection pool for reusing connections
     connection_pool: Arc<ConnectionPool>,
     /// Request queue for throttling/backpressure (multi-consumer channel)
     request_tx: async_channel::Sender<QueuedRequest>,
     /// Actual configured queue size (for error messages)
     max_queue_size: usize,
+    /// Last health check timestamp (for rate limiting)
+    last_health_check: std::sync::atomic::AtomicU64,
+    /// Consecutive failure count for health checks
+    consecutive_failures: std::sync::atomic::AtomicU32,
 }
 
 impl PoolManager {
@@ -403,56 +465,58 @@ impl PoolManager {
 
     /// Common initialization logic
     fn init(socket_path: String) -> Self {
-        let max_connections = std::env::var("PLUGIN_POOL_MAX_CONNECTIONS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(DEFAULT_POOL_MAX_CONNECTIONS);
-        let max_queue_size = std::env::var("PLUGIN_POOL_MAX_QUEUE_SIZE")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(DEFAULT_POOL_MAX_QUEUE_SIZE);
-        
+        // Use centralized config with auto-derivation from PLUGIN_MAX_CONCURRENCY
+        let config = get_config();
+        let max_connections = config.pool_max_connections;
+        let max_queue_size = config.pool_max_queue_size;
+
         // Use async-channel for multi-consumer queue (no mutex needed)
         let (tx, rx) = async_channel::bounded(max_queue_size);
-        
+
         let connection_pool = Arc::new(ConnectionPool::new(socket_path.clone(), max_connections));
         let connection_pool_clone = connection_pool.clone();
-        
+
         // Spawn background workers to process queued requests
-        Self::spawn_queue_workers(rx, connection_pool_clone);
-        
+        Self::spawn_queue_workers(rx, connection_pool_clone, config.pool_workers);
+
         Self {
             connection_pool,
             socket_path,
             process: tokio::sync::Mutex::new(None),
             initialized: RwLock::new(false),
+            restart_lock: tokio::sync::Mutex::new(()),
             request_tx: tx,
             max_queue_size,
+            last_health_check: std::sync::atomic::AtomicU64::new(0),
+            consecutive_failures: std::sync::atomic::AtomicU32::new(0),
         }
     }
-    
+
     /// Spawn multiple worker tasks to process queued requests concurrently
     fn spawn_queue_workers(
         rx: async_channel::Receiver<QueuedRequest>,
         connection_pool: Arc<ConnectionPool>,
+        configured_workers: usize,
     ) {
-        let num_workers = std::env::var("PLUGIN_POOL_WORKERS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or_else(|| {
-                std::thread::available_parallelism()
-                    .map(|n| n.get().max(4).min(32))
-                    .unwrap_or(8)
-            });
-        
+        let num_workers = if configured_workers > 0 {
+            configured_workers
+        } else {
+            std::thread::available_parallelism()
+                .map(|n| n.get().max(4).min(32))
+                .unwrap_or(8)
+        };
+
         tracing::info!(num_workers = num_workers, "Starting request queue workers");
-        
+
         for worker_id in 0..num_workers {
             let rx_clone = rx.clone();
             let pool_clone = connection_pool.clone();
-            
+
             tokio::spawn(async move {
                 while let Ok(request) = rx_clone.recv().await {
+                    let start = std::time::Instant::now();
+                    let plugin_id = request.plugin_id.clone();
+
                     let result = Self::execute_plugin_internal(
                         &pool_clone,
                         request.plugin_id,
@@ -463,16 +527,45 @@ impl PoolManager {
                         request.socket_path,
                         request.http_request_id,
                         request.timeout_secs,
-                    ).await;
-                    
+                    )
+                    .await;
+
+                    let elapsed = start.elapsed();
+                    if let Err(ref e) = result {
+                        // Don't warn about shutdown errors - these are expected during graceful shutdown
+                        let error_str = format!("{:?}", e);
+                        if error_str.contains("shutdown") || error_str.contains("Shutdown") {
+                            tracing::debug!(
+                                worker_id = worker_id,
+                                plugin_id = %plugin_id,
+                                "Plugin execution cancelled during shutdown"
+                            );
+                        } else {
+                            tracing::warn!(
+                                worker_id = worker_id,
+                                plugin_id = %plugin_id,
+                                elapsed_ms = elapsed.as_millis() as u64,
+                                error = ?e,
+                                "Plugin execution failed"
+                            );
+                        }
+                    } else if elapsed.as_secs() > 1 {
+                        tracing::debug!(
+                            worker_id = worker_id,
+                            plugin_id = %plugin_id,
+                            elapsed_ms = elapsed.as_millis() as u64,
+                            "Slow plugin execution"
+                        );
+                    }
+
                     let _ = request.response_tx.send(result);
                 }
-                
+
                 tracing::debug!(worker_id = worker_id, "Request queue worker exited");
             });
         }
     }
-    
+
     /// Internal execution method
     async fn execute_plugin_internal(
         connection_pool: &Arc<ConnectionPool>,
@@ -499,7 +592,7 @@ impl PoolManager {
             timeout: timeout_secs.map(|s| s * 1000),
         };
 
-        let timeout = timeout_secs.unwrap_or(DEFAULT_POOL_REQUEST_TIMEOUT_SECS);
+        let timeout = timeout_secs.unwrap_or(get_config().pool_request_timeout_secs);
         let response = conn.send_request_with_timeout(&request, timeout).await?;
 
         let logs: Vec<LogEntry> = response
@@ -547,8 +640,17 @@ impl PoolManager {
     }
 
     /// Start the pool server if not already running
+    /// Uses startup lock to prevent concurrent starts
     pub async fn ensure_started(&self) -> Result<(), PluginError> {
         // Fast path: check if already initialized
+        if *self.initialized.read().await {
+            return Ok(());
+        }
+
+        // Acquire startup lock to prevent concurrent starts
+        let _startup_guard = self.restart_lock.lock().await;
+
+        // Double-check after acquiring lock
         if *self.initialized.read().await {
             return Ok(());
         }
@@ -563,29 +665,82 @@ impl PoolManager {
         *initialized = true;
         Ok(())
     }
-    
+
     /// Ensure pool is started and healthy, with auto-recovery on failure
+    /// Uses rate limiting to avoid excessive health checks under load
     async fn ensure_started_and_healthy(&self) -> Result<(), PluginError> {
         self.ensure_started().await?;
-        
-        // Opportunistic health check - don't block on every request
-        // Check health periodically or on connection errors
-        // This is a lightweight check that only runs health_check if we detect issues
-        if let Ok(health) = self.health_check().await {
-            if !health.healthy {
-                tracing::warn!(
-                    status = %health.status,
-                    "Pool server unhealthy, attempting automatic recovery"
-                );
-                // Try to restart
-                if let Err(e) = self.restart().await {
-                    tracing::error!(error = %e, "Failed to restart pool server");
-                    return Err(PluginError::PluginExecutionError(format!(
-                        "Pool server unhealthy and restart failed: {}", health.status
-                    )));
-                }
-            }
+
+        // Rate limit health checks - only check every 5 seconds
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let last_check = self.last_health_check.load(Ordering::Relaxed);
+
+        // Health check interval from centralized config
+        let health_check_interval = get_config().health_check_interval_secs;
+
+        if now.saturating_sub(last_check) < health_check_interval {
+            // Too soon since last health check - skip
+            return Ok(());
         }
+
+        // Try to update last_health_check atomically (only one thread does the check)
+        if self
+            .last_health_check
+            .compare_exchange(last_check, now, Ordering::Relaxed, Ordering::Relaxed)
+            .is_err()
+        {
+            // Another thread is already doing the health check
+            return Ok(());
+        }
+
+        // Check if the process is still running (fast check)
+        let process_running = {
+            let process_guard = self.process.lock().await;
+            if let Some(child) = process_guard.as_ref() {
+                // Check if process is still alive by checking its ID
+                child.id().is_some()
+            } else {
+                false
+            }
+        };
+
+        if !process_running {
+            // Process definitely not running - try to restart
+            tracing::warn!("Pool server process not running, attempting restart");
+            self.consecutive_failures.fetch_add(1, Ordering::Relaxed);
+            if let Err(e) = self.restart().await {
+                tracing::error!(error = %e, "Failed to restart pool server");
+                return Err(PluginError::PluginExecutionError(
+                    "Pool server not running and restart failed".to_string(),
+                ));
+            }
+            self.consecutive_failures.store(0, Ordering::Relaxed);
+            return Ok(());
+        }
+
+        // Process is running - do a lightweight socket check instead of full health check
+        // This avoids using connections from the pool under load
+        let socket_exists = std::path::Path::new(&self.socket_path).exists();
+
+        if !socket_exists {
+            // Socket file gone - server crashed or was killed
+            tracing::warn!(
+                socket_path = %self.socket_path,
+                "Pool server socket file missing, attempting restart"
+            );
+            self.consecutive_failures.fetch_add(1, Ordering::Relaxed);
+            if let Err(e) = self.restart().await {
+                tracing::error!(error = %e, "Failed to restart pool server");
+                return Err(PluginError::PluginExecutionError(
+                    "Pool server socket missing and restart failed".to_string(),
+                ));
+            }
+            self.consecutive_failures.store(0, Ordering::Relaxed);
+        }
+
         Ok(())
     }
 
@@ -596,16 +751,57 @@ impl PoolManager {
             return Ok(());
         }
 
+        // Clean up socket file with retry logic to handle race conditions
+        // Multiple attempts may be needed if another process is cleaning up
+        let mut attempts = 0;
+        let max_cleanup_attempts = 5;
+        while attempts < max_cleanup_attempts {
+            match std::fs::remove_file(&self.socket_path) {
+                Ok(_) => break,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    // File doesn't exist, that's fine
+                    break;
+                }
+                Err(e) => {
+                    attempts += 1;
+                    if attempts >= max_cleanup_attempts {
+                        tracing::warn!(
+                            socket_path = %self.socket_path,
+                            error = %e,
+                            "Failed to remove socket file after {} attempts, proceeding anyway",
+                            max_cleanup_attempts
+                        );
+                        break;
+                    }
+                    // Wait a bit before retrying (exponential backoff)
+                    let delay_ms = 10 * (1 << attempts.min(3)); // Max 80ms
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                }
+            }
+        }
+
+        // Wait a bit more to ensure socket is fully released by OS
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
         let pool_server_path = std::env::current_dir()
             .map(|cwd| cwd.join("plugins/lib/pool-server.ts").display().to_string())
             .unwrap_or_else(|_| "plugins/lib/pool-server.ts".to_string());
 
         tracing::info!(socket_path = %self.socket_path, "Starting plugin pool server");
 
+        // Get config values to pass to Node.js pool server
+        let config = get_config();
+
         let mut child = Command::new("ts-node")
             .arg("--transpile-only")
             .arg(&pool_server_path)
             .arg(&self.socket_path)
+            // Pass derived config to Node.js (single source of truth from Rust)
+            .env("PLUGIN_MAX_CONCURRENCY", config.max_concurrency.to_string())
+            .env("PLUGIN_POOL_MIN_THREADS", config.nodejs_pool_min_threads.to_string())
+            .env("PLUGIN_POOL_MAX_THREADS", config.nodejs_pool_max_threads.to_string())
+            .env("PLUGIN_POOL_CONCURRENT_TASKS", config.nodejs_pool_concurrent_tasks.to_string())
+            .env("PLUGIN_POOL_IDLE_TIMEOUT", config.nodejs_pool_idle_timeout_ms.to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -683,12 +879,17 @@ impl PoolManager {
                     let mut candidate_ids = Vec::new();
                     for entry in self.connection_pool.connections.iter() {
                         let conn_id = *entry.key();
-                        let is_healthy = self.connection_pool.health.get(&conn_id).map(|h| *h.value()).unwrap_or(false);
+                        let is_healthy = self
+                            .connection_pool
+                            .health
+                            .get(&conn_id)
+                            .map(|h| *h.value())
+                            .unwrap_or(false);
                         if is_healthy {
                             candidate_ids.push(conn_id);
                         }
                     }
-                    
+
                     let mut found_conn = None;
                     for conn_id in candidate_ids {
                         if let Some((_, conn)) = self.connection_pool.connections.remove(&conn_id) {
@@ -696,7 +897,7 @@ impl PoolManager {
                             break;
                         }
                     }
-                    
+
                     match found_conn {
                         Some(conn) => PooledConnection {
                             conn: Some(conn),
@@ -705,7 +906,8 @@ impl PoolManager {
                         },
                         None => {
                             let id = self.connection_pool.next_id.fetch_add(1, Ordering::Relaxed);
-                            let conn = PoolConnection::new(&self.connection_pool.socket_path, id).await?;
+                            let conn =
+                                PoolConnection::new(&self.connection_pool.socket_path, id).await?;
                             self.connection_pool.health.insert(id, true);
                             PooledConnection {
                                 conn: Some(conn),
@@ -728,7 +930,7 @@ impl PoolManager {
                     timeout: timeout_secs.map(|s| s * 1000),
                 };
 
-                let timeout = timeout_secs.unwrap_or(DEFAULT_POOL_REQUEST_TIMEOUT_SECS);
+                let timeout = timeout_secs.unwrap_or(get_config().pool_request_timeout_secs);
                 let response = conn.send_request_with_timeout(&request, timeout).await?;
 
                 let logs: Vec<LogEntry> = response
@@ -776,8 +978,9 @@ impl PoolManager {
             }
             Err(_) => {
                 // Semaphore full - queue the request for backpressure
+                // Use blocking send with timeout to handle bursts better
                 let (response_tx, response_rx) = oneshot::channel();
-                
+
                 let queued_request = QueuedRequest {
                     plugin_id,
                     compiled_code,
@@ -789,24 +992,69 @@ impl PoolManager {
                     timeout_secs,
                     response_tx,
                 };
-                
+
+                // Try non-blocking send first (fast path)
                 match self.request_tx.try_send(queued_request) {
                     Ok(()) => {
+                        let queue_len = self.request_tx.len();
+                        if queue_len > self.max_queue_size / 2 {
+                            tracing::warn!(
+                                queue_len = queue_len,
+                                max_queue_size = self.max_queue_size,
+                                "Plugin queue is over 50% capacity"
+                            );
+                        }
                         response_rx.await.map_err(|_| {
                             PluginError::PluginExecutionError(
-                                "Request queue processor closed".to_string()
+                                "Request queue processor closed".to_string(),
                             )
                         })?
                     }
-                    Err(async_channel::TrySendError::Full(_)) => {
-                        Err(PluginError::PluginExecutionError(format!(
-                            "Plugin execution queue is full (max: {}). Please retry later.",
-                            self.max_queue_size
-                        )))
+                    Err(async_channel::TrySendError::Full(req)) => {
+                        // Queue is full - try blocking send with timeout
+                        // This allows handling bursts without immediate rejection
+                        let queue_timeout_ms = get_config().pool_queue_send_timeout_ms;
+                        let queue_timeout = Duration::from_millis(queue_timeout_ms);
+                        match tokio::time::timeout(queue_timeout, self.request_tx.send(req)).await {
+                            Ok(Ok(())) => {
+                                // Successfully queued after waiting
+                                let queue_len = self.request_tx.len();
+                                tracing::debug!(
+                                    queue_len = queue_len,
+                                    "Request queued after waiting for queue space"
+                                );
+                                response_rx.await.map_err(|_| {
+                                    PluginError::PluginExecutionError(
+                                        "Request queue processor closed".to_string(),
+                                    )
+                                })?
+                            }
+                            Ok(Err(async_channel::SendError(_))) => {
+                                // Channel closed
+                                Err(PluginError::PluginExecutionError(
+                                    "Plugin execution queue is closed".to_string(),
+                                ))
+                            }
+                            Err(_) => {
+                                // Timeout waiting for queue space
+                                let queue_len = self.request_tx.len();
+                                tracing::error!(
+                                    queue_len = queue_len,
+                                    max_queue_size = self.max_queue_size,
+                                    timeout_ms = queue_timeout.as_millis(),
+                                    "Plugin execution queue is FULL - timeout waiting for space"
+                                );
+                                Err(PluginError::PluginExecutionError(format!(
+                                    "Plugin execution queue is full (max: {}) and timeout waiting for space. \
+                                    Consider increasing PLUGIN_POOL_MAX_QUEUE_SIZE or PLUGIN_POOL_MAX_CONNECTIONS.",
+                                    self.max_queue_size
+                                )))
+                            }
+                        }
                     }
                     Err(async_channel::TrySendError::Closed(_)) => {
                         Err(PluginError::PluginExecutionError(
-                            "Plugin execution queue is closed".to_string()
+                            "Plugin execution queue is closed".to_string(),
                         ))
                     }
                 }
@@ -832,12 +1080,18 @@ impl PoolManager {
             source_code,
         };
 
-        let response = conn.send_request_with_timeout(&request, DEFAULT_POOL_REQUEST_TIMEOUT_SECS).await?;
+        let response = conn
+            .send_request_with_timeout(&request, get_config().pool_request_timeout_secs)
+            .await?;
 
         if response.success {
             response
                 .result
-                .and_then(|v| v.get("code").and_then(|c| c.as_str()).map(|s| s.to_string()))
+                .and_then(|v| {
+                    v.get("code")
+                        .and_then(|c| c.as_str())
+                        .map(|s| s.to_string())
+                })
                 .ok_or_else(|| {
                     PluginError::PluginExecutionError("No compiled code in response".to_string())
                 })
@@ -868,7 +1122,9 @@ impl PoolManager {
             compiled_code,
         };
 
-        let response = conn.send_request_with_timeout(&request, DEFAULT_POOL_REQUEST_TIMEOUT_SECS).await?;
+        let response = conn
+            .send_request_with_timeout(&request, get_config().pool_request_timeout_secs)
+            .await?;
 
         if response.success {
             Ok(())
@@ -896,11 +1152,16 @@ impl PoolManager {
             plugin_id,
         };
 
-        let _ = conn.send_request_with_timeout(&request, DEFAULT_POOL_REQUEST_TIMEOUT_SECS).await?;
+        let _ = conn
+            .send_request_with_timeout(&request, get_config().pool_request_timeout_secs)
+            .await?;
         Ok(())
     }
 
     /// Health check - verify the pool server is responding
+    /// Note: Under heavy load, this may return "healthy: false" due to connection pool exhaustion,
+    /// which is NOT the same as the server being down. Use ensure_started_and_healthy() for
+    /// automatic recovery which distinguishes between these cases.
     pub async fn health_check(&self) -> Result<HealthStatus, PluginError> {
         if !*self.initialized.read().await {
             return Ok(HealthStatus {
@@ -914,20 +1175,60 @@ impl PoolManager {
             });
         }
 
-        let mut conn = match self.connection_pool.acquire().await {
-            Ok(c) => c,
-            Err(e) => {
-                return Ok(HealthStatus {
-                    healthy: false,
-                    status: format!("connection_failed: {}", e),
-                    uptime_ms: None,
-                    memory: None,
-                    pool_completed: None,
-                    pool_queued: None,
-                    success_rate: None,
-                });
-            }
-        };
+        // First, do a fast check - is the socket file present?
+        if !std::path::Path::new(&self.socket_path).exists() {
+            return Ok(HealthStatus {
+                healthy: false,
+                status: "socket_missing".to_string(),
+                uptime_ms: None,
+                memory: None,
+                pool_completed: None,
+                pool_queued: None,
+                success_rate: None,
+            });
+        }
+
+        // Try to acquire a connection with a short timeout
+        // Use try_acquire to not wait when pool is exhausted
+        let mut conn =
+            match tokio::time::timeout(Duration::from_millis(100), self.connection_pool.acquire())
+                .await
+            {
+                Ok(Ok(c)) => c,
+                Ok(Err(e)) => {
+                    // Connection error - but check if it's just pool exhaustion
+                    let err_str = e.to_string();
+                    let is_pool_exhausted =
+                        err_str.contains("semaphore") || err_str.contains("Connection refused");
+
+                    return Ok(HealthStatus {
+                        // Mark as "healthy" if just pool exhaustion - server is running, just busy
+                        healthy: is_pool_exhausted,
+                        status: if is_pool_exhausted {
+                            format!("pool_exhausted: {}", e)
+                        } else {
+                            format!("connection_failed: {}", e)
+                        },
+                        uptime_ms: None,
+                        memory: None,
+                        pool_completed: None,
+                        pool_queued: None,
+                        success_rate: None,
+                    });
+                }
+                Err(_) => {
+                    // Timeout acquiring connection - pool is busy, server is likely healthy
+                    return Ok(HealthStatus {
+                        healthy: true, // Server running, just busy
+                        status: "pool_busy".to_string(),
+                        uptime_ms: None,
+                        memory: None,
+                        pool_completed: None,
+                        pool_queued: None,
+                        success_rate: None,
+                    });
+                }
+            };
 
         let request = PoolRequest::Health {
             task_id: Uuid::new_v4().to_string(),
@@ -939,28 +1240,36 @@ impl PoolManager {
                     let result = response.result.unwrap_or_default();
                     Ok(HealthStatus {
                         healthy: true,
-                        status: result.get("status")
+                        status: result
+                            .get("status")
                             .and_then(|v| v.as_str())
                             .unwrap_or("unknown")
                             .to_string(),
                         uptime_ms: result.get("uptime").and_then(|v| v.as_u64()),
-                        memory: result.get("memory")
+                        memory: result
+                            .get("memory")
                             .and_then(|v| v.get("heapUsed"))
                             .and_then(|v| v.as_u64()),
-                        pool_completed: result.get("pool")
+                        pool_completed: result
+                            .get("pool")
                             .and_then(|v| v.get("completed"))
                             .and_then(|v| v.as_u64()),
-                        pool_queued: result.get("pool")
+                        pool_queued: result
+                            .get("pool")
                             .and_then(|v| v.get("queued"))
                             .and_then(|v| v.as_u64()),
-                        success_rate: result.get("execution")
+                        success_rate: result
+                            .get("execution")
                             .and_then(|v| v.get("successRate"))
                             .and_then(|v| v.as_f64()),
                     })
                 } else {
                     Ok(HealthStatus {
                         healthy: false,
-                        status: response.error.map(|e| e.message).unwrap_or_else(|| "unknown_error".to_string()),
+                        status: response
+                            .error
+                            .map(|e| e.message)
+                            .unwrap_or_else(|| "unknown_error".to_string()),
                         uptime_ms: None,
                         memory: None,
                         pool_completed: None,
@@ -987,21 +1296,44 @@ impl PoolManager {
     /// Check health and restart if unhealthy
     pub async fn ensure_healthy(&self) -> Result<bool, PluginError> {
         let health = self.health_check().await?;
-        
+
         if health.healthy {
             return Ok(true);
         }
 
-        tracing::warn!(status = %health.status, "Pool server unhealthy, attempting restart");
+        // Try to acquire restart lock - if another task is already restarting, wait for it
+        // Use try_lock first to avoid thundering herd
+        match self.restart_lock.try_lock() {
+            Ok(_guard) => {
+                // We got the lock - check health again in case another task just finished restart
+                let health_recheck = self.health_check().await?;
+                if health_recheck.healthy {
+                    return Ok(true);
+                }
 
-        self.restart().await?;
+                tracing::warn!(status = %health.status, "Pool server unhealthy, attempting restart");
+                self.restart_internal().await?;
+            }
+            Err(_) => {
+                // Another task is restarting - wait for it to complete
+                tracing::debug!("Waiting for another task to complete pool server restart");
+                let _guard = self.restart_lock.lock().await;
+                // Restart completed by other task, check health
+            }
+        }
 
         let health_after = self.health_check().await?;
         Ok(health_after.healthy)
     }
 
-    /// Force restart the pool server
+    /// Force restart the pool server (public API - acquires lock)
     pub async fn restart(&self) -> Result<(), PluginError> {
+        let _guard = self.restart_lock.lock().await;
+        self.restart_internal().await
+    }
+
+    /// Internal restart without lock (must be called with restart_lock held)
+    async fn restart_internal(&self) -> Result<(), PluginError> {
         tracing::info!("Restarting plugin pool server");
 
         self.connection_pool.clear().await;
@@ -1010,17 +1342,127 @@ impl PoolManager {
             let mut process_guard = self.process.lock().await;
             if let Some(mut child) = process_guard.take() {
                 let _ = child.kill().await;
+                // Wait a bit for process to fully terminate
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
 
-        let _ = std::fs::remove_file(&self.socket_path);
+        // Clean up socket file with retry logic
+        let mut attempts = 0;
+        let max_cleanup_attempts = 5;
+        while attempts < max_cleanup_attempts {
+            match std::fs::remove_file(&self.socket_path) {
+                Ok(_) => break,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    break;
+                }
+                Err(e) => {
+                    attempts += 1;
+                    if attempts >= max_cleanup_attempts {
+                        tracing::warn!(
+                            socket_path = %self.socket_path,
+                            error = %e,
+                            "Failed to remove socket file during restart after {} attempts",
+                            max_cleanup_attempts
+                        );
+                        break;
+                    }
+                    let delay_ms = 10 * (1 << attempts.min(3));
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                }
+            }
+        }
+
+        // Wait for socket to be fully released
+        tokio::time::sleep(Duration::from_millis(100)).await;
 
         {
             let mut initialized = self.initialized.write().await;
             *initialized = false;
         }
 
-        self.ensure_started().await
+        // Start server (will acquire startup lock, but we already hold restart_lock)
+        // Since restart_lock is the same as startup lock, we need to call start_pool_server directly
+        let mut process_guard = self.process.lock().await;
+        if process_guard.is_some() {
+            // Already started by another call
+            return Ok(());
+        }
+
+        let pool_server_path = std::env::current_dir()
+            .map(|cwd| cwd.join("plugins/lib/pool-server.ts").display().to_string())
+            .unwrap_or_else(|_| "plugins/lib/pool-server.ts".to_string());
+
+        tracing::info!(socket_path = %self.socket_path, "Restarting plugin pool server");
+
+        // Get config values to pass to Node.js pool server
+        let config = get_config();
+
+        let mut child = Command::new("ts-node")
+            .arg("--transpile-only")
+            .arg(&pool_server_path)
+            .arg(&self.socket_path)
+            // Pass derived config to Node.js (single source of truth from Rust)
+            .env("PLUGIN_MAX_CONCURRENCY", config.max_concurrency.to_string())
+            .env("PLUGIN_POOL_MIN_THREADS", config.nodejs_pool_min_threads.to_string())
+            .env("PLUGIN_POOL_MAX_THREADS", config.nodejs_pool_max_threads.to_string())
+            .env("PLUGIN_POOL_CONCURRENT_TASKS", config.nodejs_pool_concurrent_tasks.to_string())
+            .env("PLUGIN_POOL_IDLE_TIMEOUT", config.nodejs_pool_idle_timeout_ms.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| {
+                PluginError::PluginExecutionError(format!("Failed to restart pool server: {e}"))
+            })?;
+
+        if let Some(stderr) = child.stderr.take() {
+            tokio::spawn(async move {
+                let reader = BufReader::new(stderr);
+                let mut lines = reader.lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    tracing::error!(target: "pool_server", "{}", line);
+                }
+            });
+        }
+
+        if let Some(stdout) = child.stdout.take() {
+            let reader = BufReader::new(stdout);
+            let mut lines = reader.lines();
+
+            let timeout = tokio::time::timeout(Duration::from_secs(10), async {
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if line.contains("POOL_SERVER_READY") {
+                        return Ok(());
+                    }
+                }
+                Err(PluginError::PluginExecutionError(
+                    "Pool server did not send ready signal".to_string(),
+                ))
+            })
+            .await;
+
+            match timeout {
+                Ok(Ok(())) => {
+                    tracing::info!("Plugin pool server restarted successfully");
+                }
+                Ok(Err(e)) => return Err(e),
+                Err(_) => {
+                    return Err(PluginError::PluginExecutionError(
+                        "Timeout waiting for pool server to restart".to_string(),
+                    ))
+                }
+            }
+        }
+
+        *process_guard = Some(child);
+
+        {
+            let mut initialized = self.initialized.write().await;
+            *initialized = true;
+        }
+
+        Ok(())
     }
 
     /// Shutdown the pool server

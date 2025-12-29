@@ -16,22 +16,25 @@
  * - Request: { type: "shutdown", taskId }
  * - Response: { taskId, success, result?, error?, logs? }
  *
- * Environment Variables for tuning (high concurrency e.g., 1000+ parallel requests):
+ * Configuration:
+ * 
+ * All configuration is derived from PLUGIN_MAX_CONCURRENCY in Rust's config.rs
+ * and passed via environment variables when spawning this process.
+ * See: src/services/plugins/config.rs
+ *
+ * Environment Variables (passed from Rust):
+ * - PLUGIN_MAX_CONCURRENCY: Primary scaling knob
+ * - PLUGIN_POOL_MAX_THREADS: Worker threads (derived from concurrency)
+ * - PLUGIN_POOL_CONCURRENT_TASKS: Tasks per worker (derived from concurrency)
+ * - PLUGIN_POOL_IDLE_TIMEOUT: Idle timeout in ms
  * - PLUGIN_POOL_DEBUG: Set to 'true' to enable debug logging
- * - PLUGIN_POOL_MAX_THREADS: Maximum worker threads (default: CPU count or 8, whichever is higher)
- * - PLUGIN_POOL_CONCURRENT_TASKS: Concurrent tasks per worker (default: 10)
- * - PLUGIN_POOL_IDLE_TIMEOUT: Idle timeout in ms (default: 60000)
- * - PLUGIN_POOL_BACKLOG: Socket connection backlog (default: 1024)
- * - PLUGIN_POOL_MAX_CONNECTIONS: Max Rust->Pool connections (default: 64, set in Rust)
  */
 
 import * as net from 'node:net';
 import * as fs from 'node:fs';
 import { WorkerPoolManager, type PluginExecutionRequest } from './worker-pool';
-import { compilePlugin, compilePluginSource } from './compiler';
 import {
   DEFAULT_POOL_MIN_THREADS,
-  DEFAULT_POOL_MIN_THREADS_DIVISOR,
   DEFAULT_POOL_MAX_THREADS_FLOOR,
   DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER,
   DEFAULT_POOL_IDLE_TIMEOUT_MS,
@@ -128,9 +131,21 @@ class PoolServer {
   constructor(socketPath: string) {
     this.socketPath = socketPath;
     
-    // Default to number of CPUs for worker threads, with higher concurrency per worker
-    // For 1000+ parallel requests, tune via environment variables
     const cpuCount = require('os').cpus().length;
+    
+    // =========================================================================
+    // Configuration - ALL values are passed from Rust (single source of truth)
+    // =========================================================================
+    // Rust's config.rs derives all values from PLUGIN_MAX_CONCURRENCY and
+    // passes them via environment variables when spawning this process.
+    //
+    // Fallbacks are provided only for manual testing without Rust.
+    //
+    const maxConcurrency = parseInt(process.env.PLUGIN_MAX_CONCURRENCY || '2048', 10);
+    const minThreads = parseInt(
+      process.env.PLUGIN_POOL_MIN_THREADS || String(Math.max(DEFAULT_POOL_MIN_THREADS, Math.floor(cpuCount / 2))),
+      10
+    );
     const maxThreads = parseInt(
       process.env.PLUGIN_POOL_MAX_THREADS || String(Math.max(cpuCount, DEFAULT_POOL_MAX_THREADS_FLOOR)),
       10
@@ -144,10 +159,11 @@ class PoolServer {
       10
     );
     
-    debug(`Initializing pool with maxThreads=${maxThreads}, concurrentTasksPerWorker=${concurrentTasksPerWorker}`);
+    // Log effective configuration (received from Rust)
+    console.error(`[pool-server] Configuration (from Rust): maxConcurrency=${maxConcurrency}, minThreads=${minThreads}, maxThreads=${maxThreads}, concurrentTasksPerWorker=${concurrentTasksPerWorker}, idleTimeout=${idleTimeout}ms`);
     
     this.pool = new WorkerPoolManager({
-      minThreads: Math.max(DEFAULT_POOL_MIN_THREADS, Math.floor(cpuCount / DEFAULT_POOL_MIN_THREADS_DIVISOR)),
+      minThreads,
       maxThreads,
       concurrentTasksPerWorker,
       idleTimeout,
@@ -179,7 +195,6 @@ class PoolServer {
     
     // Don't set maxConnections at all - the default is unlimited
     // Setting it to 0 might reject all connections!
-    // this.server.maxConnections = 0; // REMOVED
     
     // Log any server-level errors
     this.server.on('error', (err) => {

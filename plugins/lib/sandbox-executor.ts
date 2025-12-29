@@ -25,6 +25,7 @@ import {
   TransactionStatus,
   pluginError,
 } from '@openzeppelin/relayer-sdk';
+import { DEFAULT_SOCKET_REQUEST_TIMEOUT_MS } from './constants';
 
 /**
  * Task payload received from the worker pool
@@ -106,7 +107,13 @@ class SandboxPluginAPI implements PluginAPI {
         });
 
         this.socket!.on('error', (error) => {
+          this.rejectAllPending(error);
           reject(error);
+        });
+
+        this.socket!.on('close', () => {
+          this.connected = false;
+          this.rejectAllPending(new Error('Socket closed unexpectedly'));
         });
       });
 
@@ -132,6 +139,17 @@ class SandboxPluginAPI implements PluginAPI {
     }
 
     await this.connectionPromise;
+  }
+
+  /**
+   * Reject all pending requests with the given error.
+   * Called on socket error or close to prevent hanging promises.
+   */
+  private rejectAllPending(error: Error): void {
+    for (const [requestId, resolver] of this.pending.entries()) {
+      resolver.reject(error);
+      this.pending.delete(requestId);
+    }
   }
 
   useRelayer(relayerId: string): Relayer {
@@ -209,9 +227,29 @@ class SandboxPluginAPI implements PluginAPI {
     await this.ensureConnected();
 
     return new Promise((resolve, reject) => {
-      this.pending.set(requestId, { resolve, reject });
+      let timeoutId: NodeJS.Timeout | undefined;
+
+      // Set up timeout to prevent hanging forever
+      timeoutId = setTimeout(() => {
+        this.pending.delete(requestId);
+        reject(new Error(`Socket request '${method}' timed out after ${DEFAULT_SOCKET_REQUEST_TIMEOUT_MS}ms`));
+      }, DEFAULT_SOCKET_REQUEST_TIMEOUT_MS);
+
+      // Wrap resolvers to clear timeout on completion
+      this.pending.set(requestId, {
+        resolve: (value) => {
+          if (timeoutId) clearTimeout(timeoutId);
+          resolve(value);
+        },
+        reject: (reason) => {
+          if (timeoutId) clearTimeout(timeoutId);
+          reject(reason);
+        },
+      });
+
       this.socket!.write(message, (error) => {
         if (error) {
+          if (timeoutId) clearTimeout(timeoutId);
           this.pending.delete(requestId);
           reject(error);
         }
@@ -230,12 +268,33 @@ class SandboxPluginAPI implements PluginAPI {
 }
 
 /**
+ * Safely stringify a value, handling circular references and BigInt.
+ * Falls back to String() if JSON.stringify fails.
+ */
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value, (_, v) => {
+      if (typeof v === 'bigint') {
+        return v.toString() + 'n';
+      }
+      return v;
+    });
+  } catch {
+    try {
+      return String(value);
+    } catch {
+      return '[Unstringifiable value]';
+    }
+  }
+}
+
+/**
  * Creates a console-like object that captures logs.
  */
 function createSandboxConsole(logs: LogEntry[]): Console {
   const log = (level: LogEntry['level']) => (...args: any[]) => {
     const message = args.map(arg =>
-      typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
+      typeof arg === 'object' ? safeStringify(arg) : String(arg)
     ).join(' ');
     logs.push({ level, message });
   };
@@ -284,55 +343,165 @@ export default async function executeInSandbox(task: SandboxTask): Promise<Sandb
     // Prepare the module wrapper
     const wrappedCode = wrapForVm(task.compiledCode);
 
-    // Create a mock require function for the sandbox
-    // Only allow specific safe modules
+    // Create a require function for the sandbox
+    // Block dangerous Node.js built-ins, allow npm packages
+    const BLOCKED_MODULES = new Set([
+      // Filesystem access
+      'fs', 'fs/promises', 'node:fs', 'node:fs/promises',
+      // Process/system control
+      'child_process', 'node:child_process',
+      'cluster', 'node:cluster',
+      'worker_threads', 'node:worker_threads',
+      'process', 'node:process',
+      // Low-level system
+      'os', 'node:os',
+      'v8', 'node:v8',
+      'vm', 'node:vm',
+      // Direct network (use PluginAPI instead)
+      'net', 'node:net',
+      'dgram', 'node:dgram',
+      'tls', 'node:tls',
+      'http', 'node:http',
+      'https', 'node:https',
+      'http2', 'node:http2',
+      // Dangerous utilities
+      'repl', 'node:repl',
+      'inspector', 'node:inspector',
+      'perf_hooks', 'node:perf_hooks',
+      'async_hooks', 'node:async_hooks',
+      'trace_events', 'node:trace_events',
+      // Native modules (potential escape)
+      'module', 'node:module',
+    ]);
+
     const sandboxRequire = (id: string): any => {
-      // Allow the relayer SDK (it's already used in the compiled code)
-      if (id === '@openzeppelin/relayer-sdk') {
-        return require('@openzeppelin/relayer-sdk');
+      // Block dangerous built-in modules
+      if (BLOCKED_MODULES.has(id)) {
+        throw new Error(
+          `Module '${id}' is blocked for security. ` +
+          `Use the PluginAPI for network operations.`
+        );
       }
-      // Block all other requires for security
-      throw new Error(`Module '${id}' is not available in plugin sandbox`);
+
+      // Allow everything else (SDK, npm packages like uuid, ethers, etc.)
+      try {
+        return require(id);
+      } catch (err) {
+        throw new Error(
+          `Module '${id}' not found. Ensure it's installed in plugins/node_modules.`
+        );
+      }
     };
 
     // Create module-like objects for CommonJS compatibility
     const moduleExports: any = {};
     const moduleObject = { exports: moduleExports };
 
+    // Minimal crypto exposure - only safe ID generation
+    const safeCrypto = {
+      randomUUID: () => require('crypto').randomUUID(),
+      getRandomValues: (arr: Uint8Array) => require('crypto').getRandomValues(arr),
+    };
+
     // Create the sandbox context
+    // SECURITY: Only expose safe globals. Never expose:
+    // - process (env vars, exit, argv)
+    // - fs, child_process, net, http (I/O)
+    // - eval, Function constructor (code execution)
+    // - require for arbitrary modules
     const context = vm.createContext({
-      // Console for logging
+      // === Console for logging ===
       console: sandboxConsole,
-      // CommonJS module system
+
+      // === CommonJS module system ===
       exports: moduleExports,
       require: sandboxRequire,
       module: moduleObject,
       __filename: `plugin-${task.pluginId}.js`,
       __dirname: '/plugins',
-      // Timer functions
+
+      // === Async primitives ===
       setTimeout,
       setInterval,
       setImmediate,
       clearTimeout,
       clearInterval,
       clearImmediate,
-      // Promise (needed for async)
       Promise,
-      // Buffer for binary data handling
-      Buffer,
-      // JSON utilities
+      queueMicrotask,
+
+      // === Core JS types (often needed explicitly) ===
+      Object,
+      Array,
+      String,
+      Number,
+      Boolean,
+      Symbol,
+      BigInt,
+      Map,
+      Set,
+      WeakMap,
+      WeakSet,
+      Date,
+      RegExp,
+      Math,
       JSON,
-      // Error types
+
+      // === Error types ===
       Error,
       TypeError,
       RangeError,
       SyntaxError,
-      // URL handling
+      ReferenceError,
+      URIError,
+      EvalError,
+
+      // === Number utilities ===
+      parseInt,
+      parseFloat,
+      isNaN,
+      isFinite,
+      Infinity,
+      NaN,
+
+      // === String/URL encoding ===
+      encodeURI,
+      decodeURI,
+      encodeURIComponent,
+      decodeURIComponent,
+      atob,
+      btoa,
       URL,
       URLSearchParams,
-      // TextEncoder/Decoder
+
+      // === Binary data ===
+      Buffer,
+      ArrayBuffer,
+      SharedArrayBuffer,
+      Uint8Array,
+      Uint16Array,
+      Uint32Array,
+      Int8Array,
+      Int16Array,
+      Int32Array,
+      Float32Array,
+      Float64Array,
+      BigInt64Array,
+      BigUint64Array,
+      DataView,
       TextEncoder,
       TextDecoder,
+
+      // === Cancellation (modern async patterns) ===
+      AbortController,
+      AbortSignal,
+
+      // === Safe crypto subset (no signing/hashing secrets) ===
+      crypto: safeCrypto,
+
+      // === Reflection (needed by some libraries) ===
+      Reflect,
+      Proxy,
     });
 
     // Compile and run the wrapped code to get the factory function
@@ -352,22 +521,36 @@ export default async function executeInSandbox(task: SandboxTask): Promise<Sandb
       throw new Error('Plugin must export a handler function');
     }
 
-    // Execute the handler
+    // Execute the handler with timeout protection
+    // This prevents hung async handlers from blocking workers indefinitely
     let result: any;
 
-    if (handler.length === 1) {
-      // Modern context-based handler
-      const pluginContext: PluginContext = {
-        api,
-        params: task.params,
-        kv,
-        headers: task.headers ?? {},
-      };
-      result = await handler(pluginContext);
-    } else {
-      // Legacy 2-param handler (no KV/headers access)
-      result = await handler(api, task.params);
-    }
+    const handlerPromise = (async () => {
+      if (handler.length === 1) {
+        // Modern context-based handler
+        const pluginContext: PluginContext = {
+          api,
+          params: task.params,
+          kv,
+          headers: task.headers ?? {},
+        };
+        return await handler(pluginContext);
+      } else {
+        // Legacy 2-param handler (no KV/headers access)
+        return await handler(api, task.params);
+      }
+    })();
+
+    // Race handler against timeout to prevent worker starvation
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        const error = new Error(`Plugin handler timed out after ${task.timeout}ms`);
+        (error as any).code = 'ERR_HANDLER_TIMEOUT';
+        reject(error);
+      }, task.timeout);
+    });
+
+    result = await Promise.race([handlerPromise, timeoutPromise]);
 
     return {
       taskId: task.taskId,
@@ -398,7 +581,11 @@ export default async function executeInSandbox(task: SandboxTask): Promise<Sandb
       } else if (err.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT') {
         errorCode = 'TIMEOUT';
         errorStatus = 504;
-        errorMessage = `Plugin execution timed out after ${task.timeout}ms`;
+        errorMessage = `Plugin module compilation timed out after ${task.timeout}ms`;
+      } else if (err.code === 'ERR_HANDLER_TIMEOUT') {
+        errorCode = 'TIMEOUT';
+        errorStatus = 504;
+        // Message already set by the timeout error
       } else if (err.code) {
         errorCode = err.code;
       }
@@ -438,5 +625,9 @@ export default async function executeInSandbox(task: SandboxTask): Promise<Sandb
     };
   } finally {
     api.close();
+    // Disconnect Redis to prevent connection leak
+    await kv.disconnect().catch(() => {
+      // Ignore disconnect errors - connection may not have been established
+    });
   }
 }

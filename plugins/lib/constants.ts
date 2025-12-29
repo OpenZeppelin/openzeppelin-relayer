@@ -1,41 +1,35 @@
 /**
  * Plugin Pool Constants
  *
- * These values should match src/constants/plugins.rs which is the source of truth.
- * When updating these values, ensure the Rust constants are updated as well.
+ * IMPORTANT: These are fallback values only for standalone testing.
+ * In production, ALL configuration comes from Rust (src/services/plugins/config.rs)
+ * and is passed via environment variables when spawning the pool server.
+ *
+ * The single source of truth is: PLUGIN_MAX_CONCURRENCY
+ * Set it in .env and Rust derives everything else.
  */
 
 // =============================================================================
-// Pool Configuration
+// Fallbacks for standalone testing (when not spawned by Rust)
 // =============================================================================
 
-/** Default minimum worker threads */
+/** Fallback minimum worker threads if not passed from Rust */
 export const DEFAULT_POOL_MIN_THREADS = 2;
 
-/** Divisor for calculating minThreads from CPU count (cpuCount / divisor) */
-export const DEFAULT_POOL_MIN_THREADS_DIVISOR = 2;
-
-/** Default maximum worker threads floor (minimum threads even on small machines) */
+/** Fallback max threads if not passed from Rust */
 export const DEFAULT_POOL_MAX_THREADS_FLOOR = 8;
 
-/** Default concurrent tasks per worker thread */
-export const DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER = 10;
+/** Fallback concurrent tasks if not passed from Rust */
+export const DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER = 20;
 
-/** Default worker idle timeout in milliseconds */
-export const DEFAULT_POOL_IDLE_TIMEOUT_MS = 60000; // 60 seconds
+/** Fallback idle timeout if not passed from Rust */
+export const DEFAULT_POOL_IDLE_TIMEOUT_MS = 60000;
 
-/** Default socket connection backlog for high concurrency */
-export const DEFAULT_POOL_SOCKET_BACKLOG = 1024;
+/** Socket backlog for high concurrency */
+export const DEFAULT_POOL_SOCKET_BACKLOG = 2048;
 
-/** Default plugin execution timeout in milliseconds */
-export const DEFAULT_POOL_EXECUTION_TIMEOUT_MS = 30000; // 30 seconds
+/** Default execution timeout (ms) */
+export const DEFAULT_POOL_EXECUTION_TIMEOUT_MS = 30000;
 
-// =============================================================================
-// Worker Pool Specific (may differ from pool-server defaults)
-// =============================================================================
-
-/** Higher thread floor for standalone worker pool usage */
-export const DEFAULT_WORKER_POOL_MAX_THREADS_FLOOR = 16;
-
-/** Higher concurrency for I/O bound tasks in worker pool */
-export const DEFAULT_WORKER_POOL_CONCURRENT_TASKS_PER_WORKER = 20;
+/** Default per-request timeout for socket communication (ms) */
+export const DEFAULT_SOCKET_REQUEST_TIMEOUT_MS = 30000;

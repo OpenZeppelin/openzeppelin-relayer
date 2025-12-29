@@ -43,6 +43,7 @@ import {
 import { DefaultPluginKVStore } from './kv';
 import { LogInterceptor } from './logger';
 import type { PluginKVStore } from './kv';
+import { DEFAULT_SOCKET_REQUEST_TIMEOUT_MS } from './constants';
 import net from 'node:net';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -394,7 +395,13 @@ export class DefaultPluginAPI implements PluginAPI {
 
       this.socket.on('error', (error) => {
         console.error('Socket ERROR:', error);
+        this._rejectAllPending(error);
         reject(error);
+      });
+
+      this.socket.on('close', () => {
+        this._connected = false;
+        this._rejectAllPending(new Error('Socket closed unexpectedly'));
       });
     });
 
@@ -404,15 +411,30 @@ export class DefaultPluginAPI implements PluginAPI {
         .split('\n')
         .filter(Boolean)
         .forEach((msg: string) => {
-          const parsed = JSON.parse(msg);
-          const { requestId, result, error } = parsed;
-          const resolver = this.pending.get(requestId);
-          if (resolver) {
-            error ? resolver.reject(error) : resolver.resolve(result);
-            this.pending.delete(requestId);
+          try {
+            const parsed = JSON.parse(msg);
+            const { requestId, result, error } = parsed;
+            const resolver = this.pending.get(requestId);
+            if (resolver) {
+              error ? resolver.reject(error) : resolver.resolve(result);
+              this.pending.delete(requestId);
+            }
+          } catch {
+            // Ignore malformed messages
           }
         });
     });
+  }
+
+  /**
+   * Reject all pending requests with the given error.
+   * Called on socket error or close to prevent hanging promises.
+   */
+  private _rejectAllPending(error: Error): void {
+    for (const [requestId, resolver] of this.pending.entries()) {
+      resolver.reject(error);
+      this.pending.delete(requestId);
+    }
   }
 
   /**
@@ -498,18 +520,34 @@ export class DefaultPluginAPI implements PluginAPI {
       await this._connectionPromise;
     }
 
-    const result = this.socket.write(message, (error) => {
-      if (error) {
-        console.error('Error sending message:', error);
-      }
-    });
-
-    if (!result) {
-      throw new Error(`Failed to send message to relayer: ${message}`);
-    }
-
     return new Promise((resolve, reject) => {
-      this.pending.set(requestId, { resolve, reject });
+      let timeoutId: NodeJS.Timeout | undefined;
+
+      // Set up timeout to prevent hanging forever
+      timeoutId = setTimeout(() => {
+        this.pending.delete(requestId);
+        reject(new Error(`Socket request '${method}' timed out after ${DEFAULT_SOCKET_REQUEST_TIMEOUT_MS}ms`));
+      }, DEFAULT_SOCKET_REQUEST_TIMEOUT_MS);
+
+      // Wrap resolvers to clear timeout on completion
+      this.pending.set(requestId, {
+        resolve: (value) => {
+          if (timeoutId) clearTimeout(timeoutId);
+          resolve(value);
+        },
+        reject: (reason) => {
+          if (timeoutId) clearTimeout(timeoutId);
+          reject(reason);
+        },
+      });
+
+      this.socket.write(message, (error) => {
+        if (error) {
+          if (timeoutId) clearTimeout(timeoutId);
+          this.pending.delete(requestId);
+          reject(error);
+        }
+      });
     });
   }
 
