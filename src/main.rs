@@ -47,9 +47,9 @@ use tracing::info;
 use openzeppelin_relayer::{
     api,
     bootstrap::{
-        initialize_app_state, initialize_relayers, initialize_token_swap_workers,
-        initialize_workers, process_config_file,
-        initialize_plugin_pool, precompile_plugins, shutdown_plugin_pool,
+        initialize_app_state, initialize_plugin_pool, initialize_relayers,
+        initialize_token_swap_workers, initialize_workers, precompile_plugins, process_config_file,
+        shutdown_plugin_pool,
     },
     config,
     constants::PUBLIC_ENDPOINTS,
@@ -108,10 +108,9 @@ async fn main() -> Result<()> {
         match initialize_plugin_pool(app_state.plugin_repository.as_ref()).await {
             Ok(Some(pm)) => {
                 // Precompile all plugins
-                if let Err(e) = precompile_plugins(
-                    app_state.plugin_repository.as_ref(),
-                    pm.as_ref(),
-                ).await {
+                if let Err(e) =
+                    precompile_plugins(app_state.plugin_repository.as_ref(), pm.as_ref()).await
+                {
                     tracing::warn!(error = %e, "Failed to precompile some plugins");
                 }
                 Some(pm)

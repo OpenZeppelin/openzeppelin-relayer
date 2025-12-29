@@ -166,7 +166,18 @@ impl SocketService {
 
             // Now handle the connection, but also listen for shutdown
             // We spawn the handler and then select between it finishing or shutdown
-            let handle = tokio::spawn(Self::handle_connection::<RA, J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(stream, state, relayer_api));
+            let handle = tokio::spawn(Self::handle_connection::<
+                RA,
+                J,
+                RR,
+                TR,
+                NR,
+                NFR,
+                SR,
+                TCR,
+                PR,
+                AKR,
+            >(stream, state, relayer_api));
             tokio::pin!(handle);
 
             tokio::select! {
@@ -368,7 +379,7 @@ mod tests {
         );
         let bytes_read = read_result.unwrap().unwrap();
         assert!(bytes_read > 0, "No data received");
-        
+
         // Close the client first, then wait a bit for the handler to complete
         // before sending shutdown. This ensures the handler loop processes the
         // connection closure and collects the traces.

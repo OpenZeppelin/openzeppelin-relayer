@@ -644,3 +644,160 @@ The relayer will automatically detect which pattern your plugin uses:
 - If neither → shows clear error message
 
 This ensures a smooth transition period where both patterns work simultaneously.
+
+## Performance Tuning
+
+For production deployments handling high concurrency, the plugin system offers extensive tuning options via environment variables.
+
+### Execution Modes
+
+The plugin system supports two execution modes:
+
+| Mode | Environment Variable | Description |
+|------|---------------------|-------------|
+| **ts-node** (default) | `PLUGIN_USE_POOL=false` | Spawns a new process per request. Simple but slower. |
+| **Pool mode** | `PLUGIN_USE_POOL=true` | Uses persistent worker pool. **Recommended for production.** |
+
+<Callout type="info">
+Pool mode significantly improves performance by reusing worker processes and maintaining persistent connections. Enable it for any production deployment.
+</Callout>
+
+### Environment Variables Reference
+
+#### Simple Scaling (Recommended)
+
+<Callout type="info">
+**Most users only need one variable!** Set `PLUGIN_MAX_CONCURRENCY` and everything else is auto-calculated.
+</Callout>
+
+```bash
+# This is all you need for 3000 concurrent users:
+export PLUGIN_MAX_CONCURRENCY=3000
+```
+
+The system automatically derives on **both Rust and Node.js sides**:
+
+**Rust side (connection pool & queue):**
+- `PLUGIN_POOL_MAX_CONNECTIONS` = 3000 (1:1 ratio)
+- `PLUGIN_SOCKET_MAX_CONCURRENT_CONNECTIONS` = 4500 (1.5x for headroom)
+- `PLUGIN_POOL_MAX_QUEUE_SIZE` = 6000 (2x for burst handling)
+- `PLUGIN_POOL_QUEUE_SEND_TIMEOUT_MS` = 1000 (auto-scaled for high load)
+
+**Node.js side (worker pool):**
+- `PLUGIN_POOL_MAX_THREADS` = min(cpuCount×2, concurrency/50, 64)
+- `PLUGIN_POOL_CONCURRENT_TASKS` = max(10, concurrency/maxThreads) up to 50
+
+#### Advanced Overrides (Power Users)
+
+You can override any auto-derived value when needed:
+
+```bash
+# Set the primary scaling knob
+export PLUGIN_MAX_CONCURRENCY=3000
+
+# Override just the queue size (other values still auto-derived)
+export PLUGIN_POOL_MAX_QUEUE_SIZE=10000
+```
+
+#### All Available Variables
+
+| Variable | Default | Auto-Derived From | Description |
+|----------|---------|-------------------|-------------|
+| `PLUGIN_MAX_CONCURRENCY` | 2048 | - | **Primary scaling knob** - sets expected concurrent load |
+| **Rust Side** ||||
+| `PLUGIN_POOL_MAX_CONNECTIONS` | 2048 | `MAX_CONCURRENCY` | Max connections to pool server |
+| `PLUGIN_SOCKET_MAX_CONCURRENT_CONNECTIONS` | 4096 | `MAX_CONCURRENCY × 1.5` | Max plugin connections to relayer |
+| `PLUGIN_POOL_MAX_QUEUE_SIZE` | 5000 | `MAX_CONCURRENCY × 2` | Max queued requests |
+| `PLUGIN_POOL_QUEUE_SEND_TIMEOUT_MS` | 500 | Auto-scaled | Wait time when queue is full |
+| `PLUGIN_POOL_CONNECT_RETRIES` | 15 | - | Retry attempts when connecting |
+| `PLUGIN_POOL_REQUEST_TIMEOUT_SECS` | 30 | - | Timeout for pool requests |
+| `PLUGIN_SOCKET_IDLE_TIMEOUT_SECS` | 60 | - | Close idle connections after |
+| `PLUGIN_SOCKET_READ_TIMEOUT_SECS` | 30 | - | Read timeout per message |
+| `PLUGIN_POOL_WORKERS` | auto | CPU cores | Queue processing workers |
+| **Node.js Side** ||||
+| `PLUGIN_POOL_MAX_THREADS` | auto | `MAX_CONCURRENCY / 50` | Worker threads in pool (capped at 64) |
+| `PLUGIN_POOL_CONCURRENT_TASKS` | auto | `MAX_CONCURRENCY / maxThreads` | Tasks per worker (10-50) |
+| `PLUGIN_POOL_IDLE_TIMEOUT` | 60000 | - | Worker idle timeout (ms) |
+
+#### Timeout Alignment
+
+<Callout type="warn">
+Timeouts must be aligned! If your plugin takes up to 120s, set these accordingly.
+</Callout>
+
+```bash
+# In config.json: "timeout": 120
+
+# Environment should match:
+export PLUGIN_POOL_REQUEST_TIMEOUT_SECS=120
+export PLUGIN_SOCKET_IDLE_TIMEOUT_SECS=180  # 1.5x plugin timeout
+```
+
+#### Health & Recovery
+
+Controls automatic health monitoring and recovery.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PLUGIN_POOL_HEALTH_CHECK_INTERVAL_SECS` | 5 | Minimum seconds between health checks |
+| `PLUGIN_TRACE_TIMEOUT_MS` | 100 | Timeout for collecting execution traces |
+
+### Load Profile Examples
+
+#### Low Load (< 100 concurrent requests)
+
+```bash
+export PLUGIN_USE_POOL=true
+# Default settings are sufficient
+```
+
+#### Medium Load (100-1000 concurrent requests)
+
+```bash
+export PLUGIN_USE_POOL=true
+export PLUGIN_MAX_CONCURRENCY=1000
+```
+
+#### High Load (1000-5000 concurrent requests)
+
+```bash
+export PLUGIN_USE_POOL=true
+export PLUGIN_MAX_CONCURRENCY=3000
+export PLUGIN_POOL_REQUEST_TIMEOUT_SECS=60
+```
+
+#### Extreme Load (5000+ concurrent requests)
+
+```bash
+export PLUGIN_USE_POOL=true
+export PLUGIN_MAX_CONCURRENCY=8000
+export PLUGIN_POOL_REQUEST_TIMEOUT_SECS=120
+export PLUGIN_POOL_CONNECT_RETRIES=20
+```
+
+### System Limits
+
+For high concurrency, you may need to increase OS-level limits:
+
+```bash
+# Increase file descriptor limit (Linux/macOS)
+ulimit -n 65536
+
+# For macOS, also run:
+sudo sysctl -w kern.maxfiles=65536
+sudo sysctl -w kern.maxfilesperproc=65536
+```
+
+### Troubleshooting Common Errors
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| `Plugin execution queue is full` | More requests than queue can hold | Increase `PLUGIN_POOL_MAX_QUEUE_SIZE` and `PLUGIN_POOL_QUEUE_SEND_TIMEOUT_MS` |
+| `Connection limit reached` | Too many concurrent plugin connections | Increase `PLUGIN_SOCKET_MAX_CONCURRENT_CONNECTIONS` |
+| `Failed to connect to pool after N attempts` | Pool server overwhelmed | Increase `PLUGIN_POOL_CONNECT_RETRIES` and `PLUGIN_POOL_MAX_CONNECTIONS` |
+| `ScriptTimeout(N)` | Plugin execution exceeded timeout | Increase `timeout` in plugin config (config.json) |
+| `All connection permits exhausted` | Connection pool at capacity | Increase `PLUGIN_POOL_MAX_CONNECTIONS` |
+
+<Callout type="warn">
+When increasing limits significantly, monitor your system's memory and CPU usage. Each connection consumes resources.
+</Callout>

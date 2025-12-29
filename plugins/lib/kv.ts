@@ -85,6 +85,12 @@ export interface PluginKVStore {
     fn: () => Promise<T>,
     opts?: { ttlSec?: number; onBusy?: 'throw' | 'skip' }
   ): Promise<T | null>;
+
+  /**
+   * Disconnect from the backing store.
+   * Call this when the store is no longer needed to prevent connection leaks.
+   */
+  disconnect(): Promise<void>;
 }
 
 /**

@@ -161,17 +161,21 @@ impl PluginRepositoryTrait for PluginRepositoryStorage {
     ) -> Result<(), RepositoryError> {
         match self {
             PluginRepositoryStorage::InMemory(repo) => {
-                repo.store_compiled_code(plugin_id, compiled_code, source_hash).await
+                repo.store_compiled_code(plugin_id, compiled_code, source_hash)
+                    .await
             }
             PluginRepositoryStorage::Redis(repo) => {
-                repo.store_compiled_code(plugin_id, compiled_code, source_hash).await
+                repo.store_compiled_code(plugin_id, compiled_code, source_hash)
+                    .await
             }
         }
     }
 
     async fn invalidate_compiled_code(&self, plugin_id: &str) -> Result<(), RepositoryError> {
         match self {
-            PluginRepositoryStorage::InMemory(repo) => repo.invalidate_compiled_code(plugin_id).await,
+            PluginRepositoryStorage::InMemory(repo) => {
+                repo.invalidate_compiled_code(plugin_id).await
+            }
             PluginRepositoryStorage::Redis(repo) => repo.invalidate_compiled_code(plugin_id).await,
         }
     }

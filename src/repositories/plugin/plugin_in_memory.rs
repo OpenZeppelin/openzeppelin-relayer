@@ -33,7 +33,7 @@ impl Clone for InMemoryPluginRepository {
             .try_lock()
             .map(|guard| guard.clone())
             .unwrap_or_else(|_| HashMap::new());
-        
+
         let compiled = self
             .compiled_cache
             .try_lock()

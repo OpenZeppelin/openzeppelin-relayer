@@ -28,9 +28,10 @@ use crate::services::plugins::{get_pool_manager, PoolManager};
 pub async fn initialize_plugin_pool<PR: PluginRepositoryTrait>(
     plugin_repository: &PR,
 ) -> eyre::Result<Option<Arc<PoolManager>>> {
-    let has_plugins = plugin_repository.has_entries().await.map_err(|e| {
-        eyre::eyre!("Failed to check plugin repository: {}", e)
-    })?;
+    let has_plugins = plugin_repository
+        .has_entries()
+        .await
+        .map_err(|e| eyre::eyre!("Failed to check plugin repository: {}", e))?;
 
     if !has_plugins {
         info!("No plugins configured, skipping plugin pool initialization");
@@ -38,7 +39,10 @@ pub async fn initialize_plugin_pool<PR: PluginRepositoryTrait>(
     }
 
     let plugin_count = plugin_repository.count().await.unwrap_or(0);
-    info!(plugin_count = plugin_count, "Plugins detected, initializing worker pool");
+    info!(
+        plugin_count = plugin_count,
+        "Plugins detected, initializing worker pool"
+    );
 
     let pool_manager = get_pool_manager();
 
@@ -80,9 +84,10 @@ pub async fn precompile_plugins<PR: PluginRepositoryTrait>(
         per_page: 1000,
     };
 
-    let plugins = plugin_repository.list_paginated(query).await.map_err(|e| {
-        eyre::eyre!("Failed to list plugins: {}", e)
-    })?;
+    let plugins = plugin_repository
+        .list_paginated(query)
+        .await
+        .map_err(|e| eyre::eyre!("Failed to list plugins: {}", e))?;
 
     let mut compiled_count = 0;
 
@@ -137,9 +142,10 @@ pub async fn precompile_plugins<PR: PluginRepositoryTrait>(
 /// terminate the worker pool and clean up resources.
 pub async fn shutdown_plugin_pool() -> eyre::Result<()> {
     let pool_manager = get_pool_manager();
-    pool_manager.shutdown().await.map_err(|e| {
-        eyre::eyre!("Failed to shutdown plugin pool: {}", e)
-    })?;
+    pool_manager
+        .shutdown()
+        .await
+        .map_err(|e| eyre::eyre!("Failed to shutdown plugin pool: {}", e))?;
     info!("Plugin worker pool shutdown complete");
     Ok(())
 }
@@ -152,7 +158,9 @@ mod tests {
     #[tokio::test]
     async fn test_initialize_plugin_pool_no_plugins() {
         let mut mock_repo = MockPluginRepositoryTrait::new();
-        mock_repo.expect_has_entries().returning(|| async { Ok(false) });
+        mock_repo
+            .expect_has_entries()
+            .returning(|| async { Ok(false) });
 
         let result = initialize_plugin_pool(&mock_repo).await;
         assert!(result.is_ok());

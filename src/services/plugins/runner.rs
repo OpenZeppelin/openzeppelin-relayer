@@ -30,11 +30,9 @@ use crate::{
     },
 };
 
-use super::PluginError;
-use crate::constants::DEFAULT_TRACE_TIMEOUT_SECS;
+use super::{config::get_config, PluginError};
 use async_trait::async_trait;
 use tokio::{sync::oneshot, time::timeout};
-use tracing::warn;
 use uuid::Uuid;
 
 #[cfg(test)]
@@ -47,14 +45,9 @@ fn use_pool_executor() -> bool {
         .unwrap_or(false)
 }
 
-/// Get trace timeout duration - defaults to 5s but configurable
+/// Get trace timeout duration from centralized config
 fn get_trace_timeout() -> Duration {
-    Duration::from_secs(
-        std::env::var("PLUGIN_TRACE_TIMEOUT_SECS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(DEFAULT_TRACE_TIMEOUT_SECS)
-    )
+    Duration::from_millis(get_config().trace_timeout_ms)
 }
 
 #[cfg_attr(test, automock)]
@@ -70,6 +63,7 @@ pub trait PluginRunnerTrait {
         script_params: String,
         http_request_id: Option<String>,
         headers_json: Option<String>,
+        emit_traces: bool,
         state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
     ) -> Result<ScriptResult, PluginError>
     where
@@ -102,6 +96,7 @@ impl PluginRunnerTrait for PluginRunner {
         script_params: String,
         http_request_id: Option<String>,
         headers_json: Option<String>,
+        emit_traces: bool,
         state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
     ) -> Result<ScriptResult, PluginError>
     where
@@ -130,6 +125,7 @@ impl PluginRunnerTrait for PluginRunner {
                     script_params,
                     http_request_id,
                     headers_json,
+                    emit_traces,
                     state,
                 )
                 .await;
@@ -144,6 +140,7 @@ impl PluginRunnerTrait for PluginRunner {
             script_params,
             http_request_id,
             headers_json,
+            emit_traces,
             state,
         )
         .await
@@ -162,6 +159,7 @@ impl PluginRunner {
         script_params: String,
         http_request_id: Option<String>,
         headers_json: Option<String>,
+        _emit_traces: bool,
         state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
     ) -> Result<ScriptResult, PluginError>
     where
@@ -243,6 +241,7 @@ impl PluginRunner {
         script_params: String,
         http_request_id: Option<String>,
         headers_json: Option<String>,
+        emit_traces: bool,
         state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
     ) -> Result<ScriptResult, PluginError>
     where
@@ -262,18 +261,22 @@ impl PluginRunner {
     {
         // Ensure shared socket service is started
         ensure_shared_socket_started(Arc::clone(&state)).await?;
-        
+
         // Get shared socket service
         let shared_socket = get_shared_socket_service()?;
         let shared_socket_path = shared_socket.socket_path().to_string();
 
         // Generate execution ID (use http_request_id if available, otherwise generate one)
-        let execution_id = http_request_id.clone().unwrap_or_else(|| {
-            format!("exec-{}", Uuid::new_v4())
-        });
+        let execution_id = http_request_id
+            .clone()
+            .unwrap_or_else(|| format!("exec-{}", Uuid::new_v4()));
 
-        // Register execution to receive traces
-        let mut traces_rx = shared_socket.register_execution(execution_id.clone());
+        // Only register for traces if emit_traces is enabled
+        let mut traces_rx = if emit_traces {
+            Some(shared_socket.register_execution(execution_id.clone()))
+        } else {
+            None
+        };
 
         // Execute via pool manager (using shared socket path)
         let pool_manager = get_pool_manager();
@@ -291,11 +294,11 @@ impl PluginRunner {
             timeout_duration,
             pool_manager.execute_plugin(
                 plugin_id.clone(),
-                None,                   // compiled_code - will be fetched from cache
-                Some(script_path),      // plugin_path
+                None,              // compiled_code - will be fetched from cache
+                Some(script_path), // plugin_path
                 params,
                 headers,
-                shared_socket_path,     // Use shared socket path instead of unique one
+                shared_socket_path, // Use shared socket path instead of unique one
                 http_request_id,
                 Some(timeout_duration.as_secs()),
             ),
@@ -304,30 +307,28 @@ impl PluginRunner {
         {
             Ok(result) => result,
             Err(_) => {
-                shared_socket.unregister_execution(&execution_id);
+                if emit_traces {
+                    shared_socket.unregister_execution(&execution_id);
+                }
                 return Err(PluginError::ScriptTimeout(timeout_duration.as_secs()));
             }
         };
 
-        // Wait for traces with configurable timeout
-        // Use minimum of trace_timeout and timeout_duration to not exceed execution timeout
-        let trace_timeout = get_trace_timeout().min(timeout_duration);
-        let traces = match timeout(trace_timeout, traces_rx.recv()).await {
-            Ok(Some(traces)) => traces,
-            Ok(None) => {
-                warn!("Traces channel closed before receiving traces");
-                Vec::new()
+        // Collect traces only if emit_traces is enabled
+        let traces = if let Some(ref mut rx) = traces_rx {
+            // Wait for traces with short timeout - they arrive immediately if the plugin used the API
+            let trace_timeout = get_trace_timeout().min(timeout_duration);
+            match timeout(trace_timeout, rx.recv()).await {
+                Ok(Some(traces)) => traces,
+                Ok(None) | Err(_) => Vec::new(),
             }
-            Err(_) => {
-                warn!(
-                    timeout_secs = trace_timeout.as_secs(),
-                    "Timeout waiting for traces - consider increasing PLUGIN_TRACE_TIMEOUT_SECS"
-                );
-                Vec::new()
-            }
+        } else {
+            Vec::new()
         };
 
-        shared_socket.unregister_execution(&execution_id);
+        if emit_traces {
+            shared_socket.unregister_execution(&execution_id);
+        }
 
         match exec_outcome {
             Ok(mut script_result) => {
@@ -403,6 +404,7 @@ mod tests {
                 "{ \"test\": \"test\" }".to_string(),
                 None,
                 None,
+                false, // emit_traces
                 Arc::new(web::ThinData(state)),
             )
             .await;
@@ -462,6 +464,7 @@ mod tests {
                 "{}".to_string(),
                 None,
                 None,
+                false, // emit_traces
                 Arc::new(web::ThinData(state)),
             )
             .await;
