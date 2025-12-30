@@ -379,7 +379,7 @@ impl RpcSelector {
             &configs,
             excluded_urls,
             false, // allow_paused = false
-            &health_store,
+            health_store,
             expiration,
         ) {
             return Ok(url);
@@ -391,7 +391,7 @@ impl RpcSelector {
             &configs,
             excluded_urls,
             false, // allow_paused = false
-            &health_store,
+            health_store,
             expiration,
             start_index,
         ) {
@@ -409,7 +409,7 @@ impl RpcSelector {
             &configs,
             excluded_urls,
             true, // allow_paused = true
-            &health_store,
+            health_store,
             expiration,
         ) {
             return Ok(url);
@@ -420,7 +420,7 @@ impl RpcSelector {
             &configs,
             excluded_urls,
             true, // allow_paused = true
-            &health_store,
+            health_store,
             expiration,
             start_index,
         ) {

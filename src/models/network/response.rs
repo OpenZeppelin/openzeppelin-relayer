@@ -7,14 +7,14 @@ use crate::models::{
     network::{NetworkConfigData, NetworkRepoModel},
     NetworkType, RpcConfig,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 /// Network response model for API endpoints.
 ///
 /// This flattens the internal NetworkRepoModel structure for API responses,
 /// making network-type-specific fields available at the top level.
-#[derive(Debug, Serialize, Clone, PartialEq, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct NetworkResponse {
     /// Unique identifier composed of network_type and name, e.g., "evm:mainnet"
     pub id: String,
