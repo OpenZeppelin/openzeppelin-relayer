@@ -454,7 +454,8 @@ mod tests {
             "from": "parent-network",
             "chain_id": 1337,
             "required_confirmations": 1,
-            "symbol": "ETH"
+            "symbol": "ETH",
+            "rpc_urls": ["https://rpc.example.com"]
         }"#;
 
         let config: NetworkFileConfig = serde_json::from_str(json).unwrap();
@@ -548,7 +549,9 @@ mod tests {
     fn test_validation_error_propagation() {
         let mut config = create_evm_network_wrapped("test-evm");
         if let NetworkFileConfig::Evm(ref mut evm_config) = config {
-            evm_config.common.rpc_urls = Some(vec!["invalid-url".to_string()]);
+            evm_config.common.rpc_urls = Some(vec![crate::models::RpcConfig::new(
+                "invalid-url".to_string(),
+            )]);
         }
 
         let result = config.validate();

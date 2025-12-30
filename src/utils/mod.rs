@@ -44,5 +44,8 @@ pub use encryption::*;
 mod json_rpc_error;
 pub use json_rpc_error::*;
 
+mod error_sanitization;
+pub use error_sanitization::*;
+
 #[cfg(test)]
 pub mod mocks;

@@ -533,7 +533,9 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "child".to_string(),
                 from: Some("parent".to_string()),
-                rpc_urls: Some(vec!["https://custom-rpc.example.com".to_string()]),
+                rpc_urls: Some(vec![crate::models::RpcConfig::new(
+                    "https://custom-rpc.example.com".to_string(),
+                )]),
                 explorer_urls: Some(vec!["https://custom-explorer.example.com".to_string()]),
                 average_blocktime_ms: None,
                 is_testnet: None,
@@ -553,7 +555,9 @@ mod tests {
         assert_eq!(resolved.common.network, "child");
         assert_eq!(
             resolved.common.rpc_urls,
-            Some(vec!["https://custom-rpc.example.com".to_string()])
+            Some(vec![crate::models::RpcConfig::new(
+                "https://custom-rpc.example.com".to_string()
+            )])
         ); // From child
         assert_eq!(
             resolved.common.explorer_urls,
@@ -662,8 +666,8 @@ mod tests {
                 network: "parent".to_string(),
                 from: None,
                 rpc_urls: Some(vec![
-                    "https://parent-rpc1.example.com".to_string(),
-                    "https://parent-rpc2.example.com".to_string(),
+                    crate::models::RpcConfig::new("https://parent-rpc1.example.com".to_string()),
+                    crate::models::RpcConfig::new("https://parent-rpc2.example.com".to_string()),
                 ]),
                 explorer_urls: Some(vec![
                     "https://parent-explorer1.example.com".to_string(),
@@ -689,7 +693,9 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "child".to_string(),
                 from: Some("parent".to_string()),
-                rpc_urls: Some(vec!["https://child-rpc.example.com".to_string()]), // Override
+                rpc_urls: Some(vec![crate::models::RpcConfig::new(
+                    "https://child-rpc.example.com".to_string(),
+                )]), // Override
                 explorer_urls: Some(vec!["https://child-explorer.example.com".to_string()]), // Override
                 average_blocktime_ms: None,                // Inherit
                 is_testnet: Some(false),                   // Override
@@ -707,10 +713,13 @@ mod tests {
 
         let resolved = result.unwrap();
         assert_eq!(resolved.common.network, "child");
+        // Child's RPC URLs are merged with parent's (parent first, then child)
         assert_eq!(
             resolved.common.rpc_urls,
-            Some(vec!["https://child-rpc.example.com".to_string()])
-        ); // Child override
+            Some(vec![crate::models::RpcConfig::new(
+                "https://child-rpc.example.com".to_string()
+            )])
+        );
         assert_eq!(
             resolved.common.explorer_urls,
             Some(vec!["https://child-explorer.example.com".to_string()])

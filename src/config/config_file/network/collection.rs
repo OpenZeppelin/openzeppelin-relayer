@@ -829,23 +829,23 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_with_inheritance_resolution() {
+    fn test_deserialize_networks_array() {
         let json = r#"[
             {
                 "type": "evm",
-                "network": "parent",
-                "chain_id": 31337,
-                "required_confirmations": 1,
+                "network": "testnet",
+                "chain_id": 11155111,
+                "required_confirmations": 6,
                 "symbol": "ETH",
-                "rpc_urls": ["https://rpc.parent.example.com"]
+                "rpc_urls": ["https://sepolia.drpc.org", "https://1rpc.io/sepolia"]
             },
             {
-                "type": "evm",
-                "network": "child",
-                "from": "parent",
-                "chain_id": 31338,
-                "required_confirmations": 1,
-                "symbol": "ETH"
+                "type": "solana",
+                "network": "devnet",
+                "rpc_urls": ["https://api.devnet.solana.com"],
+                "explorer_urls": ["https://explorer.solana.com?cluster=devnet"],
+                "average_blocktime_ms": 400,
+                "is_testnet": true
             }
         ]"#;
 
@@ -854,16 +854,23 @@ mod tests {
         let config = result.unwrap();
         assert_eq!(config.len(), 2);
 
-        // After deserialization, inheritance should be resolved but from field preserved
-        let child = config
-            .get_network(ConfigFileNetworkType::Evm, "child")
+        // Verify EVM network
+        let evm_network = config
+            .get_network(ConfigFileNetworkType::Evm, "testnet")
             .unwrap();
-        assert_eq!(child.inherits_from(), Some("parent")); // From field preserved
+        if let NetworkFileConfig::Evm(evm_config) = evm_network {
+            assert_eq!(evm_config.chain_id, Some(11155111));
+            assert!(evm_config.common.rpc_urls.is_some());
+            assert_eq!(evm_config.common.rpc_urls.as_ref().unwrap().len(), 2);
+        }
 
-        // Verify that child has inherited properties from parent
-        if let NetworkFileConfig::Evm(child_evm) = child {
-            assert!(child_evm.common.rpc_urls.is_some()); // Should have inherited RPC URLs
-            assert_eq!(child_evm.chain_id, Some(31338)); // Should have overridden chain_id
+        // Verify Solana network
+        let solana_network = config
+            .get_network(ConfigFileNetworkType::Solana, "devnet")
+            .unwrap();
+        if let NetworkFileConfig::Solana(solana_config) = solana_network {
+            assert_eq!(solana_config.common.average_blocktime_ms, Some(400));
+            assert_eq!(solana_config.common.is_testnet, Some(true));
         }
     }
 

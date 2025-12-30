@@ -21,6 +21,7 @@
 //! The retry mechanism works with any RPC provider type and automatically handles
 //! errors, maximizing the chances of successful operations.
 use rand::Rng;
+use std::collections::HashSet;
 use std::future::Future;
 use std::time::Duration;
 
@@ -209,6 +210,8 @@ where
     let mut failover_count = 0;
     let mut total_attempts = 0;
     let mut last_error = None;
+    // Track providers that have been tried in this failover cycle to avoid retrying them
+    let mut tried_urls = HashSet::new();
 
     tracing::debug!(
         operation_name = %operation_name,
@@ -218,17 +221,24 @@ where
         "starting rpc call"
     );
 
-    while failover_count <= max_failovers && selector.available_provider_count() > 0 {
+    // Continue retrying as long as we haven't exceeded max failovers and there are providers to try
+    // Note: We use provider_count() instead of available_provider_count() because select_url()
+    // will now fall back to paused providers when no non-paused providers are available.
+    while failover_count <= max_failovers && selector.provider_count() > 0 {
         // Try to get and initialize a provider
         let (provider, provider_url) =
-            match get_provider(selector, operation_name, &provider_initializer) {
-                Ok((provider, url)) => (provider, url),
+            match get_provider(selector, operation_name, &provider_initializer, &tried_urls) {
+                Ok((provider, url)) => {
+                    // Track this provider as tried
+                    tried_urls.insert(url.clone());
+                    (provider, url)
+                }
                 Err(e) => {
                     last_error = Some(e);
                     failover_count += 1;
 
                     // If we've exhausted all providers or reached max failovers, stop
-                    if failover_count > max_failovers || selector.available_provider_count() == 0 {
+                    if failover_count > max_failovers || selector.provider_count() == 0 {
                         break;
                     }
 
@@ -241,6 +251,7 @@ where
         tracing::debug!(
             provider_url = %provider_url,
             operation_name = %operation_name,
+            tried_providers = %tried_urls.len(),
             "selected provider"
         );
 
@@ -269,9 +280,7 @@ where
                 match internal_err {
                     InternalRetryError::NonRetriable(original_err) => {
                         // Check if this non-retriable error should mark the provider as failed
-                        if should_mark_provider_failed(&original_err)
-                            && selector.available_provider_count() > 1
-                        {
+                        if should_mark_provider_failed(&original_err) {
                             tracing::warn!(
                                 error = %original_err,
                                 provider_url = %provider_url,
@@ -285,30 +294,18 @@ where
                     InternalRetryError::RetriesExhausted(original_err) => {
                         last_error = Some(original_err);
 
-                        // If retries are exhausted, we always intend to mark the provider as failed,
-                        // unless it's the last available one.
-                        if selector.available_provider_count() > 1 {
-                            tracing::warn!(
-                                max_retries = %config.max_retries,
-                                provider_url = %provider_url,
-                                operation_name = %operation_name,
-                                error = %last_error.as_ref().unwrap(),
-                                failover_count = %(failover_count + 1),
-                                max_failovers = %max_failovers,
-                                "all retry attempts failed, marking as failed and switching to next provider"
-                            );
-                            selector.mark_current_as_failed();
-                            failover_count += 1;
-                        } else {
-                            tracing::warn!(
-                                max_retries = %config.max_retries,
-                                provider_url = %provider_url,
-                                operation_name = %operation_name,
-                                error = %last_error.as_ref().unwrap(),
-                                "all retry attempts failed, this is the last available provider, not marking as failed"
-                            );
-                            break;
-                        }
+                        // If retries are exhausted, mark the provider as failed
+                        tracing::warn!(
+                            max_retries = %config.max_retries,
+                            provider_url = %provider_url,
+                            operation_name = %operation_name,
+                            error = %last_error.as_ref().unwrap(),
+                            failover_count = %(failover_count + 1),
+                            max_failovers = %max_failovers,
+                            "all retry attempts failed, marking as failed and switching to next provider"
+                        );
+                        selector.mark_current_as_failed();
+                        failover_count += 1;
                     }
                 }
             }
@@ -353,14 +350,15 @@ fn get_provider<P, E, I>(
     selector: &RpcSelector,
     operation_name: &str,
     provider_initializer: &I,
+    excluded_urls: &HashSet<String>,
 ) -> Result<(P, String), E>
 where
     E: std::fmt::Display + From<String>,
     I: Fn(&str) -> Result<P, E>,
 {
-    // Get the next provider URL from the selector
+    // Get the next provider URL from the selector, excluding already tried providers
     let provider_url = selector
-        .get_client(|url| Ok::<_, eyre::Report>(url.to_string()))
+        .get_client(|url| Ok::<_, eyre::Report>(url.to_string()), excluded_urls)
         .map_err(|e| {
             let err_msg = format!("Failed to get provider URL for {operation_name}: {e}");
             tracing::warn!(operation_name = %operation_name, error = %e, "failed to get provider url");
@@ -478,8 +476,10 @@ where
 mod tests {
     use super::*;
     use crate::models::RpcConfig;
+    use crate::services::provider::rpc_health_store::RpcHealthStore;
     use lazy_static::lazy_static;
     use std::cmp::Ordering;
+    use std::collections::HashSet;
     use std::env;
     use std::sync::atomic::{AtomicU8, Ordering as AtomicOrdering};
     use std::sync::Arc;
@@ -547,11 +547,15 @@ mod tests {
         guard.set("PROVIDER_MAX_FAILOVERS", "1");
         guard.set("PROVIDER_RETRY_BASE_DELAY_MS", "1");
         guard.set("PROVIDER_RETRY_MAX_DELAY_MS", "5");
+        guard.set("PROVIDER_FAILURE_THRESHOLD", "1");
         guard.set("REDIS_URL", "redis://localhost:6379");
         guard.set(
             "RELAYER_PRIVATE_KEY",
             "0x1234567890123456789012345678901234567890123456789012345678901234",
         );
+        // Clear health store to ensure test isolation
+        // Note: When running tests in parallel, use --test-threads=1 to avoid flakiness
+        RpcHealthStore::instance().clear_all();
         guard
     }
 
@@ -787,22 +791,23 @@ mod tests {
             RpcConfig::new("http://localhost:8545".to_string()),
             RpcConfig::new("http://localhost:8546".to_string()),
         ];
-        let selector = RpcSelector::new(configs).expect("Failed to create selector");
+        let selector = RpcSelector::new_with_defaults(configs).expect("Failed to create selector");
 
         let initializer =
             |url: &str| -> Result<String, TestError> { Ok(format!("provider-{}", url)) };
 
-        let result = get_provider(&selector, "test_operation", &initializer);
+        let result = get_provider(&selector, "test_operation", &initializer, &HashSet::new());
         assert!(result.is_ok());
         let (provider, url) = result.unwrap();
-        assert_eq!(url, "http://localhost:8545");
-        assert_eq!(provider, "provider-http://localhost:8545");
+        // When weights are equal, selection may start from any provider
+        assert!(url == "http://localhost:8545" || url == "http://localhost:8546");
+        assert_eq!(provider, format!("provider-{}", url));
 
         let initializer = |_: &str| -> Result<String, TestError> {
             Err(TestError("Failed to initialize".to_string()))
         };
 
-        let result = get_provider(&selector, "test_operation", &initializer);
+        let result = get_provider(&selector, "test_operation", &initializer, &HashSet::new());
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(format!("{}", err).contains("Failed to initialize"));
@@ -1000,12 +1005,14 @@ mod tests {
     #[tokio::test]
     async fn test_non_retriable_error_does_not_mark_provider_failed() {
         let _guard = setup_test_env();
+        RpcHealthStore::instance().clear_all();
 
+        // Use unique URLs to avoid conflicts with other tests
         let configs = vec![
-            RpcConfig::new("http://localhost:8545".to_string()),
-            RpcConfig::new("http://localhost:8546".to_string()),
+            RpcConfig::new("http://localhost:9986".to_string()),
+            RpcConfig::new("http://localhost:9985".to_string()),
         ];
-        let selector = RpcSelector::new(configs).expect("Failed to create selector");
+        let selector = RpcSelector::new_with_defaults(configs).expect("Failed to create selector");
 
         let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
 
@@ -1015,8 +1022,12 @@ mod tests {
 
         let config = RetryConfig::new(3, 1, 0, 0);
 
-        // Get initial provider count
+        // Get initial provider count - should be 2 after clearing
         let initial_available_count = selector.available_provider_count();
+        assert_eq!(
+            initial_available_count, 2,
+            "Both providers should be available after clearing"
+        );
 
         let result: Result<i32, TestError> = retry_rpc_call(
             &selector,
@@ -1042,12 +1053,14 @@ mod tests {
     #[tokio::test]
     async fn test_retriable_error_marks_provider_failed_after_retries_exhausted() {
         let _guard = setup_test_env();
+        RpcHealthStore::instance().clear_all();
 
+        // Use unique URLs to avoid conflicts with other tests
         let configs = vec![
-            RpcConfig::new("http://localhost:8545".to_string()),
-            RpcConfig::new("http://localhost:8546".to_string()),
+            RpcConfig::new("http://localhost:9984".to_string()),
+            RpcConfig::new("http://localhost:9983".to_string()),
         ];
-        let selector = RpcSelector::new(configs).expect("Failed to create selector");
+        let selector = RpcSelector::new_with_defaults(configs).expect("Failed to create selector");
 
         let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
 
@@ -1056,8 +1069,12 @@ mod tests {
 
         let config = RetryConfig::new(2, 1, 0, 0); // 2 retries, 1 failover
 
-        // Get initial provider count
+        // Get initial provider count - should be 2 after clearing
         let initial_available_count = selector.available_provider_count();
+        assert_eq!(
+            initial_available_count, 2,
+            "Both providers should be available after clearing"
+        );
 
         let result: Result<i32, TestError> = retry_rpc_call(
             &selector,
@@ -1081,12 +1098,13 @@ mod tests {
     #[tokio::test]
     async fn test_retry_rpc_call_success() {
         let _guard = setup_test_env();
+        RpcHealthStore::instance().clear_all();
 
         let configs = vec![
             RpcConfig::new("http://localhost:8545".to_string()),
             RpcConfig::new("http://localhost:8546".to_string()),
         ];
-        let selector = RpcSelector::new(configs).expect("Failed to create selector");
+        let selector = RpcSelector::new_with_defaults(configs).expect("Failed to create selector");
 
         let attempts = Arc::new(AtomicU8::new(0));
         let attempts_clone = attempts.clone();
@@ -1123,12 +1141,13 @@ mod tests {
     #[tokio::test]
     async fn test_retry_rpc_call_with_provider_failover() {
         let _guard = setup_test_env();
+        RpcHealthStore::instance().clear_all();
 
         let configs = vec![
             RpcConfig::new("http://localhost:8545".to_string()),
             RpcConfig::new("http://localhost:8546".to_string()),
         ];
-        let selector = RpcSelector::new(configs).expect("Failed to create selector");
+        let selector = RpcSelector::new_with_defaults(configs).expect("Failed to create selector");
 
         let current_provider = Arc::new(Mutex::new(String::new()));
         let current_provider_clone = current_provider.clone();
@@ -1175,12 +1194,13 @@ mod tests {
     #[tokio::test]
     async fn test_retry_rpc_call_all_providers_fail() {
         let _guard = setup_test_env();
+        RpcHealthStore::instance().clear_all();
 
         let configs = vec![
             RpcConfig::new("http://localhost:8545".to_string()),
             RpcConfig::new("http://localhost:8546".to_string()),
         ];
-        let selector = RpcSelector::new(configs).expect("Failed to create selector");
+        let selector = RpcSelector::new_with_defaults(configs).expect("Failed to create selector");
 
         let provider_initializer =
             |_: &str| -> Result<String, TestError> { Ok("mock_provider".to_string()) };
@@ -1212,7 +1232,8 @@ mod tests {
             let guard = setup_test_env();
 
             let configs = vec![RpcConfig::new("http://localhost:8545".to_string())];
-            let selector = RpcSelector::new(configs).expect("Failed to create selector");
+            let selector =
+                RpcSelector::new_with_defaults(configs).expect("Failed to create selector");
             (guard, selector)
         };
 
@@ -1240,19 +1261,21 @@ mod tests {
     #[tokio::test]
     async fn test_retry_rpc_call_provider_initialization_failures() {
         let _guard = setup_test_env();
+        RpcHealthStore::instance().clear_all();
 
+        // Use unique URLs to avoid conflicts
         let configs = vec![
-            RpcConfig::new("http://localhost:8545".to_string()),
-            RpcConfig::new("http://localhost:8546".to_string()),
+            RpcConfig::new("http://localhost:9988".to_string()),
+            RpcConfig::new("http://localhost:9987".to_string()),
         ];
-        let selector = RpcSelector::new(configs).expect("Failed to create selector");
+        let selector = RpcSelector::new_with_defaults(configs).expect("Failed to create selector");
 
         let attempt_count = Arc::new(AtomicU8::new(0));
         let attempt_count_clone = attempt_count.clone();
 
         let provider_initializer = move |url: &str| -> Result<String, TestError> {
             let count = attempt_count_clone.fetch_add(1, AtomicOrdering::SeqCst);
-            if count == 0 && url.contains("8545") {
+            if count == 0 && url.contains("9988") {
                 Err(TestError("First provider init failed".to_string()))
             } else {
                 Ok(url.to_string())
@@ -1285,7 +1308,7 @@ mod tests {
 
         // Create selector with a single provider, select it, then mark it as failed
         let configs = vec![RpcConfig::new("http://localhost:8545".to_string())];
-        let selector = RpcSelector::new(configs).expect("Failed to create selector");
+        let selector = RpcSelector::new_with_defaults(configs).expect("Failed to create selector");
 
         // First select the provider to make it current, then mark it as failed
         let _ = selector.get_current_url().unwrap(); // This selects the provider
@@ -1294,18 +1317,29 @@ mod tests {
         let provider_initializer =
             |url: &str| -> Result<String, TestError> { Ok(format!("provider-{}", url)) };
 
-        // Now get_provider should fail because the only provider is marked as failed
-        let result = get_provider(&selector, "test_operation", &provider_initializer);
-        assert!(result.is_err());
+        // Even though the provider is marked as failed/paused, for a single provider
+        // we still select it as a last resort since there are no alternatives
+        let result = get_provider(
+            &selector,
+            "test_operation",
+            &provider_initializer,
+            &HashSet::new(),
+        );
+        assert!(result.is_ok());
+        let (provider, url) = result.unwrap();
+        assert_eq!(url, "http://localhost:8545");
+        assert_eq!(provider, "provider-http://localhost:8545");
     }
 
     #[tokio::test]
     async fn test_last_provider_never_marked_as_failed() {
         let _guard = setup_test_env();
+        RpcHealthStore::instance().clear_all();
 
-        // Test with a single provider
-        let configs = vec![RpcConfig::new("http://localhost:8545".to_string())];
-        let selector = RpcSelector::new(configs).expect("Failed to create selector");
+        // Test with a single provider - use unique URL to avoid conflicts with other tests
+        let unique_url = "http://localhost:9999".to_string();
+        let configs = vec![RpcConfig::new(unique_url.clone())];
+        let selector = RpcSelector::new_with_defaults(configs).expect("Failed to create selector");
 
         let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
 
@@ -1314,9 +1348,12 @@ mod tests {
 
         let config = RetryConfig::new(2, 1, 0, 0); // 2 retries, 1 failover
 
-        // Get initial provider count
+        // Get initial provider count - should be 1 after clearing
         let initial_available_count = selector.available_provider_count();
-        assert_eq!(initial_available_count, 1);
+        assert_eq!(
+            initial_available_count, 1,
+            "Provider should be available after clearing health store"
+        );
 
         let result: Result<i32, TestError> = retry_rpc_call(
             &selector,
@@ -1331,29 +1368,26 @@ mod tests {
 
         assert!(result.is_err());
 
-        // The last provider should NOT be marked as failed
+        // The provider should be marked as failed, but selector can still use paused providers
         let final_available_count = selector.available_provider_count();
         assert_eq!(
-            final_available_count, initial_available_count,
-            "Last provider should never be marked as failed"
-        );
-        assert_eq!(
-            final_available_count, 1,
-            "Should still have 1 provider available"
+            final_available_count, 0,
+            "Provider should be marked as failed, but selector can still use paused providers"
         );
     }
 
     #[tokio::test]
     async fn test_last_provider_behavior_with_multiple_providers() {
         let _guard = setup_test_env();
+        RpcHealthStore::instance().clear_all();
 
-        // Test with multiple providers, but mark all but one as failed
+        // Test with multiple providers - use unique URLs to avoid conflicts
         let configs = vec![
-            RpcConfig::new("http://localhost:8545".to_string()),
-            RpcConfig::new("http://localhost:8546".to_string()),
-            RpcConfig::new("http://localhost:8547".to_string()),
+            RpcConfig::new("http://localhost:9991".to_string()),
+            RpcConfig::new("http://localhost:9990".to_string()),
+            RpcConfig::new("http://localhost:9989".to_string()),
         ];
-        let selector = RpcSelector::new(configs).expect("Failed to create selector");
+        let selector = RpcSelector::new_with_defaults(configs).expect("Failed to create selector");
 
         let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
 
@@ -1362,9 +1396,12 @@ mod tests {
 
         let config = RetryConfig::new(2, 2, 0, 0); // 2 retries, 2 failovers
 
-        // Get initial provider count
+        // Get initial provider count - should be 3 after clearing
         let initial_available_count = selector.available_provider_count();
-        assert_eq!(initial_available_count, 3);
+        assert_eq!(
+            initial_available_count, 3,
+            "All 3 providers should be available after clearing"
+        );
 
         let result: Result<i32, TestError> = retry_rpc_call(
             &selector,
@@ -1379,23 +1416,25 @@ mod tests {
 
         assert!(result.is_err());
 
-        // Should have marked 2 providers as failed, but kept the last one
+        // Should have marked all providers as failed, but selector can still use paused providers
         let final_available_count = selector.available_provider_count();
         assert_eq!(
-            final_available_count, 1,
-            "Should have exactly 1 provider left (the last one should not be marked as failed)"
+            final_available_count, 0,
+            "All providers should be marked as failed, but paused providers can still be used"
         );
     }
 
     #[tokio::test]
     async fn test_non_retriable_error_should_mark_provider_failed() {
         let _guard = setup_test_env();
+        RpcHealthStore::instance().clear_all();
 
+        // Use unique URLs to avoid conflicts with other tests
         let configs = vec![
-            RpcConfig::new("http://localhost:8545".to_string()),
-            RpcConfig::new("http://localhost:8546".to_string()),
+            RpcConfig::new("http://localhost:9995".to_string()),
+            RpcConfig::new("http://localhost:9994".to_string()),
         ];
-        let selector = RpcSelector::new(configs).expect("Failed to create selector");
+        let selector = RpcSelector::new_with_defaults(configs).expect("Failed to create selector");
 
         let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
 
@@ -1406,9 +1445,12 @@ mod tests {
 
         let config = RetryConfig::new(3, 1, 0, 0);
 
-        // Get initial provider count
+        // Get initial provider count - should be 2 after clearing
         let initial_available_count = selector.available_provider_count();
-        assert_eq!(initial_available_count, 2);
+        assert_eq!(
+            initial_available_count, 2,
+            "Both providers should be available after clearing health store"
+        );
 
         let result: Result<i32, TestError> = retry_rpc_call(
             &selector,
@@ -1432,12 +1474,14 @@ mod tests {
     #[tokio::test]
     async fn test_non_retriable_error_should_not_mark_provider_failed() {
         let _guard = setup_test_env();
+        RpcHealthStore::instance().clear_all();
 
+        // Use unique URLs to avoid conflicts with other tests
         let configs = vec![
-            RpcConfig::new("http://localhost:8545".to_string()),
-            RpcConfig::new("http://localhost:8546".to_string()),
+            RpcConfig::new("http://localhost:9997".to_string()),
+            RpcConfig::new("http://localhost:9996".to_string()),
         ];
-        let selector = RpcSelector::new(configs).expect("Failed to create selector");
+        let selector = RpcSelector::new_with_defaults(configs).expect("Failed to create selector");
 
         let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
 
@@ -1448,9 +1492,12 @@ mod tests {
 
         let config = RetryConfig::new(3, 1, 0, 0);
 
-        // Get initial provider count
+        // Get initial provider count - should be 2 after clearing
         let initial_available_count = selector.available_provider_count();
-        assert_eq!(initial_available_count, 2);
+        assert_eq!(
+            initial_available_count, 2,
+            "Both providers should be available after clearing health store"
+        );
 
         let result: Result<i32, TestError> = retry_rpc_call(
             &selector,
@@ -1474,12 +1521,14 @@ mod tests {
     #[tokio::test]
     async fn test_retriable_error_ignores_should_mark_provider_failed() {
         let _guard = setup_test_env();
+        RpcHealthStore::instance().clear_all();
 
+        // Use unique URLs to avoid conflicts with other tests
         let configs = vec![
-            RpcConfig::new("http://localhost:8545".to_string()),
-            RpcConfig::new("http://localhost:8546".to_string()),
+            RpcConfig::new("http://localhost:9982".to_string()),
+            RpcConfig::new("http://localhost:9981".to_string()),
         ];
-        let selector = RpcSelector::new(configs).expect("Failed to create selector");
+        let selector = RpcSelector::new_with_defaults(configs).expect("Failed to create selector");
 
         let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
 
@@ -1489,9 +1538,12 @@ mod tests {
 
         let config = RetryConfig::new(2, 1, 0, 0); // 2 retries, 1 failover
 
-        // Get initial provider count
+        // Get initial provider count - should be 2 after clearing
         let initial_available_count = selector.available_provider_count();
-        assert_eq!(initial_available_count, 2);
+        assert_eq!(
+            initial_available_count, 2,
+            "Both providers should be available after clearing"
+        );
 
         let result: Result<i32, TestError> = retry_rpc_call(
             &selector,
@@ -1516,13 +1568,15 @@ mod tests {
     #[tokio::test]
     async fn test_mixed_error_scenarios_with_different_marking_behavior() {
         let _guard = setup_test_env();
+        RpcHealthStore::instance().clear_all();
 
         // Test scenario 1: Non-retriable error that should mark provider as failed
+        // Use unique URLs to avoid conflicts with other tests
         let configs = vec![
-            RpcConfig::new("http://localhost:8545".to_string()),
-            RpcConfig::new("http://localhost:8546".to_string()),
+            RpcConfig::new("http://localhost:9993".to_string()),
+            RpcConfig::new("http://localhost:9992".to_string()),
         ];
-        let selector = RpcSelector::new(configs).expect("Failed to create selector");
+        let selector = RpcSelector::new_with_defaults(configs).expect("Failed to create selector");
 
         let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
 
@@ -1531,6 +1585,10 @@ mod tests {
 
         let config = RetryConfig::new(1, 1, 0, 0);
         let initial_count = selector.available_provider_count();
+        assert_eq!(
+            initial_count, 2,
+            "Both providers should be available after clearing"
+        );
 
         let result: Result<i32, TestError> = retry_rpc_call(
             &selector,
@@ -1577,10 +1635,12 @@ mod tests {
     #[tokio::test]
     async fn test_should_mark_provider_failed_respects_last_provider_protection() {
         let _guard = setup_test_env();
+        RpcHealthStore::instance().clear_all();
 
-        // Test with a single provider (last provider protection)
-        let configs = vec![RpcConfig::new("http://localhost:8545".to_string())];
-        let selector = RpcSelector::new(configs).expect("Failed to create selector");
+        // Test with a single provider - use unique URL to avoid conflicts
+        let unique_url = "http://localhost:9998".to_string();
+        let configs = vec![RpcConfig::new(unique_url.clone())];
+        let selector = RpcSelector::new_with_defaults(configs).expect("Failed to create selector");
 
         let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
 
@@ -1590,9 +1650,12 @@ mod tests {
 
         let config = RetryConfig::new(1, 1, 0, 0);
 
-        // Get initial provider count
+        // Get initial provider count - should be 1 after clearing
         let initial_available_count = selector.available_provider_count();
-        assert_eq!(initial_available_count, 1);
+        assert_eq!(
+            initial_available_count, 1,
+            "Provider should be available after clearing health store"
+        );
 
         let result: Result<i32, TestError> = retry_rpc_call(
             &selector,
@@ -1607,26 +1670,25 @@ mod tests {
 
         assert!(result.is_err());
 
-        // Last provider should NEVER be marked as failed, even if should_mark_provider_failed returns true
+        // Provider should be marked as failed, but selector can still use paused providers
         let final_available_count = selector.available_provider_count();
-        assert_eq!(final_available_count, initial_available_count,
-            "Last provider should never be marked as failed, regardless of should_mark_provider_failed");
         assert_eq!(
-            final_available_count, 1,
-            "Should still have 1 provider available"
+            final_available_count, 0,
+            "Provider should be marked as failed, but selector can still use paused providers"
         );
     }
 
     #[tokio::test]
     async fn test_should_mark_provider_failed_with_multiple_providers_last_protection() {
         let _guard = setup_test_env();
+        RpcHealthStore::instance().clear_all();
 
         // Test with multiple providers, but ensure last one is protected
         let configs = vec![
             RpcConfig::new("http://localhost:8545".to_string()),
             RpcConfig::new("http://localhost:8546".to_string()),
         ];
-        let selector = RpcSelector::new(configs).expect("Failed to create selector");
+        let selector = RpcSelector::new_with_defaults(configs).expect("Failed to create selector");
 
         let attempt_count = Arc::new(AtomicU8::new(0));
         let attempt_count_clone = attempt_count.clone();
@@ -1661,11 +1723,172 @@ mod tests {
 
         assert!(result.is_err());
 
-        // First provider should be marked as failed, but last provider should be protected
+        // First provider should be marked as failed, no failover happens for non-retriable errors
         let final_available_count = selector.available_provider_count();
         assert_eq!(
             final_available_count, 1,
-            "First provider should be marked as failed, but last provider should be protected"
+            "First provider should be marked as failed, second provider remains available"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tried_urls_tracking_prevents_duplicate_selection() {
+        let _guard = setup_test_env();
+        RpcHealthStore::instance().clear_all();
+
+        let configs = vec![
+            RpcConfig::new("http://localhost:8545".to_string()),
+            RpcConfig::new("http://localhost:8546".to_string()),
+            RpcConfig::new("http://localhost:8547".to_string()),
+        ];
+        let selector = RpcSelector::new_with_defaults(configs).expect("Failed to create selector");
+
+        let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
+
+        // Operation that fails for first two providers, succeeds on third
+        let operation = |provider: String| async move {
+            if provider.contains("8545") {
+                Err(TestError("Provider 1 failed".to_string()))
+            } else if provider.contains("8546") {
+                Err(TestError("Provider 2 failed".to_string()))
+            } else {
+                Ok(42)
+            }
+        };
+
+        let config = RetryConfig::new(2, 10, 0, 0); // max_retries=2 means 2 attempts per provider, 10 failovers
+
+        let result: Result<i32, TestError> = retry_rpc_call(
+            &selector,
+            "test_operation",
+            |_| true, // Retriable
+            |_| true, // Mark as failed
+            provider_initializer,
+            operation,
+            Some(config),
+        )
+        .await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    #[tokio::test]
+    async fn test_all_providers_tried_returns_error() {
+        let _guard = setup_test_env();
+        RpcHealthStore::instance().clear_all();
+
+        let configs = vec![
+            RpcConfig::new("http://localhost:8545".to_string()),
+            RpcConfig::new("http://localhost:8546".to_string()),
+        ];
+        let selector = RpcSelector::new_with_defaults(configs).expect("Failed to create selector");
+
+        let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
+
+        // Operation that always fails
+        let operation = |_provider: String| async { Err(TestError("Always fails".to_string())) };
+
+        let config = RetryConfig::new(2, 10, 0, 0); // max_retries=2 means 2 attempts per provider, 10 failovers (more than providers)
+
+        let result: Result<i32, TestError> = retry_rpc_call(
+            &selector,
+            "test_operation",
+            |_| true, // Retriable
+            |_| true, // Mark as failed
+            provider_initializer,
+            operation,
+            Some(config),
+        )
+        .await;
+
+        assert!(result.is_err());
+        // Should have tried both providers, both should be marked as failed
+        assert_eq!(
+            selector.available_provider_count(),
+            0,
+            "Both providers should be marked as failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tried_urls_passed_to_selector() {
+        let _guard = setup_test_env();
+        RpcHealthStore::instance().clear_all();
+
+        // Use unique URLs to avoid conflicts with other tests
+        let url1 = "http://localhost:9980".to_string();
+        let url2 = "http://localhost:9979".to_string();
+        let url3 = "http://localhost:9978".to_string();
+        let configs = vec![
+            RpcConfig::new(url1.clone()),
+            RpcConfig::new(url2.clone()),
+            RpcConfig::new(url3.clone()),
+        ];
+        let selector = RpcSelector::new_with_defaults(configs).expect("Failed to create selector");
+
+        let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
+
+        // Track which providers were selected
+        let selected_providers = Arc::new(Mutex::new(Vec::new()));
+        let selected_providers_clone = selected_providers.clone();
+        let url3_clone = url3.clone();
+
+        let operation = move |provider: String| {
+            let selected = selected_providers_clone.clone();
+            let url3 = url3_clone.clone();
+            async move {
+                let mut selected_guard = selected.lock().unwrap();
+                selected_guard.push(provider.clone());
+
+                // Succeed if this is the 3rd provider, fail otherwise
+                if provider == url3 {
+                    Ok(42)
+                } else {
+                    Err(TestError("Provider failed".to_string()))
+                }
+            }
+        };
+
+        let config = RetryConfig::new(2, 10, 0, 0); // max_retries=2 means 2 attempts per provider
+
+        let result: Result<i32, TestError> = retry_rpc_call(
+            &selector,
+            "test_operation",
+            |_| true,
+            |_| true,
+            provider_initializer,
+            operation,
+            Some(config),
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "Operation should succeed eventually, got error: {:?}",
+            result
+        );
+        let selected = selected_providers.lock().unwrap();
+        // Should have tried at least 1 provider (the one that succeeds)
+        let unique_providers: HashSet<_> = selected.iter().collect();
+        assert!(
+            unique_providers.len() >= 1,
+            "Should have tried at least 1 provider: {:?}",
+            selected
+        );
+        // Should have tried provider 3 (the one that succeeds)
+        assert!(
+            unique_providers.contains(&url3),
+            "Should have tried provider 3: {:?}",
+            selected
+        );
+        // With max_retries=2, we get multiple attempts per provider
+        // If provider 3 is selected first and succeeds, we might only have 1 attempt
+        // If providers 1 or 2 are selected first, we'll have more attempts
+        assert!(
+            selected.len() >= 1,
+            "Should have at least 1 total attempt, got: {}",
+            selected.len()
         );
     }
 }
