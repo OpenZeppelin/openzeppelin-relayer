@@ -222,8 +222,6 @@ where
     );
 
     // Continue retrying as long as we haven't exceeded max failovers and there are providers to try
-    // Note: We use provider_count() instead of available_provider_count() because select_url()
-    // will now fall back to paused providers when no non-paused providers are available.
     while failover_count <= max_failovers && selector.provider_count() > 0 {
         // Try to get and initialize a provider
         let (provider, provider_url) =
@@ -478,6 +476,7 @@ mod tests {
     use crate::models::RpcConfig;
     use crate::services::provider::rpc_health_store::RpcHealthStore;
     use lazy_static::lazy_static;
+    use serial_test::serial;
     use std::cmp::Ordering;
     use std::collections::HashSet;
     use std::env;
@@ -1003,6 +1002,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_non_retriable_error_does_not_mark_provider_failed() {
         let _guard = setup_test_env();
         RpcHealthStore::instance().clear_all();
@@ -1051,6 +1051,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_retriable_error_marks_provider_failed_after_retries_exhausted() {
         let _guard = setup_test_env();
         RpcHealthStore::instance().clear_all();
@@ -1096,6 +1097,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_retry_rpc_call_success() {
         let _guard = setup_test_env();
         RpcHealthStore::instance().clear_all();
@@ -1139,6 +1141,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_retry_rpc_call_with_provider_failover() {
         let _guard = setup_test_env();
         RpcHealthStore::instance().clear_all();
@@ -1192,6 +1195,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_retry_rpc_call_all_providers_fail() {
         let _guard = setup_test_env();
         RpcHealthStore::instance().clear_all();
@@ -1259,6 +1263,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_retry_rpc_call_provider_initialization_failures() {
         let _guard = setup_test_env();
         RpcHealthStore::instance().clear_all();
@@ -1332,6 +1337,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_last_provider_never_marked_as_failed() {
         let _guard = setup_test_env();
         RpcHealthStore::instance().clear_all();
@@ -1377,6 +1383,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_last_provider_behavior_with_multiple_providers() {
         let _guard = setup_test_env();
         RpcHealthStore::instance().clear_all();
@@ -1425,6 +1432,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_non_retriable_error_should_mark_provider_failed() {
         let _guard = setup_test_env();
         RpcHealthStore::instance().clear_all();
@@ -1472,6 +1480,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_non_retriable_error_should_not_mark_provider_failed() {
         let _guard = setup_test_env();
         RpcHealthStore::instance().clear_all();
@@ -1519,6 +1528,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_retriable_error_ignores_should_mark_provider_failed() {
         let _guard = setup_test_env();
         RpcHealthStore::instance().clear_all();
@@ -1566,6 +1576,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_mixed_error_scenarios_with_different_marking_behavior() {
         let _guard = setup_test_env();
         RpcHealthStore::instance().clear_all();
@@ -1633,6 +1644,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_should_mark_provider_failed_respects_last_provider_protection() {
         let _guard = setup_test_env();
         RpcHealthStore::instance().clear_all();
@@ -1679,6 +1691,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_should_mark_provider_failed_with_multiple_providers_last_protection() {
         let _guard = setup_test_env();
         RpcHealthStore::instance().clear_all();
@@ -1732,6 +1745,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_tried_urls_tracking_prevents_duplicate_selection() {
         let _guard = setup_test_env();
         RpcHealthStore::instance().clear_all();
@@ -1774,6 +1788,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_all_providers_tried_returns_error() {
         let _guard = setup_test_env();
         RpcHealthStore::instance().clear_all();
@@ -1812,6 +1827,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_tried_urls_passed_to_selector() {
         let _guard = setup_test_env();
         RpcHealthStore::instance().clear_all();

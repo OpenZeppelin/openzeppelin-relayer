@@ -242,6 +242,101 @@ impl RpcSelector {
         }
     }
 
+    /// Attempts weighted selection of a provider.
+    ///
+    /// # Arguments
+    /// * `configs` - RPC configurations
+    /// * `excluded_urls` - URLs of providers that have already been tried
+    /// * `allow_paused` - If true, allows selection of paused providers
+    /// * `health_store` - Health store instance
+    /// * `expiration` - Duration after which failures expire
+    ///
+    /// # Returns
+    /// * `Option<(usize, String)>` - Some(index, url) if a provider was selected, None otherwise
+    fn try_weighted_selection(
+        &self,
+        configs: &[RpcConfig],
+        excluded_urls: &std::collections::HashSet<String>,
+        allow_paused: bool,
+        health_store: &RpcHealthStore,
+        expiration: chrono::Duration,
+    ) -> Option<(usize, String)> {
+        let dist = self.weights_dist.as_ref()?;
+        let mut rng = rand::rng();
+
+        const MAX_ATTEMPTS: usize = 10;
+        for _ in 0..MAX_ATTEMPTS {
+            let index = dist.sample(&mut rng);
+            // Skip providers with zero weight
+            if configs[index].get_weight() == 0 {
+                continue;
+            }
+            // Skip providers already tried in this failover cycle
+            if excluded_urls.contains(&configs[index].url) {
+                continue;
+            }
+            // Check health status unless paused providers are allowed
+            if !allow_paused
+                && health_store.is_paused(&configs[index].url, self.failure_threshold, expiration)
+            {
+                continue;
+            }
+            // Found a suitable provider
+            self.current_index.store(index, Ordering::Relaxed);
+            self.has_current.store(true, Ordering::Relaxed);
+            return Some((index, configs[index].url.clone()));
+        }
+        None
+    }
+
+    /// Attempts round-robin selection of a provider.
+    ///
+    /// # Arguments
+    /// * `configs` - RPC configurations
+    /// * `excluded_urls` - URLs of providers that have already been tried
+    /// * `allow_paused` - If true, allows selection of paused providers
+    /// * `health_store` - Health store instance
+    /// * `expiration` - Duration after which failures expire
+    /// * `start_index` - Starting index for round-robin iteration
+    ///
+    /// # Returns
+    /// * `Option<(usize, String)>` - Some(index, url) if a provider was selected, None otherwise
+    fn try_round_robin_selection(
+        &self,
+        configs: &[RpcConfig],
+        excluded_urls: &std::collections::HashSet<String>,
+        allow_paused: bool,
+        health_store: &RpcHealthStore,
+        expiration: chrono::Duration,
+        start_index: usize,
+    ) -> Option<(usize, String)> {
+        let len = configs.len();
+        for i in 0..len {
+            let index = (start_index + i) % len;
+            // Skip providers with zero weight
+            if configs[index].get_weight() == 0 {
+                continue;
+            }
+            // Skip providers already tried in this failover cycle
+            if excluded_urls.contains(&configs[index].url) {
+                continue;
+            }
+            // Check health status unless paused providers are allowed
+            if !allow_paused
+                && health_store.is_paused(&configs[index].url, self.failure_threshold, expiration)
+            {
+                continue;
+            }
+            // Found a suitable provider
+            // Update the next_index atomically to point after this provider
+            self.next_index.store((index + 1) % len, Ordering::Relaxed);
+            self.current_index.store(index, Ordering::Relaxed);
+            self.has_current.store(true, Ordering::Relaxed);
+            return Some((index, configs[index].url.clone()));
+        }
+        None
+    }
+
     /// Gets the URL of the next RPC endpoint based on the selection strategy.
     ///
     /// This method first tries to select non-paused providers. If no non-paused providers
@@ -280,56 +375,27 @@ impl RpcSelector {
 
         // First, try to find a non-paused provider
         // Try weighted selection first if available
-        if let Some(dist) = &self.weights_dist {
-            let mut rng = rand::rng();
-
-            // Try a limited number of times to find a non-paused provider with weighted selection
-            const MAX_ATTEMPTS: usize = 10;
-            for _ in 0..MAX_ATTEMPTS {
-                let index = dist.sample(&mut rng);
-                // Skip providers with zero weight
-                if configs[index].get_weight() == 0 {
-                    continue;
-                }
-                // Skip providers already tried in this failover cycle
-                if excluded_urls.contains(&configs[index].url) {
-                    continue;
-                }
-                if !health_store.is_paused(&configs[index].url, self.failure_threshold, expiration)
-                {
-                    self.current_index.store(index, Ordering::Relaxed);
-                    self.has_current.store(true, Ordering::Relaxed);
-                    return Ok(configs[index].url.clone());
-                }
-            }
+        if let Some((_, url)) = self.try_weighted_selection(
+            &configs,
+            excluded_urls,
+            false, // allow_paused = false
+            &health_store,
+            expiration,
+        ) {
+            return Ok(url);
         }
 
         // Fall back to round-robin selection for non-paused providers
-        let len = configs.len();
-        let start_index = self.next_index.load(Ordering::Relaxed) % len;
-
-        // Find the next available (non-paused) provider
-        for i in 0..len {
-            let index = (start_index + i) % len;
-            // Skip providers with zero weight
-            if configs[index].get_weight() == 0 {
-                continue;
-            }
-            // Skip providers already tried in this failover cycle
-            if excluded_urls.contains(&configs[index].url) {
-                continue;
-            }
-
-            if !health_store.is_paused(&configs[index].url, self.failure_threshold, expiration) {
-                // Update the next_index atomically to point after this provider
-                self.next_index.store((index + 1) % len, Ordering::Relaxed);
-
-                // Set as current provider
-                self.current_index.store(index, Ordering::Relaxed);
-                self.has_current.store(true, Ordering::Relaxed);
-
-                return Ok(configs[index].url.clone());
-            }
+        let start_index = self.next_index.load(Ordering::Relaxed) % configs.len();
+        if let Some((_, url)) = self.try_round_robin_selection(
+            &configs,
+            excluded_urls,
+            false, // allow_paused = false
+            &health_store,
+            expiration,
+            start_index,
+        ) {
+            return Ok(url);
         }
 
         // If we get here, no non-paused providers are available
@@ -339,42 +405,26 @@ impl RpcSelector {
         );
 
         // Try weighted selection for paused providers
-        if let Some(dist) = &self.weights_dist {
-            let mut rng = rand::rng();
-            const MAX_ATTEMPTS: usize = 10;
-            for _ in 0..MAX_ATTEMPTS {
-                let index = dist.sample(&mut rng);
-                // Skip providers with zero weight
-                if configs[index].get_weight() == 0 {
-                    continue;
-                }
-                // Skip providers already tried in this failover cycle
-                if excluded_urls.contains(&configs[index].url) {
-                    continue;
-                }
-                // Accept paused providers as last resort
-                self.current_index.store(index, Ordering::Relaxed);
-                self.has_current.store(true, Ordering::Relaxed);
-                return Ok(configs[index].url.clone());
-            }
+        if let Some((_, url)) = self.try_weighted_selection(
+            &configs,
+            excluded_urls,
+            true, // allow_paused = true
+            &health_store,
+            expiration,
+        ) {
+            return Ok(url);
         }
 
         // Fall back to round-robin for paused providers
-        for i in 0..len {
-            let index = (start_index + i) % len;
-            // Skip providers with zero weight
-            if configs[index].get_weight() == 0 {
-                continue;
-            }
-            // Skip providers already tried in this failover cycle
-            if excluded_urls.contains(&configs[index].url) {
-                continue;
-            }
-            // Accept paused providers as last resort
-            self.next_index.store((index + 1) % len, Ordering::Relaxed);
-            self.current_index.store(index, Ordering::Relaxed);
-            self.has_current.store(true, Ordering::Relaxed);
-            return Ok(configs[index].url.clone());
+        if let Some((_, url)) = self.try_round_robin_selection(
+            &configs,
+            excluded_urls,
+            true, // allow_paused = true
+            &health_store,
+            expiration,
+            start_index,
+        ) {
+            return Ok(url);
         }
 
         // If we get here, all providers have zero weight (shouldn't happen in practice)
@@ -449,6 +499,7 @@ impl Clone for RpcSelector {
 mod tests {
     use super::*;
     use crate::services::provider::rpc_health_store::RpcHealthStore;
+    use serial_test::serial;
     use std::sync::Arc;
     use std::thread;
 
@@ -727,6 +778,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_mark_current_as_failed_single_provider() {
         // Clear health store to ensure clean state
         RpcHealthStore::instance().clear_all();
@@ -759,6 +811,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_mark_current_as_failed_multiple_providers() {
         // Clear health store to ensure clean state
         RpcHealthStore::instance().clear_all();
@@ -825,6 +878,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_mark_current_as_failed_weighted() {
         // Clear health store to ensure clean state
         RpcHealthStore::instance().clear_all();
@@ -911,6 +965,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_available_provider_count() {
         // Clear health store to ensure clean state
         RpcHealthStore::instance().clear_all();
@@ -971,6 +1026,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_concurrent_usage() {
         // Clear health store to ensure clean state
         RpcHealthStore::instance().clear_all();
@@ -1047,6 +1103,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_weighted_to_round_robin_fallback() {
         // Clear health store to ensure clean state
         RpcHealthStore::instance().clear_all();
@@ -1140,6 +1197,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_extreme_weight_differences() {
         let configs = vec![
             RpcConfig {
@@ -1241,6 +1299,7 @@ mod tests {
         /// 3. The selector should switch to the second RPC
         /// 4. The first RPC should be marked as failed and excluded from selection
         #[test]
+        #[serial]
         fn test_rpc_selector_switches_on_rate_limit() {
             RpcHealthStore::instance().clear_all();
             let configs = vec![
@@ -1306,6 +1365,7 @@ mod tests {
         /// This test verifies that even with weighted selection, a rate-limited provider
         /// is excluded and the selector falls back to the other provider.
         #[test]
+        #[serial]
         fn test_rpc_selector_rate_limit_with_weighted_selection() {
             RpcHealthStore::instance().clear_all();
             let configs = vec![
@@ -1368,6 +1428,7 @@ mod tests {
         /// This test verifies that failed providers remain failed,
         /// which simulates persistence of health state.
         #[test]
+        #[serial]
         fn test_rpc_selector_rate_limit_recovery() {
             RpcHealthStore::instance().clear_all();
             let configs = vec![
@@ -1409,6 +1470,7 @@ mod tests {
 
         /// Test that when both providers are rate-limited, the selector handles it gracefully.
         #[test]
+        #[serial]
         fn test_rpc_selector_both_providers_rate_limited() {
             RpcHealthStore::instance().clear_all();
             let configs = vec![
@@ -1452,6 +1514,7 @@ mod tests {
         /// This test verifies that when weighted selection fails due to rate limiting,
         /// the selector correctly falls back to round-robin selection.
         #[test]
+        #[serial]
         fn test_rpc_selector_rate_limit_round_robin_fallback() {
             RpcHealthStore::instance().clear_all();
             let configs = vec![
@@ -1509,6 +1572,7 @@ mod tests {
         }
 
         #[test]
+        #[serial]
         fn test_select_url_excludes_tried_providers() {
             RpcHealthStore::instance().clear_all();
             let configs = vec![
@@ -1543,6 +1607,7 @@ mod tests {
         }
 
         #[test]
+        #[serial]
         fn test_select_url_fallback_to_paused_providers() {
             RpcHealthStore::instance().clear_all();
             let configs = vec![
@@ -1613,6 +1678,7 @@ mod tests {
         }
 
         #[test]
+        #[serial]
         fn test_select_url_single_provider_excluded() {
             RpcHealthStore::instance().clear_all();
             let configs = vec![RpcConfig {
@@ -1637,6 +1703,7 @@ mod tests {
         }
 
         #[test]
+        #[serial]
         fn test_select_url_all_providers_excluded() {
             RpcHealthStore::instance().clear_all();
             let configs = vec![
@@ -1669,6 +1736,7 @@ mod tests {
         }
 
         #[test]
+        #[serial]
         fn test_select_url_excluded_providers_with_weighted_selection() {
             RpcHealthStore::instance().clear_all();
             let configs = vec![

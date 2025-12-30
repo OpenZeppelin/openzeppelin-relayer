@@ -713,7 +713,7 @@ mod tests {
 
         let resolved = result.unwrap();
         assert_eq!(resolved.common.network, "child");
-        // Child's RPC URLs are merged with parent's (parent first, then child)
+        // Child's RPC URLs override parent's
         assert_eq!(
             resolved.common.rpc_urls,
             Some(vec![crate::models::RpcConfig::new(

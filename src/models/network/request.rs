@@ -85,7 +85,7 @@ pub struct UpdateNetworkRequest {
     /// Supports multiple formats:
     /// - Array of strings: `["https://rpc.example.com"]` (defaults to weight 100)
     /// - Array of RpcConfig objects: `[{"url": "https://rpc.example.com", "weight": 100}]`
-    /// - Mixed array: `["https://rpc1.com", {"url": "https://rpc2.com", "weight": 200}]`
+    /// - Mixed array: `["https://rpc1.com", {"url": "https://rpc2.com", "weight": 100}]`
     ///   Must be non-empty and contain valid HTTP/HTTPS URLs if provided.
     #[serde(
         default,

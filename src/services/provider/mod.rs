@@ -264,9 +264,7 @@ impl NetworkConfiguration for EvmNetwork {
     type Provider = EvmProvider;
 
     fn public_rpc_urls(&self) -> Vec<RpcConfig> {
-        self.public_rpc_urls()
-            .map(|configs| configs.to_vec())
-            .unwrap_or_default()
+        self.rpc_urls.clone()
     }
 
     fn new_provider(config: ProviderConfig) -> Result<Self::Provider, ProviderError> {
@@ -278,9 +276,7 @@ impl NetworkConfiguration for SolanaNetwork {
     type Provider = SolanaProvider;
 
     fn public_rpc_urls(&self) -> Vec<RpcConfig> {
-        self.public_rpc_urls()
-            .map(|configs| configs.to_vec())
-            .unwrap_or_default()
+        self.rpc_urls.clone()
     }
 
     fn new_provider(config: ProviderConfig) -> Result<Self::Provider, ProviderError> {
@@ -292,9 +288,7 @@ impl NetworkConfiguration for StellarNetwork {
     type Provider = StellarProvider;
 
     fn public_rpc_urls(&self) -> Vec<RpcConfig> {
-        self.public_rpc_urls()
-            .map(|configs| configs.to_vec())
-            .unwrap_or_default()
+        self.rpc_urls.clone()
     }
 
     fn new_provider(config: ProviderConfig) -> Result<Self::Provider, ProviderError> {
