@@ -44,4 +44,3 @@ pub fn init(cfg: &mut web::ServiceConfig) {
     cfg.service(get_network); // /networks/{network_id}
     cfg.service(list_networks); // /networks
 }
-

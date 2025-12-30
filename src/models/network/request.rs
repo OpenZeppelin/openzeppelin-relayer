@@ -9,10 +9,7 @@
 //! all input is properly validated before reaching the core business logic.
 
 use crate::models::{ApiError, RpcConfig};
-use serde::{
-    de::Error as DeError,
-    Deserialize, Deserializer, Serialize,
-};
+use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize};
 use serde_json;
 use utoipa::ToSchema;
 
@@ -172,18 +169,12 @@ mod tests {
             request.rpc_urls.as_ref().unwrap()[0].url,
             "https://rpc1.com"
         );
-        assert_eq!(
-            request.rpc_urls.as_ref().unwrap()[0].weight,
-            100u8
-        ); // Default weight
+        assert_eq!(request.rpc_urls.as_ref().unwrap()[0].weight, 100u8); // Default weight
         assert_eq!(
             request.rpc_urls.as_ref().unwrap()[1].url,
             "https://rpc2.com"
         );
-        assert_eq!(
-            request.rpc_urls.as_ref().unwrap()[1].weight,
-            100u8
-        ); // Default weight
+        assert_eq!(request.rpc_urls.as_ref().unwrap()[1].weight, 100u8); // Default weight
     }
 
     #[test]
@@ -195,41 +186,30 @@ mod tests {
             request.rpc_urls.as_ref().unwrap()[0].url,
             "https://rpc1.com"
         );
-        assert_eq!(
-            request.rpc_urls.as_ref().unwrap()[0].weight,
-            50u8
-        );
+        assert_eq!(request.rpc_urls.as_ref().unwrap()[0].weight, 50u8);
         assert_eq!(
             request.rpc_urls.as_ref().unwrap()[1].url,
             "https://rpc2.com"
         );
-        assert_eq!(
-            request.rpc_urls.as_ref().unwrap()[1].weight,
-            75u8
-        );
+        assert_eq!(request.rpc_urls.as_ref().unwrap()[1].weight, 75u8);
     }
 
     #[test]
     fn test_deserialize_rpc_urls_mixed_format() {
-        let json = r#"{"rpc_urls": ["https://rpc1.com", {"url": "https://rpc2.com", "weight": 50}]}"#;
+        let json =
+            r#"{"rpc_urls": ["https://rpc1.com", {"url": "https://rpc2.com", "weight": 50}]}"#;
         let request: UpdateNetworkRequest = serde_json::from_str(json).unwrap();
         assert_eq!(request.rpc_urls.as_ref().unwrap().len(), 2);
         assert_eq!(
             request.rpc_urls.as_ref().unwrap()[0].url,
             "https://rpc1.com"
         );
-        assert_eq!(
-            request.rpc_urls.as_ref().unwrap()[0].weight,
-            100u8
-        ); // Default weight for string
+        assert_eq!(request.rpc_urls.as_ref().unwrap()[0].weight, 100u8); // Default weight for string
         assert_eq!(
             request.rpc_urls.as_ref().unwrap()[1].url,
             "https://rpc2.com"
         );
-        assert_eq!(
-            request.rpc_urls.as_ref().unwrap()[1].weight,
-            50u8
-        ); // Explicit weight from object
+        assert_eq!(request.rpc_urls.as_ref().unwrap()[1].weight, 50u8); // Explicit weight from object
     }
 
     #[test]
@@ -246,4 +226,3 @@ mod tests {
         assert!(result.is_err());
     }
 }
-

@@ -9,8 +9,8 @@ use crate::{
     config::{EvmNetworkConfig, SolanaNetworkConfig, StellarNetworkConfig},
     jobs::JobProducerTrait,
     models::{
-        NetworkConfigData, NetworkRepoModel, NetworkResponse, UpdateNetworkRequest,
-        ApiError, ApiResponse, PaginationMeta, PaginationQuery, ThinDataAppState,
+        ApiError, ApiResponse, NetworkConfigData, NetworkRepoModel, NetworkResponse,
+        PaginationMeta, PaginationQuery, ThinDataAppState, UpdateNetworkRequest,
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
@@ -36,8 +36,16 @@ pub async fn list_networks<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
-    RR: RelayerRepository + Repository<crate::models::RelayerRepoModel, String> + Send + Sync + 'static,
-    TR: TransactionRepository + Repository<crate::models::TransactionRepoModel, String> + Send + Sync + 'static,
+    RR: RelayerRepository
+        + Repository<crate::models::RelayerRepoModel, String>
+        + Send
+        + Sync
+        + 'static,
+    TR: TransactionRepository
+        + Repository<crate::models::TransactionRepoModel, String>
+        + Send
+        + Sync
+        + 'static,
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
     NFR: Repository<crate::models::NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<crate::models::SignerRepoModel, String> + Send + Sync + 'static,
@@ -76,8 +84,16 @@ pub async fn get_network<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
-    RR: RelayerRepository + Repository<crate::models::RelayerRepoModel, String> + Send + Sync + 'static,
-    TR: TransactionRepository + Repository<crate::models::TransactionRepoModel, String> + Send + Sync + 'static,
+    RR: RelayerRepository
+        + Repository<crate::models::RelayerRepoModel, String>
+        + Send
+        + Sync
+        + 'static,
+    TR: TransactionRepository
+        + Repository<crate::models::TransactionRepoModel, String>
+        + Send
+        + Sync
+        + 'static,
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
     NFR: Repository<crate::models::NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<crate::models::SignerRepoModel, String> + Send + Sync + 'static,
@@ -120,8 +136,16 @@ pub async fn update_network<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
-    RR: RelayerRepository + Repository<crate::models::RelayerRepoModel, String> + Send + Sync + 'static,
-    TR: TransactionRepository + Repository<crate::models::TransactionRepoModel, String> + Send + Sync + 'static,
+    RR: RelayerRepository
+        + Repository<crate::models::RelayerRepoModel, String>
+        + Send
+        + Sync
+        + 'static,
+    TR: TransactionRepository
+        + Repository<crate::models::TransactionRepoModel, String>
+        + Send
+        + Sync
+        + 'static,
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
     NFR: Repository<crate::models::NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<crate::models::SignerRepoModel, String> + Send + Sync + 'static,
@@ -154,7 +178,7 @@ where
     // Update fields in the network config
     let common = network.common();
     let mut updated_common = common.clone();
-    
+
     // Update RPC URLs if provided
     if let Some(rpc_urls) = request.rpc_urls {
         updated_common.rpc_urls = Some(rpc_urls);
@@ -162,21 +186,17 @@ where
 
     // Update the network config based on type
     let updated_config = match network.config {
-        NetworkConfigData::Evm(evm_config) => {
-            NetworkConfigData::Evm(EvmNetworkConfig {
-                common: updated_common,
-                chain_id: evm_config.chain_id,
-                required_confirmations: evm_config.required_confirmations,
-                features: evm_config.features,
-                symbol: evm_config.symbol,
-                gas_price_cache: evm_config.gas_price_cache,
-            })
-        }
-        NetworkConfigData::Solana(_) => {
-            NetworkConfigData::Solana(SolanaNetworkConfig {
-                common: updated_common,
-            })
-        }
+        NetworkConfigData::Evm(evm_config) => NetworkConfigData::Evm(EvmNetworkConfig {
+            common: updated_common,
+            chain_id: evm_config.chain_id,
+            required_confirmations: evm_config.required_confirmations,
+            features: evm_config.features,
+            symbol: evm_config.symbol,
+            gas_price_cache: evm_config.gas_price_cache,
+        }),
+        NetworkConfigData::Solana(_) => NetworkConfigData::Solana(SolanaNetworkConfig {
+            common: updated_common,
+        }),
         NetworkConfigData::Stellar(stellar_config) => {
             NetworkConfigData::Stellar(StellarNetworkConfig {
                 common: updated_common,
@@ -199,4 +219,3 @@ where
 
     Ok(HttpResponse::Ok().json(ApiResponse::success(network_response)))
 }
-

@@ -195,4 +195,3 @@ fn doc_get_network() {}
 )]
 #[allow(dead_code)]
 fn doc_update_network() {}
-
