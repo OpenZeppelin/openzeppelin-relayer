@@ -11,6 +11,7 @@
 //! * `signers` - Signer management endpoints
 
 pub mod api_key;
+pub mod network;
 pub mod notification;
 pub mod plugin;
 pub mod relayer;
