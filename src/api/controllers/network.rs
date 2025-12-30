@@ -107,9 +107,9 @@ where
         .await
         .map_err(|e| match e {
             crate::models::RepositoryError::NotFound(_) => {
-                ApiError::NotFound(format!("Network with ID '{}' not found", network_id))
+                ApiError::NotFound(format!("Network with ID '{network_id}' not found"))
             }
-            _ => ApiError::InternalError(format!("Failed to retrieve network: {}", e)),
+            _ => ApiError::InternalError(format!("Failed to retrieve network: {e}")),
         })?;
 
     let network_response: NetworkResponse = network.into();
@@ -170,9 +170,9 @@ where
         .await
         .map_err(|e| match e {
             crate::models::RepositoryError::NotFound(_) => {
-                ApiError::NotFound(format!("Network with ID '{}' not found", network_id))
+                ApiError::NotFound(format!("Network with ID '{network_id}' not found"))
             }
-            _ => ApiError::InternalError(format!("Failed to retrieve network: {}", e)),
+            _ => ApiError::InternalError(format!("Failed to retrieve network: {e}")),
         })?;
 
     // Update fields in the network config

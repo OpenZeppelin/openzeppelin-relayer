@@ -86,7 +86,7 @@ pub struct UpdateNetworkRequest {
     /// - Array of strings: `["https://rpc.example.com"]` (defaults to weight 100)
     /// - Array of RpcConfig objects: `[{"url": "https://rpc.example.com", "weight": 100}]`
     /// - Mixed array: `["https://rpc1.com", {"url": "https://rpc2.com", "weight": 200}]`
-    /// Must be non-empty and contain valid HTTP/HTTPS URLs if provided.
+    ///   Must be non-empty and contain valid HTTP/HTTPS URLs if provided.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -117,9 +117,8 @@ impl UpdateNetworkRequest {
             }
 
             // Validate all RPC URLs
-            RpcConfig::validate_list(rpc_urls).map_err(|e| {
-                ApiError::BadRequest(format!("Invalid RPC URL configuration: {}", e))
-            })?;
+            RpcConfig::validate_list(rpc_urls)
+                .map_err(|e| ApiError::BadRequest(format!("Invalid RPC URL configuration: {e}")))?;
         }
 
         Ok(())

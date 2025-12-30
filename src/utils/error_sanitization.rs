@@ -80,10 +80,10 @@ pub fn sanitize_error_description(error: &ProviderError) -> String {
             "Service temporarily unavailable. Please try again later".to_string()
         }
         ProviderError::RequestError { status_code, .. } => {
-            format!("Request failed with status code {}", status_code)
+            format!("Request failed with status code {status_code}")
         }
         ProviderError::RpcErrorCode { code, .. } => {
-            format!("RPC error occurred (code: {})", code)
+            format!("RPC error occurred (code: {code})")
         }
         ProviderError::TransportError(_) => {
             "Network error occurred. Please try again later".to_string()
