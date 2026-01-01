@@ -6,11 +6,11 @@
 //! Communication with the Node.js pool server happens via Unix socket using
 //! a JSON-line protocol.
 
-use dashmap::DashMap;
+use crossbeam::queue::SegQueue;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -142,17 +142,19 @@ struct PoolConnection {
     stream: UnixStream,
     /// Connection ID for tracking
     id: usize,
+    /// Health status of this connection
+    healthy: AtomicBool,
 }
 
 impl PoolConnection {
     async fn new(socket_path: &str, id: usize) -> Result<Self, PluginError> {
-        // Retry connection with backoff - socket might not be ready or server might be busy
-        let mut attempts = 0;
+        // Retry connection with exponential backoff
         let max_attempts = get_config().pool_connect_retries;
-        let mut delay_ms: u64 = 10;
-        let max_delay_ms: u64 = 1000; // Max 1 second between retries
+        let mut attempts = 0;
+        let mut delay_ms = 10u64;
 
         tracing::debug!(connection_id = id, socket_path = %socket_path, "Connecting to pool server");
+        
         loop {
             match UnixStream::connect(socket_path).await {
                 Ok(stream) => {
@@ -163,19 +165,14 @@ impl PoolConnection {
                             "Connected to pool server after retries"
                         );
                     }
-                    return Ok(Self { stream, id });
+                    return Ok(Self { 
+                        stream, 
+                        id,
+                        healthy: AtomicBool::new(true),
+                    });
                 }
                 Err(e) => {
                     attempts += 1;
-
-                    // Check if it's a temporary error (EAGAIN, ECONNREFUSED, etc)
-                    let is_temporary = matches!(
-                        e.kind(),
-                        std::io::ErrorKind::ConnectionRefused
-                            | std::io::ErrorKind::WouldBlock
-                            | std::io::ErrorKind::TimedOut
-                            | std::io::ErrorKind::Interrupted
-                    );
 
                     if attempts >= max_attempts {
                         return Err(PluginError::SocketError(format!(
@@ -184,19 +181,20 @@ impl PoolConnection {
                         )));
                     }
 
-                    // Only log at debug level to reduce noise under load
+                    // Log selectively to reduce noise
                     if attempts <= 3 || attempts % 5 == 0 {
                         tracing::debug!(
                             connection_id = id,
                             attempt = attempts,
                             max_attempts = max_attempts,
                             delay_ms = delay_ms,
-                            is_temporary = is_temporary,
                             "Retrying connection to pool server"
                         );
                     }
+                    
                     tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                    delay_ms = std::cmp::min(delay_ms * 2, max_delay_ms);
+                    // Exponential backoff with cap at 1 second
+                    delay_ms = std::cmp::min(delay_ms * 2, 1000);
                 }
             }
         }
@@ -251,13 +249,11 @@ impl PoolConnection {
 }
 
 /// Connection pool for reusing socket connections
-/// Uses DashMap for lock-free connection acquisition and release
+/// Uses lock-free SegQueue for O(1) connection acquisition and release
 struct ConnectionPool {
     socket_path: String,
-    /// Available connections (connection_id -> connection)
-    connections: Arc<DashMap<usize, PoolConnection>>,
-    /// Health tracking for connections (connection_id -> is_healthy)
-    health: Arc<DashMap<usize, bool>>,
+    /// Available connections (lock-free stack)
+    available: Arc<SegQueue<PoolConnection>>,
     /// Maximum number of connections
     max_connections: usize,
     /// Next connection ID (atomic for lock-free increment)
@@ -270,8 +266,7 @@ impl ConnectionPool {
     fn new(socket_path: String, max_connections: usize) -> Self {
         Self {
             socket_path,
-            connections: Arc::new(DashMap::new()),
-            health: Arc::new(DashMap::new()),
+            available: Arc::new(SegQueue::new()),
             max_connections,
             next_id: Arc::new(AtomicUsize::new(0)),
             semaphore: Arc::new(Semaphore::new(max_connections)),
@@ -280,96 +275,94 @@ impl ConnectionPool {
 
     /// Get a connection from the pool or create a new one
     /// Uses semaphore for proper concurrency limiting
+    /// Accepts optional pre-acquired permit for fast path optimization
+    async fn acquire_with_permit(
+        &self,
+        permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    ) -> Result<PooledConnection<'_>, PluginError> {
+        // Acquire permit if not provided
+        let permit = match permit {
+            Some(p) => p,
+            None => {
+                let available_permits = self.semaphore.available_permits();
+                if available_permits == 0 {
+                    tracing::warn!(
+                        max_connections = self.max_connections,
+                        "All connection permits exhausted - waiting for connection"
+                    );
+                }
+                self.semaphore
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| PluginError::PluginError("Connection semaphore closed".to_string()))?
+            }
+        };
+
+        // O(1) lock-free pop from available connections
+        loop {
+            match self.available.pop() {
+                Some(conn) => {
+                    // Check if connection is healthy
+                    if conn.healthy.load(Ordering::Relaxed) {
+                        tracing::debug!(connection_id = conn.id, "Reusing connection from pool");
+                        return Ok(PooledConnection {
+                            conn: Some(conn),
+                            pool: self,
+                            _permit: permit,
+                        });
+                    }
+                    // Connection unhealthy, drop it and try next
+                    tracing::debug!(connection_id = conn.id, "Dropping unhealthy connection");
+                    continue;
+                }
+                None => {
+                    // No available connection, create a new one
+                    let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                    tracing::debug!(connection_id = id, "Creating new pool connection");
+
+                    let conn = PoolConnection::new(&self.socket_path, id).await?;
+
+                    return Ok(PooledConnection {
+                        conn: Some(conn),
+                        pool: self,
+                        _permit: permit,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Convenience method for acquiring without pre-acquired permit
     async fn acquire(&self) -> Result<PooledConnection<'_>, PluginError> {
-        let available_permits = self.semaphore.available_permits();
-        if available_permits == 0 {
-            tracing::warn!(
-                max_connections = self.max_connections,
-                "All connection permits exhausted - waiting for connection"
-            );
-        }
-
-        // Acquire permit first - this limits total concurrent connections
-        let permit = self
-            .semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| PluginError::PluginError("Connection semaphore closed".to_string()))?;
-
-        // Try to find a healthy connection in the pool
-        let mut candidate_ids = Vec::new();
-
-        for entry in self.connections.iter() {
-            let conn_id = *entry.key();
-            let is_healthy = self
-                .health
-                .get(&conn_id)
-                .map(|h| *h.value())
-                .unwrap_or(false);
-            if is_healthy {
-                candidate_ids.push(conn_id);
-            }
-        }
-
-        // Try to remove one of the candidates
-        for conn_id in candidate_ids {
-            if let Some((_, conn)) = self.connections.remove(&conn_id) {
-                tracing::debug!(connection_id = conn_id, "Reusing connection from pool");
-                return Ok(PooledConnection {
-                    conn: Some(conn),
-                    pool: self,
-                    _permit: permit,
-                });
-            }
-        }
-
-        // No available connection, create a new one
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        tracing::debug!(connection_id = id, "Creating new pool connection");
-
-        let conn = PoolConnection::new(&self.socket_path, id).await?;
-        self.health.insert(id, true);
-
-        Ok(PooledConnection {
-            conn: Some(conn),
-            pool: self,
-            _permit: permit,
-        })
+        self.acquire_with_permit(None).await
     }
 
     /// Return a connection to the pool
     fn release(&self, conn: PoolConnection) {
         let conn_id = conn.id;
-        let is_healthy = self
-            .health
-            .get(&conn_id)
-            .map(|h| *h.value())
-            .unwrap_or(false);
-        let pool_size = self.connections.len();
+        let is_healthy = conn.healthy.load(Ordering::Relaxed);
 
-        if is_healthy && pool_size < self.max_connections {
-            self.connections.insert(conn_id, conn);
+        if is_healthy {
+            // O(1) lock-free push
+            self.available.push(conn);
             tracing::debug!(connection_id = conn_id, "Connection returned to pool");
         } else {
-            self.health.remove(&conn_id);
-            tracing::debug!(
-                connection_id = conn_id,
-                "Connection dropped (unhealthy or pool full)"
-            );
+            tracing::debug!(connection_id = conn_id, "Connection dropped (unhealthy)");
         }
     }
 
-    /// Mark a connection as unhealthy
-    fn mark_unhealthy(&self, conn_id: usize) {
-        self.health.insert(conn_id, false);
-        self.connections.remove(&conn_id);
+    /// Mark a connection as unhealthy (no-op with new design)
+    /// Health is now tracked in the connection itself
+    fn mark_unhealthy(&self, _conn_id: usize) {
+        // No longer needed - health is in PoolConnection.healthy
+        // Connection will be dropped on release if unhealthy
     }
 
     /// Clear all connections
     async fn clear(&self) {
-        self.connections.clear();
-        self.health.clear();
+        // Drain the queue
+        while self.available.pop().is_some() {}
     }
 }
 
@@ -406,8 +399,8 @@ impl<'a> PooledConnection<'a> {
 
     /// Mark this connection as unhealthy (won't be returned to pool)
     fn mark_unhealthy(&mut self) {
-        if let Some(conn_id) = self.conn.as_ref().map(|c| c.id) {
-            self.pool.mark_unhealthy(conn_id);
+        if let Some(ref conn) = self.conn {
+            conn.healthy.store(false, Ordering::Relaxed);
         }
     }
 }
@@ -446,10 +439,10 @@ pub struct PoolManager {
     request_tx: async_channel::Sender<QueuedRequest>,
     /// Actual configured queue size (for error messages)
     max_queue_size: usize,
-    /// Last health check timestamp (for rate limiting)
-    last_health_check: std::sync::atomic::AtomicU64,
+    /// Flag indicating if health check is needed (set by background task)
+    health_check_needed: Arc<AtomicBool>,
     /// Consecutive failure count for health checks
-    consecutive_failures: std::sync::atomic::AtomicU32,
+    consecutive_failures: Arc<AtomicU32>,
 }
 
 impl PoolManager {
@@ -479,6 +472,15 @@ impl PoolManager {
         // Spawn background workers to process queued requests
         Self::spawn_queue_workers(rx, connection_pool_clone, config.pool_workers);
 
+        let health_check_needed = Arc::new(AtomicBool::new(false));
+        let consecutive_failures = Arc::new(AtomicU32::new(0));
+
+        // Spawn background health check task to avoid atomic ops on hot path
+        Self::spawn_health_check_task(
+            health_check_needed.clone(),
+            config.health_check_interval_secs,
+        );
+
         Self {
             connection_pool,
             socket_path,
@@ -487,9 +489,26 @@ impl PoolManager {
             restart_lock: tokio::sync::Mutex::new(()),
             request_tx: tx,
             max_queue_size,
-            last_health_check: std::sync::atomic::AtomicU64::new(0),
-            consecutive_failures: std::sync::atomic::AtomicU32::new(0),
+            health_check_needed,
+            consecutive_failures,
         }
+    }
+
+    /// Spawn background task to set health check flag periodically
+    /// This avoids atomic operations on the hot path
+    fn spawn_health_check_task(
+        health_check_needed: Arc<AtomicBool>,
+        interval_secs: u64,
+    ) {
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            
+            loop {
+                interval.tick().await;
+                health_check_needed.store(true, Ordering::Relaxed);
+            }
+        });
     }
 
     /// Spawn multiple worker tasks to process queued requests concurrently
@@ -566,9 +585,11 @@ impl PoolManager {
         }
     }
 
-    /// Internal execution method
-    async fn execute_plugin_internal(
+    /// Execute plugin with optional pre-acquired permit (unified fast/slow path)
+    /// This eliminates code duplication between fast path and queued execution
+    async fn execute_with_permit(
         connection_pool: &Arc<ConnectionPool>,
+        permit: Option<tokio::sync::OwnedSemaphorePermit>,
         plugin_id: String,
         compiled_code: Option<String>,
         plugin_path: Option<String>,
@@ -578,7 +599,7 @@ impl PoolManager {
         http_request_id: Option<String>,
         timeout_secs: Option<u64>,
     ) -> Result<ScriptResult, PluginError> {
-        let mut conn = connection_pool.acquire().await?;
+        let mut conn = connection_pool.acquire_with_permit(permit).await?;
 
         let request = PoolRequest::Execute {
             task_id: Uuid::new_v4().to_string(),
@@ -595,12 +616,11 @@ impl PoolManager {
         let timeout = timeout_secs.unwrap_or(get_config().pool_request_timeout_secs);
         let response = conn.send_request_with_timeout(&request, timeout).await?;
 
+        // Avoid allocating empty Vec - only allocate if logs exist
         let logs: Vec<LogEntry> = response
             .logs
-            .unwrap_or_default()
-            .into_iter()
-            .map(|l| l.into())
-            .collect();
+            .map(|logs| logs.into_iter().map(|l| l.into()).collect())
+            .unwrap_or_else(Vec::new);
 
         if response.success {
             let return_value = response
@@ -639,6 +659,34 @@ impl PoolManager {
         }
     }
 
+    /// Internal execution method (wrapper for execute_with_permit)
+    async fn execute_plugin_internal(
+        connection_pool: &Arc<ConnectionPool>,
+        plugin_id: String,
+        compiled_code: Option<String>,
+        plugin_path: Option<String>,
+        params: serde_json::Value,
+        headers: Option<HashMap<String, Vec<String>>>,
+        socket_path: String,
+        http_request_id: Option<String>,
+        timeout_secs: Option<u64>,
+    ) -> Result<ScriptResult, PluginError> {
+        // Delegate to unified execution method (no pre-acquired permit for queued requests)
+        Self::execute_with_permit(
+            connection_pool,
+            None,
+            plugin_id,
+            compiled_code,
+            plugin_path,
+            params,
+            headers,
+            socket_path,
+            http_request_id,
+            timeout_secs,
+        )
+        .await
+    }
+
     /// Start the pool server if not already running
     /// Uses startup lock to prevent concurrent starts
     pub async fn ensure_started(&self) -> Result<(), PluginError> {
@@ -667,30 +715,22 @@ impl PoolManager {
     }
 
     /// Ensure pool is started and healthy, with auto-recovery on failure
-    /// Uses rate limiting to avoid excessive health checks under load
+    /// Uses background task flag to avoid atomic operations on hot path
     async fn ensure_started_and_healthy(&self) -> Result<(), PluginError> {
         self.ensure_started().await?;
 
-        // Rate limit health checks - only check every 5 seconds
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let last_check = self.last_health_check.load(Ordering::Relaxed);
-
-        // Health check interval from centralized config
-        let health_check_interval = get_config().health_check_interval_secs;
-
-        if now.saturating_sub(last_check) < health_check_interval {
-            // Too soon since last health check - skip
+        // Check if background task flagged that health check is needed
+        // This is a simple load, no compare_exchange - much faster!
+        if !self.health_check_needed.load(Ordering::Relaxed) {
+            // No health check needed yet
             return Ok(());
         }
 
-        // Try to update last_health_check atomically (only one thread does the check)
-        if self
-            .last_health_check
-            .compare_exchange(last_check, now, Ordering::Relaxed, Ordering::Relaxed)
-            .is_err()
+        // Try to clear the flag atomically (only one thread does the check)
+        if !self
+            .health_check_needed
+            .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
         {
             // Another thread is already doing the health check
             return Ok(());
@@ -869,112 +909,25 @@ impl PoolManager {
         // Ensure pool is started and healthy
         self.ensure_started_and_healthy().await?;
 
-        // Try direct execution first (semaphore handles concurrency limiting)
-        // If semaphore can't be acquired immediately, queue the request
+        // Try direct execution first (fast path with pre-acquired permit)
+        // If semaphore can't be acquired immediately, queue the request (slow path)
         match self.connection_pool.semaphore.clone().try_acquire_owned() {
             Ok(permit) => {
-                // Direct execution path - faster for normal load
-                let mut conn = {
-                    // Try to get pooled connection
-                    let mut candidate_ids = Vec::new();
-                    for entry in self.connection_pool.connections.iter() {
-                        let conn_id = *entry.key();
-                        let is_healthy = self
-                            .connection_pool
-                            .health
-                            .get(&conn_id)
-                            .map(|h| *h.value())
-                            .unwrap_or(false);
-                        if is_healthy {
-                            candidate_ids.push(conn_id);
-                        }
-                    }
-
-                    let mut found_conn = None;
-                    for conn_id in candidate_ids {
-                        if let Some((_, conn)) = self.connection_pool.connections.remove(&conn_id) {
-                            found_conn = Some(conn);
-                            break;
-                        }
-                    }
-
-                    match found_conn {
-                        Some(conn) => PooledConnection {
-                            conn: Some(conn),
-                            pool: &self.connection_pool,
-                            _permit: permit,
-                        },
-                        None => {
-                            let id = self.connection_pool.next_id.fetch_add(1, Ordering::Relaxed);
-                            let conn =
-                                PoolConnection::new(&self.connection_pool.socket_path, id).await?;
-                            self.connection_pool.health.insert(id, true);
-                            PooledConnection {
-                                conn: Some(conn),
-                                pool: &self.connection_pool,
-                                _permit: permit,
-                            }
-                        }
-                    }
-                };
-
-                let request = PoolRequest::Execute {
-                    task_id: Uuid::new_v4().to_string(),
-                    plugin_id: plugin_id.clone(),
+                // Fast path: execute directly with pre-acquired permit
+                // This avoids queueing overhead for normal load
+                Self::execute_with_permit(
+                    &self.connection_pool,
+                    Some(permit),
+                    plugin_id,
                     compiled_code,
                     plugin_path,
                     params,
                     headers,
                     socket_path,
                     http_request_id,
-                    timeout: timeout_secs.map(|s| s * 1000),
-                };
-
-                let timeout = timeout_secs.unwrap_or(get_config().pool_request_timeout_secs);
-                let response = conn.send_request_with_timeout(&request, timeout).await?;
-
-                let logs: Vec<LogEntry> = response
-                    .logs
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|l| l.into())
-                    .collect();
-
-                if response.success {
-                    let return_value = response
-                        .result
-                        .map(|v| {
-                            if v.is_string() {
-                                v.as_str().unwrap_or("").to_string()
-                            } else {
-                                serde_json::to_string(&v).unwrap_or_default()
-                            }
-                        })
-                        .unwrap_or_default();
-
-                    Ok(ScriptResult {
-                        logs,
-                        error: String::new(),
-                        return_value,
-                        trace: Vec::new(),
-                    })
-                } else {
-                    let error = response.error.unwrap_or(PoolError {
-                        message: "Unknown error".to_string(),
-                        code: None,
-                        status: None,
-                        details: None,
-                    });
-
-                    Err(PluginError::HandlerError(Box::new(PluginHandlerPayload {
-                        message: error.message,
-                        status: error.status.unwrap_or(500),
-                        code: error.code,
-                        details: error.details,
-                        logs: Some(logs),
-                        traces: None,
-                    })))
-                }
+                    timeout_secs,
+                )
+                .await
             }
             Err(_) => {
                 // Semaphore full - queue the request for backpressure

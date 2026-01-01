@@ -160,7 +160,7 @@ mod tests {
         let mut mock_repo = MockPluginRepositoryTrait::new();
         mock_repo
             .expect_has_entries()
-            .returning(|| async { Ok(false) });
+            .returning(|| Box::pin(async { Ok(false) }));
 
         let result = initialize_plugin_pool(&mock_repo).await;
         assert!(result.is_ok());
