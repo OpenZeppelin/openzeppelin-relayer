@@ -154,7 +154,7 @@ impl PoolConnection {
         let mut delay_ms = 10u64;
 
         tracing::debug!(connection_id = id, socket_path = %socket_path, "Connecting to pool server");
-        
+
         loop {
             match UnixStream::connect(socket_path).await {
                 Ok(stream) => {
@@ -165,8 +165,8 @@ impl PoolConnection {
                             "Connected to pool server after retries"
                         );
                     }
-                    return Ok(Self { 
-                        stream, 
+                    return Ok(Self {
+                        stream,
                         id,
                         healthy: AtomicBool::new(true),
                     });
@@ -191,7 +191,7 @@ impl PoolConnection {
                             "Retrying connection to pool server"
                         );
                     }
-                    
+
                     tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                     // Exponential backoff with cap at 1 second
                     delay_ms = std::cmp::min(delay_ms * 2, 1000);
@@ -291,11 +291,9 @@ impl ConnectionPool {
                         "All connection permits exhausted - waiting for connection"
                     );
                 }
-                self.semaphore
-                    .clone()
-                    .acquire_owned()
-                    .await
-                    .map_err(|_| PluginError::PluginError("Connection semaphore closed".to_string()))?
+                self.semaphore.clone().acquire_owned().await.map_err(|_| {
+                    PluginError::PluginError("Connection semaphore closed".to_string())
+                })?
             }
         };
 
@@ -496,14 +494,11 @@ impl PoolManager {
 
     /// Spawn background task to set health check flag periodically
     /// This avoids atomic operations on the hot path
-    fn spawn_health_check_task(
-        health_check_needed: Arc<AtomicBool>,
-        interval_secs: u64,
-    ) {
+    fn spawn_health_check_task(health_check_needed: Arc<AtomicBool>, interval_secs: u64) {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            
+
             loop {
                 interval.tick().await;
                 health_check_needed.store(true, Ordering::Relaxed);

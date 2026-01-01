@@ -272,8 +272,10 @@ impl PluginRunner {
             .unwrap_or_else(|| format!("exec-{}", Uuid::new_v4()));
 
         // Only register for traces if emit_traces is enabled
+        // ExecutionGuard will auto-unregister on drop (RAII pattern)
         let mut traces_rx = if emit_traces {
-            Some(shared_socket.register_execution(execution_id.clone()))
+            let guard = shared_socket.register_execution(execution_id.clone()).await;
+            Some(guard.into_receiver())
         } else {
             None
         };
@@ -307,9 +309,7 @@ impl PluginRunner {
         {
             Ok(result) => result,
             Err(_) => {
-                if emit_traces {
-                    shared_socket.unregister_execution(&execution_id);
-                }
+                // No need to manually unregister - ExecutionGuard handles it
                 return Err(PluginError::ScriptTimeout(timeout_duration.as_secs()));
             }
         };
@@ -326,9 +326,7 @@ impl PluginRunner {
             Vec::new()
         };
 
-        if emit_traces {
-            shared_socket.unregister_execution(&execution_id);
-        }
+        // ExecutionGuard auto-unregisters when traces_rx is dropped
 
         match exec_outcome {
             Ok(mut script_result) => {

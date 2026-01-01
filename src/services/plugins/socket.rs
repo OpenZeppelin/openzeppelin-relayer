@@ -58,12 +58,14 @@ use crate::repositories::{
     TransactionCounterTrait, TransactionRepository,
 };
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::oneshot;
-use tracing::debug;
+use tokio::sync::{oneshot, Semaphore};
+use tracing::{debug, warn};
 
 use super::{
+    config::get_config,
     relayer_api::{RelayerApiTrait, Request},
     PluginError,
 };
@@ -71,6 +73,10 @@ use super::{
 pub struct SocketService {
     socket_path: String,
     listener: UnixListener,
+    /// Semaphore for connection limiting (prevents DoS)
+    connection_semaphore: Arc<Semaphore>,
+    /// Read timeout per line (prevents hanging connections)
+    read_timeout: Duration,
 }
 
 impl SocketService {
@@ -86,9 +92,14 @@ impl SocketService {
         let listener =
             UnixListener::bind(socket_path).map_err(|e| PluginError::SocketError(e.to_string()))?;
 
+        // Use centralized config
+        let config = get_config();
+
         Ok(Self {
             socket_path: socket_path.to_string(),
             listener,
+            connection_semaphore: Arc::new(Semaphore::new(config.socket_max_connections)),
+            read_timeout: Duration::from_secs(config.socket_read_timeout_secs),
         })
     }
 
@@ -164,20 +175,32 @@ impl SocketService {
                 }
             };
 
-            // Now handle the connection, but also listen for shutdown
-            // We spawn the handler and then select between it finishing or shutdown
-            let handle = tokio::spawn(Self::handle_connection::<
-                RA,
-                J,
-                RR,
-                TR,
-                NR,
-                NFR,
-                SR,
-                TCR,
-                PR,
-                AKR,
-            >(stream, state, relayer_api));
+            // Now handle the connection with connection limiting
+            // Try to acquire semaphore permit (no race condition!)
+            let permit = match self.connection_semaphore.clone().try_acquire_owned() {
+                Ok(p) => p,
+                Err(_) => {
+                    warn!("Plugin API socket: connection limit reached, rejecting connection");
+                    drop(stream);
+                    continue;
+                }
+            };
+
+            let state_clone = Arc::clone(&state);
+            let relayer_api_clone = Arc::clone(&relayer_api);
+            let read_timeout = self.read_timeout;
+
+            // Spawn handler with permit (auto-released on task completion)
+            let handle = tokio::spawn(async move {
+                let _permit = permit; // Hold until task completes
+                Self::handle_connection::<RA, J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+                    stream,
+                    state_clone,
+                    relayer_api_clone,
+                    read_timeout,
+                )
+                .await
+            });
             tokio::pin!(handle);
 
             tokio::select! {
@@ -193,9 +216,21 @@ impl SocketService {
                 result = &mut handle => {
                     debug!("Plugin API socket: connection handler completed");
                     match result {
-                        Ok(Ok(trace)) => traces.extend(trace),
-                        Ok(Err(e)) => return Err(e),
-                        Err(e) => return Err(PluginError::SocketError(e.to_string())),
+                        Ok(Ok(connection_traces)) => {
+                            // Successfully collected traces from this connection
+                            traces.extend(connection_traces);
+                        }
+                        Ok(Err(e)) => {
+                            // Connection handler error - log but don't kill service
+                            warn!("Plugin API socket: connection handler error: {}", e);
+                        }
+                        Err(e) if e.is_cancelled() => {
+                            debug!("Plugin API socket: connection handler cancelled");
+                        }
+                        Err(e) => {
+                            // Connection handler panicked - log but don't kill service
+                            warn!("Plugin API socket: connection handler panic: {}", e);
+                        }
                     }
                 }
             }
@@ -212,6 +247,7 @@ impl SocketService {
     /// * `stream` - The stream to the client.
     /// * `state` - The application state.
     /// * `relayer_api` - The relayer API.
+    /// * `read_timeout` - Timeout for reading each line.
     ///
     /// # Returns
     ///
@@ -221,6 +257,7 @@ impl SocketService {
         stream: UnixStream,
         state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
         relayer_api: Arc<RA>,
+        read_timeout: Duration,
     ) -> Result<Vec<serde_json::Value>, PluginError>
     where
         RA: RelayerApiTrait<J, RR, TR, NR, NFR, SR, TCR, PR, AKR> + 'static + Send + Sync,
@@ -244,26 +281,78 @@ impl SocketService {
 
         debug!("Plugin API socket: handle_connection started");
 
-        while let Ok(Some(line)) = reader.next_line().await {
+        loop {
+            // Read line with timeout to prevent hanging connections
+            let line = match tokio::time::timeout(read_timeout, reader.next_line()).await {
+                Ok(Ok(Some(line))) => line,
+                Ok(Ok(None)) => {
+                    debug!("Plugin API socket: client closed connection (EOF)");
+                    break;
+                }
+                Ok(Err(e)) => {
+                    warn!("Plugin API socket: read error: {}", e);
+                    break;
+                }
+                Err(_) => {
+                    debug!("Plugin API socket: read timeout");
+                    break;
+                }
+            };
+
             debug!("Plugin API socket: received request");
-            let trace: serde_json::Value = serde_json::from_str(&line)
-                .map_err(|e| PluginError::PluginError(format!("Failed to parse trace: {e}")))?;
-            traces.push(trace);
 
-            let request: Request =
-                serde_json::from_str(&line).map_err(|e| PluginError::PluginError(e.to_string()))?;
+            // Parse JSON once and reuse (avoiding double parsing)
+            let json_value: serde_json::Value = match serde_json::from_str(&line) {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!("Plugin API socket: failed to parse JSON, skipping: {}", e);
+                    continue; // Skip bad request, don't kill connection
+                }
+            };
 
+            // Deserialize into Request from the already-parsed Value
+            let request: Request = match serde_json::from_value(json_value.clone()) {
+                Ok(req) => req,
+                Err(e) => {
+                    warn!(
+                        "Plugin API socket: failed to parse request structure, skipping: {}",
+                        e
+                    );
+                    continue; // Skip bad request, don't kill connection
+                }
+            };
+
+            // Move JSON into traces (no extra clone needed)
+            traces.push(json_value);
+
+            // Handle request
             let response = relayer_api.handle_request(request, &state).await;
 
-            let response_str = serde_json::to_string(&response)
-                .map_err(|e| PluginError::PluginError(e.to_string()))?
-                + "\n";
+            // Serialize response with error handling
+            let response_str = match serde_json::to_string(&response) {
+                Ok(s) => s + "\n",
+                Err(e) => {
+                    warn!("Plugin API socket: failed to serialize response: {}", e);
+                    continue; // Skip this response, don't kill connection
+                }
+            };
 
-            let _ = w.write_all(response_str.as_bytes()).await;
+            // Write response with error handling
+            if let Err(e) = w.write_all(response_str.as_bytes()).await {
+                warn!("Plugin API socket: failed to write response: {}", e);
+                break; // Connection broken, exit
+            }
+
+            // Flush to ensure response is sent immediately
+            if let Err(e) = w.flush().await {
+                warn!("Plugin API socket: failed to flush response: {}", e);
+                break; // Connection broken, exit
+            }
+
             debug!("Plugin API socket: sent response");
         }
 
-        debug!("Plugin API socket: handle_connection finished (client closed)");
+        debug!("Plugin API socket: handle_connection finished");
         Ok(traces)
     }
 }

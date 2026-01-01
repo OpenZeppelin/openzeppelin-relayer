@@ -1,5 +1,5 @@
-use std::process::Command;
 use std::path::Path;
+use std::process::Command;
 
 fn main() {
     // Only run if plugins directory exists
@@ -10,9 +10,7 @@ fn main() {
     }
 
     // Check if pnpm is available
-    let pnpm_check = Command::new("pnpm")
-        .arg("--version")
-        .output();
+    let pnpm_check = Command::new("pnpm").arg("--version").output();
 
     if pnpm_check.is_err() {
         println!("cargo:warning=pnpm not found in PATH, skipping plugin dependencies install");
@@ -21,7 +19,7 @@ fn main() {
     }
 
     println!("cargo:warning=Running pnpm install in plugins directory...");
-    
+
     // Run pnpm install in plugins directory
     let output = Command::new("pnpm")
         .arg("install")
@@ -44,4 +42,3 @@ fn main() {
         }
     }
 }
-

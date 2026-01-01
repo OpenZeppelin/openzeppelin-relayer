@@ -22,8 +22,8 @@
 use crate::constants::{
     DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER, DEFAULT_POOL_CONNECT_RETRIES,
     DEFAULT_POOL_HEALTH_CHECK_INTERVAL_SECS, DEFAULT_POOL_IDLE_TIMEOUT_MS,
-    DEFAULT_POOL_MAX_CONNECTIONS, DEFAULT_POOL_MAX_THREADS_FLOOR,
-    DEFAULT_POOL_MIN_THREADS, DEFAULT_POOL_QUEUE_SEND_TIMEOUT_MS, DEFAULT_POOL_REQUEST_TIMEOUT_SECS,
+    DEFAULT_POOL_MAX_CONNECTIONS, DEFAULT_POOL_MAX_THREADS_FLOOR, DEFAULT_POOL_MIN_THREADS,
+    DEFAULT_POOL_QUEUE_SEND_TIMEOUT_MS, DEFAULT_POOL_REQUEST_TIMEOUT_SECS,
     DEFAULT_POOL_SOCKET_BACKLOG, DEFAULT_SOCKET_IDLE_TIMEOUT_SECS,
     DEFAULT_SOCKET_READ_TIMEOUT_SECS, DEFAULT_TRACE_TIMEOUT_MS,
 };
@@ -180,10 +180,7 @@ impl PluginConfig {
             .max(scaling_threads)
             .max(DEFAULT_POOL_MAX_THREADS_FLOOR)
             .min(64); // Final cap at 64
-        let nodejs_pool_max_threads = env_parse(
-            "PLUGIN_POOL_MAX_THREADS",
-            derived_max_threads,
-        );
+        let nodejs_pool_max_threads = env_parse("PLUGIN_POOL_MAX_THREADS", derived_max_threads);
 
         // concurrentTasksPerWorker: Node.js async can handle many concurrent tasks
         // Formula: (concurrency / max_threads) * 2.5 for headroom
@@ -321,34 +318,34 @@ impl Default for PluginConfig {
         // Clear any test environment variables to ensure pure defaults
         // Note: This only affects the Default impl, not from_env() usage
         std::env::remove_var("PLUGIN_MAX_CONCURRENCY");
-        
+
         // Use the same derivation logic as from_env()
         // This ensures Default matches production behavior
         let max_concurrency = DEFAULT_POOL_MAX_CONNECTIONS;
         let cpu_count = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4);
-        
+
         // Apply same formulas as from_env()
         let pool_max_connections = max_concurrency;
         let socket_max_connections = (max_concurrency as f64 * 1.5) as usize;
         let pool_max_queue_size = max_concurrency * 2;
-        
+
         let scaling_threads = max_concurrency / 50;
         let nodejs_pool_max_threads = (cpu_count * 2)
             .max(scaling_threads)
             .max(DEFAULT_POOL_MAX_THREADS_FLOOR)
             .min(64);
         let nodejs_pool_min_threads = DEFAULT_POOL_MIN_THREADS.max(cpu_count / 2);
-        
+
         let base_tasks = max_concurrency / nodejs_pool_max_threads.max(1);
         let nodejs_pool_concurrent_tasks = ((base_tasks as f64 * 2.5) as usize)
             .max(DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER)
             .min(300);
-        
+
         let default_backlog = DEFAULT_POOL_SOCKET_BACKLOG as usize;
         let pool_socket_backlog = max_concurrency.max(default_backlog);
-        
+
         Self {
             max_concurrency,
             pool_max_connections,
@@ -432,11 +429,11 @@ mod tests {
         let cpu_count = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4);
-        
+
         let pool_max_connections = max_concurrency;
         let socket_max_connections = (max_concurrency as f64 * 1.5) as usize;
         let pool_max_queue_size = max_concurrency * 2;
-        
+
         let scaling_threads = max_concurrency / 50;
         let nodejs_pool_max_threads = (cpu_count * 2)
             .max(scaling_threads)
@@ -446,7 +443,7 @@ mod tests {
         assert_eq!(pool_max_connections, 10);
         assert_eq!(socket_max_connections, 15); // 1.5x
         assert_eq!(pool_max_queue_size, 20); // 2x
-        
+
         // Should still have reasonable thread count (warm pool)
         assert!(nodejs_pool_max_threads >= DEFAULT_POOL_MAX_THREADS_FLOOR);
     }
@@ -458,10 +455,10 @@ mod tests {
         let cpu_count = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4);
-        
+
         let socket_max_connections = (max_concurrency as f64 * 1.5) as usize;
         let pool_max_queue_size = max_concurrency * 2;
-        
+
         let scaling_threads = max_concurrency / 50;
         let nodejs_pool_max_threads = (cpu_count * 2)
             .max(scaling_threads)
@@ -470,7 +467,7 @@ mod tests {
 
         assert_eq!(socket_max_connections, 150); // 1.5x
         assert_eq!(pool_max_queue_size, 200); // 2x
-        
+
         // Should use cpu_count * 2 for thread count (warm pool)
         assert!(nodejs_pool_max_threads >= cpu_count * 2);
     }
@@ -479,10 +476,10 @@ mod tests {
     fn test_high_concurrency() {
         // Test edge case: high concurrency (10000)
         let max_concurrency = 10000;
-        
+
         let socket_max_connections = (max_concurrency as f64 * 1.5) as usize;
         let pool_max_queue_size = max_concurrency * 2;
-        
+
         let cpu_count = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4);
@@ -494,10 +491,10 @@ mod tests {
 
         assert_eq!(socket_max_connections, 15000); // 1.5x
         assert_eq!(pool_max_queue_size, 20000); // 2x
-        
+
         // Should hit the 64 thread cap
         assert_eq!(nodejs_pool_max_threads, 64);
-        
+
         // Should have high concurrent tasks per worker
         let base_tasks = max_concurrency / nodejs_pool_max_threads;
         let derived_concurrent_tasks = ((base_tasks as f64 * 2.5) as usize)
@@ -509,25 +506,28 @@ mod tests {
     #[test]
     fn test_validation_catches_invalid_config() {
         let mut config = PluginConfig::default();
-        
+
         // Test that validation catches pool > socket connections
         config.pool_max_connections = 1000;
         config.socket_max_connections = 500;
-        
+
         let result = std::panic::catch_unwind(|| {
             config.validate();
         });
-        assert!(result.is_err(), "Should panic on invalid pool > socket connections");
+        assert!(
+            result.is_err(),
+            "Should panic on invalid pool > socket connections"
+        );
     }
 
     #[test]
     fn test_validation_catches_invalid_threads() {
         let mut config = PluginConfig::default();
-        
+
         // Test that validation catches min > max threads
         config.nodejs_pool_min_threads = 64;
         config.nodejs_pool_max_threads = 8;
-        
+
         let result = std::panic::catch_unwind(|| {
             config.validate();
         });
@@ -545,7 +545,7 @@ mod tests {
         // Verify the override would be respected
         assert_eq!(pool_max_connections, max_concurrency); // Auto-derived
         assert_eq!(pool_max_queue_size, 5000); // Manual override (not 2000)
-        
+
         // Also test that auto-derivation would have given 2000
         let auto_derived_queue = max_concurrency * 2;
         assert_eq!(auto_derived_queue, 2000);
