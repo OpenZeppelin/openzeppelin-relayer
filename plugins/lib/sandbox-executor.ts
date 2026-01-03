@@ -6,6 +6,7 @@
  */
 
 import * as vm from 'node:vm';
+import * as v8 from 'node:v8';
 import * as net from 'node:net';
 import { v4 as uuidv4 } from 'uuid';
 import type { PluginKVStore } from './kv';
@@ -26,6 +27,204 @@ import {
   pluginError,
 } from '@openzeppelin/relayer-sdk';
 import { DEFAULT_SOCKET_REQUEST_TIMEOUT_MS } from './constants';
+
+/**
+ * Context Pool - Reuses VM contexts to avoid expensive createContext() calls.
+ * Creating a VM context takes 5-20ms. By pooling, we reduce this to near-zero for warm workers.
+ */
+class ContextPool {
+  private available: vm.Context[] = [];
+  private readonly maxSize = 10; // Max contexts to cache per worker
+
+  acquire(): vm.Context {
+    const ctx = this.available.pop();
+    if (ctx) {
+      // Reuse context - reset any mutable state
+      this.resetContext(ctx);
+      return ctx;
+    }
+    // Create new context if pool is empty
+    return this.createFreshContext();
+  }
+
+  release(ctx: vm.Context): void {
+    // Return to pool if not at capacity
+    if (this.available.length < this.maxSize) {
+      this.available.push(ctx);
+    }
+    // Otherwise let GC collect it
+  }
+
+  private createFreshContext(): vm.Context {
+    // This will be populated with globals in executeInSandbox
+    return vm.createContext({});
+  }
+
+  private resetContext(ctx: vm.Context): void {
+    // Reset any global pollution from previous execution
+    // This is much faster than creating a new context
+    try {
+      vm.runInContext(`
+        // Clear any plugin-added globals
+        if (typeof globalThis.__pluginState !== 'undefined') {
+          delete globalThis.__pluginState;
+        }
+      `, ctx, { timeout: 100 });
+    } catch {
+      // Ignore reset errors - context will be replaced
+    }
+  }
+
+  clear(): void {
+    // Emergency cleanup - drop all cached contexts
+    this.available = [];
+  }
+}
+
+/**
+ * Script Cache - Reuses compiled VM scripts to avoid recompilation.
+ * Compiling a script takes 1-5ms. Caching eliminates this for repeated code.
+ * Memory-aware: monitors heap usage and proactively evicts under pressure.
+ */
+class ScriptCache {
+  private cache = new Map<string, { script: vm.Script; timestamp: number }>();
+  private readonly maxSize = 100; // Max scripts to cache per worker
+  private lastMemoryCheck = 0;
+  private readonly memoryCheckInterval = 5000; // Check every 5s
+
+  get(code: string): vm.Script | undefined {
+    // Periodic memory check on get operations
+    this.maybeCheckMemory();
+
+    const entry = this.cache.get(code);
+    if (entry) {
+      // Update access timestamp for LRU
+      entry.timestamp = Date.now();
+      return entry.script;
+    }
+    return undefined;
+  }
+
+  set(code: string, script: vm.Script): void {
+    // Check memory before adding
+    this.maybeCheckMemory();
+
+    // Evict oldest entry if at capacity (FIFO)
+    if (this.cache.size >= this.maxSize) {
+      this.evictOldest(1);
+    }
+    this.cache.set(code, { script, timestamp: Date.now() });
+  }
+
+  /**
+   * Periodic memory check - evict cache if heap is under pressure.
+   */
+  private maybeCheckMemory(): void {
+    const now = Date.now();
+    if (now - this.lastMemoryCheck < this.memoryCheckInterval) {
+      return;
+    }
+    this.lastMemoryCheck = now;
+
+    const usage = process.memoryUsage();
+    const heapStats = v8.getHeapStatistics();
+    // Use heap_size_limit (the actual max heap) instead of heapTotal (current allocated)
+    // heapTotal grows dynamically and can be much smaller than the configured max,
+    // causing false positive pressure detection (e.g., 28MB/30MB = 93% when max is 26GB)
+    const heapUsedRatio = usage.heapUsed / heapStats.heap_size_limit;
+
+    // At 70% heap usage, evict 25% of cache
+    if (heapUsedRatio >= 0.70 && this.cache.size > 0) {
+      const evictCount = Math.max(1, Math.ceil(this.cache.size * 0.25));
+      console.warn(
+        `[worker-cache] Memory pressure (${Math.round(heapUsedRatio * 100)}% of heap limit), ` +
+        `evicting ${evictCount} scripts`
+      );
+      this.evictOldest(evictCount);
+    }
+
+    // At 85% heap usage, evict 50% of cache
+    if (heapUsedRatio >= 0.85 && this.cache.size > 0) {
+      const evictCount = Math.max(1, Math.ceil(this.cache.size * 0.5));
+      console.warn(
+        `[worker-cache] HIGH memory pressure (${Math.round(heapUsedRatio * 100)}% of heap limit), ` +
+        `evicting ${evictCount} scripts`
+      );
+      this.evictOldest(evictCount);
+    }
+  }
+
+  evictOldest(count: number): void {
+    // Sort by timestamp (oldest first) and evict
+    const entries = [...this.cache.entries()].sort(
+      (a, b) => a[1].timestamp - b[1].timestamp
+    );
+
+    let evicted = 0;
+    for (const [key] of entries) {
+      if (evicted >= count) break;
+      this.cache.delete(key);
+      evicted++;
+    }
+    if (evicted > 0) {
+      console.log(`[worker-cache] Evicted ${evicted} oldest scripts`);
+    }
+  }
+
+  clear(): void {
+    // Emergency cleanup - drop all cached scripts
+    const size = this.cache.size;
+    this.cache.clear();
+    if (size > 0) {
+      console.log(`[worker-cache] Emergency eviction: cleared ${size} cached scripts`);
+    }
+  }
+
+  size(): number {
+    return this.cache.size;
+  }
+}
+
+/**
+ * Socket Pool - Reuses socket connections across tasks in the same worker.
+ * Creating a socket takes 0.1-1ms. Pooling reduces this overhead.
+ */
+class SocketPool {
+  private available: net.Socket[] = [];
+  private readonly maxSize = 5; // Max sockets to cache per worker
+
+  acquire(socketPath: string): net.Socket | null {
+    // Try to reuse an available socket
+    const socket = this.available.pop();
+    if (socket && socket.writable && !socket.destroyed) {
+      return socket;
+    }
+    // Socket not reusable, let caller create new one
+    return null;
+  }
+
+  release(socket: net.Socket): void {
+    // Only pool if socket is still healthy and not at capacity
+    if (socket.writable && !socket.destroyed && this.available.length < this.maxSize) {
+      this.available.push(socket);
+    } else {
+      socket.destroy();
+    }
+  }
+
+  clear(): void {
+    // Clean up all pooled sockets
+    for (const socket of this.available) {
+      socket.destroy();
+    }
+    this.available = [];
+  }
+}
+
+// Worker-level pools (thread-safe since Piscina workers are single-threaded)
+const contextPool = new ContextPool();
+const scriptCache = new ScriptCache();
+const socketPool = new SocketPool();
 
 /**
  * Task payload received from the worker pool
@@ -79,6 +278,7 @@ export interface LogEntry {
  * Sandboxed Plugin API that communicates with the relayer via Unix socket.
  * This is a minimal implementation for use within the vm context.
  * Connection is lazy - only established when first API call is made.
+ * Uses socket pooling to reduce connection overhead.
  */
 class SandboxPluginAPI implements PluginAPI {
   private socket: net.Socket | null = null;
@@ -87,6 +287,8 @@ class SandboxPluginAPI implements PluginAPI {
   private connected: boolean = false;
   private httpRequestId?: string;
   private socketPath: string;
+  private readonly maxPendingRequests = 100; // Prevent memory leak from unbounded pending
+  private fromPool: boolean = false; // Track if socket is from pool
 
   constructor(socketPath: string, httpRequestId?: string) {
     this.socketPath = socketPath;
@@ -98,47 +300,98 @@ class SandboxPluginAPI implements PluginAPI {
     if (this.connected) return;
 
     if (!this.connectionPromise) {
-      this.socket = net.createConnection(this.socketPath);
+      // Try to get socket from pool first
+      const pooledSocket = socketPool.acquire(this.socketPath);
+      
+      if (pooledSocket) {
+        this.socket = pooledSocket;
+        this.fromPool = true;
+        this.connected = true;
+        this.connectionPromise = Promise.resolve();
+        
+        // Set up error/close handlers for pooled socket to enable reconnection
+        this.setupSocketHandlers(this.socket);
+      } else {
+        // Create new socket if pool is empty
+        this.socket = net.createConnection(this.socketPath);
+        this.fromPool = false;
 
-      this.connectionPromise = new Promise((resolve, reject) => {
-        this.socket!.on('connect', () => {
-          this.connected = true;
-          resolve();
-        });
-
-        this.socket!.on('error', (error) => {
-          this.rejectAllPending(error);
-          reject(error);
-        });
-
-        this.socket!.on('close', () => {
-          this.connected = false;
-          this.rejectAllPending(new Error('Socket closed unexpectedly'));
-        });
-      });
-
-      this.socket.on('data', (data) => {
-        data
-          .toString()
-          .split('\n')
-          .filter(Boolean)
-          .forEach((msg: string) => {
-            try {
-              const parsed = JSON.parse(msg);
-              const { requestId, result, error } = parsed;
-              const resolver = this.pending.get(requestId);
-              if (resolver) {
-                error ? resolver.reject(error) : resolver.resolve(result);
-                this.pending.delete(requestId);
-              }
-            } catch {
-              // Ignore malformed messages
-            }
+        this.connectionPromise = new Promise((resolve, reject) => {
+          this.socket!.on('connect', () => {
+            this.connected = true;
+            resolve();
           });
-      });
+
+          this.socket!.on('error', (error) => {
+            this.handleSocketError(error);
+            reject(error);
+          });
+
+          this.socket!.on('close', () => {
+            this.handleSocketClose();
+          });
+        });
+
+        this.socket.on('data', (data) => this.handleSocketData(data));
+      }
     }
 
     await this.connectionPromise;
+  }
+
+  /**
+   * Set up error/close/data handlers for a socket (pooled or new).
+   * This ensures sockets can trigger reconnection on failure.
+   */
+  private setupSocketHandlers(socket: net.Socket): void {
+    socket.on('error', (error) => this.handleSocketError(error));
+    socket.on('close', () => this.handleSocketClose());
+    socket.on('data', (data) => this.handleSocketData(data));
+  }
+
+  /**
+   * Handle socket error - reject pending requests and reset connection state
+   */
+  private handleSocketError(error: Error): void {
+    this.rejectAllPending(error);
+    // Reset connection state to force reconnection on next call
+    this.connected = false;
+    this.connectionPromise = null;
+    this.socket = null;
+  }
+
+  /**
+   * Handle socket close - reset connection state to enable reconnection
+   */
+  private handleSocketClose(): void {
+    this.connected = false;
+    this.rejectAllPending(new Error('Socket closed unexpectedly'));
+    // Reset connection state to force reconnection on next call
+    this.connectionPromise = null;
+    this.socket = null;
+  }
+
+  /**
+   * Handle incoming data from socket
+   */
+  private handleSocketData(data: Buffer): void {
+    data
+      .toString()
+      .split('\n')
+      .filter(Boolean)
+      .forEach((msg: string) => {
+        try {
+          const parsed = JSON.parse(msg);
+          const { requestId, result, error } = parsed;
+          const resolver = this.pending.get(requestId);
+          if (resolver) {
+            error ? resolver.reject(error) : resolver.resolve(result);
+            this.pending.delete(requestId);
+          }
+        } catch {
+          // Ignore malformed messages
+        }
+      });
   }
 
   /**
@@ -223,6 +476,14 @@ class SandboxPluginAPI implements PluginAPI {
     }
     const message = JSON.stringify(msg) + '\n';
 
+    // Check pending request limit to prevent memory leaks
+    if (this.pending.size >= this.maxPendingRequests) {
+      throw new Error(
+        `Too many concurrent API requests (max ${this.maxPendingRequests}). ` +
+        `Await previous requests before making new ones.`
+      );
+    }
+
     // Ensure we're connected before sending
     await this.ensureConnected();
 
@@ -258,12 +519,12 @@ class SandboxPluginAPI implements PluginAPI {
   }
 
   close(): void {
-    // Only close if we actually connected
+    // Return socket to pool if healthy, otherwise destroy
     if (this.socket) {
-      // Use destroy() for immediate close instead of end() which is graceful
-      // This ensures the Rust socket reader sees EOF immediately
-      this.socket.destroy();
+      socketPool.release(this.socket);
+      this.socket = null;
     }
+    this.connected = false;
   }
 }
 
@@ -289,14 +550,37 @@ function safeStringify(value: unknown): string {
 }
 
 /**
- * Creates a console-like object that captures logs.
+ * Creates a console-like object that captures logs with lazy stringification.
+ * Stringification is deferred until logs are accessed to reduce overhead.
  */
 function createSandboxConsole(logs: LogEntry[]): Console {
   const log = (level: LogEntry['level']) => (...args: any[]) => {
-    const message = args.map(arg =>
-      typeof arg === 'object' ? safeStringify(arg) : String(arg)
-    ).join(' ');
-    logs.push({ level, message });
+    // Store raw args, stringify lazily when accessed
+    const entry: any = {
+      level,
+      _args: args, // Store raw args
+      _stringified: false,
+      _message: '',
+    };
+    
+    // Lazy getter for message
+    Object.defineProperty(entry, 'message', {
+      get() {
+        if (!this._stringified) {
+          this._message = this._args.map((arg: any) =>
+            typeof arg === 'object' ? safeStringify(arg) : String(arg)
+          ).join(' ');
+          this._stringified = true;
+          // Clear raw args to free memory
+          delete this._args;
+        }
+        return this._message;
+      },
+      enumerable: true,
+      configurable: true,
+    });
+    
+    logs.push(entry);
   };
 
   return {
@@ -330,11 +614,15 @@ function createSandboxConsole(logs: LogEntry[]): Console {
 /**
  * Executes a compiled plugin in an isolated vm context.
  * This is the Piscina worker function.
+ * Uses context pooling and script caching for performance.
  */
 export default async function executeInSandbox(task: SandboxTask): Promise<SandboxResult> {
   const logs: LogEntry[] = [];
   const api = new SandboxPluginAPI(task.socketPath, task.httpRequestId);
   const kv = new DefaultPluginKVStore(task.pluginId);
+  
+  // Acquire context from pool (much faster than creating new)
+  const context = contextPool.acquire();
 
   try {
     // Create isolated context with limited globals
@@ -342,9 +630,27 @@ export default async function executeInSandbox(task: SandboxTask): Promise<Sandb
 
     // Prepare the module wrapper
     const wrappedCode = wrapForVm(task.compiledCode);
+    
+    // Try to get cached script, otherwise compile and cache
+    let script = scriptCache.get(task.compiledCode);
+    if (!script) {
+      script = new vm.Script(wrappedCode, {
+        filename: `plugin-${task.pluginId}.js`,
+      });
+      scriptCache.set(task.compiledCode, script);
+    }
 
-    // Create a require function for the sandbox
-    // Block dangerous Node.js built-ins, allow npm packages
+    // Create module-like objects for CommonJS compatibility
+    const moduleExports: any = {};
+    const moduleObject = { exports: moduleExports };
+
+    // Minimal crypto exposure - only safe ID generation
+    const safeCrypto = {
+      randomUUID: () => require('crypto').randomUUID(),
+      getRandomValues: (arr: Uint8Array) => require('crypto').getRandomValues(arr),
+    };
+
+    // Create sandboxRequire function
     const BLOCKED_MODULES = new Set([
       // Filesystem access
       'fs', 'fs/promises', 'node:fs', 'node:fs/promises',
@@ -393,23 +699,13 @@ export default async function executeInSandbox(task: SandboxTask): Promise<Sandb
       }
     };
 
-    // Create module-like objects for CommonJS compatibility
-    const moduleExports: any = {};
-    const moduleObject = { exports: moduleExports };
-
-    // Minimal crypto exposure - only safe ID generation
-    const safeCrypto = {
-      randomUUID: () => require('crypto').randomUUID(),
-      getRandomValues: (arr: Uint8Array) => require('crypto').getRandomValues(arr),
-    };
-
-    // Create the sandbox context
+    // Populate context with globals (reused context from pool)
     // SECURITY: Only expose safe globals. Never expose:
     // - process (env vars, exit, argv)
     // - fs, child_process, net, http (I/O)
     // - eval, Function constructor (code execution)
     // - require for arbitrary modules
-    const context = vm.createContext({
+    Object.assign(context, {
       // === Console for logging ===
       console: sandboxConsole,
 
@@ -504,11 +800,7 @@ export default async function executeInSandbox(task: SandboxTask): Promise<Sandb
       Proxy,
     });
 
-    // Compile and run the wrapped code to get the factory function
-    const script = new vm.Script(wrappedCode, {
-      filename: `plugin-${task.pluginId}.js`,
-    });
-
+    // Run cached script in reused context
     const factory = script.runInContext(context, { timeout: task.timeout });
 
     // Execute the factory to populate module.exports
@@ -624,10 +916,21 @@ export default async function executeInSandbox(task: SandboxTask): Promise<Sandb
       logs,
     };
   } finally {
-    api.close();
-    // Disconnect Redis to prevent connection leak
-    await kv.disconnect().catch(() => {
+    // Return context to pool for reuse
+    contextPool.release(context);
+    
+    // Close API socket (non-blocking, don't throw)
+    try {
+      api.close();
+    } catch (err) {
+      // Log but don't fail - cleanup is best-effort
+    }
+    
+    // Disconnect KV (async, don't throw)
+    try {
+      await kv.disconnect();
+    } catch {
       // Ignore disconnect errors - connection may not have been established
-    });
+    }
   }
 }

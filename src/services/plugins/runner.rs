@@ -1,22 +1,22 @@
 //! This module is the orchestrator of the plugin execution.
 //!
-//! 1. Initiates a socket connection to the relayer server - socket.rs
+//! 1. Initiates connection to shared socket service - shared_socket.rs
 //! 2. Executes the plugin script - script_executor.rs OR pool_executor.rs
-//! 3. Sends the shutdown signal to the relayer server - socket.rs
-//! 4. Waits for the relayer server to finish the execution - socket.rs
-//! 5. Returns the output of the script - script_executor.rs
+//! 3. Collects traces via ExecutionGuard - shared_socket.rs
+//! 4. Returns the output of the script - script_executor.rs
 //!
 //! ## Execution Modes
 //!
 //! - **ts-node mode** (default): Spawns ts-node per request. Simple but slower.
+//!   Uses the shared socket for bidirectional communication.
 //! - **Pool mode** (`PLUGIN_USE_POOL=true`): Uses persistent Piscina worker pool.
 //!   Faster execution with precompilation and worker reuse.
 //!
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use crate::services::plugins::{
-    ensure_shared_socket_started, get_pool_manager, get_shared_socket_service, RelayerApi,
-    ScriptExecutor, ScriptResult, SocketService,
+    ensure_shared_socket_started, get_pool_manager, get_shared_socket_service, ScriptExecutor,
+    ScriptResult,
 };
 use crate::{
     jobs::JobProducerTrait,
@@ -32,7 +32,8 @@ use crate::{
 
 use super::{config::get_config, PluginError};
 use async_trait::async_trait;
-use tokio::{sync::oneshot, time::timeout};
+use tokio::time::timeout;
+use tracing::debug;
 use uuid::Uuid;
 
 #[cfg(test)]
@@ -148,12 +149,12 @@ impl PluginRunnerTrait for PluginRunner {
 }
 
 impl PluginRunner {
-    /// Execute plugin using ts-node (legacy mode)
+    /// Execute plugin using ts-node with shared socket
     #[allow(clippy::too_many_arguments)]
     async fn run_with_tsnode<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         &self,
         plugin_id: String,
-        socket_path: &str,
+        _socket_path: &str, // Unused - kept for signature compatibility
         script_path: String,
         timeout_duration: Duration,
         script_params: String,
@@ -177,24 +178,29 @@ impl PluginRunner {
         PR: PluginRepositoryTrait + Send + Sync + 'static,
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {
-        let socket_service = SocketService::new(socket_path)?;
-        let socket_path_clone = socket_service.socket_path().to_string();
+        // Ensure shared socket is started
+        ensure_shared_socket_started(Arc::clone(&state)).await?;
 
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        // Get the shared socket service
+        let shared_socket = get_shared_socket_service()?;
+        let shared_socket_path = shared_socket.socket_path().to_string();
 
-        let server_handle = tokio::spawn(async move {
-            let relayer_api = Arc::new(RelayerApi);
-            socket_service.listen(shutdown_rx, state, relayer_api).await
-        });
+        // Generate execution_id from http_request_id or plugin_id
+        let execution_id = http_request_id
+            .clone()
+            .unwrap_or_else(|| format!("{}-{}", plugin_id, uuid::Uuid::new_v4()));
+
+        // Register execution (RAII guard auto-unregisters on drop)
+        let guard = shared_socket.register_execution(execution_id.clone()).await;
 
         let exec_outcome = match timeout(
             timeout_duration,
             ScriptExecutor::execute_typescript(
                 plugin_id,
                 script_path,
-                socket_path_clone,
+                shared_socket_path, // Use shared socket path
                 script_params,
-                http_request_id,
+                Some(execution_id),
                 headers_json,
             ),
         )
@@ -202,21 +208,19 @@ impl PluginRunner {
         {
             Ok(result) => result,
             Err(_) => {
-                // ensures the socket gets closed.
-                let _ = shutdown_tx.send(());
                 return Err(PluginError::ScriptTimeout(timeout_duration.as_secs()));
             }
         };
 
-        let _ = shutdown_tx.send(());
-
-        let server_handle = server_handle
-            .await
-            .map_err(|e| PluginError::SocketError(e.to_string()))?;
-
-        let traces = match server_handle {
-            Ok(traces) => traces,
-            Err(e) => return Err(PluginError::SocketError(e.to_string())),
+        // Collect traces from the guard
+        let mut traces_rx = guard.into_receiver();
+        let traces = match tokio::time::timeout(Duration::from_secs(5), traces_rx.recv()).await {
+            Ok(Some(traces)) => traces,
+            Ok(None) => Vec::new(),
+            Err(_) => {
+                debug!("Timeout waiting for traces");
+                Vec::new()
+            }
         };
 
         match exec_outcome {

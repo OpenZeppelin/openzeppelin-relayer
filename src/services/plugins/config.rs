@@ -72,6 +72,8 @@ pub struct PluginConfig {
     pub nodejs_pool_concurrent_tasks: usize,
     /// Worker idle timeout in milliseconds
     pub nodejs_pool_idle_timeout_ms: u64,
+    /// Worker thread heap size in MB (each worker handles concurrent_tasks contexts)
+    pub nodejs_worker_heap_mb: usize,
 
     // === Socket Backlog (derived from max_concurrency) ===
     /// Socket connection backlog for pending connections
@@ -203,6 +205,20 @@ impl PluginConfig {
         let nodejs_pool_idle_timeout_ms =
             env_parse("PLUGIN_POOL_IDLE_TIMEOUT", DEFAULT_POOL_IDLE_TIMEOUT_MS);
 
+        // Worker heap size calculation
+        // Each vm.createContext() uses ~4-8MB, and we need headroom for GC
+        // Formula: base_heap + (concurrent_tasks * 8MB)
+        // This ensures workers can handle burst context creation without OOM
+        // Examples:
+        //   - 50 concurrent tasks: 512 + (50 * 8) = 912MB
+        //   - 200 concurrent tasks: 512 + (200 * 8) = 2112MB
+        //   - 300 concurrent tasks: 512 + (300 * 8) = 2912MB
+        let base_worker_heap = 512_usize;
+        let heap_per_task = 8_usize;
+        let derived_worker_heap_mb =
+            base_worker_heap + (nodejs_pool_concurrent_tasks * heap_per_task);
+        let nodejs_worker_heap_mb = env_parse("PLUGIN_WORKER_HEAP_MB", derived_worker_heap_mb);
+
         // Socket backlog calculation
         // Use max of concurrency or default backlog to handle connection bursts
         // The 1.5x socket_max_connections provides headroom for connection churn:
@@ -231,6 +247,7 @@ impl PluginConfig {
             nodejs_pool_max_threads,
             nodejs_pool_concurrent_tasks,
             nodejs_pool_idle_timeout_ms,
+            nodejs_worker_heap_mb,
             pool_socket_backlog,
             health_check_interval_secs,
             trace_timeout_ms,
@@ -302,6 +319,7 @@ impl PluginConfig {
             nodejs_min_threads = self.nodejs_pool_min_threads,
             nodejs_max_threads = self.nodejs_pool_max_threads,
             nodejs_concurrent_tasks = self.nodejs_pool_concurrent_tasks,
+            nodejs_worker_heap_mb = self.nodejs_worker_heap_mb,
             tasks_per_thread = tasks_per_thread,
             socket_multiplier = %format!("{:.2}x", socket_ratio),
             queue_multiplier = %format!("{:.2}x", queue_ratio),
@@ -343,6 +361,12 @@ impl Default for PluginConfig {
             .max(DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER)
             .min(300);
 
+        // Worker heap for Default impl
+        let base_worker_heap = 512_usize;
+        let heap_per_task = 8_usize;
+        let nodejs_worker_heap_mb =
+            base_worker_heap + (nodejs_pool_concurrent_tasks * heap_per_task);
+
         let default_backlog = DEFAULT_POOL_SOCKET_BACKLOG as usize;
         let pool_socket_backlog = max_concurrency.max(default_backlog);
 
@@ -361,6 +385,7 @@ impl Default for PluginConfig {
             nodejs_pool_max_threads,
             nodejs_pool_concurrent_tasks,
             nodejs_pool_idle_timeout_ms: DEFAULT_POOL_IDLE_TIMEOUT_MS,
+            nodejs_worker_heap_mb,
             pool_socket_backlog,
             health_check_interval_secs: DEFAULT_POOL_HEALTH_CHECK_INTERVAL_SECS,
             trace_timeout_ms: DEFAULT_TRACE_TIMEOUT_MS,

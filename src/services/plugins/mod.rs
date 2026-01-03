@@ -35,9 +35,6 @@ pub use script_executor::*;
 pub mod pool_executor;
 pub use pool_executor::*;
 
-pub mod socket;
-pub use socket::*;
-
 pub mod shared_socket;
 pub use shared_socket::*;
 

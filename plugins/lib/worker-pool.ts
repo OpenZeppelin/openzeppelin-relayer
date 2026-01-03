@@ -3,12 +3,30 @@
  *
  * Manages a Piscina worker pool for executing compiled plugins.
  * Provides a high-level interface for running plugins with proper lifecycle management.
+ *
+ * ## Performance Tuning
+ *
+ * ### Memory Configuration
+ * Each worker thread runs with an increased heap size (512MB via resourceLimits) to prevent
+ * OOM errors under high load. Node.js v8 defaults to ~96MB heap per worker, which is
+ * insufficient when handling many concurrent plugin contexts (e.g., 2500+ VUs).
+ *
+ * Symptoms of insufficient heap:
+ * - "FATAL ERROR: CALL_AND_RETRY_LAST Allocation failed - JavaScript heap out of memory"
+ * - Workers crash during v8::internal::ContextDeserializer::Deserialize
+ * - Queue builds up (>50% capacity warnings) then all requests fail
+ *
+ * ### Thread Scaling
+ * - Worker threads scale dynamically based on PLUGIN_MAX_CONCURRENCY
+ * - Formula: max(cpuCount * 2, concurrency / 50, 8) with 64 thread cap
+ * - Each worker handles multiple concurrent tasks via Node.js async I/O
  */
 
 import Piscina from 'piscina';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
+import * as v8 from 'node:v8';
 import { v4 as uuidv4 } from 'uuid';
 import { compilePlugin, compilePluginSource, type CompilationResult } from './compiler';
 import type { SandboxTask, SandboxResult, LogEntry } from './sandbox-executor';
@@ -105,26 +123,26 @@ interface PluginMetrics {
   totalExecutions: number;
   successfulExecutions: number;
   failedExecutions: number;
-  
+
   // Timing metrics (in ms)
   totalExecutionTime: number;
   minExecutionTime: number;
   maxExecutionTime: number;
-  
+
   // Cache metrics
   cacheHits: number;
   cacheMisses: number;
-  
+
   // Compilation metrics
   totalCompilations: number;
   totalCompilationTime: number;
-  
+
   // Per-plugin execution counts
   pluginExecutions: Map<string, number>;
-  
+
   // Error tracking
   errorsByType: Map<string, number>;
-  
+
   // Timestamps
   startTime: number;
   lastExecutionTime: number | null;
@@ -174,14 +192,141 @@ function incrementBoundedMap(
 
 /**
  * In-memory cache for compiled plugin code
+ * Includes memory pressure awareness for proactive eviction
  */
 class CompiledCodeCache {
-  private cache: Map<string, { code: string; timestamp: number }> = new Map();
+  private cache: Map<string, { code: string; timestamp: number; size: number }> = new Map();
   private maxAge: number;
+  private cleanupInterval!: NodeJS.Timeout;
+  private memoryCheckInterval!: NodeJS.Timeout;
+  private totalCacheSize: number = 0;
+  // Max cache size in bytes (100MB default - adjust under memory pressure)
+  private maxCacheSize: number = 100 * 1024 * 1024;
+  // Track last LRU access for smarter eviction
+  private accessOrder: string[] = [];
 
   constructor(maxAgeMs: number = 3600000) {
     // 1 hour default
     this.maxAge = maxAgeMs;
+    this.startCleanupTimer();
+    this.startMemoryPressureMonitor();
+  }
+
+  /**
+   * Start periodic cleanup timer to evict expired entries.
+   * Runs every 5 minutes to prevent memory leaks.
+   */
+  private startCleanupTimer(): void {
+    this.cleanupInterval = setInterval(() => {
+      this.evictExpired();
+    }, 300000); // 5 minutes
+    // unref() allows process to exit even if timer is active
+    this.cleanupInterval.unref();
+  }
+
+  /**
+   * Start memory pressure monitoring - proactively evict cache under pressure.
+   * This helps prevent GC issues under high load.
+   */
+  private startMemoryPressureMonitor(): void {
+    this.memoryCheckInterval = setInterval(() => {
+      this.checkMemoryPressure();
+    }, 10000); // Every 10 seconds
+    this.memoryCheckInterval.unref();
+  }
+
+  /**
+   * Check memory pressure and evict cache entries proactively.
+   */
+  private checkMemoryPressure(): void {
+    const usage = process.memoryUsage();
+    const heapStats = v8.getHeapStatistics();
+    // Use heap_size_limit (the actual max heap) instead of heapTotal (current allocated)
+    // heapTotal grows dynamically and can be much smaller than the configured max,
+    // causing false positive pressure detection (e.g., 28MB/30MB = 93% when max is 26GB)
+    const heapUsedRatio = usage.heapUsed / heapStats.heap_size_limit;
+
+    // At 70% heap usage, start evicting oldest entries
+    if (heapUsedRatio >= 0.70) {
+      const evictCount = Math.ceil(this.cache.size * 0.25); // Evict 25%
+      if (evictCount > 0) {
+        console.warn(
+          `[cache] Memory pressure detected (${Math.round(heapUsedRatio * 100)}% of heap limit), ` +
+          `evicting ${evictCount} oldest entries`
+        );
+        this.evictOldest(evictCount);
+        
+        // Force GC if available
+        if (global.gc) {
+          try {
+            global.gc();
+          } catch {
+            // Ignore
+          }
+        }
+      }
+    }
+
+    // At 85% heap usage, be more aggressive
+    if (heapUsedRatio >= 0.85) {
+      const evictCount = Math.ceil(this.cache.size * 0.5); // Evict 50%
+      if (evictCount > 0) {
+        console.error(
+          `[cache] HIGH memory pressure (${Math.round(heapUsedRatio * 100)}% of heap limit), ` +
+          `evicting ${evictCount} entries`
+        );
+        this.evictOldest(evictCount);
+        
+        // Force GC
+        if (global.gc) {
+          try {
+            global.gc();
+          } catch {
+            // Ignore
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Evict all expired entries from the cache.
+   */
+  private evictExpired(): void {
+    const now = Date.now();
+    let evictedCount = 0;
+    for (const [key, entry] of this.cache.entries()) {
+      if (now - entry.timestamp > this.maxAge) {
+        this.totalCacheSize -= entry.size;
+        this.cache.delete(key);
+        evictedCount++;
+      }
+    }
+    if (evictedCount > 0) {
+      console.log(`[cache] Evicted ${evictedCount} expired entries`);
+    }
+  }
+
+  /**
+   * Evict N oldest entries (LRU-style) - used under memory pressure.
+   */
+  private evictOldest(count: number): void {
+    // Sort by timestamp (oldest first)
+    const entries = [...this.cache.entries()].sort(
+      (a, b) => a[1].timestamp - b[1].timestamp
+    );
+
+    let evicted = 0;
+    for (const [key, entry] of entries) {
+      if (evicted >= count) break;
+      this.totalCacheSize -= entry.size;
+      this.cache.delete(key);
+      evicted++;
+    }
+
+    if (evicted > 0) {
+      console.log(`[cache] Evicted ${evicted} oldest entries under memory pressure`);
+    }
   }
 
   get(pluginPath: string): string | undefined {
@@ -190,27 +335,73 @@ class CompiledCodeCache {
 
     // Check if expired
     if (Date.now() - entry.timestamp > this.maxAge) {
+      this.totalCacheSize -= entry.size;
       this.cache.delete(pluginPath);
       return undefined;
     }
+
+    // Update timestamp for LRU tracking
+    entry.timestamp = Date.now();
 
     return entry.code;
   }
 
   set(pluginPath: string, code: string): void {
-    this.cache.set(pluginPath, { code, timestamp: Date.now() });
+    const size = Buffer.byteLength(code, 'utf8');
+    
+    // Evict if adding this would exceed max cache size
+    while (this.totalCacheSize + size > this.maxCacheSize && this.cache.size > 0) {
+      this.evictOldest(1);
+    }
+
+    const existing = this.cache.get(pluginPath);
+    if (existing) {
+      this.totalCacheSize -= existing.size;
+    }
+
+    this.cache.set(pluginPath, { code, timestamp: Date.now(), size });
+    this.totalCacheSize += size;
   }
 
   delete(pluginPath: string): boolean {
+    const entry = this.cache.get(pluginPath);
+    if (entry) {
+      this.totalCacheSize -= entry.size;
+    }
     return this.cache.delete(pluginPath);
   }
 
   clear(): void {
     this.cache.clear();
+    this.totalCacheSize = 0;
   }
 
   has(pluginPath: string): boolean {
     return this.get(pluginPath) !== undefined;
+  }
+
+  /**
+   * Get current cache stats.
+   */
+  stats(): { entries: number; totalSizeBytes: number; maxSizeBytes: number } {
+    return {
+      entries: this.cache.size,
+      totalSizeBytes: this.totalCacheSize,
+      maxSizeBytes: this.maxCacheSize,
+    };
+  }
+
+  /**
+   * Destroy the cache and stop cleanup timer.
+   */
+  destroy(): void {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+    }
+    if (this.memoryCheckInterval) {
+      clearInterval(this.memoryCheckInterval);
+    }
+    this.clear();
   }
 }
 
@@ -312,12 +503,77 @@ export class WorkerPoolManager {
       this.isTemporaryWorkerFile = true;
     }
 
+    // Worker heap size from Rust config (based on concurrent tasks per worker)
+    // Formula: 512 + (concurrent_tasks * 8) MB - ensures enough heap for burst context creation
+    // Default to 2048MB if not passed (conservative for high load)
+    const workerHeapMb = parseInt(process.env.PLUGIN_WORKER_HEAP_MB || '2048', 10);
+    
+    console.error(`[worker-pool] Worker heap size: ${workerHeapMb}MB (per worker thread)`);
+
     this.pool = new Piscina({
       filename: this.compiledWorkerPath,
       minThreads: this.options.minThreads,
       maxThreads: this.options.maxThreads,
       concurrentTasksPerWorker: this.options.concurrentTasksPerWorker,
       idleTimeout: this.options.idleTimeout,
+      recordTiming: true,  // Unless you need waitTime/runTime metrics
+      // Worker heap size scaled by concurrent tasks per worker
+      // Each vm.createContext() uses ~4-8MB, plus GC headroom
+      // Set by Rust via PLUGIN_WORKER_HEAP_MB env var
+      resourceLimits: {
+        maxOldGenerationSizeMb: workerHeapMb,
+      },
+    });
+
+    // Track worker crashes for self-healing monitoring
+    let workerCrashCount = 0;
+    let lastCrashReset = Date.now();
+    const CRASH_WINDOW_MS = 60000; // 1 minute window for crash rate monitoring
+
+    // Listen to worker events for monitoring
+    this.pool.on('error', (err) => {
+      console.error('[worker-pool] Worker error (will be replaced):', err.message);
+      // Track errors that indicate memory issues
+      const errMsg = err.message.toLowerCase();
+      if (errMsg.includes('heap') || errMsg.includes('memory') || errMsg.includes('allocation')) {
+        console.error('[worker-pool] Memory-related worker error detected - consider increasing worker heap size');
+      }
+      // Don't throw - Piscina handles recovery
+    });
+
+    this.pool.on('workerExit', (workerId: number, exitCode: number) => {
+      // Reset crash counter periodically
+      const now = Date.now();
+      if (now - lastCrashReset > CRASH_WINDOW_MS) {
+        workerCrashCount = 0;
+        lastCrashReset = now;
+      }
+
+      if (exitCode !== 0) {
+        workerCrashCount++;
+        console.error(
+          `[worker-pool] Worker ${workerId} exited with code ${exitCode} ` +
+          `(replaced automatically, crashes in window: ${workerCrashCount})`
+        );
+
+        // Detect crash storms (many workers dying = likely OOM or GC issue)
+        if (workerCrashCount >= 3) {
+          console.error(
+            `[worker-pool] WARNING: ${workerCrashCount} worker crashes in ${CRASH_WINDOW_MS}ms - ` +
+            `possible memory pressure. Consider reducing PLUGIN_MAX_CONCURRENCY or increasing heap.`
+          );
+        }
+
+        // Exit codes that indicate memory issues
+        if (exitCode === 134 || exitCode === 137 || exitCode === 9) {
+          console.error(
+            `[worker-pool] Worker ${workerId} killed with signal (code ${exitCode}) - ` +
+            `likely OOM. Clearing script cache as mitigation.`
+          );
+          // Clear cache as mitigation
+          this.compiledCache.clear();
+        }
+      }
     });
 
     this.initialized = true;
@@ -329,7 +585,7 @@ export class WorkerPoolManager {
    */
   private async compileExecutorOnTheFly(): Promise<string> {
     const sandboxExecutorPath = path.resolve(__dirname, 'sandbox-executor.ts');
-    
+
     const esbuild = await import('esbuild');
     const result = await esbuild.build({
       entryPoints: [sandboxExecutorPath],
@@ -353,23 +609,20 @@ export class WorkerPoolManager {
    * Pre-compile a plugin and cache the result.
    *
    * @param pluginPath - Path to the plugin source file
+   * @param pluginId - Optional plugin identifier for caching
    * @returns Compilation result
    */
   async precompilePlugin(pluginPath: string, pluginId?: string): Promise<CompilationResult> {
     const startTime = Date.now();
     const result = await compilePlugin(pluginPath);
     const compilationTime = Date.now() - startTime;
-    
+
     this.metrics.totalCompilations++;
     this.metrics.totalCompilationTime += compilationTime;
-    
-    // Cache by pluginId if provided, otherwise by path
-    // Always cache by both to support lookups by either key
+
+    // Cache by pluginId if provided, otherwise by path (single key to avoid duplication)
     const cacheKey = pluginId || pluginPath;
     this.compiledCache.set(cacheKey, result.code);
-    if (pluginId && pluginId !== pluginPath) {
-      this.compiledCache.set(pluginPath, result.code);
-    }
     return result;
   }
 
@@ -387,10 +640,10 @@ export class WorkerPoolManager {
     const startTime = Date.now();
     const result = await compilePluginSource(sourceCode, `${pluginId}.ts`);
     const compilationTime = Date.now() - startTime;
-    
+
     this.metrics.totalCompilations++;
     this.metrics.totalCompilationTime += compilationTime;
-    
+
     this.compiledCache.set(pluginId, result.code);
     return result;
   }
@@ -501,15 +754,15 @@ export class WorkerPoolManager {
 
     try {
       const runPromise = this.pool!.run(task);
-      
+
       const timeoutPromise = new Promise<never>((_, reject) => {
         timeoutId = setTimeout(() => {
           reject(new Error(`Task timed out after ${taskTimeout}ms (worker may be stuck)`));
         }, taskTimeout);
       });
-      
+
       const result: SandboxResult = await Promise.race([runPromise, timeoutPromise]);
-      
+
       // Update execution metrics
       const executionTime = Date.now() - executionStartTime;
       this.metrics.totalExecutions++;
@@ -517,7 +770,7 @@ export class WorkerPoolManager {
       this.metrics.totalExecutionTime += executionTime;
       this.metrics.minExecutionTime = Math.min(this.metrics.minExecutionTime, executionTime);
       this.metrics.maxExecutionTime = Math.max(this.metrics.maxExecutionTime, executionTime);
-      
+
       if (result.success) {
         this.metrics.successfulExecutions++;
       } else {
@@ -526,7 +779,7 @@ export class WorkerPoolManager {
           incrementBoundedMap(this.metrics.errorsByType, result.error.code, MAX_METRICS_ENTRIES);
         }
       }
-      
+
       return {
         success: result.success,
         result: result.result,
@@ -535,7 +788,7 @@ export class WorkerPoolManager {
       };
     } catch (error) {
       const err = error as Error;
-      
+
       // Update execution metrics for error case
       const executionTime = Date.now() - executionStartTime;
       this.metrics.totalExecutions++;
@@ -545,7 +798,7 @@ export class WorkerPoolManager {
       this.metrics.minExecutionTime = Math.min(this.metrics.minExecutionTime, executionTime);
       this.metrics.maxExecutionTime = Math.max(this.metrics.maxExecutionTime, executionTime);
       incrementBoundedMap(this.metrics.errorsByType, 'WORKER_ERROR', MAX_METRICS_ENTRIES);
-      
+
       return {
         success: false,
         error: {
@@ -640,29 +893,29 @@ export class WorkerPoolManager {
         total: this.metrics.totalExecutions,
         successful: this.metrics.successfulExecutions,
         failed: this.metrics.failedExecutions,
-        successRate: this.metrics.totalExecutions > 0 
-          ? this.metrics.successfulExecutions / this.metrics.totalExecutions 
+        successRate: this.metrics.totalExecutions > 0
+          ? this.metrics.successfulExecutions / this.metrics.totalExecutions
           : 1,
-        avgExecutionTime: this.metrics.totalExecutions > 0 
-          ? this.metrics.totalExecutionTime / this.metrics.totalExecutions 
+        avgExecutionTime: this.metrics.totalExecutions > 0
+          ? this.metrics.totalExecutionTime / this.metrics.totalExecutions
           : 0,
-        minExecutionTime: this.metrics.minExecutionTime === Infinity 
-          ? 0 
+        minExecutionTime: this.metrics.minExecutionTime === Infinity
+          ? 0
           : this.metrics.minExecutionTime,
         maxExecutionTime: this.metrics.maxExecutionTime,
       },
       cache: {
         hits: this.metrics.cacheHits,
         misses: this.metrics.cacheMisses,
-        hitRate: totalCacheAccesses > 0 
-          ? this.metrics.cacheHits / totalCacheAccesses 
+        hitRate: totalCacheAccesses > 0
+          ? this.metrics.cacheHits / totalCacheAccesses
           : 0,
       },
       compilation: {
         total: this.metrics.totalCompilations,
         totalTime: this.metrics.totalCompilationTime,
-        avgTime: this.metrics.totalCompilations > 0 
-          ? this.metrics.totalCompilationTime / this.metrics.totalCompilations 
+        avgTime: this.metrics.totalCompilations > 0
+          ? this.metrics.totalCompilationTime / this.metrics.totalCompilations
           : 0,
       },
       plugins: Object.fromEntries(this.metrics.pluginExecutions),
@@ -689,7 +942,7 @@ export class WorkerPoolManager {
       this.pool = null;
       this.initialized = false;
     }
-    
+
     // Clean up temporary compiled worker file to prevent disk space leak
     if (this.isTemporaryWorkerFile && this.compiledWorkerPath) {
       try {
@@ -698,10 +951,11 @@ export class WorkerPoolManager {
         // Ignore errors - file may already be deleted or inaccessible
       }
     }
-    
+
     this.compiledWorkerPath = null;
     this.isTemporaryWorkerFile = false;
-    this.compiledCache.clear();
+    // Properly destroy cache (clears timer + entries)
+    this.compiledCache.destroy();
   }
 }
 

@@ -10,9 +10,9 @@ use crossbeam::queue::SegQueue;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::process::{Child, Command};
@@ -22,6 +22,247 @@ use uuid::Uuid;
 use super::{
     config::get_config, LogEntry, LogLevel, PluginError, PluginHandlerPayload, ScriptResult,
 };
+
+/// Lock-free ring buffer for tracking recent results (sliding window)
+struct ResultRingBuffer {
+    buffer: Vec<AtomicU8>, // 0 = empty, 1 = success, 2 = failure
+    index: AtomicUsize,
+    size: usize,
+}
+
+impl ResultRingBuffer {
+    fn new(size: usize) -> Self {
+        let mut buffer = Vec::with_capacity(size);
+        for _ in 0..size {
+            buffer.push(AtomicU8::new(0));
+        }
+        Self {
+            buffer,
+            index: AtomicUsize::new(0),
+            size,
+        }
+    }
+
+    fn record(&self, success: bool) {
+        let idx = self.index.fetch_add(1, Ordering::Relaxed) % self.size;
+        self.buffer[idx].store(if success { 1 } else { 2 }, Ordering::Relaxed);
+    }
+
+    fn failure_rate(&self) -> f32 {
+        let mut total = 0;
+        let mut failures = 0;
+
+        for slot in &self.buffer {
+            match slot.load(Ordering::Relaxed) {
+                0 => {}          // Empty slot
+                1 => total += 1, // Success
+                2 => {
+                    total += 1;
+                    failures += 1;
+                }
+                _ => {}
+            }
+        }
+
+        if total < 10 {
+            return 0.0; // Not enough data to make decision
+        }
+
+        (failures as f32) / (total as f32)
+    }
+}
+
+/// Circuit breaker state for automatic degradation under stress
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CircuitState {
+    /// Normal operation - all requests allowed
+    Closed,
+    /// Degraded - some requests rejected to reduce load
+    HalfOpen,
+    /// Fully open - most requests rejected, recovery in progress
+    Open,
+}
+
+/// Circuit breaker for managing pool health and automatic recovery
+/// Tracks failure rates and response times to detect GC pressure
+pub struct CircuitBreaker {
+    /// Current circuit state (encoded as u8 for atomic access)
+    /// 0 = Closed, 1 = HalfOpen, 2 = Open
+    state: AtomicU32,
+    /// Time when circuit opened (for recovery timing)
+    opened_at_ms: AtomicU64,
+    /// Consecutive successful requests in half-open state
+    recovery_successes: AtomicU32,
+    /// Average response time in ms (exponential moving average)
+    avg_response_time_ms: AtomicU32,
+    /// Number of restart attempts
+    restart_attempts: AtomicU32,
+    /// Sliding window of recent results (100 most recent)
+    recent_results: Arc<ResultRingBuffer>,
+}
+
+impl Default for CircuitBreaker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CircuitBreaker {
+    pub fn new() -> Self {
+        Self {
+            state: AtomicU32::new(0), // Closed
+            opened_at_ms: AtomicU64::new(0),
+            recovery_successes: AtomicU32::new(0),
+            avg_response_time_ms: AtomicU32::new(0),
+            restart_attempts: AtomicU32::new(0),
+            recent_results: Arc::new(ResultRingBuffer::new(100)),
+        }
+    }
+
+    fn state(&self) -> CircuitState {
+        match self.state.load(Ordering::Relaxed) {
+            0 => CircuitState::Closed,
+            1 => CircuitState::HalfOpen,
+            _ => CircuitState::Open,
+        }
+    }
+
+    fn set_state(&self, state: CircuitState) {
+        let val = match state {
+            CircuitState::Closed => 0,
+            CircuitState::HalfOpen => 1,
+            CircuitState::Open => 2,
+        };
+        self.state.store(val, Ordering::Relaxed);
+    }
+
+    /// Record a successful request with response time
+    pub fn record_success(&self, response_time_ms: u32) {
+        self.recent_results.record(true);
+
+        // Update exponential moving average (alpha = 0.1)
+        let current = self.avg_response_time_ms.load(Ordering::Relaxed);
+        let new_avg = if current == 0 {
+            response_time_ms
+        } else {
+            (current * 9 + response_time_ms) / 10
+        };
+        self.avg_response_time_ms.store(new_avg, Ordering::Relaxed);
+
+        // Handle state transitions on success
+        match self.state() {
+            CircuitState::HalfOpen => {
+                let successes = self.recovery_successes.fetch_add(1, Ordering::Relaxed) + 1;
+                // Require 10 consecutive successes to close circuit
+                if successes >= 10 {
+                    tracing::info!("Circuit breaker closing - recovery successful");
+                    self.set_state(CircuitState::Closed);
+                    self.recovery_successes.store(0, Ordering::Relaxed);
+                    self.restart_attempts.store(0, Ordering::Relaxed);
+                }
+            }
+            CircuitState::Open => {
+                // Check if enough time has passed to try half-open
+                self.maybe_transition_to_half_open();
+            }
+            CircuitState::Closed => {}
+        }
+    }
+
+    /// Record a failed request
+    pub fn record_failure(&self) {
+        self.recent_results.record(false);
+        self.recovery_successes.store(0, Ordering::Relaxed);
+
+        let failure_rate = self.recent_results.failure_rate();
+
+        match self.state() {
+            CircuitState::Closed => {
+                // Open circuit if failure rate > 50% (ring buffer requires at least 10 samples)
+                if failure_rate > 0.5 {
+                    tracing::warn!(
+                        failure_rate = %format!("{:.1}%", failure_rate * 100.0),
+                        "Circuit breaker opening - high failure rate"
+                    );
+                    self.open_circuit();
+                }
+            }
+            CircuitState::HalfOpen => {
+                // Any failure in half-open sends back to open
+                tracing::warn!("Circuit breaker reopening - failure during recovery");
+                self.open_circuit();
+            }
+            CircuitState::Open => {
+                // Already open, just check for transition
+                self.maybe_transition_to_half_open();
+            }
+        }
+    }
+
+    fn open_circuit(&self) {
+        self.set_state(CircuitState::Open);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        self.opened_at_ms.store(now, Ordering::Relaxed);
+        self.recovery_successes.store(0, Ordering::Relaxed);
+    }
+
+    fn maybe_transition_to_half_open(&self) {
+        let opened_at = self.opened_at_ms.load(Ordering::Relaxed);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        // Wait at least 5 seconds before trying recovery
+        // Exponential backoff: 5s, 10s, 20s, 40s, max 60s
+        let attempts = self.restart_attempts.load(Ordering::Relaxed);
+        let backoff_ms = (5000u64 * (1 << attempts.min(4))).min(60000);
+
+        if now - opened_at >= backoff_ms {
+            tracing::info!(
+                backoff_ms = backoff_ms,
+                "Circuit breaker transitioning to half-open"
+            );
+            self.set_state(CircuitState::HalfOpen);
+            self.restart_attempts.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Check if request should be allowed based on circuit state
+    /// If recovery_allowance is provided, use it in HalfOpen state instead of default 10%
+    pub fn should_allow_request(&self, recovery_allowance: Option<u32>) -> bool {
+        match self.state() {
+            CircuitState::Closed => true,
+            CircuitState::HalfOpen => {
+                // Use recovery allowance if provided, otherwise default to 10%
+                let allowance = recovery_allowance.unwrap_or(10);
+                (rand::random::<u32>() % 100) < allowance
+            }
+            CircuitState::Open => {
+                // Check if we should transition to half-open
+                self.maybe_transition_to_half_open();
+                // Recheck state after potential transition
+                matches!(self.state(), CircuitState::HalfOpen)
+            }
+        }
+    }
+
+    /// Get current response time average for monitoring
+    pub fn avg_response_time(&self) -> u32 {
+        self.avg_response_time_ms.load(Ordering::Relaxed)
+    }
+
+    /// Force circuit to closed state (for manual recovery)
+    pub fn force_close(&self) {
+        self.set_state(CircuitState::Closed);
+        self.recovery_successes.store(0, Ordering::Relaxed);
+        self.restart_attempts.store(0, Ordering::Relaxed);
+        // Note: Ring buffer will naturally overwrite old results, no need to clear
+    }
+}
 
 /// Health status information from the pool server
 #[derive(Debug, Clone)]
@@ -33,6 +274,14 @@ pub struct HealthStatus {
     pub pool_completed: Option<u64>,
     pub pool_queued: Option<u64>,
     pub success_rate: Option<f64>,
+    /// Circuit breaker state (Closed/HalfOpen/Open)
+    pub circuit_state: Option<String>,
+    /// Average response time in ms
+    pub avg_response_time_ms: Option<u32>,
+    /// Whether recovery mode is active
+    pub recovering: Option<bool>,
+    /// Current recovery allowance percentage
+    pub recovery_percent: Option<u32>,
 }
 
 /// Message types for pool communication
@@ -441,6 +690,14 @@ pub struct PoolManager {
     health_check_needed: Arc<AtomicBool>,
     /// Consecutive failure count for health checks
     consecutive_failures: Arc<AtomicU32>,
+    /// Circuit breaker for automatic degradation under GC pressure
+    circuit_breaker: Arc<CircuitBreaker>,
+    /// Last successful restart time (for backoff calculation)
+    last_restart_time_ms: Arc<AtomicU64>,
+    /// Is currently in recovery mode (gradual ramp-up)
+    recovery_mode: Arc<AtomicBool>,
+    /// Requests allowed during recovery (gradual increase)
+    recovery_allowance: Arc<AtomicU32>,
 }
 
 impl PoolManager {
@@ -472,12 +729,19 @@ impl PoolManager {
 
         let health_check_needed = Arc::new(AtomicBool::new(false));
         let consecutive_failures = Arc::new(AtomicU32::new(0));
+        let circuit_breaker = Arc::new(CircuitBreaker::new());
+        let last_restart_time_ms = Arc::new(AtomicU64::new(0));
+        let recovery_mode = Arc::new(AtomicBool::new(false));
+        let recovery_allowance = Arc::new(AtomicU32::new(0));
 
         // Spawn background health check task to avoid atomic ops on hot path
         Self::spawn_health_check_task(
             health_check_needed.clone(),
             config.health_check_interval_secs,
         );
+
+        // Spawn background recovery ramp-up task
+        Self::spawn_recovery_task(recovery_mode.clone(), recovery_allowance.clone());
 
         Self {
             connection_pool,
@@ -489,7 +753,41 @@ impl PoolManager {
             max_queue_size,
             health_check_needed,
             consecutive_failures,
+            circuit_breaker,
+            last_restart_time_ms,
+            recovery_mode,
+            recovery_allowance,
         }
+    }
+
+    /// Spawn background task to gradually increase recovery allowance
+    fn spawn_recovery_task(recovery_mode: Arc<AtomicBool>, recovery_allowance: Arc<AtomicU32>) {
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(500));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+            loop {
+                interval.tick().await;
+
+                if recovery_mode.load(Ordering::Relaxed) {
+                    let current = recovery_allowance.load(Ordering::Relaxed);
+                    // Gradually increase from 10% to 100% over ~15 seconds
+                    // 10 -> 20 -> 30 -> ... -> 100
+                    if current < 100 {
+                        let new_allowance = (current + 10).min(100);
+                        recovery_allowance.store(new_allowance, Ordering::Relaxed);
+                        tracing::debug!(
+                            allowance = new_allowance,
+                            "Recovery mode: increasing request allowance"
+                        );
+                    } else {
+                        // Recovery complete
+                        recovery_mode.store(false, Ordering::Relaxed);
+                        tracing::info!("Recovery mode complete - full capacity restored");
+                    }
+                }
+            }
+        });
     }
 
     /// Spawn background task to set health check flag periodically
@@ -731,12 +1029,39 @@ impl PoolManager {
             return Ok(());
         }
 
-        // Check if the process is still running (fast check)
+        // Check if the process is still running (and reap zombies)
         let process_running = {
-            let process_guard = self.process.lock().await;
-            if let Some(child) = process_guard.as_ref() {
-                // Check if process is still alive by checking its ID
-                child.id().is_some()
+            let mut process_guard = self.process.lock().await;
+            if let Some(child) = process_guard.as_mut() {
+                // Actually check if process is still alive using try_wait()
+                // This returns Ok(Some(exit_status)) if process has exited,
+                // Ok(None) if still running, or Err if check failed
+                match child.try_wait() {
+                    Ok(Some(exit_status)) => {
+                        // Process has exited - log, clean up, and mark as not running
+                        tracing::warn!(
+                            exit_status = ?exit_status,
+                            "Pool server process has exited"
+                        );
+                        // Drop the child handle to reap zombie process
+                        *process_guard = None;
+                        false
+                    }
+                    Ok(None) => {
+                        // Process is still running
+                        true
+                    }
+                    Err(e) => {
+                        // Failed to check status - assume dead to be safe
+                        tracing::warn!(
+                            error = %e,
+                            "Failed to check pool server process status, assuming dead"
+                        );
+                        // Clean up handle
+                        *process_guard = None;
+                        false
+                    }
+                }
             } else {
                 false
             }
@@ -827,16 +1152,46 @@ impl PoolManager {
         // Get config values to pass to Node.js pool server
         let config = get_config();
 
+        // Calculate heap size for pool server based on concurrency
+        // Pool server needs heap for: worker management, code cache, message buffering
+        // Formula: 512MB base + 32MB per 10 concurrent workers
+        let calculated_heap = 512 + ((config.max_concurrency / 10) * 32);
+
+        // Cap at 8GB to prevent unreasonable allocations
+        let pool_server_heap_mb = calculated_heap.min(8192);
+
+        if calculated_heap > 8192 {
+            tracing::warn!(
+                calculated_heap_mb = calculated_heap,
+                capped_heap_mb = pool_server_heap_mb,
+                max_concurrency = config.max_concurrency,
+                "Pool server heap calculation exceeded 8GB cap"
+            );
+        }
+
+        tracing::info!(
+            heap_mb = pool_server_heap_mb,
+            max_concurrency = config.max_concurrency,
+            "Configuring pool server heap size"
+        );
+
+        // Node.js options: heap size and expose GC for emergency recovery
+        let node_options = format!("--max-old-space-size={} --expose-gc", pool_server_heap_mb);
+
         let mut child = Command::new("ts-node")
             .arg("--transpile-only")
             .arg(&pool_server_path)
             .arg(&self.socket_path)
+            // Pass Node.js flags via NODE_OPTIONS (ts-node doesn't accept them directly)
+            .env("NODE_OPTIONS", node_options)
             // Pass derived config to Node.js (single source of truth from Rust)
             .env("PLUGIN_MAX_CONCURRENCY", config.max_concurrency.to_string())
             .env("PLUGIN_POOL_MIN_THREADS", config.nodejs_pool_min_threads.to_string())
             .env("PLUGIN_POOL_MAX_THREADS", config.nodejs_pool_max_threads.to_string())
             .env("PLUGIN_POOL_CONCURRENT_TASKS", config.nodejs_pool_concurrent_tasks.to_string())
             .env("PLUGIN_POOL_IDLE_TIMEOUT", config.nodejs_pool_idle_timeout_ms.to_string())
+            .env("PLUGIN_WORKER_HEAP_MB", config.nodejs_worker_heap_mb.to_string())
+            .env("PLUGIN_POOL_SOCKET_BACKLOG", config.pool_socket_backlog.to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -890,6 +1245,7 @@ impl PoolManager {
 
     /// Execute a plugin via the pool
     /// Uses semaphore-based concurrency limiting with queue fallback
+    /// Includes circuit breaker for automatic degradation under GC pressure
     pub async fn execute_plugin(
         &self,
         plugin_id: String,
@@ -901,16 +1257,44 @@ impl PoolManager {
         http_request_id: Option<String>,
         timeout_secs: Option<u64>,
     ) -> Result<ScriptResult, PluginError> {
+        // Get recovery allowance if in recovery mode
+        let recovery_allowance = if self.recovery_mode.load(Ordering::Relaxed) {
+            Some(self.recovery_allowance.load(Ordering::Relaxed))
+        } else {
+            None
+        };
+
+        // Single unified check - circuit breaker handles recovery mode
+        if !self
+            .circuit_breaker
+            .should_allow_request(recovery_allowance)
+        {
+            let state = self.circuit_breaker.state();
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                circuit_state = ?state,
+                recovery_allowance = ?recovery_allowance,
+                "Request rejected by circuit breaker"
+            );
+            return Err(PluginError::PluginExecutionError(
+                "Plugin system temporarily unavailable due to high load. Please retry shortly."
+                    .to_string(),
+            ));
+        }
+
+        let start_time = Instant::now();
+
         // Ensure pool is started and healthy
         self.ensure_started_and_healthy().await?;
 
         // Try direct execution first (fast path with pre-acquired permit)
         // If semaphore can't be acquired immediately, queue the request (slow path)
+        let circuit_breaker = self.circuit_breaker.clone();
         match self.connection_pool.semaphore.clone().try_acquire_owned() {
             Ok(permit) => {
                 // Fast path: execute directly with pre-acquired permit
                 // This avoids queueing overhead for normal load
-                Self::execute_with_permit(
+                let result = Self::execute_with_permit(
                     &self.connection_pool,
                     Some(permit),
                     plugin_id,
@@ -922,7 +1306,33 @@ impl PoolManager {
                     http_request_id,
                     timeout_secs,
                 )
-                .await
+                .await;
+
+                // Record result with circuit breaker
+                let elapsed_ms = start_time.elapsed().as_millis() as u32;
+                match &result {
+                    Ok(_) => circuit_breaker.record_success(elapsed_ms),
+                    Err(e) => {
+                        circuit_breaker.record_failure();
+                        // Check if this error indicates the pool server is dead
+                        // (EOF while parsing, broken pipe, connection refused, etc.)
+                        if Self::is_dead_server_error(e) {
+                            tracing::warn!(
+                                error = %e,
+                                "Detected dead pool server error, triggering health check for restart"
+                            );
+                            // Set health check flag so next request triggers restart
+                            self.health_check_needed.store(true, Ordering::Relaxed);
+                            // Also clear the connection pool since connections are dead
+                            let pool = self.connection_pool.clone();
+                            tokio::spawn(async move {
+                                pool.clear().await;
+                            });
+                        }
+                    }
+                }
+
+                result
             }
             Err(_) => {
                 // Semaphore full - queue the request for backpressure
@@ -942,7 +1352,7 @@ impl PoolManager {
                 };
 
                 // Try non-blocking send first (fast path)
-                match self.request_tx.try_send(queued_request) {
+                let result = match self.request_tx.try_send(queued_request) {
                     Ok(()) => {
                         let queue_len = self.request_tx.len();
                         if queue_len > self.max_queue_size / 2 {
@@ -1005,9 +1415,65 @@ impl PoolManager {
                             "Plugin execution queue is closed".to_string(),
                         ))
                     }
+                };
+
+                // Record result with circuit breaker (for queued path)
+                let elapsed_ms = start_time.elapsed().as_millis() as u32;
+                match &result {
+                    Ok(_) => circuit_breaker.record_success(elapsed_ms),
+                    Err(e) => {
+                        circuit_breaker.record_failure();
+                        // Check if this error indicates the pool server is dead
+                        if Self::is_dead_server_error(e) {
+                            tracing::warn!(
+                                error = %e,
+                                "Detected dead pool server error (queued path), triggering health check for restart"
+                            );
+                            // Set health check flag so next request triggers restart
+                            self.health_check_needed.store(true, Ordering::Relaxed);
+                            // Also clear the connection pool since connections are dead
+                            let pool = self.connection_pool.clone();
+                            tokio::spawn(async move {
+                                pool.clear().await;
+                            });
+                        }
+                    }
                 }
+
+                result
             }
         }
+    }
+
+    /// Check if an error indicates the pool server is dead and needs restart
+    /// Excludes plugin execution timeouts which are user errors, not server failures
+    fn is_dead_server_error(err: &PluginError) -> bool {
+        let error_str = err.to_string().to_lowercase();
+
+        // Exclude plugin execution timeouts (not a server issue)
+        if error_str.contains("handler timed out")
+            || (error_str.contains("plugin") && error_str.contains("timed out"))
+        {
+            return false;
+        }
+
+        // Patterns that indicate the server process is dead or unreachable
+        let dead_server_patterns = [
+            "eof while parsing",    // JSON parse error - connection closed mid-message
+            "broken pipe",          // Write to closed socket
+            "connection refused",   // Server not listening
+            "connection reset",     // Server forcefully closed
+            "not connected",        // Socket not connected
+            "failed to connect",    // Connection establishment failed
+            "socket file missing",  // Unix socket file deleted
+            "no such file",         // Socket file doesn't exist
+            "connection timed out", // Connection timeout (not execution timeout)
+            "connect timed out",    // Connect operation timeout
+        ];
+
+        dead_server_patterns
+            .iter()
+            .any(|pattern| error_str.contains(pattern))
     }
 
     /// Precompile a plugin
@@ -1111,7 +1577,23 @@ impl PoolManager {
     /// which is NOT the same as the server being down. Use ensure_started_and_healthy() for
     /// automatic recovery which distinguishes between these cases.
     pub async fn health_check(&self) -> Result<HealthStatus, PluginError> {
+        // Helper to get circuit breaker info for all responses
+        let circuit_info = || {
+            let state = match self.circuit_breaker.state() {
+                CircuitState::Closed => "closed",
+                CircuitState::HalfOpen => "half_open",
+                CircuitState::Open => "open",
+            };
+            (
+                Some(state.to_string()),
+                Some(self.circuit_breaker.avg_response_time()),
+                Some(self.recovery_mode.load(Ordering::Relaxed)),
+                Some(self.recovery_allowance.load(Ordering::Relaxed)),
+            )
+        };
+
         if !*self.initialized.read().await {
+            let (circuit_state, avg_rt, recovering, recovery_pct) = circuit_info();
             return Ok(HealthStatus {
                 healthy: false,
                 status: "not_initialized".to_string(),
@@ -1120,11 +1602,16 @@ impl PoolManager {
                 pool_completed: None,
                 pool_queued: None,
                 success_rate: None,
+                circuit_state,
+                avg_response_time_ms: avg_rt,
+                recovering,
+                recovery_percent: recovery_pct,
             });
         }
 
         // First, do a fast check - is the socket file present?
         if !std::path::Path::new(&self.socket_path).exists() {
+            let (circuit_state, avg_rt, recovering, recovery_pct) = circuit_info();
             return Ok(HealthStatus {
                 healthy: false,
                 status: "socket_missing".to_string(),
@@ -1133,6 +1620,10 @@ impl PoolManager {
                 pool_completed: None,
                 pool_queued: None,
                 success_rate: None,
+                circuit_state,
+                avg_response_time_ms: avg_rt,
+                recovering,
+                recovery_percent: recovery_pct,
             });
         }
 
@@ -1149,6 +1640,7 @@ impl PoolManager {
                     let is_pool_exhausted =
                         err_str.contains("semaphore") || err_str.contains("Connection refused");
 
+                    let (circuit_state, avg_rt, recovering, recovery_pct) = circuit_info();
                     return Ok(HealthStatus {
                         // Mark as "healthy" if just pool exhaustion - server is running, just busy
                         healthy: is_pool_exhausted,
@@ -1162,10 +1654,15 @@ impl PoolManager {
                         pool_completed: None,
                         pool_queued: None,
                         success_rate: None,
+                        circuit_state,
+                        avg_response_time_ms: avg_rt,
+                        recovering,
+                        recovery_percent: recovery_pct,
                     });
                 }
                 Err(_) => {
                     // Timeout acquiring connection - pool is busy, server is likely healthy
+                    let (circuit_state, avg_rt, recovering, recovery_pct) = circuit_info();
                     return Ok(HealthStatus {
                         healthy: true, // Server running, just busy
                         status: "pool_busy".to_string(),
@@ -1174,6 +1671,10 @@ impl PoolManager {
                         pool_completed: None,
                         pool_queued: None,
                         success_rate: None,
+                        circuit_state,
+                        avg_response_time_ms: avg_rt,
+                        recovering,
+                        recovery_percent: recovery_pct,
                     });
                 }
             };
@@ -1181,6 +1682,8 @@ impl PoolManager {
         let request = PoolRequest::Health {
             task_id: Uuid::new_v4().to_string(),
         };
+
+        let (circuit_state, avg_rt, recovering, recovery_pct) = circuit_info();
 
         match conn.send_request_with_timeout(&request, 5).await {
             Ok(response) => {
@@ -1210,6 +1713,10 @@ impl PoolManager {
                             .get("execution")
                             .and_then(|v| v.get("successRate"))
                             .and_then(|v| v.as_f64()),
+                        circuit_state,
+                        avg_response_time_ms: avg_rt,
+                        recovering,
+                        recovery_percent: recovery_pct,
                     })
                 } else {
                     Ok(HealthStatus {
@@ -1223,6 +1730,10 @@ impl PoolManager {
                         pool_completed: None,
                         pool_queued: None,
                         success_rate: None,
+                        circuit_state,
+                        avg_response_time_ms: avg_rt,
+                        recovering,
+                        recovery_percent: recovery_pct,
                     })
                 }
             }
@@ -1236,6 +1747,10 @@ impl PoolManager {
                     pool_completed: None,
                     pool_queued: None,
                     success_rate: None,
+                    circuit_state,
+                    avg_response_time_ms: avg_rt,
+                    recovering,
+                    recovery_percent: recovery_pct,
                 })
             }
         }
@@ -1346,16 +1861,44 @@ impl PoolManager {
         // Get config values to pass to Node.js pool server
         let config = get_config();
 
+        // Calculate heap size for pool server based on concurrency
+        let calculated_heap = 512 + ((config.max_concurrency / 10) * 32);
+
+        // Cap at 8GB to prevent unreasonable allocations
+        let pool_server_heap_mb = calculated_heap.min(8192);
+
+        if calculated_heap > 8192 {
+            tracing::warn!(
+                calculated_heap_mb = calculated_heap,
+                capped_heap_mb = pool_server_heap_mb,
+                max_concurrency = config.max_concurrency,
+                "Pool server heap calculation exceeded 8GB cap during restart"
+            );
+        }
+
+        tracing::info!(
+            heap_mb = pool_server_heap_mb,
+            max_concurrency = config.max_concurrency,
+            "Configuring pool server heap size for restart"
+        );
+
+        // Node.js options: heap size and expose GC for emergency recovery
+        let node_options = format!("--max-old-space-size={} --expose-gc", pool_server_heap_mb);
+
         let mut child = Command::new("ts-node")
             .arg("--transpile-only")
             .arg(&pool_server_path)
             .arg(&self.socket_path)
+            // Pass Node.js flags via NODE_OPTIONS
+            .env("NODE_OPTIONS", node_options)
             // Pass derived config to Node.js (single source of truth from Rust)
             .env("PLUGIN_MAX_CONCURRENCY", config.max_concurrency.to_string())
             .env("PLUGIN_POOL_MIN_THREADS", config.nodejs_pool_min_threads.to_string())
             .env("PLUGIN_POOL_MAX_THREADS", config.nodejs_pool_max_threads.to_string())
             .env("PLUGIN_POOL_CONCURRENT_TASKS", config.nodejs_pool_concurrent_tasks.to_string())
             .env("PLUGIN_POOL_IDLE_TIMEOUT", config.nodejs_pool_idle_timeout_ms.to_string())
+            .env("PLUGIN_WORKER_HEAP_MB", config.nodejs_worker_heap_mb.to_string())
+            .env("PLUGIN_POOL_SOCKET_BACKLOG", config.pool_socket_backlog.to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -1410,7 +1953,43 @@ impl PoolManager {
             *initialized = true;
         }
 
+        // Enable recovery mode - gradually ramp up request allowance
+        self.recovery_allowance.store(10, Ordering::Relaxed); // Start at 10%
+        self.recovery_mode.store(true, Ordering::Relaxed);
+
+        // Close the circuit breaker after successful restart
+        self.circuit_breaker.force_close();
+
+        // Record restart time for backoff calculation
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        self.last_restart_time_ms.store(now, Ordering::Relaxed);
+
+        tracing::info!("Recovery mode enabled - requests will gradually increase from 10%");
+
         Ok(())
+    }
+
+    /// Get current circuit breaker state for monitoring
+    pub fn circuit_state(&self) -> CircuitState {
+        self.circuit_breaker.state()
+    }
+
+    /// Get average response time in ms (for monitoring)
+    pub fn avg_response_time_ms(&self) -> u32 {
+        self.circuit_breaker.avg_response_time()
+    }
+
+    /// Check if currently in recovery mode
+    pub fn is_recovering(&self) -> bool {
+        self.recovery_mode.load(Ordering::Relaxed)
+    }
+
+    /// Get current recovery allowance percentage (0-100)
+    pub fn recovery_allowance_percent(&self) -> u32 {
+        self.recovery_allowance.load(Ordering::Relaxed)
     }
 
     /// Shutdown the pool server

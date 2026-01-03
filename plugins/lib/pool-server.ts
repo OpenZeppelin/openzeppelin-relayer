@@ -32,6 +32,7 @@
 
 import * as net from 'node:net';
 import * as fs from 'node:fs';
+import * as v8 from 'node:v8';
 import { WorkerPoolManager, type PluginExecutionRequest } from './worker-pool';
 import {
   DEFAULT_POOL_MIN_THREADS,
@@ -46,6 +47,180 @@ const DEBUG = process.env.PLUGIN_POOL_DEBUG === 'true';
 function debug(...args: any[]): void {
   if (DEBUG) {
     console.error('[pool-server]', ...args);
+  }
+}
+
+/**
+ * Memory Pressure Monitor - Pool Server Edition
+ * Monitors main process heap and logs warnings when approaching limits.
+ * Pool server manages workers, code cache, and socket communication.
+ * 
+ * SELF-HEALING FEATURES:
+ * - Proactive GC triggering at 80% heap usage
+ * - Cache eviction at 85% heap usage
+ * - Emergency restart signal at 95% (tells Rust to restart)
+ */
+class PoolServerMemoryMonitor {
+  private checkInterval: NodeJS.Timeout | null = null;
+  private readonly warningThreshold = 0.75; // 75% of heap - start monitoring
+  private readonly gcThreshold = 0.80; // 80% of heap - force GC
+  private readonly criticalThreshold = 0.85; // 85% of heap - evict caches
+  private readonly emergencyThreshold = 0.92; // 92% of heap - signal restart
+  private lastWarningTime = 0;
+  private readonly warningCooldown = 10000; // 10 seconds between warnings (more frequent)
+  private consecutiveHighPressure = 0;
+  private onCacheEvictionRequest: (() => void) | null = null;
+  private onEmergencyRestart: (() => void) | null = null;
+
+  start(): void {
+    if (this.checkInterval) return;
+    
+    // Check memory pressure every 5 seconds (more frequent for faster response)
+    this.checkInterval = setInterval(() => {
+      this.checkMemoryPressure();
+    }, 5000);
+    
+    // Don't prevent process exit
+    this.checkInterval.unref();
+    
+    console.error('[pool-server] Memory monitoring started (thresholds: 75%/80%/85%/92%)');
+  }
+
+  stop(): void {
+    if (this.checkInterval) {
+      clearInterval(this.checkInterval);
+      this.checkInterval = null;
+    }
+  }
+
+  /**
+   * Register callback for cache eviction requests.
+   */
+  onCacheEviction(callback: () => void): void {
+    this.onCacheEvictionRequest = callback;
+  }
+
+  /**
+   * Register callback for emergency restart signal.
+   */
+  onEmergency(callback: () => void): void {
+    this.onEmergencyRestart = callback;
+  }
+
+  private checkMemoryPressure(): void {
+    const usage = process.memoryUsage();
+    const heapStats = v8.getHeapStatistics();
+    const heapUsed = usage.heapUsed;
+    // Use heap_size_limit (the actual max heap) instead of heapTotal (current allocated)
+    // heapTotal grows dynamically and can be much smaller than the configured max,
+    // causing false positive pressure detection (e.g., 28MB/30MB = 93% when max is 26GB)
+    const heapLimit = heapStats.heap_size_limit;
+    const heapUsedRatio = heapUsed / heapLimit;
+
+    // Track consecutive high pressure for emergency detection
+    if (heapUsedRatio >= this.criticalThreshold) {
+      this.consecutiveHighPressure++;
+    } else if (heapUsedRatio < this.warningThreshold) {
+      this.consecutiveHighPressure = 0;
+    }
+
+    // Emergency: persistent critical pressure = GC can't keep up
+    if (heapUsedRatio >= this.emergencyThreshold || this.consecutiveHighPressure >= 6) {
+      this.handleEmergency(heapUsed, heapLimit, usage.external, usage.rss);
+    } else if (heapUsedRatio >= this.criticalThreshold) {
+      this.handleCriticalPressure(heapUsed, heapLimit, usage.external, usage.rss);
+    } else if (heapUsedRatio >= this.gcThreshold) {
+      this.handleGCPressure(heapUsed, heapLimit);
+    } else if (heapUsedRatio >= this.warningThreshold) {
+      this.handleWarningPressure(heapUsed, heapLimit, usage.external, usage.rss);
+    }
+  }
+
+  private handleEmergency(heapUsed: number, heapLimit: number, external: number, rss: number): void {
+    const heapUsedMB = Math.round(heapUsed / 1024 / 1024);
+    const heapLimitMB = Math.round(heapLimit / 1024 / 1024);
+    const percent = Math.round((heapUsed / heapLimit) * 100);
+
+    console.error(
+      `[pool-server] EMERGENCY: Heap at ${heapUsedMB}MB / ${heapLimitMB}MB limit (${percent}%). ` +
+      `Consecutive high pressure: ${this.consecutiveHighPressure}. ` +
+      `GC cannot keep up - signaling Rust for graceful restart.`
+    );
+
+    // Try last-ditch GC
+    if (global.gc) {
+      try {
+        global.gc();
+      } catch {
+        // Ignore
+      }
+    }
+
+    // Signal emergency to any registered handlers
+    if (this.onEmergencyRestart) {
+      this.onEmergencyRestart();
+    }
+
+    // Reset counter after emergency signal
+    this.consecutiveHighPressure = 0;
+  }
+
+  private handleCriticalPressure(heapUsed: number, heapLimit: number, external: number, rss: number): void {
+    const now = Date.now();
+    if (now - this.lastWarningTime < this.warningCooldown) return;
+    this.lastWarningTime = now;
+
+    const heapUsedMB = Math.round(heapUsed / 1024 / 1024);
+    const heapLimitMB = Math.round(heapLimit / 1024 / 1024);
+    const externalMB = Math.round(external / 1024 / 1024);
+    const rssMB = Math.round(rss / 1024 / 1024);
+    const percent = Math.round((heapUsed / heapLimit) * 100);
+    
+    console.error(
+      `[pool-server] CRITICAL: Heap at ${heapUsedMB}MB / ${heapLimitMB}MB limit (${percent}%). ` +
+      `External: ${externalMB}MB, RSS: ${rssMB}MB. ` +
+      `Requesting cache eviction and forcing GC.`
+    );
+
+    // Request cache eviction
+    if (this.onCacheEvictionRequest) {
+      this.onCacheEvictionRequest();
+    }
+
+    // Force GC
+    if (global.gc) {
+      try {
+        global.gc();
+        console.error(`[pool-server] Forced GC triggered`);
+      } catch (err) {
+        console.error(`[pool-server] Failed to trigger GC:`, err);
+      }
+    }
+  }
+
+  private handleGCPressure(heapUsed: number, heapLimit: number): void {
+    // Silently trigger GC at 80% threshold
+    if (global.gc) {
+      try {
+        global.gc();
+      } catch {
+        // Ignore
+      }
+    }
+  }
+
+  private handleWarningPressure(heapUsed: number, heapLimit: number, external: number, rss: number): void {
+    const now = Date.now();
+    if (now - this.lastWarningTime < this.warningCooldown * 3) return; // Less frequent warnings
+    this.lastWarningTime = now;
+
+    const heapUsedMB = Math.round(heapUsed / 1024 / 1024);
+    const heapLimitMB = Math.round(heapLimit / 1024 / 1024);
+    const percent = Math.round((heapUsed / heapLimit) * 100);
+    
+    console.error(
+      `[pool-server] WARNING: Heap at ${heapUsedMB}MB / ${heapLimitMB}MB limit (${percent}%).`
+    );
   }
 }
 
@@ -162,6 +337,8 @@ class PoolServer {
     // Log effective configuration (received from Rust)
     console.error(`[pool-server] Configuration (from Rust): maxConcurrency=${maxConcurrency}, minThreads=${minThreads}, maxThreads=${maxThreads}, concurrentTasksPerWorker=${concurrentTasksPerWorker}, idleTimeout=${idleTimeout}ms`);
     
+    // WorkerPoolManager handles cache lifecycle with active eviction (runs every 5 mins)
+    // Cache is properly cleaned up on shutdown via pool.destroy()
     this.pool = new WorkerPoolManager({
       minThreads,
       maxThreads,
@@ -206,7 +383,8 @@ class PoolServer {
     });
 
     // Backlog for pending connections (default 511, increase for high concurrency)
-    const backlog = parseInt(process.env.PLUGIN_POOL_BACKLOG || String(DEFAULT_POOL_SOCKET_BACKLOG), 10);
+    // Note: Rust exports PLUGIN_POOL_SOCKET_BACKLOG with derived headroom
+    const backlog = parseInt(process.env.PLUGIN_POOL_SOCKET_BACKLOG || String(DEFAULT_POOL_SOCKET_BACKLOG), 10);
 
     return new Promise((resolve, reject) => {
       this.server!.on('error', (err) => {
@@ -553,6 +731,19 @@ class PoolServer {
   }
 
   /**
+   * Evict code cache under memory pressure.
+   * Called by memory monitor when heap usage is critical.
+   */
+  evictCache(): void {
+    try {
+      this.pool.clearCache();
+      console.error('[pool-server] Code cache evicted due to memory pressure');
+    } catch (err) {
+      console.error('[pool-server] Failed to evict cache:', err);
+    }
+  }
+
+  /**
    * Stop the server
    */
   async stop(): Promise<void> {
@@ -584,15 +775,64 @@ async function main(): Promise<void> {
 
   debug('Starting with socket path:', socketPath);
 
+  // Log heap configuration from NODE_OPTIONS
+  const nodeOptions = process.env.NODE_OPTIONS || '';
+  const maxOldSpaceMatch = nodeOptions.match(/--max-old-space-size=(\d+)/);
+  const configuredHeapMB = maxOldSpaceMatch ? parseInt(maxOldSpaceMatch[1], 10) : 'default';
+  const currentHeapMB = Math.round(process.memoryUsage().heapTotal / 1024 / 1024);
+  
+  console.error(
+    `[pool-server] Heap configuration: ${configuredHeapMB}MB max ` +
+    `(current: ${currentHeapMB}MB, will grow as needed)`
+  );
+
   const server = new PoolServer(socketPath);
 
-  // Handle uncaught exceptions to prevent silent crashes
-  process.on('uncaughtException', (err) => {
-    console.error('[pool-server] Uncaught exception:', err);
+  // Start memory monitoring for pool server process
+  const memoryMonitor = new PoolServerMemoryMonitor();
+  
+  // Connect memory monitor to pool for cache eviction
+  memoryMonitor.onCacheEviction(() => {
+    console.error('[pool-server] Memory pressure - clearing code cache');
+    server.evictCache();
   });
 
-  process.on('unhandledRejection', (reason, promise) => {
+  // Connect emergency handler - graceful shutdown to trigger Rust restart
+  memoryMonitor.onEmergency(() => {
+    console.error('[pool-server] Emergency memory pressure - initiating graceful shutdown for restart');
+    // Don't exit immediately - let pending requests complete
+    // Rust will detect the exit and restart the process
+    setTimeout(async () => {
+      try {
+        await server.stop();
+      } catch (err) {
+        console.error('[pool-server] Error during emergency shutdown:', err);
+      }
+      process.exit(137); // Signal OOM-like exit to Rust
+    }, 1000);
+  });
+
+  memoryMonitor.start();
+
+  // Handle uncaught exceptions to prevent silent crashes
+  process.on('uncaughtException', async (err) => {
+    console.error('[pool-server] Uncaught exception:', err);
+    try {
+      await server.stop();
+    } catch (stopErr) {
+      console.error('[pool-server] Error during cleanup:', stopErr);
+    }
+    process.exit(1);
+  });
+
+  process.on('unhandledRejection', async (reason, promise) => {
     console.error('[pool-server] Unhandled rejection at:', promise, 'reason:', reason);
+    try {
+      await server.stop();
+    } catch (stopErr) {
+      console.error('[pool-server] Error during cleanup:', stopErr);
+    }
+    process.exit(1);
   });
 
   // Handle signals for graceful shutdown
