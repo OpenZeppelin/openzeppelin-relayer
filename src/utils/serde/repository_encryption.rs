@@ -3,11 +3,15 @@
 //! This module provides serde serializers/deserializers that automatically encrypt
 //! sensitive data when storing to Redis and decrypt when retrieving.
 //!
-//! ## AAD (Additional Authenticated Data) Support
+//! ## AAD (Additional Authenticated Data)
 //!
-//! When an `EncryptionContext` is set (via `EncryptionContext::with_aad`), the serializers
-//! will use AAD to bind the ciphertext to its storage location, preventing ciphertext
-//! swap attacks. If no context is set, falls back to v1 encryption (no AAD).
+//! **Serialization**: Always uses AAD (via `EncryptionContext`) to bind the ciphertext
+//! to its storage location. The `EncryptionContext`
+//! must be set before serialization.
+//!
+//! **Deserialization**: Supports both legacy (v1, no AAD) and new (v2, with AAD)
+//! encrypted data for backwards compatibility. If `EncryptionContext` is set, it will
+//! be used for v2 decryption; v1 data can be decrypted without context.
 
 use secrets::SecretVec;
 use serde::{Deserialize, Deserializer, Serializer};
@@ -15,15 +19,15 @@ use serde::{Deserialize, Deserializer, Serializer};
 use crate::{
     models::SecretString,
     utils::{
-        base64_decode, base64_encode, decrypt_sensitive_field_auto, encrypt_sensitive_field,
+        base64_decode, base64_encode, decrypt_sensitive_field_auto,
         encrypt_sensitive_field_with_aad, EncryptionContext,
     },
 };
-// TODO: Remove this module and use the encryption module directly!!
+
 /// Helper function to serialize secrets as encrypted base64 for storage.
 ///
-/// If `EncryptionContext` is set, uses AAD (v2 encryption) to bind the ciphertext
-/// to its storage location. Otherwise, uses v1 encryption (no AAD).
+/// Uses AAD from `EncryptionContext` to bind the ciphertext to its storage location.
+/// The `EncryptionContext` must be set before calling this function.
 pub fn serialize_secret_vec<S>(secret: &SecretVec<u8>, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
@@ -31,30 +35,31 @@ where
     // First encode the raw secret as base64
     let base64 = base64_encode(secret.borrow().as_ref());
 
-    // Then encrypt the base64 string for secure storage
-    // Use AAD if context is available (v2), otherwise fall back to v1
-    let encrypted = match EncryptionContext::get() {
-        Some(aad) => encrypt_sensitive_field_with_aad(&base64, &aad),
-        None => encrypt_sensitive_field(&base64),
-    }
-    .map_err(|e| serde::ser::Error::custom(format!("Encryption failed: {e}")))?;
+    // Get AAD from context (required)
+    let aad = EncryptionContext::get()
+        .ok_or_else(|| serde::ser::Error::custom("EncryptionContext not set"))?;
+
+    // Then encrypt the base64 string for secure storage with AAD
+    let encrypted = encrypt_sensitive_field_with_aad(&base64, &aad)
+        .map_err(|e| serde::ser::Error::custom(format!("Encryption failed: {e}")))?;
 
     serializer.serialize_str(&encrypted)
 }
 
 /// Helper function to deserialize secrets from encrypted base64 storage.
 ///
-/// Supports both v1 (no AAD) and v2 (with AAD) encrypted data for backwards
-/// compatibility. If `EncryptionContext` is set, uses it for v2 decryption.
+/// Supports both legacy (v1, no AAD) and new (v2, with AAD) encrypted data
+/// for backwards compatibility. Uses `EncryptionContext` for v2 decryption if set.
 pub fn deserialize_secret_vec<'de, D>(deserializer: D) -> Result<SecretVec<u8>, D::Error>
 where
     D: Deserializer<'de>,
 {
     let encrypted_str = String::deserialize(deserializer)?;
 
-    // First decrypt the encrypted string to get the base64 string
-    // Use auto-detection to handle both v1 and v2 encrypted data
+    // Get AAD from context if available (for v2 decryption)
     let aad = EncryptionContext::get();
+
+    // Decrypt using auto-detection to handle both v1 (legacy) and v2 (with AAD)
     let base64_str = decrypt_sensitive_field_auto(&encrypted_str, aad.as_deref())
         .map_err(|e| serde::de::Error::custom(format!("Decryption failed: {e}")))?;
 
@@ -69,20 +74,21 @@ where
 
 /// Helper function to serialize secrets as encrypted base64 for storage.
 ///
-/// If `EncryptionContext` is set, uses AAD (v2 encryption) to bind the ciphertext
-/// to its storage location. Otherwise, uses v1 encryption (no AAD).
+/// Uses AAD from `EncryptionContext` to bind the ciphertext to its storage location.
+/// The `EncryptionContext` must be set before calling this function.
 pub fn serialize_secret_string<S>(secret: &SecretString, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
     let secret_content = secret.to_str();
 
-    // Use AAD if context is available (v2), otherwise fall back to v1
-    let encrypted = match EncryptionContext::get() {
-        Some(aad) => encrypt_sensitive_field_with_aad(&secret_content, &aad),
-        None => encrypt_sensitive_field(&secret_content),
-    }
-    .map_err(|e| serde::ser::Error::custom(format!("Encryption failed: {e}")))?;
+    // Get AAD from context (required)
+    let aad = EncryptionContext::get()
+        .ok_or_else(|| serde::ser::Error::custom("EncryptionContext not set"))?;
+
+    // Encrypt with AAD
+    let encrypted = encrypt_sensitive_field_with_aad(&secret_content, &aad)
+        .map_err(|e| serde::ser::Error::custom(format!("Encryption failed: {e}")))?;
 
     let encoded = base64_encode(encrypted.as_bytes());
 
@@ -91,8 +97,8 @@ where
 
 /// Helper function to deserialize secrets from encrypted base64 storage.
 ///
-/// Supports both v1 (no AAD) and v2 (with AAD) encrypted data for backwards
-/// compatibility. If `EncryptionContext` is set, uses it for v2 decryption.
+/// Supports both legacy (v1, no AAD) and new (v2, with AAD) encrypted data
+/// for backwards compatibility. Uses `EncryptionContext` for v2 decryption if set.
 pub fn deserialize_secret_string<'de, D>(deserializer: D) -> Result<SecretString, D::Error>
 where
     D: Deserializer<'de>,
@@ -107,8 +113,10 @@ where
     let encrypted_str = String::from_utf8(encrypted_bytes)
         .map_err(|e| serde::de::Error::custom(format!("Invalid UTF-8: {e}")))?;
 
-    // Then decrypt using auto-detection to handle both v1 and v2 encrypted data
+    // Get AAD from context if available (for v2 decryption)
     let aad = EncryptionContext::get();
+
+    // Decrypt using auto-detection to handle both v1 (legacy) and v2 (with AAD)
     let decrypted = decrypt_sensitive_field_auto(&encrypted_str, aad.as_deref())
         .map_err(|e| serde::de::Error::custom(format!("Decryption failed: {e}")))?;
 
@@ -117,8 +125,8 @@ where
 
 /// Helper function to serialize optional secrets as encrypted base64 for storage.
 ///
-/// If `EncryptionContext` is set, uses AAD (v2 encryption) to bind the ciphertext
-/// to its storage location. Otherwise, uses v1 encryption (no AAD).
+/// Uses AAD from `EncryptionContext` to bind the ciphertext to its storage location.
+/// The `EncryptionContext` must be set before calling this function.
 pub fn serialize_option_secret_string<S>(
     secret: &Option<SecretString>,
     serializer: S,
@@ -130,12 +138,13 @@ where
         Some(secret_string) => {
             let secret_content = secret_string.to_str();
 
-            // Use AAD if context is available (v2), otherwise fall back to v1
-            let encrypted = match EncryptionContext::get() {
-                Some(aad) => encrypt_sensitive_field_with_aad(&secret_content, &aad),
-                None => encrypt_sensitive_field(&secret_content),
-            }
-            .map_err(|e| serde::ser::Error::custom(format!("Encryption failed: {e}")))?;
+            // Get AAD from context (required)
+            let aad = EncryptionContext::get()
+                .ok_or_else(|| serde::ser::Error::custom("EncryptionContext not set"))?;
+
+            // Encrypt with AAD
+            let encrypted = encrypt_sensitive_field_with_aad(&secret_content, &aad)
+                .map_err(|e| serde::ser::Error::custom(format!("Encryption failed: {e}")))?;
 
             let encoded = base64_encode(encrypted.as_bytes());
             serializer.serialize_some(&encoded)
@@ -146,8 +155,8 @@ where
 
 /// Helper function to deserialize optional secrets from encrypted base64 storage.
 ///
-/// Supports both v1 (no AAD) and v2 (with AAD) encrypted data for backwards
-/// compatibility. If `EncryptionContext` is set, uses it for v2 decryption.
+/// Supports both legacy (v1, no AAD) and new (v2, with AAD) encrypted data
+/// for backwards compatibility. Uses `EncryptionContext` for v2 decryption if set.
 pub fn deserialize_option_secret_string<'de, D>(
     deserializer: D,
 ) -> Result<Option<SecretString>, D::Error>
@@ -166,8 +175,10 @@ where
             let encrypted_str = String::from_utf8(encrypted_bytes)
                 .map_err(|e| serde::de::Error::custom(format!("Invalid UTF-8: {e}")))?;
 
-            // Then decrypt using auto-detection to handle both v1 and v2 encrypted data
+            // Get AAD from context if available (for v2 decryption)
             let aad = EncryptionContext::get();
+
+            // Decrypt using auto-detection to handle both v1 (legacy) and v2 (with AAD)
             let decrypted = decrypt_sensitive_field_auto(&encrypted_str, aad.as_deref())
                 .map_err(|e| serde::de::Error::custom(format!("Decryption failed: {e}")))?;
 
@@ -182,6 +193,10 @@ mod tests {
     use super::*;
     use secrets::SecretVec;
     use serde_json;
+
+    fn test_aad() -> String {
+        "test-context".to_string()
+    }
 
     #[test]
     fn test_serialize_deserialize_secret_string() {
@@ -201,11 +216,15 @@ mod tests {
             secret: secret.clone(),
         };
 
-        // Test serialization
-        let serialized = serde_json::to_string(&test_struct).unwrap();
+        // Test serialization with AAD context
+        let serialized = EncryptionContext::with_aad_sync(test_aad(), || {
+            serde_json::to_string(&test_struct).unwrap()
+        });
 
-        // Test deserialization
-        let deserialized: TestStruct = serde_json::from_str(&serialized).unwrap();
+        // Test deserialization with AAD context
+        let deserialized: TestStruct = EncryptionContext::with_aad_sync(test_aad(), || {
+            serde_json::from_str(&serialized).unwrap()
+        });
 
         // Verify content matches
         assert_eq!(secret.to_str(), deserialized.secret.to_str());
@@ -230,11 +249,15 @@ mod tests {
             secret_data: secret,
         };
 
-        // Test serialization
-        let serialized = serde_json::to_string(&test_struct).unwrap();
+        // Test serialization with AAD context
+        let serialized = EncryptionContext::with_aad_sync(test_aad(), || {
+            serde_json::to_string(&test_struct).unwrap()
+        });
 
-        // Test deserialization
-        let deserialized: TestStruct = serde_json::from_str(&serialized).unwrap();
+        // Test deserialization with AAD context
+        let deserialized: TestStruct = EncryptionContext::with_aad_sync(test_aad(), || {
+            serde_json::from_str(&serialized).unwrap()
+        });
 
         // Verify content matches
         let original_borrowed = original_data;
@@ -260,11 +283,15 @@ mod tests {
             optional_secret: Some(secret.clone()),
         };
 
-        // Test serialization
-        let serialized = serde_json::to_string(&test_struct).unwrap();
+        // Test serialization with AAD context
+        let serialized = EncryptionContext::with_aad_sync(test_aad(), || {
+            serde_json::to_string(&test_struct).unwrap()
+        });
 
-        // Test deserialization
-        let deserialized: TestStruct = serde_json::from_str(&serialized).unwrap();
+        // Test deserialization with AAD context
+        let deserialized: TestStruct = EncryptionContext::with_aad_sync(test_aad(), || {
+            serde_json::from_str(&serialized).unwrap()
+        });
 
         // Verify content matches
         assert!(deserialized.optional_secret.is_some());
@@ -292,11 +319,15 @@ mod tests {
             optional_secret: secret,
         };
 
-        // Test serialization
-        let serialized = serde_json::to_string(&test_struct).unwrap();
+        // Test serialization with AAD context
+        let serialized = EncryptionContext::with_aad_sync(test_aad(), || {
+            serde_json::to_string(&test_struct).unwrap()
+        });
 
-        // Test deserialization
-        let deserialized: TestStruct = serde_json::from_str(&serialized).unwrap();
+        // Test deserialization with AAD context
+        let deserialized: TestStruct = EncryptionContext::with_aad_sync(test_aad(), || {
+            serde_json::from_str(&serialized).unwrap()
+        });
 
         // Verify it's None
         assert!(deserialized.optional_secret.is_none());
@@ -319,11 +350,14 @@ mod tests {
             secret: original.clone(),
         };
 
-        // Serialize to JSON
-        let json = serde_json::to_string(&test_struct).unwrap();
+        // Serialize to JSON with AAD context
+        let json = EncryptionContext::with_aad_sync(test_aad(), || {
+            serde_json::to_string(&test_struct).unwrap()
+        });
 
-        // Deserialize back
-        let deserialized: TestStruct = serde_json::from_str(&json).unwrap();
+        // Deserialize back with AAD context
+        let deserialized: TestStruct =
+            EncryptionContext::with_aad_sync(test_aad(), || serde_json::from_str(&json).unwrap());
 
         // Verify the content is identical
         assert_eq!(original.to_str(), deserialized.secret.to_str());
@@ -353,11 +387,15 @@ mod tests {
                 optional_secret: test_case.clone(),
             };
 
-            // Serialize to JSON
-            let json = serde_json::to_string(&test_struct).unwrap();
+            // Serialize to JSON with AAD context
+            let json = EncryptionContext::with_aad_sync(test_aad(), || {
+                serde_json::to_string(&test_struct).unwrap()
+            });
 
-            // Deserialize back
-            let deserialized: TestStruct = serde_json::from_str(&json).unwrap();
+            // Deserialize back with AAD context
+            let deserialized: TestStruct = EncryptionContext::with_aad_sync(test_aad(), || {
+                serde_json::from_str(&json).unwrap()
+            });
 
             // Verify the content matches
             match (test_case, deserialized.optional_secret) {
@@ -383,7 +421,11 @@ mod tests {
         }
 
         let test_struct = TestStruct { secret };
-        let json = serde_json::to_string(&test_struct).unwrap();
+
+        // Serialize with AAD context
+        let json = EncryptionContext::with_aad_sync(test_aad(), || {
+            serde_json::to_string(&test_struct).unwrap()
+        });
 
         // The serialized JSON should not contain the plaintext secret
         assert!(!json.contains("plaintext-secret"));
@@ -409,7 +451,11 @@ mod tests {
         let test_struct = TestStruct {
             optional_secret: secret,
         };
-        let json = serde_json::to_string(&test_struct).unwrap();
+
+        // Serialize with AAD context
+        let json = EncryptionContext::with_aad_sync(test_aad(), || {
+            serde_json::to_string(&test_struct).unwrap()
+        });
 
         // The serialized JSON should not contain the plaintext secret
         assert!(!json.contains("plaintext-secret"));
@@ -436,10 +482,35 @@ mod tests {
         let test_struct = TestStruct {
             optional_secret: secret,
         };
-        let json = serde_json::to_string(&test_struct).unwrap();
+
+        // Serialize with AAD context
+        let json = EncryptionContext::with_aad_sync(test_aad(), || {
+            serde_json::to_string(&test_struct).unwrap()
+        });
 
         // Parse the JSON to verify structure
         let json_value: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert!(json_value["optional_secret"].is_null());
+    }
+
+    #[test]
+    fn test_serialize_fails_without_context() {
+        let secret = SecretString::new("test-secret");
+
+        #[derive(serde::Serialize)]
+        struct TestStruct {
+            #[serde(serialize_with = "serialize_secret_string")]
+            secret: SecretString,
+        }
+
+        let test_struct = TestStruct { secret };
+
+        // Should fail without AAD context
+        let result = serde_json::to_string(&test_struct);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("EncryptionContext not set"));
     }
 }
