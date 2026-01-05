@@ -1,14 +1,29 @@
-//! Helper functions to serialize and deserialize secrets as encrypted base64 for storage
+//! Helper functions to serialize and deserialize secrets as encrypted base64 for storage.
+//!
+//! This module provides serde serializers/deserializers that automatically encrypt
+//! sensitive data when storing to Redis and decrypt when retrieving.
+//!
+//! ## AAD (Additional Authenticated Data) Support
+//!
+//! When an `EncryptionContext` is set (via `EncryptionContext::with_aad`), the serializers
+//! will use AAD to bind the ciphertext to its storage location, preventing ciphertext
+//! swap attacks. If no context is set, falls back to v1 encryption (no AAD).
 
 use secrets::SecretVec;
 use serde::{Deserialize, Deserializer, Serializer};
 
 use crate::{
     models::SecretString,
-    utils::{base64_decode, base64_encode, decrypt_sensitive_field, encrypt_sensitive_field},
+    utils::{
+        base64_decode, base64_encode, decrypt_sensitive_field_auto, encrypt_sensitive_field,
+        encrypt_sensitive_field_with_aad, EncryptionContext,
+    },
 };
-
-/// Helper function to serialize secrets as encrypted base64 for storage
+// TODO: Remove this module and use the encryption module directly!!
+/// Helper function to serialize secrets as encrypted base64 for storage.
+///
+/// If `EncryptionContext` is set, uses AAD (v2 encryption) to bind the ciphertext
+/// to its storage location. Otherwise, uses v1 encryption (no AAD).
 pub fn serialize_secret_vec<S>(secret: &SecretVec<u8>, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
@@ -17,13 +32,20 @@ where
     let base64 = base64_encode(secret.borrow().as_ref());
 
     // Then encrypt the base64 string for secure storage
-    let encrypted = encrypt_sensitive_field(&base64)
-        .map_err(|e| serde::ser::Error::custom(format!("Encryption failed: {e}")))?;
+    // Use AAD if context is available (v2), otherwise fall back to v1
+    let encrypted = match EncryptionContext::get() {
+        Some(aad) => encrypt_sensitive_field_with_aad(&base64, &aad),
+        None => encrypt_sensitive_field(&base64),
+    }
+    .map_err(|e| serde::ser::Error::custom(format!("Encryption failed: {e}")))?;
 
     serializer.serialize_str(&encrypted)
 }
 
-/// Helper function to deserialize secrets from encrypted base64 storage
+/// Helper function to deserialize secrets from encrypted base64 storage.
+///
+/// Supports both v1 (no AAD) and v2 (with AAD) encrypted data for backwards
+/// compatibility. If `EncryptionContext` is set, uses it for v2 decryption.
 pub fn deserialize_secret_vec<'de, D>(deserializer: D) -> Result<SecretVec<u8>, D::Error>
 where
     D: Deserializer<'de>,
@@ -31,7 +53,9 @@ where
     let encrypted_str = String::deserialize(deserializer)?;
 
     // First decrypt the encrypted string to get the base64 string
-    let base64_str = decrypt_sensitive_field(&encrypted_str)
+    // Use auto-detection to handle both v1 and v2 encrypted data
+    let aad = EncryptionContext::get();
+    let base64_str = decrypt_sensitive_field_auto(&encrypted_str, aad.as_deref())
         .map_err(|e| serde::de::Error::custom(format!("Decryption failed: {e}")))?;
 
     // Then decode the base64 to get the raw secret bytes
@@ -43,21 +67,32 @@ where
     }))
 }
 
-/// Helper function to serialize secrets as encrypted base64 for storage
+/// Helper function to serialize secrets as encrypted base64 for storage.
+///
+/// If `EncryptionContext` is set, uses AAD (v2 encryption) to bind the ciphertext
+/// to its storage location. Otherwise, uses v1 encryption (no AAD).
 pub fn serialize_secret_string<S>(secret: &SecretString, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
     let secret_content = secret.to_str();
-    let encrypted = encrypt_sensitive_field(&secret_content)
-        .map_err(|e| serde::ser::Error::custom(format!("Encryption failed: {e}")))?;
+
+    // Use AAD if context is available (v2), otherwise fall back to v1
+    let encrypted = match EncryptionContext::get() {
+        Some(aad) => encrypt_sensitive_field_with_aad(&secret_content, &aad),
+        None => encrypt_sensitive_field(&secret_content),
+    }
+    .map_err(|e| serde::ser::Error::custom(format!("Encryption failed: {e}")))?;
 
     let encoded = base64_encode(encrypted.as_bytes());
 
     serializer.serialize_str(&encoded)
 }
 
-/// Helper function to deserialize secrets from encrypted base64 storage
+/// Helper function to deserialize secrets from encrypted base64 storage.
+///
+/// Supports both v1 (no AAD) and v2 (with AAD) encrypted data for backwards
+/// compatibility. If `EncryptionContext` is set, uses it for v2 decryption.
 pub fn deserialize_secret_string<'de, D>(deserializer: D) -> Result<SecretString, D::Error>
 where
     D: Deserializer<'de>,
@@ -72,14 +107,18 @@ where
     let encrypted_str = String::from_utf8(encrypted_bytes)
         .map_err(|e| serde::de::Error::custom(format!("Invalid UTF-8: {e}")))?;
 
-    // Then decrypt the encrypted string to get the original content
-    let decrypted = decrypt_sensitive_field(&encrypted_str)
+    // Then decrypt using auto-detection to handle both v1 and v2 encrypted data
+    let aad = EncryptionContext::get();
+    let decrypted = decrypt_sensitive_field_auto(&encrypted_str, aad.as_deref())
         .map_err(|e| serde::de::Error::custom(format!("Decryption failed: {e}")))?;
 
     Ok(SecretString::new(&decrypted))
 }
 
-/// Helper function to serialize optional secrets as encrypted base64 for storage
+/// Helper function to serialize optional secrets as encrypted base64 for storage.
+///
+/// If `EncryptionContext` is set, uses AAD (v2 encryption) to bind the ciphertext
+/// to its storage location. Otherwise, uses v1 encryption (no AAD).
 pub fn serialize_option_secret_string<S>(
     secret: &Option<SecretString>,
     serializer: S,
@@ -90,8 +129,13 @@ where
     match secret {
         Some(secret_string) => {
             let secret_content = secret_string.to_str();
-            let encrypted = encrypt_sensitive_field(&secret_content)
-                .map_err(|e| serde::ser::Error::custom(format!("Encryption failed: {e}")))?;
+
+            // Use AAD if context is available (v2), otherwise fall back to v1
+            let encrypted = match EncryptionContext::get() {
+                Some(aad) => encrypt_sensitive_field_with_aad(&secret_content, &aad),
+                None => encrypt_sensitive_field(&secret_content),
+            }
+            .map_err(|e| serde::ser::Error::custom(format!("Encryption failed: {e}")))?;
 
             let encoded = base64_encode(encrypted.as_bytes());
             serializer.serialize_some(&encoded)
@@ -100,7 +144,10 @@ where
     }
 }
 
-/// Helper function to deserialize optional secrets from encrypted base64 storage
+/// Helper function to deserialize optional secrets from encrypted base64 storage.
+///
+/// Supports both v1 (no AAD) and v2 (with AAD) encrypted data for backwards
+/// compatibility. If `EncryptionContext` is set, uses it for v2 decryption.
 pub fn deserialize_option_secret_string<'de, D>(
     deserializer: D,
 ) -> Result<Option<SecretString>, D::Error>
@@ -119,8 +166,9 @@ where
             let encrypted_str = String::from_utf8(encrypted_bytes)
                 .map_err(|e| serde::de::Error::custom(format!("Invalid UTF-8: {e}")))?;
 
-            // Then decrypt the encrypted string to get the original content
-            let decrypted = decrypt_sensitive_field(&encrypted_str)
+            // Then decrypt using auto-detection to handle both v1 and v2 encrypted data
+            let aad = EncryptionContext::get();
+            let decrypted = decrypt_sensitive_field_auto(&encrypted_str, aad.as_deref())
                 .map_err(|e| serde::de::Error::custom(format!("Decryption failed: {e}")))?;
 
             Ok(Some(SecretString::new(&decrypted)))

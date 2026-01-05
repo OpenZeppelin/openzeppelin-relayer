@@ -41,6 +41,9 @@ pub use uuid::*;
 mod encryption;
 pub use encryption::*;
 
+mod encryption_context;
+pub use encryption_context::*;
+
 mod json_rpc_error;
 pub use json_rpc_error::*;
 

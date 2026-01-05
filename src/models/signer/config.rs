@@ -360,6 +360,8 @@ impl TryFrom<GoogleCloudKmsSignerFileConfig> for GoogleCloudKmsSignerConfig {
     type Error = ConfigFileError;
 
     fn try_from(config: GoogleCloudKmsSignerFileConfig) -> Result<Self, Self::Error> {
+        use crate::models::SecretString;
+
         let private_key = config
             .service_account
             .private_key
@@ -387,20 +389,22 @@ impl TryFrom<GoogleCloudKmsSignerFileConfig> for GoogleCloudKmsSignerConfig {
         let service_account = GoogleCloudKmsSignerServiceAccountConfig {
             private_key,
             private_key_id,
-            project_id: config.service_account.project_id,
+            project_id: SecretString::new(&config.service_account.project_id),
             client_email,
-            client_id: config.service_account.client_id,
-            auth_uri: config.service_account.auth_uri,
-            token_uri: config.service_account.token_uri,
-            auth_provider_x509_cert_url: config.service_account.auth_provider_x509_cert_url,
-            client_x509_cert_url: config.service_account.client_x509_cert_url,
-            universe_domain: config.service_account.universe_domain,
+            client_id: SecretString::new(&config.service_account.client_id),
+            auth_uri: SecretString::new(&config.service_account.auth_uri),
+            token_uri: SecretString::new(&config.service_account.token_uri),
+            auth_provider_x509_cert_url: SecretString::new(
+                &config.service_account.auth_provider_x509_cert_url,
+            ),
+            client_x509_cert_url: SecretString::new(&config.service_account.client_x509_cert_url),
+            universe_domain: SecretString::new(&config.service_account.universe_domain),
         };
 
         let key = GoogleCloudKmsSignerKeyConfig {
-            location: config.key.location,
-            key_ring_id: config.key.key_ring_id,
-            key_id: config.key.key_id,
+            location: SecretString::new(&config.key.location),
+            key_ring_id: SecretString::new(&config.key.key_ring_id),
+            key_id: SecretString::new(&config.key.key_id),
             key_version: config.key.key_version,
         };
 
@@ -435,7 +439,7 @@ impl TryFrom<SignerFileConfigEnum> for SignerConfig {
                 VaultTransitSignerConfig::try_from(vault_transit)?,
             )),
             SignerFileConfigEnum::GoogleCloudKms(gcp_kms) => Ok(SignerConfig::GoogleCloudKms(
-                GoogleCloudKmsSignerConfig::try_from(gcp_kms)?,
+                Box::new(GoogleCloudKmsSignerConfig::try_from(gcp_kms)?),
             )),
         }
     }
@@ -668,8 +672,11 @@ mod tests {
         assert!(result.is_ok());
 
         let gcp_config = result.unwrap();
-        assert_eq!(gcp_config.key.key_id, "test-key");
-        assert_eq!(gcp_config.service_account.project_id, "test-project");
+        assert_eq!(gcp_config.key.key_id.to_str().as_str(), "test-key");
+        assert_eq!(
+            gcp_config.service_account.project_id.to_str().as_str(),
+            "test-project"
+        );
     }
 
     #[test]
