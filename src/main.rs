@@ -99,10 +99,11 @@ async fn main() -> Result<()> {
     // Setup workers for processing jobs
     initialize_workers(app_state.clone()).await?;
 
-    // Initialize plugin worker pool if pool execution is enabled
+    // Initialize plugin worker pool (enabled by default for better performance)
+    // Set PLUGIN_USE_POOL=false to use legacy ts-node mode
     let pool_manager = if std::env::var("PLUGIN_USE_POOL")
         .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-        .unwrap_or(false)
+        .unwrap_or(true)
     {
         info!("Pool-based plugin execution enabled, initializing plugin pool");
         match initialize_plugin_pool(app_state.plugin_repository.as_ref()).await {

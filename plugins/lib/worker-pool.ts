@@ -202,8 +202,6 @@ class CompiledCodeCache {
   private totalCacheSize: number = 0;
   // Max cache size in bytes (100MB default - adjust under memory pressure)
   private maxCacheSize: number = 100 * 1024 * 1024;
-  // Track last LRU access for smarter eviction
-  private accessOrder: string[] = [];
 
   constructor(maxAgeMs: number = 3600000) {
     // 1 hour default
@@ -297,9 +295,11 @@ class CompiledCodeCache {
     let evictedCount = 0;
     for (const [key, entry] of this.cache.entries()) {
       if (now - entry.timestamp > this.maxAge) {
-        this.totalCacheSize -= entry.size;
-        this.cache.delete(key);
-        evictedCount++;
+        // Check delete return value to prevent size drift
+        if (this.cache.delete(key)) {
+          this.totalCacheSize -= entry.size;
+          evictedCount++;
+        }
       }
     }
     if (evictedCount > 0) {
@@ -319,9 +319,11 @@ class CompiledCodeCache {
     let evicted = 0;
     for (const [key, entry] of entries) {
       if (evicted >= count) break;
-      this.totalCacheSize -= entry.size;
-      this.cache.delete(key);
-      evicted++;
+      // Check delete return value to prevent size drift
+      if (this.cache.delete(key)) {
+        this.totalCacheSize -= entry.size;
+        evicted++;
+      }
     }
 
     if (evicted > 0) {
@@ -335,12 +337,15 @@ class CompiledCodeCache {
 
     // Check if expired
     if (Date.now() - entry.timestamp > this.maxAge) {
-      this.totalCacheSize -= entry.size;
-      this.cache.delete(pluginPath);
+      if (this.cache.delete(pluginPath)) {
+        this.totalCacheSize -= entry.size;
+      }
       return undefined;
     }
 
     // Update timestamp for LRU tracking
+    // Note: Timestamp update is racy under concurrent access but acceptable
+    // for LRU approximation - lost updates only cause slightly suboptimal eviction
     entry.timestamp = Date.now();
 
     return entry.code;
@@ -426,6 +431,10 @@ export class WorkerPoolManager {
   private isTemporaryWorkerFile: boolean = false;
   private metrics: PluginMetrics;
 
+  // Event handlers stored as class properties for proper cleanup
+  private poolErrorHandler: ((err: Error) => void) | null = null;
+  private poolExitHandler: ((workerId: number, exitCode: number) => void) | null = null;
+
   constructor(options: WorkerPoolOptions = {}) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
     this.compiledCache = new CompiledCodeCache();
@@ -436,23 +445,35 @@ export class WorkerPoolManager {
   }
 
   /**
+   * Cleanup handler for process exit - stored as property for removal
+   */
+  private cleanupHandler = (): void => {
+    if (this.isTemporaryWorkerFile && this.compiledWorkerPath) {
+      try {
+        fs.unlinkSync(this.compiledWorkerPath);
+      } catch {
+        // Ignore - best effort cleanup
+      }
+    }
+  };
+
+  /**
    * Register process handlers to clean up temp files on unexpected exit.
    */
   private registerCleanupHandlers(): void {
-    const cleanup = () => {
-      if (this.isTemporaryWorkerFile && this.compiledWorkerPath) {
-        try {
-          fs.unlinkSync(this.compiledWorkerPath);
-        } catch {
-          // Ignore - best effort cleanup
-        }
-      }
-    };
-
     // Handle various exit scenarios
-    process.once('beforeExit', cleanup);
-    process.once('SIGINT', cleanup);
-    process.once('SIGTERM', cleanup);
+    process.once('beforeExit', this.cleanupHandler);
+    process.once('SIGINT', this.cleanupHandler);
+    process.once('SIGTERM', this.cleanupHandler);
+  }
+
+  /**
+   * Remove process cleanup handlers (called during shutdown)
+   */
+  private removeCleanupHandlers(): void {
+    process.off('beforeExit', this.cleanupHandler);
+    process.off('SIGINT', this.cleanupHandler);
+    process.off('SIGTERM', this.cleanupHandler);
   }
 
   /**
@@ -530,8 +551,8 @@ export class WorkerPoolManager {
     let lastCrashReset = Date.now();
     const CRASH_WINDOW_MS = 60000; // 1 minute window for crash rate monitoring
 
-    // Listen to worker events for monitoring
-    this.pool.on('error', (err) => {
+    // Store event handlers as class properties for proper cleanup on shutdown
+    this.poolErrorHandler = (err: Error) => {
       console.error('[worker-pool] Worker error (will be replaced):', err.message);
       // Track errors that indicate memory issues
       const errMsg = err.message.toLowerCase();
@@ -539,9 +560,9 @@ export class WorkerPoolManager {
         console.error('[worker-pool] Memory-related worker error detected - consider increasing worker heap size');
       }
       // Don't throw - Piscina handles recovery
-    });
+    };
 
-    this.pool.on('workerExit', (workerId: number, exitCode: number) => {
+    this.poolExitHandler = (workerId: number, exitCode: number) => {
       // Reset crash counter periodically
       const now = Date.now();
       if (now - lastCrashReset > CRASH_WINDOW_MS) {
@@ -574,7 +595,11 @@ export class WorkerPoolManager {
           this.compiledCache.clear();
         }
       }
-    });
+    };
+
+    // Listen to worker events for monitoring
+    this.pool.on('error', this.poolErrorHandler);
+    this.pool.on('workerExit', this.poolExitHandler);
 
     this.initialized = true;
   }
@@ -678,6 +703,19 @@ export class WorkerPoolManager {
   async runPlugin(request: PluginExecutionRequest): Promise<PluginExecutionResult> {
     if (!this.initialized || !this.pool) {
       await this.initialize();
+    }
+
+    // Verify pool exists after init (defensive - initialize() should throw on failure)
+    if (!this.pool) {
+      return {
+        success: false,
+        error: {
+          message: 'Worker pool failed to initialize',
+          code: 'POOL_INIT_FAILED',
+          status: 500,
+        },
+        logs: [],
+      };
     }
 
     const executionStartTime = Date.now();
@@ -938,10 +976,23 @@ export class WorkerPoolManager {
    */
   async shutdown(): Promise<void> {
     if (this.pool) {
+      // Remove event listeners before destroying to prevent accumulation
+      if (this.poolErrorHandler) {
+        this.pool.off('error', this.poolErrorHandler);
+        this.poolErrorHandler = null;
+      }
+      if (this.poolExitHandler) {
+        this.pool.off('workerExit', this.poolExitHandler);
+        this.poolExitHandler = null;
+      }
+
       await this.pool.destroy();
       this.pool = null;
       this.initialized = false;
     }
+
+    // Remove process cleanup handlers to prevent accumulation
+    this.removeCleanupHandlers();
 
     // Clean up temporary compiled worker file to prevent disk space leak
     if (this.isTemporaryWorkerFile && this.compiledWorkerPath) {

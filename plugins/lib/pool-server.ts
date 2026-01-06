@@ -54,11 +54,15 @@ function debug(...args: any[]): void {
  * Memory Pressure Monitor - Pool Server Edition
  * Monitors main process heap and logs warnings when approaching limits.
  * Pool server manages workers, code cache, and socket communication.
- * 
+ *
  * SELF-HEALING FEATURES:
  * - Proactive GC triggering at 80% heap usage
  * - Cache eviction at 85% heap usage
  * - Emergency restart signal at 95% (tells Rust to restart)
+ *
+ * ASYNC SAFETY:
+ * - All callbacks are queued to event loop via setImmediate to avoid blocking the timer
+ * - Emergency shutdown is tracked to prevent duplicate invocations
  */
 class PoolServerMemoryMonitor {
   private checkInterval: NodeJS.Timeout | null = null;
@@ -71,6 +75,8 @@ class PoolServerMemoryMonitor {
   private consecutiveHighPressure = 0;
   private onCacheEvictionRequest: (() => void) | null = null;
   private onEmergencyRestart: (() => void) | null = null;
+  /** Tracks if emergency shutdown has already been triggered (prevents duplicate calls) */
+  private emergencyTriggered = false;
 
   start(): void {
     if (this.checkInterval) return;
@@ -111,9 +117,9 @@ class PoolServerMemoryMonitor {
     const usage = process.memoryUsage();
     const heapStats = v8.getHeapStatistics();
     const heapUsed = usage.heapUsed;
-    // Use heap_size_limit (the actual max heap) instead of heapTotal (current allocated)
-    // heapTotal grows dynamically and can be much smaller than the configured max,
-    // causing false positive pressure detection (e.g., 28MB/30MB = 93% when max is 26GB)
+    // Use heap_size_limit (V8's configured maximum heap) instead of heapTotal
+    // heapTotal is the currently allocated heap which grows dynamically,
+    // heap_size_limit is the actual maximum (e.g., from --max-old-space-size)
     const heapLimit = heapStats.heap_size_limit;
     const heapUsedRatio = heapUsed / heapLimit;
 
@@ -137,6 +143,12 @@ class PoolServerMemoryMonitor {
   }
 
   private handleEmergency(heapUsed: number, heapLimit: number, external: number, rss: number): void {
+    // Prevent duplicate emergency shutdowns
+    if (this.emergencyTriggered) {
+      return;
+    }
+    this.emergencyTriggered = true;
+
     const heapUsedMB = Math.round(heapUsed / 1024 / 1024);
     const heapLimitMB = Math.round(heapLimit / 1024 / 1024);
     const percent = Math.round((heapUsed / heapLimit) * 100);
@@ -156,9 +168,13 @@ class PoolServerMemoryMonitor {
       }
     }
 
-    // Signal emergency to any registered handlers
+    // Queue emergency callback to event loop to avoid blocking the timer
+    // This ensures the setInterval can continue and the async shutdown
+    // is handled properly without blocking other operations
     if (this.onEmergencyRestart) {
-      this.onEmergencyRestart();
+      setImmediate(() => {
+        this.onEmergencyRestart!();
+      });
     }
 
     // Reset counter after emergency signal
@@ -175,16 +191,18 @@ class PoolServerMemoryMonitor {
     const externalMB = Math.round(external / 1024 / 1024);
     const rssMB = Math.round(rss / 1024 / 1024);
     const percent = Math.round((heapUsed / heapLimit) * 100);
-    
+
     console.error(
       `[pool-server] CRITICAL: Heap at ${heapUsedMB}MB / ${heapLimitMB}MB limit (${percent}%). ` +
       `External: ${externalMB}MB, RSS: ${rssMB}MB. ` +
       `Requesting cache eviction and forcing GC.`
     );
 
-    // Request cache eviction
+    // Request cache eviction - queue to event loop to avoid blocking timer
     if (this.onCacheEvictionRequest) {
-      this.onCacheEvictionRequest();
+      setImmediate(() => {
+        this.onCacheEvictionRequest!();
+      });
     }
 
     // Force GC
@@ -302,6 +320,9 @@ class PoolServer {
   private server: net.Server | null = null;
   private socketPath: string;
   private running: boolean = false;
+  private shuttingDown: boolean = false;
+  private activeRequests: number = 0;
+  private readonly shutdownTimeoutMs: number = 30000; // 30 seconds max drain time
 
   constructor(socketPath: string) {
     this.socketPath = socketPath;
@@ -370,8 +391,6 @@ class PoolServer {
       this.handleConnection(socket);
     });
     
-    // Don't set maxConnections at all - the default is unlimited
-    // Setting it to 0 might reject all connections!
     
     // Log any server-level errors
     this.server.on('error', (err) => {
@@ -426,51 +445,70 @@ class PoolServer {
     socket.setNoDelay(true); // Disable Nagle's algorithm for lower latency
     
     let buffer = '';
-    let processing = false;
+    let processingPromise: Promise<void> | null = null;
     const pendingLines: string[] = [];
 
-    const processQueue = async () => {
-      if (processing) return;
-      processing = true;
-      
-      while (pendingLines.length > 0) {
-        const line = pendingLines.shift()!;
-        if (!line.trim()) continue;
-        
-        try {
-          const message = JSON.parse(line) as Message;
-          debug('Processing message type:', message.type);
-          const response = await this.handleMessage(message);
-          debug('Sending response for task:', response.taskId);
-          // Check if socket is still writable before writing
-          if (socket.writable) {
-            socket.write(JSON.stringify(response) + '\n');
-          } else {
-            debug('Socket no longer writable, discarding response');
-          }
-        } catch (err) {
-          const error = err as Error;
-          debug('Error handling message:', error);
-          const response: Response = {
-            taskId: 'unknown',
-            success: false,
-            error: {
-              message: error.message || 'Failed to parse message',
-              code: 'PARSE_ERROR',
-            },
-          };
-          if (socket.writable) {
-            socket.write(JSON.stringify(response) + '\n');
-          }
-        }
+    // Max buffer size to prevent OOM from malicious clients (10MB)
+    const MAX_BUFFER_SIZE = 10 * 1024 * 1024;
+
+    const processQueue = async (): Promise<void> => {
+      // Wait for any in-progress processing to complete (proper mutual exclusion)
+      if (processingPromise) {
+        await processingPromise;
       }
       
-      processing = false;
+      if (pendingLines.length === 0) return;
+      
+      processingPromise = (async () => {
+        while (pendingLines.length > 0) {
+          const line = pendingLines.shift()!;
+          if (!line.trim()) continue;
+          
+          try {
+            const message = JSON.parse(line) as Message;
+            debug('Processing message type:', message.type);
+            const response = await this.handleMessage(message);
+            debug('Sending response for task:', response.taskId);
+            // Check if socket is still writable before writing
+            if (socket.writable) {
+              socket.write(JSON.stringify(response) + '\n');
+            } else {
+              debug('Socket no longer writable, discarding response');
+            }
+          } catch (err) {
+            const error = err as Error;
+            debug('Error handling message:', error);
+            const response: Response = {
+              taskId: 'unknown',
+              success: false,
+              error: {
+                message: error.message || 'Failed to parse message',
+                code: 'PARSE_ERROR',
+              },
+            };
+            if (socket.writable) {
+              socket.write(JSON.stringify(response) + '\n');
+            }
+          }
+        }
+      })();
+      
+      await processingPromise;
+      processingPromise = null;
     };
 
-    socket.on('data', (data) => {
+    // Define handlers for proper cleanup on close
+    const dataHandler = (data: Buffer): void => {
       buffer += data.toString();
       debug(`[${clientId}] Received data: ${data.length} bytes, buffer: ${buffer.length}`);
+
+      // Buffer overflow protection - disconnect malicious clients
+      if (buffer.length > MAX_BUFFER_SIZE) {
+        console.error(`[pool-server] [${clientId}] Buffer overflow (${buffer.length} bytes), disconnecting`);
+        socket.destroy();
+        return;
+      }
+
       debug(`[${clientId}] Buffer content: ${buffer.substring(0, 200)}...`);
 
       // Extract complete messages (newline-delimited)
@@ -485,21 +523,37 @@ class PoolServer {
       // Process queue (async but don't await here)
       processQueue().catch((err) => {
         console.error(`[pool-server] [${clientId}] Error in processQueue:`, err);
+        // Send error response so client doesn't hang
+        const response: Response = {
+          taskId: 'unknown',
+          success: false,
+          error: { message: 'Internal queue processing error', code: 'QUEUE_ERROR' },
+        };
+        if (socket.writable) {
+          socket.write(JSON.stringify(response) + '\n');
+        }
       });
-    });
+    };
 
-    socket.on('error', (err) => {
+    const errorHandler = (err: Error): void => {
       // Connection resets are normal during shutdown, don't log as errors
       if ((err as any).code === 'ECONNRESET') {
         debug(`[${clientId}] Connection reset`);
       } else {
-        console.warn(`[pool-server] [${clientId}] Socket error:`, err.message);
+        console.error(`[pool-server] [${clientId}] Socket error:`, err.message);
       }
-    });
+    };
     
-    socket.on('close', () => {
-      debug(`[${clientId}] Client disconnected`);
-    });
+    const closeHandler = (): void => {
+      // Explicit cleanup of listeners (good practice for long-running servers)
+      socket.removeListener('data', dataHandler);
+      socket.removeListener('error', errorHandler);
+      debug(`[${clientId}] Client disconnected, listeners cleaned up`);
+    };
+
+    socket.on('data', dataHandler);
+    socket.on('error', errorHandler);
+    socket.once('close', closeHandler);
   }
 
   /**
@@ -508,29 +562,85 @@ class PoolServer {
   private async handleMessage(message: Message): Promise<Response> {
     const { taskId } = message;
 
+    // Allow shutdown and health messages during shutdown, reject others
+    if (this.shuttingDown && message.type !== 'shutdown' && message.type !== 'health') {
+      return {
+        taskId,
+        success: false,
+        error: {
+          message: 'Server is shutting down, not accepting new requests',
+          code: 'SHUTTING_DOWN',
+        },
+      };
+    }
+
+    // Track active requests for graceful shutdown draining
+    // Work requests get try/finally to ensure counter accuracy
+    const isWorkRequest = message.type === 'execute' || message.type === 'precompile';
+
+    if (isWorkRequest) {
+      this.activeRequests++;
+      try {
+        return await this.handleWorkRequest(message);
+      } finally {
+        this.activeRequests--;
+      }
+    }
+
+    // Non-work requests don't need tracking
+    return this.handleNonWorkRequest(message);
+  }
+
+  /**
+   * Handle work requests (execute, precompile) - tracked for graceful shutdown
+   */
+  private async handleWorkRequest(message: ExecuteMessage | PrecompileMessage): Promise<Response> {
+    const { taskId } = message;
     try {
       switch (message.type) {
         case 'execute':
           return await this.handleExecute(message);
-
         case 'precompile':
           return await this.handlePrecompile(message);
+        default:
+          // TypeScript exhaustiveness check
+          const _exhaustive: never = message;
+          return {
+            taskId,
+            success: false,
+            error: { message: 'Unknown work request type', code: 'UNKNOWN_TYPE' },
+          };
+      }
+    } catch (err) {
+      const error = err as Error;
+      return {
+        taskId,
+        success: false,
+        error: {
+          message: error.message || String(err),
+          code: 'HANDLER_ERROR',
+        },
+      };
+    }
+  }
 
+  /**
+   * Handle non-work requests (cache, invalidate, stats, health, shutdown)
+   */
+  private async handleNonWorkRequest(message: Message): Promise<Response> {
+    const { taskId } = message;
+    try {
+      switch (message.type) {
         case 'cache':
-          return this.handleCache(message);
-
+          return this.handleCache(message as CacheMessage);
         case 'invalidate':
-          return this.handleInvalidate(message);
-
+          return this.handleInvalidate(message as InvalidateMessage);
         case 'stats':
-          return this.handleStats(message);
-
+          return this.handleStats(message as StatsMessage);
         case 'health':
-          return this.handleHealth(message);
-
+          return this.handleHealth(message as HealthMessage);
         case 'shutdown':
-          return await this.handleShutdown(message);
-
+          return await this.handleShutdown(message as ShutdownMessage);
         default:
           return {
             taskId,
@@ -715,19 +825,75 @@ class PoolServer {
   }
 
   /**
-   * Shutdown the server
+   * Shutdown the server gracefully
+   * 1. Stop accepting new requests
+   * 2. Wait for in-flight requests to complete (with timeout)
+   * 3. Clean up resources and exit
    */
   private async handleShutdown(message: ShutdownMessage): Promise<Response> {
-    // Send response first, then shutdown
-    setTimeout(async () => {
-      await this.stop();
-      process.exit(0);
-    }, 100);
+    if (this.shuttingDown) {
+      return {
+        taskId: message.taskId,
+        success: true,
+        result: { status: 'already_shutting_down', activeRequests: this.activeRequests },
+      };
+    }
+
+    console.error(`[pool-server] Graceful shutdown initiated, ${this.activeRequests} active requests`);
+    this.shuttingDown = true;
+
+    // Wait for in-flight requests to drain, then shutdown
+    // This runs asynchronously - we send the response first
+    this.drainAndExit().catch((err) => {
+      console.error('[pool-server] Error during graceful shutdown:', err);
+      process.exit(1);
+    });
 
     return {
       taskId: message.taskId,
       success: true,
+      result: { 
+        status: 'draining', 
+        activeRequests: this.activeRequests,
+        timeoutMs: this.shutdownTimeoutMs,
+      },
     };
+  }
+
+  /**
+   * Wait for active requests to complete, then exit
+   */
+  private async drainAndExit(): Promise<void> {
+    const startTime = Date.now();
+    const checkInterval = 100; // Check every 100ms
+
+    // Wait for requests to drain
+    while (this.activeRequests > 0) {
+      const elapsed = Date.now() - startTime;
+      if (elapsed >= this.shutdownTimeoutMs) {
+        console.error(
+          `[pool-server] Shutdown timeout (${this.shutdownTimeoutMs}ms) reached, ` +
+          `${this.activeRequests} requests still active - forcing shutdown`
+        );
+        break;
+      }
+
+      // Log progress every 5 seconds
+      if (elapsed > 0 && elapsed % 5000 < checkInterval) {
+        console.error(
+          `[pool-server] Draining: ${this.activeRequests} requests remaining ` +
+          `(${Math.round(elapsed / 1000)}s / ${this.shutdownTimeoutMs / 1000}s)`
+        );
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, checkInterval));
+    }
+
+    const drainTime = Date.now() - startTime;
+    console.error(`[pool-server] Drain complete in ${drainTime}ms, proceeding with shutdown`);
+
+    await this.stop();
+    process.exit(0);
   }
 
   /**
@@ -741,6 +907,54 @@ class PoolServer {
     } catch (err) {
       console.error('[pool-server] Failed to evict cache:', err);
     }
+  }
+
+  /**
+   * Emergency shutdown due to memory pressure.
+   * Uses shorter timeout but same drain logic for consistency.
+   * Exit code 1 indicates abnormal termination (not 137 which is SIGKILL).
+   */
+  async emergencyShutdown(): Promise<void> {
+    if (this.shuttingDown) {
+      // Already shutting down, just wait
+      return;
+    }
+
+    console.error(`[pool-server] Emergency shutdown initiated, ${this.activeRequests} active requests`);
+    this.shuttingDown = true;
+
+    // Shorter timeout for emergency (10 seconds vs normal 30)
+    const emergencyTimeoutMs = 10000;
+    const startTime = Date.now();
+    const checkInterval = 100;
+
+    // Wait for requests to drain with shorter timeout
+    while (this.activeRequests > 0) {
+      const elapsed = Date.now() - startTime;
+      if (elapsed >= emergencyTimeoutMs) {
+        console.error(
+          `[pool-server] Emergency shutdown timeout (${emergencyTimeoutMs}ms) reached, ` +
+          `${this.activeRequests} requests still active - forcing exit`
+        );
+        break;
+      }
+
+      if (elapsed > 0 && elapsed % 2000 < checkInterval) {
+        console.error(
+          `[pool-server] Emergency draining: ${this.activeRequests} requests remaining`
+        );
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, checkInterval));
+    }
+
+    const drainTime = Date.now() - startTime;
+    console.error(`[pool-server] Emergency drain complete in ${drainTime}ms`);
+
+    await this.stop();
+    // Exit code 1 = abnormal termination (OOM-like condition)
+    // Note: 137 is SIGKILL which is incorrect for voluntary exit
+    process.exit(1);
   }
 
   /**
@@ -800,16 +1014,13 @@ async function main(): Promise<void> {
   // Connect emergency handler - graceful shutdown to trigger Rust restart
   memoryMonitor.onEmergency(() => {
     console.error('[pool-server] Emergency memory pressure - initiating graceful shutdown for restart');
-    // Don't exit immediately - let pending requests complete
+    // Reuse the same graceful shutdown logic as normal shutdown
+    // This ensures active requests are drained properly (with timeout)
     // Rust will detect the exit and restart the process
-    setTimeout(async () => {
-      try {
-        await server.stop();
-      } catch (err) {
-        console.error('[pool-server] Error during emergency shutdown:', err);
-      }
-      process.exit(137); // Signal OOM-like exit to Rust
-    }, 1000);
+    server.emergencyShutdown().catch((err) => {
+      console.error('[pool-server] Error during emergency shutdown:', err);
+      process.exit(1);
+    });
   });
 
   memoryMonitor.start();

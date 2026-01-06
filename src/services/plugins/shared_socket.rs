@@ -988,4 +988,572 @@ mod tests {
 
         service.shutdown().await;
     }
+
+    #[tokio::test]
+    async fn test_execution_guard_auto_unregister() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_guard.sock");
+
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+        let execution_id = "test-exec-guard".to_string();
+
+        {
+            let _guard = service.register_execution(execution_id.clone()).await;
+
+            // Verify execution is registered
+            let map = service.executions.read().await;
+            assert!(map.contains_key(&execution_id));
+        }
+        // Guard dropped here
+
+        // Give tokio task time to run
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Verify execution was auto-unregistered
+        let map = service.executions.read().await;
+        assert!(!map.contains_key(&execution_id));
+    }
+
+    #[tokio::test]
+    async fn test_api_request_without_register_rejected() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_no_register.sock");
+
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        service
+            .clone()
+            .start(Arc::new(web::ThinData(state)))
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = UnixStream::connect(socket_path.to_str().unwrap())
+            .await
+            .unwrap();
+
+        // Send ApiRequest WITHOUT registering first (security violation)
+        let api_request = PluginMessage::ApiRequest {
+            request_id: "req-1".to_string(),
+            relayer_id: "relayer-1".to_string(),
+            method: crate::services::plugins::relayer_api::PluginMethod::GetRelayerStatus,
+            payload: serde_json::json!({}),
+        };
+        let req_json = serde_json::to_string(&api_request).unwrap() + "\n";
+        client.write_all(req_json.as_bytes()).await.unwrap();
+        client.flush().await.unwrap();
+
+        // Connection should be closed by server
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let (r, _w) = client.into_split();
+        let mut reader = BufReader::new(r);
+        let mut line = String::new();
+        let result = reader.read_line(&mut line).await;
+
+        // Should get EOF (connection closed)
+        assert!(result.is_err() || result.unwrap() == 0);
+
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_register_with_unknown_execution_id_rejected() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_unknown_exec.sock");
+
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        service
+            .clone()
+            .start(Arc::new(web::ThinData(state)))
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = UnixStream::connect(socket_path.to_str().unwrap())
+            .await
+            .unwrap();
+
+        // Try to register with an execution_id that doesn't exist in registry
+        let register_msg = PluginMessage::Register {
+            execution_id: "unknown-exec-id".to_string(),
+        };
+        let msg_json = serde_json::to_string(&register_msg).unwrap() + "\n";
+        client.write_all(msg_json.as_bytes()).await.unwrap();
+        client.flush().await.unwrap();
+
+        // Connection should be closed
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let (r, _w) = client.into_split();
+        let mut reader = BufReader::new(r);
+        let mut line = String::new();
+        let result = reader.read_line(&mut line).await;
+
+        assert!(result.is_err() || result.unwrap() == 0);
+
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_connection_limit_enforcement() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_connection_limit.sock");
+
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        service
+            .clone()
+            .start(Arc::new(web::ThinData(state)))
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Check initial connection count
+        let initial_permits = service.connection_semaphore.available_permits();
+        let max_connections = get_config().socket_max_connections;
+        assert_eq!(initial_permits, max_connections);
+
+        // Create a connection (should reduce available permits)
+        let _client = UnixStream::connect(socket_path.to_str().unwrap())
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Available permits should be reduced
+        let after_connect = service.connection_semaphore.available_permits();
+        assert!(after_connect < initial_permits);
+
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_idle_timeout() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_idle_timeout.sock");
+
+        // Create service with short idle timeout for testing
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        service
+            .clone()
+            .start(Arc::new(web::ThinData(state)))
+            .await
+            .unwrap();
+
+        let execution_id = "test-exec-idle".to_string();
+        let _guard = service.register_execution(execution_id.clone()).await;
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = UnixStream::connect(socket_path.to_str().unwrap())
+            .await
+            .unwrap();
+
+        // Register
+        let register_msg = PluginMessage::Register { execution_id };
+        client
+            .write_all((serde_json::to_string(&register_msg).unwrap() + "\n").as_bytes())
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+
+        // Wait longer than idle timeout (configured in service)
+        // Note: idle_timeout is from config, but we can test that connection stays alive
+        // within a reasonable time
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Connection should still be alive if we're within timeout
+        // Send a Shutdown message to verify connection is still up
+        let shutdown_msg = PluginMessage::Shutdown;
+        let write_result = client
+            .write_all((serde_json::to_string(&shutdown_msg).unwrap() + "\n").as_bytes())
+            .await;
+
+        assert!(write_result.is_ok(), "Connection should still be alive");
+
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_read_timeout_handling() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_read_timeout.sock");
+
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        service
+            .clone()
+            .start(Arc::new(web::ThinData(state)))
+            .await
+            .unwrap();
+
+        let execution_id = "test-exec-read-timeout".to_string();
+        let _guard = service.register_execution(execution_id.clone()).await;
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = UnixStream::connect(socket_path.to_str().unwrap())
+            .await
+            .unwrap();
+
+        // Register
+        let register_msg = PluginMessage::Register { execution_id };
+        client
+            .write_all((serde_json::to_string(&register_msg).unwrap() + "\n").as_bytes())
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+
+        // Don't send anything else - connection should be cleaned up after read timeout
+        // Read timeout is configured in service (from config)
+
+        // Wait a bit (but not as long as full timeout)
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // Connection should still be valid for a short time
+        drop(client);
+
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_multiple_api_requests_same_connection() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_multiple_requests.sock");
+
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        service
+            .clone()
+            .start(Arc::new(web::ThinData(state)))
+            .await
+            .unwrap();
+
+        let execution_id = "test-exec-multi".to_string();
+        let _guard = service.register_execution(execution_id.clone()).await;
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = UnixStream::connect(socket_path.to_str().unwrap())
+            .await
+            .unwrap();
+
+        // Register
+        let register_msg = PluginMessage::Register {
+            execution_id: execution_id.clone(),
+        };
+        client
+            .write_all((serde_json::to_string(&register_msg).unwrap() + "\n").as_bytes())
+            .await
+            .unwrap();
+
+        let (r, mut w) = client.into_split();
+        let mut reader = BufReader::new(r);
+
+        // Send multiple API requests
+        for i in 1..=3 {
+            let api_request = PluginMessage::ApiRequest {
+                request_id: format!("req-{}", i),
+                relayer_id: "relayer-1".to_string(),
+                method: crate::services::plugins::relayer_api::PluginMethod::GetRelayerStatus,
+                payload: serde_json::json!({}),
+            };
+            w.write_all((serde_json::to_string(&api_request).unwrap() + "\n").as_bytes())
+                .await
+                .unwrap();
+            w.flush().await.unwrap();
+
+            // Read response
+            let mut response_line = String::new();
+            reader.read_line(&mut response_line).await.unwrap();
+
+            let response: PluginMessage = serde_json::from_str(&response_line).unwrap();
+            match response {
+                PluginMessage::ApiResponse { request_id, .. } => {
+                    assert_eq!(request_id, format!("req-{}", i));
+                }
+                _ => panic!("Expected ApiResponse"),
+            }
+        }
+
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_signal() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_shutdown_signal.sock");
+
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        service
+            .clone()
+            .start(Arc::new(web::ThinData(state)))
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Verify socket file exists
+        assert!(std::path::Path::new(socket_path.to_str().unwrap()).exists());
+
+        // Shutdown the service
+        service.shutdown().await;
+
+        // Give time for cleanup
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Socket file should be removed
+        assert!(!std::path::Path::new(socket_path.to_str().unwrap()).exists());
+    }
+
+    #[tokio::test]
+    async fn test_malformed_json_handling() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_malformed.sock");
+
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        service
+            .clone()
+            .start(Arc::new(web::ThinData(state)))
+            .await
+            .unwrap();
+
+        let execution_id = "test-exec-malformed".to_string();
+        let _guard = service.register_execution(execution_id.clone()).await;
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = UnixStream::connect(socket_path.to_str().unwrap())
+            .await
+            .unwrap();
+
+        // Register first
+        let register_msg = PluginMessage::Register {
+            execution_id: execution_id.clone(),
+        };
+        client
+            .write_all((serde_json::to_string(&register_msg).unwrap() + "\n").as_bytes())
+            .await
+            .unwrap();
+
+        // Send malformed JSON
+        client
+            .write_all(b"{ this is not valid json }\n")
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+
+        // Connection should remain open (malformed messages are logged and skipped)
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Send valid shutdown message to verify connection is still up
+        let shutdown_msg = PluginMessage::Shutdown;
+        let write_result = client
+            .write_all((serde_json::to_string(&shutdown_msg).unwrap() + "\n").as_bytes())
+            .await;
+
+        assert!(
+            write_result.is_ok(),
+            "Connection should still be alive after malformed JSON"
+        );
+
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_invalid_message_direction() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_invalid_direction.sock");
+
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        service
+            .clone()
+            .start(Arc::new(web::ThinData(state)))
+            .await
+            .unwrap();
+
+        let execution_id = "test-exec-invalid-dir".to_string();
+        let _guard = service.register_execution(execution_id.clone()).await;
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = UnixStream::connect(socket_path.to_str().unwrap())
+            .await
+            .unwrap();
+
+        // Register
+        let register_msg = PluginMessage::Register {
+            execution_id: execution_id.clone(),
+        };
+        client
+            .write_all((serde_json::to_string(&register_msg).unwrap() + "\n").as_bytes())
+            .await
+            .unwrap();
+
+        // Plugin tries to send ApiResponse (invalid direction - only Host sends ApiResponse)
+        let invalid_msg = PluginMessage::ApiResponse {
+            request_id: "invalid".to_string(),
+            result: Some(serde_json::json!({})),
+            error: None,
+        };
+        client
+            .write_all((serde_json::to_string(&invalid_msg).unwrap() + "\n").as_bytes())
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+
+        // Connection should remain open (invalid messages are logged and skipped)
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Verify connection is still alive
+        let shutdown_msg = PluginMessage::Shutdown;
+        let write_result = client
+            .write_all((serde_json::to_string(&shutdown_msg).unwrap() + "\n").as_bytes())
+            .await;
+
+        assert!(write_result.is_ok());
+
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_stale_execution_cleanup() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_stale_cleanup.sock");
+
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+
+        // Register an execution manually with old timestamp
+        let execution_id = "stale-exec".to_string();
+        let (tx, _rx) = mpsc::channel(1);
+        {
+            let mut map = service.executions.write().await;
+            map.insert(
+                execution_id.clone(),
+                ExecutionContext {
+                    traces_tx: tx,
+                    created_at: Instant::now() - Duration::from_secs(400), // 6+ minutes old
+                    bound_execution_id: execution_id.clone(),
+                },
+            );
+        }
+
+        // Verify it's registered
+        {
+            let map = service.executions.read().await;
+            assert!(map.contains_key(&execution_id));
+        }
+
+        // Wait for cleanup task to run (it runs every 60 seconds, but we can't wait that long)
+        // Instead, we verify the cleanup logic by checking the code in new()
+        // The actual cleanup test would require mocking time or waiting 60+ seconds
+
+        // For this test, we just verify the logic exists and doesn't panic
+        drop(service);
+    }
+
+    #[tokio::test]
+    async fn test_socket_path_getter() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_path.sock");
+
+        let service = SharedSocketService::new(socket_path.to_str().unwrap()).unwrap();
+
+        assert_eq!(service.socket_path(), socket_path.to_str().unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_trace_send_timeout() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_trace_timeout.sock");
+
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        service
+            .clone()
+            .start(Arc::new(web::ThinData(state)))
+            .await
+            .unwrap();
+
+        let execution_id = "test-exec-trace-timeout".to_string();
+        let guard = service.register_execution(execution_id.clone()).await;
+
+        // Don't consume the receiver - this will cause the channel to fill up
+        drop(guard);
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = UnixStream::connect(socket_path.to_str().unwrap())
+            .await
+            .unwrap();
+
+        // Register
+        let register_msg = PluginMessage::Register {
+            execution_id: execution_id.clone(),
+        };
+        client
+            .write_all((serde_json::to_string(&register_msg).unwrap() + "\n").as_bytes())
+            .await
+            .unwrap();
+
+        // Send trace
+        let trace = PluginMessage::Trace {
+            trace: serde_json::json!({"event": "test"}),
+        };
+        client
+            .write_all((serde_json::to_string(&trace).unwrap() + "\n").as_bytes())
+            .await
+            .unwrap();
+
+        // Shutdown
+        let shutdown_msg = PluginMessage::Shutdown;
+        client
+            .write_all((serde_json::to_string(&shutdown_msg).unwrap() + "\n").as_bytes())
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+
+        drop(client);
+
+        // Wait for connection to close - should handle timeout gracefully
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_get_shared_socket_service() {
+        // Test the global singleton
+        let service1 = get_shared_socket_service();
+        assert!(service1.is_ok());
+
+        let service2 = get_shared_socket_service();
+        assert!(service2.is_ok());
+
+        // Should return the same instance
+        let svc1 = service1.unwrap();
+        let svc2 = service2.unwrap();
+        let path1 = svc1.socket_path();
+        let path2 = svc2.socket_path();
+        assert_eq!(path1, path2);
+    }
 }

@@ -7,10 +7,10 @@
 //!
 //! ## Execution Modes
 //!
-//! - **ts-node mode** (default): Spawns ts-node per request. Simple but slower.
-//!   Uses the shared socket for bidirectional communication.
-//! - **Pool mode** (`PLUGIN_USE_POOL=true`): Uses persistent Piscina worker pool.
+//! - **Pool mode** (default): Uses persistent Piscina worker pool.
 //!   Faster execution with precompilation and worker reuse.
+//! - **ts-node mode** (`PLUGIN_USE_POOL=false`): Spawns ts-node per request.
+//!   Simple but slower. Uses the shared socket for bidirectional communication.
 //!
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
@@ -40,10 +40,11 @@ use uuid::Uuid;
 use mockall::automock;
 
 /// Check if pool-based execution is enabled via environment variable
+/// Pool mode is enabled by default for better performance
 fn use_pool_executor() -> bool {
     std::env::var("PLUGIN_USE_POOL")
         .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-        .unwrap_or(false)
+        .unwrap_or(true) // Pool mode is now the default
 }
 
 /// Get trace timeout duration from centralized config
@@ -376,6 +377,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_run() {
+        // Use ts-node mode for this test since temp files are outside plugins directory
+        std::env::set_var("PLUGIN_USE_POOL", "false");
+
         let temp_dir = tempdir().unwrap();
         let ts_config = temp_dir.path().join("tsconfig.json");
         let script_path = temp_dir.path().join("test_run.ts");
@@ -410,6 +414,10 @@ mod tests {
                 Arc::new(web::ThinData(state)),
             )
             .await;
+
+        // Cleanup env var
+        std::env::remove_var("PLUGIN_USE_POOL");
+
         if matches!(
             result,
             Err(PluginError::SocketError(ref msg)) if msg.contains("Operation not permitted")
@@ -428,6 +436,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_timeout() {
+        // Use ts-node mode for this test since temp files are outside plugins directory
+        std::env::set_var("PLUGIN_USE_POOL", "false");
+
         let temp_dir = tempdir().unwrap();
         let ts_config = temp_dir.path().join("tsconfig.json");
         let script_path = temp_dir.path().join("test_simple_timeout.ts");
@@ -470,6 +481,9 @@ mod tests {
                 Arc::new(web::ThinData(state)),
             )
             .await;
+
+        // Cleanup env var
+        std::env::remove_var("PLUGIN_USE_POOL");
 
         // Should timeout
         if matches!(

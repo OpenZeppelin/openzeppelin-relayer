@@ -23,6 +23,15 @@ use uuid::Uuid;
 pub mod config;
 pub use config::*;
 
+pub mod health;
+pub use health::*;
+
+pub mod protocol;
+pub use protocol::*;
+
+pub mod connection;
+pub use connection::*;
+
 pub mod runner;
 pub use runner::*;
 

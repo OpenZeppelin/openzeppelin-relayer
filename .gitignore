@@ -70,6 +70,10 @@ test-results/
 # Pre-compiled plugin executor (generated at build time)
 plugins/lib/sandbox-executor.js
 
+# Build executor cache files
+plugins/lib/.build-cache-hash
+plugins/lib/sandbox-executor.js.sha256
+
 # TypeScript compiled output in plugins (we use ts-node for runtime)
 plugins/**/*.js
 plugins/**/*.js.map
