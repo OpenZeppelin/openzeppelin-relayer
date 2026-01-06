@@ -195,9 +195,26 @@ impl GoogleCloudKmsService {
 
     fn get_base_url(&self) -> String {
         let universe_domain = self.config.service_account.universe_domain.to_str();
-        if universe_domain.starts_with("http") {
+
+        if universe_domain.starts_with("https://") {
+            // Already a full HTTPS URL
             (*universe_domain).clone()
+        } else if universe_domain.starts_with("http://") {
+            // Allow HTTP only in test mode for mock servers
+            #[cfg(test)]
+            {
+                (*universe_domain).clone()
+            }
+            #[cfg(not(test))]
+            {
+                // In production, upgrade http:// to https://
+                format!(
+                    "https://{}",
+                    universe_domain.strip_prefix("http://").unwrap()
+                )
+            }
         } else {
+            // Just a domain name, construct the full HTTPS URL
             format!("https://cloudkms.{}", *universe_domain)
         }
     }
