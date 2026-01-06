@@ -200,15 +200,16 @@ impl GoogleCloudKmsService {
             // Already a full HTTPS URL
             (*universe_domain).clone()
         } else if universe_domain.starts_with("http://") {
+            // In production, always upgrade http:// to https:// to ensure encryption
+            #[cfg(not(test))]
+            {
+                format!("https://{}", universe_domain.trim_start_matches("http://"))
+            }
             // Allow HTTP only in test mode for mock servers
+            // This is intentional for testing and does not pose a security risk
             #[cfg(test)]
             {
                 (*universe_domain).clone()
-            }
-            #[cfg(not(test))]
-            {
-                // In production, upgrade http:// to https://
-                format!("https://{}", universe_domain.trim_start_matches("http://"))
             }
         } else {
             // Just a domain name, construct the full HTTPS URL
@@ -218,6 +219,8 @@ impl GoogleCloudKmsService {
 
     async fn kms_get(&self, url: &str) -> GoogleCloudKmsResult<Value> {
         let headers = self.get_auth_headers().await?;
+        // In production, all requests use HTTPS. HTTP is only allowed in test mode for mock servers.
+        // lgtm[rust/cleartext-transmission]
         let resp = self
             .client
             .get(url)
@@ -241,6 +244,8 @@ impl GoogleCloudKmsService {
 
     async fn kms_post(&self, url: &str, body: &Value) -> GoogleCloudKmsResult<Value> {
         let headers = self.get_auth_headers().await?;
+        // In production, all requests use HTTPS. HTTP is only allowed in test mode for mock servers.
+        // lgtm[rust/cleartext-transmission]
         let resp = self
             .client
             .post(url)
