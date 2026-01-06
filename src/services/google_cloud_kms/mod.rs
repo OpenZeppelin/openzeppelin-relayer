@@ -208,10 +208,7 @@ impl GoogleCloudKmsService {
             #[cfg(not(test))]
             {
                 // In production, upgrade http:// to https://
-                format!(
-                    "https://{}",
-                    universe_domain.strip_prefix("http://").unwrap()
-                )
+                format!("https://{}", universe_domain.trim_start_matches("http://"))
             }
         } else {
             // Just a domain name, construct the full HTTPS URL

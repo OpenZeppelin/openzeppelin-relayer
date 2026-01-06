@@ -51,9 +51,11 @@ pub struct SwapInfo {
     #[serde(rename = "outAmount")]
     pub out_amount: String,
     #[serde(rename = "feeAmount")]
-    pub fee_amount: String,
+    #[serde(default)]
+    pub fee_amount: Option<String>,
     #[serde(rename = "feeMint")]
-    pub fee_mint: String,
+    #[serde(default)]
+    pub fee_mint: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -412,8 +414,8 @@ impl JupiterServiceTrait for MockJupiterService {
                     output_mint: request.output_mint.to_string(),
                     in_amount: request.amount.to_string(),
                     out_amount: request.amount.to_string(),
-                    fee_amount: "0".to_string(),
-                    fee_mint: "mock_fee_mint".to_string(),
+                    fee_amount: Some("0".to_string()),
+                    fee_mint: Some("mock_fee_mint".to_string()),
                 },
             }],
         };
@@ -472,8 +474,8 @@ impl JupiterServiceTrait for MockJupiterService {
                     output_mint: request.output_mint.to_string(),
                     in_amount: request.amount.to_string(),
                     out_amount: request.amount.to_string(),
-                    fee_amount: "0".to_string(),
-                    fee_mint: "mock_fee_mint".to_string(),
+                    fee_amount: Some("0".to_string()),
+                    fee_mint: Some("mock_fee_mint".to_string()),
                 },
             }],
             prioritization_fee_lamports: 0,
@@ -679,8 +681,8 @@ mod tests {
                     output_mint: "So11111111111111111111111111111111111111112".to_string(),
                     in_amount: "1000000".to_string(),
                     out_amount: "24860952".to_string(),
-                    fee_amount: "1000".to_string(),
-                    fee_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                    fee_amount: Some("1000".to_string()),
+                    fee_mint: Some("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string()),
                 },
             }],
         };
@@ -750,8 +752,8 @@ mod tests {
                     output_mint: "So11111111111111111111111111111111111111112".to_string(),
                     in_amount: "1000000".to_string(),
                     out_amount: "24860952".to_string(),
-                    fee_amount: "1000".to_string(),
-                    fee_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                    fee_amount: Some("1000".to_string()),
+                    fee_mint: Some("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string()),
                 },
             }],
             prioritization_fee_lamports: 5000,
