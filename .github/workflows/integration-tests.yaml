@@ -50,9 +50,7 @@ jobs:
         run: |
           docker build -f Dockerfile.integration --target runtime -t openzeppelin-relayer-integration:latest .
       - name: Create coverage directories
-        run: |
-          mkdir -p ./coverage ./profraw
-          chmod 777 ./coverage ./profraw
+        run: mkdir -p ./coverage ./profraw
       - name: Run Integration Tests
         run: ./scripts/run-integration-docker.sh
       - name: Verify coverage exists
