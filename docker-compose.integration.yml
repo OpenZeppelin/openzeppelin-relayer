@@ -86,6 +86,7 @@ services:
       dockerfile: Dockerfile.integration
       target: runtime  # Use runtime stage that executes pre-built binary with coverage
     container_name: integration-tests
+    user: ${HOST_UID:-1000}:${HOST_GID:-1000}  # Run as host user for proper file permissions
     depends_on:
       relayer:
         condition: service_healthy

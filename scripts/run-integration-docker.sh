@@ -51,6 +51,10 @@ set -a
 source "$PROJECT_ROOT/.env.integration"
 set +a
 
+# Export UID/GID for docker-compose (allows container to run as host user)
+export HOST_UID=$(id -u)
+export HOST_GID=$(id -g)
+
 # Detect if running in CI
 CI=${CI:-false}
 
@@ -218,9 +222,8 @@ case "$COMMAND" in
         log_info "Starting relayer..."
         docker compose $PROFILE -f docker-compose.integration.yml up -d relayer
 
-        # Create coverage directories
+        # Create coverage directories (container runs as host user, so default perms are fine)
         mkdir -p "$PROJECT_ROOT/coverage" "$PROJECT_ROOT/profraw"
-        chmod 777 "$PROJECT_ROOT/coverage" "$PROJECT_ROOT/profraw"
 
         # Run tests - different behavior for CI vs local
         log_info "Running integration tests..."
