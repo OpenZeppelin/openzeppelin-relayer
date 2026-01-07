@@ -3,10 +3,14 @@
     on:
       push:
         branches: ["main"]
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
     jobs:
       build-push-image:
         name: Build and Push Docker Image
-        runs-on: ubuntu:latest
+        runs-on: ubuntu-latest
         steps:
           - name: Harden the runner (Audit all outbound calls)
             uses: step-security/harden-runner@df199fb7be9f65074067a9eb93f12bb4c5547cf2  # v2.13.3
