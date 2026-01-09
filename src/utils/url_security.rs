@@ -47,8 +47,12 @@ pub fn validate_rpc_url(
         .host_str()
         .ok_or_else(|| "URL must contain a host".to_string())?;
 
-    // If allowed_hosts is non-empty, enforce allow-list
-    if !allowed_hosts.is_empty() && !allowed_hosts.iter().any(|allowed| allowed == host) {
+    // If allowed_hosts is non-empty, enforce allow-list (case-insensitive, as DNS is case-insensitive)
+    if !allowed_hosts.is_empty()
+        && !allowed_hosts
+            .iter()
+            .any(|allowed| allowed.eq_ignore_ascii_case(host))
+    {
         error!(
             url = sanitize_url(url),
             host = host,
@@ -57,7 +61,19 @@ pub fn validate_rpc_url(
         return Err(format!("Host '{host}' is not in the allowed hosts list"));
     }
 
-    // Block dangerous hostnames when block_private is enabled
+    // Always block cloud metadata hostnames (security-critical, similar to metadata IPs)
+    if is_metadata_hostname(host) {
+        error!(
+            url = sanitize_url(url),
+            host = host,
+            "RPC URL rejected: cloud metadata hostname"
+        );
+        return Err(
+            "Cloud metadata hostnames (metadata.google.internal) are not allowed".to_string(),
+        );
+    }
+
+    // Block other dangerous hostnames when block_private is enabled
     if block_private && is_dangerous_hostname(host) {
         error!(
             url = sanitize_url(url),
@@ -83,7 +99,22 @@ pub fn validate_rpc_url(
     Ok(())
 }
 
-/// Checks if a hostname is dangerous (localhost, internal cloud endpoints, etc.)
+/// Checks if a hostname is a known cloud metadata endpoint
+///
+/// These hostnames are ALWAYS blocked regardless of the `block_private` setting
+/// because they can be used for SSRF attacks to access cloud instance metadata.
+fn is_metadata_hostname(host: &str) -> bool {
+    let host_lower = host.to_lowercase();
+
+    // GCP metadata endpoint hostname
+    // AWS and Azure use IP addresses (169.254.169.254) which are handled by is_metadata_endpoint()
+    host_lower == "metadata.google.internal"
+}
+
+/// Checks if a hostname is dangerous (localhost, internal domains, etc.)
+///
+/// These hostnames are blocked when `block_private=true` because they typically
+/// resolve to private/internal network resources.
 fn is_dangerous_hostname(host: &str) -> bool {
     let host_lower = host.to_lowercase();
 
@@ -92,14 +123,9 @@ fn is_dangerous_hostname(host: &str) -> bool {
         return true;
     }
 
-    // Block cloud provider internal metadata hostnames
-    // GCP uses metadata.google.internal
-    if host_lower == "metadata.google.internal" {
-        return true;
-    }
-
     // Block common internal domain patterns
     // .internal is commonly used for internal DNS in cloud environments
+    // Note: metadata.google.internal is handled by is_metadata_hostname() and always blocked
     if host_lower.ends_with(".internal") {
         return true;
     }
@@ -229,6 +255,42 @@ fn sanitize_url(url: &str) -> String {
     }
 }
 
+/// Sanitizes a URL for error messages by only showing scheme, host, and port
+///
+/// This function is more aggressive than `sanitize_url` because it completely
+/// redacts the path, query parameters, and fragments. This prevents leaking
+/// API keys that are commonly embedded in RPC URL paths (e.g., Infura, Alchemy).
+///
+/// # Examples
+/// ```
+/// use openzeppelin_relayer::utils::sanitize_url_for_error;
+///
+/// // API key in path is redacted
+/// assert_eq!(
+///     sanitize_url_for_error("https://mainnet.infura.io/v3/SECRET_KEY"),
+///     "https://mainnet.infura.io/[path redacted]"
+/// );
+///
+/// // Query parameters are also redacted
+/// assert_eq!(
+///     sanitize_url_for_error("https://api.example.com?apikey=secret"),
+///     "https://api.example.com/[path redacted]"
+/// );
+///
+/// // Invalid URLs show a safe placeholder
+/// assert_eq!(sanitize_url_for_error("not-a-url"), "[invalid URL]");
+/// ```
+pub fn sanitize_url_for_error(url: &str) -> String {
+    if let Ok(parsed) = reqwest::Url::parse(url) {
+        let scheme = parsed.scheme();
+        let host = parsed.host_str().unwrap_or("[no host]");
+        let port_suffix = parsed.port().map(|p| format!(":{p}")).unwrap_or_default();
+        format!("{scheme}://{host}{port_suffix}/[path redacted]")
+    } else {
+        "[invalid URL]".to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,6 +393,34 @@ mod tests {
     }
 
     #[test]
+    fn test_allow_list_case_insensitive() {
+        // DNS is case-insensitive, so allow-list comparison should be too
+        // URL with lowercase, allow-list with uppercase
+        let result = validate_rpc_url(
+            "https://eth-mainnet.g.alchemy.com/v2/demo",
+            &["ETH-MAINNET.G.ALCHEMY.COM".to_string()],
+            false,
+        );
+        assert!(result.is_ok());
+
+        // URL with uppercase, allow-list with lowercase
+        let result = validate_rpc_url(
+            "https://ETH-MAINNET.G.ALCHEMY.COM/v2/demo",
+            &["eth-mainnet.g.alchemy.com".to_string()],
+            false,
+        );
+        assert!(result.is_ok());
+
+        // Mixed case in both
+        let result = validate_rpc_url(
+            "https://Eth-Mainnet.G.Alchemy.COM/v2/demo",
+            &["ETH-mainnet.g.ALCHEMY.com".to_string()],
+            false,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
     fn test_allow_list_rejects_unlisted_host() {
         // Hosts not in the allow-list are rejected
         let result = validate_rpc_url(
@@ -380,6 +470,60 @@ mod tests {
             "https://example.com/path"
         );
         assert_eq!(sanitize_url("invalid"), "[invalid URL]");
+    }
+
+    #[test]
+    fn test_sanitize_url_for_error_redacts_path() {
+        // API key in path should be redacted
+        assert_eq!(
+            sanitize_url_for_error("https://mainnet.infura.io/v3/SECRET_API_KEY"),
+            "https://mainnet.infura.io/[path redacted]"
+        );
+        assert_eq!(
+            sanitize_url_for_error("https://eth-mainnet.g.alchemy.com/v2/MY_API_KEY"),
+            "https://eth-mainnet.g.alchemy.com/[path redacted]"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_url_for_error_redacts_query() {
+        // Query parameters should be redacted
+        assert_eq!(
+            sanitize_url_for_error("https://api.example.com/rpc?apikey=secret"),
+            "https://api.example.com/[path redacted]"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_url_for_error_preserves_port() {
+        // Port should be preserved
+        assert_eq!(
+            sanitize_url_for_error("https://rpc.example.com:8545/path"),
+            "https://rpc.example.com:8545/[path redacted]"
+        );
+        assert_eq!(
+            sanitize_url_for_error("http://localhost:8545/secret"),
+            "http://localhost:8545/[path redacted]"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_url_for_error_handles_invalid() {
+        // Invalid URLs should return safe placeholder
+        assert_eq!(sanitize_url_for_error("not-a-url"), "[invalid URL]");
+        assert_eq!(sanitize_url_for_error(""), "[invalid URL]");
+    }
+
+    #[test]
+    fn test_sanitize_url_for_error_preserves_scheme() {
+        assert_eq!(
+            sanitize_url_for_error("http://example.com/path"),
+            "http://example.com/[path redacted]"
+        );
+        assert_eq!(
+            sanitize_url_for_error("https://example.com/path"),
+            "https://example.com/[path redacted]"
+        );
     }
 
     // === New tests for improved SSRF protection ===
@@ -432,15 +576,25 @@ mod tests {
     }
 
     #[test]
-    fn test_block_metadata_google_internal() {
-        // GCP metadata endpoint hostname should be blocked
+    fn test_block_metadata_google_internal_always() {
+        // GCP metadata endpoint hostname should be ALWAYS blocked (similar to metadata IPs)
+        // Test with block_private=true
         let result = validate_rpc_url(
             "http://metadata.google.internal/computeMetadata/v1",
             &[],
             true,
         );
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("not allowed"));
+        assert!(result.unwrap_err().contains("metadata"));
+
+        // Test with block_private=false - should STILL be blocked
+        let result = validate_rpc_url(
+            "http://metadata.google.internal/computeMetadata/v1",
+            &[],
+            false,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("metadata"));
     }
 
     #[test]
@@ -466,13 +620,30 @@ mod tests {
 
     #[test]
     fn test_dangerous_hostname_detection() {
+        // Localhost patterns
         assert!(is_dangerous_hostname("localhost"));
         assert!(is_dangerous_hostname("LOCALHOST")); // case insensitive
         assert!(is_dangerous_hostname("sub.localhost"));
-        assert!(is_dangerous_hostname("metadata.google.internal"));
+        // Internal domains (excluding metadata.google.internal which is handled separately)
         assert!(is_dangerous_hostname("service.internal"));
+        assert!(is_dangerous_hostname("some-app.internal"));
+        // Safe hostnames
         assert!(!is_dangerous_hostname("example.com"));
         assert!(!is_dangerous_hostname("eth-mainnet.g.alchemy.com"));
+        // Note: metadata.google.internal is now checked by is_metadata_hostname()
+        // but is_dangerous_hostname still catches it via .internal suffix
+        assert!(is_dangerous_hostname("metadata.google.internal"));
+    }
+
+    #[test]
+    fn test_metadata_hostname_detection() {
+        // Cloud metadata hostnames should always be detected
+        assert!(is_metadata_hostname("metadata.google.internal"));
+        assert!(is_metadata_hostname("METADATA.GOOGLE.INTERNAL")); // case insensitive
+                                                                   // Non-metadata hostnames
+        assert!(!is_metadata_hostname("localhost"));
+        assert!(!is_metadata_hostname("example.com"));
+        assert!(!is_metadata_hostname("service.internal"));
     }
 
     #[test]

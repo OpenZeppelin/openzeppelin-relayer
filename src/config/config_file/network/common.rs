@@ -10,7 +10,7 @@
 //! - **Validation**: Required field checks and URL format validation
 
 use crate::config::{ConfigFileError, ServerConfig};
-use crate::utils::validate_rpc_url;
+use crate::utils::{sanitize_url_for_error, validate_rpc_url};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -60,15 +60,11 @@ impl NetworkConfigCommon {
             let block_private_ips = ServerConfig::get_block_private_ips();
 
             for url in urls {
-                // Validate URL format
-                reqwest::Url::parse(url).map_err(|_| {
-                    ConfigFileError::InvalidFormat(format!("Invalid RPC URL: {url}"))
-                })?;
-
-                // Validate URL security (SSRF protection)
+                // Validate URL format and security
                 validate_rpc_url(url, &allowed_hosts, block_private_ips).map_err(|err| {
                     ConfigFileError::InvalidFormat(format!(
-                        "RPC URL security validation failed for '{url}': {err}"
+                        "RPC URL validation failed for '{}': {err}",
+                        sanitize_url_for_error(url)
                     ))
                 })?;
             }
@@ -77,7 +73,10 @@ impl NetworkConfigCommon {
         if let Some(urls) = &self.explorer_urls {
             for url in urls {
                 reqwest::Url::parse(url).map_err(|_| {
-                    ConfigFileError::InvalidFormat(format!("Invalid Explorer URL: {url}"))
+                    ConfigFileError::InvalidFormat(format!(
+                        "Invalid Explorer URL: {}",
+                        sanitize_url_for_error(url)
+                    ))
                 })?;
             }
         }
