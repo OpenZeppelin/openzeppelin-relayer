@@ -560,7 +560,24 @@ impl SolanaProvider {
     }
 
     /// Initialize a provider for a given URL
+    ///
+    /// # SSRF Mitigation Note
+    /// Unlike EVM and Stellar providers, HTTP redirect policy cannot be disabled here.
+    /// The Solana SDK's `RpcClient::new_with_timeout_and_commitment` doesn't expose
+    /// HTTP client configuration. To disable redirects, we would need to use
+    /// `solana-rpc-client::HttpSender::new_with_client()` with a custom reqwest::Client,
+    /// which requires adding `solana-rpc-client` as a direct dependency.
+    /// The URL security validation provides the primary SSRF defense for Solana.
     fn initialize_provider(&self, url: &str) -> Result<Arc<RpcClient>, SolanaProviderError> {
+        // Layer 2 validation: Re-validate URL security as a safety net
+        let allowed_hosts = crate::config::ServerConfig::get_allowed_rpc_hosts();
+        let block_private_ips = crate::config::ServerConfig::get_block_private_ips();
+        crate::utils::validate_rpc_url(url, &allowed_hosts, block_private_ips).map_err(|e| {
+            SolanaProviderError::NetworkConfiguration(format!(
+                "RPC URL security validation failed: {e}"
+            ))
+        })?;
+
         let rpc_url: Url = url.parse().map_err(|e| {
             SolanaProviderError::NetworkConfiguration(format!("Invalid URL format: {e}"))
         })?;

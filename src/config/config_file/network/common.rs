@@ -9,7 +9,7 @@
 //! - **Smart merging**: Collections merge preserving unique items, primitives override
 //! - **Validation**: Required field checks and URL format validation
 
-use crate::config::ConfigFileError;
+use crate::config::{ConfigFileError, ServerConfig};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -52,12 +52,26 @@ impl NetworkConfigCommon {
             }
         }
 
-        // Validate RPC URLs format if provided
+        // Validate RPC URLs format and security if provided
         if let Some(urls) = &self.rpc_urls {
+            // Get security configuration from environment
+            let allowed_hosts = ServerConfig::get_allowed_rpc_hosts();
+            let block_private_ips = ServerConfig::get_block_private_ips();
+
             for url in urls {
+                // Validate URL format
                 reqwest::Url::parse(url).map_err(|_| {
                     ConfigFileError::InvalidFormat(format!("Invalid RPC URL: {url}"))
                 })?;
+
+                // Validate URL security (SSRF protection)
+                crate::utils::validate_rpc_url(url, &allowed_hosts, block_private_ips).map_err(
+                    |err| {
+                        ConfigFileError::InvalidFormat(format!(
+                            "RPC URL security validation failed for '{url}': {err}"
+                        ))
+                    },
+                )?;
             }
         }
 
@@ -229,15 +243,30 @@ mod tests {
     #[test]
     fn test_validate_various_valid_rpc_url_formats() {
         let mut config = create_network_common("test-network");
+        // Note: Only http and https schemes are allowed by SSRF validation
+        // localhost is allowed when BLOCK_PRIVATE_IPS is not set (default false)
         config.rpc_urls = Some(vec![
             "https://mainnet.infura.io/v3/key".to_string(),
             "http://localhost:8545".to_string(),
-            "wss://ws.example.com".to_string(),
             "https://rpc.example.com:8080/path".to_string(),
         ]);
 
         let result = config.validate();
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_rejects_non_http_scheme() {
+        let mut config = create_network_common("test-network");
+        // wss:// is not allowed - only http and https
+        config.rpc_urls = Some(vec!["wss://ws.example.com".to_string()]);
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ConfigFileError::InvalidFormat(_)
+        ));
     }
 
     #[test]

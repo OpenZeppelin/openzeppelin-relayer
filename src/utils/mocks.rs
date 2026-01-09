@@ -326,6 +326,8 @@ pub mod mockutils {
                 "test_encryption_key_1234567890_test_key_32",
             )),
             transaction_expiration_hours: 4,
+            allowed_rpc_hosts: vec![],
+            block_private_ips: false,
         }
     }
 }

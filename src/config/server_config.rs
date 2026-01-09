@@ -64,6 +64,10 @@ pub struct ServerConfig {
     pub storage_encryption_key: Option<SecretString>,
     /// Transaction expiration time in hours for transactions in final states.
     pub transaction_expiration_hours: u64,
+    /// Comma-separated list of allowed RPC hosts (domains or IPs). If non-empty, only these hosts are permitted.
+    pub allowed_rpc_hosts: Vec<String>,
+    /// If true, block private IP addresses (RFC 1918, loopback, link-local). Cloud metadata endpoints are always blocked.
+    pub block_private_ips: bool,
 }
 
 impl ServerConfig {
@@ -110,6 +114,8 @@ impl ServerConfig {
             reset_storage_on_start: Self::get_reset_storage_on_start(),
             storage_encryption_key: Self::get_storage_encryption_key(),
             transaction_expiration_hours: Self::get_transaction_expiration_hours(),
+            allowed_rpc_hosts: Self::get_allowed_rpc_hosts(),
+            block_private_ips: Self::get_block_private_ips(),
         }
     }
 
@@ -289,6 +295,26 @@ impl ServerConfig {
             .unwrap_or_else(|_| "4".to_string())
             .parse()
             .unwrap_or(4)
+    }
+
+    /// Gets the allowed RPC hosts from environment variable or default (empty list)
+    pub fn get_allowed_rpc_hosts() -> Vec<String> {
+        env::var("ALLOWED_RPC_HOSTS")
+            .ok()
+            .map(|s| {
+                s.split(',')
+                    .map(|host| host.trim().to_string())
+                    .filter(|host| !host.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Gets the block private IPs setting from environment variable or default (false)
+    pub fn get_block_private_ips() -> bool {
+        env::var("BLOCK_PRIVATE_IPS")
+            .map(|v| v.to_lowercase() == "true")
+            .unwrap_or(false)
     }
 
     /// Get worker concurrency from environment variable or use default

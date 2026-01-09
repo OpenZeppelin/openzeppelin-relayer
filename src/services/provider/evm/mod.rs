@@ -185,6 +185,13 @@ impl EvmProvider {
 
     /// Initialize a provider for a given URL
     fn initialize_provider(&self, url: &str) -> Result<EvmProviderType, ProviderError> {
+        // Re-validate URL security as a safety net
+        let allowed_hosts = crate::config::ServerConfig::get_allowed_rpc_hosts();
+        let block_private_ips = crate::config::ServerConfig::get_block_private_ips();
+        crate::utils::validate_rpc_url(url, &allowed_hosts, block_private_ips).map_err(|e| {
+            ProviderError::NetworkConfiguration(format!("RPC URL security validation failed: {e}"))
+        })?;
+
         let rpc_url = url
             .parse()
             .map_err(|e| ProviderError::NetworkConfiguration(format!("Invalid URL format: {e}")))?;
@@ -193,6 +200,7 @@ impl EvmProvider {
         let client = ReqwestClientBuilder::new()
             .timeout(Duration::from_secs(self.timeout_seconds))
             .use_rustls_tls()
+            .redirect(reqwest::redirect::Policy::none()) // Prevent SSRF via redirect chains
             .build()
             .map_err(|e| ProviderError::Other(format!("Failed to build HTTP client: {e}")))?;
 

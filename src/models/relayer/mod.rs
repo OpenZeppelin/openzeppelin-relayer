@@ -1141,10 +1141,22 @@ impl Relayer {
     /// Validates custom RPC URL configurations
     fn validate_custom_rpc_urls(&self) -> Result<(), RelayerValidationError> {
         if let Some(configs) = &self.custom_rpc_urls {
+            // Get security configuration from environment
+            let allowed_hosts = crate::config::ServerConfig::get_allowed_rpc_hosts();
+            let block_private_ips = crate::config::ServerConfig::get_block_private_ips();
+
             for config in configs {
+                // Validate URL format
                 reqwest::Url::parse(&config.url)
                     .map_err(|_| RelayerValidationError::InvalidRpcUrl(config.url.clone()))?;
 
+                // Validate URL security (SSRF protection)
+                crate::utils::validate_rpc_url(&config.url, &allowed_hosts, block_private_ips)
+                    .map_err(|err| {
+                        RelayerValidationError::InvalidRpcUrl(format!("{}: {}", config.url, err))
+                    })?;
+
+                // Validate weight range
                 if config.weight > 100 {
                     return Err(RelayerValidationError::InvalidRpcWeight);
                 }

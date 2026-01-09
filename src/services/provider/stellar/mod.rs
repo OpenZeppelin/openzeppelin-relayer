@@ -367,6 +367,13 @@ impl StellarProvider {
 
     /// Initialize a Stellar client for a given URL
     fn initialize_provider(&self, url: &str) -> Result<Client, ProviderError> {
+        // Layer 2 validation: Re-validate URL security as a safety net
+        let allowed_hosts = crate::config::ServerConfig::get_allowed_rpc_hosts();
+        let block_private_ips = crate::config::ServerConfig::get_block_private_ips();
+        crate::utils::validate_rpc_url(url, &allowed_hosts, block_private_ips).map_err(|e| {
+            ProviderError::NetworkConfiguration(format!("RPC URL security validation failed: {e}"))
+        })?;
+
         Client::new(url).map_err(|e| {
             ProviderError::NetworkConfiguration(format!(
                 "Failed to create Stellar RPC client: {e} - URL: '{url}'"
@@ -381,6 +388,7 @@ impl StellarProvider {
         ReqwestClient::builder()
             .timeout(self.timeout_seconds)
             .use_rustls_tls()
+            .redirect(reqwest::redirect::Policy::none()) // Prevent SSRF via redirect chains
             .build()
             .map_err(|e| {
                 ProviderError::NetworkConfiguration(format!(
@@ -1721,7 +1729,11 @@ mod stellar_rpc_tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             ProviderError::NetworkConfiguration(msg) => {
-                assert!(msg.contains("Failed to create Stellar RPC client"));
+                // Error message can be either from URL validation or client creation
+                assert!(
+                    msg.contains("Failed to create Stellar RPC client")
+                        || msg.contains("RPC URL security validation failed")
+                );
             }
             _ => panic!("Expected NetworkConfiguration error"),
         }
