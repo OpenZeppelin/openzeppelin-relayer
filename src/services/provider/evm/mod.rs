@@ -42,6 +42,8 @@ use crate::{
     services::provider::{is_retriable_error, should_mark_provider_failed},
 };
 
+use crate::utils::validate_rpc_url;
+
 #[cfg(test)]
 use mockall::automock;
 
@@ -188,7 +190,7 @@ impl EvmProvider {
         // Re-validate URL security as a safety net
         let allowed_hosts = crate::config::ServerConfig::get_allowed_rpc_hosts();
         let block_private_ips = crate::config::ServerConfig::get_block_private_ips();
-        crate::utils::validate_rpc_url(url, &allowed_hosts, block_private_ips).map_err(|e| {
+        validate_rpc_url(url, &allowed_hosts, block_private_ips).map_err(|e| {
             ProviderError::NetworkConfiguration(format!("RPC URL security validation failed: {e}"))
         })?;
 

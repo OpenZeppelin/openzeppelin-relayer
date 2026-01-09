@@ -46,6 +46,8 @@ use super::{
     RetryConfig,
 };
 
+use crate::utils::validate_rpc_url;
+
 /// Utility function to match error patterns by normalizing both strings.
 /// Removes spaces and converts to lowercase for flexible matching.
 ///
@@ -572,7 +574,7 @@ impl SolanaProvider {
         // Layer 2 validation: Re-validate URL security as a safety net
         let allowed_hosts = crate::config::ServerConfig::get_allowed_rpc_hosts();
         let block_private_ips = crate::config::ServerConfig::get_block_private_ips();
-        crate::utils::validate_rpc_url(url, &allowed_hosts, block_private_ips).map_err(|e| {
+        validate_rpc_url(url, &allowed_hosts, block_private_ips).map_err(|e| {
             SolanaProviderError::NetworkConfiguration(format!(
                 "RPC URL security validation failed: {e}"
             ))

@@ -10,6 +10,7 @@
 //! - **Validation**: Required field checks and URL format validation
 
 use crate::config::{ConfigFileError, ServerConfig};
+use crate::utils::validate_rpc_url;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -65,13 +66,11 @@ impl NetworkConfigCommon {
                 })?;
 
                 // Validate URL security (SSRF protection)
-                crate::utils::validate_rpc_url(url, &allowed_hosts, block_private_ips).map_err(
-                    |err| {
-                        ConfigFileError::InvalidFormat(format!(
-                            "RPC URL security validation failed for '{url}': {err}"
-                        ))
-                    },
-                )?;
+                validate_rpc_url(url, &allowed_hosts, block_private_ips).map_err(|err| {
+                    ConfigFileError::InvalidFormat(format!(
+                        "RPC URL security validation failed for '{url}': {err}"
+                    ))
+                })?;
             }
         }
 

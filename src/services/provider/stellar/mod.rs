@@ -34,6 +34,7 @@ use crate::services::provider::ProviderError;
 use crate::services::provider::RetryConfig;
 // Reqwest client is used for raw JSON-RPC HTTP requests. Alias to avoid name clash with the
 // soroban `Client` type imported above.
+use crate::utils::validate_rpc_url;
 use reqwest::Client as ReqwestClient;
 use std::sync::Arc;
 use std::time::Duration;
@@ -370,7 +371,7 @@ impl StellarProvider {
         // Layer 2 validation: Re-validate URL security as a safety net
         let allowed_hosts = crate::config::ServerConfig::get_allowed_rpc_hosts();
         let block_private_ips = crate::config::ServerConfig::get_block_private_ips();
-        crate::utils::validate_rpc_url(url, &allowed_hosts, block_private_ips).map_err(|e| {
+        validate_rpc_url(url, &allowed_hosts, block_private_ips).map_err(|e| {
             ProviderError::NetworkConfiguration(format!("RPC URL security validation failed: {e}"))
         })?;
 
