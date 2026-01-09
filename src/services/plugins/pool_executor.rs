@@ -748,8 +748,10 @@ impl PoolManager {
                 match &result {
                     Ok(_) => circuit_breaker.record_success(elapsed_ms),
                     Err(e) => {
-                        circuit_breaker.record_failure();
+                        // Only count infrastructure errors for circuit breaker, not business errors
+                        // Business errors (RPC failures, plugin logic errors) mean the pool is healthy
                         if Self::is_dead_server_error(e) {
+                            circuit_breaker.record_failure();
                             tracing::warn!(
                                 error = %e,
                                 "Detected dead pool server error, triggering health check for restart"
@@ -759,6 +761,9 @@ impl PoolManager {
                             tokio::spawn(async move {
                                 pool.clear().await;
                             });
+                        } else {
+                            // Plugin executed but returned error - infrastructure is healthy
+                            circuit_breaker.record_success(elapsed_ms);
                         }
                     }
                 }
@@ -844,8 +849,9 @@ impl PoolManager {
                 match &result {
                     Ok(_) => circuit_breaker.record_success(elapsed_ms),
                     Err(e) => {
-                        circuit_breaker.record_failure();
+                        // Only count infrastructure errors for circuit breaker, not business errors
                         if Self::is_dead_server_error(e) {
+                            circuit_breaker.record_failure();
                             tracing::warn!(
                                 error = %e,
                                 "Detected dead pool server error (queued path), triggering health check for restart"
@@ -855,6 +861,9 @@ impl PoolManager {
                             tokio::spawn(async move {
                                 pool.clear().await;
                             });
+                        } else {
+                            // Plugin executed but returned error - infrastructure is healthy
+                            circuit_breaker.record_success(elapsed_ms);
                         }
                     }
                 }

@@ -145,6 +145,8 @@ pub struct CircuitBreaker {
     state: AtomicU32,
     /// Time when circuit opened (for recovery timing)
     opened_at_ms: AtomicU64,
+    /// Time of last activity (for idle auto-close)
+    last_activity_ms: AtomicU64,
     /// Consecutive successful requests in half-open state
     recovery_successes: AtomicU32,
     /// Average response time in ms (exponential moving average)
@@ -162,15 +164,31 @@ impl Default for CircuitBreaker {
 }
 
 impl CircuitBreaker {
+    /// Idle timeout for auto-closing circuit (2 minutes of no activity)
+    const IDLE_AUTO_CLOSE_MS: u64 = 120_000;
+
     pub fn new() -> Self {
         Self {
             state: AtomicU32::new(0), // Closed
             opened_at_ms: AtomicU64::new(0),
+            last_activity_ms: AtomicU64::new(0),
             recovery_successes: AtomicU32::new(0),
             avg_response_time_ms: AtomicU32::new(0),
             restart_attempts: AtomicU32::new(0),
             recent_results: Arc::new(ResultRingBuffer::new(100)),
         }
+    }
+
+    fn now_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
+    }
+
+    fn update_last_activity(&self) {
+        self.last_activity_ms
+            .store(Self::now_ms(), Ordering::Relaxed);
     }
 
     pub fn state(&self) -> CircuitState {
@@ -192,6 +210,7 @@ impl CircuitBreaker {
 
     /// Record a successful request with response time
     pub fn record_success(&self, response_time_ms: u32) {
+        self.update_last_activity();
         self.recent_results.record(true);
 
         // Update exponential moving average (alpha = 0.1)
@@ -225,6 +244,7 @@ impl CircuitBreaker {
 
     /// Record a failed request
     pub fn record_failure(&self) {
+        self.update_last_activity();
         self.recent_results.record(false);
         self.recovery_successes.store(0, Ordering::Relaxed);
 
@@ -287,7 +307,22 @@ impl CircuitBreaker {
 
     /// Check if request should be allowed based on circuit state.
     /// If recovery_allowance is provided, use it in HalfOpen state instead of default 10%.
+    /// Auto-closes circuit if idle for longer than IDLE_AUTO_CLOSE_MS.
     pub fn should_allow_request(&self, recovery_allowance: Option<u32>) -> bool {
+        // Auto-close if idle for too long (no failures means system likely recovered)
+        if !matches!(self.state(), CircuitState::Closed) {
+            let last_activity = self.last_activity_ms.load(Ordering::Relaxed);
+            let now = Self::now_ms();
+            if last_activity > 0 && now - last_activity >= Self::IDLE_AUTO_CLOSE_MS {
+                tracing::info!(
+                    idle_ms = now - last_activity,
+                    "Circuit breaker auto-closing after idle period"
+                );
+                self.force_close();
+                return true;
+            }
+        }
+
         match self.state() {
             CircuitState::Closed => true,
             CircuitState::HalfOpen => {

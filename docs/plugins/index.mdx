@@ -838,3 +838,27 @@ sudo sysctl -w kern.maxfilesperproc=65536
 <Callout type="warn">
 When increasing limits significantly, monitor your system's memory and CPU usage. Each connection consumes resources.
 </Callout>
+
+## Architecture & Internals
+
+For developers who want to understand or modify the plugin system internals, see the [Architecture Guide](https://github.com/OpenZeppelin/openzeppelin-relayer/blob/main/plugins/ARCHITECTURE.md).
+
+The architecture documentation covers:
+
+- **System Architecture**: High-level diagram showing Rust ↔ Node.js communication
+- **Module Overview**: Purpose of each Rust and TypeScript module
+- **Communication Protocols**: JSON-line protocol for pool and shared socket communication
+- **Request Flow**: Step-by-step execution path for plugin requests
+- **Health & Recovery**: Circuit breaker states, dead server detection, memory pressure handling
+- **Module Dependencies**: How the codebase modules relate to each other
+
+### Key Source Files
+
+| Component | Location | Description |
+|-----------|----------|-------------|
+| **Rust Plugin Runner** | `src/services/plugins/runner.rs` | Entry point for plugin execution |
+| **Pool Executor** | `src/services/plugins/pool_executor.rs` | Manages Node.js process and connections |
+| **Configuration** | `src/services/plugins/config.rs` | Auto-derivation logic for all env vars |
+| **Pool Server** | `plugins/lib/pool-server.ts` | Node.js server accepting plugin requests |
+| **Sandbox Executor** | `plugins/lib/sandbox-executor.ts` | VM-based plugin execution with security |
+| **Plugin SDK** | `plugins/lib/plugin.ts` | PluginContext and API for plugins |

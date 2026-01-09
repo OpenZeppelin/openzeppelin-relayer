@@ -290,6 +290,11 @@ class SandboxPluginAPI implements PluginAPI {
   private readonly maxPendingRequests = 100; // Prevent memory leak from unbounded pending
   private fromPool: boolean = false; // Track if socket is from pool
 
+  // Store handler references for proper cleanup (prevents listener accumulation)
+  private boundErrorHandler: ((error: Error) => void) | null = null;
+  private boundCloseHandler: (() => void) | null = null;
+  private boundDataHandler: ((data: Buffer) => void) | null = null;
+
   constructor(socketPath: string, httpRequestId?: string) {
     this.socketPath = socketPath;
     this.pending = new Map();
@@ -316,23 +321,19 @@ class SandboxPluginAPI implements PluginAPI {
         this.socket = net.createConnection(this.socketPath);
         this.fromPool = false;
 
+        // Set up tracked handlers (can be removed later)
+        this.setupSocketHandlers(this.socket);
+
         this.connectionPromise = new Promise((resolve, reject) => {
-          this.socket!.on('connect', () => {
+          // 'connect' is one-time event, use once() so it auto-removes
+          this.socket!.once('connect', () => {
             this.connected = true;
             resolve();
           });
 
-          this.socket!.on('error', (error) => {
-            this.handleSocketError(error);
-            reject(error);
-          });
-
-          this.socket!.on('close', () => {
-            this.handleSocketClose();
-          });
+          // Additional one-time error handler for connection phase only
+          this.socket!.once('error', reject);
         });
-
-        this.socket.on('data', (data) => this.handleSocketData(data));
       }
     }
 
@@ -342,11 +343,36 @@ class SandboxPluginAPI implements PluginAPI {
   /**
    * Set up error/close/data handlers for a socket (pooled or new).
    * This ensures sockets can trigger reconnection on failure.
+   * Stores references for proper cleanup to prevent listener accumulation.
    */
   private setupSocketHandlers(socket: net.Socket): void {
-    socket.on('error', (error) => this.handleSocketError(error));
-    socket.on('close', () => this.handleSocketClose());
-    socket.on('data', (data) => this.handleSocketData(data));
+    // Create bound handlers so they can be removed later
+    this.boundErrorHandler = (error: Error) => this.handleSocketError(error);
+    this.boundCloseHandler = () => this.handleSocketClose();
+    this.boundDataHandler = (data: Buffer) => this.handleSocketData(data);
+
+    socket.on('error', this.boundErrorHandler);
+    socket.on('close', this.boundCloseHandler);
+    socket.on('data', this.boundDataHandler);
+  }
+
+  /**
+   * Remove socket handlers before returning to pool.
+   * Prevents listener accumulation (MaxListenersExceededWarning).
+   */
+  private removeSocketHandlers(socket: net.Socket): void {
+    if (this.boundErrorHandler) {
+      socket.removeListener('error', this.boundErrorHandler);
+      this.boundErrorHandler = null;
+    }
+    if (this.boundCloseHandler) {
+      socket.removeListener('close', this.boundCloseHandler);
+      this.boundCloseHandler = null;
+    }
+    if (this.boundDataHandler) {
+      socket.removeListener('data', this.boundDataHandler);
+      this.boundDataHandler = null;
+    }
   }
 
   /**
@@ -469,6 +495,20 @@ class SandboxPluginAPI implements PluginAPI {
   }
 
   private async send<T>(relayerId: string, method: string, payload: any): Promise<T> {
+    return this.sendWithRetry(relayerId, method, payload, false);
+  }
+
+  /**
+   * Send request with EPIPE retry logic.
+   * EPIPE occurs when the pooled socket was closed by the server but client doesn't know yet.
+   * On EPIPE, we destroy the stale socket and retry with a fresh connection.
+   */
+  private async sendWithRetry<T>(
+    relayerId: string,
+    method: string,
+    payload: any,
+    isRetry: boolean
+  ): Promise<T> {
     const requestId = uuidv4();
     const msg: any = { requestId, relayerId, method, payload };
     if (this.httpRequestId) {
@@ -487,40 +527,61 @@ class SandboxPluginAPI implements PluginAPI {
     // Ensure we're connected before sending
     await this.ensureConnected();
 
-    return new Promise((resolve, reject) => {
-      let timeoutId: NodeJS.Timeout | undefined;
+    try {
+      return await new Promise<T>((resolve, reject) => {
+        let timeoutId: NodeJS.Timeout | undefined;
 
-      // Set up timeout to prevent hanging forever
-      timeoutId = setTimeout(() => {
-        this.pending.delete(requestId);
-        reject(new Error(`Socket request '${method}' timed out after ${DEFAULT_SOCKET_REQUEST_TIMEOUT_MS}ms`));
-      }, DEFAULT_SOCKET_REQUEST_TIMEOUT_MS);
-
-      // Wrap resolvers to clear timeout on completion
-      this.pending.set(requestId, {
-        resolve: (value) => {
-          if (timeoutId) clearTimeout(timeoutId);
-          resolve(value);
-        },
-        reject: (reason) => {
-          if (timeoutId) clearTimeout(timeoutId);
-          reject(reason);
-        },
-      });
-
-      this.socket!.write(message, (error) => {
-        if (error) {
-          if (timeoutId) clearTimeout(timeoutId);
+        // Set up timeout to prevent hanging forever
+        timeoutId = setTimeout(() => {
           this.pending.delete(requestId);
-          reject(error);
-        }
+          reject(new Error(`Socket request '${method}' timed out after ${DEFAULT_SOCKET_REQUEST_TIMEOUT_MS}ms`));
+        }, DEFAULT_SOCKET_REQUEST_TIMEOUT_MS);
+
+        // Wrap resolvers to clear timeout on completion
+        this.pending.set(requestId, {
+          resolve: (value) => {
+            if (timeoutId) clearTimeout(timeoutId);
+            resolve(value);
+          },
+          reject: (reason) => {
+            if (timeoutId) clearTimeout(timeoutId);
+            reject(reason);
+          },
+        });
+
+        this.socket!.write(message, (error) => {
+          if (error) {
+            if (timeoutId) clearTimeout(timeoutId);
+            this.pending.delete(requestId);
+            reject(error);
+          }
+        });
       });
-    });
+    } catch (error: any) {
+      // Handle EPIPE/ECONNRESET - stale socket from pool, retry with fresh connection
+      if (!isRetry && (error.code === 'EPIPE' || error.code === 'ECONNRESET')) {
+        // Destroy the stale socket (don't return to pool)
+        if (this.socket) {
+          this.removeSocketHandlers(this.socket);
+          this.socket.destroy();
+          this.socket = null;
+        }
+        this.connected = false;
+        this.connectionPromise = null;
+        this.fromPool = false;
+
+        // Retry with fresh connection (bypass pool by clearing state)
+        return this.sendWithRetry(relayerId, method, payload, true);
+      }
+      throw error;
+    }
   }
 
   close(): void {
     // Return socket to pool if healthy, otherwise destroy
     if (this.socket) {
+      // Remove handlers BEFORE returning to pool to prevent listener accumulation
+      this.removeSocketHandlers(this.socket);
       socketPool.release(this.socket);
       this.socket = null;
     }
