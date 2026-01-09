@@ -605,12 +605,6 @@ mod tests {
         assert!(result.unwrap_err().contains("not allowed"));
     }
 
-    // NOTE: IPv6 URL tests removed because reqwest::Url::host_str() returns
-    // addresses without brackets for IPv6, but the current implementation only
-    // parses raw IP strings. IPv6 support via URL would require using
-    // parsed_url.host() instead of host_str() to get the Host enum.
-    // The IPv4-mapped IPv6 handling still works for direct IP parsing.
-
     #[test]
     fn test_allow_list_with_ip_address() {
         // IP address in allow-list should work
@@ -656,5 +650,324 @@ mod tests {
         let mapped_private: Ipv6Addr = "::ffff:192.168.1.1".parse().unwrap();
         assert!(mapped_private.to_ipv4_mapped().is_some());
         assert!(mapped_private.to_ipv4_mapped().unwrap().is_private());
+    }
+
+    // === Additional tests for improved coverage ===
+
+    #[test]
+    fn test_private_ipv6_detection() {
+        // IPv6 unique local addresses (fc00::/7) should be detected as private
+        assert!(is_private_ip_range(&IpAddr::V6(Ipv6Addr::new(
+            0xfc00, 0, 0, 0, 0, 0, 0, 1
+        ))));
+        assert!(is_private_ip_range(&IpAddr::V6(Ipv6Addr::new(
+            0xfd00, 0, 0, 0, 0, 0, 0, 1
+        ))));
+        assert!(is_private_ip_range(&IpAddr::V6(Ipv6Addr::new(
+            0xfdff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff
+        ))));
+        // Public IPv6 should not be detected as private
+        assert!(!is_private_ip_range(&IpAddr::V6(Ipv6Addr::new(
+            0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888
+        ))));
+    }
+
+    #[test]
+    fn test_block_link_local_ipv4() {
+        // IPv4 link-local (169.254.0.0/16) should be blocked when block_private=true
+        // Note: 169.254.169.254 is handled by metadata endpoint check
+        let result = validate_rpc_url("http://169.254.1.1:8545", &[], true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Link-local"));
+    }
+
+    #[test]
+    fn test_allow_link_local_ipv4_when_disabled() {
+        // Link-local IPv4 should be allowed when block_private=false (except metadata)
+        let result = validate_rpc_url("http://169.254.1.1:8545", &[], false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_loopback_range_boundary() {
+        // Full 127.0.0.0/8 range should be blocked as loopback
+        let result = validate_rpc_url("http://127.0.0.1:8545", &[], true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Loopback"));
+
+        let result = validate_rpc_url("http://127.255.255.1:8545", &[], true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Loopback"));
+
+        let result = validate_rpc_url("http://127.0.0.255:8545", &[], true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Loopback"));
+    }
+
+    #[test]
+    fn test_private_ip_range_boundaries() {
+        // 10.0.0.0/8 boundaries
+        let result = validate_rpc_url("http://10.0.0.0:8545", &[], true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Private IP"));
+
+        let result = validate_rpc_url("http://10.255.255.255:8545", &[], true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Private IP"));
+
+        // 172.16.0.0/12 boundaries
+        let result = validate_rpc_url("http://172.16.0.0:8545", &[], true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Private IP"));
+
+        let result = validate_rpc_url("http://172.31.255.255:8545", &[], true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Private IP"));
+
+        // Just outside 172.16.0.0/12 - should be allowed (172.15.x.x is public)
+        let result = validate_rpc_url("http://172.15.255.255:8545", &[], true);
+        assert!(result.is_ok());
+
+        // Just outside 172.16.0.0/12 - should be allowed (172.32.x.x is public)
+        let result = validate_rpc_url("http://172.32.0.1:8545", &[], true);
+        assert!(result.is_ok());
+
+        // 192.168.0.0/16 boundaries
+        let result = validate_rpc_url("http://192.168.0.0:8545", &[], true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Private IP"));
+
+        let result = validate_rpc_url("http://192.168.255.255:8545", &[], true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Private IP"));
+    }
+
+    #[test]
+    fn test_multiple_allowed_hosts() {
+        // When multiple hosts are in the allow-list, any of them should work
+        let allowed = vec![
+            "eth-mainnet.g.alchemy.com".to_string(),
+            "mainnet.infura.io".to_string(),
+            "rpc.ankr.com".to_string(),
+        ];
+
+        let result = validate_rpc_url("https://eth-mainnet.g.alchemy.com/v2/key", &allowed, false);
+        assert!(result.is_ok());
+
+        let result = validate_rpc_url("https://mainnet.infura.io/v3/key", &allowed, false);
+        assert!(result.is_ok());
+
+        let result = validate_rpc_url("https://rpc.ankr.com/eth", &allowed, false);
+        assert!(result.is_ok());
+
+        // Host not in list should be rejected
+        let result = validate_rpc_url("https://other-provider.com/rpc", &allowed, false);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("not in the allowed hosts list"));
+    }
+
+    #[test]
+    fn test_url_with_credentials() {
+        // URLs with username/password should still be validated
+        let result = validate_rpc_url("http://user:pass@8.8.8.8:8545", &[], false);
+        assert!(result.is_ok());
+
+        // Private IP with credentials should be blocked when block_private=true
+        let result = validate_rpc_url("http://user:pass@192.168.1.1:8545", &[], true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Private IP"));
+    }
+
+    #[test]
+    fn test_url_without_port() {
+        // URL without explicit port should work
+        let result = validate_rpc_url("http://8.8.8.8", &[], false);
+        assert!(result.is_ok());
+
+        let result = validate_rpc_url("https://example.com", &[], false);
+        assert!(result.is_ok());
+
+        let result = validate_rpc_url("http://192.168.1.1", &[], true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Private IP"));
+    }
+
+    #[test]
+    fn test_url_with_path_and_query() {
+        // URL with path and query should be validated correctly
+        let result = validate_rpc_url("https://example.com/path/to/rpc?key=value", &[], false);
+        assert!(result.is_ok());
+
+        let result = validate_rpc_url(
+            "https://192.168.1.1/path/to/rpc?key=value#fragment",
+            &[],
+            true,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Private IP"));
+    }
+
+    #[test]
+    fn test_sanitize_url_no_path() {
+        // URL with only host (no path) should sanitize correctly
+        assert_eq!(sanitize_url("https://example.com"), "https://example.com/");
+
+        assert_eq!(
+            sanitize_url("https://example.com:8545"),
+            "https://example.com:8545/"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_url_preserves_path() {
+        // Path should be preserved, only query/fragment removed
+        assert_eq!(
+            sanitize_url("https://example.com/api/v1/rpc"),
+            "https://example.com/api/v1/rpc"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_url_for_error_no_path() {
+        // URL with no path should still show [path redacted]
+        assert_eq!(
+            sanitize_url_for_error("https://example.com"),
+            "https://example.com/[path redacted]"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_url_for_error_with_credentials() {
+        // Credentials in URL should be handled (note: they appear in host area)
+        let result = sanitize_url_for_error("https://user:pass@example.com/path");
+        assert!(result.contains("example.com"));
+        assert!(result.contains("[path redacted]"));
+    }
+
+    #[test]
+    fn test_is_link_local_ipv6_variations() {
+        // Various fe80::/10 addresses
+        assert!(is_link_local(&IpAddr::V6(Ipv6Addr::new(
+            0xfe80, 0, 0, 0, 0, 0, 0, 1
+        ))));
+        assert!(is_link_local(&IpAddr::V6(Ipv6Addr::new(
+            0xfe80, 0, 0, 0, 0x1234, 0x5678, 0x9abc, 0xdef0
+        ))));
+        assert!(is_link_local(&IpAddr::V6(Ipv6Addr::new(
+            0xfebf, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff
+        ))));
+        // Outside fe80::/10 should not be link-local
+        assert!(!is_link_local(&IpAddr::V6(Ipv6Addr::new(
+            0xfec0, 0, 0, 0, 0, 0, 0, 1
+        ))));
+    }
+
+    #[test]
+    fn test_validate_ip_address_directly() {
+        // Test validate_ip_address function directly with IPv4-mapped IPv6
+        // This ensures the recursive handling works correctly
+
+        // IPv4-mapped loopback should be blocked
+        let mapped_loopback = IpAddr::V6("::ffff:127.0.0.1".parse().unwrap());
+        let result = validate_ip_address(&mapped_loopback, true, "http://test");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Loopback"));
+
+        // IPv4-mapped private IP should be blocked
+        let mapped_private = IpAddr::V6("::ffff:192.168.1.1".parse().unwrap());
+        let result = validate_ip_address(&mapped_private, true, "http://test");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Private IP"));
+
+        // IPv4-mapped metadata endpoint should be blocked
+        let mapped_metadata = IpAddr::V6("::ffff:169.254.169.254".parse().unwrap());
+        let result = validate_ip_address(&mapped_metadata, false, "http://test");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("metadata"));
+
+        // IPv4-mapped public IP should be allowed
+        let mapped_public = IpAddr::V6("::ffff:8.8.8.8".parse().unwrap());
+        let result = validate_ip_address(&mapped_public, true, "http://test");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_allow_internal_domain_when_disabled() {
+        // .internal domains should be allowed when block_private=false
+        // (except metadata.google.internal which is always blocked)
+        let result = validate_rpc_url("http://some-service.internal:8545", &[], false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_localhost_uppercase() {
+        // Hostname detection should be case-insensitive
+        let result = validate_rpc_url("http://LOCALHOST:8545", &[], true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not allowed"));
+
+        let result = validate_rpc_url("http://LocalHost:8545", &[], true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not allowed"));
+    }
+
+    #[test]
+    fn test_data_uri_scheme_rejected() {
+        // data: URI scheme should be rejected
+        let result = validate_rpc_url("data:text/html,<h1>test</h1>", &[], false);
+        assert!(result.is_err());
+        // data: URIs don't have a host, so this might fail at host extraction
+    }
+
+    #[test]
+    fn test_javascript_uri_scheme_rejected() {
+        // javascript: URI scheme should be rejected
+        let result = validate_rpc_url("javascript:alert(1)", &[], false);
+        assert!(result.is_err());
+    }
+
+    // NOTE: IPv6 allow-list test removed because reqwest::Url::host_str() returns
+    // IPv6 addresses in a format that may not match exactly with user-provided allow-list
+    // entries. This is part of the known IPv6 URL handling limitation.
+
+    #[test]
+    fn test_metadata_endpoint_ipv4_variations() {
+        // Only exactly 169.254.169.254 should be detected as metadata
+        assert!(is_metadata_endpoint(&IpAddr::V4(Ipv4Addr::new(
+            169, 254, 169, 254
+        ))));
+        // Other 169.254.x.x addresses are link-local but not metadata
+        assert!(!is_metadata_endpoint(&IpAddr::V4(Ipv4Addr::new(
+            169, 254, 169, 253
+        ))));
+        assert!(!is_metadata_endpoint(&IpAddr::V4(Ipv4Addr::new(
+            169, 254, 1, 1
+        ))));
+    }
+
+    #[test]
+    fn test_block_private_different_10_subnet() {
+        // Various addresses in 10.0.0.0/8
+        let result = validate_rpc_url("http://10.1.2.3:8545", &[], true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Private IP"));
+
+        let result = validate_rpc_url("http://10.100.200.50:8545", &[], true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Private IP"));
+    }
+
+    #[test]
+    fn test_non_metadata_link_local_vs_metadata() {
+        // 169.254.169.254 (metadata) should be blocked as metadata, not link-local
+        let result = validate_rpc_url("http://169.254.169.254:8545", &[], false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("metadata"));
+
+        // Other 169.254.x.x should be link-local (allowed when block_private=false)
+        let result = validate_rpc_url("http://169.254.1.1:8545", &[], false);
+        assert!(result.is_ok());
     }
 }
