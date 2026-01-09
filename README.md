@@ -571,6 +571,27 @@ This project is licensed under the GNU Affero General Public License v3.0 - see 
 
 For security concerns, please refer to our [Security Policy](SECURITY.md).
 
+### Custom RPC URL Security
+
+The relayer includes built-in protection against Server-Side Request Forgery (SSRF) attacks when using custom RPC URLs. You can configure the following security features via environment variables:
+
+- **`ALLOWED_RPC_HOSTS`**: Comma-separated list of allowed RPC hostnames/IPs. If non-empty, only URLs with these hosts are permitted.
+  - Example: `ALLOWED_RPC_HOSTS=eth-mainnet.g.alchemy.com,mainnet.infura.io`
+
+- **`BLOCK_PRIVATE_IPS`**: Block private IP addresses (RFC 1918, loopback, link-local). Set to `true` to prevent RPC URLs from targeting private networks.
+  - Example: `BLOCK_PRIVATE_IPS=true`
+  - Default: `false` (for backwards compatibility)
+
+**Note:** Cloud metadata endpoints (`169.254.169.254`, `fd00:ec2::254`) are **always blocked** to prevent credential theft, regardless of configuration.
+
+**Recommended Production Configuration:**
+```bash
+BLOCK_PRIVATE_IPS=true
+ALLOWED_RPC_HOSTS=eth-mainnet.g.alchemy.com,mainnet.infura.io,eth.llamarpc.com
+```
+
+See [`.env.example`](.env.example) for more configuration examples.
+
 ## Get Help
 
 If you have any questions, first see if the answer to your question can be found in the [User Documentation](https://docs.openzeppelin.com/relayer/).
