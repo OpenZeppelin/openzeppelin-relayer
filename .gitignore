@@ -80,3 +80,6 @@ plugins/**/*.js.map
 plugins/**/*.d.ts
 # Exception: keep pre-compiled sandbox executor
 !plugins/lib/sandbox-executor.js
+
+profraw/
+coverage/

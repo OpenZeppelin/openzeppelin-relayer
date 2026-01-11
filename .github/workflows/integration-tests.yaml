@@ -32,6 +32,7 @@ jobs:
           API_KEY=${{ secrets.INTEGRATION_TESTS_API_KEY }}
           LOG_LEVEL=info
           USE_KMS=true
+          CI=true
           AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
           AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
           AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
@@ -45,5 +46,31 @@ jobs:
           mkdir -p tests/integration/config/testnet
           echo '${{ vars.INTEGRATION_CONFIG_JSON }}' | envsubst > tests/integration/config/testnet/config.json
           echo '${{ vars.INTEGRATION_REGISTRY_JSON }}' > tests/integration/config/testnet/registry.json
+      - name: Build Integration Test Image
+        run: |
+          docker build -f Dockerfile.integration --target runtime -t openzeppelin-relayer-integration:latest .
+      - name: Create coverage directories
+        run: mkdir -p ./coverage ./profraw
       - name: Run Integration Tests
         run: ./scripts/run-integration-docker.sh
+      - name: Verify coverage exists
+        if: always()
+        run: |
+          ls -lah ./coverage/
+          if [ -f ./coverage/integration-lcov.info ]; then
+            echo "✓ Coverage file found ($(wc -l < ./coverage/integration-lcov.info) lines)"
+          else
+            echo "✗ Coverage file not found!"
+            exit 1
+          fi
+      # TODO: Integration test coverage will be included in the future when test cases are considerable enough to include
+      # - name: Upload Integration Coverage to Codecov
+      #   if: always()  # Upload coverage even if tests fail
+      #   uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
+      #   with:
+      #     token: ${{ secrets.CODECOV_TOKEN }}
+      #     name: integration-coverage
+      #     files: ./coverage/integration-lcov.info
+      #     flags: integration
+      #     fail_ci_if_error: false
+      #     verbose: true
