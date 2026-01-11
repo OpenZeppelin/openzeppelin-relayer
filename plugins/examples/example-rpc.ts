@@ -6,8 +6,6 @@ import { JsonRpcResponseNetworkRpcResult, PluginAPI } from "@openzeppelin/relaye
 
 type Params = {};
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
 /**
  * Plugin handler function - this is the entry point
  * Export it as 'handler' and the relayer will automatically call it

@@ -27,12 +27,6 @@ pnpm test                                # Run plugin tests
 cargo make docker-compose-up             # Start with docker-compose
 cargo make docker-compose-down           # Stop services
 
-# Integration testing
-cargo make integration-test-standalone   # Full integration test (requires relayer running)
-cargo make integration-test-local        # Against local Anvil
-
-# Documentation
-cargo make rust-docs                     # Generate Rust documentation
 ```
 
 ## Architecture
@@ -57,40 +51,11 @@ src/
 └── utils/         # Helpers
 ```
 
-### Plugin System (Rust ↔ Node.js)
-
-The plugin system uses a multi-process architecture:
-
-**Rust side** (`src/services/plugins/`):
-- `runner.rs` → Entry point, routes to pool executor
-- `pool_executor.rs` → Manages Node.js process lifecycle, circuit breaker
-- `connection.rs` → Lock-free connection pool with semaphore concurrency
-- `shared_socket.rs` → Per-request Unix socket for plugin API calls
-- `health.rs` → Circuit breaker states, dead server detection
-
-**Node.js side** (`plugins/lib/`):
-- `pool-server.ts` → Main server, memory pressure monitoring
-- `worker-pool.ts` → Piscina wrapper with dynamic scaling
-- `sandbox-executor.ts` → VM-based plugin execution with security
-
-**Communication:** Unix socket with newline-delimited JSON protocol
-
 ### Key Abstractions
 
 - **Repository Pattern**: Redis-backed repositories for configs (RelayerRepository, SignerRepository)
 - **Service Traits**: Async traits for dependency injection and testability
 - **Job Processing**: Apalis-based async job queue
-
-## Configuration
-
-**Key Environment Variables:**
-- `CONFIG_DIR`, `CONFIG_FILE_NAME` → Location of config.json
-- `LOG_LEVEL` → trace/debug/info/warn/error
-- `REDIS_URL` → Redis connection string
-- `API_KEY` → Request authentication
-- `PLUGIN_MAX_CONCURRENCY` → Main plugin scaling knob (default: 2048)
-
-**Config file** (`config/config.json`): Defines relayers, signers, networks, notifications, plugins
 
 ## Code Standards
 
