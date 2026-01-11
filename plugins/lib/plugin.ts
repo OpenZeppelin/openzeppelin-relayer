@@ -48,6 +48,20 @@ import net from 'node:net';
 import { v4 as uuidv4 } from 'uuid';
 
 /**
+ * Custom error for socket closure - provides a recognizable error code
+ * for server-side connection termination (e.g., Rust's 60-second connection lifetime).
+ */
+class SocketClosedError extends Error {
+  code: string;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'SocketClosedError';
+    this.code = 'ESOCKETCLOSED';
+  }
+}
+
+/**
  * Smart serialization for plugin return values
  * - Objects/Arrays: JSON.stringify (need serialization)
  * - Primitives: String conversion (clean, no extra quotes)
@@ -401,7 +415,8 @@ export class DefaultPluginAPI implements PluginAPI {
 
       this.socket.on('close', () => {
         this._connected = false;
-        this._rejectAllPending(new Error('Socket closed unexpectedly'));
+        // Use SocketClosedError so callers can identify server-side closure
+        this._rejectAllPending(new SocketClosedError('Socket closed by server (connection lifetime exceeded)'));
       });
     });
 

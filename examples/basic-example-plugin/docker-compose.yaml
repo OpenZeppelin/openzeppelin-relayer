@@ -12,11 +12,11 @@ services:
       - keystore_passphrase
     environment:
       REDIS_URL: redis://redis:6379
-      RATE_LIMIT_REQUESTS_PER_SECOND: 10
-      RATE_LIMIT_BURST: 50
       WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY}
       API_KEY: ${API_KEY}
       KEYSTORE_PASSPHRASE: ${KEYSTORE_PASSPHRASE}
+      RATE_LIMIT_REQUESTS_PER_SECOND: 50000
+      RATE_LIMIT_BURST_SIZE: 300
     security_opt:
       - no-new-privileges
     networks:

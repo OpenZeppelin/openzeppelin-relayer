@@ -186,36 +186,103 @@ class ScriptCache {
 }
 
 /**
+ * Custom error for socket closure - enables retry logic to detect and handle
+ * server-side connection termination (e.g., Rust's 60-second connection lifetime).
+ */
+class SocketClosedError extends Error {
+  code: string;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'SocketClosedError';
+    this.code = 'ESOCKETCLOSED';
+  }
+}
+
+/**
+ * Pooled socket with creation timestamp for age-based eviction.
+ */
+interface PooledSocket {
+  socket: net.Socket;
+  createdAt: number;
+}
+
+/**
+ * Result of acquiring a socket from the pool.
+ */
+interface AcquiredSocket {
+  socket: net.Socket;
+  createdAt: number;
+}
+
+/**
  * Socket Pool - Reuses socket connections across tasks in the same worker.
  * Creating a socket takes 0.1-1ms. Pooling reduces this overhead.
+ *
+ * CRITICAL: The Rust server has a 60-second TOTAL CONNECTION LIFETIME (not idle).
+ * This means sockets created at T=0 will be closed at T=60, regardless of activity.
+ * We track per-socket creation time and discard sockets older than 50 seconds.
  */
 class SocketPool {
-  private available: net.Socket[] = [];
+  private available: PooledSocket[] = [];
   private readonly maxSize = 5; // Max sockets to cache per worker
+  // Rust server connection lifetime is 60s. Discard sockets older than 50s.
+  private readonly maxSocketAgeMs = 50_000;
 
-  acquire(socketPath: string): net.Socket | null {
-    // Try to reuse an available socket
-    const socket = this.available.pop();
-    if (socket && socket.writable && !socket.destroyed) {
-      return socket;
+  acquire(): AcquiredSocket | null {
+    const now = Date.now();
+
+    // Pop sockets until we find a valid one or pool is empty
+    while (this.available.length > 0) {
+      const pooled = this.available.pop()!;
+      const age = now - pooled.createdAt;
+
+      // Discard sockets older than max age (Rust will close them soon anyway)
+      if (age > this.maxSocketAgeMs) {
+        pooled.socket.destroy();
+        continue;
+      }
+
+      // Check socket health
+      if (pooled.socket.writable && !pooled.socket.destroyed) {
+        return { socket: pooled.socket, createdAt: pooled.createdAt };
+      }
+
+      // Socket unhealthy, destroy and try next
+      pooled.socket.destroy();
     }
-    // Socket not reusable, let caller create new one
+
+    // No valid socket found
     return null;
   }
 
-  release(socket: net.Socket): void {
-    // Only pool if socket is still healthy and not at capacity
-    if (socket.writable && !socket.destroyed && this.available.length < this.maxSize) {
-      this.available.push(socket);
-    } else {
+  /**
+   * Release a socket back to the pool.
+   * @param socket The socket to release
+   * @param createdAt When the socket was originally created (for age tracking)
+   */
+  release(socket: net.Socket, createdAt: number): void {
+    const now = Date.now();
+    const age = now - createdAt;
+
+    // Don't pool sockets that are already old or unhealthy
+    if (
+      age > this.maxSocketAgeMs ||
+      !socket.writable ||
+      socket.destroyed ||
+      this.available.length >= this.maxSize
+    ) {
       socket.destroy();
+      return;
     }
+
+    this.available.push({ socket, createdAt });
   }
 
   clear(): void {
     // Clean up all pooled sockets
-    for (const socket of this.available) {
-      socket.destroy();
+    for (const pooled of this.available) {
+      pooled.socket.destroy();
     }
     this.available = [];
   }
@@ -288,7 +355,7 @@ class SandboxPluginAPI implements PluginAPI {
   private httpRequestId?: string;
   private socketPath: string;
   private readonly maxPendingRequests = 100; // Prevent memory leak from unbounded pending
-  private fromPool: boolean = false; // Track if socket is from pool
+  private socketCreatedAt: number = 0; // Track socket creation time for pool age-based eviction
 
   // Store handler references for proper cleanup (prevents listener accumulation)
   private boundErrorHandler: ((error: Error) => void) | null = null;
@@ -306,20 +373,20 @@ class SandboxPluginAPI implements PluginAPI {
 
     if (!this.connectionPromise) {
       // Try to get socket from pool first
-      const pooledSocket = socketPool.acquire(this.socketPath);
-      
-      if (pooledSocket) {
-        this.socket = pooledSocket;
-        this.fromPool = true;
+      const acquired = socketPool.acquire();
+
+      if (acquired) {
+        this.socket = acquired.socket;
+        this.socketCreatedAt = acquired.createdAt;
         this.connected = true;
         this.connectionPromise = Promise.resolve();
-        
+
         // Set up error/close handlers for pooled socket to enable reconnection
         this.setupSocketHandlers(this.socket);
       } else {
         // Create new socket if pool is empty
         this.socket = net.createConnection(this.socketPath);
-        this.fromPool = false;
+        this.socketCreatedAt = Date.now();
 
         // Set up tracked handlers (can be removed later)
         this.setupSocketHandlers(this.socket);
@@ -387,11 +454,13 @@ class SandboxPluginAPI implements PluginAPI {
   }
 
   /**
-   * Handle socket close - reset connection state to enable reconnection
+   * Handle socket close - reset connection state to enable reconnection.
+   * Uses SocketClosedError to enable automatic retry in sendWithRetry().
    */
   private handleSocketClose(): void {
     this.connected = false;
-    this.rejectAllPending(new Error('Socket closed unexpectedly'));
+    // Use SocketClosedError so retry logic can detect and handle this
+    this.rejectAllPending(new SocketClosedError('Socket closed by server (connection lifetime exceeded)'));
     // Reset connection state to force reconnection on next call
     this.connectionPromise = null;
     this.socket = null;
@@ -528,6 +597,19 @@ class SandboxPluginAPI implements PluginAPI {
     await this.ensureConnected();
 
     try {
+      // Capture socket reference locally to guard against TOCTOU race condition.
+      // Socket can become null between ensureConnected() and write() if an error/close
+      // event fires asynchronously. This is especially likely after stress testing when
+      // pooled connections may be in a degraded state.
+      const socket = this.socket;
+      if (!socket) {
+        // Socket was nullified by error/close handler between ensureConnected and now.
+        // Treat as a stale connection error that can be retried.
+        const staleError = new Error('Socket became unavailable after connection') as NodeJS.ErrnoException;
+        staleError.code = 'ECONNRESET';
+        throw staleError;
+      }
+
       return await new Promise<T>((resolve, reject) => {
         let timeoutId: NodeJS.Timeout | undefined;
 
@@ -549,7 +631,7 @@ class SandboxPluginAPI implements PluginAPI {
           },
         });
 
-        this.socket!.write(message, (error) => {
+        socket.write(message, (error) => {
           if (error) {
             if (timeoutId) clearTimeout(timeoutId);
             this.pending.delete(requestId);
@@ -558,8 +640,16 @@ class SandboxPluginAPI implements PluginAPI {
         });
       });
     } catch (error: any) {
-      // Handle EPIPE/ECONNRESET - stale socket from pool, retry with fresh connection
-      if (!isRetry && (error.code === 'EPIPE' || error.code === 'ECONNRESET')) {
+      // Handle connection errors - stale socket from pool or server-side closure
+      // EPIPE: write to closed socket (client doesn't know server closed)
+      // ECONNRESET: connection reset by peer (server forcefully closed)
+      // ESOCKETCLOSED: server closed connection (e.g., 60-second lifetime expired)
+      const isRetryableError =
+        error.code === 'EPIPE' ||
+        error.code === 'ECONNRESET' ||
+        error.code === 'ESOCKETCLOSED';
+
+      if (!isRetry && isRetryableError) {
         // Destroy the stale socket (don't return to pool)
         if (this.socket) {
           this.removeSocketHandlers(this.socket);
@@ -568,7 +658,6 @@ class SandboxPluginAPI implements PluginAPI {
         }
         this.connected = false;
         this.connectionPromise = null;
-        this.fromPool = false;
 
         // Retry with fresh connection (bypass pool by clearing state)
         return this.sendWithRetry(relayerId, method, payload, true);
@@ -582,7 +671,7 @@ class SandboxPluginAPI implements PluginAPI {
     if (this.socket) {
       // Remove handlers BEFORE returning to pool to prevent listener accumulation
       this.removeSocketHandlers(this.socket);
-      socketPool.release(this.socket);
+      socketPool.release(this.socket, this.socketCreatedAt);
       this.socket = null;
     }
     this.connected = false;
