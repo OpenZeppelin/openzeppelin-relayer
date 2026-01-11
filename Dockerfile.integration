@@ -16,6 +16,11 @@ RUN apk update && apk --no-cache add \
 
 WORKDIR /app
 
+# Install llvm-tools-preview component and cargo-llvm-cov for coverage
+RUN rustup default stable && \
+    rustup component add llvm-tools-preview && \
+    cargo install cargo-llvm-cov --locked
+
 # Copy manifests
 COPY Cargo.toml Cargo.lock ./
 
@@ -28,27 +33,40 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 COPY src ./src
 COPY tests ./tests
 
-# Build integration tests
-# Clear cached integration test artifacts to force recompilation when source changes.
-# This ensures changes to test files are always reflected in the binary while still
-# keeping dependency compilation cached for fast builds.
+# Build integration tests with coverage instrumentation
+# Using RUSTFLAGS to enable coverage instrumentation during compilation
+# This avoids the triple compilation issue (normal build, test build, coverage build)
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \
-    rm -rf /app/target/release/deps/integration-* \
-           /app/target/release/.fingerprint/*integration* && \
+    RUSTFLAGS="-C instrument-coverage" \
     cargo test --features integration-tests --test integration --release --no-run && \
     TEST_BINARY=$(find target/release/deps -name 'integration-*' -type f -executable | head -n 1) && \
     cp "$TEST_BINARY" /app/integration-test-binary
 
 # ============================================================================
-# Runtime Stage - Minimal image with only what's needed to run tests
+# Runtime Stage - Minimal image with only what's needed to run tests and generate coverage
 # ============================================================================
-FROM cgr.dev/chainguard/wolfi-base
+FROM cgr.dev/chainguard/wolfi-base AS runtime
 
 WORKDIR /app
 
-# Copy test binary from builder
+# Copy LLVM tools and libraries from builder (architecture-agnostic with wildcards)
+# This fixes the hardcoded aarch64 issue - works on both x86_64 and aarch64
+COPY --from=builder /root/.rustup/toolchains/stable-*/lib/rustlib/*/bin/llvm-cov \
+     /usr/local/bin/llvm-cov
+COPY --from=builder /root/.rustup/toolchains/stable-*/lib/rustlib/*/bin/llvm-profdata \
+     /usr/local/bin/llvm-profdata
+
+# Copy LLVM shared libraries that llvm-cov and llvm-profdata depend on
+# Use a broad pattern to cover libLLVM.so.* and libLLVM-*.so variants.
+COPY --from=builder /root/.rustup/toolchains/stable-*/lib/libLLVM*.so* /usr/local/lib/
+COPY --from=builder /root/.rustup/toolchains/stable-*/lib/librustc_driver-*.so /usr/local/lib/
+
+# Update library path so the LLVM tools can find their dependencies
+ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+
+# Copy instrumented test binary from builder
 COPY --from=builder /app/integration-test-binary ./integration-tests
 
 # Copy SSL libraries from builder
@@ -62,9 +80,19 @@ COPY tests/integration ./tests/integration
 # Networks is mounted separately at /app/networks to avoid nested mount issues
 RUN mkdir -p /app/config /app/networks
 
-# Create directory for test results
-RUN mkdir -p /app/test-results
+# Create directories for coverage output with proper permissions
+RUN mkdir -p /app/coverage /app/profraw && chmod -R 777 /app/coverage /app/profraw
 
-# Default test command
-# Can be overridden via docker-compose or docker run
-CMD ["./integration-tests", "--nocapture", "--test-threads=1"]
+# Execute tests directly, then generate lcov report using llvm-cov
+# This approach:
+# 1. Runs the instrumented test binary (generates .profraw files)
+# 2. Merges .profraw files into .profdata
+# 3. Generates lcov report from .profdata
+# All without invoking cargo or recompiling
+CMD ["sh", "-c", "\
+  LLVM_PROFILE_FILE=/app/profraw/integration-%p-%m.profraw \
+    ./integration-tests --nocapture --test-threads=1 && \
+  llvm-profdata merge -sparse /app/profraw/*.profraw -o /app/coverage/integration.profdata && \
+  llvm-cov export --format=lcov \
+    --instr-profile=/app/coverage/integration.profdata \
+    ./integration-tests > /app/coverage/integration-lcov.info"]
