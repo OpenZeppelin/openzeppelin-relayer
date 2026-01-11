@@ -10,50 +10,8 @@
 //! - **Validation**: Required field checks and URL format validation
 
 use crate::config::ConfigFileError;
-use crate::models::RpcConfig;
-use serde::de::Error as DeError;
+use crate::models::{deserialize_rpc_urls, RpcConfig};
 use serde::{Deserialize, Deserializer, Serialize};
-
-/// Custom deserializer for rpc_urls that supports both simple format (array of strings)
-/// and extended format (array of RpcConfig objects).
-fn deserialize_rpc_urls<'de, D>(deserializer: D) -> Result<Option<Vec<RpcConfig>>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    // First, deserialize as a generic Value to check what we have
-    let value: Option<serde_json::Value> = Option::deserialize(deserializer)?;
-
-    match value {
-        None => Ok(None),
-        Some(serde_json::Value::Array(arr)) => {
-            let mut configs = Vec::new();
-            for item in arr {
-                match item {
-                    serde_json::Value::String(url) => {
-                        // Simple format: string -> convert to RpcConfig with default weight
-                        configs.push(RpcConfig::new(url));
-                    }
-                    serde_json::Value::Object(obj) => {
-                        // Extended format: object -> deserialize as RpcConfig
-                        let config: RpcConfig =
-                            serde_json::from_value(serde_json::Value::Object(obj))
-                                .map_err(DeError::custom)?;
-                        configs.push(config);
-                    }
-                    _ => {
-                        return Err(DeError::custom(
-                            "rpc_urls must be an array of strings or RpcConfig objects",
-                        ));
-                    }
-                }
-            }
-            Ok(Some(configs))
-        }
-        Some(_) => Err(DeError::custom(
-            "rpc_urls must be an array of strings or RpcConfig objects",
-        )),
-    }
-}
 
 #[derive(Debug, Serialize, Clone)]
 pub struct NetworkConfigCommon {

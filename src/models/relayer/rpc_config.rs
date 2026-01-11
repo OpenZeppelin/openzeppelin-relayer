@@ -5,7 +5,9 @@
 
 use crate::constants::DEFAULT_RPC_WEIGHT;
 use eyre::eyre;
-use serde::{ser::SerializeStruct, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{
+    de::Error as DeError, ser::SerializeStruct, Deserialize, Deserializer, Serialize, Serializer,
+};
 use std::hash::{Hash, Hasher};
 use thiserror::Error;
 use utoipa::ToSchema;
@@ -14,6 +16,11 @@ use utoipa::ToSchema;
 pub enum RpcConfigError {
     #[error("Invalid weight: {value}. Must be between 0 and 100.")]
     InvalidWeight { value: u8 },
+}
+
+/// Returns the default RPC weight for OpenAPI schema generation.
+fn default_rpc_weight() -> u8 {
+    DEFAULT_RPC_WEIGHT
 }
 
 /// Configuration for an RPC endpoint.
@@ -26,8 +33,8 @@ pub struct RpcConfig {
     /// The RPC endpoint URL.
     pub url: String,
     /// The weight of this endpoint in the weighted round-robin selection.
-    /// Defaults to DEFAULT_RPC_WEIGHT (100). Should be between 0 and 100.
-    #[schema(default = 100, minimum = 0, maximum = 100)]
+    /// Defaults to [`DEFAULT_RPC_WEIGHT`]. Should be between 0 and 100.
+    #[schema(default = default_rpc_weight, minimum = 0, maximum = 100)]
     pub weight: u8,
 }
 
@@ -145,6 +152,70 @@ impl RpcConfig {
             Self::validate_url_scheme(&config.url)?;
         }
         Ok(())
+    }
+}
+
+/// Custom deserializer for `Option<Vec<RpcConfig>>` that supports multiple input formats.
+///
+/// This function is designed to be used with `#[serde(deserialize_with = "...")]` and supports:
+///
+/// - **Simple format**: Array of strings, e.g., `["https://rpc1.com", "https://rpc2.com"]`
+///   Each string is converted to an `RpcConfig` with default weight (100).
+///
+/// - **Extended format**: Array of objects, e.g., `[{"url": "https://rpc.com", "weight": 50}]`
+///   Each object is deserialized directly as an `RpcConfig`.
+///
+/// - **Mixed format**: Array containing both strings and objects
+///   e.g., `["https://rpc1.com", {"url": "https://rpc2.com", "weight": 50}]`
+///
+/// # Example Usage
+///
+/// ```rust,ignore
+/// use serde::Deserialize;
+/// use crate::models::RpcConfig;
+///
+/// #[derive(Deserialize)]
+/// struct MyConfig {
+///     #[serde(default, deserialize_with = "crate::models::deserialize_rpc_urls")]
+///     rpc_urls: Option<Vec<RpcConfig>>,
+/// }
+/// ```
+pub fn deserialize_rpc_urls<'de, D>(deserializer: D) -> Result<Option<Vec<RpcConfig>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    // First, deserialize as a generic Value to check what we have
+    let value: Option<serde_json::Value> = Option::deserialize(deserializer)?;
+
+    match value {
+        None => Ok(None),
+        Some(serde_json::Value::Array(arr)) => {
+            let mut configs = Vec::with_capacity(arr.len());
+            for item in arr {
+                match item {
+                    serde_json::Value::String(url) => {
+                        // Simple format: string -> convert to RpcConfig with default weight
+                        configs.push(RpcConfig::new(url));
+                    }
+                    serde_json::Value::Object(obj) => {
+                        // Extended format: object -> deserialize as RpcConfig
+                        let config: RpcConfig =
+                            serde_json::from_value(serde_json::Value::Object(obj))
+                                .map_err(DeError::custom)?;
+                        configs.push(config);
+                    }
+                    _ => {
+                        return Err(DeError::custom(
+                            "rpc_urls must be an array of strings or RpcConfig objects",
+                        ));
+                    }
+                }
+            }
+            Ok(Some(configs))
+        }
+        Some(_) => Err(DeError::custom(
+            "rpc_urls must be an array of strings or RpcConfig objects",
+        )),
     }
 }
 
@@ -283,5 +354,280 @@ mod tests {
         ];
         let result = RpcConfig::validate_list(&configs);
         assert!(result.is_err(), "Should fail with all invalid URLs");
+    }
+
+    // =========================================================================
+    // Tests for deserialize_rpc_urls function
+    // =========================================================================
+
+    /// Helper struct to test the deserialize_rpc_urls function via serde
+    #[derive(Deserialize, Debug)]
+    struct TestRpcUrlsContainer {
+        #[serde(default, deserialize_with = "super::deserialize_rpc_urls")]
+        rpc_urls: Option<Vec<RpcConfig>>,
+    }
+
+    #[test]
+    fn test_deserialize_rpc_urls_simple_format_single_url() {
+        let json = r#"{"rpc_urls": ["https://rpc.example.com"]}"#;
+        let result: TestRpcUrlsContainer = serde_json::from_str(json).unwrap();
+
+        let urls = result.rpc_urls.unwrap();
+        assert_eq!(urls.len(), 1);
+        assert_eq!(urls[0].url, "https://rpc.example.com");
+        assert_eq!(urls[0].weight, DEFAULT_RPC_WEIGHT);
+    }
+
+    #[test]
+    fn test_deserialize_rpc_urls_simple_format_multiple_urls() {
+        let json = r#"{"rpc_urls": ["https://rpc1.com", "https://rpc2.com", "https://rpc3.com"]}"#;
+        let result: TestRpcUrlsContainer = serde_json::from_str(json).unwrap();
+
+        let urls = result.rpc_urls.unwrap();
+        assert_eq!(urls.len(), 3);
+        assert_eq!(urls[0].url, "https://rpc1.com");
+        assert_eq!(urls[1].url, "https://rpc2.com");
+        assert_eq!(urls[2].url, "https://rpc3.com");
+        // All should have default weight
+        for url in &urls {
+            assert_eq!(url.weight, DEFAULT_RPC_WEIGHT);
+        }
+    }
+
+    #[test]
+    fn test_deserialize_rpc_urls_extended_format_single_config() {
+        let json = r#"{"rpc_urls": [{"url": "https://rpc.example.com", "weight": 50}]}"#;
+        let result: TestRpcUrlsContainer = serde_json::from_str(json).unwrap();
+
+        let urls = result.rpc_urls.unwrap();
+        assert_eq!(urls.len(), 1);
+        assert_eq!(urls[0].url, "https://rpc.example.com");
+        assert_eq!(urls[0].weight, 50);
+    }
+
+    #[test]
+    fn test_deserialize_rpc_urls_extended_format_multiple_configs() {
+        let json = r#"{"rpc_urls": [
+            {"url": "https://primary.com", "weight": 80},
+            {"url": "https://secondary.com", "weight": 15},
+            {"url": "https://fallback.com", "weight": 5}
+        ]}"#;
+        let result: TestRpcUrlsContainer = serde_json::from_str(json).unwrap();
+
+        let urls = result.rpc_urls.unwrap();
+        assert_eq!(urls.len(), 3);
+        assert_eq!(urls[0].url, "https://primary.com");
+        assert_eq!(urls[0].weight, 80);
+        assert_eq!(urls[1].url, "https://secondary.com");
+        assert_eq!(urls[1].weight, 15);
+        assert_eq!(urls[2].url, "https://fallback.com");
+        assert_eq!(urls[2].weight, 5);
+    }
+
+    #[test]
+    fn test_deserialize_rpc_urls_extended_format_without_weight() {
+        // When weight is omitted in extended format, it should default
+        let json = r#"{"rpc_urls": [{"url": "https://rpc.example.com"}]}"#;
+        let result: TestRpcUrlsContainer = serde_json::from_str(json).unwrap();
+
+        let urls = result.rpc_urls.unwrap();
+        assert_eq!(urls.len(), 1);
+        assert_eq!(urls[0].url, "https://rpc.example.com");
+        assert_eq!(urls[0].weight, DEFAULT_RPC_WEIGHT);
+    }
+
+    #[test]
+    fn test_deserialize_rpc_urls_mixed_format() {
+        let json = r#"{"rpc_urls": [
+            "https://simple.com",
+            {"url": "https://weighted.com", "weight": 75},
+            "https://another-simple.com"
+        ]}"#;
+        let result: TestRpcUrlsContainer = serde_json::from_str(json).unwrap();
+
+        let urls = result.rpc_urls.unwrap();
+        assert_eq!(urls.len(), 3);
+
+        // First: simple string format
+        assert_eq!(urls[0].url, "https://simple.com");
+        assert_eq!(urls[0].weight, DEFAULT_RPC_WEIGHT);
+
+        // Second: extended object format
+        assert_eq!(urls[1].url, "https://weighted.com");
+        assert_eq!(urls[1].weight, 75);
+
+        // Third: simple string format
+        assert_eq!(urls[2].url, "https://another-simple.com");
+        assert_eq!(urls[2].weight, DEFAULT_RPC_WEIGHT);
+    }
+
+    #[test]
+    fn test_deserialize_rpc_urls_none_when_field_missing() {
+        let json = r#"{}"#;
+        let result: TestRpcUrlsContainer = serde_json::from_str(json).unwrap();
+
+        assert!(result.rpc_urls.is_none());
+    }
+
+    #[test]
+    fn test_deserialize_rpc_urls_none_when_null() {
+        let json = r#"{"rpc_urls": null}"#;
+        let result: TestRpcUrlsContainer = serde_json::from_str(json).unwrap();
+
+        assert!(result.rpc_urls.is_none());
+    }
+
+    #[test]
+    fn test_deserialize_rpc_urls_empty_array() {
+        let json = r#"{"rpc_urls": []}"#;
+        let result: TestRpcUrlsContainer = serde_json::from_str(json).unwrap();
+
+        let urls = result.rpc_urls.unwrap();
+        assert!(urls.is_empty());
+    }
+
+    #[test]
+    fn test_deserialize_rpc_urls_weight_zero() {
+        let json = r#"{"rpc_urls": [{"url": "https://disabled.com", "weight": 0}]}"#;
+        let result: TestRpcUrlsContainer = serde_json::from_str(json).unwrap();
+
+        let urls = result.rpc_urls.unwrap();
+        assert_eq!(urls[0].weight, 0);
+    }
+
+    #[test]
+    fn test_deserialize_rpc_urls_weight_max() {
+        let json = r#"{"rpc_urls": [{"url": "https://max.com", "weight": 100}]}"#;
+        let result: TestRpcUrlsContainer = serde_json::from_str(json).unwrap();
+
+        let urls = result.rpc_urls.unwrap();
+        assert_eq!(urls[0].weight, 100);
+    }
+
+    #[test]
+    fn test_deserialize_rpc_urls_invalid_not_array() {
+        let json = r#"{"rpc_urls": "https://not-an-array.com"}"#;
+        let result: Result<TestRpcUrlsContainer, _> = serde_json::from_str(json);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("rpc_urls must be an array"),
+            "Error should mention array requirement: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_deserialize_rpc_urls_invalid_number_in_array() {
+        let json = r#"{"rpc_urls": [123, 456]}"#;
+        let result: Result<TestRpcUrlsContainer, _> = serde_json::from_str(json);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("rpc_urls must be an array of strings or RpcConfig objects"),
+            "Error should mention valid types: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_deserialize_rpc_urls_invalid_boolean_in_array() {
+        let json = r#"{"rpc_urls": [true, false]}"#;
+        let result: Result<TestRpcUrlsContainer, _> = serde_json::from_str(json);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_deserialize_rpc_urls_invalid_nested_array() {
+        let json = r#"{"rpc_urls": [["nested", "array"]]}"#;
+        let result: Result<TestRpcUrlsContainer, _> = serde_json::from_str(json);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_deserialize_rpc_urls_invalid_object_in_array() {
+        let json = r#"{"rpc_urls": {"not": "an_array"}}"#;
+        let result: Result<TestRpcUrlsContainer, _> = serde_json::from_str(json);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_deserialize_rpc_urls_invalid_object_missing_url() {
+        // Object format requires 'url' field
+        let json = r#"{"rpc_urls": [{"weight": 50}]}"#;
+        let result: Result<TestRpcUrlsContainer, _> = serde_json::from_str(json);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("url") || err.contains("missing field"),
+            "Error should mention missing url field: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_deserialize_rpc_urls_mixed_valid_and_invalid() {
+        // One valid string followed by an invalid number
+        let json = r#"{"rpc_urls": ["https://valid.com", 12345]}"#;
+        let result: Result<TestRpcUrlsContainer, _> = serde_json::from_str(json);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_deserialize_rpc_urls_preserves_url_with_special_chars() {
+        let json = r#"{"rpc_urls": ["https://rpc.example.com/v1?api_key=abc123&network=mainnet"]}"#;
+        let result: TestRpcUrlsContainer = serde_json::from_str(json).unwrap();
+
+        let urls = result.rpc_urls.unwrap();
+        assert_eq!(
+            urls[0].url,
+            "https://rpc.example.com/v1?api_key=abc123&network=mainnet"
+        );
+    }
+
+    #[test]
+    fn test_deserialize_rpc_urls_preserves_url_with_port() {
+        let json = r#"{"rpc_urls": ["http://localhost:8545"]}"#;
+        let result: TestRpcUrlsContainer = serde_json::from_str(json).unwrap();
+
+        let urls = result.rpc_urls.unwrap();
+        assert_eq!(urls[0].url, "http://localhost:8545");
+    }
+
+    #[test]
+    fn test_deserialize_rpc_urls_unicode_url() {
+        let json = r#"{"rpc_urls": ["https://测试.example.com"]}"#;
+        let result: TestRpcUrlsContainer = serde_json::from_str(json).unwrap();
+
+        let urls = result.rpc_urls.unwrap();
+        assert_eq!(urls[0].url, "https://测试.example.com");
+    }
+
+    #[test]
+    fn test_deserialize_rpc_urls_empty_string_url() {
+        // Empty string is technically valid JSON, deserialization should succeed
+        // (validation happens at a different layer)
+        let json = r#"{"rpc_urls": [""]}"#;
+        let result: TestRpcUrlsContainer = serde_json::from_str(json).unwrap();
+
+        let urls = result.rpc_urls.unwrap();
+        assert_eq!(urls[0].url, "");
+    }
+
+    #[test]
+    fn test_deserialize_rpc_urls_whitespace_url() {
+        let json = r#"{"rpc_urls": ["  https://rpc.example.com  "]}"#;
+        let result: TestRpcUrlsContainer = serde_json::from_str(json).unwrap();
+
+        let urls = result.rpc_urls.unwrap();
+        // Whitespace is preserved (trimming is a validation concern)
+        assert_eq!(urls[0].url, "  https://rpc.example.com  ");
     }
 }

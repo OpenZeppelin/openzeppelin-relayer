@@ -4,11 +4,11 @@
 //! Health state is shared across all relayers using the same RPC URL.
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
-use tracing::debug;
+use tracing::{debug, warn};
 
 /// Metadata for tracking RPC endpoint health.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -39,6 +39,34 @@ impl RpcHealthStore {
         &HEALTH_STORE
     }
 
+    /// Acquires a read lock, recovering from poison if necessary.
+    ///
+    /// If the lock is poisoned (a thread panicked while holding it), we recover
+    /// by extracting the inner data. This prevents cascading failures.
+    fn acquire_read_lock(&self) -> RwLockReadGuard<'_, HashMap<String, RpcConfigMetadata>> {
+        match self.metadata.read() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                warn!("RpcHealthStore read lock was poisoned, recovering");
+                poisoned.into_inner()
+            }
+        }
+    }
+
+    /// Acquires a write lock, recovering from poison if necessary.
+    ///
+    /// If the lock is poisoned (a thread panicked while holding it), we recover
+    /// by extracting the inner data. This prevents cascading failures.
+    fn acquire_write_lock(&self) -> RwLockWriteGuard<'_, HashMap<String, RpcConfigMetadata>> {
+        match self.metadata.write() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                warn!("RpcHealthStore write lock was poisoned, recovering");
+                poisoned.into_inner()
+            }
+        }
+    }
+
     /// Gets metadata for a given RPC URL.
     ///
     /// Returns default (empty) metadata if the URL is not in the store.
@@ -49,8 +77,8 @@ impl RpcHealthStore {
     /// # Returns
     /// * `RpcConfigMetadata` - The metadata for the URL, or default if not found
     pub fn get_metadata(&self, url: &str) -> RpcConfigMetadata {
-        let metadata = self.metadata.read().unwrap();
-        metadata.get(url).cloned().unwrap_or_default()
+        let store = self.acquire_read_lock();
+        store.get(url).cloned().unwrap_or_default()
     }
 
     /// Updates metadata for a given RPC URL.
@@ -59,7 +87,7 @@ impl RpcHealthStore {
     /// * `url` - The RPC endpoint URL
     /// * `metadata` - The metadata to store
     pub fn update_metadata(&self, url: &str, metadata: RpcConfigMetadata) {
-        let mut store = self.metadata.write().unwrap();
+        let mut store = self.acquire_write_lock();
         store.insert(url.to_string(), metadata);
     }
 
@@ -79,7 +107,7 @@ impl RpcHealthStore {
         pause_duration: chrono::Duration,
         failure_expiration: chrono::Duration,
     ) {
-        let mut store = self.metadata.write().unwrap();
+        let mut store = self.acquire_write_lock();
         let mut metadata = store.get(url).cloned().unwrap_or_default();
 
         let now = Utc::now();
@@ -140,33 +168,21 @@ impl RpcHealthStore {
     /// # Arguments
     /// * `url` - The RPC endpoint URL
     pub fn reset_failures(&self, url: &str) {
-        let mut store = self.metadata.write().unwrap();
+        let mut store = self.acquire_write_lock();
         store.remove(url);
     }
 
     /// Resets the failure count only if the provider has failures recorded.
-    /// This is more efficient than `reset_failures` as it avoids write lock
-    /// acquisition when there are no failures.
     ///
     /// # Arguments
     /// * `url` - The RPC endpoint URL
     ///
     /// # Returns
     /// * `bool` - True if failures were reset, false if no failures existed
+    #[must_use]
     pub fn reset_failures_if_exists(&self, url: &str) -> bool {
-        // Fast path: check if entry exists with read lock first
-        let has_failures = {
-            let store = self.metadata.read().unwrap();
-            store.contains_key(url)
-        };
-
-        if has_failures {
-            let mut store = self.metadata.write().unwrap();
-            store.remove(url);
-            true
-        } else {
-            false
-        }
+        let mut store = self.acquire_write_lock();
+        store.remove(url).is_some()
     }
 
     /// Checks if an RPC endpoint is currently paused.
@@ -177,6 +193,10 @@ impl RpcHealthStore {
     ///
     /// Stale failures (older than failure_expiration) are automatically removed
     /// to allow the provider to be retried.
+    ///
+    /// This method uses a read-lock-first pattern for better concurrency:
+    /// - First acquires a read lock to check if modification is needed
+    /// - Only upgrades to write lock if cleanup is required
     ///
     /// # Arguments
     /// * `url` - The RPC endpoint URL
@@ -191,49 +211,106 @@ impl RpcHealthStore {
         threshold: u32,
         failure_expiration: chrono::Duration,
     ) -> bool {
-        let mut metadata_guard = self.metadata.write().unwrap();
-        if let Some(meta) = metadata_guard.get_mut(url) {
-            let now = Utc::now();
+        let now = Utc::now();
 
-            // Remove stale failures (older than expiration window)
-            meta.failure_timestamps
-                .retain(|&ts| now - ts <= failure_expiration);
+        // Fast path: check with read lock first
+        let needs_write = {
+            let store = self.acquire_read_lock();
+            match store.get(url) {
+                None => return false, // No entry, definitely not paused
+                Some(meta) => {
+                    // Check if we need to modify anything
+                    let has_stale_failures = meta
+                        .failure_timestamps
+                        .iter()
+                        .any(|&ts| now - ts > failure_expiration);
+                    let pause_expired = meta
+                        .paused_until
+                        .is_some_and(|paused_until| now >= paused_until);
+                    let needs_cleanup =
+                        meta.failure_timestamps.is_empty() && meta.paused_until.is_none();
 
-            // If pause has expired, clear it
-            if let Some(paused_until) = meta.paused_until {
-                if now >= paused_until {
-                    // Pause expired - clear pause (but keep failure timestamps for tracking)
-                    debug!(
-                        provider_url = %url,
-                        paused_until = %paused_until,
-                        current_time = %now,
-                        remaining_failures = %meta.failure_timestamps.len(),
-                        "RPC provider pause expired, provider available again"
-                    );
-                    meta.paused_until = None;
-                    // If no recent failures remain, clear everything
-                    if meta.failure_timestamps.is_empty() {
-                        metadata_guard.remove(url);
+                    if has_stale_failures || pause_expired || needs_cleanup {
+                        // Need write lock to clean up
+                        true
+                    } else {
+                        // No cleanup needed, can determine pause status with read lock
+                        let recent_failures = meta.failure_timestamps.len() as u32;
+                        if recent_failures >= threshold {
+                            if let Some(paused_until) = meta.paused_until {
+                                return now < paused_until;
+                            }
+                        }
+                        return false;
                     }
-                    return false;
                 }
             }
+        };
 
-            // Check if paused: must have reached threshold AND be within pause window
-            let recent_failures = meta.failure_timestamps.len() as u32;
-            if recent_failures >= threshold {
-                if let Some(paused_until) = meta.paused_until {
-                    return now < paused_until;
+        // Slow path: need write lock for cleanup
+        if needs_write {
+            self.is_paused_with_cleanup(url, threshold, failure_expiration, now)
+        } else {
+            false
+        }
+    }
+
+    /// Internal helper that performs pause check with cleanup (requires write lock).
+    ///
+    /// This is called when the read-lock check determined that modifications are needed.
+    fn is_paused_with_cleanup(
+        &self,
+        url: &str,
+        threshold: u32,
+        failure_expiration: chrono::Duration,
+        now: DateTime<Utc>,
+    ) -> bool {
+        let mut store = self.acquire_write_lock();
+
+        // Re-check after acquiring write lock (state may have changed)
+        let Some(meta) = store.get_mut(url) else {
+            return false;
+        };
+
+        // Remove stale failures (older than expiration window)
+        meta.failure_timestamps
+            .retain(|&ts| now - ts <= failure_expiration);
+
+        // If pause has expired, clear it
+        if let Some(paused_until) = meta.paused_until {
+            if now >= paused_until {
+                // Pause expired - clear pause (but keep failure timestamps for tracking)
+                debug!(
+                    provider_url = %url,
+                    paused_until = %paused_until,
+                    current_time = %now,
+                    remaining_failures = %meta.failure_timestamps.len(),
+                    "RPC provider pause expired, provider available again"
+                );
+                meta.paused_until = None;
+                // If no recent failures remain, clear everything
+                if meta.failure_timestamps.is_empty() {
+                    store.remove(url);
                 }
-                // If we've reached threshold but no pause_until is set, not paused
                 return false;
             }
-
-            // If no recent failures remain, remove the entry
-            if meta.failure_timestamps.is_empty() && meta.paused_until.is_none() {
-                metadata_guard.remove(url);
-            }
         }
+
+        // Check if paused: must have reached threshold AND be within pause window
+        let recent_failures = meta.failure_timestamps.len() as u32;
+        if recent_failures >= threshold {
+            if let Some(paused_until) = meta.paused_until {
+                return now < paused_until;
+            }
+            // If we've reached threshold but no pause_until is set, not paused
+            return false;
+        }
+
+        // If no recent failures remain, remove the entry
+        if meta.failure_timestamps.is_empty() && meta.paused_until.is_none() {
+            store.remove(url);
+        }
+
         false
     }
 
@@ -241,7 +318,7 @@ impl RpcHealthStore {
     /// Primarily useful for testing.
     #[cfg(test)]
     pub fn clear_all(&self) {
-        let mut store = self.metadata.write().unwrap();
+        let mut store = self.acquire_write_lock();
         store.clear();
     }
 }

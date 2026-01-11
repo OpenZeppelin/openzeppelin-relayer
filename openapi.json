@@ -7116,7 +7116,7 @@
           "weight": {
             "type": "integer",
             "format": "int32",
-            "description": "The weight of this endpoint in the weighted round-robin selection.\nDefaults to DEFAULT_RPC_WEIGHT (100). Should be between 0 and 100.",
+            "description": "The weight of this endpoint in the weighted round-robin selection.\nDefaults to [`DEFAULT_RPC_WEIGHT`]. Should be between 0 and 100.",
             "default": 100,
             "maximum": 100,
             "minimum": 0
@@ -8914,7 +8914,7 @@
             "items": {
               "$ref": "#/components/schemas/RpcUrlEntry"
             },
-            "description": "List of RPC endpoint configurations for connecting to the network.\nSupports multiple formats:\n- Array of strings: `[\"https://rpc.example.com\"]` (defaults to weight 100)\n- Array of RpcConfig objects: `[{\"url\": \"https://rpc.example.com\", \"weight\": 100}]`\n- Mixed array: `[\"https://rpc1.com\", {\"url\": \"https://rpc2.com\", \"weight\": 200}]`\nMust be non-empty and contain valid HTTP/HTTPS URLs if provided.",
+            "description": "List of RPC endpoint configurations for connecting to the network.\nSupports multiple formats:\n- Array of strings: `[\"https://rpc.example.com\"]` (defaults to weight 100)\n- Array of RpcConfig objects: `[{\"url\": \"https://rpc.example.com\", \"weight\": 100}]`\n- Mixed array: `[\"https://rpc1.com\", {\"url\": \"https://rpc2.com\", \"weight\": 100}]`\n  Must be non-empty and contain valid HTTP/HTTPS URLs if provided.",
             "example": [
               {
                 "url": "https://rpc.example.com",
