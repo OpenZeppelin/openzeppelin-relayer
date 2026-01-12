@@ -20,7 +20,7 @@ use crate::{
     models::SecretString,
     utils::{
         base64_decode, base64_encode, decrypt_sensitive_field_auto,
-        encrypt_sensitive_field_with_aad, EncryptionContext,
+        encrypt_sensitive_field_with_aad,
     },
 };
 
@@ -35,12 +35,8 @@ where
     // First encode the raw secret as base64
     let base64 = base64_encode(secret.borrow().as_ref());
 
-    // Get AAD from context (required)
-    let aad = EncryptionContext::get()
-        .ok_or_else(|| serde::ser::Error::custom("EncryptionContext not set"))?;
-
     // Then encrypt the base64 string for secure storage with AAD
-    let encrypted = encrypt_sensitive_field_with_aad(&base64, &aad)
+    let encrypted = encrypt_sensitive_field_with_aad(&base64)
         .map_err(|e| serde::ser::Error::custom(format!("Encryption failed: {e}")))?;
 
     serializer.serialize_str(&encrypted)
@@ -56,11 +52,8 @@ where
 {
     let encrypted_str = String::deserialize(deserializer)?;
 
-    // Get AAD from context if available (for v2 decryption)
-    let aad = EncryptionContext::get();
-
     // Decrypt using auto-detection to handle both v1 (legacy) and v2 (with AAD)
-    let base64_str = decrypt_sensitive_field_auto(&encrypted_str, aad.as_deref())
+    let base64_str = decrypt_sensitive_field_auto(&encrypted_str)
         .map_err(|e| serde::de::Error::custom(format!("Decryption failed: {e}")))?;
 
     // Then decode the base64 to get the raw secret bytes
@@ -82,12 +75,8 @@ where
 {
     let secret_content = secret.to_str();
 
-    // Get AAD from context (required)
-    let aad = EncryptionContext::get()
-        .ok_or_else(|| serde::ser::Error::custom("EncryptionContext not set"))?;
-
     // Encrypt with AAD
-    let encrypted = encrypt_sensitive_field_with_aad(&secret_content, &aad)
+    let encrypted = encrypt_sensitive_field_with_aad(&secret_content)
         .map_err(|e| serde::ser::Error::custom(format!("Encryption failed: {e}")))?;
 
     let encoded = base64_encode(encrypted.as_bytes());
@@ -113,11 +102,8 @@ where
     let encrypted_str = String::from_utf8(encrypted_bytes)
         .map_err(|e| serde::de::Error::custom(format!("Invalid UTF-8: {e}")))?;
 
-    // Get AAD from context if available (for v2 decryption)
-    let aad = EncryptionContext::get();
-
     // Decrypt using auto-detection to handle both v1 (legacy) and v2 (with AAD)
-    let decrypted = decrypt_sensitive_field_auto(&encrypted_str, aad.as_deref())
+    let decrypted = decrypt_sensitive_field_auto(&encrypted_str)
         .map_err(|e| serde::de::Error::custom(format!("Decryption failed: {e}")))?;
 
     Ok(SecretString::new(&decrypted))
@@ -138,12 +124,8 @@ where
         Some(secret_string) => {
             let secret_content = secret_string.to_str();
 
-            // Get AAD from context (required)
-            let aad = EncryptionContext::get()
-                .ok_or_else(|| serde::ser::Error::custom("EncryptionContext not set"))?;
-
             // Encrypt with AAD
-            let encrypted = encrypt_sensitive_field_with_aad(&secret_content, &aad)
+            let encrypted = encrypt_sensitive_field_with_aad(&secret_content)
                 .map_err(|e| serde::ser::Error::custom(format!("Encryption failed: {e}")))?;
 
             let encoded = base64_encode(encrypted.as_bytes());
@@ -175,11 +157,8 @@ where
             let encrypted_str = String::from_utf8(encrypted_bytes)
                 .map_err(|e| serde::de::Error::custom(format!("Invalid UTF-8: {e}")))?;
 
-            // Get AAD from context if available (for v2 decryption)
-            let aad = EncryptionContext::get();
-
             // Decrypt using auto-detection to handle both v1 (legacy) and v2 (with AAD)
-            let decrypted = decrypt_sensitive_field_auto(&encrypted_str, aad.as_deref())
+            let decrypted = decrypt_sensitive_field_auto(&encrypted_str)
                 .map_err(|e| serde::de::Error::custom(format!("Decryption failed: {e}")))?;
 
             Ok(Some(SecretString::new(&decrypted)))
@@ -191,6 +170,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::EncryptionContext;
     use secrets::SecretVec;
     use serde_json;
 

@@ -14,7 +14,7 @@ use zeroize::Zeroize;
 
 use crate::{
     models::SecretString,
-    utils::{base64_decode, base64_encode},
+    utils::{base64_decode, base64_encode, EncryptionContext},
 };
 
 #[derive(Error, Debug, Clone)]
@@ -368,9 +368,15 @@ pub fn decrypt_sensitive_field(data: &str) -> Result<String, EncryptionError> {
 
 /// Encrypts sensitive data with AAD (Additional Authenticated Data)
 ///
-/// AAD binds the ciphertext to a specific context (e.g., Redis key),
-/// preventing ciphertext swap attacks.
-pub fn encrypt_sensitive_field_with_aad(data: &str, aad: &str) -> Result<String, EncryptionError> {
+/// AAD is automatically retrieved from `EncryptionContext` and binds the ciphertext
+/// to a specific context (e.g., Redis key), preventing ciphertext swap attacks.
+/// The `EncryptionContext` must be set before calling this function.
+pub fn encrypt_sensitive_field_with_aad(data: &str) -> Result<String, EncryptionError> {
+    // Get AAD from context (required)
+    let aad = EncryptionContext::get().ok_or_else(|| {
+        EncryptionError::EncryptionFailed("EncryptionContext not set".to_string())
+    })?;
+
     if FieldEncryption::is_configured() {
         match get_encryption() {
             Ok(encryption) => {
@@ -395,11 +401,13 @@ pub fn encrypt_sensitive_field_with_aad(data: &str, aad: &str) -> Result<String,
 /// Decrypts sensitive data with automatic version detection
 ///
 /// - Version 1: Decrypts without AAD (legacy, backwards compatible)
-/// - Version 2: Decrypts with AAD (new format)
-pub fn decrypt_sensitive_field_auto(
-    data: &str,
-    aad: Option<&str>,
-) -> Result<String, EncryptionError> {
+/// - Version 2: Decrypts with AAD (retrieved from `EncryptionContext` if available)
+///
+/// The `EncryptionContext` is automatically retrieved if set for v2 decryption.
+pub fn decrypt_sensitive_field_auto(data: &str) -> Result<String, EncryptionError> {
+    // Get AAD from context if available (for v2 decryption)
+    let aad = EncryptionContext::get();
+
     // Always try to decode base64 first
     let json_bytes = base64_decode(data)
         .map_err(|e| EncryptionError::InvalidFormat(format!("Invalid base64: {e}")))?;
@@ -413,7 +421,7 @@ pub fn decrypt_sensitive_field_auto(
             // Check if this looks like encrypted data by trying to parse as EncryptedData
             if let Ok(encrypted_data) = serde_json::from_str::<EncryptedData>(&json_str) {
                 // Use auto-detect to handle both v1 and v2
-                let aad_bytes = aad.map(|s| s.as_bytes());
+                let aad_bytes = aad.as_deref().map(|s| s.as_bytes());
                 let plaintext_bytes = encryption.decrypt_auto(&encrypted_data, aad_bytes)?;
                 return String::from_utf8(plaintext_bytes).map_err(|e| {
                     EncryptionError::DecryptionFailed(format!("Invalid UTF-8 in plaintext: {e}"))
@@ -983,11 +991,15 @@ mod tests {
         env::remove_var("STORAGE_ENCRYPTION_KEY");
 
         let plaintext = "fallback-secret";
-        let aad = "context-aad";
+        let aad = "context-aad".to_string();
 
         // Should use fallback mode (base64-encoded JSON)
-        let encoded = encrypt_sensitive_field_with_aad(plaintext, aad).unwrap();
-        let decoded = decrypt_sensitive_field_auto(&encoded, Some(aad)).unwrap();
+        let encoded = EncryptionContext::with_aad_sync(aad.clone(), || {
+            encrypt_sensitive_field_with_aad(plaintext).unwrap()
+        });
+        let decoded = EncryptionContext::with_aad_sync(aad, || {
+            decrypt_sensitive_field_auto(&encoded).unwrap()
+        });
         assert_eq!(plaintext, decoded);
 
         // Should be base64-encoded JSON (fallback ignores AAD)
