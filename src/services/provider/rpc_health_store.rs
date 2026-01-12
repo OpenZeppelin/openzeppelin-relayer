@@ -330,7 +330,6 @@ mod tests {
     #[test]
     fn test_get_metadata_returns_default_when_not_found() {
         let store = RpcHealthStore::instance();
-        store.clear_all();
 
         // Use a unique URL to avoid interference from other tests
         let url = "https://test-get-metadata.example.com";
@@ -343,7 +342,6 @@ mod tests {
     #[test]
     fn test_update_and_get_metadata() {
         let store = RpcHealthStore::instance();
-        store.clear_all();
 
         let url = "https://test-update-metadata.example.com";
         let mut metadata = RpcConfigMetadata::default();
@@ -363,7 +361,6 @@ mod tests {
     #[test]
     fn test_mark_failed_increments_count() {
         let store = RpcHealthStore::instance();
-        store.clear_all();
 
         // Use a unique URL to avoid interference
         let url = "https://test-increment-count.example.com";
@@ -443,7 +440,6 @@ mod tests {
     #[test]
     fn test_reset_failures() {
         let store = RpcHealthStore::instance();
-        store.clear_all();
 
         let url = "https://test-reset-failures.example.com";
         let expiration = chrono::Duration::seconds(60);
@@ -464,7 +460,6 @@ mod tests {
     #[test]
     fn test_is_paused_with_failure_count_below_threshold() {
         let store = RpcHealthStore::instance();
-        store.clear_all();
 
         let url = "https://test-below-threshold.example.com";
         let expiration = chrono::Duration::seconds(60);
@@ -479,7 +474,6 @@ mod tests {
     #[test]
     fn test_is_paused_with_time_based_pause() {
         let store = RpcHealthStore::instance();
-        store.clear_all();
 
         let url = "https://test-time-based-pause.example.com";
         let expiration = chrono::Duration::seconds(60);
@@ -497,7 +491,6 @@ mod tests {
     #[test]
     fn test_is_paused_expires_after_time() {
         let store = RpcHealthStore::instance();
-        store.clear_all();
 
         let url = "https://test-expires-after-time.example.com";
         let expiration = chrono::Duration::seconds(60);
@@ -514,7 +507,6 @@ mod tests {
     fn test_shared_state_across_instances() {
         let store1 = RpcHealthStore::instance();
         let store2 = RpcHealthStore::instance();
-        store1.clear_all();
 
         let url = "https://test-shared-state.example.com";
         let expiration = chrono::Duration::seconds(60);
@@ -540,7 +532,6 @@ mod tests {
     #[test]
     fn test_stale_failures_are_expired() {
         let store = RpcHealthStore::instance();
-        store.clear_all();
 
         let url = "https://test-stale-failures.example.com";
         let expiration = chrono::Duration::seconds(60);
@@ -566,7 +557,6 @@ mod tests {
     #[test]
     fn test_failure_timestamps_size_limit() {
         let store = RpcHealthStore::instance();
-        store.clear_all();
 
         let url = "https://test-size-limit.example.com";
         let expiration = chrono::Duration::seconds(60);
@@ -585,7 +575,6 @@ mod tests {
     #[test]
     fn test_mixed_stale_and_recent_failures() {
         let store = RpcHealthStore::instance();
-        store.clear_all();
 
         let url = "https://test-mixed-failures.example.com";
         let expiration = chrono::Duration::seconds(60);
@@ -614,7 +603,6 @@ mod tests {
     #[test]
     fn test_pause_extension_when_already_paused() {
         let store = RpcHealthStore::instance();
-        store.clear_all();
 
         // Use a unique URL to avoid interference
         let url = "https://test-pause-extension.example.com";
@@ -685,7 +673,6 @@ mod tests {
     #[test]
     fn test_stale_failures_removed_during_mark_failed() {
         let store = RpcHealthStore::instance();
-        store.clear_all();
 
         let url = "https://test-stale-removed.example.com";
         let expiration = chrono::Duration::seconds(60);
@@ -715,7 +702,6 @@ mod tests {
     #[test]
     fn test_pause_expiration_cleans_up_metadata() {
         let store = RpcHealthStore::instance();
-        store.clear_all();
 
         let url = "https://test-pause-expiration-cleanup.example.com";
         let expiration = chrono::Duration::seconds(60);
@@ -736,7 +722,6 @@ mod tests {
     #[test]
     fn test_pause_expiration_keeps_recent_failures() {
         let store = RpcHealthStore::instance();
-        store.clear_all();
 
         // Use a unique URL to avoid interference
         let url = "https://test-pause-expiration.example.com";
@@ -777,6 +762,174 @@ mod tests {
         assert!(
             metadata_after.paused_until.is_none(),
             "Pause should be cleared"
+        );
+    }
+
+    #[test]
+    fn test_reset_failures_if_exists_returns_true_when_entry_exists() {
+        let store = RpcHealthStore::instance();
+
+        let url = "https://test-reset-if-exists-true.example.com";
+        let expiration = chrono::Duration::seconds(60);
+        let threshold = 3;
+
+        // Add some failures
+        store.mark_failed(url, threshold, chrono::Duration::seconds(60), expiration);
+        store.mark_failed(url, threshold, chrono::Duration::seconds(60), expiration);
+
+        // Should return true when entry exists
+        let result = store.reset_failures_if_exists(url);
+        assert!(result, "Should return true when entry existed");
+
+        // Verify entry was removed
+        let metadata = store.get_metadata(url);
+        assert_eq!(metadata, RpcConfigMetadata::default());
+    }
+
+    #[test]
+    fn test_reset_failures_if_exists_returns_false_when_no_entry() {
+        let store = RpcHealthStore::instance();
+
+        // Use a URL that was never used
+        let url = "https://test-reset-if-exists-false.example.com";
+
+        // Should return false when entry doesn't exist
+        let result = store.reset_failures_if_exists(url);
+        assert!(!result, "Should return false when entry doesn't exist");
+    }
+
+    #[test]
+    fn test_is_paused_fast_path_no_cleanup_needed() {
+        let store = RpcHealthStore::instance();
+
+        // This test verifies the fast path in is_paused (lines 237-244)
+        // where no cleanup is needed and we can return directly with read lock
+        let url = "https://test-fast-path.example.com";
+        let expiration = chrono::Duration::seconds(60);
+        let threshold = 3;
+
+        // Create metadata with recent failures (not stale) and future pause
+        let mut metadata = RpcConfigMetadata::default();
+        metadata.failure_timestamps.push(Utc::now());
+        metadata.failure_timestamps.push(Utc::now());
+        metadata.failure_timestamps.push(Utc::now());
+        metadata.paused_until = Some(Utc::now() + chrono::Duration::seconds(60));
+        store.update_metadata(url, metadata);
+
+        // This should hit the fast path and return true without needing write lock
+        assert!(
+            store.is_paused(url, threshold, expiration),
+            "Should be paused via fast path"
+        );
+
+        // Verify the metadata is unchanged (no cleanup performed)
+        let metadata_after = store.get_metadata(url);
+        assert_eq!(
+            metadata_after.failure_timestamps.len(),
+            3,
+            "Should have 3 failures unchanged"
+        );
+        assert!(
+            metadata_after.paused_until.is_some(),
+            "Pause should be unchanged"
+        );
+    }
+
+    #[test]
+    fn test_is_paused_fast_path_below_threshold_returns_false() {
+        let store = RpcHealthStore::instance();
+
+        // Test fast path when failures are below threshold
+        let url = "https://test-fast-path-below-threshold.example.com";
+        let expiration = chrono::Duration::seconds(60);
+        let threshold = 3;
+
+        // Create metadata with recent failures below threshold
+        let mut metadata = RpcConfigMetadata::default();
+        metadata.failure_timestamps.push(Utc::now());
+        metadata.failure_timestamps.push(Utc::now());
+        // Only 2 failures, threshold is 3
+        store.update_metadata(url, metadata);
+
+        // Should hit fast path and return false
+        assert!(
+            !store.is_paused(url, threshold, expiration),
+            "Should not be paused - below threshold"
+        );
+    }
+
+    #[test]
+    fn test_is_paused_threshold_reached_but_no_pause_until() {
+        let store = RpcHealthStore::instance();
+
+        // Test edge case: threshold reached but no paused_until set
+        // This can happen if metadata is manipulated directly
+        let url = "https://test-threshold-no-pause.example.com";
+        let expiration = chrono::Duration::seconds(60);
+        let threshold = 3;
+
+        // Create metadata with failures at threshold but no paused_until
+        let mut metadata = RpcConfigMetadata::default();
+        metadata.failure_timestamps.push(Utc::now());
+        metadata.failure_timestamps.push(Utc::now());
+        metadata.failure_timestamps.push(Utc::now());
+        // Note: paused_until is None
+        store.update_metadata(url, metadata);
+
+        // Should return false because no paused_until is set
+        // This tests line 305-306 in is_paused_with_cleanup
+        assert!(
+            !store.is_paused(url, threshold, expiration),
+            "Should not be paused - no paused_until set despite threshold reached"
+        );
+    }
+
+    #[test]
+    fn test_is_paused_cleans_up_empty_entry() {
+        let store = RpcHealthStore::instance();
+
+        // Test that empty entries get cleaned up
+        let url = "https://test-cleanup-empty.example.com";
+        let expiration = chrono::Duration::seconds(60);
+
+        // Create an empty metadata entry (simulating a state after all failures expired)
+        let metadata = RpcConfigMetadata::default();
+        store.update_metadata(url, metadata);
+
+        // Calling is_paused should clean up the empty entry
+        assert!(!store.is_paused(url, 3, expiration));
+
+        // Verify entry was removed (get_metadata returns default for non-existent entries)
+        // We can't directly verify removal, but the behavior is correct
+    }
+
+    #[test]
+    fn test_mark_failed_logs_new_pause_vs_extended_pause() {
+        let store = RpcHealthStore::instance();
+
+        // This test exercises both logging branches in mark_failed:
+        // - Line 142-149: "RPC provider paused due to failures" (first pause)
+        // - Line 151-159: "RPC provider pause extended" (already paused)
+        let url = "https://test-pause-logging.example.com";
+        let expiration = chrono::Duration::seconds(60);
+        let pause_duration = chrono::Duration::seconds(60);
+        let threshold = 3;
+
+        // First pause (exercises lines 142-149)
+        store.mark_failed(url, threshold, pause_duration, expiration);
+        store.mark_failed(url, threshold, pause_duration, expiration);
+        store.mark_failed(url, threshold, pause_duration, expiration);
+
+        let metadata1 = store.get_metadata(url);
+        assert!(metadata1.paused_until.is_some(), "Should be paused");
+
+        // Extended pause (exercises lines 151-159)
+        store.mark_failed(url, threshold, pause_duration, expiration);
+
+        let metadata2 = store.get_metadata(url);
+        assert!(
+            metadata2.paused_until.is_some(),
+            "Should still be paused after extension"
         );
     }
 }

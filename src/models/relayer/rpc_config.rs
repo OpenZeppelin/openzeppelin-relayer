@@ -155,6 +155,80 @@ impl RpcConfig {
     }
 }
 
+/// Masks a URL by showing only the scheme and host, hiding the path and query parameters.
+///
+/// This is used to safely display RPC URLs in API responses without exposing
+/// sensitive API keys that are often embedded in the URL path or query string.
+///
+/// # Examples
+/// - `https://eth-mainnet.g.alchemy.com/v2/abc123` → `https://eth-mainnet.g.alchemy.com/***`
+/// - `https://mainnet.infura.io/v3/PROJECT_ID` → `https://mainnet.infura.io/***`
+/// - `http://localhost:8545` → `http://localhost:8545` (no path to mask)
+/// - `invalid-url` → `***` (fallback for unparseable URLs)
+pub fn mask_url(url: &str) -> String {
+    // Find the scheme separator "://"
+    let Some(scheme_end) = url.find("://") else {
+        // No valid scheme, mask entirely for safety
+        return "***".to_string();
+    };
+
+    // Find where the host ends (first "/" after "://")
+    let host_start = scheme_end + 3; // Skip "://"
+    let rest = &url[host_start..];
+
+    // Find the first "/" which marks the start of the path
+    if let Some(path_start) = rest.find('/') {
+        // Check if there's actually content in the path (not just "/")
+        let path_and_beyond = &rest[path_start..];
+        if path_and_beyond.len() > 1 || url.contains('?') {
+            // There's a path or query to mask
+            let host_end = host_start + path_start;
+            format!("{}/***", &url[..host_end])
+        } else {
+            // Just a trailing "/" with no real path content
+            url.to_string()
+        }
+    } else if url.contains('?') {
+        // No path but has query parameters - mask those
+        let query_start = url.find('?').unwrap();
+        format!("{}?***", &url[..query_start])
+    } else {
+        // No path or query to mask, return original
+        url.to_string()
+    }
+}
+
+/// RPC configuration with masked URL for API responses.
+///
+/// This type is used in API responses to prevent exposing sensitive API keys
+/// that are often embedded in RPC endpoint URLs (e.g., Alchemy, Infura, QuickNode).
+/// The URL path and query parameters are masked while keeping the host visible,
+/// allowing users to identify which provider is configured.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({"url": "https://eth-mainnet.g.alchemy.com/***", "weight": 100}))]
+pub struct MaskedRpcConfig {
+    /// The RPC endpoint URL with path/query masked.
+    pub url: String,
+    /// The weight of this endpoint in the weighted round-robin selection.
+    #[schema(minimum = 0, maximum = 100)]
+    pub weight: u8,
+}
+
+impl From<&RpcConfig> for MaskedRpcConfig {
+    fn from(config: &RpcConfig) -> Self {
+        Self {
+            url: mask_url(&config.url),
+            weight: config.weight,
+        }
+    }
+}
+
+impl From<RpcConfig> for MaskedRpcConfig {
+    fn from(config: RpcConfig) -> Self {
+        Self::from(&config)
+    }
+}
+
 /// Custom deserializer for `Option<Vec<RpcConfig>>` that supports multiple input formats.
 ///
 /// This function is designed to be used with `#[serde(deserialize_with = "...")]` and supports:
@@ -629,5 +703,143 @@ mod tests {
         let urls = result.rpc_urls.unwrap();
         // Whitespace is preserved (trimming is a validation concern)
         assert_eq!(urls[0].url, "  https://rpc.example.com  ");
+    }
+
+    // =========================================================================
+    // Tests for mask_url function
+    // =========================================================================
+
+    #[test]
+    fn test_mask_url_alchemy_with_api_key() {
+        let url = "https://eth-mainnet.g.alchemy.com/v2/abc123xyz";
+        let masked = super::mask_url(url);
+        assert_eq!(masked, "https://eth-mainnet.g.alchemy.com/***");
+    }
+
+    #[test]
+    fn test_mask_url_infura_with_project_id() {
+        let url = "https://mainnet.infura.io/v3/my-project-id";
+        let masked = super::mask_url(url);
+        assert_eq!(masked, "https://mainnet.infura.io/***");
+    }
+
+    #[test]
+    fn test_mask_url_quicknode_with_api_key() {
+        let url = "https://my-node.quiknode.pro/secret-api-key/";
+        let masked = super::mask_url(url);
+        assert_eq!(masked, "https://my-node.quiknode.pro/***");
+    }
+
+    #[test]
+    fn test_mask_url_localhost_no_path() {
+        // No path to mask, should return original
+        let url = "http://localhost:8545";
+        let masked = super::mask_url(url);
+        assert_eq!(masked, "http://localhost:8545");
+    }
+
+    #[test]
+    fn test_mask_url_localhost_with_trailing_slash() {
+        // Just a trailing slash with no real path content
+        let url = "http://localhost:8545/";
+        let masked = super::mask_url(url);
+        assert_eq!(masked, "http://localhost:8545/");
+    }
+
+    #[test]
+    fn test_mask_url_with_query_params() {
+        let url = "https://rpc.example.com/v1?api_key=secret123&network=mainnet";
+        let masked = super::mask_url(url);
+        assert_eq!(masked, "https://rpc.example.com/***");
+    }
+
+    #[test]
+    fn test_mask_url_query_params_no_path() {
+        let url = "https://rpc.example.com?api_key=secret123";
+        let masked = super::mask_url(url);
+        assert_eq!(masked, "https://rpc.example.com?***");
+    }
+
+    #[test]
+    fn test_mask_url_invalid_url_no_scheme() {
+        // Invalid URL without scheme should be fully masked for safety
+        let url = "invalid-url";
+        let masked = super::mask_url(url);
+        assert_eq!(masked, "***");
+    }
+
+    #[test]
+    fn test_mask_url_empty_string() {
+        let url = "";
+        let masked = super::mask_url(url);
+        assert_eq!(masked, "***");
+    }
+
+    #[test]
+    fn test_mask_url_with_port_and_path() {
+        let url = "https://rpc.example.com:8080/api/v1/secret";
+        let masked = super::mask_url(url);
+        assert_eq!(masked, "https://rpc.example.com:8080/***");
+    }
+
+    #[test]
+    fn test_mask_url_ankr_with_api_key() {
+        let url = "https://rpc.ankr.com/eth/my-api-key-here";
+        let masked = super::mask_url(url);
+        assert_eq!(masked, "https://rpc.ankr.com/***");
+    }
+
+    // =========================================================================
+    // Tests for MaskedRpcConfig
+    // =========================================================================
+
+    #[test]
+    fn test_masked_rpc_config_from_rpc_config() {
+        let config = RpcConfig::new("https://eth-mainnet.g.alchemy.com/v2/secret-key".to_string());
+        let masked: MaskedRpcConfig = config.into();
+
+        assert_eq!(masked.url, "https://eth-mainnet.g.alchemy.com/***");
+        assert_eq!(masked.weight, DEFAULT_RPC_WEIGHT);
+    }
+
+    #[test]
+    fn test_masked_rpc_config_preserves_weight() {
+        let config =
+            RpcConfig::with_weight("https://mainnet.infura.io/v3/project-id".to_string(), 75)
+                .unwrap();
+        let masked: MaskedRpcConfig = config.into();
+
+        assert_eq!(masked.url, "https://mainnet.infura.io/***");
+        assert_eq!(masked.weight, 75);
+    }
+
+    #[test]
+    fn test_masked_rpc_config_from_reference() {
+        let config = RpcConfig::new("https://rpc.ankr.com/eth/secret".to_string());
+        let masked = MaskedRpcConfig::from(&config);
+
+        assert_eq!(masked.url, "https://rpc.ankr.com/***");
+        assert_eq!(masked.weight, DEFAULT_RPC_WEIGHT);
+    }
+
+    #[test]
+    fn test_masked_rpc_config_serialization() {
+        let masked = MaskedRpcConfig {
+            url: "https://eth-mainnet.g.alchemy.com/***".to_string(),
+            weight: 100,
+        };
+
+        let serialized = serde_json::to_string(&masked).unwrap();
+        assert!(serialized.contains("https://eth-mainnet.g.alchemy.com/***"));
+        assert!(serialized.contains("100"));
+    }
+
+    #[test]
+    fn test_masked_rpc_config_deserialization() {
+        let json = r#"{"url": "https://rpc.example.com/***", "weight": 50}"#;
+        let masked: MaskedRpcConfig = serde_json::from_str(json).unwrap();
+
+        assert_eq!(masked.url, "https://rpc.example.com/***");
+        assert_eq!(masked.weight, 50);
     }
 }

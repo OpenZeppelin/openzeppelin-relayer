@@ -12,10 +12,10 @@
 //! with the domain model for business logic.
 
 use super::{
-    DisabledReason, Relayer, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerNetworkType,
-    RelayerRepoModel, RelayerSolanaPolicy, RelayerSolanaSwapConfig, RelayerStellarPolicy,
-    RelayerStellarSwapConfig, RpcConfig, SolanaAllowedTokensPolicy, SolanaFeePaymentStrategy,
-    StellarAllowedTokensPolicy, StellarFeePaymentStrategy,
+    DisabledReason, MaskedRpcConfig, Relayer, RelayerEvmPolicy, RelayerNetworkPolicy,
+    RelayerNetworkType, RelayerRepoModel, RelayerSolanaPolicy, RelayerSolanaSwapConfig,
+    RelayerStellarPolicy, RelayerStellarSwapConfig, SolanaAllowedTokensPolicy,
+    SolanaFeePaymentStrategy, StellarAllowedTokensPolicy, StellarFeePaymentStrategy,
 };
 use crate::constants::{
     DEFAULT_EVM_GAS_LIMIT_ESTIMATION, DEFAULT_EVM_MIN_BALANCE, DEFAULT_SOLANA_MAX_TX_DATA_SIZE,
@@ -79,9 +79,12 @@ pub struct RelayerResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub notification_id: Option<String>,
+    /// Custom RPC URLs with sensitive path/query parameters masked for security.
+    /// The domain is visible to identify providers (e.g., Alchemy, Infura) but
+    /// API keys embedded in paths are hidden.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
-    pub custom_rpc_urls: Option<Vec<RpcConfig>>,
+    pub custom_rpc_urls: Option<Vec<MaskedRpcConfig>>,
     // Runtime fields from repository model
     #[schema(nullable = false)]
     pub address: Option<String>,
@@ -185,7 +188,9 @@ impl From<Relayer> for RelayerResponse {
                 .map(|policy| convert_policy_to_response(policy, relayer.network_type)),
             signer_id: relayer.signer_id,
             notification_id: relayer.notification_id,
-            custom_rpc_urls: relayer.custom_rpc_urls,
+            custom_rpc_urls: relayer
+                .custom_rpc_urls
+                .map(|urls| urls.into_iter().map(MaskedRpcConfig::from).collect()),
             address: None,
             system_disabled: None,
             disabled_reason: None,
@@ -214,7 +219,9 @@ impl From<RelayerRepoModel> for RelayerResponse {
             policies,
             signer_id: model.signer_id,
             notification_id: model.notification_id,
-            custom_rpc_urls: model.custom_rpc_urls,
+            custom_rpc_urls: model
+                .custom_rpc_urls
+                .map(|urls| urls.into_iter().map(MaskedRpcConfig::from).collect()),
             address: Some(model.address),
             system_disabled: Some(model.system_disabled),
             disabled_reason: model.disabled_reason,
@@ -600,7 +607,8 @@ mod tests {
         );
         assert_eq!(response.signer_id, relayer.signer_id);
         assert_eq!(response.notification_id, relayer.notification_id);
-        assert_eq!(response.custom_rpc_urls, relayer.custom_rpc_urls);
+        // custom_rpc_urls is None in this test
+        assert_eq!(response.custom_rpc_urls, None);
         assert_eq!(response.address, None);
         assert_eq!(response.system_disabled, None);
     }

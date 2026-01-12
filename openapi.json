@@ -4253,8 +4253,9 @@
               "custom_rpc_urls": {
                 "type": "array",
                 "items": {
-                  "$ref": "#/components/schemas/RpcConfig"
-                }
+                  "$ref": "#/components/schemas/MaskedRpcConfig"
+                },
+                "description": "Custom RPC URLs with sensitive path/query parameters masked for security.\nThe domain is visible to identify providers (e.g., Alchemy, Infura) but\nAPI keys embedded in paths are hidden."
               },
               "disabled_reason": {
                 "$ref": "#/components/schemas/DisabledReason"
@@ -4885,8 +4886,9 @@
                 "custom_rpc_urls": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/RpcConfig"
-                  }
+                    "$ref": "#/components/schemas/MaskedRpcConfig"
+                  },
+                  "description": "Custom RPC URLs with sensitive path/query parameters masked for security.\nThe domain is visible to identify providers (e.g., Alchemy, Infura) but\nAPI keys embedded in paths are hidden."
                 },
                 "disabled_reason": {
                   "$ref": "#/components/schemas/DisabledReason"
@@ -6058,6 +6060,31 @@
           "result"
         ]
       },
+      "MaskedRpcConfig": {
+        "type": "object",
+        "description": "RPC configuration with masked URL for API responses.\n\nThis type is used in API responses to prevent exposing sensitive API keys\nthat are often embedded in RPC endpoint URLs (e.g., Alchemy, Infura, QuickNode).\nThe URL path and query parameters are masked while keeping the host visible,\nallowing users to identify which provider is configured.",
+        "required": [
+          "url",
+          "weight"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "The RPC endpoint URL with path/query masked."
+          },
+          "weight": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The weight of this endpoint in the weighted round-robin selection.",
+            "maximum": 100,
+            "minimum": 0
+          }
+        },
+        "example": {
+          "url": "https://eth-mainnet.g.alchemy.com/***",
+          "weight": 100
+        }
+      },
       "MemoSpec": {
         "oneOf": [
           {
@@ -6734,8 +6761,9 @@
           "custom_rpc_urls": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/RpcConfig"
-            }
+              "$ref": "#/components/schemas/MaskedRpcConfig"
+            },
+            "description": "Custom RPC URLs with sensitive path/query parameters masked for security.\nThe domain is visible to identify providers (e.g., Alchemy, Infura) but\nAPI keys embedded in paths are hidden."
           },
           "disabled_reason": {
             "$ref": "#/components/schemas/DisabledReason"
