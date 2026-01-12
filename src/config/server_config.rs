@@ -2,7 +2,13 @@
 use std::{env, str::FromStr};
 use strum::Display;
 
-use crate::{constants::MINIMUM_SECRET_VALUE_LENGTH, models::SecretString};
+use crate::{
+    constants::{
+        DEFAULT_PROVIDER_FAILURE_EXPIRATION_SECS, DEFAULT_PROVIDER_FAILURE_THRESHOLD,
+        DEFAULT_PROVIDER_PAUSE_DURATION_SECS, MINIMUM_SECRET_VALUE_LENGTH,
+    },
+    models::SecretString,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Display)]
 pub enum RepositoryStorageType {
@@ -56,6 +62,12 @@ pub struct ServerConfig {
     pub provider_retry_max_delay_ms: u64,
     /// Maximum number of failovers (switching to different providers).
     pub provider_max_failovers: u8,
+    /// Number of consecutive failures before pausing a provider.
+    pub provider_failure_threshold: u32,
+    /// Duration in seconds to pause a provider after reaching failure threshold.
+    pub provider_pause_duration_secs: u64,
+    /// Duration in seconds after which failures are considered stale and reset.
+    pub provider_failure_expiration_secs: u64,
     /// The type of repository storage to use.
     pub repository_storage_type: RepositoryStorageType,
     /// Flag to force config file processing.
@@ -86,6 +98,9 @@ impl ServerConfig {
     /// - `PROVIDER_RETRY_BASE_DELAY_MS` defaults to `100`.
     /// - `PROVIDER_RETRY_MAX_DELAY_MS` defaults to `2000`.
     /// - `PROVIDER_MAX_FAILOVERS` defaults to `3`.
+    /// - `PROVIDER_FAILURE_THRESHOLD` defaults to `3`.
+    /// - `PROVIDER_PAUSE_DURATION_SECS` defaults to `60` (1 minute).
+    /// - `PROVIDER_FAILURE_EXPIRATION_SECS` defaults to `60` (1 minute).
     /// - `REPOSITORY_STORAGE_TYPE` defaults to `"in_memory"`.
     /// - `TRANSACTION_EXPIRATION_HOURS` defaults to `4`.
     pub fn from_env() -> Self {
@@ -106,6 +121,9 @@ impl ServerConfig {
             provider_retry_base_delay_ms: Self::get_provider_retry_base_delay_ms(),
             provider_retry_max_delay_ms: Self::get_provider_retry_max_delay_ms(),
             provider_max_failovers: Self::get_provider_max_failovers(),
+            provider_failure_threshold: Self::get_provider_failure_threshold(),
+            provider_pause_duration_secs: Self::get_provider_pause_duration_secs(),
+            provider_failure_expiration_secs: Self::get_provider_failure_expiration_secs(),
             repository_storage_type: Self::get_repository_storage_type(),
             reset_storage_on_start: Self::get_reset_storage_on_start(),
             storage_encryption_key: Self::get_storage_encryption_key(),
@@ -261,6 +279,38 @@ impl ServerConfig {
             .unwrap_or(3)
     }
 
+    /// Gets the provider failure threshold from environment variable or default
+    pub fn get_provider_failure_threshold() -> u32 {
+        env::var("PROVIDER_FAILURE_THRESHOLD")
+            .or_else(|_| env::var("RPC_FAILURE_THRESHOLD")) // Support legacy env var
+            .unwrap_or_else(|_| DEFAULT_PROVIDER_FAILURE_THRESHOLD.to_string())
+            .parse()
+            .unwrap_or(DEFAULT_PROVIDER_FAILURE_THRESHOLD)
+    }
+
+    /// Gets the provider pause duration in seconds from environment variable or default
+    ///
+    /// Defaults to 60 seconds (1 minute) for faster recovery while still providing
+    /// a reasonable cooldown period for failed providers.
+    pub fn get_provider_pause_duration_secs() -> u64 {
+        env::var("PROVIDER_PAUSE_DURATION_SECS")
+            .or_else(|_| env::var("RPC_PAUSE_DURATION_SECS")) // Support legacy env var
+            .unwrap_or_else(|_| DEFAULT_PROVIDER_PAUSE_DURATION_SECS.to_string())
+            .parse()
+            .unwrap_or(DEFAULT_PROVIDER_PAUSE_DURATION_SECS)
+    }
+
+    /// Gets the provider failure expiration duration in seconds from environment variable or default
+    ///
+    /// Defaults to 60 seconds (1 minute). Failures older than this are considered stale
+    /// and reset, allowing providers to naturally recover over time.
+    pub fn get_provider_failure_expiration_secs() -> u64 {
+        env::var("PROVIDER_FAILURE_EXPIRATION_SECS")
+            .unwrap_or_else(|_| DEFAULT_PROVIDER_FAILURE_EXPIRATION_SECS.to_string())
+            .parse()
+            .unwrap_or(DEFAULT_PROVIDER_FAILURE_EXPIRATION_SECS)
+    }
+
     /// Gets the repository storage type from environment variable or default
     pub fn get_repository_storage_type() -> RepositoryStorageType {
         env::var("REPOSITORY_STORAGE_TYPE")
@@ -373,6 +423,8 @@ mod tests {
         assert_eq!(config.provider_retry_base_delay_ms, 100);
         assert_eq!(config.provider_retry_max_delay_ms, 2000);
         assert_eq!(config.provider_max_failovers, 3);
+        assert_eq!(config.provider_failure_threshold, 3);
+        assert_eq!(config.provider_pause_duration_secs, 60);
         assert_eq!(
             config.repository_storage_type,
             RepositoryStorageType::InMemory

@@ -2,15 +2,14 @@
  * Example plugin using rpc method
  */
 
-import { JsonRpcResponseNetworkRpcResult, PluginAPI } from "@openzeppelin/relayer-sdk";
-
-type Params = {};
-
+import { JsonRpcResponseNetworkRpcResult, PluginAPI, PluginContext } from "@openzeppelin/relayer-sdk";
 /**
  * Plugin handler function - this is the entry point
  * Export it as 'handler' and the relayer will automatically call it
  */
-export async function handler(api: PluginAPI, params: Params): Promise<JsonRpcResponseNetworkRpcResult> {
+export async function handler(context: PluginContext): Promise<JsonRpcResponseNetworkRpcResult> {
+  const { api } = context;
+
     /**
      * Instance the relayer with the given id.
      */

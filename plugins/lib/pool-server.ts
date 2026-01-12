@@ -258,6 +258,10 @@ interface ExecuteMessage extends BaseMessage {
   socketPath: string;
   httpRequestId?: string;
   timeout?: number;
+  route?: string;
+  config?: any;
+  method?: string;
+  query?: any;
 }
 
 interface PrecompileMessage extends BaseMessage {
@@ -685,6 +689,10 @@ class PoolServer {
       socketPath: message.socketPath,
       httpRequestId: message.httpRequestId,
       timeout: message.timeout,
+      route: message.route,
+      config: message.config,
+      method: message.method,
+      query: message.query,
     };
 
     try {

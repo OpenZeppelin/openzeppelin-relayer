@@ -10,9 +10,8 @@
 //! - Handle EVM-specific result types and error formatting
 
 use crate::{
-    models::{EvmRpcResult, NetworkRpcResult, OpenZeppelinErrorCodes, RpcErrorCodes},
+    models::{EvmRpcResult, NetworkRpcResult},
     models::{JsonRpcError, JsonRpcId, JsonRpcResponse},
-    services::provider::ProviderError,
 };
 use serde_json;
 
@@ -70,55 +69,14 @@ pub fn create_success_response(
     }
 }
 
-/// Maps provider errors to appropriate JSON-RPC error codes and messages.
-///
-/// This function translates internal provider errors into standardized
-/// JSON-RPC error codes and user-friendly messages that can be returned
-/// to clients. It follows JSON-RPC 2.0 specification for standard errors
-/// and uses OpenZeppelin-specific codes for extended functionality.
-///
-/// # Arguments
-///
-/// * `error` - A reference to the provider error to be mapped
-///
-/// # Returns
-///
-/// Returns a tuple containing:
-/// - `i32` - The error code (following JSON-RPC 2.0 and OpenZeppelin conventions)
-/// - `&'static str` - A static string describing the error type
-///
-/// # Error Code Mappings
-///
-/// - `InvalidAddress` → -32602 ("Invalid params")
-/// - `NetworkConfiguration` → -33004 ("Network configuration error")
-/// - `Timeout` → -33000 ("Request timeout")
-/// - `RateLimited` → -33001 ("Rate limited")
-/// - `BadGateway` → -33002 ("Bad gateway")
-/// - `RequestError` → -33003 ("Request error")
-/// - `Other` and unknown errors → -32603 ("Internal error")
-pub fn map_provider_error(error: &ProviderError) -> (i32, &'static str) {
-    match error {
-        ProviderError::InvalidAddress(_) => (RpcErrorCodes::INVALID_PARAMS, "Invalid params"),
-        ProviderError::NetworkConfiguration(_) => (
-            OpenZeppelinErrorCodes::NETWORK_CONFIGURATION,
-            "Network configuration error",
-        ),
-        ProviderError::Timeout => (OpenZeppelinErrorCodes::TIMEOUT, "Request timeout"),
-        ProviderError::RateLimited => (OpenZeppelinErrorCodes::RATE_LIMITED, "Rate limited"),
-        ProviderError::BadGateway => (OpenZeppelinErrorCodes::BAD_GATEWAY, "Bad gateway"),
-        ProviderError::RequestError { .. } => {
-            (OpenZeppelinErrorCodes::REQUEST_ERROR, "Request error")
-        }
-        ProviderError::Other(_) => (RpcErrorCodes::INTERNAL_ERROR, "Internal error"),
-        _ => (RpcErrorCodes::INTERNAL_ERROR, "Internal error"),
-    }
-}
+// Re-export error sanitization functions for backward compatibility
+// These functions have been moved to src/utils/error_sanitization.rs
+pub use crate::utils::{map_provider_error, sanitize_error_description};
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::models::{OpenZeppelinErrorCodes, RpcErrorCodes};
-    use crate::services::provider::{rpc_selector::RpcSelectorError, SolanaProviderError};
     use serde_json::json;
 
     #[test]
@@ -443,187 +401,11 @@ mod tests {
     }
 
     #[test]
-    fn test_map_provider_error_invalid_address() {
-        let error = ProviderError::InvalidAddress("invalid address".to_string());
-        let (code, _message) = map_provider_error(&error);
-
-        assert_eq!(code, RpcErrorCodes::INVALID_PARAMS);
-    }
-
-    #[test]
-    fn test_map_provider_error_invalid_address_empty() {
-        let error = ProviderError::InvalidAddress("".to_string());
-        let (code, _message) = map_provider_error(&error);
-
-        assert_eq!(code, RpcErrorCodes::INVALID_PARAMS);
-    }
-
-    #[test]
-    fn test_map_provider_error_network_configuration() {
-        let error = ProviderError::NetworkConfiguration("network config error".to_string());
-        let (code, _message) = map_provider_error(&error);
-
-        assert_eq!(code, OpenZeppelinErrorCodes::NETWORK_CONFIGURATION);
-    }
-
-    #[test]
-    fn test_map_provider_error_network_configuration_empty() {
-        let error = ProviderError::NetworkConfiguration("".to_string());
-        let (code, _message) = map_provider_error(&error);
-
-        assert_eq!(code, OpenZeppelinErrorCodes::NETWORK_CONFIGURATION);
-    }
-
-    #[test]
-    fn test_map_provider_error_timeout() {
-        let error = ProviderError::Timeout;
-        let (code, _message) = map_provider_error(&error);
-
-        assert_eq!(code, OpenZeppelinErrorCodes::TIMEOUT);
-    }
-
-    #[test]
-    fn test_map_provider_error_rate_limited() {
-        let error = ProviderError::RateLimited;
-        let (code, _message) = map_provider_error(&error);
-
-        assert_eq!(code, OpenZeppelinErrorCodes::RATE_LIMITED);
-    }
-
-    #[test]
-    fn test_map_provider_error_bad_gateway() {
-        let error = ProviderError::BadGateway;
-        let (code, _message) = map_provider_error(&error);
-
-        assert_eq!(code, OpenZeppelinErrorCodes::BAD_GATEWAY);
-    }
-
-    #[test]
-    fn test_map_provider_error_request_error_400() {
-        let error = ProviderError::RequestError {
-            error: "Bad request".to_string(),
-            status_code: 400,
-        };
-        let (code, _message) = map_provider_error(&error);
-
-        assert_eq!(code, OpenZeppelinErrorCodes::REQUEST_ERROR);
-    }
-
-    #[test]
-    fn test_map_provider_error_request_error_500() {
-        let error = ProviderError::RequestError {
-            error: "Internal server error".to_string(),
-            status_code: 500,
-        };
-        let (code, _message) = map_provider_error(&error);
-
-        assert_eq!(code, OpenZeppelinErrorCodes::REQUEST_ERROR);
-    }
-
-    #[test]
-    fn test_map_provider_error_request_error_empty_message() {
-        let error = ProviderError::RequestError {
-            error: "".to_string(),
-            status_code: 404,
-        };
-        let (code, _message) = map_provider_error(&error);
-
-        assert_eq!(code, OpenZeppelinErrorCodes::REQUEST_ERROR);
-    }
-
-    #[test]
-    fn test_map_provider_error_request_error_zero_status() {
-        let error = ProviderError::RequestError {
-            error: "No status".to_string(),
-            status_code: 0,
-        };
-        let (code, _message) = map_provider_error(&error);
-
-        assert_eq!(code, OpenZeppelinErrorCodes::REQUEST_ERROR);
-    }
-
-    #[test]
-    fn test_map_provider_error_other() {
-        let error = ProviderError::Other("some other error".to_string());
-        let (code, _message) = map_provider_error(&error);
-
-        assert_eq!(code, RpcErrorCodes::INTERNAL_ERROR);
-    }
-
-    #[test]
-    fn test_map_provider_error_other_empty() {
-        let error = ProviderError::Other("".to_string());
-        let (code, _message) = map_provider_error(&error);
-
-        assert_eq!(code, RpcErrorCodes::INTERNAL_ERROR);
-    }
-
-    #[test]
-    fn test_map_provider_error_solana_rpc_error() {
-        let solana_error = SolanaProviderError::RpcError("Solana RPC failed".to_string());
-        let error = ProviderError::SolanaRpcError(solana_error);
-        let (code, _message) = map_provider_error(&error);
-
-        // The SolanaRpcError variant should be caught by the wildcard pattern
-        assert_eq!(code, RpcErrorCodes::INTERNAL_ERROR);
-    }
-
-    #[test]
-    fn test_map_provider_error_solana_invalid_address() {
-        let solana_error =
-            SolanaProviderError::InvalidAddress("Invalid Solana address".to_string());
-        let error = ProviderError::SolanaRpcError(solana_error);
-        let (code, _message) = map_provider_error(&error);
-
-        // The SolanaRpcError variant should be caught by the wildcard pattern
-        assert_eq!(code, RpcErrorCodes::INTERNAL_ERROR);
-    }
-
-    #[test]
-    fn test_map_provider_error_solana_selector_error() {
-        let selector_error = RpcSelectorError::NoProviders;
-        let solana_error = SolanaProviderError::SelectorError(selector_error);
-        let error = ProviderError::SolanaRpcError(solana_error);
-        let (code, _message) = map_provider_error(&error);
-
-        // The SolanaRpcError variant should be caught by the wildcard pattern
-        assert_eq!(code, RpcErrorCodes::INTERNAL_ERROR);
-    }
-
-    #[test]
-    fn test_map_provider_error_solana_network_configuration() {
-        let solana_error =
-            SolanaProviderError::NetworkConfiguration("Solana network config error".to_string());
-        let error = ProviderError::SolanaRpcError(solana_error);
-        let (code, _message) = map_provider_error(&error);
-
-        // The SolanaRpcError variant should be caught by the wildcard pattern
-        assert_eq!(code, RpcErrorCodes::INTERNAL_ERROR);
-    }
-
-    #[test]
-    fn test_map_provider_error_wildcard_pattern() {
-        // This test ensures the wildcard pattern works by testing all variations
-        // that should fall through to the default case
-        let test_cases = vec![
-            ProviderError::SolanaRpcError(SolanaProviderError::RpcError("test".to_string())),
-            ProviderError::SolanaRpcError(SolanaProviderError::InvalidAddress("test".to_string())),
-            ProviderError::SolanaRpcError(SolanaProviderError::NetworkConfiguration(
-                "test".to_string(),
-            )),
-            ProviderError::SolanaRpcError(SolanaProviderError::SelectorError(
-                RpcSelectorError::NoProviders,
-            )),
-        ];
-
-        for error in test_cases {
-            let (code, _message) = map_provider_error(&error);
-            assert_eq!(code, RpcErrorCodes::INTERNAL_ERROR);
-        }
-    }
-
-    #[test]
     fn test_integration_error_response_with_mapped_provider_error() {
+        use crate::models::RpcErrorCodes;
+        use crate::services::provider::ProviderError;
+        use crate::utils::map_provider_error;
+
         let provider_error = ProviderError::InvalidAddress("0xinvalid".to_string());
         let (error_code, error_message) = map_provider_error(&provider_error);
 
@@ -646,6 +428,10 @@ mod tests {
 
     #[test]
     fn test_integration_all_provider_errors_to_responses() {
+        use crate::models::{OpenZeppelinErrorCodes, RpcErrorCodes};
+        use crate::services::provider::ProviderError;
+        use crate::utils::map_provider_error;
+
         let test_cases = vec![
             (
                 ProviderError::InvalidAddress("test".to_string()),

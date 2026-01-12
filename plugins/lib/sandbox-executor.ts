@@ -313,6 +313,14 @@ export interface SandboxTask {
   httpRequestId?: string;
   /** Execution timeout in milliseconds */
   timeout: number;
+  /** Wildcard route path (e.g., "/verify" from "/api/v1/plugins/:id/*") */
+  route?: string;
+  /** Plugin configuration object */
+  config?: any;
+  /** HTTP method (GET, POST, etc.) */
+  method?: string;
+  /** Query parameters */
+  query?: any;
 }
 
 /**
@@ -975,6 +983,10 @@ export default async function executeInSandbox(task: SandboxTask): Promise<Sandb
           params: task.params,
           kv,
           headers: task.headers ?? {},
+          route: task.route ?? '',
+          config: task.config,
+          method: task.method ?? 'POST',
+          query: task.query ?? {},
         };
         return await handler(pluginContext);
       } else {

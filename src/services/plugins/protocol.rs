@@ -30,6 +30,14 @@ pub enum PoolRequest {
         http_request_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         timeout: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        route: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        config: Option<serde_json::Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        method: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        query: Option<serde_json::Value>,
     },
     Precompile {
         #[serde(rename = "taskId")]

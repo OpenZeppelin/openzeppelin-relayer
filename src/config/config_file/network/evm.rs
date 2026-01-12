@@ -166,7 +166,7 @@ impl EvmNetworkConfig {
 mod tests {
     use super::*;
     use crate::config::config_file::network::test_utils::*;
-
+    use crate::models::RpcConfig;
     #[test]
     fn test_validate_success_complete_config() {
         let config = create_evm_network("ethereum-mainnet");
@@ -237,7 +237,7 @@ mod tests {
     #[test]
     fn test_validate_invalid_rpc_urls() {
         let mut config = create_evm_network("ethereum-mainnet");
-        config.common.rpc_urls = Some(vec!["invalid-url".to_string()]);
+        config.common.rpc_urls = Some(vec![RpcConfig::new("invalid-url".to_string())]);
 
         let result = config.validate();
         assert!(result.is_err());
@@ -298,7 +298,9 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "parent".to_string(),
                 from: Some("parent".to_string()),
-                rpc_urls: Some(vec!["https://parent-rpc.example.com".to_string()]),
+                rpc_urls: Some(vec![RpcConfig::new(
+                    "https://parent-rpc.example.com".to_string(),
+                )]),
                 explorer_urls: Some(vec!["https://parent-explorer.example.com".to_string()]),
                 average_blocktime_ms: Some(10000),
                 is_testnet: Some(true),
@@ -319,7 +321,9 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "child".to_string(),
                 from: Some("parent".to_string()),
-                rpc_urls: Some(vec!["https://child-rpc.example.com".to_string()]),
+                rpc_urls: Some(vec![RpcConfig::new(
+                    "https://child-rpc.example.com".to_string(),
+                )]),
                 explorer_urls: Some(vec!["https://child-explorer.example.com".to_string()]),
                 average_blocktime_ms: Some(15000),
                 is_testnet: Some(false),
@@ -343,7 +347,9 @@ mod tests {
         assert_eq!(result.common.from, Some("parent".to_string()));
         assert_eq!(
             result.common.rpc_urls,
-            Some(vec!["https://child-rpc.example.com".to_string()])
+            Some(vec![RpcConfig::new(
+                "https://child-rpc.example.com".to_string()
+            )])
         );
         assert_eq!(
             result.common.explorer_urls,
@@ -378,7 +384,9 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "parent".to_string(),
                 from: None,
-                rpc_urls: Some(vec!["https://parent-rpc.example.com".to_string()]),
+                rpc_urls: Some(vec![RpcConfig::new(
+                    "https://parent-rpc.example.com".to_string(),
+                )]),
                 explorer_urls: Some(vec!["https://parent-explorer.example.com".to_string()]),
                 average_blocktime_ms: Some(10000),
                 is_testnet: Some(true),
@@ -404,7 +412,9 @@ mod tests {
         assert_eq!(result.common.from, Some("ethereum-mainnet".to_string()));
         assert_eq!(
             result.common.rpc_urls,
-            Some(vec!["https://parent-rpc.example.com".to_string()])
+            Some(vec![RpcConfig::new(
+                "https://parent-rpc.example.com".to_string()
+            )])
         );
         assert_eq!(
             result.common.explorer_urls,
@@ -433,7 +443,9 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "parent".to_string(),
                 from: None,
-                rpc_urls: Some(vec!["https://parent-rpc.example.com".to_string()]),
+                rpc_urls: Some(vec![RpcConfig::new(
+                    "https://parent-rpc.example.com".to_string(),
+                )]),
                 explorer_urls: Some(vec!["https://parent-explorer.example.com".to_string()]),
                 average_blocktime_ms: Some(10000),
                 is_testnet: Some(true),
@@ -454,7 +466,9 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "child".to_string(),
                 from: Some("parent".to_string()),
-                rpc_urls: Some(vec!["https://child-rpc.example.com".to_string()]), // Override
+                rpc_urls: Some(vec![RpcConfig::new(
+                    "https://child-rpc.example.com".to_string(),
+                )]), // Override
                 explorer_urls: Some(vec!["https://child-explorer.example.com".to_string()]), // Override
                 average_blocktime_ms: None,                // Inherit
                 is_testnet: Some(false),                   // Override
@@ -476,7 +490,9 @@ mod tests {
         assert_eq!(result.common.network, "child");
         assert_eq!(
             result.common.rpc_urls,
-            Some(vec!["https://child-rpc.example.com".to_string()])
+            Some(vec![RpcConfig::new(
+                "https://child-rpc.example.com".to_string()
+            )])
         ); // Overridden
         assert_eq!(
             result.common.explorer_urls,
@@ -570,7 +586,7 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "parent".to_string(),
                 from: None,
-                rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+                rpc_urls: Some(vec![RpcConfig::new("https://rpc.example.com".to_string())]),
                 explorer_urls: Some(vec!["https://explorer.example.com".to_string()]),
                 average_blocktime_ms: Some(12000),
                 is_testnet: Some(false),
@@ -652,7 +668,9 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "parent".to_string(),
                 from: Some("grandparent".to_string()),
-                rpc_urls: Some(vec!["https://parent.example.com".to_string()]),
+                rpc_urls: Some(vec![RpcConfig::new(
+                    "https://parent.example.com".to_string(),
+                )]),
                 explorer_urls: Some(vec!["https://parent-explorer.example.com".to_string()]),
                 average_blocktime_ms: Some(10000),
                 is_testnet: Some(true),
@@ -724,7 +742,7 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "parent".to_string(),
                 from: None,
-                rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+                rpc_urls: Some(vec![RpcConfig::new("https://rpc.example.com".to_string())]),
                 explorer_urls: Some(vec!["https://explorer.example.com".to_string()]),
                 average_blocktime_ms: Some(12000),
                 is_testnet: Some(false),

@@ -190,6 +190,9 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: false,
             emit_traces: false,
+            raw_response: false,
+            allow_get_invocation: false,
+            config: None,
             forward_logs: false,
         };
         plugin_repository.add(plugin.clone()).await.unwrap();
@@ -215,6 +218,9 @@ mod tests {
             timeout: None,
             emit_logs: false,
             emit_traces: false,
+            raw_response: false,
+            allow_get_invocation: false,
+            config: None,
             forward_logs: false,
         };
         let result = PluginModel::try_from(plugin);
@@ -227,6 +233,9 @@ mod tests {
                 timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
                 emit_logs: false,
                 emit_traces: false,
+                raw_response: false,
+                allow_get_invocation: false,
+                config: None,
                 forward_logs: false,
             }
         );
@@ -242,6 +251,9 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: false,
             emit_traces: false,
+            raw_response: false,
+            allow_get_invocation: false,
+            config: None,
             forward_logs: false,
         };
         plugin_repository.add(plugin.clone()).await.unwrap();
@@ -261,6 +273,9 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: false,
             emit_traces: false,
+            raw_response: false,
+            allow_get_invocation: false,
+            config: None,
             forward_logs: false,
         };
 
@@ -270,6 +285,9 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: false,
             emit_traces: false,
+            raw_response: false,
+            allow_get_invocation: false,
+            config: None,
             forward_logs: false,
         };
 
@@ -298,6 +316,9 @@ mod tests {
                 timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
                 emit_logs: false,
                 emit_traces: false,
+                raw_response: false,
+                allow_get_invocation: false,
+                config: None,
                 forward_logs: false,
             })
             .await
@@ -318,6 +339,9 @@ mod tests {
                 timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
                 emit_logs: false,
                 emit_traces: false,
+                raw_response: false,
+                allow_get_invocation: false,
+                config: None,
                 forward_logs: false,
             })
             .await

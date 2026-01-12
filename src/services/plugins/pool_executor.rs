@@ -34,6 +34,10 @@ struct QueuedRequest {
     socket_path: String,
     http_request_id: Option<String>,
     timeout_secs: Option<u64>,
+    route: Option<String>,
+    config: Option<serde_json::Value>,
+    method: Option<String>,
+    query: Option<serde_json::Value>,
     response_tx: oneshot::Sender<Result<ScriptResult, PluginError>>,
 }
 
@@ -252,6 +256,10 @@ impl PoolManager {
                                 request.socket_path,
                                 request.http_request_id,
                                 request.timeout_secs,
+                                request.route,
+                                request.config,
+                                request.method,
+                                request.query,
                             )
                             .await;
 
@@ -342,6 +350,7 @@ impl PoolManager {
     }
 
     /// Execute plugin with optional pre-acquired permit (unified fast/slow path)
+    #[allow(clippy::too_many_arguments)]
     async fn execute_with_permit(
         connection_pool: &Arc<ConnectionPool>,
         permit: Option<tokio::sync::OwnedSemaphorePermit>,
@@ -353,6 +362,10 @@ impl PoolManager {
         socket_path: String,
         http_request_id: Option<String>,
         timeout_secs: Option<u64>,
+        route: Option<String>,
+        config: Option<serde_json::Value>,
+        method: Option<String>,
+        query: Option<serde_json::Value>,
     ) -> Result<ScriptResult, PluginError> {
         let mut conn = connection_pool.acquire_with_permit(permit).await?;
 
@@ -366,6 +379,10 @@ impl PoolManager {
             socket_path,
             http_request_id,
             timeout: timeout_secs.map(|s| s * 1000),
+            route,
+            config,
+            method,
+            query,
         };
 
         let timeout = timeout_secs.unwrap_or(get_config().pool_request_timeout_secs);
@@ -414,6 +431,7 @@ impl PoolManager {
     }
 
     /// Internal execution method (wrapper for execute_with_permit)
+    #[allow(clippy::too_many_arguments)]
     async fn execute_plugin_internal(
         connection_pool: &Arc<ConnectionPool>,
         plugin_id: String,
@@ -424,6 +442,10 @@ impl PoolManager {
         socket_path: String,
         http_request_id: Option<String>,
         timeout_secs: Option<u64>,
+        route: Option<String>,
+        config: Option<serde_json::Value>,
+        method: Option<String>,
+        query: Option<serde_json::Value>,
     ) -> Result<ScriptResult, PluginError> {
         Self::execute_with_permit(
             connection_pool,
@@ -436,6 +458,10 @@ impl PoolManager {
             socket_path,
             http_request_id,
             timeout_secs,
+            route,
+            config,
+            method,
+            query,
         )
         .await
     }
@@ -689,6 +715,7 @@ impl PoolManager {
     }
 
     /// Execute a plugin via the pool
+    #[allow(clippy::too_many_arguments)]
     pub async fn execute_plugin(
         &self,
         plugin_id: String,
@@ -699,6 +726,10 @@ impl PoolManager {
         socket_path: String,
         http_request_id: Option<String>,
         timeout_secs: Option<u64>,
+        route: Option<String>,
+        config: Option<serde_json::Value>,
+        method: Option<String>,
+        query: Option<serde_json::Value>,
     ) -> Result<ScriptResult, PluginError> {
         let recovery_allowance = if self.recovery_mode.load(Ordering::Relaxed) {
             Some(self.recovery_allowance.load(Ordering::Relaxed))
@@ -741,6 +772,10 @@ impl PoolManager {
                     socket_path,
                     http_request_id,
                     timeout_secs,
+                    route,
+                    config,
+                    method,
+                    query,
                 )
                 .await;
 
@@ -782,6 +817,10 @@ impl PoolManager {
                     socket_path,
                     http_request_id,
                     timeout_secs,
+                    route,
+                    config,
+                    method,
+                    query,
                     response_tx,
                 };
 

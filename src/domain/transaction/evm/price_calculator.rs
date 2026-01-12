@@ -701,9 +701,10 @@ mod tests {
             _ => 12000,         // 12 seconds for mainnet and others
         };
 
+        use crate::models::RpcConfig;
         EvmNetwork {
             network: name.to_string(),
-            rpc_urls: vec!["https://rpc.example.com".to_string()],
+            rpc_urls: vec![RpcConfig::new("https://rpc.example.com".to_string())],
             explorer_urls: None,
             average_blocktime_ms,
             is_testnet: true,
@@ -717,6 +718,7 @@ mod tests {
     }
 
     fn create_mock_no_mempool_network(name: &str) -> EvmNetwork {
+        use crate::models::RpcConfig;
         let average_blocktime_ms = match name {
             "arbitrum" => 1000, // 1 second for arbitrum
             _ => 12000,         // 12 seconds for others
@@ -724,7 +726,7 @@ mod tests {
 
         EvmNetwork {
             network: name.to_string(),
-            rpc_urls: vec!["https://rpc.example.com".to_string()],
+            rpc_urls: vec![RpcConfig::new("https://rpc.example.com".to_string())],
             explorer_urls: None,
             average_blocktime_ms,
             is_testnet: true,
@@ -2068,9 +2070,10 @@ mod tests {
         let mut mock_service = MockEvmGasPriceServiceTrait::new();
 
         // Create a network that returns true for is_arbitrum() but not lacks_mempool()
+        use crate::models::RpcConfig;
         let arbitrum_network = EvmNetwork {
             network: "arbitrum-one".to_string(),
-            rpc_urls: vec!["https://arb1.arbitrum.io/rpc".to_string()],
+            rpc_urls: vec![RpcConfig::new("https://arb1.arbitrum.io/rpc".to_string())],
             explorer_urls: None,
             average_blocktime_ms: 1000, // 1 second for arbitrum
             is_testnet: false,

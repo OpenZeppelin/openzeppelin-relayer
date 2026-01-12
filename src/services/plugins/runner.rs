@@ -65,6 +65,10 @@ pub trait PluginRunnerTrait {
         script_params: String,
         http_request_id: Option<String>,
         headers_json: Option<String>,
+        route: Option<String>,
+        config_json: Option<String>,
+        method: Option<String>,
+        query_json: Option<String>,
         emit_traces: bool,
         state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
     ) -> Result<ScriptResult, PluginError>
@@ -98,6 +102,10 @@ impl PluginRunnerTrait for PluginRunner {
         script_params: String,
         http_request_id: Option<String>,
         headers_json: Option<String>,
+        route: Option<String>,
+        config_json: Option<String>,
+        method: Option<String>,
+        query_json: Option<String>,
         emit_traces: bool,
         state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
     ) -> Result<ScriptResult, PluginError>
@@ -127,6 +135,10 @@ impl PluginRunnerTrait for PluginRunner {
                     script_params,
                     http_request_id,
                     headers_json,
+                    route,
+                    config_json,
+                    method,
+                    query_json,
                     emit_traces,
                     state,
                 )
@@ -142,6 +154,10 @@ impl PluginRunnerTrait for PluginRunner {
             script_params,
             http_request_id,
             headers_json,
+            route,
+            config_json,
+            method,
+            query_json,
             emit_traces,
             state,
         )
@@ -161,6 +177,10 @@ impl PluginRunner {
         script_params: String,
         http_request_id: Option<String>,
         headers_json: Option<String>,
+        route: Option<String>,
+        config_json: Option<String>,
+        method: Option<String>,
+        query_json: Option<String>,
         _emit_traces: bool,
         state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
     ) -> Result<ScriptResult, PluginError>
@@ -203,6 +223,10 @@ impl PluginRunner {
                 script_params,
                 Some(execution_id),
                 headers_json,
+                route,
+                config_json,
+                method,
+                query_json,
             ),
         )
         .await
@@ -246,6 +270,10 @@ impl PluginRunner {
         script_params: String,
         http_request_id: Option<String>,
         headers_json: Option<String>,
+        route: Option<String>,
+        config_json: Option<String>,
+        method: Option<String>,
+        query_json: Option<String>,
         emit_traces: bool,
         state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
     ) -> Result<ScriptResult, PluginError>
@@ -297,6 +325,16 @@ impl PluginRunner {
             .as_ref()
             .and_then(|h| serde_json::from_str(h).ok());
 
+        // Parse config if present
+        let config: Option<serde_json::Value> = config_json
+            .as_ref()
+            .and_then(|c| serde_json::from_str(c).ok());
+
+        // Parse query if present
+        let query: Option<serde_json::Value> = query_json
+            .as_ref()
+            .and_then(|q| serde_json::from_str(q).ok());
+
         let exec_outcome = match timeout(
             timeout_duration,
             pool_manager.execute_plugin(
@@ -308,6 +346,10 @@ impl PluginRunner {
                 shared_socket_path, // Use shared socket path instead of unique one
                 http_request_id,
                 Some(timeout_duration.as_secs()),
+                route,
+                config,
+                method,
+                query,
             ),
         )
         .await
@@ -410,6 +452,10 @@ mod tests {
                 "{ \"test\": \"test\" }".to_string(),
                 None,
                 None,
+                None,
+                None,
+                None,
+                None,
                 false, // emit_traces
                 Arc::new(web::ThinData(state)),
             )
@@ -475,6 +521,10 @@ mod tests {
                 script_path_str,
                 Duration::from_millis(100), // 100ms timeout
                 "{}".to_string(),
+                None,
+                None,
+                None,
+                None,
                 None,
                 None,
                 false, // emit_traces

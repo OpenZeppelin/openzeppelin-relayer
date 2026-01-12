@@ -5635,6 +5635,7 @@ dependencies = [
  "tracing-appender",
  "tracing-error",
  "tracing-subscriber",
+ "url",
  "utoipa",
  "uuid 1.19.0",
  "validator",

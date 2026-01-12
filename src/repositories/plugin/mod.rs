@@ -214,6 +214,9 @@ impl TryFrom<PluginFileConfig> for PluginModel {
             timeout,
             emit_logs: config.emit_logs,
             emit_traces: config.emit_traces,
+            raw_response: config.raw_response,
+            allow_get_invocation: config.allow_get_invocation,
+            config: config.config,
             forward_logs: config.forward_logs,
         })
     }
@@ -240,6 +243,9 @@ mod tests {
             timeout: None,
             emit_logs: false,
             emit_traces: false,
+            raw_response: false,
+            allow_get_invocation: false,
+            config: None,
             forward_logs: false,
         };
         let result = PluginModel::try_from(plugin);
@@ -252,6 +258,9 @@ mod tests {
                 timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
                 emit_logs: false,
                 emit_traces: false,
+                raw_response: false,
+                allow_get_invocation: false,
+                config: None,
                 forward_logs: false,
             }
         );
@@ -265,6 +274,9 @@ mod tests {
             timeout: Duration::from_secs(30),
             emit_logs: false,
             emit_traces: false,
+            raw_response: false,
+            allow_get_invocation: false,
+            config: None,
             forward_logs: false,
         }
     }

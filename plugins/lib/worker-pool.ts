@@ -75,6 +75,14 @@ export interface PluginExecutionRequest {
   httpRequestId?: string;
   /** Execution timeout in milliseconds */
   timeout?: number;
+  /** Wildcard route path (e.g., "/verify" from "/api/v1/plugins/:id/*") */
+  route?: string;
+  /** Plugin configuration object */
+  config?: any;
+  /** HTTP method (GET, POST, etc.) */
+  method?: string;
+  /** Query parameters */
+  query?: any;
 }
 
 /**
@@ -780,6 +788,10 @@ export class WorkerPoolManager {
       socketPath: request.socketPath,
       httpRequestId: request.httpRequestId,
       timeout: request.timeout ?? DEFAULT_TIMEOUT,
+      route: request.route,
+      config: request.config,
+      method: request.method,
+      query: request.query,
     };
 
     // Track per-plugin execution (bounded to prevent memory leak)

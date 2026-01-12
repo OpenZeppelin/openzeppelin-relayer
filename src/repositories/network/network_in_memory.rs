@@ -92,10 +92,19 @@ impl Repository<NetworkRepoModel, String> for InMemoryNetworkRepository {
 
     async fn update(
         &self,
-        _id: String,
-        _network: NetworkRepoModel,
+        id: String,
+        network: NetworkRepoModel,
     ) -> Result<NetworkRepoModel, RepositoryError> {
-        Err(RepositoryError::NotSupported("Not supported".to_string()))
+        let mut store = Self::acquire_lock(&self.store).await?;
+
+        if !store.contains_key(&id) {
+            return Err(RepositoryError::NotFound(format!(
+                "Network with id {id} not found"
+            )));
+        }
+
+        store.insert(id, network.clone());
+        Ok(network)
     }
 
     async fn delete_by_id(&self, _id: String) -> Result<(), RepositoryError> {
@@ -110,9 +119,25 @@ impl Repository<NetworkRepoModel, String> for InMemoryNetworkRepository {
 
     async fn list_paginated(
         &self,
-        _query: PaginationQuery,
+        query: PaginationQuery,
     ) -> Result<PaginatedResult<NetworkRepoModel>, RepositoryError> {
-        Err(RepositoryError::NotSupported("Not supported".to_string()))
+        let total = self.count().await?;
+        let start = ((query.page - 1) * query.per_page) as usize;
+
+        let items = Self::acquire_lock(&self.store)
+            .await?
+            .values()
+            .skip(start)
+            .take(query.per_page as usize)
+            .cloned()
+            .collect();
+
+        Ok(PaginatedResult {
+            items,
+            total: total as u64,
+            page: query.page,
+            per_page: query.per_page,
+        })
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
@@ -178,7 +203,9 @@ mod tests {
         let common = NetworkConfigCommon {
             network: name.clone(),
             from: None,
-            rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+            rpc_urls: Some(vec![crate::models::RpcConfig::new(
+                "https://rpc.example.com".to_string(),
+            )]),
             explorer_urls: None,
             average_blocktime_ms: None,
             is_testnet: Some(true),
@@ -288,30 +315,86 @@ mod tests {
     #[tokio::test]
     async fn test_unsupported_operations() {
         let repo = InMemoryNetworkRepository::new();
-        let network = create_test_network("test".to_string(), NetworkType::Evm);
 
-        let update_result = repo.update("test".to_string(), network.clone()).await;
-        assert!(matches!(
-            update_result,
-            Err(RepositoryError::NotSupported(_))
-        ));
-
+        // Delete is still unsupported
         let delete_result = repo.delete_by_id("test".to_string()).await;
         assert!(matches!(
             delete_result,
             Err(RepositoryError::NotSupported(_))
         ));
+    }
 
-        let pagination_result = repo
+    #[tokio::test]
+    async fn test_update_network() {
+        let repo = InMemoryNetworkRepository::new();
+        let network = create_test_network("test".to_string(), NetworkType::Evm);
+        // Note: new_evm generates ID as "evm:{name}" -> "evm:test"
+        let network_id = network.id.clone();
+
+        // First create the network
+        repo.create(network.clone()).await.unwrap();
+
+        // Update should work now
+        let mut updated_network = network.clone();
+        updated_network.name = "Updated Name".to_string();
+
+        let update_result = repo
+            .update(network_id.clone(), updated_network.clone())
+            .await;
+        assert!(update_result.is_ok());
+        let updated = update_result.unwrap();
+        assert_eq!(updated.name, "Updated Name");
+
+        // Verify it was persisted
+        let retrieved = repo.get_by_id(network_id).await.unwrap();
+        assert_eq!(retrieved.name, "Updated Name");
+    }
+
+    #[tokio::test]
+    async fn test_update_network_not_found() {
+        let repo = InMemoryNetworkRepository::new();
+        let network = create_test_network("test".to_string(), NetworkType::Evm);
+
+        // Update on non-existent network should fail
+        let update_result = repo.update("nonexistent".to_string(), network).await;
+        assert!(matches!(update_result, Err(RepositoryError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn test_list_paginated() {
+        let repo = InMemoryNetworkRepository::new();
+
+        // Create multiple networks
+        for i in 0..5 {
+            let network = create_test_network(format!("network-{}", i), NetworkType::Evm);
+            repo.create(network).await.unwrap();
+        }
+
+        // Test pagination
+        let result = repo
             .list_paginated(PaginationQuery {
                 page: 1,
-                per_page: 10,
+                per_page: 2,
             })
             .await;
-        assert!(matches!(
-            pagination_result,
-            Err(RepositoryError::NotSupported(_))
-        ));
+        assert!(result.is_ok());
+        let paginated = result.unwrap();
+        assert_eq!(paginated.items.len(), 2);
+        assert_eq!(paginated.total, 5);
+        assert_eq!(paginated.page, 1);
+        assert_eq!(paginated.per_page, 2);
+
+        // Test second page
+        let result2 = repo
+            .list_paginated(PaginationQuery {
+                page: 2,
+                per_page: 2,
+            })
+            .await;
+        assert!(result2.is_ok());
+        let paginated2 = result2.unwrap();
+        assert_eq!(paginated2.items.len(), 2);
+        assert_eq!(paginated2.page, 2);
     }
 
     #[tokio::test]
