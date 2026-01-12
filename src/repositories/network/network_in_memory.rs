@@ -99,8 +99,7 @@ impl Repository<NetworkRepoModel, String> for InMemoryNetworkRepository {
 
         if !store.contains_key(&id) {
             return Err(RepositoryError::NotFound(format!(
-                "Network with id {} not found",
-                id
+                "Network with id {id} not found"
             )));
         }
 

@@ -32,7 +32,7 @@ use async_trait::async_trait;
 use eyre::Result;
 use reqwest::ClientBuilder as ReqwestClientBuilder;
 use serde_json;
-use tracing::info;
+use tracing::debug;
 
 use super::rpc_selector::RpcSelector;
 use super::{retry_rpc_call, ProviderConfig, RetryConfig};
@@ -41,6 +41,7 @@ use crate::{
         BlockResponse, EvmTransactionData, RpcConfig, TransactionError, TransactionReceipt, U256,
     },
     services::provider::{is_retriable_error, should_mark_provider_failed},
+    utils::mask_url,
 };
 
 #[cfg(test)]
@@ -200,7 +201,7 @@ impl EvmProvider {
 
     /// Initialize a provider for a given URL
     fn initialize_provider(&self, url: &str) -> Result<EvmProviderType, ProviderError> {
-        info!("Initializing provider for URL: {url}");
+        debug!("Initializing provider for URL: {}", mask_url(url));
         let rpc_url = url
             .parse()
             .map_err(|e| ProviderError::NetworkConfiguration(format!("Invalid URL format: {e}")))?;
