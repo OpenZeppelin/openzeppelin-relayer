@@ -323,6 +323,7 @@ impl SharedSocketService {
     /// Start the shared socket service
     /// This spawns a background task that listens for connections
     /// Safe to call multiple times - will only start once per instance
+    #[allow(clippy::type_complexity)]
     pub async fn start<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         self: Arc<Self>,
         state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
@@ -433,6 +434,7 @@ impl SharedSocketService {
     }
 
     /// Handle connection with overall idle timeout
+    #[allow(clippy::type_complexity)]
     async fn handle_connection_with_timeout<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         stream: UnixStream,
         relayer_api: Arc<RelayerApi>,
@@ -476,6 +478,7 @@ impl SharedSocketService {
     /// Security: The first message must be a Register message. Once registered,
     /// the connection is "tagged" with that execution_id and cannot be changed.
     /// This prevents Plugin A from spoofing Plugin B's execution_id.
+    #[allow(clippy::type_complexity)]
     async fn handle_connection<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         stream: UnixStream,
         relayer_api: Arc<RelayerApi>,
@@ -720,6 +723,7 @@ pub fn get_shared_socket_service() -> Result<Arc<SharedSocketService>, PluginErr
 }
 
 /// Ensure the shared socket service is started
+#[allow(clippy::type_complexity)]
 pub async fn ensure_shared_socket_started<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
 ) -> Result<(), PluginError>

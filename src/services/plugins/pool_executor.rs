@@ -222,7 +222,7 @@ impl PoolManager {
             configured_workers
         } else {
             std::thread::available_parallelism()
-                .map(|n| n.get().max(4).min(32))
+                .map(|n| n.get().clamp(4, 32))
                 .unwrap_or(8)
         };
 
@@ -375,7 +375,7 @@ impl PoolManager {
     ) -> Result<ScriptResult, PluginError> {
         let mut conn = connection_pool.acquire_with_permit(permit).await?;
 
-        let request = PoolRequest::Execute {
+        let request = PoolRequest::Execute(Box::new(super::protocol::ExecuteRequest {
             task_id: Uuid::new_v4().to_string(),
             plugin_id: plugin_id.clone(),
             compiled_code,
@@ -389,7 +389,7 @@ impl PoolManager {
             config,
             method,
             query,
-        };
+        }));
 
         let timeout = timeout_secs.unwrap_or(get_config().pool_request_timeout_secs);
         let response = conn.send_request_with_timeout(&request, timeout).await?;

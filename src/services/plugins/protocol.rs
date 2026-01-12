@@ -8,37 +8,41 @@ use std::collections::HashMap;
 
 use super::{LogEntry, LogLevel};
 
+/// Execute request payload (boxed to reduce enum size)
+#[derive(Serialize, Debug)]
+pub struct ExecuteRequest {
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+    #[serde(rename = "pluginId")]
+    pub plugin_id: String,
+    #[serde(rename = "compiledCode", skip_serializing_if = "Option::is_none")]
+    pub compiled_code: Option<String>,
+    #[serde(rename = "pluginPath", skip_serializing_if = "Option::is_none")]
+    pub plugin_path: Option<String>,
+    pub params: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub headers: Option<HashMap<String, Vec<String>>>,
+    #[serde(rename = "socketPath")]
+    pub socket_path: String,
+    #[serde(rename = "httpRequestId", skip_serializing_if = "Option::is_none")]
+    pub http_request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub query: Option<serde_json::Value>,
+}
+
 /// Request messages sent to the pool server
 #[derive(Serialize, Debug)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum PoolRequest {
-    Execute {
-        #[serde(rename = "taskId")]
-        task_id: String,
-        #[serde(rename = "pluginId")]
-        plugin_id: String,
-        #[serde(rename = "compiledCode", skip_serializing_if = "Option::is_none")]
-        compiled_code: Option<String>,
-        #[serde(rename = "pluginPath", skip_serializing_if = "Option::is_none")]
-        plugin_path: Option<String>,
-        params: serde_json::Value,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        headers: Option<HashMap<String, Vec<String>>>,
-        #[serde(rename = "socketPath")]
-        socket_path: String,
-        #[serde(rename = "httpRequestId", skip_serializing_if = "Option::is_none")]
-        http_request_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        timeout: Option<u64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        route: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        config: Option<serde_json::Value>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        method: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        query: Option<serde_json::Value>,
-    },
+    Execute(Box<ExecuteRequest>),
     Precompile {
         #[serde(rename = "taskId")]
         task_id: String,
@@ -127,7 +131,7 @@ mod tests {
 
     #[test]
     fn test_pool_request_execute_serialization() {
-        let request = PoolRequest::Execute {
+        let request = PoolRequest::Execute(Box::new(ExecuteRequest {
             task_id: "test-123".to_string(),
             plugin_id: "my-plugin".to_string(),
             compiled_code: Some("console.log('hello')".to_string()),
@@ -141,7 +145,7 @@ mod tests {
             config: None,
             method: None,
             query: None,
-        };
+        }));
 
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains("\"type\":\"execute\""));

@@ -120,8 +120,7 @@ impl PluginConfig {
         let estimated_concurrency_threads = (max_concurrency / 200).max(cpu_count);
         let estimated_max_threads = estimated_memory_threads
             .min(estimated_concurrency_threads)
-            .max(DEFAULT_POOL_MAX_THREADS_FLOOR)
-            .min(32); // Same cap as actual calculation
+            .clamp(DEFAULT_POOL_MAX_THREADS_FLOOR, 32); // Same cap as actual calculation
 
         // Queue timeout scales with concurrency AND thread count
         // Formula: base_timeout * (concurrency / threads) with caps
@@ -246,8 +245,7 @@ impl PluginConfig {
         // This ensures we don't exceed either memory or concurrency constraints
         let derived_max_threads = memory_based_max_threads
             .min(concurrency_based_threads)
-            .max(DEFAULT_POOL_MAX_THREADS_FLOOR) // At least the floor
-            .min(32); // Hard cap at 32 (reduced from 64)
+            .clamp(DEFAULT_POOL_MAX_THREADS_FLOOR, 32); // At least the floor, hard cap at 32
 
         tracing::debug!(
             total_memory_mb = total_memory_mb,
@@ -270,8 +268,7 @@ impl PluginConfig {
         //   - 1000 VUs / 8 threads * 1.2 = 150
         let base_tasks = max_concurrency / nodejs_pool_max_threads.max(1);
         let derived_concurrent_tasks = ((base_tasks as f64 * 1.2) as usize)
-            .max(DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER)
-            .min(250); // Cap at 250 (validated stable by testing)
+            .clamp(DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER, 250); // Cap at 250 (validated stable by testing)
         let nodejs_pool_concurrent_tasks =
             env_parse("PLUGIN_POOL_CONCURRENT_TASKS", derived_concurrent_tasks);
 
@@ -288,9 +285,8 @@ impl PluginConfig {
         //   - 250 concurrent tasks: 512 + (250 * 5) = 1762MB
         let base_worker_heap = 512_usize;
         let heap_per_task = 5_usize;
-        let derived_worker_heap_mb = (base_worker_heap + (nodejs_pool_concurrent_tasks * heap_per_task))
-                .max(1024) // At least 1GB
-                .min(2048); // Cap at 2GB
+        let derived_worker_heap_mb =
+            (base_worker_heap + (nodejs_pool_concurrent_tasks * heap_per_task)).clamp(1024, 2048); // At least 1GB, cap at 2GB
         let nodejs_worker_heap_mb = env_parse("PLUGIN_WORKER_HEAP_MB", derived_worker_heap_mb);
 
         // Socket backlog calculation
@@ -435,22 +431,18 @@ impl Default for PluginConfig {
 
         let nodejs_pool_max_threads = memory_based_max_threads
             .min(concurrency_based_threads)
-            .max(DEFAULT_POOL_MAX_THREADS_FLOOR)
-            .min(32);
+            .clamp(DEFAULT_POOL_MAX_THREADS_FLOOR, 32);
         let nodejs_pool_min_threads = DEFAULT_POOL_MIN_THREADS.max(cpu_count / 2);
 
         let base_tasks = max_concurrency / nodejs_pool_max_threads.max(1);
         let nodejs_pool_concurrent_tasks = ((base_tasks as f64 * 1.2) as usize)
-            .max(DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER)
-            .min(250);
+            .clamp(DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER, 250);
 
         // Worker heap for Default impl (same formula as from_env)
         let base_worker_heap = 512_usize;
         let heap_per_task = 5_usize;
-        let nodejs_worker_heap_mb = (base_worker_heap
-            + (nodejs_pool_concurrent_tasks * heap_per_task))
-            .max(1024)
-            .min(2048);
+        let nodejs_worker_heap_mb =
+            (base_worker_heap + (nodejs_pool_concurrent_tasks * heap_per_task)).clamp(1024, 2048);
 
         let default_backlog = DEFAULT_POOL_SOCKET_BACKLOG as usize;
         let pool_socket_backlog = max_concurrency.max(default_backlog);

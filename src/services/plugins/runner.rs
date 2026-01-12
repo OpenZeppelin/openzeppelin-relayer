@@ -167,7 +167,7 @@ impl PluginRunnerTrait for PluginRunner {
 
 impl PluginRunner {
     /// Execute plugin using ts-node with shared socket
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     async fn run_with_tsnode<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         &self,
         plugin_id: String,
@@ -260,7 +260,7 @@ impl PluginRunner {
 
     /// Execute plugin using worker pool (new high-performance mode)
     /// Uses shared socket service for better scalability
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     async fn run_with_pool<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         &self,
         plugin_id: String,
