@@ -85,6 +85,8 @@ impl Modify for SecurityAddon {
         plugin_docs::doc_call_plugin,
         plugin_docs::doc_call_plugin_get,
         plugin_docs::doc_list_plugins,
+        plugin_docs::doc_get_plugin,
+        plugin_docs::doc_update_plugin,
         notification_docs::doc_list_notifications,
         notification_docs::doc_get_notification,
         notification_docs::doc_create_notification,
@@ -116,6 +118,7 @@ impl Modify for SecurityAddon {
         domain::SignTransactionExternalResponse,
         models::PluginCallRequest,
         models::PluginMetadata,
+        models::UpdatePluginRequest,
         plugins::PluginHandlerError,
         plugins::LogEntry,
         plugins::LogLevel

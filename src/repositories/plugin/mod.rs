@@ -50,6 +50,8 @@ pub trait PluginRepositoryTrait {
     // Plugin CRUD operations
     async fn get_by_id(&self, id: &str) -> Result<Option<PluginModel>, RepositoryError>;
     async fn add(&self, plugin: PluginModel) -> Result<(), RepositoryError>;
+    /// Update an existing plugin. Returns the updated plugin if found.
+    async fn update(&self, plugin: PluginModel) -> Result<PluginModel, RepositoryError>;
     async fn list_paginated(
         &self,
         query: PaginationQuery,
@@ -112,6 +114,13 @@ impl PluginRepositoryTrait for PluginRepositoryStorage {
         match self {
             PluginRepositoryStorage::InMemory(repo) => repo.add(plugin).await,
             PluginRepositoryStorage::Redis(repo) => repo.add(plugin).await,
+        }
+    }
+
+    async fn update(&self, plugin: PluginModel) -> Result<PluginModel, RepositoryError> {
+        match self {
+            PluginRepositoryStorage::InMemory(repo) => repo.update(plugin).await,
+            PluginRepositoryStorage::Redis(repo) => repo.update(plugin).await,
         }
     }
 

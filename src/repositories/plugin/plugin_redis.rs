@@ -216,6 +216,43 @@ impl PluginRepositoryTrait for RedisPluginRepository {
         Ok(())
     }
 
+    async fn update(&self, plugin: PluginModel) -> Result<PluginModel, RepositoryError> {
+        if plugin.id.is_empty() {
+            return Err(RepositoryError::InvalidData(
+                "Plugin ID cannot be empty".to_string(),
+            ));
+        }
+
+        let mut conn = self.client.as_ref().clone();
+        let key = self.plugin_key(&plugin.id);
+
+        debug!(plugin_id = %plugin.id, "updating plugin");
+
+        // Check if plugin exists
+        let exists: bool = conn
+            .exists(&key)
+            .await
+            .map_err(|e| self.map_redis_error(e, &format!("check_plugin_exists_{}", plugin.id)))?;
+
+        if !exists {
+            return Err(RepositoryError::NotFound(format!(
+                "Plugin with ID {} not found",
+                plugin.id
+            )));
+        }
+
+        // Serialize plugin
+        let json = self.serialize_entity(&plugin, |p| &p.id, "plugin")?;
+
+        // Update the plugin data
+        conn.set::<_, _, ()>(&key, &json)
+            .await
+            .map_err(|e| self.map_redis_error(e, &format!("update_plugin_{}", plugin.id)))?;
+
+        debug!(plugin_id = %plugin.id, "successfully updated plugin");
+        Ok(plugin)
+    }
+
     async fn list_paginated(
         &self,
         query: PaginationQuery,

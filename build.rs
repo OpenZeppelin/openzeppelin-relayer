@@ -39,11 +39,11 @@ fn main() {
             }
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                println!("cargo:warning=pnpm install failed: {}", stderr);
+                println!("cargo:warning=pnpm install failed: {stderr}");
                 return;
             }
             Err(e) => {
-                println!("cargo:warning=Failed to execute pnpm install: {}", e);
+                println!("cargo:warning=Failed to execute pnpm install: {e}");
                 return;
             }
         }
@@ -77,10 +77,10 @@ fn main() {
             }
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                println!("cargo:warning=sandbox-executor build failed: {}", stderr);
+                println!("cargo:warning=sandbox-executor build failed: {stderr}");
             }
             Err(e) => {
-                println!("cargo:warning=Failed to build sandbox-executor: {}", e);
+                println!("cargo:warning=Failed to build sandbox-executor: {e}");
             }
         }
     }

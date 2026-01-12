@@ -115,7 +115,7 @@
 //! // (handled automatically by the background listener)
 //!
 //! // Collect traces when done
-//! let traces_rx = guard.into_receiver();
+//! let mut traces_rx = guard.into_receiver();
 //! let traces = traces_rx.recv().await;
 //! # Ok(())
 //! # }
@@ -349,7 +349,7 @@ impl SharedSocketService {
 
         // Create the listener and move it into the task
         let listener = UnixListener::bind(&self.socket_path)
-            .map_err(|e| PluginError::SocketError(format!("Failed to bind listener: {}", e)))?;
+            .map_err(|e| PluginError::SocketError(format!("Failed to bind listener: {e}")))?;
         let executions = self.executions.clone();
         let relayer_api = Arc::new(RelayerApi);
         let socket_path = self.socket_path.clone();
@@ -714,8 +714,7 @@ pub fn get_shared_socket_service() -> Result<Arc<SharedSocketService>, PluginErr
     match result {
         Ok(service) => Ok(service.clone()),
         Err(e) => Err(PluginError::SocketError(format!(
-            "Failed to create shared socket service: {}",
-            e
+            "Failed to create shared socket service: {e}"
         ))),
     }
 }

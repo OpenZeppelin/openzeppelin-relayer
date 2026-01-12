@@ -70,6 +70,12 @@ pub struct PoolManager {
     shutdown_signal: Arc<tokio::sync::Notify>,
 }
 
+impl Default for PoolManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PoolManager {
     /// Create a new PoolManager with default socket path
     pub fn new() -> Self {
@@ -265,7 +271,7 @@ impl PoolManager {
 
                             let elapsed = start.elapsed();
                             if let Err(ref e) = result {
-                                let error_str = format!("{:?}", e);
+                                let error_str = format!("{e:?}");
                                 if error_str.contains("shutdown") || error_str.contains("Shutdown") {
                                     tracing::debug!(
                                         worker_id = worker_id,
@@ -496,10 +502,10 @@ impl PoolManager {
             return Ok(());
         }
 
-        if !self
+        if self
             .health_check_needed
             .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
+            .is_err()
         {
             return Ok(());
         }
@@ -622,7 +628,7 @@ impl PoolManager {
             "Spawning plugin pool server"
         );
 
-        let node_options = format!("--max-old-space-size={} --expose-gc", pool_server_heap_mb);
+        let node_options = format!("--max-old-space-size={pool_server_heap_mb} --expose-gc");
 
         let mut child = Command::new("ts-node")
             .arg("--transpile-only")
@@ -659,7 +665,7 @@ impl PoolManager {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| {
-                PluginError::PluginExecutionError(format!("Failed to {} pool server: {e}", context))
+                PluginError::PluginExecutionError(format!("Failed to {context} pool server: {e}"))
             })?;
 
         if let Some(stderr) = child.stderr.take() {
@@ -689,8 +695,7 @@ impl PoolManager {
                 Ok(Err(e)) => return Err(e),
                 Err(_) => {
                     return Err(PluginError::PluginExecutionError(format!(
-                        "Timeout waiting for pool server to {}",
-                        context
+                        "Timeout waiting for pool server to {context}"
                     )))
                 }
             }
@@ -1086,9 +1091,9 @@ impl PoolManager {
                     return Ok(HealthStatus {
                         healthy: is_pool_exhausted,
                         status: if is_pool_exhausted {
-                            format!("pool_exhausted: {}", e)
+                            format!("pool_exhausted: {e}")
                         } else {
-                            format!("connection_failed: {}", e)
+                            format!("connection_failed: {e}")
                         },
                         uptime_ms: None,
                         memory: None,
@@ -1181,7 +1186,7 @@ impl PoolManager {
                 conn.mark_unhealthy();
                 Ok(HealthStatus {
                     healthy: false,
-                    status: format!("request_failed: {}", e),
+                    status: format!("request_failed: {e}"),
                     uptime_ms: None,
                     memory: None,
                     pool_completed: None,
@@ -1386,8 +1391,7 @@ impl PoolManager {
             Ok(c) => c,
             Err(e) => {
                 return Err(PluginError::PluginExecutionError(format!(
-                    "Failed to connect for shutdown: {}",
-                    e
+                    "Failed to connect for shutdown: {e}"
                 )));
             }
         };

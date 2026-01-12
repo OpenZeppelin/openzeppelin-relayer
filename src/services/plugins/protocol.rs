@@ -137,6 +137,10 @@ mod tests {
             socket_path: "/tmp/test.sock".to_string(),
             http_request_id: Some("req-456".to_string()),
             timeout: Some(30000),
+            route: None,
+            config: None,
+            method: None,
+            query: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();

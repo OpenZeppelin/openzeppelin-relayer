@@ -84,6 +84,18 @@ impl PluginRepositoryTrait for InMemoryPluginRepository {
         Ok(())
     }
 
+    async fn update(&self, plugin: PluginModel) -> Result<PluginModel, RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store).await?;
+        if !store.contains_key(&plugin.id) {
+            return Err(RepositoryError::NotFound(format!(
+                "Plugin with id {} not found",
+                plugin.id
+            )));
+        }
+        store.insert(plugin.id.clone(), plugin.clone());
+        Ok(plugin)
+    }
+
     async fn list_paginated(
         &self,
         query: PaginationQuery,
