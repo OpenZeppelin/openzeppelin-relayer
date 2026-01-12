@@ -1149,8 +1149,9 @@ mod tests {
         jobs::MockJobProducerTrait,
         models::{
             EncodedSerializedTransaction, JsonRpcId, NetworkConfigData, NetworkRepoModel,
-            RelayerSolanaSwapConfig, SolanaAllowedTokensSwapConfig, SolanaFeeEstimateRequestParams,
-            SolanaGetFeaturesEnabledRequestParams, SolanaRpcResult, SolanaSwapStrategy,
+            RelayerSolanaSwapConfig, RpcConfig, SolanaAllowedTokensSwapConfig,
+            SolanaFeeEstimateRequestParams, SolanaGetFeaturesEnabledRequestParams, SolanaRpcResult,
+            SolanaSwapStrategy,
         },
         repositories::{MockNetworkRepository, MockRelayerRepository, MockTransactionRepository},
         services::{
@@ -1236,7 +1237,9 @@ mod tests {
                     common: NetworkConfigCommon {
                         network: "devnet".to_string(),
                         from: None,
-                        rpc_urls: Some(vec!["https://api.devnet.solana.com".to_string()]),
+                        rpc_urls: Some(vec![RpcConfig::new(
+                            "https://api.devnet.solana.com".to_string(),
+                        )]),
                         explorer_urls: None,
                         average_blocktime_ms: Some(400),
                         is_testnet: Some(true),

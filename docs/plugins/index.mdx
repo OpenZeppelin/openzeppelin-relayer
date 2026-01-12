@@ -15,6 +15,7 @@ The plugin system features:
 - **_Plugin API_**: Clean interface for interacting with relayers
 - **_Key-Value Storage_**: Persistent state and locking for plugins
 - **_HTTP Headers_**: Access request headers for authentication and metadata
+- **_Route-Based Invocation_**: Optional route suffix (`/call/<route>`) for multi-endpoint plugins
 - **_Docker Integration_**: Seamless development and deployment
 - **_Comprehensive Error Handling_**: Detailed logging and debugging capabilities
 
@@ -98,6 +99,39 @@ export async function handler(context: PluginContext): Promise<MyPluginResult> {
 }
 ```
 
+#### Handler Context (`PluginContext`)
+
+All modern plugins export a single function with the signature:
+
+```typescript
+import type { PluginContext } from '@openzeppelin/relayer-sdk';
+
+export async function handler(context: PluginContext) {
+  const { api, params, kv, headers, route, method, query, config } = context;
+
+  // ...your logic
+  return { ok: true };
+}
+```
+
+The `handler` receives a `PluginContext` object with these commonly-used fields:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `context.api` | `PluginAPI` | Client for interacting with Relayers (e.g. `api.useRelayer(...)`). |
+| `context.params` | `any` | The input parameters for the plugin invocation. For `POST`, this comes from the request body; for `GET`, it is `{}`. |
+| `context.kv` | KV store client | Persistent key/value store (namespaced per plugin). Only available in the modern context handler. |
+| `context.headers` | `Record<string, string[]>` | Incoming HTTP headers (lowercased keys; values are arrays). |
+| `context.route` | `string` | The route suffix, including the leading slash, e.g. `""`, `"/verify"`, `"/settle"`. |
+| `context.method` | `"GET" \| "POST"` | The HTTP method used to invoke the plugin. |
+| `context.query` | `Record<string, string[]>` | Query parameters parsed from the request URL. Most useful for `GET` invocations. |
+| `context.config` | `unknown` | User-defined plugin configuration object from `plugins[].config` in the Relayer config file. |
+
+<Callout>
+  `context.params` is user-provided input. Prefer defining a `type` for your params, validating required fields, and using
+  `pluginError(...)` to return structured 4xx errors.
+</Callout>
+
 #### Legacy Patterns (Deprecated, but supported)
 
 <Callout type="warn">
@@ -140,7 +174,6 @@ The file contains a list of plugins, each with an id, path, timeout in seconds (
 Example:
 
 ```json
-
 "plugins": [
   {
     "id": "my-plugin",
@@ -148,6 +181,11 @@ Example:
     "timeout": 30,
     "emit_logs": false,
     "emit_traces": false,
+    "raw_response": false,
+    "allow_get_invocation": false,
+    "config": {
+      "featureFlagExample": true
+    }
     "forward_logs": false
   }
 ]
@@ -231,9 +269,28 @@ console.log(result);
 
 ## Invocation
 
-Plugins are invoked by hitting the `api/v1/plugins/plugin-id/call` endpoint.
+Plugins are invoked by hitting the `/api/v1/plugins/{plugin-id}/call{route}` endpoint.
 
-The endpoint accepts a `POST` request. Example post request body:
+- `route` is optional. Use `/call` for a single endpoint, or `/call/<route>` to expose multiple routes from the same plugin.
+- The plugin receives the route as `context.route`.
+- You can implement your own routing by branching on `context.route` (for example, `"/verify"`, `"/settle"`, `""`).
+
+Example (route-based invocation):
+
+```bash
+# Calls the plugin with context.route = "/verify"
+curl -X POST http://localhost:8080/api/v1/plugins/my-plugin/call/verify \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{"params":{}}'
+```
+
+The endpoint accepts a `POST` request.
+
+- If the request body contains a top-level `params` field, that value is used as `context.params`.
+- If the request body does not contain `params`, the entire JSON body is treated as `params`.
+
+Example `POST` request body:
 
 ```json
 {
@@ -247,9 +304,18 @@ The endpoint accepts a `POST` request. Example post request body:
 
 The parameters are passed directly to your plugin’s `handler` function.
 
+### GET invocation (optional)
+
+By default, plugins can only be called with `POST`. To allow `GET` requests, set `allow_get_invocation: true` in the plugin configuration.
+
+- `GET` requests invoke the plugin with an empty params object (`context.params = {}`).
+- Query parameters are available to plugins via `context.query` as `Record<string, string[]>`.
+
 ## Responses
 
-API responses use the `ApiResponse` envelope: `success, data, error, metadata`.
+By default, API responses use the `ApiResponse` envelope: `success, data, error, metadata`.
+
+If `raw_response: true` is set for a plugin, the Relayer bypasses the envelope and returns the plugin result (or plugin error) directly.
 
 ### Success responses (HTTP 200)
 
@@ -265,6 +331,12 @@ API responses use the `ApiResponse` envelope: `success, data, error, metadata`.
 - `data` carries `code?: string, details?: any` reported by the plugin.
 - `metadata` follows the same visibility rules (`emit_logs` / `emit_traces`).
 - Plugin error logs are also forwarded to the Relayer's tracing system if `forward_logs` is enabled.
+
+### Raw responses (`raw_response: true`)
+
+- **Success**: the response body is the value returned by your plugin handler.
+- **Error**: the response body is the plugin error payload (typically `{ "code": string | null, "details": any | null }`) and the HTTP status is taken from the error.
+- **No metadata envelope**: when `raw_response` is enabled, the response does not include `metadata` even if `emit_logs` / `emit_traces` are enabled.
 
 ### Complete Example
 

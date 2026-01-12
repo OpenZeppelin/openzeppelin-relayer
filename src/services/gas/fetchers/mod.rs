@@ -100,7 +100,9 @@ mod tests {
     fn create_zkevm_network() -> EvmNetwork {
         EvmNetwork {
             network: "polygon-zkevm".to_string(),
-            rpc_urls: vec!["https://zkevm-rpc.com".to_string()],
+            rpc_urls: vec![crate::models::RpcConfig::new(
+                "https://zkevm-rpc.com".to_string(),
+            )],
             explorer_urls: None,
             average_blocktime_ms: 2000,
             is_testnet: false,
@@ -116,7 +118,9 @@ mod tests {
     fn create_default_network() -> EvmNetwork {
         EvmNetwork {
             network: "ethereum".to_string(),
-            rpc_urls: vec!["https://mainnet.infura.io".to_string()],
+            rpc_urls: vec![crate::models::RpcConfig::new(
+                "https://mainnet.infura.io".to_string(),
+            )],
             explorer_urls: None,
             average_blocktime_ms: 12000,
             is_testnet: false,

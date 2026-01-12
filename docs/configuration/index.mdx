@@ -65,6 +65,9 @@ This table lists the environment variables and their default values.
 | `PROVIDER_RETRY_BASE_DELAY_MS` | `100` | `<delay in milliseconds>` | Base delay between retry attempts in milliseconds. |
 | `PROVIDER_RETRY_MAX_DELAY_MS` | `2000` | `<delay in milliseconds>` | Maximum delay between retry attempts in milliseconds. |
 | `PROVIDER_MAX_FAILOVERS` | `3` | `<number of failovers>` | Maximum number of failovers (switching to different providers). |
+| `PROVIDER_FAILURE_THRESHOLD` | `3` | `<number>` | Number of consecutive failures before a provider is temporarily paused. When a provider reaches this threshold, it will be paused for the duration specified by `PROVIDER_PAUSE_DURATION_SECS`. Supports legacy env var `RPC_FAILURE_THRESHOLD`. |
+| `PROVIDER_PAUSE_DURATION_SECS` | `60` | `<seconds>` | Duration in seconds that a provider remains paused after reaching the failure threshold. During this time, the relayer will attempt to use other available providers. Supports legacy env var `RPC_PAUSE_DURATION_SECS`. |
+| `PROVIDER_FAILURE_EXPIRATION_SECS` | `60` | `<seconds>` | Duration in seconds after which individual failure records are considered stale and automatically removed. This allows providers to naturally recover over time even without explicit success calls. Failures older than this duration are not counted toward the failure threshold. |
 | `ENABLE_SWAGGER` | `false` | `true, false` | Enable or disable Swagger UI for API documentation. |
 | `KEYSTORE_PASSPHRASE` | `` | `<keystore passphrase>` | Passphrase for the keystore file used for signing transactions. |
 | `BACKGROUND_WORKER_TRANSACTION_REQUEST_CONCURRENCY` | `50` | `<any positive number>` | Maximum number of concurrent transaction request jobs that can be processed simultaneously. |
@@ -99,6 +102,9 @@ PROVIDER_MAX_RETRIES=3
 PROVIDER_RETRY_BASE_DELAY_MS=100
 PROVIDER_RETRY_MAX_DELAY_MS=2000
 PROVIDER_MAX_FAILOVERS=3
+PROVIDER_FAILURE_THRESHOLD=3
+PROVIDER_PAUSE_DURATION_SECS=60
+PROVIDER_FAILURE_EXPIRATION_SECS=60
 ENABLE_SWAGGER=false
 KEYSTORE_PASSPHRASE=your_keystore_passphrase
 STORAGE_ENCRYPTION_KEY=X67aXacJB+krEldv9i2w7NCSFwwOzVV/1ELM2KJJjQw=
@@ -298,6 +304,23 @@ For backward compatibility, string arrays are still supported:
 ```json
 "custom_rpc_urls": ["https://your-rpc.example.com"]
 ```
+
+#### Provider Health Management
+
+The relayer automatically tracks the health of RPC providers and manages failover:
+
+* **Failure Tracking**: When a provider fails, the failure is recorded with a timestamp. Failures older than `PROVIDER_FAILURE_EXPIRATION_SECS` (default: 60 seconds) are automatically considered stale and removed.
+
+* **Automatic Pausing**: When a provider reaches `PROVIDER_FAILURE_THRESHOLD` (default: 3) failures within the expiration window, it is automatically paused for `PROVIDER_PAUSE_DURATION_SECS` (default: 60 seconds). During this pause period, the relayer will attempt to use other available providers.
+
+* **Automatic Recovery**: After the pause duration expires, the provider becomes available again. Additionally, if all failures expire (older than `PROVIDER_FAILURE_EXPIRATION_SECS`), the provider automatically recovers even if it hasn't reached the pause expiration time.
+
+* **Fallback Behavior**: If all non-paused providers are unavailable, the relayer will fall back to paused providers as a last resort, ensuring maximum availability.
+
+You can configure these behaviors using the environment variables:
+* `PROVIDER_FAILURE_THRESHOLD`: Number of failures before pausing (default: 3)
+* `PROVIDER_PAUSE_DURATION_SECS`: How long to pause a failed provider (default: 60 seconds)
+* `PROVIDER_FAILURE_EXPIRATION_SECS`: How long failures are remembered (default: 60 seconds)
 
 <Callout type='warn'>
 

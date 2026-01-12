@@ -1,12 +1,12 @@
-use crate::models::{NetworkConfigData, NetworkRepoModel, RepositoryError};
+use crate::models::{NetworkConfigData, NetworkRepoModel, RepositoryError, RpcConfig};
 use core::time::Duration;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct SolanaNetwork {
     /// Unique network identifier (e.g., "mainnet", "sepolia", "custom-devnet").
     pub network: String,
-    /// List of RPC endpoint URLs for connecting to the network.
-    pub rpc_urls: Vec<String>,
+    /// List of RPC endpoint configurations for connecting to the network.
+    pub rpc_urls: Vec<RpcConfig>,
     /// List of Explorer endpoint URLs for connecting to the network.
     pub explorer_urls: Option<Vec<String>>,
     /// Estimated average time between blocks in milliseconds.
@@ -68,7 +68,7 @@ impl SolanaNetwork {
         Some(Duration::from_millis(self.average_blocktime_ms))
     }
 
-    pub fn public_rpc_urls(&self) -> Option<&[String]> {
+    pub fn public_rpc_urls(&self) -> Option<&[RpcConfig]> {
         if self.rpc_urls.is_empty() {
             None
         } else {

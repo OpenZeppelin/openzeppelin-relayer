@@ -32,14 +32,16 @@ use async_trait::async_trait;
 use eyre::Result;
 use reqwest::ClientBuilder as ReqwestClientBuilder;
 use serde_json;
+use tracing::debug;
 
 use super::rpc_selector::RpcSelector;
-use super::{retry_rpc_call, RetryConfig};
+use super::{retry_rpc_call, ProviderConfig, RetryConfig};
 use crate::{
     models::{
         BlockResponse, EvmTransactionData, RpcConfig, TransactionError, TransactionReceipt, U256,
     },
     services::provider::{is_retriable_error, should_mark_provider_failed},
+    utils::mask_url,
 };
 
 use crate::utils::{create_secure_redirect_policy, validate_rpc_url};
@@ -70,6 +72,7 @@ pub struct EvmProvider {
 #[cfg_attr(test, automock)]
 #[allow(dead_code)]
 pub trait EvmProviderTrait: Send + Sync {
+    fn get_configs(&self) -> Vec<RpcConfig>;
     /// Gets the balance of an address in the native currency.
     ///
     /// # Arguments
@@ -156,23 +159,28 @@ impl EvmProvider {
     /// Creates a new EVM provider instance.
     ///
     /// # Arguments
-    /// * `configs` - A vector of RPC configurations (URL and weight)
-    /// * `timeout_seconds` - The timeout duration in seconds (defaults to 30 if None)
+    /// * `config` - Provider configuration containing RPC configs, timeout, and failure handling settings
     ///
     /// # Returns
     /// * `Result<Self>` - A new provider instance or an error
-    pub fn new(configs: Vec<RpcConfig>, timeout_seconds: u64) -> Result<Self, ProviderError> {
-        if configs.is_empty() {
+    pub fn new(config: ProviderConfig) -> Result<Self, ProviderError> {
+        if config.rpc_configs.is_empty() {
             return Err(ProviderError::NetworkConfiguration(
                 "At least one RPC configuration must be provided".to_string(),
             ));
         }
 
-        RpcConfig::validate_list(&configs)
+        RpcConfig::validate_list(&config.rpc_configs)
             .map_err(|e| ProviderError::NetworkConfiguration(format!("Invalid URL: {e}")))?;
 
         // Create the RPC selector
-        let selector = RpcSelector::new(configs).map_err(|e| {
+        let selector = RpcSelector::new(
+            config.rpc_configs,
+            config.failure_threshold,
+            config.pause_duration_secs,
+            config.failure_expiration_secs,
+        )
+        .map_err(|e| {
             ProviderError::NetworkConfiguration(format!("Failed to create RPC selector: {e}"))
         })?;
 
@@ -180,9 +188,17 @@ impl EvmProvider {
 
         Ok(Self {
             selector,
-            timeout_seconds,
+            timeout_seconds: config.timeout_seconds,
             retry_config,
         })
+    }
+
+    /// Gets the current RPC configurations.
+    ///
+    /// # Returns
+    /// * `Vec<RpcConfig>` - The current configurations
+    pub fn get_configs(&self) -> Vec<RpcConfig> {
+        self.selector.get_configs()
     }
 
     /// Initialize a provider for a given URL
@@ -194,6 +210,7 @@ impl EvmProvider {
             ProviderError::NetworkConfiguration(format!("RPC URL security validation failed: {e}"))
         })?;
 
+        debug!("Initializing provider for URL: {}", mask_url(url));
         let rpc_url = url
             .parse()
             .map_err(|e| ProviderError::NetworkConfiguration(format!("Invalid URL format: {e}")))?;
@@ -265,6 +282,10 @@ impl AsRef<EvmProvider> for EvmProvider {
 
 #[async_trait]
 impl EvmProviderTrait for EvmProvider {
+    fn get_configs(&self) -> Vec<RpcConfig> {
+        self.get_configs()
+    }
+
     async fn get_balance(&self, address: &str) -> Result<U256, ProviderError> {
         let parsed_address = address
             .parse::<alloy::primitives::Address>()
@@ -603,14 +624,25 @@ mod tests {
     fn test_new_provider() {
         let _env_guard = setup_test_env();
 
-        let provider = EvmProvider::new(
+        let config = ProviderConfig::new(
             vec![RpcConfig::new("http://localhost:8545".to_string())],
             30,
+            3,
+            60,
+            60,
         );
+        let provider = EvmProvider::new(config);
         assert!(provider.is_ok());
 
         // Test with invalid URL
-        let provider = EvmProvider::new(vec![RpcConfig::new("invalid-url".to_string())], 30);
+        let config = ProviderConfig::new(
+            vec![RpcConfig::new("invalid-url".to_string())],
+            30,
+            3,
+            60,
+            60,
+        );
+        let provider = EvmProvider::new(config);
         assert!(provider.is_err());
     }
 
@@ -619,26 +651,47 @@ mod tests {
         let _env_guard = setup_test_env();
 
         // Test with valid URL and timeout
-        let provider = EvmProvider::new(
+        let config = ProviderConfig::new(
             vec![RpcConfig::new("http://localhost:8545".to_string())],
             30,
+            3,
+            60,
+            60,
         );
+        let provider = EvmProvider::new(config);
         assert!(provider.is_ok());
 
         // Test with invalid URL
-        let provider = EvmProvider::new(vec![RpcConfig::new("invalid-url".to_string())], 30);
+        let config = ProviderConfig::new(
+            vec![RpcConfig::new("invalid-url".to_string())],
+            30,
+            3,
+            60,
+            60,
+        );
+        let provider = EvmProvider::new(config);
         assert!(provider.is_err());
 
         // Test with zero timeout
-        let provider =
-            EvmProvider::new(vec![RpcConfig::new("http://localhost:8545".to_string())], 0);
+        let config = ProviderConfig::new(
+            vec![RpcConfig::new("http://localhost:8545".to_string())],
+            0,
+            3,
+            60,
+            60,
+        );
+        let provider = EvmProvider::new(config);
         assert!(provider.is_ok());
 
         // Test with large timeout
-        let provider = EvmProvider::new(
+        let config = ProviderConfig::new(
             vec![RpcConfig::new("http://localhost:8545".to_string())],
             3600,
+            3,
+            60,
+            60,
         );
+        let provider = EvmProvider::new(config);
         assert!(provider.is_ok());
     }
 

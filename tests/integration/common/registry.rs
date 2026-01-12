@@ -108,7 +108,7 @@ impl TestRegistry {
     pub fn get_network(&self, network: &str) -> Result<&NetworkConfig> {
         self.networks
             .get(network)
-            .ok_or_else(|| eyre::eyre!("Network '{}' not found in registry", network))
+            .ok_or_else(|| eyre::eyre!("Network '{}' not found in registry!", network))
     }
 
     /// Get contract address for a network

@@ -408,7 +408,7 @@ mod tests {
         jobs::MockJobProducerTrait,
         models::{
             NetworkConfigData, NetworkRepoModel, NetworkType, RelayerNetworkPolicy,
-            RelayerRepoModel, RelayerStellarPolicy, RelayerStellarSwapConfig,
+            RelayerRepoModel, RelayerStellarPolicy, RelayerStellarSwapConfig, RpcConfig,
             StellarAllowedTokensPolicy, StellarAllowedTokensSwapConfig, StellarFeePaymentStrategy,
             StellarSwapStrategy,
         },
@@ -578,7 +578,9 @@ mod tests {
                 common: NetworkConfigCommon {
                     network: "testnet".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["https://horizon-testnet.stellar.org".to_string()]),
+                    rpc_urls: Some(vec![RpcConfig::new(
+                        "https://horizon-testnet.stellar.org".to_string(),
+                    )]),
                     explorer_urls: None,
                     average_blocktime_ms: Some(5000),
                     is_testnet: Some(true),
