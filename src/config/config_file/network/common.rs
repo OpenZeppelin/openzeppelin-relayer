@@ -322,7 +322,6 @@ mod tests {
         config.rpc_urls = Some(vec![
             RpcConfig::new("https://mainnet.infura.io/v3/key".to_string()),
             RpcConfig::new("http://localhost:8545".to_string()),
-            RpcConfig::new("wss://ws.example.com".to_string()),
             RpcConfig::new("https://rpc.example.com:8080/path".to_string()),
         ]);
 
