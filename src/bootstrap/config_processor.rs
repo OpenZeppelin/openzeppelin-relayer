@@ -1071,6 +1071,9 @@ mod tests {
                 timeout: None,
                 emit_logs: false,
                 emit_traces: false,
+                config: None,
+                raw_response: false,
+                allow_get_invocation: false,
                 forward_logs: false,
             },
             PluginFileConfig {
@@ -1079,6 +1082,9 @@ mod tests {
                 timeout: Some(12),
                 emit_logs: false,
                 emit_traces: false,
+                config: None,
+                raw_response: false,
+                allow_get_invocation: false,
                 forward_logs: false,
             },
         ];
@@ -1192,6 +1198,9 @@ mod tests {
             timeout: None,
             emit_logs: false,
             emit_traces: false,
+            allow_get_invocation: false,
+            config: None,
+            raw_response: false,
             forward_logs: false,
         }];
 

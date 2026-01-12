@@ -9,17 +9,31 @@ use crate::{
 /// Logs and traces are only returned when the plugin is configured with `emit_logs` / `emit_traces`.
 /// Plugin-provided errors are normalized into a consistent payload (`code`, `details`) and a derived
 /// message so downstream clients receive a stable shape regardless of how the handler threw.
+///
+/// The endpoint supports wildcard route routing, allowing plugins to implement custom routing logic:
+/// - `/api/v1/plugins/{plugin_id}/call` - Default endpoint (route = "")
+/// - `/api/v1/plugins/{plugin_id}/call/verify` - Custom route (route = "/verify")
+/// - `/api/v1/plugins/{plugin_id}/call/settle` - Custom route (route = "/settle")
+/// - `/api/v1/plugins/{plugin_id}/call/api/v1/action` - Nested route (route = "/api/v1/action")
+///
+/// The route is passed to the plugin handler via the `context.route` field.
 #[utoipa::path(
     post,
-    path = "/api/v1/plugins/{plugin_id}/call",
+    path = "/api/v1/plugins/{plugin_id}/call{route}",
     tag = "Plugins",
     operation_id = "callPlugin",
-    summary = "Execute a plugin and receive the sanitized result",
+    summary = "Execute a plugin with optional wildcard route routing",
     security(
         ("bearer_auth" = [])
     ),
     params(
-        ("plugin_id" = String, Path, description = "The unique identifier of the plugin")
+        ("plugin_id" = String, Path, description = "The unique identifier of the plugin"),
+        (
+            "route" = String,
+            Path,
+            description = "Optional route suffix captured by the server. Use an empty string for the default route, or include a leading slash (e.g. '/verify'). May include additional slashes for nested routes (e.g. '/api/v1/action').",
+            example = "/verify"
+        )
     ),
     request_body = PluginCallRequest,
     responses(
@@ -110,6 +124,94 @@ use crate::{
 )]
 #[allow(dead_code)]
 fn doc_call_plugin() {}
+
+/// Calls a plugin method via GET request.
+///
+/// This endpoint is disabled by default. To enable it for a given plugin, set
+/// `allow_get_invocation: true` in the plugin configuration.
+///
+/// When invoked via GET:
+/// - `params` is an empty object (`{}`)
+/// - query parameters are passed to the plugin handler via `context.query`
+/// - wildcard route routing is supported the same way as POST (see `doc_call_plugin`)
+#[utoipa::path(
+    get,
+    path = "/api/v1/plugins/{plugin_id}/call{route}",
+    tag = "Plugins",
+    operation_id = "callPluginGet",
+    summary = "Execute a plugin via GET (must be enabled per plugin)",
+    security(
+        ("bearer_auth" = [])
+    ),
+    params(
+        ("plugin_id" = String, Path, description = "The unique identifier of the plugin"),
+        (
+            "route" = String,
+            Path,
+            description = "Optional route suffix captured by the server. Use an empty string for the default route, or include a leading slash (e.g. '/supported'). May include additional slashes for nested routes.",
+            example = "/supported"
+        )
+    ),
+    responses(
+        (
+            status = 200,
+            description = "Plugin call successful",
+            body = ApiResponse<serde_json::Value>
+        ),
+        (
+            status = 405,
+            description = "Method Not Allowed (GET invocation disabled for this plugin)",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "error": "GET requests are not enabled for this plugin. Set 'allow_get_invocation: true' in plugin configuration to enable.",
+                "data": null
+            })
+        ),
+        (
+            status = 401,
+            description = "Unauthorized",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "error": "Unauthorized",
+                "data": null
+            })
+        ),
+        (
+            status = 404,
+            description = "Not Found",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "error": "Plugin with ID plugin_id not found",
+                "data": null
+            })
+        ),
+        (
+            status = 429,
+            description = "Too Many Requests",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "error": "Too Many Requests",
+                "data": null
+            })
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "error": "Internal Server Error",
+                "data": null
+            })
+        )
+    )
+)]
+#[allow(dead_code)]
+fn doc_call_plugin_get() {}
 
 /// List plugins.
 #[utoipa::path(

@@ -63,6 +63,9 @@ node_modules
 # Exclude generated OpenAPI files from the docs directory
 !./openapi.json
 
+!examples/**/pnpm-lock.yaml
+!examples/**/package-lock.json
+
 # Integration test artifacts
 test-results/
 **/*lcov.info

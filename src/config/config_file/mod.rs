@@ -246,7 +246,10 @@ mod tests {
                 path: "/app/plugins/test-plugin.ts".to_string(),
                 timeout: None,
                 emit_logs: false,
+                allow_get_invocation: false,
                 emit_traces: false,
+                config: None,
+                raw_response: false,
                 forward_logs: false,
             }]),
         }
@@ -1160,6 +1163,9 @@ mod tests {
                 timeout: None,
                 emit_logs: false,
                 emit_traces: false,
+                allow_get_invocation: false,
+                config: None,
+                raw_response: false,
                 forward_logs: false,
             }]),
         };

@@ -801,13 +801,257 @@
         ]
       }
     },
-    "/api/v1/plugins/{plugin_id}/call": {
+    "/api/v1/plugins": {
+      "get": {
+        "tags": [
+          "Plugins"
+        ],
+        "summary": "List plugins.",
+        "operationId": "listPlugins",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "description": "Page number for pagination (starts at 1)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Number of items per page (default: 10)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plugins listed successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_PaginatedResult_PluginModel"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "BadRequest",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Bad Request",
+                  "success": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Unauthorized",
+                  "success": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Plugin with ID plugin_id not found",
+                  "success": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Too Many Requests",
+                  "success": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Internal Server Error",
+                  "success": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/plugins/{plugin_id}/call{route}": {
+      "get": {
+        "tags": [
+          "Plugins"
+        ],
+        "summary": "Execute a plugin via GET (must be enabled per plugin)",
+        "description": "This endpoint is disabled by default. To enable it for a given plugin, set\n`allow_get_invocation: true` in the plugin configuration.\n\nWhen invoked via GET:\n- `params` is an empty object (`{}`)\n- query parameters are passed to the plugin handler via `context.query`\n- wildcard route routing is supported the same way as POST (see `doc_call_plugin`)",
+        "operationId": "callPluginGet",
+        "parameters": [
+          {
+            "name": "plugin_id",
+            "in": "path",
+            "description": "The unique identifier of the plugin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "route",
+            "in": "path",
+            "description": "Optional route suffix captured by the server. Use an empty string for the default route, or include a leading slash (e.g. '/supported'). May include additional slashes for nested routes.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "/supported"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plugin call successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_Value"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Unauthorized",
+                  "success": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Plugin with ID plugin_id not found",
+                  "success": false
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Method Not Allowed (GET invocation disabled for this plugin)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "GET requests are not enabled for this plugin. Set 'allow_get_invocation: true' in plugin configuration to enable.",
+                  "success": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Too Many Requests",
+                  "success": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Internal Server Error",
+                  "success": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
       "post": {
         "tags": [
           "Plugins"
         ],
-        "summary": "Execute a plugin and receive the sanitized result",
-        "description": "Logs and traces are only returned when the plugin is configured with `emit_logs` / `emit_traces`.\nPlugin-provided errors are normalized into a consistent payload (`code`, `details`) and a derived\nmessage so downstream clients receive a stable shape regardless of how the handler threw.",
+        "summary": "Execute a plugin with optional wildcard route routing",
+        "description": "Logs and traces are only returned when the plugin is configured with `emit_logs` / `emit_traces`.\nPlugin-provided errors are normalized into a consistent payload (`code`, `details`) and a derived\nmessage so downstream clients receive a stable shape regardless of how the handler threw.\n\nThe endpoint supports wildcard route routing, allowing plugins to implement custom routing logic:\n- `/api/v1/plugins/{plugin_id}/call` - Default endpoint (route = \"\")\n- `/api/v1/plugins/{plugin_id}/call/verify` - Custom route (route = \"/verify\")\n- `/api/v1/plugins/{plugin_id}/call/settle` - Custom route (route = \"/settle\")\n- `/api/v1/plugins/{plugin_id}/call/api/v1/action` - Nested route (route = \"/api/v1/action\")\n\nThe route is passed to the plugin handler via the `context.route` field.",
         "operationId": "callPlugin",
         "parameters": [
           {
@@ -818,6 +1062,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "route",
+            "in": "path",
+            "description": "Optional route suffix captured by the server. Use an empty string for the default route, or include a leading slash (e.g. '/verify'). May include additional slashes for nested routes (e.g. '/api/v1/action').",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "/verify"
           }
         ],
         "requestBody": {
@@ -4197,6 +4451,106 @@
           }
         }
       },
+      "ApiResponse_PaginatedResult_PluginModel": {
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "items",
+              "total",
+              "page",
+              "per_page"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "path",
+                    "timeout"
+                  ],
+                  "properties": {
+                    "allow_get_invocation": {
+                      "type": "boolean",
+                      "description": "Whether to allow GET requests to invoke plugin logic"
+                    },
+                    "config": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "description": "User-defined configuration accessible to the plugin (must be a JSON object)",
+                      "additionalProperties": {},
+                      "propertyNames": {
+                        "type": "string"
+                      }
+                    },
+                    "emit_logs": {
+                      "type": "boolean",
+                      "description": "Whether to include logs in the HTTP response"
+                    },
+                    "emit_traces": {
+                      "type": "boolean",
+                      "description": "Whether to include traces in the HTTP response"
+                    },
+                    "id": {
+                      "type": "string",
+                      "description": "Plugin ID"
+                    },
+                    "path": {
+                      "type": "string",
+                      "description": "Plugin path"
+                    },
+                    "raw_response": {
+                      "type": "boolean",
+                      "description": "Whether to return raw plugin response without ApiResponse wrapper"
+                    },
+                    "timeout": {
+                      "type": "integer",
+                      "format": "int64",
+                      "description": "Plugin timeout",
+                      "minimum": 0
+                    }
+                  }
+                }
+              },
+              "page": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "per_page": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "total": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              }
+            }
+          },
+          "error": {
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMeta"
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
       "ApiResponse_PluginHandlerError": {
         "type": "object",
         "required": [
@@ -6562,12 +6916,9 @@
       },
       "PluginCallRequest": {
         "type": "object",
-        "required": [
-          "params"
-        ],
         "properties": {
           "params": {
-            "description": "Plugin parameters"
+            "description": "Plugin parameters. If not provided, the entire request body will be used as params."
           }
         }
       },
@@ -6601,6 +6952,57 @@
               "null"
             ],
             "items": {}
+          }
+        }
+      },
+      "PluginModel": {
+        "type": "object",
+        "required": [
+          "id",
+          "path",
+          "timeout"
+        ],
+        "properties": {
+          "allow_get_invocation": {
+            "type": "boolean",
+            "description": "Whether to allow GET requests to invoke plugin logic"
+          },
+          "config": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "User-defined configuration accessible to the plugin (must be a JSON object)",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "emit_logs": {
+            "type": "boolean",
+            "description": "Whether to include logs in the HTTP response"
+          },
+          "emit_traces": {
+            "type": "boolean",
+            "description": "Whether to include traces in the HTTP response"
+          },
+          "id": {
+            "type": "string",
+            "description": "Plugin ID"
+          },
+          "path": {
+            "type": "string",
+            "description": "Plugin path"
+          },
+          "raw_response": {
+            "type": "boolean",
+            "description": "Whether to return raw plugin response without ApiResponse wrapper"
+          },
+          "timeout": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Plugin timeout",
+            "minimum": 0
           }
         }
       },
