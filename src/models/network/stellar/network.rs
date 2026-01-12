@@ -1,4 +1,4 @@
-use crate::models::{NetworkConfigData, NetworkRepoModel, RepositoryError};
+use crate::models::{NetworkConfigData, NetworkRepoModel, RepositoryError, RpcConfig};
 use core::time::Duration;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -8,8 +8,8 @@ use soroban_rs::xdr::Hash;
 pub struct StellarNetwork {
     /// Unique network identifier (e.g., "mainnet", "devnet", "custom-devnet").
     pub network: String,
-    /// List of RPC endpoint URLs for connecting to the network.
-    pub rpc_urls: Vec<String>,
+    /// List of RPC endpoint configurations for connecting to the network.
+    pub rpc_urls: Vec<RpcConfig>,
     /// List of Explorer endpoint URLs for connecting to the network.
     pub explorer_urls: Option<Vec<String>>,
     /// Estimated average time between blocks in milliseconds.
@@ -90,7 +90,7 @@ impl StellarNetwork {
         Some(Duration::from_millis(self.average_blocktime_ms))
     }
 
-    pub fn public_rpc_urls(&self) -> Option<&[String]> {
+    pub fn public_rpc_urls(&self) -> Option<&[RpcConfig]> {
         if self.rpc_urls.is_empty() {
             None
         } else {

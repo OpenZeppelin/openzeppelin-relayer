@@ -4,4 +4,5 @@
 
 mod authorization;
 pub mod evm;
+mod network_api;
 mod relayer_api;

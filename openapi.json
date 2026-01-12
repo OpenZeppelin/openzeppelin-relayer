@@ -15,6 +15,302 @@
     "version": "1.3.0"
   },
   "paths": {
+    "/api/v1/networks": {
+      "get": {
+        "tags": [
+          "Networks"
+        ],
+        "summary": "Network routes implementation",
+        "description": "Note: OpenAPI documentation for these endpoints can be found in the `openapi.rs` file\n\nLists all networks with pagination support.",
+        "operationId": "listNetworks",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "description": "Page number for pagination (starts at 1)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Number of items per page (default: 10)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Network list retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_Vec_NetworkResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Bad Request",
+                  "success": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Unauthorized",
+                  "success": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Internal Server Error",
+                  "success": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/networks/{network_id}": {
+      "get": {
+        "tags": [
+          "Networks"
+        ],
+        "summary": "Retrieves details of a specific network by ID.",
+        "operationId": "getNetwork",
+        "parameters": [
+          {
+            "name": "network_id",
+            "in": "path",
+            "description": "Network ID (e.g., evm:sepolia, solana:mainnet)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Network retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_NetworkResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request - invalid network type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Bad Request",
+                  "success": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Unauthorized",
+                  "success": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Network with ID 'evm:sepolia' not found",
+                  "success": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Internal Server Error",
+                  "success": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "Networks"
+        ],
+        "summary": "Updates a network's configuration.\nCurrently supports updating RPC URLs only. Can be extended to support other fields.",
+        "operationId": "updateNetwork",
+        "parameters": [
+          {
+            "name": "network_id",
+            "in": "path",
+            "description": "Network ID (e.g., evm:sepolia, solana:mainnet)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateNetworkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Network updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_NetworkResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request - invalid network type or request data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Bad Request",
+                  "success": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Unauthorized",
+                  "success": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Network with ID 'evm:sepolia' not found",
+                  "success": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Internal Server Error",
+                  "success": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/api/v1/notifications": {
       "get": {
         "tags": [
@@ -3751,6 +4047,111 @@
           }
         }
       },
+      "ApiResponse_NetworkResponse": {
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Network response model for API endpoints.\n\nThis flattens the internal NetworkRepoModel structure for API responses,\nmaking network-type-specific fields available at the top level.",
+            "required": [
+              "id",
+              "name",
+              "network_type"
+            ],
+            "properties": {
+              "average_blocktime_ms": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Estimated average time between blocks in milliseconds",
+                "minimum": 0
+              },
+              "chain_id": {
+                "type": "integer",
+                "format": "int64",
+                "description": "EVM-specific: Chain ID",
+                "minimum": 0
+              },
+              "explorer_urls": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "List of Explorer endpoint URLs"
+              },
+              "features": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "EVM-specific: Network features (e.g., \"eip1559\")"
+              },
+              "horizon_url": {
+                "type": "string",
+                "description": "Stellar-specific: Horizon URL"
+              },
+              "id": {
+                "type": "string",
+                "description": "Unique identifier composed of network_type and name, e.g., \"evm:mainnet\""
+              },
+              "is_testnet": {
+                "type": "boolean",
+                "description": "Flag indicating if the network is a testnet"
+              },
+              "name": {
+                "type": "string",
+                "description": "Name of the network (e.g., \"mainnet\", \"sepolia\")"
+              },
+              "network_type": {
+                "$ref": "#/components/schemas/RelayerNetworkType",
+                "description": "Type of the network (EVM, Solana, Stellar)"
+              },
+              "passphrase": {
+                "type": "string",
+                "description": "Stellar-specific: Network passphrase"
+              },
+              "required_confirmations": {
+                "type": "integer",
+                "format": "int64",
+                "description": "EVM-specific: Required confirmations",
+                "minimum": 0
+              },
+              "rpc_urls": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/RpcConfig"
+                },
+                "description": "List of RPC endpoint configurations"
+              },
+              "symbol": {
+                "type": "string",
+                "description": "EVM-specific: Native token symbol"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "List of arbitrary tags for categorizing or filtering networks"
+              }
+            }
+          },
+          "error": {
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMeta"
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
       "ApiResponse_NotificationResponse": {
         "type": "object",
         "required": [
@@ -3852,8 +4253,9 @@
               "custom_rpc_urls": {
                 "type": "array",
                 "items": {
-                  "$ref": "#/components/schemas/RpcConfig"
-                }
+                  "$ref": "#/components/schemas/MaskedRpcConfig"
+                },
+                "description": "Custom RPC URLs with sensitive path/query parameters masked for security.\nThe domain is visible to identify providers (e.g., Alchemy, Infura) but\nAPI keys embedded in paths are hidden."
               },
               "disabled_reason": {
                 "$ref": "#/components/schemas/DisabledReason"
@@ -4302,6 +4704,114 @@
           }
         }
       },
+      "ApiResponse_Vec_NetworkResponse": {
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "Network response model for API endpoints.\n\nThis flattens the internal NetworkRepoModel structure for API responses,\nmaking network-type-specific fields available at the top level.",
+              "required": [
+                "id",
+                "name",
+                "network_type"
+              ],
+              "properties": {
+                "average_blocktime_ms": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Estimated average time between blocks in milliseconds",
+                  "minimum": 0
+                },
+                "chain_id": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "EVM-specific: Chain ID",
+                  "minimum": 0
+                },
+                "explorer_urls": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "List of Explorer endpoint URLs"
+                },
+                "features": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "EVM-specific: Network features (e.g., \"eip1559\")"
+                },
+                "horizon_url": {
+                  "type": "string",
+                  "description": "Stellar-specific: Horizon URL"
+                },
+                "id": {
+                  "type": "string",
+                  "description": "Unique identifier composed of network_type and name, e.g., \"evm:mainnet\""
+                },
+                "is_testnet": {
+                  "type": "boolean",
+                  "description": "Flag indicating if the network is a testnet"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Name of the network (e.g., \"mainnet\", \"sepolia\")"
+                },
+                "network_type": {
+                  "$ref": "#/components/schemas/RelayerNetworkType",
+                  "description": "Type of the network (EVM, Solana, Stellar)"
+                },
+                "passphrase": {
+                  "type": "string",
+                  "description": "Stellar-specific: Network passphrase"
+                },
+                "required_confirmations": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "EVM-specific: Required confirmations",
+                  "minimum": 0
+                },
+                "rpc_urls": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RpcConfig"
+                  },
+                  "description": "List of RPC endpoint configurations"
+                },
+                "symbol": {
+                  "type": "string",
+                  "description": "EVM-specific: Native token symbol"
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "List of arbitrary tags for categorizing or filtering networks"
+                }
+              }
+            }
+          },
+          "error": {
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMeta"
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
       "ApiResponse_Vec_NotificationResponse": {
         "type": "object",
         "required": [
@@ -4376,8 +4886,9 @@
                 "custom_rpc_urls": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/RpcConfig"
-                  }
+                    "$ref": "#/components/schemas/MaskedRpcConfig"
+                  },
+                  "description": "Custom RPC URLs with sensitive path/query parameters masked for security.\nThe domain is visible to identify providers (e.g., Alchemy, Infura) but\nAPI keys embedded in paths are hidden."
                 },
                 "disabled_reason": {
                   "$ref": "#/components/schemas/DisabledReason"
@@ -5549,6 +6060,31 @@
           "result"
         ]
       },
+      "MaskedRpcConfig": {
+        "type": "object",
+        "description": "RPC configuration with masked URL for API responses.\n\nThis type is used in API responses to prevent exposing sensitive API keys\nthat are often embedded in RPC endpoint URLs (e.g., Alchemy, Infura, QuickNode).\nThe URL path and query parameters are masked while keeping the host visible,\nallowing users to identify which provider is configured.",
+        "required": [
+          "url",
+          "weight"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "The RPC endpoint URL with path/query masked."
+          },
+          "weight": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The weight of this endpoint in the weighted round-robin selection.",
+            "maximum": 100,
+            "minimum": 0
+          }
+        },
+        "example": {
+          "url": "https://eth-mainnet.g.alchemy.com/***",
+          "weight": 100
+        }
+      },
       "MemoSpec": {
         "oneOf": [
           {
@@ -5658,6 +6194,91 @@
           }
         ],
         "description": "Network policy response models for OpenAPI documentation"
+      },
+      "NetworkResponse": {
+        "type": "object",
+        "description": "Network response model for API endpoints.\n\nThis flattens the internal NetworkRepoModel structure for API responses,\nmaking network-type-specific fields available at the top level.",
+        "required": [
+          "id",
+          "name",
+          "network_type"
+        ],
+        "properties": {
+          "average_blocktime_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Estimated average time between blocks in milliseconds",
+            "minimum": 0
+          },
+          "chain_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "EVM-specific: Chain ID",
+            "minimum": 0
+          },
+          "explorer_urls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of Explorer endpoint URLs"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "EVM-specific: Network features (e.g., \"eip1559\")"
+          },
+          "horizon_url": {
+            "type": "string",
+            "description": "Stellar-specific: Horizon URL"
+          },
+          "id": {
+            "type": "string",
+            "description": "Unique identifier composed of network_type and name, e.g., \"evm:mainnet\""
+          },
+          "is_testnet": {
+            "type": "boolean",
+            "description": "Flag indicating if the network is a testnet"
+          },
+          "name": {
+            "type": "string",
+            "description": "Name of the network (e.g., \"mainnet\", \"sepolia\")"
+          },
+          "network_type": {
+            "$ref": "#/components/schemas/RelayerNetworkType",
+            "description": "Type of the network (EVM, Solana, Stellar)"
+          },
+          "passphrase": {
+            "type": "string",
+            "description": "Stellar-specific: Network passphrase"
+          },
+          "required_confirmations": {
+            "type": "integer",
+            "format": "int64",
+            "description": "EVM-specific: Required confirmations",
+            "minimum": 0
+          },
+          "rpc_urls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RpcConfig"
+            },
+            "description": "List of RPC endpoint configurations"
+          },
+          "symbol": {
+            "type": "string",
+            "description": "EVM-specific: Native token symbol"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of arbitrary tags for categorizing or filtering networks"
+          }
+        }
       },
       "NetworkRpcRequest": {
         "oneOf": [
@@ -6140,8 +6761,9 @@
           "custom_rpc_urls": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/RpcConfig"
-            }
+              "$ref": "#/components/schemas/MaskedRpcConfig"
+            },
+            "description": "Custom RPC URLs with sensitive path/query parameters masked for security.\nThe domain is visible to identify providers (e.g., Alchemy, Infura) but\nAPI keys embedded in paths are hidden."
           },
           "disabled_reason": {
             "$ref": "#/components/schemas/DisabledReason"
@@ -6509,9 +7131,10 @@
       },
       "RpcConfig": {
         "type": "object",
-        "description": "Configuration for an RPC endpoint.",
+        "description": "Configuration for an RPC endpoint.\n\nThis struct contains only persistent configuration (URL and weight).\nHealth metadata (failures, pause state) is managed separately via `RpcHealthStore`.",
         "required": [
-          "url"
+          "url",
+          "weight"
         ],
         "properties": {
           "url": {
@@ -6521,10 +7144,29 @@
           "weight": {
             "type": "integer",
             "format": "int32",
-            "description": "The weight of this endpoint in the weighted round-robin selection.\nDefaults to DEFAULT_RPC_WEIGHT (100). Should be between 0 and 100.",
+            "description": "The weight of this endpoint in the weighted round-robin selection.\nDefaults to [`DEFAULT_RPC_WEIGHT`]. Should be between 0 and 100.",
+            "default": 100,
+            "maximum": 100,
             "minimum": 0
           }
+        },
+        "example": {
+          "url": "https://rpc.example.com",
+          "weight": 100
         }
+      },
+      "RpcUrlEntry": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "Simple string format (e.g., \"https://rpc.example.com\")\nDefaults to weight 100."
+          },
+          {
+            "$ref": "#/components/schemas/RpcConfig",
+            "description": "Extended object format with explicit weight"
+          }
+        ],
+        "description": "Schema-only type representing a flexible RPC URL entry.\nUsed for OpenAPI documentation to show that rpc_urls can accept\neither strings or RpcConfig objects.\n\nThis is NOT used for actual deserialization - the custom deserializer\nhandles the conversion. This type exists solely for schema generation."
       },
       "SignAndSendTransactionRequestParams": {
         "type": "object",
@@ -8291,6 +8933,26 @@
         },
         "additionalProperties": false
       },
+      "UpdateNetworkRequest": {
+        "type": "object",
+        "description": "Request structure for updating a network configuration.\nCurrently supports updating RPC URLs only. Can be extended to support other fields.",
+        "properties": {
+          "rpc_urls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RpcUrlEntry"
+            },
+            "description": "List of RPC endpoint configurations for connecting to the network.\nSupports multiple formats:\n- Array of strings: `[\"https://rpc.example.com\"]` (defaults to weight 100)\n- Array of RpcConfig objects: `[{\"url\": \"https://rpc.example.com\", \"weight\": 100}]`\n- Mixed array: `[\"https://rpc1.com\", {\"url\": \"https://rpc2.com\", \"weight\": 100}]`\n  Must be non-empty and contain valid HTTP/HTTPS URLs if provided.",
+            "example": [
+              {
+                "url": "https://rpc.example.com",
+                "weight": 100
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "UpdateRelayerRequest": {
         "type": "object",
         "properties": {
@@ -8439,6 +9101,10 @@
     {
       "name": "Signers",
       "description": "Signers are responsible for signing the transactions related to the relayers."
+    },
+    {
+      "name": "Networks",
+      "description": "Networks represent blockchain network configurations including RPC endpoints and network-specific settings."
     },
     {
       "name": "Metrics",

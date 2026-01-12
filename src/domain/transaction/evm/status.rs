@@ -733,7 +733,8 @@ mod tests {
         models::{
             evm::Speed, EvmTransactionData, NetworkConfigData, NetworkRepoModel,
             NetworkTransactionData, NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy,
-            RelayerRepoModel, TransactionReceipt, TransactionRepoModel, TransactionStatus, U256,
+            RelayerRepoModel, RpcConfig, TransactionReceipt, TransactionRepoModel,
+            TransactionStatus, U256,
         },
         repositories::{
             MockNetworkRepository, MockRelayerRepository, MockTransactionCounterTrait,
@@ -799,7 +800,7 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "mainnet".to_string(),
                 from: None,
-                rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+                rpc_urls: Some(vec![RpcConfig::new("https://rpc.example.com".to_string())]),
                 explorer_urls: Some(vec!["https://explorer.example.com".to_string()]),
                 average_blocktime_ms: Some(12000),
                 is_testnet: Some(false),
@@ -825,7 +826,9 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "arbitrum".to_string(),
                 from: None,
-                rpc_urls: Some(vec!["https://arb-rpc.example.com".to_string()]),
+                rpc_urls: Some(vec![crate::models::RpcConfig::new(
+                    "https://arb-rpc.example.com".to_string(),
+                )]),
                 explorer_urls: Some(vec!["https://arb-explorer.example.com".to_string()]),
                 average_blocktime_ms: Some(1000),
                 is_testnet: Some(false),
@@ -1206,7 +1209,9 @@ mod tests {
                 common: NetworkConfigCommon {
                     network: "invalid-network".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+                    rpc_urls: Some(vec![crate::models::RpcConfig::new(
+                        "https://rpc.example.com".to_string(),
+                    )]),
                     explorer_urls: Some(vec!["https://explorer.example.com".to_string()]),
                     average_blocktime_ms: Some(12000),
                     is_testnet: Some(false),

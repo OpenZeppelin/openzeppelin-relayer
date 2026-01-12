@@ -1698,7 +1698,9 @@ mod tests {
                 common: NetworkConfigCommon {
                     network: "ethereum".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["https://mainnet.infura.io".to_string()]),
+                    rpc_urls: Some(vec![crate::models::RpcConfig::new(
+                        "https://mainnet.infura.io".to_string(),
+                    )]),
                     explorer_urls: Some(vec!["https://etherscan.io".to_string()]),
                     average_blocktime_ms: Some(12000),
                     is_testnet: Some(false),
@@ -1780,7 +1782,9 @@ mod tests {
                 common: NetworkConfigCommon {
                     network: "mainnet".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["https://api.mainnet-beta.solana.com".to_string()]),
+                    rpc_urls: Some(vec![crate::models::RpcConfig::new(
+                        "https://api.mainnet-beta.solana.com".to_string(),
+                    )]),
                     explorer_urls: Some(vec!["https://explorer.solana.com".to_string()]),
                     average_blocktime_ms: Some(400),
                     is_testnet: Some(false),
@@ -1856,7 +1860,9 @@ mod tests {
                 common: NetworkConfigCommon {
                     network: "mainnet".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["https://horizon.stellar.org".to_string()]),
+                    rpc_urls: Some(vec![crate::models::RpcConfig::new(
+                        "https://horizon.stellar.org".to_string(),
+                    )]),
                     explorer_urls: Some(vec!["https://stellarchain.io".to_string()]),
                     average_blocktime_ms: Some(5000),
                     is_testnet: Some(false),
@@ -2116,7 +2122,9 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "testnet".to_string(),
                 from: None,
-                rpc_urls: Some(vec!["https://test.stellar.org".to_string()]),
+                rpc_urls: Some(vec![crate::models::RpcConfig::new(
+                    "https://test.stellar.org".to_string(),
+                )]),
                 explorer_urls: None,
                 average_blocktime_ms: Some(5000), // 5 seconds for Stellar
                 is_testnet: Some(true),

@@ -1,6 +1,6 @@
 use crate::{
     api::routes::{
-        docs::{notification_docs, plugin_docs, relayer_docs, signer_docs},
+        docs::{network_docs, notification_docs, plugin_docs, relayer_docs, signer_docs},
         health, metrics,
     },
     domain, models,
@@ -44,6 +44,7 @@ impl Modify for SecurityAddon {
       (name = "Plugins", description = "Plugins are TypeScript functions that can be used to extend the OpenZeppelin Relayer API functionality."),
       (name = "Notifications", description = "Notifications are responsible for showing the notifications related to the relayers."),
       (name = "Signers", description = "Signers are responsible for signing the transactions related to the relayers."),
+      (name = "Networks", description = "Networks represent blockchain network configurations including RPC endpoints and network-specific settings."),
       (name = "Metrics", description = "Metrics are responsible for showing the metrics related to the relayers."),
       (name = "Health", description = "Health is responsible for showing the health of the relayers.")
     ),
@@ -92,6 +93,9 @@ impl Modify for SecurityAddon {
         signer_docs::doc_create_signer,
         signer_docs::doc_update_signer,
         signer_docs::doc_delete_signer,
+        network_docs::doc_list_networks,
+        network_docs::doc_get_network,
+        network_docs::doc_update_network,
     ),
     components(schemas(
         models::RelayerResponse,
@@ -101,6 +105,9 @@ impl Modify for SecurityAddon {
         models::SolanaPolicyResponse,
         models::StellarPolicyResponse,
         models::UpdateRelayerRequest,
+        models::NetworkResponse,
+        models::UpdateNetworkRequest,
+        models::RpcUrlEntry,
         domain::SignDataRequest,
         domain::SignTypedDataRequest,
         domain::SignTransactionRequest,

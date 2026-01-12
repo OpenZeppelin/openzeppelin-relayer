@@ -1,7 +1,7 @@
 use crate::constants::get_stellar_sponsored_transaction_validity_duration;
-use crate::domain::map_provider_error;
 use crate::domain::relayer::evm::create_error_response;
 use crate::services::stellar_dex::StellarDexService;
+use crate::utils::{map_provider_error, sanitize_error_description};
 /// This module defines the `StellarRelayer` struct and its associated functionality for
 /// interacting with Stellar networks. The `StellarRelayer` is responsible for managing
 /// transactions, synchronizing sequence numbers, and ensuring the relayer's state is
@@ -575,12 +575,18 @@ where
         {
             Ok(result_value) => Ok(create_success_response(id.clone(), result_value)),
             Err(provider_error) => {
+                // Log the full error internally for debugging
+                tracing::error!(
+                    error = %provider_error,
+                    "RPC provider error occurred"
+                );
                 let (error_code, error_message) = map_provider_error(&provider_error);
+                let sanitized_description = sanitize_error_description(&provider_error);
                 Ok(create_error_response(
                     id.clone(),
                     error_code,
                     error_message,
-                    &provider_error.to_string(),
+                    &sanitized_description,
                 ))
             }
         }
@@ -794,7 +800,7 @@ mod tests {
         jobs::MockJobProducerTrait,
         models::{
             NetworkConfigData, NetworkRepoModel, NetworkType, RelayerNetworkPolicy,
-            RelayerRepoModel, RelayerStellarPolicy, SignerError,
+            RelayerRepoModel, RelayerStellarPolicy, RpcConfig, SignerError,
         },
         repositories::{
             InMemoryNetworkRepository, MockRelayerRepository, MockTransactionRepository,
@@ -866,7 +872,9 @@ mod tests {
                     common: NetworkConfigCommon {
                         network: "testnet".to_string(),
                         from: None,
-                        rpc_urls: Some(vec!["https://horizon-testnet.stellar.org".to_string()]),
+                        rpc_urls: Some(vec![RpcConfig::new(
+                            "https://horizon-testnet.stellar.org".to_string(),
+                        )]),
                         explorer_urls: None,
                         average_blocktime_ms: Some(5000),
                         is_testnet: Some(true),
@@ -1355,7 +1363,9 @@ mod tests {
                 common: NetworkConfigCommon {
                     network: "mainnet".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["https://horizon.stellar.org".to_string()]),
+                    rpc_urls: Some(vec![RpcConfig::new(
+                        "https://horizon.stellar.org".to_string(),
+                    )]),
                     explorer_urls: None,
                     average_blocktime_ms: Some(5000),
                     is_testnet: Some(false),

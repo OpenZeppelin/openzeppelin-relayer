@@ -658,7 +658,9 @@ mod tests {
         let common = NetworkConfigCommon {
             network: name.to_string(),
             from: None,
-            rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+            rpc_urls: Some(vec![crate::models::RpcConfig::new(
+                "https://rpc.example.com".to_string(),
+            )]),
             explorer_urls: None,
             average_blocktime_ms: Some(12000),
             is_testnet: Some(true),
@@ -947,7 +949,9 @@ mod tests {
                     common: NetworkConfigCommon {
                         network: "test".to_string(),
                         from: None,
-                        rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+                        rpc_urls: Some(vec![crate::models::RpcConfig::new(
+                            "https://rpc.example.com".to_string(),
+                        )]),
                         explorer_urls: None,
                         average_blocktime_ms: Some(12000),
                         is_testnet: Some(true),

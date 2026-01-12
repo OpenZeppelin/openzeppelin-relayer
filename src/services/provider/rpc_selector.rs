@@ -12,7 +12,6 @@
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use eyre::Result;
 use parking_lot::RwLock;
@@ -20,9 +19,10 @@ use rand::distr::weighted::WeightedIndex;
 use rand::prelude::*;
 use serde::Serialize;
 use thiserror::Error;
-use tokio::time::Instant;
+use tracing::info;
 
 use crate::models::RpcConfig;
+use crate::services::provider::rpc_health_store::RpcHealthStore;
 
 #[derive(Error, Debug, Serialize)]
 pub enum RpcSelectorError {
@@ -36,86 +36,52 @@ pub enum RpcSelectorError {
     AllProvidersFailed,
 }
 
-// Provider health tracking struct
-#[derive(Debug)]
-struct ProviderHealth {
-    // Maps the index of each failed provider to the timestamp (Instant) when it will become available for use again.
-    failed_provider_reset_times: std::collections::HashMap<usize, Instant>,
-    // The amount of time a provider remains unavailable after being marked as failed.
-    reset_duration: Duration,
-}
-
-impl ProviderHealth {
-    // Create a new ProviderHealth tracker with a given reset duration
-    fn new(reset_duration: Duration) -> Self {
-        Self {
-            failed_provider_reset_times: std::collections::HashMap::new(),
-            reset_duration,
-        }
-    }
-
-    // Mark a provider as failed
-    fn mark_failed(&mut self, index: usize) {
-        let reset_time = Instant::now() + self.reset_duration;
-        self.failed_provider_reset_times.insert(index, reset_time);
-    }
-
-    // Check if a provider is marked as failed and handle auto-reset if needed
-    fn is_failed(&mut self, index: usize) -> bool {
-        if let Some(reset_time) = self.failed_provider_reset_times.get(&index) {
-            if Instant::now() >= *reset_time {
-                // Time has passed, remove from failed set (auto-reset for this provider)
-                self.failed_provider_reset_times.remove(&index);
-                return false;
-            }
-            return true;
-        }
-        false
-    }
-
-    // Reset all failed providers
-    fn reset(&mut self) {
-        self.failed_provider_reset_times.clear();
-    }
-
-    // Get the number of failed providers whose reset time has not yet passed.
-    fn failed_count(&self) -> usize {
-        self.failed_provider_reset_times
-            .values()
-            .filter(|&&reset_time| Instant::now() < reset_time)
-            .count()
-    }
-}
-
 /// Manages selection of RPC endpoints based on configuration.
 #[derive(Debug)]
 pub struct RpcSelector {
     /// RPC configurations
-    configs: Vec<RpcConfig>,
+    configs: Arc<RwLock<Vec<RpcConfig>>>,
     /// Pre-computed weighted distribution for faster provider selection
     weights_dist: Option<Arc<WeightedIndex<u8>>>,
     /// Counter for round-robin selection as a fallback or for equal weights
     next_index: Arc<AtomicUsize>,
-    /// Health tracking for providers
-    health: Arc<RwLock<ProviderHealth>>,
     /// Currently selected provider index
     current_index: Arc<AtomicUsize>,
     /// Flag indicating whether a current provider is valid
     has_current: Arc<AtomicBool>,
+    /// Number of consecutive failures before pausing a provider
+    failure_threshold: u32,
+    /// Duration in seconds to pause a provider after reaching failure threshold
+    pause_duration_secs: u64,
+    /// Duration in seconds after which failures are considered stale and reset
+    failure_expiration_secs: u64,
 }
-
-// Auto-reset duration for failed providers (5 minutes)
-const DEFAULT_PROVIDER_RESET_DURATION: Duration = Duration::from_secs(300);
 
 impl RpcSelector {
     /// Creates a new RpcSelector instance.
     ///
     /// # Arguments
-    /// * `configs` - A vector of RPC configurations (URL and weight)
+    /// * `configs` - RPC configurations
+    /// * `failure_threshold` - Number of consecutive failures before pausing a provider.
+    ///   Defaults to [`DEFAULT_PROVIDER_FAILURE_THRESHOLD`] if not provided via env var `PROVIDER_FAILURE_THRESHOLD`.
+    /// * `pause_duration_secs` - Duration in seconds to pause a provider after reaching failure threshold.
+    ///   Defaults to [`DEFAULT_PROVIDER_PAUSE_DURATION_SECS`] if not provided via env var `PROVIDER_PAUSE_DURATION_SECS`.
+    /// * `failure_expiration_secs` - Duration in seconds after which failures are considered stale and reset.
+    ///   Defaults to [`DEFAULT_PROVIDER_FAILURE_EXPIRATION_SECS`] (60 seconds).
     ///
     /// # Returns
     /// * `Result<Self>` - A new selector instance or an error
-    pub fn new(configs: Vec<RpcConfig>) -> Result<Self, RpcSelectorError> {
+    ///
+    /// # Note
+    /// These values are typically loaded from `ServerConfig::from_env()` which reads from environment variables:
+    /// - `PROVIDER_FAILURE_THRESHOLD` (default: 3, legacy: `RPC_FAILURE_THRESHOLD`)
+    /// - `PROVIDER_PAUSE_DURATION_SECS` (default: 60, legacy: `RPC_PAUSE_DURATION_SECS`)
+    pub fn new(
+        configs: Vec<RpcConfig>,
+        failure_threshold: u32,
+        pause_duration_secs: u64,
+        failure_expiration_secs: u64,
+    ) -> Result<Self, RpcSelectorError> {
         if configs.is_empty() {
             return Err(RpcSelectorError::NoProviders);
         }
@@ -123,17 +89,44 @@ impl RpcSelector {
         // Create the weights distribution based on provided weights
         let weights_dist = Self::create_weights_distribution(&configs, &HashSet::new());
 
-        // Initialize health tracker with default reset duration
-        let health = ProviderHealth::new(DEFAULT_PROVIDER_RESET_DURATION);
-
-        Ok(Self {
-            configs,
+        let selector = Self {
+            configs: Arc::new(RwLock::new(configs)),
             weights_dist,
             next_index: Arc::new(AtomicUsize::new(0)),
-            health: Arc::new(RwLock::new(health)),
             current_index: Arc::new(AtomicUsize::new(0)),
             has_current: Arc::new(AtomicBool::new(false)), // Initially no current provider
-        })
+            failure_threshold,
+            pause_duration_secs,
+            failure_expiration_secs,
+        };
+
+        // Randomize the starting index to avoid always starting with the same provider
+        let mut rng = rand::rng();
+        selector.next_index.store(
+            rng.random_range(0..selector.configs.read().len()),
+            Ordering::Relaxed,
+        );
+
+        Ok(selector)
+    }
+
+    /// Creates a new RpcSelector instance with default failure threshold and pause duration.
+    ///
+    /// This is a convenience method primarily for testing. In production code, use `new()` with
+    /// values from `ServerConfig::from_env()`.
+    ///
+    /// # Arguments
+    /// * `configs` - RPC configurations
+    ///
+    /// # Returns
+    /// * `Result<Self>` - A new selector instance or an error
+    pub fn new_with_defaults(configs: Vec<RpcConfig>) -> Result<Self, RpcSelectorError> {
+        Self::new(
+            configs,
+            crate::config::ServerConfig::get_provider_failure_threshold(),
+            crate::config::ServerConfig::get_provider_pause_duration_secs(),
+            crate::config::ServerConfig::get_provider_failure_expiration_secs(),
+        )
     }
 
     /// Gets the number of available providers
@@ -141,16 +134,29 @@ impl RpcSelector {
     /// # Returns
     /// * `usize` - The number of providers in the selector
     pub fn provider_count(&self) -> usize {
-        self.configs.len()
+        self.configs.read().len()
     }
 
-    /// Gets the number of available (non-failed) providers
+    /// Gets the number of available (non-paused) providers
     ///
     /// # Returns
-    /// * `usize` - The number of non-failed providers
+    /// * `usize` - The number of non-paused providers
     pub fn available_provider_count(&self) -> usize {
-        let health = self.health.read();
-        self.configs.len() - health.failed_count()
+        let health_store = RpcHealthStore::instance();
+        let expiration = chrono::Duration::seconds(self.failure_expiration_secs as i64);
+        self.configs
+            .read()
+            .iter()
+            .filter(|c| !health_store.is_paused(&c.url, self.failure_threshold, expiration))
+            .count()
+    }
+
+    /// Gets the current RPC configurations.
+    ///
+    /// # Returns
+    /// * `Vec<RpcConfig>` - The current configurations
+    pub fn get_configs(&self) -> Vec<RpcConfig> {
+        self.configs.read().clone()
     }
 
     /// Marks the current endpoint as failed and forces selection of a different endpoint.
@@ -158,28 +164,31 @@ impl RpcSelector {
     /// This method is used when a provider consistently fails, and we want to try a different one.
     /// It adds the current provider to the failed providers set and will avoid selecting it again.
     pub fn mark_current_as_failed(&self) {
+        info!("Marking current provider as failed");
         // Only proceed if we have a current provider
         if self.has_current.load(Ordering::Relaxed) {
             let current = self.current_index.load(Ordering::Relaxed);
+            let configs = self.configs.read();
+            let config = &configs[current];
 
-            // Mark this provider as failed
-            let mut health = self.health.write();
-            health.mark_failed(current);
+            // Mark this provider as failed in the health store
+            let health_store = RpcHealthStore::instance();
+            use chrono::Duration;
+            health_store.mark_failed(
+                &config.url,
+                self.failure_threshold,
+                Duration::seconds(self.pause_duration_secs as i64),
+                Duration::seconds(self.failure_expiration_secs as i64),
+            );
 
             // Clear the current provider
             self.has_current.store(false, Ordering::Relaxed);
 
             // Move round-robin index forward to avoid selecting the same provider again
-            if self.configs.len() > 1 {
+            if configs.len() > 1 {
                 self.next_index.fetch_add(1, Ordering::Relaxed);
             }
         }
-    }
-
-    /// Resets the failed providers set, making all providers available again.
-    pub fn reset_failed_providers(&self) {
-        let mut health = self.health.write();
-        health.reset();
     }
 
     /// Creates a weighted distribution for selecting RPC endpoints based on their weights.
@@ -233,70 +242,192 @@ impl RpcSelector {
         }
     }
 
-    /// Gets the URL of the next RPC endpoint based on the selection strategy.
-    fn select_url(&self) -> Result<&str, RpcSelectorError> {
-        if self.configs.is_empty() {
-            return Err(RpcSelectorError::NoProviders);
-        }
+    /// Attempts weighted selection of a provider.
+    ///
+    /// # Arguments
+    /// * `configs` - RPC configurations
+    /// * `excluded_urls` - URLs of providers that have already been tried
+    /// * `allow_paused` - If true, allows selection of paused providers
+    /// * `health_store` - Health store instance
+    /// * `expiration` - Duration after which failures expire
+    ///
+    /// # Returns
+    /// * `Option<(usize, String)>` - Some(index, url) if a provider was selected, None otherwise
+    fn try_weighted_selection(
+        &self,
+        configs: &[RpcConfig],
+        excluded_urls: &std::collections::HashSet<String>,
+        allow_paused: bool,
+        health_store: &RpcHealthStore,
+        expiration: chrono::Duration,
+    ) -> Option<(usize, String)> {
+        let dist = self.weights_dist.as_ref()?;
+        let mut rng = rand::rng();
 
-        // For a single provider, handle special case
-        if self.configs.len() == 1 {
-            let mut health = self.health.write();
-            if health.is_failed(0) {
-                // is_failed will attempt auto-reset for provider 0
-                return Err(RpcSelectorError::AllProvidersFailed);
+        const MAX_ATTEMPTS: usize = 10;
+        for _ in 0..MAX_ATTEMPTS {
+            let index = dist.sample(&mut rng);
+            // Skip providers with zero weight
+            if configs[index].get_weight() == 0 {
+                continue;
             }
-
-            // Set as current
-            self.current_index.store(0, Ordering::Relaxed);
+            // Skip providers already tried in this failover cycle
+            if excluded_urls.contains(&configs[index].url) {
+                continue;
+            }
+            // Check health status unless paused providers are allowed
+            if !allow_paused
+                && health_store.is_paused(&configs[index].url, self.failure_threshold, expiration)
+            {
+                continue;
+            }
+            // Found a suitable provider
+            self.current_index.store(index, Ordering::Relaxed);
             self.has_current.store(true, Ordering::Relaxed);
-            return Ok(&self.configs[0].url);
+            return Some((index, configs[index].url.clone()));
         }
+        None
+    }
 
-        // Try weighted selection first if available
-        if let Some(dist) = &self.weights_dist {
-            let mut rng = rand::rng();
-            let mut health = self.health.write();
-
-            // Try a limited number of times to find a non-failed provider with weighted selection
-            const MAX_ATTEMPTS: usize = 5;
-            for _ in 0..MAX_ATTEMPTS {
-                let index = dist.sample(&mut rng);
-                if !health.is_failed(index) {
-                    self.current_index.store(index, Ordering::Relaxed);
-                    self.has_current.store(true, Ordering::Relaxed);
-                    return Ok(&self.configs[index].url);
-                }
-            }
-            // If we couldn't find a provider after multiple attempts, fall back to round-robin
-        }
-
-        // Fall back to round-robin selection
-        let len = self.configs.len();
-        let start_index = self.next_index.load(Ordering::Relaxed) % len;
-
-        // Find the next available (non-failed) provider
+    /// Attempts round-robin selection of a provider.
+    ///
+    /// # Arguments
+    /// * `configs` - RPC configurations
+    /// * `excluded_urls` - URLs of providers that have already been tried
+    /// * `allow_paused` - If true, allows selection of paused providers
+    /// * `health_store` - Health store instance
+    /// * `expiration` - Duration after which failures expire
+    /// * `start_index` - Starting index for round-robin iteration
+    ///
+    /// # Returns
+    /// * `Option<(usize, String)>` - Some(index, url) if a provider was selected, None otherwise
+    fn try_round_robin_selection(
+        &self,
+        configs: &[RpcConfig],
+        excluded_urls: &std::collections::HashSet<String>,
+        allow_paused: bool,
+        health_store: &RpcHealthStore,
+        expiration: chrono::Duration,
+        start_index: usize,
+    ) -> Option<(usize, String)> {
+        let len = configs.len();
         for i in 0..len {
             let index = (start_index + i) % len;
             // Skip providers with zero weight
-            if self.configs[index].get_weight() == 0 {
+            if configs[index].get_weight() == 0 {
                 continue;
             }
-
-            let mut health = self.health.write();
-            if !health.is_failed(index) {
-                // Update the next_index atomically to point after this provider
-                self.next_index.store((index + 1) % len, Ordering::Relaxed);
-
-                // Set as current provider
-                self.current_index.store(index, Ordering::Relaxed);
-                self.has_current.store(true, Ordering::Relaxed);
-
-                return Ok(&self.configs[index].url);
+            // Skip providers already tried in this failover cycle
+            if excluded_urls.contains(&configs[index].url) {
+                continue;
             }
+            // Check health status unless paused providers are allowed
+            if !allow_paused
+                && health_store.is_paused(&configs[index].url, self.failure_threshold, expiration)
+            {
+                continue;
+            }
+            // Found a suitable provider
+            // Update the next_index atomically to point after this provider
+            self.next_index.store((index + 1) % len, Ordering::Relaxed);
+            self.current_index.store(index, Ordering::Relaxed);
+            self.has_current.store(true, Ordering::Relaxed);
+            return Some((index, configs[index].url.clone()));
+        }
+        None
+    }
+
+    /// Gets the URL of the next RPC endpoint based on the selection strategy.
+    ///
+    /// This method first tries to select non-paused providers. If no non-paused providers
+    /// are available, it falls back to paused providers as a last resort, since they might
+    /// have recovered.
+    ///
+    /// # Arguments
+    /// * `excluded_urls` - URLs of providers that have already been tried in the current failover cycle
+    fn select_url_internal(
+        &self,
+        excluded_urls: &std::collections::HashSet<String>,
+    ) -> Result<String, RpcSelectorError> {
+        let configs = self.configs.read();
+        if configs.is_empty() {
+            return Err(RpcSelectorError::NoProviders);
         }
 
-        // If we get here, all providers must have failed
+        let health_store = RpcHealthStore::instance();
+        let expiration = chrono::Duration::seconds(self.failure_expiration_secs as i64);
+
+        // For a single provider, handle special case
+        if configs.len() == 1 {
+            // Skip providers with zero weight
+            if configs[0].get_weight() == 0 {
+                return Err(RpcSelectorError::AllProvidersFailed);
+            }
+            // Skip if already tried
+            if excluded_urls.contains(&configs[0].url) {
+                return Err(RpcSelectorError::AllProvidersFailed);
+            }
+            // Even if paused, try it as last resort
+            self.current_index.store(0, Ordering::Relaxed);
+            self.has_current.store(true, Ordering::Relaxed);
+            return Ok(configs[0].url.clone());
+        }
+
+        // First, try to find a non-paused provider
+        // Try weighted selection first if available
+        if let Some((_, url)) = self.try_weighted_selection(
+            &configs,
+            excluded_urls,
+            false, // allow_paused = false
+            health_store,
+            expiration,
+        ) {
+            return Ok(url);
+        }
+
+        // Fall back to round-robin selection for non-paused providers
+        let start_index = self.next_index.load(Ordering::Relaxed) % configs.len();
+        if let Some((_, url)) = self.try_round_robin_selection(
+            &configs,
+            excluded_urls,
+            false, // allow_paused = false
+            health_store,
+            expiration,
+            start_index,
+        ) {
+            return Ok(url);
+        }
+
+        // If we get here, no non-paused providers are available
+        // Fall back to paused providers as a last resort
+        tracing::warn!(
+            "No non-paused providers available, falling back to paused providers as last resort"
+        );
+
+        // Try weighted selection for paused providers
+        if let Some((_, url)) = self.try_weighted_selection(
+            &configs,
+            excluded_urls,
+            true, // allow_paused = true
+            health_store,
+            expiration,
+        ) {
+            return Ok(url);
+        }
+
+        // Fall back to round-robin for paused providers
+        if let Some((_, url)) = self.try_round_robin_selection(
+            &configs,
+            excluded_urls,
+            true, // allow_paused = true
+            health_store,
+            expiration,
+            start_index,
+        ) {
+            return Ok(url);
+        }
+
+        // If we get here, all providers have zero weight (shouldn't happen in practice)
         Err(RpcSelectorError::AllProvidersFailed)
     }
 
@@ -305,23 +436,46 @@ impl RpcSelector {
     /// # Returns
     /// * `Result<String, RpcSelectorError>` - The URL of the current provider, or an error
     pub fn get_current_url(&self) -> Result<String, RpcSelectorError> {
-        self.select_url().map(|url| url.to_string())
+        self.select_url_internal(&std::collections::HashSet::new())
+    }
+
+    /// Gets the URL of the next RPC endpoint, excluding providers that have already been tried.
+    ///
+    /// # Arguments
+    /// * `excluded_urls` - URLs of providers that have already been tried in the current failover cycle
+    ///
+    /// # Returns
+    /// * `Result<String, RpcSelectorError>` - The URL of the next provider, or an error
+    pub fn get_next_url(
+        &self,
+        excluded_urls: &std::collections::HashSet<String>,
+    ) -> Result<String, RpcSelectorError> {
+        self.select_url_internal(excluded_urls)
+    }
+
+    /// Gets the URL of the next RPC endpoint (for backward compatibility in tests).
+    /// This method doesn't exclude any providers - use `get_next_url()` with excluded URLs in production code.
+    #[cfg(test)]
+    pub fn select_url(&self) -> Result<String, RpcSelectorError> {
+        self.select_url_internal(&std::collections::HashSet::new())
     }
 
     /// Gets a client for the selected RPC endpoint.
     ///
     /// # Arguments
     /// * `initializer` - A function that takes a URL string and returns a `Result<T>`
+    /// * `excluded_urls` - URLs of providers that have already been tried in the current failover cycle
     ///
     /// # Returns
     /// * `Result<T>` - The client instance or an error
     pub fn get_client<T>(
         &self,
         initializer: impl Fn(&str) -> Result<T>,
+        excluded_urls: &std::collections::HashSet<String>,
     ) -> Result<T, RpcSelectorError> {
-        let url = self.select_url()?;
+        let url = self.select_url_internal(excluded_urls)?;
 
-        initializer(url).map_err(|e| RpcSelectorError::ClientInitializationError(e.to_string()))
+        initializer(&url).map_err(|e| RpcSelectorError::ClientInitializationError(e.to_string()))
     }
 }
 
@@ -329,12 +483,14 @@ impl RpcSelector {
 impl Clone for RpcSelector {
     fn clone(&self) -> Self {
         Self {
-            configs: self.configs.clone(),
+            configs: Arc::new(RwLock::new(self.configs.read().clone())),
             weights_dist: self.weights_dist.clone(),
             next_index: Arc::clone(&self.next_index),
-            health: Arc::clone(&self.health),
             current_index: Arc::clone(&self.current_index),
             has_current: Arc::clone(&self.has_current),
+            failure_threshold: self.failure_threshold,
+            pause_duration_secs: self.pause_duration_secs,
+            failure_expiration_secs: self.failure_expiration_secs,
         }
     }
 }
@@ -342,6 +498,9 @@ impl Clone for RpcSelector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::provider::rpc_health_store::RpcHealthStore;
+    use serial_test::serial;
+    use std::sync::Arc;
     use std::thread;
 
     #[test]
@@ -349,6 +508,7 @@ mod tests {
         let configs = vec![RpcConfig {
             url: "https://example.com/rpc".to_string(),
             weight: 1,
+            ..Default::default()
         }];
 
         let excluded = HashSet::new();
@@ -362,14 +522,17 @@ mod tests {
             RpcConfig {
                 url: "https://example1.com/rpc".to_string(),
                 weight: 5,
+                ..Default::default()
             },
             RpcConfig {
                 url: "https://example2.com/rpc".to_string(),
                 weight: 5,
+                ..Default::default()
             },
             RpcConfig {
                 url: "https://example3.com/rpc".to_string(),
                 weight: 5,
+                ..Default::default()
             },
         ];
 
@@ -384,14 +547,17 @@ mod tests {
             RpcConfig {
                 url: "https://example1.com/rpc".to_string(),
                 weight: 1,
+                ..Default::default()
             },
             RpcConfig {
                 url: "https://example2.com/rpc".to_string(),
                 weight: 2,
+                ..Default::default()
             },
             RpcConfig {
                 url: "https://example3.com/rpc".to_string(),
                 weight: 3,
+                ..Default::default()
             },
         ];
 
@@ -406,14 +572,17 @@ mod tests {
             RpcConfig {
                 url: "https://example1.com/rpc".to_string(),
                 weight: 1,
+                ..Default::default()
             },
             RpcConfig {
                 url: "https://example2.com/rpc".to_string(),
                 weight: 2,
+                ..Default::default()
             },
             RpcConfig {
                 url: "https://example3.com/rpc".to_string(),
                 weight: 3,
+                ..Default::default()
             },
         ];
 
@@ -433,7 +602,7 @@ mod tests {
     #[test]
     fn test_rpc_selector_new_empty_configs() {
         let configs: Vec<RpcConfig> = vec![];
-        let result = RpcSelector::new(configs);
+        let result = RpcSelector::new_with_defaults(configs);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), RpcSelectorError::NoProviders));
     }
@@ -443,9 +612,10 @@ mod tests {
         let configs = vec![RpcConfig {
             url: "https://example.com/rpc".to_string(),
             weight: 1,
+            ..Default::default()
         }];
 
-        let result = RpcSelector::new(configs);
+        let result = RpcSelector::new_with_defaults(configs);
         assert!(result.is_ok());
         let selector = result.unwrap();
         assert!(selector.weights_dist.is_none());
@@ -457,14 +627,16 @@ mod tests {
             RpcConfig {
                 url: "https://example1.com/rpc".to_string(),
                 weight: 5,
+                ..Default::default()
             },
             RpcConfig {
                 url: "https://example2.com/rpc".to_string(),
                 weight: 5,
+                ..Default::default()
             },
         ];
 
-        let result = RpcSelector::new(configs);
+        let result = RpcSelector::new_with_defaults(configs);
         assert!(result.is_ok());
         let selector = result.unwrap();
         assert!(selector.weights_dist.is_none());
@@ -476,14 +648,16 @@ mod tests {
             RpcConfig {
                 url: "https://example1.com/rpc".to_string(),
                 weight: 1,
+                ..Default::default()
             },
             RpcConfig {
                 url: "https://example2.com/rpc".to_string(),
                 weight: 3,
+                ..Default::default()
             },
         ];
 
-        let result = RpcSelector::new(configs);
+        let result = RpcSelector::new_with_defaults(configs);
         assert!(result.is_ok());
         let selector = result.unwrap();
         assert!(selector.weights_dist.is_some());
@@ -494,9 +668,10 @@ mod tests {
         let configs = vec![RpcConfig {
             url: "https://example.com/rpc".to_string(),
             weight: 1,
+            ..Default::default()
         }];
 
-        let selector = RpcSelector::new(configs).unwrap();
+        let selector = RpcSelector::new_with_defaults(configs).unwrap();
         let result = selector.select_url();
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "https://example.com/rpc");
@@ -509,14 +684,16 @@ mod tests {
             RpcConfig {
                 url: "https://example1.com/rpc".to_string(),
                 weight: 1,
+                ..Default::default()
             },
             RpcConfig {
                 url: "https://example2.com/rpc".to_string(),
                 weight: 1,
+                ..Default::default()
             },
         ];
 
-        let selector = RpcSelector::new(configs).unwrap();
+        let selector = RpcSelector::new_with_defaults(configs).unwrap();
 
         // First call should return the first URL
         let first_url = selector.select_url().unwrap();
@@ -535,14 +712,15 @@ mod tests {
         let configs = vec![RpcConfig {
             url: "https://example.com/rpc".to_string(),
             weight: 1,
+            ..Default::default()
         }];
 
-        let selector = RpcSelector::new(configs).unwrap();
+        let selector = RpcSelector::new_with_defaults(configs).unwrap();
 
         // Create a simple initializer function that returns the URL as a string
         let initializer = |url: &str| -> Result<String> { Ok(url.to_string()) };
 
-        let result = selector.get_client(initializer);
+        let result = selector.get_client(initializer, &std::collections::HashSet::new());
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "https://example.com/rpc");
     }
@@ -552,15 +730,16 @@ mod tests {
         let configs = vec![RpcConfig {
             url: "https://example.com/rpc".to_string(),
             weight: 1,
+            ..Default::default()
         }];
 
-        let selector = RpcSelector::new(configs).unwrap();
+        let selector = RpcSelector::new_with_defaults(configs).unwrap();
 
         // Create a failing initializer function
         let initializer =
             |_url: &str| -> Result<String> { Err(eyre::eyre!("Initialization error")) };
 
-        let result = selector.get_client(initializer);
+        let result = selector.get_client(initializer, &std::collections::HashSet::new());
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -574,20 +753,22 @@ mod tests {
             RpcConfig {
                 url: "https://example1.com/rpc".to_string(),
                 weight: 1,
+                ..Default::default()
             },
             RpcConfig {
                 url: "https://example2.com/rpc".to_string(),
                 weight: 3,
+                ..Default::default()
             },
         ];
 
-        let selector = RpcSelector::new(configs).unwrap();
+        let selector = RpcSelector::new_with_defaults(configs).unwrap();
         let cloned = selector.clone();
 
         // Check that the cloned selector has the same configuration
-        assert_eq!(selector.configs.len(), cloned.configs.len());
-        assert_eq!(selector.configs[0].url, cloned.configs[0].url);
-        assert_eq!(selector.configs[1].url, cloned.configs[1].url);
+        assert_eq!(selector.configs.read().len(), cloned.configs.read().len());
+        assert_eq!(selector.configs.read()[0].url, cloned.configs.read()[0].url);
+        assert_eq!(selector.configs.read()[1].url, cloned.configs.read()[1].url);
 
         // Check that weights distribution is also cloned
         assert_eq!(
@@ -597,172 +778,151 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_mark_current_as_failed_single_provider() {
-        // With a single provider, marking as failed should cause an error when trying to select it again
+        // Clear health store to ensure clean state
+        RpcHealthStore::instance().clear_all();
+
+        // With a single provider, marking as failed multiple times (to reach threshold) will pause it,
+        // but it can still be selected as a last resort
         let configs = vec![RpcConfig {
-            url: "https://example.com/rpc".to_string(),
+            url: "https://test-single-provider.example.com/rpc".to_string(),
             weight: 1,
+            ..Default::default()
         }];
 
-        let selector = RpcSelector::new(configs).unwrap();
-        let initial_url = selector.select_url().unwrap();
+        // Create selector with threshold=1 for testing
+        let selector = RpcSelector::new(configs, 1, 60, 60).unwrap();
+        let _initial_url = selector.select_url().unwrap();
 
-        // Mark as failed
+        // Mark as failed once (with threshold=1, this will pause it)
         selector.mark_current_as_failed();
 
-        // Next call should return an error
+        // With threshold=1, available_provider_count should be 0
+        assert_eq!(selector.available_provider_count(), 0);
+
+        // But select_url should still work (selecting paused provider as last resort)
         let next_url = selector.select_url();
-        assert!(next_url.is_err());
-        assert!(matches!(
-            next_url.unwrap_err(),
-            RpcSelectorError::AllProvidersFailed
-        ));
-
-        // Reset failed providers
-        selector.reset_failed_providers();
-
-        // Now we should be able to select the provider again
-        let after_reset = selector.select_url();
-        assert!(after_reset.is_ok());
-        assert_eq!(initial_url, after_reset.unwrap());
+        assert!(next_url.is_ok());
+        assert_eq!(
+            next_url.unwrap(),
+            "https://test-single-provider.example.com/rpc"
+        );
     }
 
     #[test]
+    #[serial]
     fn test_mark_current_as_failed_multiple_providers() {
-        // With multiple providers, marking as failed should prevent that provider from being selected again
+        // Clear health store to ensure clean state
+        RpcHealthStore::instance().clear_all();
+
+        // With multiple providers, marking as failed (with threshold=1) will pause them,
+        // but they can still be selected as a last resort
         let configs = vec![
             RpcConfig {
-                url: "https://example1.com/rpc".to_string(),
+                url: "https://test-multi1.example.com/rpc".to_string(),
                 weight: 5,
+                ..Default::default()
             },
             RpcConfig {
-                url: "https://example2.com/rpc".to_string(),
+                url: "https://test-multi2.example.com/rpc".to_string(),
                 weight: 5,
+                ..Default::default()
             },
             RpcConfig {
-                url: "https://example3.com/rpc".to_string(),
+                url: "https://test-multi3.example.com/rpc".to_string(),
                 weight: 5,
+                ..Default::default()
             },
         ];
 
-        let selector = RpcSelector::new(configs).unwrap();
+        // Create selector with threshold=1 for testing
+        let selector = RpcSelector::new(configs, 1, 60, 60).unwrap();
 
         // Get the first URL
         let url1 = selector.select_url().unwrap().to_string();
 
-        // Mark as failed to move to a different one
+        // Mark as failed (with threshold=1, this pauses it)
         selector.mark_current_as_failed();
-        let url2 = selector.select_url().unwrap().to_string();
+        // Available count should decrease
+        assert_eq!(selector.available_provider_count(), 2);
 
-        // The URLs should be different
+        // Next selection should prefer non-paused providers
+        let url2 = selector.select_url().unwrap().to_string();
+        // Should be different from the paused one
         assert_ne!(url1, url2);
 
         // Mark the second URL as failed too
         selector.mark_current_as_failed();
-        let url3 = selector.select_url().unwrap().to_string();
+        assert_eq!(selector.available_provider_count(), 1);
 
-        // Should get a third different URL
+        let url3 = selector.select_url().unwrap().to_string();
+        // Should get the third URL (non-paused)
         assert_ne!(url1, url3);
         assert_ne!(url2, url3);
 
         // Mark the third URL as failed too
         selector.mark_current_as_failed();
+        assert_eq!(selector.available_provider_count(), 0);
 
-        // Now all URLs should be marked as failed, so next call should return error
+        // Now all URLs are paused, but select_url should still work (selecting paused providers as last resort)
         let url4 = selector.select_url();
-        assert!(url4.is_err());
-        assert!(matches!(
-            url4.unwrap_err(),
-            RpcSelectorError::AllProvidersFailed
-        ));
+        assert!(url4.is_ok());
+        // Should return one of the paused providers
+        let url4_str = url4.unwrap();
+        assert!(
+            url4_str == "https://test-multi1.example.com/rpc"
+                || url4_str == "https://test-multi2.example.com/rpc"
+                || url4_str == "https://test-multi3.example.com/rpc"
+        );
     }
 
     #[test]
+    #[serial]
     fn test_mark_current_as_failed_weighted() {
+        // Clear health store to ensure clean state
+        RpcHealthStore::instance().clear_all();
+
         // Test with weighted selection
         let configs = vec![
             RpcConfig {
-                url: "https://example1.com/rpc".to_string(),
+                url: "https://test-weighted1.example.com/rpc".to_string(),
                 weight: 1, // Low weight
+                ..Default::default()
             },
             RpcConfig {
-                url: "https://example2.com/rpc".to_string(),
+                url: "https://test-weighted2.example.com/rpc".to_string(),
                 weight: 10, // High weight
+                ..Default::default()
             },
         ];
 
-        let selector = RpcSelector::new(configs).unwrap();
+        // Create selector with threshold=1 for testing
+        let selector = RpcSelector::new(configs, 1, 60, 60).unwrap();
         assert!(selector.weights_dist.is_some()); // Confirm we're using weighted selection
 
         // Get a URL
         let url1 = selector.select_url().unwrap().to_string();
 
-        // Mark it as failed
+        // Mark it as failed (with threshold=1, this pauses it)
         selector.mark_current_as_failed();
+        assert_eq!(selector.available_provider_count(), 1);
 
-        // Get another URL, it should be different
+        // Get another URL, it should prefer the non-paused one
         let url2 = selector.select_url().unwrap().to_string();
         assert_ne!(url1, url2);
 
         // Mark this one as failed too
         selector.mark_current_as_failed();
+        assert_eq!(selector.available_provider_count(), 0);
 
-        // With no more providers, next call should fail
+        // With all providers paused, select_url should still work (selecting paused providers as last resort)
         let url3 = selector.select_url();
-        assert!(url3.is_err());
-
-        // Reset and try again
-        selector.reset_failed_providers();
-        let url4 = selector.select_url();
-        assert!(url4.is_ok());
-    }
-
-    #[test]
-    fn test_auto_reset_mechanism() {
-        // Create a selector with a very short reset duration
-        let configs = vec![
-            RpcConfig {
-                url: "https://example1.com/rpc".to_string(),
-                weight: 1,
-            },
-            RpcConfig {
-                url: "https://example2.com/rpc".to_string(),
-                weight: 1,
-            },
-        ];
-
-        // Change the auto-reset duration for this test
-        let selector = RpcSelector::new(configs).unwrap();
-        {
-            let mut health = selector.health.write();
-            *health = ProviderHealth::new(Duration::from_millis(100)); // Very short duration for testing
-        }
-
-        // Select and mark both as failed
-        selector.select_url().unwrap();
-        selector.mark_current_as_failed();
-        selector.select_url().unwrap();
-        selector.mark_current_as_failed();
-
-        // Immediately after, all providers should be failed
-        let result = selector.select_url();
-        assert!(result.is_err());
-
-        // Sleep for longer than the reset duration
-        thread::sleep(Duration::from_millis(150));
-
-        // Force a check for auto-reset by directly calling is_failed()
-        {
-            let mut health = selector.health.write();
-            // This should trigger auto-reset
-            let _ = health.is_failed(0);
-        }
-
-        // After sleeping and checking, providers should be auto-reset
-        let result = selector.select_url();
+        assert!(url3.is_ok());
+        let url3_str = url3.unwrap();
         assert!(
-            result.is_ok(),
-            "Providers should have been auto-reset after timeout"
+            url3_str == "https://test-weighted1.example.com/rpc"
+                || url3_str == "https://test-weighted2.example.com/rpc"
         );
     }
 
@@ -770,15 +930,16 @@ mod tests {
     fn test_provider_count() {
         // Test with no providers
         let configs: Vec<RpcConfig> = vec![];
-        let result = RpcSelector::new(configs);
+        let result = RpcSelector::new_with_defaults(configs);
         assert!(result.is_err());
 
         // Test with a single provider
         let configs = vec![RpcConfig {
             url: "https://example.com/rpc".to_string(),
             weight: 1,
+            ..Default::default()
         }];
-        let selector = RpcSelector::new(configs).unwrap();
+        let selector = RpcSelector::new_with_defaults(configs).unwrap();
         assert_eq!(selector.provider_count(), 1);
 
         // Test with multiple providers
@@ -786,54 +947,62 @@ mod tests {
             RpcConfig {
                 url: "https://example1.com/rpc".to_string(),
                 weight: 1,
+                ..Default::default()
             },
             RpcConfig {
                 url: "https://example2.com/rpc".to_string(),
                 weight: 2,
+                ..Default::default()
             },
             RpcConfig {
                 url: "https://example3.com/rpc".to_string(),
                 weight: 3,
+                ..Default::default()
             },
         ];
-        let selector = RpcSelector::new(configs).unwrap();
+        let selector = RpcSelector::new_with_defaults(configs).unwrap();
         assert_eq!(selector.provider_count(), 3);
     }
 
     #[test]
+    #[serial]
     fn test_available_provider_count() {
+        // Clear health store to ensure clean state
+        RpcHealthStore::instance().clear_all();
+
         let configs = vec![
             RpcConfig {
-                url: "https://example1.com/rpc".to_string(),
+                url: "https://test-available1.example.com/rpc".to_string(),
                 weight: 1,
+                ..Default::default()
             },
             RpcConfig {
-                url: "https://example2.com/rpc".to_string(),
+                url: "https://test-available2.example.com/rpc".to_string(),
                 weight: 2,
+                ..Default::default()
             },
             RpcConfig {
-                url: "https://example3.com/rpc".to_string(),
+                url: "https://test-available3.example.com/rpc".to_string(),
                 weight: 3,
+                ..Default::default()
             },
         ];
 
-        let selector = RpcSelector::new(configs).unwrap();
+        // Create selector with threshold=1 for testing
+        let selector = RpcSelector::new(configs, 1, 60, 60).unwrap();
         assert_eq!(selector.provider_count(), 3);
         assert_eq!(selector.available_provider_count(), 3);
 
-        // Mark one provider as failed
+        // Mark one provider as failed (with threshold=1, this pauses it)
         selector.select_url().unwrap(); // Select a provider first
         selector.mark_current_as_failed();
+        // Available count should decrease (only non-paused providers)
         assert_eq!(selector.available_provider_count(), 2);
 
         // Mark another provider as failed
         selector.select_url().unwrap(); // Select another provider
         selector.mark_current_as_failed();
         assert_eq!(selector.available_provider_count(), 1);
-
-        // Reset failed providers
-        selector.reset_failed_providers();
-        assert_eq!(selector.available_provider_count(), 3);
     }
 
     #[test]
@@ -843,7 +1012,7 @@ mod tests {
             RpcConfig::new("https://example2.com/rpc".to_string()),
         ];
 
-        let selector = RpcSelector::new(configs).unwrap();
+        let selector = RpcSelector::new_with_defaults(configs).unwrap();
 
         // Should return a valid URL
         let url = selector.get_current_url();
@@ -857,15 +1026,20 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_concurrent_usage() {
+        // Clear health store to ensure clean state
+        RpcHealthStore::instance().clear_all();
+
         // Test RpcSelector with concurrent access from multiple threads
         let configs = vec![
-            RpcConfig::new("https://example1.com/rpc".to_string()),
-            RpcConfig::new("https://example2.com/rpc".to_string()),
-            RpcConfig::new("https://example3.com/rpc".to_string()),
+            RpcConfig::new("https://test-concurrent1.example.com/rpc".to_string()),
+            RpcConfig::new("https://test-concurrent2.example.com/rpc".to_string()),
+            RpcConfig::new("https://test-concurrent3.example.com/rpc".to_string()),
         ];
 
-        let selector = RpcSelector::new(configs).unwrap();
+        // Create selector with threshold=1 for testing
+        let selector = RpcSelector::new(configs, 1, 60, 60).unwrap();
         let selector_arc = Arc::new(selector);
 
         let mut handles = Vec::with_capacity(10);
@@ -875,7 +1049,7 @@ mod tests {
             let selector_clone = Arc::clone(&selector_arc);
             let handle = thread::spawn(move || {
                 let url = selector_clone.select_url().unwrap().to_string();
-                if url.contains("example1") {
+                if url.contains("test-concurrent1") {
                     // Only mark example1 as failed
                     selector_clone.mark_current_as_failed();
                 }
@@ -894,36 +1068,17 @@ mod tests {
         let unique_urls: std::collections::HashSet<String> = urls.into_iter().collect();
         assert!(unique_urls.len() > 1, "Expected multiple unique URLs");
 
-        // After all threads, example1 should be marked as failed
+        // After all threads, example1 should be marked as failed (paused)
+        // Selections should prefer non-paused providers
         let mut found_non_example1 = false;
         for _ in 0..10 {
             let url = selector_arc.select_url().unwrap().to_string();
-            if !url.contains("example1") {
+            if !url.contains("test-concurrent1") {
                 found_non_example1 = true;
             }
         }
 
-        assert!(found_non_example1, "Should avoid selecting failed provider");
-    }
-
-    #[test]
-    fn test_provider_health_methods() {
-        let duration = Duration::from_secs(10);
-        let mut health = ProviderHealth::new(duration);
-
-        // Initially no failed providers
-        assert_eq!(health.failed_count(), 0);
-        assert!(!health.is_failed(0));
-
-        // Mark as failed and verify
-        health.mark_failed(0);
-        assert_eq!(health.failed_count(), 1);
-        assert!(health.is_failed(0));
-
-        // Reset and verify
-        health.reset();
-        assert_eq!(health.failed_count(), 0);
-        assert!(!health.is_failed(0));
+        assert!(found_non_example1, "Should prefer non-paused providers");
     }
 
     #[test]
@@ -933,7 +1088,7 @@ mod tests {
             RpcConfig::new("https://example2.com/rpc".to_string()),
         ];
 
-        let selector = RpcSelector::new(configs).unwrap();
+        let selector = RpcSelector::new_with_defaults(configs).unwrap();
 
         // First call to select a provider
         selector.select_url().unwrap();
@@ -948,67 +1103,31 @@ mod tests {
     }
 
     #[test]
-    fn test_partial_auto_reset() {
-        let configs = vec![
-            RpcConfig::new("https://example1.com/rpc".to_string()),
-            RpcConfig::new("https://example2.com/rpc".to_string()),
-            RpcConfig::new("https://example3.com/rpc".to_string()),
-        ];
-
-        let selector = RpcSelector::new(configs).unwrap();
-
-        // Override the reset durations to be different
-        {
-            let mut health = selector.health.write();
-            *health = ProviderHealth::new(Duration::from_millis(50)); // Very short duration
-        }
-
-        // Select and mark all providers as failed
-        for _ in 0..3 {
-            selector.select_url().unwrap();
-            selector.mark_current_as_failed();
-        }
-
-        // All providers should now be marked as failed
-        assert!(selector.select_url().is_err());
-
-        // Mark provider 0 with a longer timeout manually
-        {
-            let mut health = selector.health.write();
-            health
-                .failed_provider_reset_times
-                .insert(0, Instant::now() + Duration::from_millis(200));
-        }
-
-        // Sleep for enough time to auto-reset providers 1 and 2, but not 0
-        thread::sleep(Duration::from_millis(100));
-
-        // Now provider 0 should still be failed, but 1 and 2 should be available
-        let url = selector.select_url();
-        assert!(url.is_ok());
-
-        // The selected URL should not be provider 0
-        assert!(!url.unwrap().contains("example1"));
-    }
-
-    #[test]
+    #[serial]
     fn test_weighted_to_round_robin_fallback() {
+        // Clear health store to ensure clean state
+        RpcHealthStore::instance().clear_all();
+
         let configs = vec![
             RpcConfig {
-                url: "https://example1.com/rpc".to_string(),
+                url: "https://test-wrr1.example.com/rpc".to_string(),
                 weight: 10, // High weight
+                ..Default::default()
             },
             RpcConfig {
-                url: "https://example2.com/rpc".to_string(),
+                url: "https://test-wrr2.example.com/rpc".to_string(),
                 weight: 1, // Low weight
+                ..Default::default()
             },
             RpcConfig {
-                url: "https://example3.com/rpc".to_string(),
+                url: "https://test-wrr3.example.com/rpc".to_string(),
                 weight: 1, // Low weight
+                ..Default::default()
             },
         ];
 
-        let selector = RpcSelector::new(configs).unwrap();
+        // Create selector with threshold=1 for testing
+        let selector = RpcSelector::new(configs, 1, 60, 60).unwrap();
         assert!(selector.weights_dist.is_some()); // Using weighted selection
 
         // Mock a situation where weighted selection would fail multiple times
@@ -1018,9 +1137,9 @@ mod tests {
         // Try multiple times - the first provider should be selected more often due to weight
         for _ in 0..10 {
             let url = selector.select_url().unwrap();
-            if url.contains("example1") {
+            if url.contains("test-wrr1") {
                 selected_first = true;
-                // Mark the high-weight provider as failed
+                // Mark the high-weight provider as failed (pauses it)
                 selector.mark_current_as_failed();
                 break;
             }
@@ -1031,18 +1150,18 @@ mod tests {
             "High-weight provider should have been selected"
         );
 
-        // After marking it failed, the other providers should be selected
+        // After marking it failed (paused), selections should prefer the other providers (non-paused)
         let mut seen_urls = HashSet::new();
         for _ in 0..10 {
             let url = selector.select_url().unwrap().to_string();
             seen_urls.insert(url);
         }
 
-        // Should have seen at least example2 and example3
+        // Should have seen at least example2 and example3 (non-paused providers)
         assert!(seen_urls.len() >= 2);
         assert!(
-            !seen_urls.iter().any(|url| url.contains("example1")),
-            "Failed provider should not be selected"
+            !seen_urls.iter().any(|url| url.contains("test-wrr1")),
+            "Paused provider should not be selected (prefer non-paused)"
         );
     }
 
@@ -1052,14 +1171,16 @@ mod tests {
             RpcConfig {
                 url: "https://example1.com/rpc".to_string(),
                 weight: 0, // Zero weight
+                ..Default::default()
             },
             RpcConfig {
                 url: "https://example2.com/rpc".to_string(),
                 weight: 5, // Normal weight
+                ..Default::default()
             },
         ];
 
-        let selector = RpcSelector::new(configs).unwrap();
+        let selector = RpcSelector::new_with_defaults(configs).unwrap();
 
         // With weighted selection, should never select the zero-weight provider
         let mut seen_urls = HashSet::new();
@@ -1076,19 +1197,22 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_extreme_weight_differences() {
         let configs = vec![
             RpcConfig {
                 url: "https://example1.com/rpc".to_string(),
                 weight: 100, // Very high weight
+                ..Default::default()
             },
             RpcConfig {
                 url: "https://example2.com/rpc".to_string(),
                 weight: 1, // Very low weight
+                ..Default::default()
             },
         ];
 
-        let selector = RpcSelector::new(configs).unwrap();
+        let selector = RpcSelector::new_with_defaults(configs).unwrap();
 
         // High weight provider should be selected much more frequently
         let mut count_high = 0;
@@ -1119,7 +1243,7 @@ mod tests {
             RpcConfig::new("https://example2.com/rpc".to_string()),
         ];
 
-        let selector = RpcSelector::new(configs).unwrap();
+        let selector = RpcSelector::new_with_defaults(configs).unwrap();
 
         // Without selecting, mark as failed (should be a no-op)
         selector.mark_current_as_failed();
@@ -1160,5 +1284,490 @@ mod tests {
         let error = RpcSelectorError::AllProvidersFailed;
         let json = serde_json::to_string(&error).unwrap();
         assert!(json.contains("AllProvidersFailed"));
+    }
+
+    #[cfg(test)]
+    mod rate_limiting_tests {
+        use super::*;
+        use crate::services::provider::rpc_health_store::RpcHealthStore;
+
+        /// Test that RpcSelector switches to the second RPC when the first one is rate-limited.
+        ///
+        /// This test simulates a scenario where:
+        /// 1. Two RPC configs are set up with equal weights
+        /// 2. The first RPC starts returning rate limit errors (429)
+        /// 3. The selector should switch to the second RPC
+        /// 4. The first RPC should be marked as failed and excluded from selection
+        #[test]
+        #[serial]
+        fn test_rpc_selector_switches_on_rate_limit() {
+            RpcHealthStore::instance().clear_all();
+            let configs = vec![
+                RpcConfig {
+                    url: "https://test-rate-limit1.example.com".to_string(),
+                    weight: 100,
+                    ..Default::default()
+                },
+                RpcConfig {
+                    url: "https://test-rate-limit2.example.com".to_string(),
+                    weight: 100,
+                    ..Default::default()
+                },
+            ];
+
+            // Create selector with threshold=1 for testing
+            let selector = RpcSelector::new(configs, 1, 60, 60).unwrap();
+
+            // Initially, both providers should be available
+            assert_eq!(selector.available_provider_count(), 2);
+
+            // Select the first provider
+            let first_url = selector.select_url().unwrap();
+
+            // Verify we got a valid URL
+            assert!(
+                first_url == "https://test-rate-limit1.example.com"
+                    || first_url == "https://test-rate-limit2.example.com"
+            );
+
+            // Simulate rate limiting: mark the current provider as failed
+            // This simulates what happens when a provider returns HTTP 429 after retries are exhausted
+            selector.mark_current_as_failed();
+
+            // Now only one provider should be available (non-paused)
+            assert_eq!(selector.available_provider_count(), 1);
+
+            // The next selection should prefer the non-paused provider
+            let second_url = selector.select_url().unwrap();
+
+            // Verify we got a different URL (the non-paused one)
+            assert_ne!(first_url, second_url);
+
+            // Verify the failed provider is not selected again (prefer non-paused)
+            let third_url = selector.select_url().unwrap();
+            assert_eq!(second_url, third_url); // Should keep using the working provider
+
+            // Verify the failed provider is excluded from preferred selection
+            let mut selected_urls = std::collections::HashSet::new();
+            for _ in 0..10 {
+                let url = selector.select_url().unwrap();
+                selected_urls.insert(url.to_string());
+            }
+
+            // Should only select from the non-failed provider (preferred)
+            assert_eq!(selected_urls.len(), 1);
+            assert!(!selected_urls.contains(&first_url.to_string()));
+            assert!(selected_urls.contains(&second_url.to_string()));
+        }
+
+        /// Test that RpcSelector handles rate limiting with weighted selection.
+        ///
+        /// This test verifies that even with weighted selection, a rate-limited provider
+        /// is excluded and the selector falls back to the other provider.
+        #[test]
+        #[serial]
+        fn test_rpc_selector_rate_limit_with_weighted_selection() {
+            RpcHealthStore::instance().clear_all();
+            let configs = vec![
+                RpcConfig {
+                    url: "https://test-weighted-rl1.example.com".to_string(),
+                    weight: 80, // Higher weight, should be preferred
+                    ..Default::default()
+                },
+                RpcConfig {
+                    url: "https://test-weighted-rl2.example.com".to_string(),
+                    weight: 20, // Lower weight
+                    ..Default::default()
+                },
+            ];
+
+            // Create selector with threshold=1 for testing
+            let selector = RpcSelector::new(configs, 1, 60, 60).unwrap();
+
+            // Select multiple times - with weighted selection, rpc1 should be selected more often
+            let mut rpc1_count = 0;
+            let mut rpc2_count = 0;
+
+            for _ in 0..20 {
+                let url = selector.select_url().unwrap();
+                if url == "https://test-weighted-rl1.example.com" {
+                    rpc1_count += 1;
+                } else {
+                    rpc2_count += 1;
+                }
+            }
+
+            // With weighted selection, rpc1 should be selected more often
+            assert!(rpc1_count > rpc2_count);
+
+            // Now simulate rate limiting on rpc1
+            // First, select rpc1
+            let mut selected_rpc1 = false;
+            for _ in 0..10 {
+                let url = selector.select_url().unwrap();
+                if url == "https://test-weighted-rl1.example.com" {
+                    selector.mark_current_as_failed();
+                    selected_rpc1 = true;
+                    break;
+                }
+            }
+            assert!(selected_rpc1, "Should have selected rpc1 at least once");
+
+            // After marking rpc1 as failed (paused), selections should prefer rpc2 (non-paused)
+            for _ in 0..20 {
+                let url = selector.select_url().unwrap();
+                assert_eq!(url, "https://test-weighted-rl2.example.com");
+            }
+
+            // Verify only one provider is available (non-paused)
+            assert_eq!(selector.available_provider_count(), 1);
+        }
+
+        /// Test that a rate-limited provider stays failed.
+        ///
+        /// This test verifies that failed providers remain failed,
+        /// which simulates persistence of health state.
+        #[test]
+        #[serial]
+        fn test_rpc_selector_rate_limit_recovery() {
+            RpcHealthStore::instance().clear_all();
+            let configs = vec![
+                RpcConfig {
+                    url: "https://test-recovery1.example.com".to_string(),
+                    weight: 100,
+                    ..Default::default()
+                },
+                RpcConfig {
+                    url: "https://test-recovery2.example.com".to_string(),
+                    weight: 100,
+                    ..Default::default()
+                },
+            ];
+
+            // Create selector with threshold=1 for testing
+            let selector = RpcSelector::new(configs, 1, 60, 60).unwrap();
+
+            // Select first provider
+            let first_url = selector.select_url().unwrap();
+
+            // Mark it as failed (simulating rate limit, with threshold=1 this pauses it)
+            selector.mark_current_as_failed();
+            assert_eq!(selector.available_provider_count(), 1);
+
+            // Next selection should prefer the other provider (non-paused)
+            let second_url = selector.select_url().unwrap();
+            assert_ne!(first_url, second_url);
+
+            // Verify only the working provider is selected (prefer non-paused)
+            for _ in 0..10 {
+                let url = selector.select_url().unwrap();
+                assert_eq!(url, second_url);
+            }
+
+            // Since we persist health, the failed provider stays failed (paused)
+            assert_eq!(selector.available_provider_count(), 1);
+        }
+
+        /// Test that when both providers are rate-limited, the selector handles it gracefully.
+        #[test]
+        #[serial]
+        fn test_rpc_selector_both_providers_rate_limited() {
+            RpcHealthStore::instance().clear_all();
+            let configs = vec![
+                RpcConfig {
+                    url: "https://test-both-rl1.example.com".to_string(),
+                    weight: 100,
+                    ..Default::default()
+                },
+                RpcConfig {
+                    url: "https://test-both-rl2.example.com".to_string(),
+                    weight: 100,
+                    ..Default::default()
+                },
+            ];
+
+            // Create selector with threshold=1 for testing
+            let selector = RpcSelector::new(configs, 1, 60, 60).unwrap();
+
+            // Select and mark first provider as failed (pauses it)
+            selector.select_url().unwrap();
+            selector.mark_current_as_failed();
+            assert_eq!(selector.available_provider_count(), 1);
+
+            // Select and mark second provider as failed (pauses it)
+            selector.select_url().unwrap();
+            selector.mark_current_as_failed();
+            assert_eq!(selector.available_provider_count(), 0);
+
+            // Now all providers are paused, but select_url should still work (selecting paused providers as last resort)
+            let result = selector.select_url();
+            assert!(result.is_ok());
+            let url = result.unwrap();
+            assert!(
+                url == "https://test-both-rl1.example.com"
+                    || url == "https://test-both-rl2.example.com"
+            );
+        }
+
+        /// Test that rate limiting works correctly with round-robin fallback.
+        ///
+        /// This test verifies that when weighted selection fails due to rate limiting,
+        /// the selector correctly falls back to round-robin selection.
+        #[test]
+        #[serial]
+        fn test_rpc_selector_rate_limit_round_robin_fallback() {
+            RpcHealthStore::instance().clear_all();
+            let configs = vec![
+                RpcConfig {
+                    url: "https://test-rr-fallback1.example.com".to_string(),
+                    weight: 100,
+                    ..Default::default()
+                },
+                RpcConfig {
+                    url: "https://test-rr-fallback2.example.com".to_string(),
+                    weight: 100,
+                    ..Default::default()
+                },
+                RpcConfig {
+                    url: "https://test-rr-fallback3.example.com".to_string(),
+                    weight: 100,
+                    ..Default::default()
+                },
+            ];
+
+            // Create selector with threshold=1 for testing
+            let selector = RpcSelector::new(configs, 1, 60, 60).unwrap();
+
+            // Mark rpc1 as failed (simulating rate limit)
+            selector.select_url().unwrap();
+            let first_url = selector.get_current_url().unwrap();
+
+            // If we got rpc1, mark it as failed
+            if first_url == "https://test-rr-fallback1.example.com" {
+                selector.mark_current_as_failed();
+            } else {
+                // Otherwise, select until we get rpc1, then mark it as failed
+                loop {
+                    let url = selector.select_url().unwrap();
+                    if url == "https://test-rr-fallback1.example.com" {
+                        selector.mark_current_as_failed();
+                        break;
+                    }
+                }
+            }
+
+            // Now rpc1 should be paused, and selections should prefer rpc2 and rpc3 (non-paused)
+            let mut selected_urls = std::collections::HashSet::new();
+            for _ in 0..20 {
+                let url = selector.select_url().unwrap();
+                selected_urls.insert(url.to_string());
+                // rpc1 should not be selected (prefer non-paused)
+                assert_ne!(url, "https://test-rr-fallback1.example.com");
+            }
+
+            // Should have selected from both rpc2 and rpc3
+            assert!(selected_urls.contains("https://test-rr-fallback2.example.com"));
+            assert!(selected_urls.contains("https://test-rr-fallback3.example.com"));
+            assert_eq!(selected_urls.len(), 2);
+        }
+
+        #[test]
+        #[serial]
+        fn test_select_url_excludes_tried_providers() {
+            RpcHealthStore::instance().clear_all();
+            let configs = vec![
+                RpcConfig {
+                    url: "https://provider1.com".to_string(),
+                    weight: 1,
+                    ..Default::default()
+                },
+                RpcConfig {
+                    url: "https://provider2.com".to_string(),
+                    weight: 1,
+                    ..Default::default()
+                },
+                RpcConfig {
+                    url: "https://provider3.com".to_string(),
+                    weight: 1,
+                    ..Default::default()
+                },
+            ];
+
+            let selector = RpcSelector::new_with_defaults(configs).unwrap();
+
+            // Exclude provider1
+            let mut excluded = std::collections::HashSet::new();
+            excluded.insert("https://provider1.com".to_string());
+
+            // Should select provider2 or provider3, not provider1
+            for _ in 0..10 {
+                let url = selector.get_next_url(&excluded).unwrap();
+                assert_ne!(url, "https://provider1.com");
+            }
+        }
+
+        #[test]
+        #[serial]
+        fn test_select_url_fallback_to_paused_providers() {
+            RpcHealthStore::instance().clear_all();
+            let configs = vec![
+                RpcConfig {
+                    url: "https://provider1.com".to_string(),
+                    weight: 1,
+                    ..Default::default()
+                },
+                RpcConfig {
+                    url: "https://provider2.com".to_string(),
+                    weight: 1,
+                    ..Default::default()
+                },
+            ];
+
+            let selector = RpcSelector::new_with_defaults(configs).unwrap();
+            let health_store = RpcHealthStore::instance();
+            let expiration = chrono::Duration::seconds(60);
+
+            // Pause both providers
+            health_store.mark_failed(
+                "https://provider1.com",
+                3,
+                chrono::Duration::seconds(60),
+                expiration,
+            );
+            health_store.mark_failed(
+                "https://provider1.com",
+                3,
+                chrono::Duration::seconds(60),
+                expiration,
+            );
+            health_store.mark_failed(
+                "https://provider1.com",
+                3,
+                chrono::Duration::seconds(60),
+                expiration,
+            );
+
+            health_store.mark_failed(
+                "https://provider2.com",
+                3,
+                chrono::Duration::seconds(60),
+                expiration,
+            );
+            health_store.mark_failed(
+                "https://provider2.com",
+                3,
+                chrono::Duration::seconds(60),
+                expiration,
+            );
+            health_store.mark_failed(
+                "https://provider2.com",
+                3,
+                chrono::Duration::seconds(60),
+                expiration,
+            );
+
+            // Both should be paused
+            assert!(health_store.is_paused("https://provider1.com", 3, expiration));
+            assert!(health_store.is_paused("https://provider2.com", 3, expiration));
+
+            // Should still be able to select (fallback to paused providers)
+            let url = selector
+                .get_next_url(&std::collections::HashSet::new())
+                .unwrap();
+            assert!(url == "https://provider1.com" || url == "https://provider2.com");
+        }
+
+        #[test]
+        #[serial]
+        fn test_select_url_single_provider_excluded() {
+            RpcHealthStore::instance().clear_all();
+            let configs = vec![RpcConfig {
+                url: "https://single-provider.com".to_string(),
+                weight: 1,
+                ..Default::default()
+            }];
+
+            let selector = RpcSelector::new_with_defaults(configs).unwrap();
+
+            // Exclude the only provider
+            let mut excluded = std::collections::HashSet::new();
+            excluded.insert("https://single-provider.com".to_string());
+
+            // Should return error
+            let result = selector.get_next_url(&excluded);
+            assert!(result.is_err());
+            assert!(matches!(
+                result.unwrap_err(),
+                RpcSelectorError::AllProvidersFailed
+            ));
+        }
+
+        #[test]
+        #[serial]
+        fn test_select_url_all_providers_excluded() {
+            RpcHealthStore::instance().clear_all();
+            let configs = vec![
+                RpcConfig {
+                    url: "https://provider1.com".to_string(),
+                    weight: 1,
+                    ..Default::default()
+                },
+                RpcConfig {
+                    url: "https://provider2.com".to_string(),
+                    weight: 1,
+                    ..Default::default()
+                },
+            ];
+
+            let selector = RpcSelector::new_with_defaults(configs).unwrap();
+
+            // Exclude all providers
+            let mut excluded = std::collections::HashSet::new();
+            excluded.insert("https://provider1.com".to_string());
+            excluded.insert("https://provider2.com".to_string());
+
+            // Should return error
+            let result = selector.get_next_url(&excluded);
+            assert!(result.is_err());
+            assert!(matches!(
+                result.unwrap_err(),
+                RpcSelectorError::AllProvidersFailed
+            ));
+        }
+
+        #[test]
+        #[serial]
+        fn test_select_url_excluded_providers_with_weighted_selection() {
+            RpcHealthStore::instance().clear_all();
+            let configs = vec![
+                RpcConfig {
+                    url: "https://provider1.com".to_string(),
+                    weight: 10,
+                    ..Default::default()
+                },
+                RpcConfig {
+                    url: "https://provider2.com".to_string(),
+                    weight: 1,
+                    ..Default::default()
+                },
+                RpcConfig {
+                    url: "https://provider3.com".to_string(),
+                    weight: 1,
+                    ..Default::default()
+                },
+            ];
+
+            let selector = RpcSelector::new_with_defaults(configs).unwrap();
+
+            // Exclude provider1 (highest weight)
+            let mut excluded = std::collections::HashSet::new();
+            excluded.insert("https://provider1.com".to_string());
+
+            // Should select from provider2 or provider3, never provider1
+            for _ in 0..20 {
+                let url = selector.get_next_url(&excluded).unwrap();
+                assert_ne!(url, "https://provider1.com");
+            }
+        }
     }
 }

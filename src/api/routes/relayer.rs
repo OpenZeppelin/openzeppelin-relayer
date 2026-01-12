@@ -251,7 +251,7 @@ mod tests {
         models::{
             ApiKeyRepoModel, AppState, EvmTransactionData, LocalSignerConfigStorage,
             NetworkConfigData, NetworkRepoModel, NetworkTransactionData, NetworkType,
-            RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, SecretString,
+            RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, RpcConfig, SecretString,
             SignerConfigStorage, SignerRepoModel, TransactionRepoModel, TransactionStatus, U256,
         },
         repositories::{
@@ -293,7 +293,7 @@ mod tests {
                 common: NetworkConfigCommon {
                     network: "ethereum".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+                    rpc_urls: Some(vec![RpcConfig::new("https://rpc.example.com".to_string())]),
                     explorer_urls: None,
                     average_blocktime_ms: Some(12000),
                     is_testnet: Some(false),

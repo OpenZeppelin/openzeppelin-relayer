@@ -413,7 +413,9 @@ mod tests {
     fn create_test_evm_network() -> EvmNetwork {
         EvmNetwork {
             network: "mainnet".to_string(),
-            rpc_urls: vec!["https://mainnet.infura.io/v3/YOUR_INFURA_API_KEY".to_string()],
+            rpc_urls: vec![crate::models::RpcConfig::new(
+                "https://mainnet.infura.io/v3/YOUR_INFURA_API_KEY".to_string(),
+            )],
             explorer_urls: None,
             average_blocktime_ms: 12000,
             is_testnet: false,

@@ -43,7 +43,7 @@ use crate::{
 use super::ProviderError;
 use super::{
     rpc_selector::{RpcSelector, RpcSelectorError},
-    RetryConfig,
+    ProviderConfig, RetryConfig,
 };
 
 /// Utility function to match error patterns by normalizing both strings.
@@ -355,6 +355,7 @@ impl SolanaProviderError {
 #[cfg_attr(test, automock)]
 #[allow(dead_code)]
 pub trait SolanaProviderTrait: Send + Sync {
+    fn get_configs(&self) -> Vec<RpcConfig>;
     /// Retrieves the balance (in lamports) for the given address.
     async fn get_balance(&self, address: &str) -> Result<u64, SolanaProviderError>;
 
@@ -495,8 +496,15 @@ impl std::fmt::Display for TokenMetadata {
 
 #[allow(dead_code)]
 impl SolanaProvider {
-    pub fn new(configs: Vec<RpcConfig>, timeout_seconds: u64) -> Result<Self, ProviderError> {
-        Self::new_with_commitment(configs, timeout_seconds, CommitmentConfig::confirmed())
+    pub fn new(config: ProviderConfig) -> Result<Self, ProviderError> {
+        Self::new_with_commitment_and_health(
+            config.rpc_configs,
+            config.timeout_seconds,
+            CommitmentConfig::confirmed(),
+            config.failure_threshold,
+            config.pause_duration_secs,
+            config.failure_expiration_secs,
+        )
     }
 
     /// Creates a new SolanaProvider with RPC configurations and optional settings.
@@ -506,14 +514,20 @@ impl SolanaProvider {
     /// * `configs` - A vector of RPC configurations
     /// * `timeout` - Optional custom timeout
     /// * `commitment` - Optional custom commitment level
+    /// * `failure_threshold` - Number of consecutive failures before pausing a provider
+    /// * `pause_duration_secs` - Duration in seconds to pause a provider after reaching failure threshold
+    /// * `failure_expiration_secs` - Duration in seconds after which failures are considered stale
     ///
     /// # Returns
     ///
     /// A Result containing the provider or an error
-    pub fn new_with_commitment(
+    pub fn new_with_commitment_and_health(
         configs: Vec<RpcConfig>,
         timeout_seconds: u64,
         commitment: CommitmentConfig,
+        failure_threshold: u32,
+        pause_duration_secs: u64,
+        failure_expiration_secs: u64,
     ) -> Result<Self, ProviderError> {
         if configs.is_empty() {
             return Err(ProviderError::NetworkConfiguration(
@@ -525,7 +539,13 @@ impl SolanaProvider {
             .map_err(|e| ProviderError::NetworkConfiguration(format!("Invalid URL: {e}")))?;
 
         // Now create the selector with validated configs
-        let selector = RpcSelector::new(configs).map_err(|e| {
+        let selector = RpcSelector::new(
+            configs,
+            failure_threshold,
+            pause_duration_secs,
+            failure_expiration_secs,
+        )
+        .map_err(|e| {
             ProviderError::NetworkConfiguration(format!("Failed to create RPC selector: {e}"))
         })?;
 
@@ -539,6 +559,14 @@ impl SolanaProvider {
         })
     }
 
+    /// Gets the current RPC configurations.
+    ///
+    /// # Returns
+    /// * `Vec<RpcConfig>` - The current configurations
+    pub fn get_configs(&self) -> Vec<RpcConfig> {
+        self.selector.get_configs()
+    }
+
     /// Retrieves an RPC client instance using the configured selector.
     ///
     /// # Returns
@@ -549,13 +577,16 @@ impl SolanaProvider {
     ///
     fn get_client(&self) -> Result<RpcClient, SolanaProviderError> {
         self.selector
-            .get_client(|url| {
-                Ok(RpcClient::new_with_timeout_and_commitment(
-                    url.to_string(),
-                    self.timeout_seconds,
-                    self.commitment,
-                ))
-            })
+            .get_client(
+                |url| {
+                    Ok(RpcClient::new_with_timeout_and_commitment(
+                        url.to_string(),
+                        self.timeout_seconds,
+                        self.commitment,
+                    ))
+                },
+                &std::collections::HashSet::new(),
+            )
             .map_err(SolanaProviderError::SelectorError)
     }
 
@@ -611,6 +642,10 @@ impl SolanaProvider {
 #[async_trait]
 #[allow(dead_code)]
 impl SolanaProviderTrait for SolanaProvider {
+    fn get_configs(&self) -> Vec<RpcConfig> {
+        self.get_configs()
+    }
+
     /// Retrieves the balance (in lamports) for the given address.
     /// # Errors
     ///
@@ -991,7 +1026,12 @@ mod tests {
         RpcConfig {
             url: "https://api.devnet.solana.com".to_string(),
             weight: 1,
+            ..Default::default()
         }
+    }
+
+    fn create_test_provider_config(configs: Vec<RpcConfig>, timeout: u64) -> ProviderConfig {
+        ProviderConfig::new(configs, timeout, 3, 60, 60)
     }
 
     #[tokio::test]
@@ -1000,7 +1040,7 @@ mod tests {
         let configs = vec![create_test_rpc_config()];
         let timeout = 30;
 
-        let result = SolanaProvider::new(configs, timeout);
+        let result = SolanaProvider::new(create_test_provider_config(configs, timeout));
 
         assert!(result.is_ok());
         let provider = result.unwrap();
@@ -1016,7 +1056,8 @@ mod tests {
         let timeout = 30;
         let commitment = CommitmentConfig::finalized();
 
-        let result = SolanaProvider::new_with_commitment(configs, timeout, commitment);
+        let result =
+            SolanaProvider::new_with_commitment_and_health(configs, timeout, commitment, 3, 60, 60);
 
         assert!(result.is_ok());
         let provider = result.unwrap();
@@ -1030,7 +1071,7 @@ mod tests {
         let configs: Vec<RpcConfig> = vec![];
         let timeout = 30;
 
-        let result = SolanaProvider::new(configs, timeout);
+        let result = SolanaProvider::new(create_test_provider_config(configs, timeout));
 
         assert!(result.is_err());
         assert!(matches!(
@@ -1046,7 +1087,8 @@ mod tests {
         let timeout = 30;
         let commitment = CommitmentConfig::finalized();
 
-        let result = SolanaProvider::new_with_commitment(configs, timeout, commitment);
+        let result =
+            SolanaProvider::new_with_commitment_and_health(configs, timeout, commitment, 3, 60, 60);
 
         assert!(result.is_err());
         assert!(matches!(
@@ -1061,10 +1103,11 @@ mod tests {
         let configs = vec![RpcConfig {
             url: "invalid-url".to_string(),
             weight: 1,
+            ..Default::default()
         }];
         let timeout = 30;
 
-        let result = SolanaProvider::new(configs, timeout);
+        let result = SolanaProvider::new(create_test_provider_config(configs, timeout));
 
         assert!(result.is_err());
         assert!(matches!(
@@ -1079,11 +1122,13 @@ mod tests {
         let configs = vec![RpcConfig {
             url: "invalid-url".to_string(),
             weight: 1,
+            ..Default::default()
         }];
         let timeout = 30;
         let commitment = CommitmentConfig::finalized();
 
-        let result = SolanaProvider::new_with_commitment(configs, timeout, commitment);
+        let result =
+            SolanaProvider::new_with_commitment_and_health(configs, timeout, commitment, 3, 60, 60);
 
         assert!(result.is_err());
         assert!(matches!(
@@ -1100,11 +1145,12 @@ mod tests {
             RpcConfig {
                 url: "https://api.mainnet-beta.solana.com".to_string(),
                 weight: 1,
+                ..Default::default()
             },
         ];
         let timeout = 30;
 
-        let result = SolanaProvider::new(configs, timeout);
+        let result = SolanaProvider::new(create_test_provider_config(configs, timeout));
 
         assert!(result.is_ok());
     }
@@ -1114,7 +1160,7 @@ mod tests {
         let _env_guard = setup_test_env();
         let configs = vec![create_test_rpc_config()];
         let timeout = 30;
-        let provider = SolanaProvider::new(configs, timeout);
+        let provider = SolanaProvider::new(create_test_provider_config(configs, timeout));
         assert!(provider.is_ok());
     }
 
@@ -1123,7 +1169,7 @@ mod tests {
         let _env_guard = setup_test_env();
         let configs = vec![create_test_rpc_config()];
         let timeout = 30;
-        let provider = SolanaProvider::new(configs, timeout).unwrap();
+        let provider = SolanaProvider::new(create_test_provider_config(configs, timeout)).unwrap();
         let keypair = Keypair::new();
         let balance = provider.get_balance(&keypair.pubkey().to_string()).await;
         assert!(balance.is_ok());
@@ -1135,7 +1181,7 @@ mod tests {
         let _env_guard = setup_test_env();
         let configs = vec![create_test_rpc_config()];
         let timeout = 30;
-        let provider = SolanaProvider::new(configs, timeout).unwrap();
+        let provider = SolanaProvider::new(create_test_provider_config(configs, timeout)).unwrap();
         let keypair = get_funded_keypair();
         let balance = provider.get_balance(&keypair.pubkey().to_string()).await;
         assert!(balance.is_ok());
@@ -1147,7 +1193,7 @@ mod tests {
         let _env_guard = setup_test_env();
         let configs = vec![create_test_rpc_config()];
         let timeout = 30;
-        let provider = SolanaProvider::new(configs, timeout).unwrap();
+        let provider = SolanaProvider::new(create_test_provider_config(configs, timeout)).unwrap();
         let blockhash = provider.get_latest_blockhash().await;
         assert!(blockhash.is_ok());
     }
@@ -1157,7 +1203,8 @@ mod tests {
         let _env_guard = setup_test_env();
         let configs = vec![create_test_rpc_config()];
         let timeout = 30;
-        let provider = SolanaProvider::new(configs, timeout).expect("Failed to create provider");
+        let provider = SolanaProvider::new(create_test_provider_config(configs, timeout))
+            .expect("Failed to create provider");
 
         let fee_payer = get_funded_keypair();
 
@@ -1195,9 +1242,10 @@ mod tests {
         let configs = vec![RpcConfig {
             url: "https://api.mainnet-beta.solana.com".to_string(),
             weight: 1,
+            ..Default::default()
         }];
         let timeout = 30;
-        let provider = SolanaProvider::new(configs, timeout).unwrap();
+        let provider = SolanaProvider::new(create_test_provider_config(configs, timeout)).unwrap();
         let usdc_token_metadata = provider
             .get_token_metadata_from_pubkey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
             .await
@@ -1232,7 +1280,7 @@ mod tests {
         let _env_guard = setup_test_env();
         let configs = vec![create_test_rpc_config()];
         let timeout = 30;
-        let provider = SolanaProvider::new(configs, timeout).unwrap();
+        let provider = SolanaProvider::new(create_test_provider_config(configs, timeout)).unwrap();
 
         let client = provider.get_client();
         assert!(client.is_ok());
@@ -1249,7 +1297,9 @@ mod tests {
         let timeout = 30;
         let commitment = CommitmentConfig::finalized();
 
-        let provider = SolanaProvider::new_with_commitment(configs, timeout, commitment).unwrap();
+        let provider =
+            SolanaProvider::new_with_commitment_and_health(configs, timeout, commitment, 3, 60, 60)
+                .unwrap();
 
         let client = provider.get_client();
         assert!(client.is_ok());
@@ -1267,11 +1317,12 @@ mod tests {
             RpcConfig {
                 url: "https://api.mainnet-beta.solana.com".to_string(),
                 weight: 2,
+                ..Default::default()
             },
         ];
         let timeout = 30;
 
-        let provider = SolanaProvider::new(configs, timeout).unwrap();
+        let provider = SolanaProvider::new(create_test_provider_config(configs, timeout)).unwrap();
 
         let client_result = provider.get_client();
         assert!(client_result.is_ok());
@@ -1290,8 +1341,9 @@ mod tests {
         let configs = vec![RpcConfig {
             url: "https://api.devnet.solana.com".to_string(),
             weight: 1,
+            ..Default::default()
         }];
-        let provider = SolanaProvider::new(configs, 10).unwrap();
+        let provider = SolanaProvider::new(create_test_provider_config(configs, 10)).unwrap();
         let result = provider.initialize_provider("https://api.devnet.solana.com");
         assert!(result.is_ok());
         let arc_client = result.unwrap();
@@ -1306,8 +1358,9 @@ mod tests {
         let configs = vec![RpcConfig {
             url: "https://api.devnet.solana.com".to_string(),
             weight: 1,
+            ..Default::default()
         }];
-        let provider = SolanaProvider::new(configs, 10).unwrap();
+        let provider = SolanaProvider::new(create_test_provider_config(configs, 10)).unwrap();
         let result = provider.initialize_provider("not-a-valid-url");
         assert!(result.is_err());
         match result {
@@ -1478,7 +1531,7 @@ mod tests {
         let _env_guard = super::tests::setup_test_env();
         let configs = vec![super::tests::create_test_rpc_config()];
         let timeout = 30;
-        let provider = SolanaProvider::new(configs, timeout).unwrap();
+        let provider = SolanaProvider::new(create_test_provider_config(configs, timeout)).unwrap();
 
         // 0 bytes is always valid, should return a value >= 0
         let result = provider.get_minimum_balance_for_rent_exemption(0).await;
@@ -1490,7 +1543,7 @@ mod tests {
         let _env_guard = super::tests::setup_test_env();
         let configs = vec![super::tests::create_test_rpc_config()];
         let timeout = 30;
-        let provider = SolanaProvider::new(configs, timeout).unwrap();
+        let provider = SolanaProvider::new(create_test_provider_config(configs, timeout)).unwrap();
 
         // Get a recent blockhash (should be valid)
         let blockhash = provider.get_latest_blockhash().await.unwrap();
@@ -1505,7 +1558,7 @@ mod tests {
         let _env_guard = super::tests::setup_test_env();
         let configs = vec![super::tests::create_test_rpc_config()];
         let timeout = 30;
-        let provider = SolanaProvider::new(configs, timeout).unwrap();
+        let provider = SolanaProvider::new(create_test_provider_config(configs, timeout)).unwrap();
 
         let invalid_blockhash = solana_sdk::hash::Hash::new_from_array([0u8; 32]);
         let is_valid = provider
@@ -1519,7 +1572,7 @@ mod tests {
         let _env_guard = super::tests::setup_test_env();
         let configs = vec![super::tests::create_test_rpc_config()];
         let timeout = 30;
-        let provider = SolanaProvider::new(configs, timeout).unwrap();
+        let provider = SolanaProvider::new(create_test_provider_config(configs, timeout)).unwrap();
 
         let commitment = CommitmentConfig::confirmed();
         let result = provider
