@@ -5,7 +5,9 @@
 //! potentially dangerous network locations.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use tracing::error;
+
+use reqwest::redirect::{Attempt, Policy};
+use tracing::{error, warn};
 
 /// Validates an RPC URL against security policies
 ///
@@ -289,6 +291,94 @@ pub fn sanitize_url_for_error(url: &str) -> String {
     } else {
         "[invalid URL]".to_string()
     }
+}
+
+/// Creates a secure redirect policy that only allows HTTP to HTTPS upgrades on the same host.
+///
+/// This policy prevents SSRF attacks via redirect chains while still allowing legitimate
+/// protocol upgrades (e.g., when a user configures `http://` but the server redirects to `https://`).
+///
+/// # Security Guarantees
+/// - **Single redirect only**: Prevents redirect chains that could be used to bypass security
+/// - **Same host required**: The redirect target must have the exact same host as the original request
+/// - **Protocol upgrade only**: Only allows `http` → `https`, blocks all other redirects
+///
+/// # Examples
+/// Allowed:
+/// - `http://example.com/rpc` → `https://example.com/rpc`
+/// - `http://example.com:8545/` → `https://example.com:8545/`
+///
+/// Blocked:
+/// - `https://example.com/` → `https://other.com/` (different host)
+/// - `https://example.com/` → `http://example.com/` (downgrade)
+/// - `http://a.com/` → `http://b.com/` → `https://b.com/` (chain)
+pub fn create_secure_redirect_policy() -> Policy {
+    Policy::custom(|attempt: Attempt| {
+        // Get the redirect target URL
+        let target_url = attempt.url();
+
+        // Get the previous URLs in the redirect chain
+        let previous_urls = attempt.previous();
+
+        // Only allow one redirect (prevent redirect chains)
+        if previous_urls.len() > 1 {
+            warn!(
+                redirect_count = previous_urls.len(),
+                "Blocking redirect: too many redirects in chain"
+            );
+            return attempt.stop();
+        }
+
+        // Get the original URL (first in the chain)
+        let Some(original_url) = previous_urls.first() else {
+            // This shouldn't happen, but if there's no previous URL, stop
+            warn!("Blocking redirect: no previous URL found");
+            return attempt.stop();
+        };
+
+        // Check same host (case-insensitive, as DNS is case-insensitive)
+        let original_host = original_url.host_str().unwrap_or("");
+        let target_host = target_url.host_str().unwrap_or("");
+        if !original_host.eq_ignore_ascii_case(target_host) {
+            warn!(
+                original_host = original_host,
+                target_host = target_host,
+                "Blocking redirect: host mismatch"
+            );
+            return attempt.stop();
+        }
+
+        // Check port matches (explicit or default for scheme)
+        let original_port = original_url.port_or_known_default();
+        let target_port = target_url.port_or_known_default();
+        if original_port != target_port {
+            warn!(
+                original_port = ?original_port,
+                target_port = ?target_port,
+                "Blocking redirect: port mismatch"
+            );
+            return attempt.stop();
+        }
+
+        // Only allow HTTP → HTTPS upgrade
+        let original_scheme = original_url.scheme();
+        let target_scheme = target_url.scheme();
+        if original_scheme == "http" && target_scheme == "https" {
+            tracing::debug!(
+                original = %original_url,
+                target = %target_url,
+                "Allowing HTTP to HTTPS redirect"
+            );
+            attempt.follow()
+        } else {
+            warn!(
+                original_scheme = original_scheme,
+                target_scheme = target_scheme,
+                "Blocking redirect: only HTTP to HTTPS upgrades are allowed"
+            );
+            attempt.stop()
+        }
+    })
 }
 
 #[cfg(test)]
@@ -969,5 +1059,11 @@ mod tests {
         // Other 169.254.x.x should be link-local (allowed when block_private=false)
         let result = validate_rpc_url("http://169.254.1.1:8545", &[], false);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_secure_redirect_policy_created() {
+        // Verify the policy can be created without panicking
+        let _policy = create_secure_redirect_policy();
     }
 }

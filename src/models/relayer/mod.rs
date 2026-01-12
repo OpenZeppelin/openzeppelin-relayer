@@ -26,7 +26,7 @@ pub use repository::*;
 mod rpc_config;
 pub use rpc_config::*;
 
-use crate::utils::validate_rpc_url;
+use crate::utils::{sanitize_url_for_error, validate_rpc_url};
 use crate::{
     config::ConfigFileNetworkType,
     constants::ID_REGEX,
@@ -1148,12 +1148,19 @@ impl Relayer {
 
             for config in configs {
                 // Validate URL format
-                reqwest::Url::parse(&config.url)
-                    .map_err(|_| RelayerValidationError::InvalidRpcUrl(config.url.clone()))?;
+                reqwest::Url::parse(&config.url).map_err(|_| {
+                    RelayerValidationError::InvalidRpcUrl(sanitize_url_for_error(&config.url))
+                })?;
 
                 // Validate URL security (SSRF protection)
                 validate_rpc_url(&config.url, &allowed_hosts, block_private_ips).map_err(
-                    |err| RelayerValidationError::InvalidRpcUrl(format!("{}: {}", config.url, err)),
+                    |err| {
+                        RelayerValidationError::InvalidRpcUrl(format!(
+                            "{}: {}",
+                            sanitize_url_for_error(&config.url),
+                            err
+                        ))
+                    },
                 )?;
 
                 // Validate weight range

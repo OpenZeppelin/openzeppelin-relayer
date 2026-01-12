@@ -34,7 +34,7 @@ use crate::services::provider::ProviderError;
 use crate::services::provider::RetryConfig;
 // Reqwest client is used for raw JSON-RPC HTTP requests. Alias to avoid name clash with the
 // soroban `Client` type imported above.
-use crate::utils::validate_rpc_url;
+use crate::utils::{create_secure_redirect_policy, validate_rpc_url};
 use reqwest::Client as ReqwestClient;
 use std::sync::Arc;
 use std::time::Duration;
@@ -389,7 +389,9 @@ impl StellarProvider {
         ReqwestClient::builder()
             .timeout(self.timeout_seconds)
             .use_rustls_tls()
-            .redirect(reqwest::redirect::Policy::none()) // Prevent SSRF via redirect chains
+            // Allow only HTTP→HTTPS redirects on same host to handle legitimate protocol upgrades
+            // while preventing SSRF via redirect chains to different hosts
+            .redirect(create_secure_redirect_policy())
             .build()
             .map_err(|e| {
                 ProviderError::NetworkConfiguration(format!(

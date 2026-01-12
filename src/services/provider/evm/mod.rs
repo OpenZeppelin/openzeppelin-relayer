@@ -42,7 +42,7 @@ use crate::{
     services::provider::{is_retriable_error, should_mark_provider_failed},
 };
 
-use crate::utils::validate_rpc_url;
+use crate::utils::{create_secure_redirect_policy, validate_rpc_url};
 
 #[cfg(test)]
 use mockall::automock;
@@ -202,7 +202,9 @@ impl EvmProvider {
         let client = ReqwestClientBuilder::new()
             .timeout(Duration::from_secs(self.timeout_seconds))
             .use_rustls_tls()
-            .redirect(reqwest::redirect::Policy::none()) // Prevent SSRF via redirect chains
+            // Allow only HTTP→HTTPS redirects on same host to handle legitimate protocol upgrades
+            // while preventing SSRF via redirect chains to different hosts
+            .redirect(create_secure_redirect_policy())
             .build()
             .map_err(|e| ProviderError::Other(format!("Failed to build HTTP client: {e}")))?;
 
