@@ -56,9 +56,8 @@ use async_trait::async_trait;
 use eyre::Result;
 use tracing::{debug, info, warn};
 
-use super::{
-    create_error_response, create_success_response, map_provider_error, EvmTransactionValidator,
-};
+use super::{create_error_response, create_success_response, EvmTransactionValidator};
+use crate::utils::{map_provider_error, sanitize_error_description};
 
 #[allow(dead_code)]
 pub struct EvmRelayer<P, RR, NR, TR, J, S, TCS>
@@ -494,12 +493,18 @@ where
         match self.provider.raw_request_dyn(&method, params_json).await {
             Ok(result_value) => Ok(create_success_response(request.id, result_value)),
             Err(provider_error) => {
+                // Log the full error internally for debugging
+                tracing::error!(
+                    error = %provider_error,
+                    "RPC provider error occurred"
+                );
                 let (error_code, error_message) = map_provider_error(&provider_error);
+                let sanitized_description = sanitize_error_description(&provider_error);
                 Ok(create_error_response(
                     request.id,
                     error_code,
                     error_message,
-                    &provider_error.to_string(),
+                    &sanitized_description,
                 ))
             }
         }
@@ -626,6 +631,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::RpcConfig;
     use crate::{
         config::{EvmNetworkConfig, NetworkConfigCommon},
         jobs::MockJobProducerTrait,
@@ -656,7 +662,9 @@ mod tests {
     fn create_test_evm_network() -> EvmNetwork {
         EvmNetwork {
             network: "mainnet".to_string(),
-            rpc_urls: vec!["https://mainnet.infura.io/v3/YOUR_INFURA_API_KEY".to_string()],
+            rpc_urls: vec![RpcConfig::new(
+                "https://mainnet.infura.io/v3/YOUR_INFURA_API_KEY".to_string(),
+            )],
             explorer_urls: None,
             average_blocktime_ms: 12000,
             is_testnet: false,
@@ -674,9 +682,9 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "mainnet".to_string(),
                 from: None,
-                rpc_urls: Some(vec![
-                    "https://mainnet.infura.io/v3/YOUR_INFURA_API_KEY".to_string()
-                ]),
+                rpc_urls: Some(vec![crate::models::RpcConfig::new(
+                    "https://mainnet.infura.io/v3/YOUR_INFURA_API_KEY".to_string(),
+                )]),
                 explorer_urls: None,
                 average_blocktime_ms: Some(12000),
                 is_testnet: Some(false),

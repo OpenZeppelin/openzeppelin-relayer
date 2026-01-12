@@ -69,13 +69,16 @@ mod tests {
     use crate::{
         constants::{OPTIMISM_BASED_TAG, POLYGON_ZKEVM_TAG},
         models::{RpcConfig, U256},
+        services::provider::ProviderConfig,
     };
     use std::env;
 
     fn create_test_network_with_tags(tags: Vec<&str>) -> EvmNetwork {
         EvmNetwork {
             network: "test-network".to_string(),
-            rpc_urls: vec!["https://rpc.example.com".to_string()],
+            rpc_urls: vec![crate::models::RpcConfig::new(
+                "https://rpc.example.com".to_string(),
+            )],
             explorer_urls: None,
             average_blocktime_ms: 12000,
             is_testnet: false,
@@ -98,7 +101,8 @@ mod tests {
     fn test_price_params_handler_for_polygon_zkevm() {
         setup_test_env();
         let rpc_configs = vec![RpcConfig::new("http://localhost:8545".to_string())];
-        let provider = EvmProvider::new(rpc_configs, 30).expect("Failed to create EvmProvider");
+        let provider = EvmProvider::new(ProviderConfig::new(rpc_configs, 30, 3, 60, 60))
+            .expect("Failed to create EvmProvider");
         let network = create_test_network_with_tags(vec![POLYGON_ZKEVM_TAG]);
         let handler = PriceParamsHandler::for_network(&network, provider);
         assert!(handler.is_some());
@@ -112,7 +116,8 @@ mod tests {
     fn test_price_params_handler_for_optimism() {
         setup_test_env();
         let rpc_configs = vec![RpcConfig::new("http://localhost:8545".to_string())];
-        let provider = EvmProvider::new(rpc_configs, 30).expect("Failed to create EvmProvider");
+        let provider = EvmProvider::new(ProviderConfig::new(rpc_configs, 30, 3, 60, 60))
+            .expect("Failed to create EvmProvider");
         let network = create_test_network_with_tags(vec![OPTIMISM_BASED_TAG]);
         let handler = PriceParamsHandler::for_network(&network, provider);
         assert!(handler.is_some());
@@ -126,7 +131,8 @@ mod tests {
     fn test_price_params_handler_for_non_l2() {
         setup_test_env();
         let rpc_configs = vec![RpcConfig::new("http://localhost:8545".to_string())];
-        let provider = EvmProvider::new(rpc_configs, 30).expect("Failed to create EvmProvider");
+        let provider = EvmProvider::new(ProviderConfig::new(rpc_configs, 30, 3, 60, 60))
+            .expect("Failed to create EvmProvider");
         let network = create_test_network_with_tags(vec!["mainnet"]);
         let handler = PriceParamsHandler::for_network(&network, provider);
         assert!(handler.is_none());

@@ -418,6 +418,140 @@ impl RelayerClient {
 
         Ok(())
     }
+
+    /// Lists all networks with pagination support
+    ///
+    /// GET /api/v1/networks
+    pub async fn list_networks(
+        &self,
+        page: Option<usize>,
+        per_page: Option<usize>,
+    ) -> Result<Vec<openzeppelin_relayer::models::NetworkResponse>> {
+        let mut url = format!("{}/api/v1/networks", self.base_url);
+        let mut query_params = Vec::new();
+        if let Some(p) = page {
+            query_params.push(format!("page={}", p));
+        }
+        if let Some(pp) = per_page {
+            query_params.push(format!("per_page={}", pp));
+        }
+        if !query_params.is_empty() {
+            url.push('?');
+            url.push_str(&query_params.join("&"));
+        }
+
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .send()
+            .await
+            .wrap_err_with(|| format!("Failed to send request to {}", url))?;
+
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .wrap_err("Failed to read response body")?;
+
+        if !status.is_success() {
+            return Err(eyre::eyre!(
+                "API request failed with status {}: {}",
+                status,
+                body
+            ));
+        }
+
+        let api_response: ApiResponse<Vec<openzeppelin_relayer::models::NetworkResponse>> =
+            serde_json::from_str(&body)
+                .wrap_err_with(|| format!("Failed to parse response: {}", body))?;
+
+        api_response
+            .data
+            .ok_or_else(|| eyre::eyre!("API response missing data field"))
+    }
+
+    /// Retrieves details of a specific network by ID
+    ///
+    /// GET /api/v1/networks/{network_id}
+    pub async fn get_network(
+        &self,
+        network_id: &str,
+    ) -> Result<openzeppelin_relayer::models::NetworkResponse> {
+        let url = format!("{}/api/v1/networks/{}", self.base_url, network_id);
+
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .send()
+            .await
+            .wrap_err_with(|| format!("Failed to send request to {}", url))?;
+
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .wrap_err("Failed to read response body")?;
+
+        if !status.is_success() {
+            return Err(eyre::eyre!(
+                "API request failed with status {}: {}",
+                status,
+                body
+            ));
+        }
+
+        let api_response: ApiResponse<openzeppelin_relayer::models::NetworkResponse> =
+            serde_json::from_str(&body)
+                .wrap_err_with(|| format!("Failed to parse response: {}", body))?;
+
+        api_response
+            .data
+            .ok_or_else(|| eyre::eyre!("API response missing data field"))
+    }
+
+    /// Updates a network's configuration
+    ///
+    /// PATCH /api/v1/networks/{network_id}
+    pub async fn update_network(
+        &self,
+        network_id: &str,
+        request: openzeppelin_relayer::models::UpdateNetworkRequest,
+    ) -> Result<openzeppelin_relayer::models::NetworkResponse> {
+        let url = format!("{}/api/v1/networks/{}", self.base_url, network_id);
+
+        let response = self
+            .client
+            .patch(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&request)
+            .send()
+            .await
+            .wrap_err_with(|| format!("Failed to send request to {}", url))?;
+
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .wrap_err("Failed to read response body")?;
+
+        if !status.is_success() {
+            return Err(eyre::eyre!(
+                "API request failed with status {}: {}",
+                status,
+                body
+            ));
+        }
+
+        let api_response: ApiResponse<openzeppelin_relayer::models::NetworkResponse> =
+            serde_json::from_str(&body)
+                .wrap_err_with(|| format!("Failed to parse response: {}", body))?;
+
+        api_response
+            .data
+            .ok_or_else(|| eyre::eyre!("API response missing data field"))
+    }
 }
 
 // ============================================================================

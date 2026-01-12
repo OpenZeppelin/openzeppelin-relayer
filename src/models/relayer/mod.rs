@@ -2324,6 +2324,7 @@ mod tests {
             Some(vec![RpcConfig {
                 url: "https://example.com".to_string(),
                 weight: 150,
+                ..Default::default()
             }]), // Weight > 100
         );
 

@@ -10,9 +10,10 @@
 //! - **Validation**: Required field checks and URL format validation
 
 use crate::config::ConfigFileError;
-use serde::{Deserialize, Serialize};
+use crate::models::{deserialize_rpc_urls, RpcConfig};
+use serde::{Deserialize, Deserializer, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Clone)]
 pub struct NetworkConfigCommon {
     /// Unique network identifier (e.g., "mainnet", "sepolia", "custom-devnet").
     pub network: String,
@@ -20,8 +21,10 @@ pub struct NetworkConfigCommon {
     /// If set, this network will use the `from` network's settings as a base,
     /// overriding specific fields as needed.
     pub from: Option<String>,
-    /// List of RPC endpoint URLs for connecting to the network.
-    pub rpc_urls: Option<Vec<String>>,
+    /// List of RPC endpoint configurations for connecting to the network.
+    /// Supports both simple format (array of strings) and extended format (array of RpcConfig objects).
+    #[serde(deserialize_with = "deserialize_rpc_urls")]
+    pub rpc_urls: Option<Vec<RpcConfig>>,
     /// List of Explorer endpoint URLs for connecting to the network.
     pub explorer_urls: Option<Vec<String>>,
     /// Estimated average time between blocks in milliseconds.
@@ -30,6 +33,36 @@ pub struct NetworkConfigCommon {
     pub is_testnet: Option<bool>,
     /// List of arbitrary tags for categorizing or filtering networks.
     pub tags: Option<Vec<String>>,
+}
+
+impl<'de> Deserialize<'de> for NetworkConfigCommon {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct NetworkConfigCommonHelper {
+            network: String,
+            from: Option<String>,
+            #[serde(deserialize_with = "deserialize_rpc_urls")]
+            rpc_urls: Option<Vec<RpcConfig>>,
+            explorer_urls: Option<Vec<String>>,
+            average_blocktime_ms: Option<u64>,
+            is_testnet: Option<bool>,
+            tags: Option<Vec<String>>,
+        }
+
+        let helper = NetworkConfigCommonHelper::deserialize(deserializer)?;
+        Ok(NetworkConfigCommon {
+            network: helper.network,
+            from: helper.from,
+            rpc_urls: helper.rpc_urls,
+            explorer_urls: helper.explorer_urls,
+            average_blocktime_ms: helper.average_blocktime_ms,
+            is_testnet: helper.is_testnet,
+            tags: helper.tags,
+        })
+    }
 }
 
 impl NetworkConfigCommon {
@@ -53,10 +86,10 @@ impl NetworkConfigCommon {
         }
 
         // Validate RPC URLs format if provided
-        if let Some(urls) = &self.rpc_urls {
-            for url in urls {
-                reqwest::Url::parse(url).map_err(|_| {
-                    ConfigFileError::InvalidFormat(format!("Invalid RPC URL: {url}"))
+        if let Some(configs) = &self.rpc_urls {
+            for config in configs {
+                reqwest::Url::parse(&config.url).map_err(|_| {
+                    ConfigFileError::InvalidFormat(format!("Invalid RPC URL: {}", config.url))
                 })?;
             }
         }
@@ -79,11 +112,12 @@ impl NetworkConfigCommon {
     ///
     /// # Returns
     /// A new `NetworkConfigCommon` with merged values where child takes precedence over parent.
+    /// For RPC URLs: if child has RPC URLs, they completely override parent's. If child has no RPC URLs, parent's are inherited.
     pub fn merge_with_parent(&self, parent: &Self) -> Self {
         Self {
             network: self.network.clone(),
             from: self.from.clone(),
-            rpc_urls: self.rpc_urls.clone().or_else(|| parent.rpc_urls.clone()),
+            rpc_urls: merge_optional_rpc_config_vecs(&self.rpc_urls, &parent.rpc_urls),
             explorer_urls: self
                 .explorer_urls
                 .clone()
@@ -92,6 +126,29 @@ impl NetworkConfigCommon {
             is_testnet: self.is_testnet.or(parent.is_testnet),
             tags: merge_tags(&self.tags, &parent.tags),
         }
+    }
+}
+
+/// Combines child and parent RPC config vectors.
+///
+/// Behavior:
+/// - If child has RPC configs: Use child's configs (allows weight specification for child URLs).
+/// - If child has no RPC configs: Use parent's configs (inheritance).
+///
+/// # Arguments
+/// * `child` - Optional vector of child RPC configs.
+/// * `parent` - Optional vector of parent RPC configs.
+///
+/// # Returns
+/// An optional vector containing child's RPC configs, or parent's if child has none, or `None` if both inputs are `None`.
+pub fn merge_optional_rpc_config_vecs(
+    child: &Option<Vec<RpcConfig>>,
+    parent: &Option<Vec<RpcConfig>>,
+) -> Option<Vec<RpcConfig>> {
+    match (child, parent) {
+        (Some(child), _) => Some(child.clone()), // Child overrides parent
+        (None, Some(parent)) => Some(parent.clone()), // Inherit from parent
+        (None, None) => None,
     }
 }
 
@@ -198,8 +255,9 @@ mod tests {
 
     #[test]
     fn test_validate_invalid_rpc_url_format() {
+        use crate::models::RpcConfig;
         let mut config = create_network_common("test-network");
-        config.rpc_urls = Some(vec!["invalid-url".to_string()]);
+        config.rpc_urls = Some(vec![RpcConfig::new("invalid-url".to_string())]);
 
         let result = config.validate();
         assert!(result.is_err());
@@ -211,11 +269,12 @@ mod tests {
 
     #[test]
     fn test_validate_multiple_invalid_rpc_urls() {
+        use crate::models::RpcConfig;
         let mut config = create_network_common("test-network");
         config.rpc_urls = Some(vec![
-            "https://valid.example.com".to_string(),
-            "invalid-url".to_string(),
-            "also-invalid".to_string(),
+            RpcConfig::new("https://valid.example.com".to_string()),
+            RpcConfig::new("invalid-url".to_string()),
+            RpcConfig::new("also-invalid".to_string()),
         ]);
 
         let result = config.validate();
@@ -228,12 +287,13 @@ mod tests {
 
     #[test]
     fn test_validate_various_valid_rpc_url_formats() {
+        use crate::models::RpcConfig;
         let mut config = create_network_common("test-network");
         config.rpc_urls = Some(vec![
-            "https://mainnet.infura.io/v3/key".to_string(),
-            "http://localhost:8545".to_string(),
-            "wss://ws.example.com".to_string(),
-            "https://rpc.example.com:8080/path".to_string(),
+            RpcConfig::new("https://mainnet.infura.io/v3/key".to_string()),
+            RpcConfig::new("http://localhost:8545".to_string()),
+            RpcConfig::new("wss://ws.example.com".to_string()),
+            RpcConfig::new("https://rpc.example.com:8080/path".to_string()),
         ]);
 
         let result = config.validate();
@@ -242,8 +302,11 @@ mod tests {
 
     #[test]
     fn test_validate_inheriting_network_with_rpc_urls() {
+        use crate::models::RpcConfig;
         let mut config = create_network_common_with_parent("child-network", "parent-network");
-        config.rpc_urls = Some(vec!["https://override.example.com".to_string()]);
+        config.rpc_urls = Some(vec![RpcConfig::new(
+            "https://override.example.com".to_string(),
+        )]);
 
         let result = config.validate();
         assert!(result.is_ok());
@@ -251,8 +314,9 @@ mod tests {
 
     #[test]
     fn test_validate_inheriting_network_with_invalid_rpc_urls() {
+        use crate::models::RpcConfig;
         let mut config = create_network_common_with_parent("child-network", "parent-network");
-        config.rpc_urls = Some(vec!["invalid-url".to_string()]);
+        config.rpc_urls = Some(vec![RpcConfig::new("invalid-url".to_string())]);
 
         let result = config.validate();
         assert!(result.is_err());
@@ -264,10 +328,13 @@ mod tests {
 
     #[test]
     fn test_merge_with_parent_child_overrides() {
+        use crate::models::RpcConfig;
         let parent = NetworkConfigCommon {
             network: "parent".to_string(),
             from: None,
-            rpc_urls: Some(vec!["https://parent-rpc.example.com".to_string()]),
+            rpc_urls: Some(vec![RpcConfig::new(
+                "https://parent-rpc.example.com".to_string(),
+            )]),
             explorer_urls: Some(vec!["https://parent-explorer.example.com".to_string()]),
             average_blocktime_ms: Some(10000),
             is_testnet: Some(true),
@@ -277,7 +344,9 @@ mod tests {
         let child = NetworkConfigCommon {
             network: "child".to_string(),
             from: Some("parent".to_string()),
-            rpc_urls: Some(vec!["https://child-rpc.example.com".to_string()]),
+            rpc_urls: Some(vec![RpcConfig::new(
+                "https://child-rpc.example.com".to_string(),
+            )]),
             explorer_urls: Some(vec!["https://child-explorer.example.com".to_string()]),
             average_blocktime_ms: Some(15000),
             is_testnet: Some(false),
@@ -288,9 +357,12 @@ mod tests {
 
         assert_eq!(result.network, "child");
         assert_eq!(result.from, Some("parent".to_string()));
+        // Child's RPC URLs override parent's
         assert_eq!(
             result.rpc_urls,
-            Some(vec!["https://child-rpc.example.com".to_string()])
+            Some(vec![RpcConfig::new(
+                "https://child-rpc.example.com".to_string()
+            )])
         );
         assert_eq!(result.average_blocktime_ms, Some(15000));
         assert_eq!(result.is_testnet, Some(false));
@@ -302,10 +374,13 @@ mod tests {
 
     #[test]
     fn test_merge_with_parent_child_inherits() {
+        use crate::models::RpcConfig;
         let parent = NetworkConfigCommon {
             network: "parent".to_string(),
             from: None,
-            rpc_urls: Some(vec!["https://parent-rpc.example.com".to_string()]),
+            rpc_urls: Some(vec![RpcConfig::new(
+                "https://parent-rpc.example.com".to_string(),
+            )]),
             explorer_urls: Some(vec!["https://parent-explorer.example.com".to_string()]),
             average_blocktime_ms: Some(10000),
             is_testnet: Some(true),
@@ -328,7 +403,9 @@ mod tests {
         assert_eq!(result.from, Some("parent".to_string()));
         assert_eq!(
             result.rpc_urls,
-            Some(vec!["https://parent-rpc.example.com".to_string()])
+            Some(vec![RpcConfig::new(
+                "https://parent-rpc.example.com".to_string()
+            )])
         );
         assert_eq!(
             result.explorer_urls,
@@ -341,10 +418,13 @@ mod tests {
 
     #[test]
     fn test_merge_with_parent_mixed_inheritance() {
+        use crate::models::RpcConfig;
         let parent = NetworkConfigCommon {
             network: "parent".to_string(),
             from: None,
-            rpc_urls: Some(vec!["https://parent-rpc.example.com".to_string()]),
+            rpc_urls: Some(vec![RpcConfig::new(
+                "https://parent-rpc.example.com".to_string(),
+            )]),
             explorer_urls: Some(vec!["https://parent-explorer.example.com".to_string()]),
             average_blocktime_ms: Some(10000),
             is_testnet: Some(true),
@@ -354,19 +434,24 @@ mod tests {
         let child = NetworkConfigCommon {
             network: "child".to_string(),
             from: Some("parent".to_string()),
-            rpc_urls: Some(vec!["https://child-rpc.example.com".to_string()]), // Override
+            rpc_urls: Some(vec![RpcConfig::new(
+                "https://child-rpc.example.com".to_string(),
+            )]), // Override
             explorer_urls: Some(vec!["https://child-explorer.example.com".to_string()]), // Override
-            average_blocktime_ms: None,                                        // Inherit
-            is_testnet: Some(false),                                           // Override
-            tags: Some(vec!["child-tag".to_string()]),                         // Merge
+            average_blocktime_ms: None,                                                  // Inherit
+            is_testnet: Some(false),                                                     // Override
+            tags: Some(vec!["child-tag".to_string()]),                                   // Merge
         };
 
         let result = child.merge_with_parent(&parent);
 
         assert_eq!(result.network, "child");
+        // Child's RPC URLs override parent's (complete override)
         assert_eq!(
             result.rpc_urls,
-            Some(vec!["https://child-rpc.example.com".to_string()])
+            Some(vec![RpcConfig::new(
+                "https://child-rpc.example.com".to_string()
+            )])
         );
         assert_eq!(
             result.explorer_urls,
@@ -419,10 +504,11 @@ mod tests {
 
     #[test]
     fn test_merge_with_parent_complex_tag_merging() {
+        use crate::models::RpcConfig;
         let parent = NetworkConfigCommon {
             network: "parent".to_string(),
             from: None,
-            rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+            rpc_urls: Some(vec![RpcConfig::new("https://rpc.example.com".to_string())]),
             explorer_urls: Some(vec!["https://explorer.example.com".to_string()]),
             average_blocktime_ms: Some(12000),
             is_testnet: Some(true),
@@ -611,8 +697,9 @@ mod tests {
 
     #[test]
     fn test_validate_with_unicode_rpc_urls() {
+        use crate::models::RpcConfig;
         let mut config = create_network_common("test-network");
-        config.rpc_urls = Some(vec!["https://测试.example.com".to_string()]);
+        config.rpc_urls = Some(vec![RpcConfig::new("https://测试.example.com".to_string())]);
 
         let result = config.validate();
         assert!(result.is_ok());
@@ -620,10 +707,13 @@ mod tests {
 
     #[test]
     fn test_merge_with_parent_preserves_child_network_name() {
+        use crate::models::RpcConfig;
         let parent = NetworkConfigCommon {
             network: "parent-name".to_string(),
             from: None,
-            rpc_urls: Some(vec!["https://parent.example.com".to_string()]),
+            rpc_urls: Some(vec![RpcConfig::new(
+                "https://parent.example.com".to_string(),
+            )]),
             explorer_urls: Some(vec!["https://parent.example.com".to_string()]),
             average_blocktime_ms: Some(10000),
             is_testnet: Some(true),
@@ -649,10 +739,13 @@ mod tests {
 
     #[test]
     fn test_merge_with_parent_preserves_child_from_field() {
+        use crate::models::RpcConfig;
         let parent = NetworkConfigCommon {
             network: "parent".to_string(),
             from: Some("grandparent".to_string()),
-            rpc_urls: Some(vec!["https://parent.example.com".to_string()]),
+            rpc_urls: Some(vec![RpcConfig::new(
+                "https://parent.example.com".to_string(),
+            )]),
             explorer_urls: Some(vec!["https://parent.example.com".to_string()]),
             average_blocktime_ms: Some(10000),
             is_testnet: Some(true),
@@ -673,5 +766,178 @@ mod tests {
 
         // Child's 'from' field should be preserved, not inherited from parent
         assert_eq!(result.from, Some("parent".to_string()));
+    }
+
+    #[test]
+    fn test_deserialize_simple_string_array_format() {
+        // Test that simple format (array of strings) is correctly converted to RpcConfig
+        let json = r#"{
+            "network": "test-network",
+            "rpc_urls": ["https://rpc1.example.com", "https://rpc2.example.com"]
+        }"#;
+
+        let config: NetworkConfigCommon = serde_json::from_str(json).unwrap();
+        assert!(config.rpc_urls.is_some());
+        let rpc_configs = config.rpc_urls.unwrap();
+        assert_eq!(rpc_configs.len(), 2);
+        assert_eq!(rpc_configs[0].url, "https://rpc1.example.com");
+        assert_eq!(rpc_configs[0].weight, crate::constants::DEFAULT_RPC_WEIGHT);
+        assert_eq!(rpc_configs[1].url, "https://rpc2.example.com");
+        assert_eq!(rpc_configs[1].weight, crate::constants::DEFAULT_RPC_WEIGHT);
+    }
+
+    #[test]
+    fn test_deserialize_extended_object_array_format() {
+        // Test that extended format (array of RpcConfig objects) works correctly
+        let json = r#"{
+            "network": "test-network",
+            "rpc_urls": [
+                {"url": "https://rpc1.example.com", "weight": 50},
+                {"url": "https://rpc2.example.com", "weight": 100}
+            ]
+        }"#;
+
+        let config: NetworkConfigCommon = serde_json::from_str(json).unwrap();
+        assert!(config.rpc_urls.is_some());
+        let rpc_configs = config.rpc_urls.unwrap();
+        assert_eq!(rpc_configs.len(), 2);
+        assert_eq!(rpc_configs[0].url, "https://rpc1.example.com");
+        assert_eq!(rpc_configs[0].weight, 50);
+        assert_eq!(rpc_configs[1].url, "https://rpc2.example.com");
+        assert_eq!(rpc_configs[1].weight, 100);
+    }
+
+    #[test]
+    fn test_deserialize_object_array_with_default_weight() {
+        // Test that RpcConfig objects without weight get default weight
+        let json = r#"{
+            "network": "test-network",
+            "rpc_urls": [
+                {"url": "https://rpc1.example.com"}
+            ]
+        }"#;
+
+        let config: NetworkConfigCommon = serde_json::from_str(json).unwrap();
+        assert!(config.rpc_urls.is_some());
+        let rpc_configs = config.rpc_urls.unwrap();
+        assert_eq!(rpc_configs.len(), 1);
+        assert_eq!(rpc_configs[0].url, "https://rpc1.example.com");
+        assert_eq!(rpc_configs[0].weight, crate::constants::DEFAULT_RPC_WEIGHT);
+    }
+
+    #[test]
+    fn test_serialize_preserves_weights() {
+        // Test that serialization preserves weights
+        use crate::models::RpcConfig;
+        let config = NetworkConfigCommon {
+            network: "test-network".to_string(),
+            from: None,
+            rpc_urls: Some(vec![
+                RpcConfig::with_weight("https://rpc1.example.com".to_string(), 50).unwrap(),
+                RpcConfig::new("https://rpc2.example.com".to_string()),
+            ]),
+            explorer_urls: None,
+            average_blocktime_ms: None,
+            is_testnet: None,
+            tags: None,
+        };
+
+        let serialized = serde_json::to_string(&config).unwrap();
+        let deserialized: NetworkConfigCommon = serde_json::from_str(&serialized).unwrap();
+
+        assert!(deserialized.rpc_urls.is_some());
+        let rpc_configs = deserialized.rpc_urls.unwrap();
+        assert_eq!(rpc_configs.len(), 2);
+        assert_eq!(rpc_configs[0].url, "https://rpc1.example.com");
+        assert_eq!(rpc_configs[0].weight, 50);
+        assert_eq!(rpc_configs[1].url, "https://rpc2.example.com");
+        assert_eq!(rpc_configs[1].weight, crate::constants::DEFAULT_RPC_WEIGHT);
+    }
+
+    #[test]
+    fn test_roundtrip_simple_to_extended_format() {
+        // Test that simple format can be read and then serialized in extended format
+        let simple_json = r#"{
+            "network": "test-network",
+            "rpc_urls": ["https://rpc1.example.com", "https://rpc2.example.com"]
+        }"#;
+
+        let config: NetworkConfigCommon = serde_json::from_str(simple_json).unwrap();
+        let serialized = serde_json::to_string(&config).unwrap();
+
+        // The serialized version should be in extended format (with weights)
+        assert!(serialized.contains("\"url\""));
+        assert!(serialized.contains("\"weight\""));
+
+        // Deserialize again to verify it still works
+        let deserialized: NetworkConfigCommon = serde_json::from_str(&serialized).unwrap();
+        assert!(deserialized.rpc_urls.is_some());
+        let rpc_configs = deserialized.rpc_urls.unwrap();
+        assert_eq!(rpc_configs.len(), 2);
+        assert_eq!(rpc_configs[0].url, "https://rpc1.example.com");
+        assert_eq!(rpc_configs[1].url, "https://rpc2.example.com");
+    }
+
+    #[test]
+    fn test_merge_rpc_configs_override_behavior() {
+        // Test that child RPC configs completely override parent configs
+        use crate::models::RpcConfig;
+        let parent = NetworkConfigCommon {
+            network: "parent".to_string(),
+            from: None,
+            rpc_urls: Some(vec![
+                RpcConfig::with_weight("https://rpc1.example.com".to_string(), 100).unwrap(),
+                RpcConfig::with_weight("https://rpc2.example.com".to_string(), 100).unwrap(),
+            ]),
+            explorer_urls: None,
+            average_blocktime_ms: None,
+            is_testnet: None,
+            tags: None,
+        };
+
+        let child = NetworkConfigCommon {
+            network: "child".to_string(),
+            from: Some("parent".to_string()),
+            // Child completely overrides parent's RPC URLs
+            rpc_urls: Some(vec![
+                RpcConfig::with_weight("https://child-rpc1.example.com".to_string(), 50).unwrap(),
+                RpcConfig::with_weight("https://child-rpc2.example.com".to_string(), 75).unwrap(),
+            ]),
+            explorer_urls: None,
+            average_blocktime_ms: None,
+            is_testnet: None,
+            tags: None,
+        };
+
+        let result = child.merge_with_parent(&parent);
+
+        // Should have only child's RPC configs (complete override)
+        assert!(result.rpc_urls.is_some());
+        let rpc_configs = result.rpc_urls.unwrap();
+        assert_eq!(rpc_configs.len(), 2);
+
+        // Find each config by URL
+        let child_rpc1 = rpc_configs
+            .iter()
+            .find(|c| c.url == "https://child-rpc1.example.com")
+            .unwrap();
+        let child_rpc2 = rpc_configs
+            .iter()
+            .find(|c| c.url == "https://child-rpc2.example.com")
+            .unwrap();
+
+        // Should have child's weights
+        assert_eq!(child_rpc1.weight, 50);
+        assert_eq!(child_rpc2.weight, 75);
+
+        // Should not have any parent URLs
+        assert!(rpc_configs
+            .iter()
+            .find(|c| c.url == "https://rpc1.example.com")
+            .is_none());
+        assert!(rpc_configs
+            .iter()
+            .find(|c| c.url == "https://rpc2.example.com")
+            .is_none());
     }
 }

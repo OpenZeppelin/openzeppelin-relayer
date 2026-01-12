@@ -2,7 +2,7 @@
  * Example plugin using 'handler' export pattern
  */
 
-import { PluginAPI, Speed } from "@openzeppelin/relayer-sdk";
+import { PluginContext, Speed } from "@openzeppelin/relayer-sdk";
 
 type Params = {
     destinationAddress: string;
@@ -13,7 +13,7 @@ type Params = {
  * Plugin handler function - this is the entry point
  * Export it as 'handler' and the relayer will automatically call it
  */
-export async function handler(api: PluginAPI, params: Params): Promise<string> {
+export async function handler({ api, params }: PluginContext): Promise<string> {
     console.info("Plugin started with new handler pattern...");
 
     /**

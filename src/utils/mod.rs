@@ -47,5 +47,11 @@ pub use encryption_context::*;
 mod json_rpc_error;
 pub use json_rpc_error::*;
 
+mod error_sanitization;
+pub use error_sanitization::*;
+
+mod url;
+pub use url::*;
+
 #[cfg(test)]
 pub mod mocks;

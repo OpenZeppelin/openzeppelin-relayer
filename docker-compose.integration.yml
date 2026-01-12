@@ -80,10 +80,13 @@ services:
       retries: 15
       start_period: 10s
   integration-tests:
+    image: openzeppelin-relayer-integration:latest
     build:
       context: .
       dockerfile: Dockerfile.integration
+      target: runtime  # Use runtime stage that executes pre-built binary with coverage
     container_name: integration-tests
+    user: ${HOST_UID:-1000}:${HOST_GID:-1000}  # Run as host user for proper file permissions
     depends_on:
       relayer:
         condition: service_healthy
@@ -101,10 +104,10 @@ services:
     volumes:
       - ./tests/integration/config:/app/config:ro
       - ./config/networks:/app/networks:ro
-      # Optional: mount test results output
-      - ./test-results:/app/test-results
-    # Uses the pre-built binary from Dockerfile.integration
-    # The binary runs with --ignored --nocapture --test-threads=1 by default
+      # Mount coverage output directory
+      - ./coverage:/app/coverage
+      # Mount profraw directory for debugging raw coverage data
+      - ./profraw:/app/profraw
 networks:
   integration:
     driver: bridge

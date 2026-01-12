@@ -1817,13 +1817,15 @@ mod tests {
                 .with(eq(NetworkType::Evm), eq(1))
                 .returning(|_, _| {
                     use crate::config::{EvmNetworkConfig, NetworkConfigCommon};
-                    use crate::models::{NetworkConfigData, NetworkRepoModel};
+                    use crate::models::{NetworkConfigData, NetworkRepoModel, RpcConfig};
 
                     let config = EvmNetworkConfig {
                         common: NetworkConfigCommon {
                             network: "mainnet".to_string(),
                             from: None,
-                            rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+                            rpc_urls: Some(vec![RpcConfig::new(
+                                "https://rpc.example.com".to_string(),
+                            )]),
                             explorer_urls: None,
                             average_blocktime_ms: Some(12000),
                             is_testnet: Some(false),
@@ -2004,7 +2006,9 @@ mod tests {
                         common: NetworkConfigCommon {
                             network: "mainnet".to_string(),
                             from: None,
-                            rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+                            rpc_urls: Some(vec![crate::models::RpcConfig::new(
+                                "https://rpc.example.com".to_string(),
+                            )]),
                             explorer_urls: None,
                             average_blocktime_ms: Some(12000),
                             is_testnet: Some(false),

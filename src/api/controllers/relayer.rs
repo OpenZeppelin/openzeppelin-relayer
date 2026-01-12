@@ -965,7 +965,7 @@ mod tests {
     /// Helper function to create a mock Solana network
     fn create_mock_solana_network() -> crate::models::NetworkRepoModel {
         use crate::config::{NetworkConfigCommon, SolanaNetworkConfig};
-        use crate::models::{NetworkConfigData, NetworkRepoModel, NetworkType};
+        use crate::models::{NetworkConfigData, NetworkRepoModel, NetworkType, RpcConfig};
 
         NetworkRepoModel {
             id: "test".to_string(),
@@ -975,7 +975,7 @@ mod tests {
                 common: NetworkConfigCommon {
                     network: "test".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["http://localhost:8899".to_string()]),
+                    rpc_urls: Some(vec![RpcConfig::new("http://localhost:8899".to_string())]),
                     explorer_urls: None,
                     average_blocktime_ms: Some(400),
                     is_testnet: Some(true),
@@ -988,7 +988,7 @@ mod tests {
     /// Helper function to create a mock Stellar network
     fn create_mock_stellar_network() -> crate::models::NetworkRepoModel {
         use crate::config::{NetworkConfigCommon, StellarNetworkConfig};
-        use crate::models::{NetworkConfigData, NetworkRepoModel, NetworkType};
+        use crate::models::{NetworkConfigData, NetworkRepoModel, NetworkType, RpcConfig};
 
         NetworkRepoModel {
             id: "test".to_string(),
@@ -998,7 +998,9 @@ mod tests {
                 common: NetworkConfigCommon {
                     network: "test".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["https://horizon-testnet.stellar.org".to_string()]),
+                    rpc_urls: Some(vec![RpcConfig::new(
+                        "https://horizon-testnet.stellar.org".to_string(),
+                    )]),
                     explorer_urls: None,
                     average_blocktime_ms: Some(5000),
                     is_testnet: Some(true),
@@ -1836,6 +1838,7 @@ mod tests {
         relayer.custom_rpc_urls = Some(vec![crate::models::RpcConfig {
             url: "https://custom-rpc.example.com".to_string(),
             weight: 50,
+            ..Default::default()
         }]);
         let app_state =
             create_mock_app_state(None, Some(vec![relayer]), None, None, None, None).await;

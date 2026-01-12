@@ -162,11 +162,12 @@ mod tests {
     use super::*;
 
     fn create_evm_config(name: &str, chain_id: u64, symbol: &str) -> EvmNetworkConfig {
+        use crate::models::RpcConfig;
         EvmNetworkConfig {
             common: NetworkConfigCommon {
                 network: name.to_string(),
                 from: None,
-                rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+                rpc_urls: Some(vec![RpcConfig::new("https://rpc.example.com".to_string())]),
                 explorer_urls: Some(vec!["https://explorer.example.com".to_string()]),
                 average_blocktime_ms: Some(12000),
                 is_testnet: Some(false),
@@ -181,11 +182,14 @@ mod tests {
     }
 
     fn create_solana_config(name: &str, is_testnet: bool) -> SolanaNetworkConfig {
+        use crate::models::RpcConfig;
         SolanaNetworkConfig {
             common: NetworkConfigCommon {
                 network: name.to_string(),
                 from: None,
-                rpc_urls: Some(vec!["https://api.mainnet-beta.solana.com".to_string()]),
+                rpc_urls: Some(vec![RpcConfig::new(
+                    "https://api.mainnet-beta.solana.com".to_string(),
+                )]),
                 explorer_urls: Some(vec!["https://explorer.solana.com".to_string()]),
                 average_blocktime_ms: Some(400),
                 is_testnet: Some(is_testnet),
@@ -195,11 +199,14 @@ mod tests {
     }
 
     fn create_stellar_config(name: &str, passphrase: Option<&str>) -> StellarNetworkConfig {
+        use crate::models::RpcConfig;
         StellarNetworkConfig {
             common: NetworkConfigCommon {
                 network: name.to_string(),
                 from: None,
-                rpc_urls: Some(vec!["https://horizon.stellar.org".to_string()]),
+                rpc_urls: Some(vec![RpcConfig::new(
+                    "https://horizon.stellar.org".to_string(),
+                )]),
                 explorer_urls: Some(vec!["https://stellarchain.io".to_string()]),
                 average_blocktime_ms: Some(5000),
                 is_testnet: Some(passphrase.is_none()),
@@ -336,9 +343,10 @@ mod tests {
         assert_eq!(common.network, "mainnet");
         assert_eq!(common.is_testnet, Some(false));
         assert_eq!(common.average_blocktime_ms, Some(12000));
+        use crate::models::RpcConfig;
         assert_eq!(
             common.rpc_urls,
-            Some(vec!["https://rpc.example.com".to_string()])
+            Some(vec![RpcConfig::new("https://rpc.example.com".to_string())])
         );
     }
 
@@ -453,11 +461,12 @@ mod tests {
 
     #[test]
     fn test_empty_optional_fields() {
+        use crate::models::RpcConfig;
         let minimal_config = EvmNetworkConfig {
             common: NetworkConfigCommon {
                 network: "minimal".to_string(),
                 from: None,
-                rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+                rpc_urls: Some(vec![RpcConfig::new("https://rpc.example.com".to_string())]),
                 explorer_urls: None,
                 average_blocktime_ms: None,
                 is_testnet: None,

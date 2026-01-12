@@ -30,3 +30,10 @@ pub const STELLAR_SMALLEST_UNIT_NAME: &str = "stroop";
 pub const SOLANA_SMALLEST_UNIT_NAME: &str = "lamport";
 
 pub const DEFAULT_RPC_WEIGHT: u8 = 100;
+
+// === Provider Health Defaults ===
+pub const DEFAULT_PROVIDER_FAILURE_THRESHOLD: u32 = 3;
+pub const DEFAULT_PROVIDER_PAUSE_DURATION_SECS: u64 = 60; // 1 minute
+/// Duration in seconds after which failures are considered stale and reset.
+/// This allows providers to naturally recover over time even without explicit success calls.
+pub const DEFAULT_PROVIDER_FAILURE_EXPIRATION_SECS: u64 = 60; // 1 minute
