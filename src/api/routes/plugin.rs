@@ -60,6 +60,22 @@ fn extract_query_params(http_req: &HttpRequest) -> HashMap<String, Vec<String>> 
     query_params
 }
 
+/// Resolves the effective route from path and query parameters.
+/// Path route takes precedence; if empty, falls back to `route` query parameter.
+fn resolve_route(path_route: &str, http_req: &HttpRequest) -> String {
+    if !path_route.is_empty() {
+        return path_route.to_string();
+    }
+
+    // Check for route in query parameters
+    let query_params = extract_query_params(http_req);
+    query_params
+        .get("route")
+        .and_then(|values| values.first())
+        .cloned()
+        .unwrap_or_default()
+}
+
 fn build_plugin_call_request_from_post_body(
     route: &str,
     http_req: &HttpRequest,
@@ -113,7 +129,8 @@ async fn plugin_call(
     body: web::Bytes,
     data: web::ThinData<DefaultAppState>,
 ) -> Result<HttpResponse, ApiError> {
-    let (plugin_id, route) = params.into_inner();
+    let (plugin_id, path_route) = params.into_inner();
+    let route = resolve_route(&path_route, &http_req);
 
     let mut plugin_call_request =
         match build_plugin_call_request_from_post_body(&route, &http_req, body.as_ref()) {
@@ -133,7 +150,8 @@ async fn plugin_call_get(
     http_req: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> Result<HttpResponse, ApiError> {
-    let (plugin_id, route) = params.into_inner();
+    let (plugin_id, path_route) = params.into_inner();
+    let route = resolve_route(&path_route, &http_req);
 
     // Check if GET requests are allowed for this plugin
     let plugin = data
@@ -230,7 +248,8 @@ mod tests {
         body: web::Bytes,
         captured: web::Data<CapturedRequest>,
     ) -> impl Responder {
-        let (_plugin_id, route) = params.into_inner();
+        let (_plugin_id, path_route) = params.into_inner();
+        let route = resolve_route(&path_route, &http_req);
         match build_plugin_call_request_from_post_body(&route, &http_req, body.as_ref()) {
             Ok(mut req) => {
                 req.method = Some("POST".to_string());
@@ -252,7 +271,8 @@ mod tests {
         http_req: HttpRequest,
         captured: web::Data<CapturedRequest>,
     ) -> impl Responder {
-        let (_plugin_id, route) = params.into_inner();
+        let (_plugin_id, path_route) = params.into_inner();
+        let route = resolve_route(&path_route, &http_req);
         // Simulate what plugin_call_get does for GET requests
         let plugin_call_request = PluginCallRequest {
             params: serde_json::json!({}),
@@ -932,6 +952,70 @@ mod tests {
                 uri
             );
         }
+    }
+
+    /// Verifies that route can be specified via query parameter when path route is empty
+    #[actix_web::test]
+    async fn test_route_from_query_parameter() {
+        let captured = web::Data::new(CapturedRequest::default());
+        let app = test::init_service(
+            App::new()
+                .app_data(captured.clone())
+                .service(
+                    web::resource("/plugins/{plugin_id}/call{route:.*}")
+                        .route(web::post().to(capturing_plugin_call_handler)),
+                )
+                .configure(init),
+        )
+        .await;
+
+        // Test route from query parameter
+        let req = test::TestRequest::post()
+            .uri("/plugins/test/call?route=/verify")
+            .insert_header(("Content-Type", "application/json"))
+            .set_json(serde_json::json!({}))
+            .to_request();
+
+        test::call_service(&app, req).await;
+
+        let captured_req = captured.get().expect("Request should have been captured");
+        assert_eq!(
+            captured_req.route,
+            Some("/verify".to_string()),
+            "Route should be extracted from query parameter"
+        );
+    }
+
+    /// Verifies that path route takes precedence over query parameter
+    #[actix_web::test]
+    async fn test_path_route_takes_precedence_over_query() {
+        let captured = web::Data::new(CapturedRequest::default());
+        let app = test::init_service(
+            App::new()
+                .app_data(captured.clone())
+                .service(
+                    web::resource("/plugins/{plugin_id}/call{route:.*}")
+                        .route(web::post().to(capturing_plugin_call_handler)),
+                )
+                .configure(init),
+        )
+        .await;
+
+        // Test that path route takes precedence over query param
+        let req = test::TestRequest::post()
+            .uri("/plugins/test/call/settle?route=/verify")
+            .insert_header(("Content-Type", "application/json"))
+            .set_json(serde_json::json!({}))
+            .to_request();
+
+        test::call_service(&app, req).await;
+
+        let captured_req = captured.get().expect("Request should have been captured");
+        assert_eq!(
+            captured_req.route,
+            Some("/settle".to_string()),
+            "Path route should take precedence over query parameter"
+        );
     }
 
     /// Verifies that query parameters are correctly extracted and passed

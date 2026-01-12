@@ -1187,13 +1187,13 @@
         ]
       }
     },
-    "/api/v1/plugins/{plugin_id}/call{route}": {
+    "/api/v1/plugins/{plugin_id}/call": {
       "get": {
         "tags": [
           "Plugins"
         ],
         "summary": "Execute a plugin via GET (must be enabled per plugin)",
-        "description": "This endpoint is disabled by default. To enable it for a given plugin, set\n`allow_get_invocation: true` in the plugin configuration.\n\nWhen invoked via GET:\n- `params` is an empty object (`{}`)\n- query parameters are passed to the plugin handler via `context.query`\n- wildcard route routing is supported the same way as POST (see `doc_call_plugin`)",
+        "description": "This endpoint is disabled by default. To enable it for a given plugin, set\n`allow_get_invocation: true` in the plugin configuration.\n\nWhen invoked via GET:\n- `params` is an empty object (`{}`)\n- query parameters are passed to the plugin handler via `context.query`\n- wildcard route routing is supported the same way as POST (see `doc_call_plugin`)\n- Use the `route` query parameter or append the route to the URL path",
         "operationId": "callPluginGet",
         "parameters": [
           {
@@ -1207,13 +1207,12 @@
           },
           {
             "name": "route",
-            "in": "path",
-            "description": "Optional route suffix captured by the server. Use an empty string for the default route, or include a leading slash (e.g. '/supported'). May include additional slashes for nested routes.",
-            "required": true,
+            "in": "query",
+            "description": "Optional route suffix for custom routing (e.g., '/verify'). Alternative to appending the route to the URL path.",
+            "required": false,
             "schema": {
               "type": "string"
-            },
-            "example": "/supported"
+            }
           }
         ],
         "responses": {
@@ -1314,7 +1313,7 @@
           "Plugins"
         ],
         "summary": "Execute a plugin with optional wildcard route routing",
-        "description": "Logs and traces are only returned when the plugin is configured with `emit_logs` / `emit_traces`.\nPlugin-provided errors are normalized into a consistent payload (`code`, `details`) and a derived\nmessage so downstream clients receive a stable shape regardless of how the handler threw.\n\nThe endpoint supports wildcard route routing, allowing plugins to implement custom routing logic:\n- `/api/v1/plugins/{plugin_id}/call` - Default endpoint (route = \"\")\n- `/api/v1/plugins/{plugin_id}/call/verify` - Custom route (route = \"/verify\")\n- `/api/v1/plugins/{plugin_id}/call/settle` - Custom route (route = \"/settle\")\n- `/api/v1/plugins/{plugin_id}/call/api/v1/action` - Nested route (route = \"/api/v1/action\")\n\nThe route is passed to the plugin handler via the `context.route` field.",
+        "description": "Logs and traces are only returned when the plugin is configured with `emit_logs` / `emit_traces`.\nPlugin-provided errors are normalized into a consistent payload (`code`, `details`) and a derived\nmessage so downstream clients receive a stable shape regardless of how the handler threw.\n\nThe endpoint supports wildcard route routing, allowing plugins to implement custom routing logic:\n- `/api/v1/plugins/{plugin_id}/call` - Default endpoint (route = \"\")\n- `/api/v1/plugins/{plugin_id}/call?route=/verify` - Custom route via query parameter\n- `/api/v1/plugins/{plugin_id}/call/verify` - Custom route via URL path (route = \"/verify\")\n\nThe route is passed to the plugin handler via the `context.route` field.\nYou can specify a custom route either by appending it to the URL path or by using the `route` query parameter.",
         "operationId": "callPlugin",
         "parameters": [
           {
@@ -1328,13 +1327,12 @@
           },
           {
             "name": "route",
-            "in": "path",
-            "description": "Optional route suffix captured by the server. Use an empty string for the default route, or include a leading slash (e.g. '/verify'). May include additional slashes for nested routes (e.g. '/api/v1/action').",
-            "required": true,
+            "in": "query",
+            "description": "Optional route suffix for custom routing (e.g., '/verify'). Alternative to appending the route to the URL path.",
+            "required": false,
             "schema": {
               "type": "string"
-            },
-            "example": "/verify"
+            }
           }
         ],
         "requestBody": {
