@@ -7,7 +7,6 @@
 [![CI](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/ci.yaml/badge.svg)](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/ci.yaml)
 [![Release Workflow](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/release-please.yml/badge.svg)](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/release-please.yml)
 
-
 This relayer service enables interaction with blockchain networks through transaction submissions. It offers multi-chain support and an extensible architecture for adding new chains.
 
 [User Docs](https://docs.openzeppelin.com/relayer/) | [Quickstart](https://docs.openzeppelin.com/relayer/quickstart)
@@ -50,23 +49,21 @@ View the [Usage](https://docs.openzeppelin.com/relayer#running_the_relayer) docu
 
 The repository includes several ready-to-use examples to help you get started with different configurations:
 
-| Example                                                                              | Description                                             |
-| ------------------------------------------------------------------------------------ | ------------------------------------------------------- |
-| [`basic-example`](./examples/basic-example/)                                         | Simple setup with Redis                                 |
-| [`redis-storage`](./examples/redis-storage/)                                         | Simple setup with Redis for storage                     |
-| [`basic-example-logging`](./examples/basic-example-logging/)                         | Configuration with file-based logging                   |
-| [`basic-example-metrics`](./examples/basic-example-metrics/)                         | Setup with Prometheus and Grafana metrics               |
-| [`vault-secret-signer`](./examples/vault-secret-signer/)                             | Using HashiCorp Vault for key management                |
-| [`vault-transit-signer`](./examples/vault-transit-signer/)                           | Using Vault Transit for secure signing                  |
-| [`evm-turnkey-signer`](./examples/evm-turnkey-signer/)                               | Using Turnkey Signer for EVM secure signing             |
-| [`solana-turnkey-signer`](./examples/solana-turnkey-signer/)                         | Using Turnkey Signer for Solana secure signing          |
-| [`solana-google-cloud-kms-signer`](./examples/solana-google-cloud-kms-signer/)       | Using Google Cloud KMS Signer for Solana secure signing |
+| Example                                                                              | Description                                              |
+| ------------------------------------------------------------------------------------ | -------------------------------------------------------- |
+| [`basic-example`](./examples/basic-example/)                                         | Simple setup with Redis                                  |
+| [`redis-storage`](./examples/redis-storage/)                                         | Simple setup with Redis for storage                      |
+| [`basic-example-logging`](./examples/basic-example-logging/)                         | Configuration with file-based logging                    |
+| [`basic-example-metrics`](./examples/basic-example-metrics/)                         | Setup with Prometheus and Grafana metrics                |
+| [`vault-secret-signer`](./examples/vault-secret-signer/)                             | Using HashiCorp Vault for key management                 |
+| [`vault-transit-signer`](./examples/vault-transit-signer/)                           | Using Vault Transit for secure signing                   |
+| [`evm-turnkey-signer`](./examples/evm-turnkey-signer/)                               | Using Turnkey Signer for EVM secure signing              |
+| [`solana-turnkey-signer`](./examples/solana-turnkey-signer/)                         | Using Turnkey Signer for Solana secure signing           |
+| [`solana-google-cloud-kms-signer`](./examples/solana-google-cloud-kms-signer/)       | Using Google Cloud KMS Signer for Solana secure signing  |
 | [`stellar-gcp-kms-signer`](./examples/stellar-gcp-kms-signer/)                       | Using Google Cloud KMS Signer for Stellar secure signing |
-| [`evm-cdp-signer`](./examples/evm-cdp-signer/)                                       | Using CDP Signer for EVM secure signing                 |
-| [`network-configuration-config-file`](./examples/network-configuration-config-file/) | Using Custom network configuration via config file      |
-| [`network-configuration-json-file`](./examples/network-configuration-json-file/)     | Using Custom network configuration via json file        |
-
-
+| [`evm-cdp-signer`](./examples/evm-cdp-signer/)                                       | Using CDP Signer for EVM secure signing                  |
+| [`network-configuration-config-file`](./examples/network-configuration-config-file/) | Using Custom network configuration via config file       |
+| [`network-configuration-json-file`](./examples/network-configuration-json-file/)     | Using Custom network configuration via json file         |
 
 Each example includes:
 
@@ -254,8 +251,8 @@ Run the following commands to install pre-commit hooks:
 - Install stable libsodium version from [here](https://download.libsodium.org/libsodium/releases/).
 - Follow steps to install libsodium from the [libsodium installation guide](https://doc.libsodium.org/installation).
 
-
   > Note (Debian/Ubuntu): If you're compiling libsodium from source, install build-essential first.
+
   ```bash
   sudo apt-get update && sudo apt-get install -y build-essential
   ```
@@ -279,7 +276,6 @@ cargo test properties
 cargo test integration
 ```
 
-
 > :warning: Debian/Ubuntu: If you encounter OpenSSL build errors, install the required packages:
 
 ```bash
@@ -301,7 +297,7 @@ docker run -d \
 
 3. Run the tests using single thread to avoid race conditions within suites:
 
-```bash
+````bash
 cargo test your_test_regex -- --test-threads=1
 
 
@@ -311,7 +307,7 @@ Create `config/config.json` file. You can use `config/config.example.json` as a 
 
 ```sh
 cp config/config.example.json config/config.json
-```
+````
 
 Refer to the [Configuration References](https://docs.openzeppelin.com/relayer#configuration_references) section for a complete list of configuration options.
 
@@ -522,7 +518,6 @@ docker compose logs -f
 
 - Rust docs will be generated in `docs/build/site/openzeppelin_relayer/` directory.
 
-
 ## Observability
 
 - Currently we support logs and metrics ( uses prometheus and grafana) for the relayer server.
@@ -575,19 +570,21 @@ For security concerns, please refer to our [Security Policy](SECURITY.md).
 
 The relayer includes built-in protection against Server-Side Request Forgery (SSRF) attacks when using custom RPC URLs. You can configure the following security features via environment variables:
 
-- **`ALLOWED_RPC_HOSTS`**: Comma-separated list of allowed RPC hostnames/IPs. If non-empty, only URLs with these hosts are permitted.
-  - Example: `ALLOWED_RPC_HOSTS=eth-mainnet.g.alchemy.com,mainnet.infura.io`
+- **`RPC_ALLOWED_HOSTS`**: Comma-separated list of allowed RPC hostnames/IPs. If non-empty, only URLs with these hosts are permitted.
 
-- **`BLOCK_PRIVATE_IPS`**: Block private IP addresses (RFC 1918, loopback, link-local). Set to `true` to prevent RPC URLs from targeting private networks.
-  - Example: `BLOCK_PRIVATE_IPS=true`
+  - Example: `RPC_ALLOWED_HOSTS=eth-mainnet.g.alchemy.com,mainnet.infura.io`
+
+- **`RPC_BLOCK_PRIVATE_IPS`**: Block private IP addresses (RFC 1918, loopback, link-local). Set to `true` to prevent RPC URLs from targeting private networks.
+  - Example: `RPC_BLOCK_PRIVATE_IPS=true`
   - Default: `false` (for backwards compatibility)
 
 **Note:** Cloud metadata endpoints (`169.254.169.254`, `fd00:ec2::254`) are **always blocked** to prevent credential theft, regardless of configuration.
 
 **Recommended Production Configuration:**
+
 ```bash
-BLOCK_PRIVATE_IPS=true
-ALLOWED_RPC_HOSTS=eth-mainnet.g.alchemy.com,mainnet.infura.io,eth.llamarpc.com
+RPC_BLOCK_PRIVATE_IPS=true
+RPC_ALLOWED_HOSTS=eth-mainnet.g.alchemy.com,mainnet.infura.io,eth.llamarpc.com
 ```
 
 See [`.env.example`](.env.example) for more configuration examples.

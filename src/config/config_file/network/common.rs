@@ -56,8 +56,8 @@ impl NetworkConfigCommon {
         // Validate RPC URLs format and security if provided
         if let Some(urls) = &self.rpc_urls {
             // Get security configuration from environment
-            let allowed_hosts = ServerConfig::get_allowed_rpc_hosts();
-            let block_private_ips = ServerConfig::get_block_private_ips();
+            let allowed_hosts = ServerConfig::get_rpc_allowed_hosts();
+            let block_private_ips = ServerConfig::get_rpc_block_private_ips();
 
             for url in urls {
                 // Validate URL format and security
@@ -165,8 +165,8 @@ mod tests {
 
     fn setup_security_env() {
         // Clear security-related environment variables
-        env::remove_var("ALLOWED_RPC_HOSTS");
-        env::remove_var("BLOCK_PRIVATE_IPS");
+        env::remove_var("RPC_ALLOWED_HOSTS");
+        env::remove_var("RPC_RPC_BLOCK_PRIVATE_IPS");
     }
 
     #[test]
@@ -256,7 +256,7 @@ mod tests {
     fn test_validate_various_valid_rpc_url_formats() {
         let mut config = create_network_common("test-network");
         // Note: Only http and https schemes are allowed by SSRF validation
-        // localhost is allowed when BLOCK_PRIVATE_IPS is not set (default false)
+        // localhost is allowed when RPC_BLOCK_PRIVATE_IPS is not set (default false)
         config.rpc_urls = Some(vec![
             "https://mainnet.infura.io/v3/key".to_string(),
             "http://localhost:8545".to_string(),
@@ -672,7 +672,7 @@ mod tests {
         };
         setup_security_env();
 
-        // Cloud metadata endpoints should always be blocked regardless of BLOCK_PRIVATE_IPS
+        // Cloud metadata endpoints should always be blocked regardless of RPC_BLOCK_PRIVATE_IPS
         let mut config = create_network_common("test-network");
         config.rpc_urls = Some(vec!["http://169.254.169.254/latest/meta-data".to_string()]);
 
@@ -707,9 +707,9 @@ mod tests {
             Err(poisoned) => poisoned.into_inner(),
         };
         setup_security_env();
-        env::set_var("BLOCK_PRIVATE_IPS", "true");
+        env::set_var("RPC_BLOCK_PRIVATE_IPS", "true");
 
-        // Private IPs should be blocked when BLOCK_PRIVATE_IPS is true
+        // Private IPs should be blocked when RPC_BLOCK_PRIVATE_IPS is true
         let mut config = create_network_common("test-network");
         config.rpc_urls = Some(vec!["http://192.168.1.1:8545".to_string()]);
 
@@ -719,7 +719,7 @@ mod tests {
         assert!(matches!(err, ConfigFileError::InvalidFormat(_)));
 
         // Clean up
-        env::remove_var("BLOCK_PRIVATE_IPS");
+        env::remove_var("RPC_BLOCK_PRIVATE_IPS");
     }
 
     #[test]
@@ -729,9 +729,9 @@ mod tests {
             Err(poisoned) => poisoned.into_inner(),
         };
         setup_security_env();
-        env::set_var("BLOCK_PRIVATE_IPS", "true");
+        env::set_var("RPC_BLOCK_PRIVATE_IPS", "true");
 
-        // Localhost should be blocked when BLOCK_PRIVATE_IPS is true
+        // Localhost should be blocked when RPC_BLOCK_PRIVATE_IPS is true
         let mut config = create_network_common("test-network");
         config.rpc_urls = Some(vec!["http://localhost:8545".to_string()]);
 
@@ -741,7 +741,7 @@ mod tests {
         assert!(matches!(err, ConfigFileError::InvalidFormat(_)));
 
         // Clean up
-        env::remove_var("BLOCK_PRIVATE_IPS");
+        env::remove_var("RPC_BLOCK_PRIVATE_IPS");
     }
 
     #[test]
@@ -751,9 +751,9 @@ mod tests {
             Err(poisoned) => poisoned.into_inner(),
         };
         setup_security_env();
-        env::set_var("BLOCK_PRIVATE_IPS", "true");
+        env::set_var("RPC_BLOCK_PRIVATE_IPS", "true");
 
-        // 127.0.0.1 should be blocked when BLOCK_PRIVATE_IPS is true
+        // 127.0.0.1 should be blocked when RPC_BLOCK_PRIVATE_IPS is true
         let mut config = create_network_common("test-network");
         config.rpc_urls = Some(vec!["http://127.0.0.1:8545".to_string()]);
 
@@ -763,7 +763,7 @@ mod tests {
         assert!(matches!(err, ConfigFileError::InvalidFormat(_)));
 
         // Clean up
-        env::remove_var("BLOCK_PRIVATE_IPS");
+        env::remove_var("RPC_BLOCK_PRIVATE_IPS");
     }
 
     #[test]
@@ -774,9 +774,9 @@ mod tests {
         };
         setup_security_env();
         // Explicitly disable (default)
-        env::set_var("BLOCK_PRIVATE_IPS", "false");
+        env::set_var("RPC_BLOCK_PRIVATE_IPS", "false");
 
-        // Private IPs should be allowed when BLOCK_PRIVATE_IPS is false
+        // Private IPs should be allowed when RPC_BLOCK_PRIVATE_IPS is false
         let mut config = create_network_common("test-network");
         config.rpc_urls = Some(vec!["http://192.168.1.1:8545".to_string()]);
 
@@ -784,7 +784,7 @@ mod tests {
         assert!(result.is_ok());
 
         // Clean up
-        env::remove_var("BLOCK_PRIVATE_IPS");
+        env::remove_var("RPC_BLOCK_PRIVATE_IPS");
     }
 
     #[test]
@@ -795,9 +795,9 @@ mod tests {
         };
         setup_security_env();
         // Explicitly disable (default)
-        env::set_var("BLOCK_PRIVATE_IPS", "false");
+        env::set_var("RPC_BLOCK_PRIVATE_IPS", "false");
 
-        // Localhost should be allowed when BLOCK_PRIVATE_IPS is false
+        // Localhost should be allowed when RPC_BLOCK_PRIVATE_IPS is false
         let mut config = create_network_common("test-network");
         config.rpc_urls = Some(vec!["http://localhost:8545".to_string()]);
 
@@ -805,7 +805,7 @@ mod tests {
         assert!(result.is_ok());
 
         // Clean up
-        env::remove_var("BLOCK_PRIVATE_IPS");
+        env::remove_var("RPC_BLOCK_PRIVATE_IPS");
     }
 
     #[test]
@@ -815,7 +815,7 @@ mod tests {
             Err(poisoned) => poisoned.into_inner(),
         };
         setup_security_env();
-        env::set_var("ALLOWED_RPC_HOSTS", "allowed.example.com,other.example.com");
+        env::set_var("RPC_ALLOWED_HOSTS", "allowed.example.com,other.example.com");
 
         // Non-allowed hosts should be blocked when allowlist is set
         let mut config = create_network_common("test-network");
@@ -827,7 +827,7 @@ mod tests {
         assert!(matches!(err, ConfigFileError::InvalidFormat(_)));
 
         // Clean up
-        env::remove_var("ALLOWED_RPC_HOSTS");
+        env::remove_var("RPC_ALLOWED_HOSTS");
     }
 
     #[test]
@@ -837,7 +837,7 @@ mod tests {
             Err(poisoned) => poisoned.into_inner(),
         };
         setup_security_env();
-        env::set_var("ALLOWED_RPC_HOSTS", "allowed.example.com,other.example.com");
+        env::set_var("RPC_ALLOWED_HOSTS", "allowed.example.com,other.example.com");
 
         // Hosts in the allowlist should be permitted
         let mut config = create_network_common("test-network");
@@ -847,7 +847,7 @@ mod tests {
         assert!(result.is_ok());
 
         // Clean up
-        env::remove_var("ALLOWED_RPC_HOSTS");
+        env::remove_var("RPC_ALLOWED_HOSTS");
     }
 
     #[test]
@@ -857,7 +857,7 @@ mod tests {
             Err(poisoned) => poisoned.into_inner(),
         };
         setup_security_env();
-        env::set_var("ALLOWED_RPC_HOSTS", "Allowed.Example.COM");
+        env::set_var("RPC_ALLOWED_HOSTS", "Allowed.Example.COM");
 
         // Allowlist matching should be case-insensitive (DNS is case-insensitive)
         let mut config = create_network_common("test-network");
@@ -867,7 +867,7 @@ mod tests {
         assert!(result.is_ok());
 
         // Clean up
-        env::remove_var("ALLOWED_RPC_HOSTS");
+        env::remove_var("RPC_ALLOWED_HOSTS");
     }
 
     #[test]
@@ -877,7 +877,7 @@ mod tests {
             Err(poisoned) => poisoned.into_inner(),
         };
         setup_security_env();
-        env::set_var("BLOCK_PRIVATE_IPS", "true");
+        env::set_var("RPC_BLOCK_PRIVATE_IPS", "true");
 
         // 10.x.x.x private range should be blocked
         let mut config = create_network_common("test-network");
@@ -889,7 +889,7 @@ mod tests {
         assert!(matches!(err, ConfigFileError::InvalidFormat(_)));
 
         // Clean up
-        env::remove_var("BLOCK_PRIVATE_IPS");
+        env::remove_var("RPC_BLOCK_PRIVATE_IPS");
     }
 
     #[test]
@@ -899,7 +899,7 @@ mod tests {
             Err(poisoned) => poisoned.into_inner(),
         };
         setup_security_env();
-        env::set_var("BLOCK_PRIVATE_IPS", "true");
+        env::set_var("RPC_BLOCK_PRIVATE_IPS", "true");
 
         // 172.16.x.x - 172.31.x.x private range should be blocked
         let mut config = create_network_common("test-network");
@@ -911,7 +911,7 @@ mod tests {
         assert!(matches!(err, ConfigFileError::InvalidFormat(_)));
 
         // Clean up
-        env::remove_var("BLOCK_PRIVATE_IPS");
+        env::remove_var("RPC_BLOCK_PRIVATE_IPS");
     }
 
     #[test]
@@ -942,7 +942,7 @@ mod tests {
             Err(poisoned) => poisoned.into_inner(),
         };
         setup_security_env();
-        env::set_var("BLOCK_PRIVATE_IPS", "true");
+        env::set_var("RPC_BLOCK_PRIVATE_IPS", "true");
 
         // If any URL fails validation, the whole validation should fail
         let mut config = create_network_common("test-network");
@@ -957,7 +957,7 @@ mod tests {
         assert!(matches!(err, ConfigFileError::InvalidFormat(_)));
 
         // Clean up
-        env::remove_var("BLOCK_PRIVATE_IPS");
+        env::remove_var("RPC_BLOCK_PRIVATE_IPS");
     }
 
     #[test]

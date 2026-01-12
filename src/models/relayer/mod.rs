@@ -1143,8 +1143,8 @@ impl Relayer {
     fn validate_custom_rpc_urls(&self) -> Result<(), RelayerValidationError> {
         if let Some(configs) = &self.custom_rpc_urls {
             // Get security configuration from environment
-            let allowed_hosts = crate::config::ServerConfig::get_allowed_rpc_hosts();
-            let block_private_ips = crate::config::ServerConfig::get_block_private_ips();
+            let allowed_hosts = crate::config::ServerConfig::get_rpc_allowed_hosts();
+            let block_private_ips = crate::config::ServerConfig::get_rpc_block_private_ips();
 
             for config in configs {
                 // Validate URL format
