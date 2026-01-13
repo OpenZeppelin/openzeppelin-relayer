@@ -696,8 +696,12 @@ mod tests {
 
         let cfg = deadpool_redis::Config::from_url(redis_url);
         let pool = cfg
-            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
-            .expect("Failed to create Redis pool");
+            .builder()
+            .expect("Failed to create pool builder")
+            .max_size(16)
+            .runtime(deadpool_redis::Runtime::Tokio1)
+            .build()
+            .expect("Failed to build Redis pool");
 
         RedisNetworkRepository::new(Arc::new(pool), key_prefix.to_string())
             .expect("Failed to create repository")

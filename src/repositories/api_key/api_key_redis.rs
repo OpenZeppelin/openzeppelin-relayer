@@ -367,8 +367,12 @@ mod tests {
             std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string());
         let cfg = deadpool_redis::Config::from_url(&redis_url);
         let pool = cfg
-            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
-            .expect("Failed to create Redis pool");
+            .builder()
+            .expect("Failed to create pool builder")
+            .max_size(16)
+            .runtime(deadpool_redis::Runtime::Tokio1)
+            .build()
+            .expect("Failed to build Redis pool");
 
         let random_id = uuid::Uuid::new_v4().to_string();
         let key_prefix = format!("test_prefix:{}", random_id);
@@ -390,8 +394,12 @@ mod tests {
         let redis_url = "redis://127.0.0.1:6379/";
         let cfg = deadpool_redis::Config::from_url(redis_url);
         let pool = cfg
-            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
-            .expect("Failed to create Redis pool");
+            .builder()
+            .expect("Failed to create pool builder")
+            .max_size(16)
+            .runtime(deadpool_redis::Runtime::Tokio1)
+            .build()
+            .expect("Failed to build Redis pool");
 
         let result = RedisApiKeyRepository::new(Arc::new(pool), "".to_string());
         assert!(result.is_err());
