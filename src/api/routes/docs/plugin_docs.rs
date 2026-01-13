@@ -12,14 +12,14 @@ use crate::{
 ///
 /// The endpoint supports wildcard route routing, allowing plugins to implement custom routing logic:
 /// - `/api/v1/plugins/{plugin_id}/call` - Default endpoint (route = "")
-/// - `/api/v1/plugins/{plugin_id}/call/verify` - Custom route (route = "/verify")
-/// - `/api/v1/plugins/{plugin_id}/call/settle` - Custom route (route = "/settle")
-/// - `/api/v1/plugins/{plugin_id}/call/api/v1/action` - Nested route (route = "/api/v1/action")
+/// - `/api/v1/plugins/{plugin_id}/call?route=/verify` - Custom route via query parameter
+/// - `/api/v1/plugins/{plugin_id}/call/verify` - Custom route via URL path (route = "/verify")
 ///
 /// The route is passed to the plugin handler via the `context.route` field.
+/// You can specify a custom route either by appending it to the URL path or by using the `route` query parameter.
 #[utoipa::path(
     post,
-    path = "/api/v1/plugins/{plugin_id}/call{route}",
+    path = "/api/v1/plugins/{plugin_id}/call",
     tag = "Plugins",
     operation_id = "callPlugin",
     summary = "Execute a plugin with optional wildcard route routing",
@@ -28,12 +28,7 @@ use crate::{
     ),
     params(
         ("plugin_id" = String, Path, description = "The unique identifier of the plugin"),
-        (
-            "route" = String,
-            Path,
-            description = "Optional route suffix captured by the server. Use an empty string for the default route, or include a leading slash (e.g. '/verify'). May include additional slashes for nested routes (e.g. '/api/v1/action').",
-            example = "/verify"
-        )
+        ("route" = Option<String>, Query, description = "Optional route suffix for custom routing (e.g., '/verify'). Alternative to appending the route to the URL path.")
     ),
     request_body = PluginCallRequest,
     responses(
@@ -134,9 +129,10 @@ fn doc_call_plugin() {}
 /// - `params` is an empty object (`{}`)
 /// - query parameters are passed to the plugin handler via `context.query`
 /// - wildcard route routing is supported the same way as POST (see `doc_call_plugin`)
+/// - Use the `route` query parameter or append the route to the URL path
 #[utoipa::path(
     get,
-    path = "/api/v1/plugins/{plugin_id}/call{route}",
+    path = "/api/v1/plugins/{plugin_id}/call",
     tag = "Plugins",
     operation_id = "callPluginGet",
     summary = "Execute a plugin via GET (must be enabled per plugin)",
@@ -145,12 +141,7 @@ fn doc_call_plugin() {}
     ),
     params(
         ("plugin_id" = String, Path, description = "The unique identifier of the plugin"),
-        (
-            "route" = String,
-            Path,
-            description = "Optional route suffix captured by the server. Use an empty string for the default route, or include a leading slash (e.g. '/supported'). May include additional slashes for nested routes.",
-            example = "/supported"
-        )
+        ("route" = Option<String>, Query, description = "Optional route suffix for custom routing (e.g., '/verify'). Alternative to appending the route to the URL path.")
     ),
     responses(
         (
