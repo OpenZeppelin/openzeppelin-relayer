@@ -86,27 +86,46 @@ where
 
 /// Helper function to deserialize secrets from encrypted base64 storage.
 ///
-/// Supports both legacy (v1, no AAD) and new (v2, with AAD) encrypted data
-/// for backwards compatibility. Uses `EncryptionContext` for v2 decryption if set.
+/// Supports three formats for backwards compatibility:
+/// 1. New format (v2): base64(encrypted data with AAD)
+/// 2. Legacy encrypted format (v1): base64(encrypted data without AAD)
+/// 3. Plain text format: unencrypted plain string (for data stored before encryption was added)
+///
+/// Uses `EncryptionContext` for v2 decryption if set.
 pub fn deserialize_secret_string<'de, D>(deserializer: D) -> Result<SecretString, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let base64_str = String::deserialize(deserializer)?;
+    let value_str = String::deserialize(deserializer)?;
 
-    // First decode the base64 to get the encrypted bytes
-    let encrypted_bytes = base64_decode(&base64_str)
-        .map_err(|e| serde::de::Error::custom(format!("Invalid base64: {e}")))?;
-
-    // Convert encrypted bytes back to string
-    let encrypted_str = String::from_utf8(encrypted_bytes)
-        .map_err(|e| serde::de::Error::custom(format!("Invalid UTF-8: {e}")))?;
-
-    // Decrypt using auto-detection to handle both v1 (legacy) and v2 (with AAD)
-    let decrypted = decrypt_sensitive_field_auto(&encrypted_str)
-        .map_err(|e| serde::de::Error::custom(format!("Decryption failed: {e}")))?;
-
-    Ok(SecretString::new(&decrypted))
+    // Try to decode as base64 first (encrypted format)
+    match base64_decode(&value_str) {
+        Ok(encrypted_bytes) => {
+            // Successfully decoded base64, now try to decrypt
+            match String::from_utf8(encrypted_bytes) {
+                Ok(encrypted_str) => {
+                    // Try to decrypt - handles both v1 (no AAD) and v2 (with AAD)
+                    match decrypt_sensitive_field_auto(&encrypted_str) {
+                        Ok(decrypted) => Ok(SecretString::new(&decrypted)),
+                        Err(_) => {
+                            // Decryption failed - this might be a plain base64-encoded value
+                            // Fall back to treating the original string as plain text
+                            Ok(SecretString::new(&value_str))
+                        }
+                    }
+                }
+                Err(_) => {
+                    // Invalid UTF-8 after base64 decode - treat as plain text
+                    Ok(SecretString::new(&value_str))
+                }
+            }
+        }
+        Err(_) => {
+            // Base64 decode failed - this is plain text from before encryption was added
+            // This handles the migration case where old data was stored as plain strings
+            Ok(SecretString::new(&value_str))
+        }
+    }
 }
 
 /// Helper function to serialize optional secrets as encrypted base64 for storage.
@@ -137,31 +156,48 @@ where
 
 /// Helper function to deserialize optional secrets from encrypted base64 storage.
 ///
-/// Supports both legacy (v1, no AAD) and new (v2, with AAD) encrypted data
-/// for backwards compatibility. Uses `EncryptionContext` for v2 decryption if set.
+/// Supports three formats for backwards compatibility:
+/// 1. New format (v2): base64(encrypted data with AAD)
+/// 2. Legacy encrypted format (v1): base64(encrypted data without AAD)
+/// 3. Plain text format: unencrypted plain string (for data stored before encryption was added)
+///
+/// Uses `EncryptionContext` for v2 decryption if set.
 pub fn deserialize_option_secret_string<'de, D>(
     deserializer: D,
 ) -> Result<Option<SecretString>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let opt_base64_str: Option<String> = Option::deserialize(deserializer)?;
+    let opt_value_str: Option<String> = Option::deserialize(deserializer)?;
 
-    match opt_base64_str {
-        Some(base64_str) => {
-            // First decode the base64 to get the encrypted bytes
-            let encrypted_bytes = base64_decode(&base64_str)
-                .map_err(|e| serde::de::Error::custom(format!("Invalid base64: {e}")))?;
-
-            // Convert encrypted bytes back to string
-            let encrypted_str = String::from_utf8(encrypted_bytes)
-                .map_err(|e| serde::de::Error::custom(format!("Invalid UTF-8: {e}")))?;
-
-            // Decrypt using auto-detection to handle both v1 (legacy) and v2 (with AAD)
-            let decrypted = decrypt_sensitive_field_auto(&encrypted_str)
-                .map_err(|e| serde::de::Error::custom(format!("Decryption failed: {e}")))?;
-
-            Ok(Some(SecretString::new(&decrypted)))
+    match opt_value_str {
+        Some(value_str) => {
+            // Try to decode as base64 first (encrypted format)
+            match base64_decode(&value_str) {
+                Ok(encrypted_bytes) => {
+                    // Successfully decoded base64, now try to decrypt
+                    match String::from_utf8(encrypted_bytes) {
+                        Ok(encrypted_str) => {
+                            // Try to decrypt - handles both v1 (no AAD) and v2 (with AAD)
+                            match decrypt_sensitive_field_auto(&encrypted_str) {
+                                Ok(decrypted) => Ok(Some(SecretString::new(&decrypted))),
+                                Err(_) => {
+                                    // Decryption failed - treat as plain text
+                                    Ok(Some(SecretString::new(&value_str)))
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            // Invalid UTF-8 after base64 decode - treat as plain text
+                            Ok(Some(SecretString::new(&value_str)))
+                        }
+                    }
+                }
+                Err(_) => {
+                    // Base64 decode failed - this is plain text from before encryption was added
+                    Ok(Some(SecretString::new(&value_str)))
+                }
+            }
         }
         None => Ok(None),
     }
@@ -492,5 +528,92 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("EncryptionContext not set"));
+    }
+
+    #[test]
+    fn test_deserialize_plain_text_backward_compatibility() {
+        // Test deserializing plain text that was stored before encryption was added
+        #[derive(serde::Deserialize)]
+        struct TestStruct {
+            #[serde(deserialize_with = "deserialize_secret_string")]
+            project_id: SecretString,
+            #[serde(deserialize_with = "deserialize_secret_string")]
+            location: SecretString,
+        }
+
+        // Simulate old JSON format with plain strings (including hyphens)
+        let old_json = r#"{"project_id":"my-project-123","location":"us-central1"}"#;
+
+        // Should successfully deserialize plain text as SecretString
+        let deserialized: TestStruct = serde_json::from_str(old_json).unwrap();
+
+        assert_eq!(*deserialized.project_id.to_str(), "my-project-123");
+        assert_eq!(*deserialized.location.to_str(), "us-central1");
+    }
+
+    #[test]
+    fn test_deserialize_option_plain_text_backward_compatibility() {
+        // Test deserializing optional plain text
+        #[derive(serde::Deserialize)]
+        struct TestStruct {
+            #[serde(deserialize_with = "deserialize_option_secret_string")]
+            field: Option<SecretString>,
+        }
+
+        // Plain text
+        let json = r#"{"field":"plain-value-with-hyphen"}"#;
+        let deserialized: TestStruct = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            *deserialized.field.unwrap().to_str(),
+            "plain-value-with-hyphen"
+        );
+
+        // None
+        let json = r#"{"field":null}"#;
+        let deserialized: TestStruct = serde_json::from_str(json).unwrap();
+        assert!(deserialized.field.is_none());
+    }
+
+    #[test]
+    fn test_mixed_format_deserialization() {
+        // Test deserializing a mix of encrypted and plain text fields
+        #[derive(serde::Deserialize)]
+        struct TestStruct {
+            #[serde(deserialize_with = "deserialize_secret_string")]
+            plain_field: SecretString,
+            #[serde(deserialize_with = "deserialize_secret_string")]
+            encrypted_field: SecretString,
+        }
+
+        // First, create an encrypted value
+        let encrypted_value = EncryptionContext::with_aad_sync(test_aad(), || {
+            #[derive(serde::Serialize)]
+            struct TempStruct {
+                #[serde(serialize_with = "serialize_secret_string")]
+                field: SecretString,
+            }
+            let temp = TempStruct {
+                field: SecretString::new("encrypted-content"),
+            };
+            serde_json::to_string(&temp).unwrap()
+        });
+
+        let encrypted_value_parsed: serde_json::Value =
+            serde_json::from_str(&encrypted_value).unwrap();
+        let encrypted_field_value = encrypted_value_parsed["field"].as_str().unwrap();
+
+        // Create JSON with both plain and encrypted fields
+        let mixed_json = format!(
+            r#"{{"plain_field":"plain-text-value","encrypted_field":"{}"}}"#,
+            encrypted_field_value
+        );
+
+        // Should successfully deserialize both
+        let deserialized: TestStruct = EncryptionContext::with_aad_sync(test_aad(), || {
+            serde_json::from_str(&mixed_json).unwrap()
+        });
+
+        assert_eq!(*deserialized.plain_field.to_str(), "plain-text-value");
+        assert_eq!(*deserialized.encrypted_field.to_str(), "encrypted-content");
     }
 }
