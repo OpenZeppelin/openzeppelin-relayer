@@ -17,11 +17,11 @@ jobs:
       SLACK_CHANNEL: '#oss-releases'
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@df199fb7be9f65074067a9eb93f12bb4c5547cf2  # v2.13.3
+        uses: step-security/harden-runner@20cf305ff2072d973412fa9b1e3a4f227bda3c76  # v2.14.0
         with:
           egress-policy: audit
       - name: Get github app token
-        uses: actions/create-github-app-token@7e473efe3cb98aa54f8d4bac15400b15fad77d94  # v2.2.0
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf  # v2.2.1
         id: gh-app-token
         with:
           app-id: ${{ vars.GH_APP_ID }}
@@ -40,7 +40,7 @@ jobs:
           message: Starting generating sbom for ${{ github.repository }} with tag ${{ inputs.tag }}......
         if: always()
       - name: Run SBOM
-        uses: anchore/sbom-action@fbfd9c6c189226748411491745178e0c2017392d  # v0.20.10
+        uses: anchore/sbom-action@a930d0ac434e3182448fe678398ba5713717112a  # v0.21.0
         with:
           upload-artifact-retention: 7
           upload-release-assets: false
@@ -52,7 +52,7 @@ jobs:
           GH_TOKEN: ${{ steps.gh-app-token.outputs.token }}
         run: gh release upload ${{ inputs.tag }} openzeppelin-relayer-${{ inputs.tag }}-spdx.json
       - name: SBOM attestation
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a  # main
+        uses: actions/attest-build-provenance@00014ed6ed5efc5b1ab7f7f34a39eb55d41aa4f8  # main
         with:
           subject-path: ./openzeppelin-relayer-${{ inputs.tag }}-spdx.json
           github-token: ${{ steps.gh-app-token.outputs.token }}
