@@ -9,8 +9,9 @@
 //! - **Smart merging**: Collections merge preserving unique items, primitives override
 //! - **Validation**: Required field checks and URL format validation
 
-use crate::config::ConfigFileError;
+use crate::config::{ConfigFileError, ServerConfig};
 use crate::models::{deserialize_rpc_urls, RpcConfig};
+use crate::utils::{sanitize_url_for_error, validate_rpc_url};
 use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Debug, Serialize, Clone)]
@@ -85,19 +86,32 @@ impl NetworkConfigCommon {
             }
         }
 
-        // Validate RPC URLs format if provided
+        // Validate RPC URLs format and security if provided
         if let Some(configs) = &self.rpc_urls {
+            // Get security configuration from environment
+            let allowed_hosts = ServerConfig::get_rpc_allowed_hosts();
+            let block_private_ips = ServerConfig::get_rpc_block_private_ips();
+
             for config in configs {
-                reqwest::Url::parse(&config.url).map_err(|_| {
-                    ConfigFileError::InvalidFormat(format!("Invalid RPC URL: {}", config.url))
-                })?;
+                // Validate URL format and security
+                validate_rpc_url(&config.url, &allowed_hosts, block_private_ips).map_err(
+                    |err| {
+                        ConfigFileError::InvalidFormat(format!(
+                            "RPC URL validation failed for '{}': {err}",
+                            sanitize_url_for_error(&config.url)
+                        ))
+                    },
+                )?;
             }
         }
 
         if let Some(urls) = &self.explorer_urls {
             for url in urls {
                 reqwest::Url::parse(url).map_err(|_| {
-                    ConfigFileError::InvalidFormat(format!("Invalid Explorer URL: {url}"))
+                    ConfigFileError::InvalidFormat(format!(
+                        "Invalid Explorer URL: {}",
+                        sanitize_url_for_error(url)
+                    ))
                 })?;
             }
         }
@@ -199,6 +213,20 @@ fn merge_tags(
 mod tests {
     use super::*;
     use crate::config::config_file::network::test_utils::*;
+    use lazy_static::lazy_static;
+    use std::env;
+    use std::sync::Mutex;
+
+    // Use a mutex to ensure tests don't run in parallel when modifying env vars
+    lazy_static! {
+        static ref ENV_MUTEX: Mutex<()> = Mutex::new(());
+    }
+
+    fn setup_security_env() {
+        // Clear security-related environment variables
+        env::remove_var("RPC_ALLOWED_HOSTS");
+        env::remove_var("RPC_RPC_BLOCK_PRIVATE_IPS");
+    }
 
     #[test]
     fn test_validate_success_base_network() {
@@ -289,15 +317,30 @@ mod tests {
     fn test_validate_various_valid_rpc_url_formats() {
         use crate::models::RpcConfig;
         let mut config = create_network_common("test-network");
+        // Note: Only http and https schemes are allowed by SSRF validation
+        // localhost is allowed when RPC_BLOCK_PRIVATE_IPS is not set (default false)
         config.rpc_urls = Some(vec![
             RpcConfig::new("https://mainnet.infura.io/v3/key".to_string()),
             RpcConfig::new("http://localhost:8545".to_string()),
-            RpcConfig::new("wss://ws.example.com".to_string()),
             RpcConfig::new("https://rpc.example.com:8080/path".to_string()),
         ]);
 
         let result = config.validate();
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_rejects_non_http_scheme() {
+        let mut config = create_network_common("test-network");
+        // wss:// is not allowed - only http and https
+        config.rpc_urls = Some(vec![RpcConfig::new("wss://ws.example.com".to_string())]);
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ConfigFileError::InvalidFormat(_)
+        ));
     }
 
     #[test]
@@ -703,6 +746,335 @@ mod tests {
 
         let result = config.validate();
         assert!(result.is_ok());
+    }
+
+    // ==========================================================================
+    // RPC URL Security Validation Tests
+    // These tests validate the SSRF protection for RPC URLs
+    // ==========================================================================
+
+    #[test]
+    fn test_validate_blocks_cloud_metadata_ip_always() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        setup_security_env();
+
+        // Cloud metadata endpoints should always be blocked regardless of RPC_BLOCK_PRIVATE_IPS
+        let mut config = create_network_common("test-network");
+        config.rpc_urls = Some(vec![RpcConfig::new(
+            "http://169.254.169.254/latest/meta-data".to_string(),
+        )]);
+
+        let result = config.validate();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ConfigFileError::InvalidFormat(_)));
+    }
+
+    #[test]
+    fn test_validate_blocks_cloud_metadata_hostname_always() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        setup_security_env();
+
+        // GCP metadata hostname should always be blocked
+        let mut config = create_network_common("test-network");
+        config.rpc_urls = Some(vec![RpcConfig::new(
+            "http://metadata.google.internal".to_string(),
+        )]);
+
+        let result = config.validate();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ConfigFileError::InvalidFormat(_)));
+    }
+
+    #[test]
+    fn test_validate_blocks_private_ip_when_block_private_ips_enabled() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        setup_security_env();
+        env::set_var("RPC_BLOCK_PRIVATE_IPS", "true");
+
+        // Private IPs should be blocked when RPC_BLOCK_PRIVATE_IPS is true
+        let mut config = create_network_common("test-network");
+        config.rpc_urls = Some(vec![RpcConfig::new("http://192.168.1.1:8545".to_string())]);
+
+        let result = config.validate();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ConfigFileError::InvalidFormat(_)));
+
+        // Clean up
+        env::remove_var("RPC_BLOCK_PRIVATE_IPS");
+    }
+
+    #[test]
+    fn test_validate_blocks_localhost_when_block_private_ips_enabled() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        setup_security_env();
+        env::set_var("RPC_BLOCK_PRIVATE_IPS", "true");
+
+        // Localhost should be blocked when RPC_BLOCK_PRIVATE_IPS is true
+        let mut config = create_network_common("test-network");
+        config.rpc_urls = Some(vec![RpcConfig::new("http://localhost:8545".to_string())]);
+
+        let result = config.validate();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ConfigFileError::InvalidFormat(_)));
+
+        // Clean up
+        env::remove_var("RPC_BLOCK_PRIVATE_IPS");
+    }
+
+    #[test]
+    fn test_validate_blocks_127_0_0_1_when_block_private_ips_enabled() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        setup_security_env();
+        env::set_var("RPC_BLOCK_PRIVATE_IPS", "true");
+
+        // 127.0.0.1 should be blocked when RPC_BLOCK_PRIVATE_IPS is true
+        let mut config = create_network_common("test-network");
+        config.rpc_urls = Some(vec![RpcConfig::new("http://127.0.0.1:8545".to_string())]);
+
+        let result = config.validate();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ConfigFileError::InvalidFormat(_)));
+
+        // Clean up
+        env::remove_var("RPC_BLOCK_PRIVATE_IPS");
+    }
+
+    #[test]
+    fn test_validate_allows_private_ip_when_block_private_ips_disabled() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        setup_security_env();
+        // Explicitly disable (default)
+        env::set_var("RPC_BLOCK_PRIVATE_IPS", "false");
+
+        // Private IPs should be allowed when RPC_BLOCK_PRIVATE_IPS is false
+        let mut config = create_network_common("test-network");
+        config.rpc_urls = Some(vec![RpcConfig::new("http://192.168.1.1:8545".to_string())]);
+
+        let result = config.validate();
+        assert!(result.is_ok());
+
+        // Clean up
+        env::remove_var("RPC_BLOCK_PRIVATE_IPS");
+    }
+
+    #[test]
+    fn test_validate_allows_localhost_when_block_private_ips_disabled() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        setup_security_env();
+        // Explicitly disable (default)
+        env::set_var("RPC_BLOCK_PRIVATE_IPS", "false");
+
+        // Localhost should be allowed when RPC_BLOCK_PRIVATE_IPS is false
+        let mut config = create_network_common("test-network");
+        config.rpc_urls = Some(vec![RpcConfig::new("http://localhost:8545".to_string())]);
+
+        let result = config.validate();
+        assert!(result.is_ok());
+
+        // Clean up
+        env::remove_var("RPC_BLOCK_PRIVATE_IPS");
+    }
+
+    #[test]
+    fn test_validate_blocks_non_allowed_host_when_allowlist_set() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        setup_security_env();
+        env::set_var("RPC_ALLOWED_HOSTS", "allowed.example.com,other.example.com");
+
+        // Non-allowed hosts should be blocked when allowlist is set
+        let mut config = create_network_common("test-network");
+        config.rpc_urls = Some(vec![RpcConfig::new(
+            "https://not-allowed.example.com".to_string(),
+        )]);
+
+        let result = config.validate();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ConfigFileError::InvalidFormat(_)));
+
+        // Clean up
+        env::remove_var("RPC_ALLOWED_HOSTS");
+    }
+
+    #[test]
+    fn test_validate_allows_host_in_allowlist() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        setup_security_env();
+        env::set_var("RPC_ALLOWED_HOSTS", "allowed.example.com,other.example.com");
+
+        // Hosts in the allowlist should be permitted
+        let mut config = create_network_common("test-network");
+        config.rpc_urls = Some(vec![RpcConfig::new(
+            "https://allowed.example.com:8545".to_string(),
+        )]);
+
+        let result = config.validate();
+        assert!(result.is_ok());
+
+        // Clean up
+        env::remove_var("RPC_ALLOWED_HOSTS");
+    }
+
+    #[test]
+    fn test_validate_allowlist_is_case_insensitive() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        setup_security_env();
+        env::set_var("RPC_ALLOWED_HOSTS", "Allowed.Example.COM");
+
+        // Allowlist matching should be case-insensitive (DNS is case-insensitive)
+        let mut config = create_network_common("test-network");
+        config.rpc_urls = Some(vec![RpcConfig::new(
+            "https://allowed.example.com:8545".to_string(),
+        )]);
+
+        let result = config.validate();
+        assert!(result.is_ok());
+
+        // Clean up
+        env::remove_var("RPC_ALLOWED_HOSTS");
+    }
+
+    #[test]
+    fn test_validate_blocks_10_x_private_range_when_enabled() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        setup_security_env();
+        env::set_var("RPC_BLOCK_PRIVATE_IPS", "true");
+
+        // 10.x.x.x private range should be blocked
+        let mut config = create_network_common("test-network");
+        config.rpc_urls = Some(vec![RpcConfig::new("http://10.0.0.1:8545".to_string())]);
+
+        let result = config.validate();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ConfigFileError::InvalidFormat(_)));
+
+        // Clean up
+        env::remove_var("RPC_BLOCK_PRIVATE_IPS");
+    }
+
+    #[test]
+    fn test_validate_blocks_172_16_private_range_when_enabled() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        setup_security_env();
+        env::set_var("RPC_BLOCK_PRIVATE_IPS", "true");
+
+        // 172.16.x.x - 172.31.x.x private range should be blocked
+        let mut config = create_network_common("test-network");
+        config.rpc_urls = Some(vec![RpcConfig::new("http://172.16.0.1:8545".to_string())]);
+
+        let result = config.validate();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ConfigFileError::InvalidFormat(_)));
+
+        // Clean up
+        env::remove_var("RPC_BLOCK_PRIVATE_IPS");
+    }
+
+    #[test]
+    fn test_validate_error_message_contains_sanitized_url() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        setup_security_env();
+
+        // Test that error messages contain sanitized URLs (no credentials)
+        let mut config = create_network_common("test-network");
+        config.rpc_urls = Some(vec![RpcConfig::new("invalid-url".to_string())]);
+
+        let result = config.validate();
+        assert!(result.is_err());
+        if let ConfigFileError::InvalidFormat(msg) = result.unwrap_err() {
+            assert!(msg.contains("RPC URL validation failed"));
+        } else {
+            panic!("Expected InvalidFormat error");
+        }
+    }
+
+    #[test]
+    fn test_validate_multiple_urls_with_one_blocked() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        setup_security_env();
+        env::set_var("RPC_BLOCK_PRIVATE_IPS", "true");
+
+        // If any URL fails validation, the whole validation should fail
+        let mut config = create_network_common("test-network");
+        config.rpc_urls = Some(vec![
+            RpcConfig::new("https://valid.example.com".to_string()),
+            RpcConfig::new("http://localhost:8545".to_string()), // This should be blocked
+        ]);
+
+        let result = config.validate();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ConfigFileError::InvalidFormat(_)));
+
+        // Clean up
+        env::remove_var("RPC_BLOCK_PRIVATE_IPS");
+    }
+
+    #[test]
+    fn test_validate_blocks_unspecified_ip_always() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        setup_security_env();
+
+        // 0.0.0.0 should be blocked (unspecified address)
+        let mut config = create_network_common("test-network");
+        config.rpc_urls = Some(vec![RpcConfig::new("http://0.0.0.0:8545".to_string())]);
+
+        let result = config.validate();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ConfigFileError::InvalidFormat(_)));
     }
 
     #[test]
