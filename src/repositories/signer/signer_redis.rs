@@ -434,6 +434,7 @@ mod tests {
     use deadpool_redis::{Config, Runtime};
     use secrets::SecretVec;
     use std::sync::Arc;
+    use uuid::Uuid;
 
     fn create_local_signer(id: &str) -> SignerRepoModel {
         SignerRepoModel {
@@ -456,15 +457,17 @@ mod tests {
             .build()
             .expect("Failed to build Redis pool");
 
-        RedisSignerRepository::new(Arc::new(pool), "test".to_string())
-            .expect("Failed to create repository")
+        let random_id = Uuid::new_v4().to_string();
+        let key_prefix = format!("test_prefix:{}", random_id);
+
+        RedisSignerRepository::new(Arc::new(pool), key_prefix).expect("Failed to create repository")
     }
 
     #[tokio::test]
     #[ignore = "Requires active Redis instance"]
     async fn test_new_repository_creation() {
         let repo = setup_test_repo().await;
-        assert_eq!(repo.key_prefix, "test");
+        assert!(repo.key_prefix.contains("test_prefix"));
     }
 
     #[tokio::test]
@@ -496,8 +499,8 @@ mod tests {
         let signer_key = repo.signer_key("test-id");
         let list_key = repo.signer_list_key();
 
-        assert_eq!(signer_key, "test:signer:test-id");
-        assert_eq!(list_key, "test:signer_list");
+        assert!(signer_key.contains(":signer:test-id"));
+        assert!(list_key.contains(":signer_list"));
     }
 
     #[tokio::test]
@@ -695,7 +698,7 @@ mod tests {
         let repo = setup_test_repo().await;
         let debug_str = format!("{:?}", repo);
         assert!(debug_str.contains("RedisSignerRepository"));
-        assert!(debug_str.contains("test"));
+        assert!(debug_str.contains("test_prefix"));
     }
 
     #[tokio::test]

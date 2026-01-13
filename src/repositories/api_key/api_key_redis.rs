@@ -370,13 +370,10 @@ mod tests {
             .create_pool(Some(deadpool_redis::Runtime::Tokio1))
             .expect("Failed to create Redis pool");
 
-        // Clear the api key list
-        let mut conn = pool.get().await.expect("Failed to get connection");
-        conn.del::<&str, ()>("test_api_key:apikey_list")
-            .await
-            .unwrap();
+        let random_id = uuid::Uuid::new_v4().to_string();
+        let key_prefix = format!("test_prefix:{}", random_id);
 
-        RedisApiKeyRepository::new(Arc::new(pool), "test_api_key".to_string())
+        RedisApiKeyRepository::new(Arc::new(pool), key_prefix)
             .expect("Failed to create Redis api key repository")
     }
 
@@ -384,7 +381,7 @@ mod tests {
     #[ignore = "Requires active Redis instance"]
     async fn test_new_repository_creation() {
         let repo = setup_test_repo().await;
-        assert_eq!(repo.key_prefix, "test_api_key");
+        assert!(repo.key_prefix.contains("test_prefix"));
     }
 
     #[tokio::test]
@@ -410,10 +407,10 @@ mod tests {
         let repo = setup_test_repo().await;
 
         let api_key_key = repo.api_key_key("test-api-key");
-        assert_eq!(api_key_key, "test_api_key:apikey:test-api-key");
+        assert!(api_key_key.contains(":apikey:test-api-key"));
 
         let list_key = repo.api_key_list_key();
-        assert_eq!(list_key, "test_api_key:apikey_list");
+        assert!(list_key.contains(":apikey_list"));
     }
 
     #[tokio::test]

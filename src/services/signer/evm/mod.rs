@@ -168,8 +168,8 @@ fn validate_and_decode_hex(value: &str, field_name: &str) -> Result<Vec<u8>, Sig
 /// # Examples
 ///
 /// ```ignore
-/// use crate::domain::SignTypedDataRequest;
-/// use crate::services::signer::evm::construct_eip712_message_hash;
+/// use openzeppelin_relayer::domain::SignTypedDataRequest;
+/// use openzeppelin_relayer::services::signer::construct_eip712_message_hash;
 ///
 /// let request = SignTypedDataRequest {
 ///     // 32 bytes as hex (with or without 0x prefix)
@@ -177,7 +177,7 @@ fn validate_and_decode_hex(value: &str, field_name: &str) -> Result<Vec<u8>, Sig
 ///     hash_struct_message: "b".repeat(64),
 /// };
 ///
-/// let hash = construct_eip712_message_hash(&request)?;
+/// let hash = construct_eip712_message_hash(&request).unwrap();
 /// // hash is now ready for signing
 /// ```
 pub fn construct_eip712_message_hash(

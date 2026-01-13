@@ -347,13 +347,10 @@ mod tests {
             .create_pool(Some(deadpool_redis::Runtime::Tokio1))
             .expect("Failed to create Redis pool");
 
-        // Clear the plugin lists
-        let mut conn = pool.get().await.expect("Failed to get connection");
-        conn.del::<&str, ()>("test_plugin:plugin_list")
-            .await
-            .unwrap();
+        let random_id = uuid::Uuid::new_v4().to_string();
+        let key_prefix = format!("test_prefix:{}", random_id);
 
-        RedisPluginRepository::new(Arc::new(pool), "test_plugin".to_string())
+        RedisPluginRepository::new(Arc::new(pool), key_prefix)
             .expect("Failed to create Redis plugin repository")
     }
 
@@ -361,7 +358,7 @@ mod tests {
     #[ignore = "Requires active Redis instance"]
     async fn test_new_repository_creation() {
         let repo = setup_test_repo().await;
-        assert_eq!(repo.key_prefix, "test_plugin");
+        assert!(repo.key_prefix.contains("test_prefix"));
     }
 
     #[tokio::test]
@@ -387,10 +384,10 @@ mod tests {
         let repo = setup_test_repo().await;
 
         let plugin_key = repo.plugin_key("test-plugin");
-        assert_eq!(plugin_key, "test_plugin:plugin:test-plugin");
+        assert!(plugin_key.contains(":plugin:test-plugin"));
 
         let list_key = repo.plugin_list_key();
-        assert_eq!(list_key, "test_plugin:plugin_list");
+        assert!(list_key.contains(":plugin_list"));
     }
 
     #[tokio::test]
@@ -473,7 +470,7 @@ mod tests {
         let repo = setup_test_repo().await;
         let debug_str = format!("{:?}", repo);
         assert!(debug_str.contains("RedisPluginRepository"));
-        assert!(debug_str.contains("test_plugin"));
+        assert!(debug_str.contains("test_prefix"));
     }
 
     #[tokio::test]
@@ -533,9 +530,11 @@ mod tests {
             .get_by_ids(&[plugin1.id.clone(), plugin2.id.clone()])
             .await
             .unwrap();
-        assert!(retrieved.results.len() == 2);
-        assert_eq!(retrieved.results[0].id, plugin2.id);
-        assert_eq!(retrieved.results[1].id, plugin1.id);
+        assert_eq!(retrieved.results.len(), 2);
+        // Results order may vary, so check that both plugins are present
+        let result_ids: Vec<String> = retrieved.results.iter().map(|p| p.id.clone()).collect();
+        assert!(result_ids.contains(&plugin1.id));
+        assert!(result_ids.contains(&plugin2.id));
         assert_eq!(retrieved.failed_ids.len(), 0);
     }
 

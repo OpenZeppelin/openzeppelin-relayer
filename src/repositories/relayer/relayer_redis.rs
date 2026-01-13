@@ -572,7 +572,10 @@ mod tests {
             .build()
             .expect("Failed to build Redis pool");
 
-        RedisRelayerRepository::new(Arc::new(pool), "test".to_string())
+        let random_id = uuid::Uuid::new_v4().to_string();
+        let key_prefix = format!("test_prefix:{}", random_id);
+
+        RedisRelayerRepository::new(Arc::new(pool), key_prefix)
             .expect("Failed to create Redis relayer repository")
     }
 
@@ -580,7 +583,7 @@ mod tests {
     #[tokio::test]
     async fn test_new_repository_creation() {
         let repo = setup_test_repo().await;
-        assert_eq!(repo.key_prefix, "test");
+        assert!(repo.key_prefix.contains("test_prefix"));
     }
 
     #[ignore = "Requires active Redis instance"]
@@ -607,10 +610,10 @@ mod tests {
         let repo = setup_test_repo().await;
 
         let relayer_key = repo.relayer_key("test-relayer");
-        assert_eq!(relayer_key, "test:relayer:test-relayer");
+        assert!(relayer_key.contains(":relayer:test-relayer"));
 
         let list_key = repo.relayer_list_key();
-        assert_eq!(list_key, "test:relayer_list");
+        assert!(list_key.contains(":relayer_list"));
     }
 
     #[ignore = "Requires active Redis instance"]

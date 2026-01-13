@@ -457,7 +457,10 @@ mod tests {
             .create_pool(Some(deadpool_redis::Runtime::Tokio1))
             .expect("Failed to create Redis pool");
 
-        RedisNotificationRepository::new(Arc::new(pool), "test_prefix".to_string())
+        let random_id = uuid::Uuid::new_v4().to_string();
+        let key_prefix = format!("test_prefix:{}", random_id);
+
+        RedisNotificationRepository::new(Arc::new(pool), key_prefix)
             .expect("Failed to create RedisNotificationRepository")
     }
 
@@ -465,7 +468,7 @@ mod tests {
     #[ignore = "Requires active Redis instance"]
     async fn test_new_repository_creation() {
         let repo = setup_test_repo().await;
-        assert_eq!(repo.key_prefix, "test_prefix");
+        assert!(repo.key_prefix.contains("test_prefix"));
     }
 
     #[tokio::test]
@@ -487,14 +490,11 @@ mod tests {
     async fn test_key_generation() {
         let repo = setup_test_repo().await;
 
-        assert_eq!(
-            repo.notification_key("test-id"),
-            "test_prefix:notification:test-id"
-        );
-        assert_eq!(
-            repo.notification_list_key(),
-            "test_prefix:notification_list"
-        );
+        let notification_key = repo.notification_key("test-id");
+        assert!(notification_key.contains(":notification:test-id"));
+
+        let list_key = repo.notification_list_key();
+        assert!(list_key.contains(":notification_list"));
     }
 
     #[tokio::test]
