@@ -882,19 +882,6 @@ export PLUGIN_POOL_REQUEST_TIMEOUT_SECS=120
 export PLUGIN_POOL_CONNECT_RETRIES=20
 ```
 
-### System Limits
-
-For high concurrency, you may need to increase OS-level limits:
-
-```bash
-# Increase file descriptor limit (Linux/macOS)
-ulimit -n 65536
-
-# For macOS, also run:
-sudo sysctl -w kern.maxfiles=65536
-sudo sysctl -w kern.maxfilesperproc=65536
-```
-
 ### Troubleshooting Common Errors
 
 | Error | Cause | Solution |
