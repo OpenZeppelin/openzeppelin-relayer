@@ -21,6 +21,7 @@ jobs:
         uses: step-security/harden-runner@df199fb7be9f65074067a9eb93f12bb4c5547cf2  # v2.13.3
         with:
           egress-policy: audit
+
       - name: Slack notification
         uses: act10ns/slack@44541246747a30eb3102d87f7a4cc5471b0ffb7d  # v2.1.0
         with:
@@ -29,10 +30,12 @@ jobs:
           channel: ${{ env.SLACK_CHANNEL }}
           message: Starting docker build and push to dockerhub for ${{ github.repository }} with tag ${{ inputs.tag }}......
         if: always()
+
       - name: Checkout release branch
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
         with:
           ref: ${{ inputs.tag }}
+
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5.10.0
@@ -52,13 +55,16 @@ jobs:
             org.opencontainers.image.description="OpenZeppelin Relayer service provides infrastructure to relay transactions to the EVM and Non-EVM networks."
         env:
           DOCKER_METADATA_SHORT_SHA_LENGTH: 10
+
       - name: Login to Dockerhub
         uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PAT }}
+
       - name: Set Up Docker Buildx
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435  # v3.11.1
+
       - name: Build Docker image
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83  # v6.18.0
         id: build
@@ -73,12 +79,33 @@ jobs:
           sbom: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
       - name: Get github app token
         uses: actions/create-github-app-token@7e473efe3cb98aa54f8d4bac15400b15fad77d94  # v2.2.0
         id: gh-app-token
         with:
           app-id: ${{ vars.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
+      - name: Trigger external workflows
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          github-token: ${{ steps.gh-app-token.outputs.token }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: 'OpenZeppelin',
+              repo: 'openzeppelin-relayer-infra',
+              workflow_id: 'testnet.yml',
+              ref: 'main'
+            })
+
+            await github.rest.actions.createWorkflowDispatch({
+              owner: 'OpenZeppelin',
+              repo: 'openzeppelin-relayer-infra',
+              workflow_id: 'mainnet.yml',
+              ref: 'main'
+            })
+
       - name: Attest
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a  # v3.0.0
         id: attest
@@ -87,6 +114,7 @@ jobs:
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: false
           github-token: ${{ steps.gh-app-token.outputs.token }}
+
       - name: Docker Hub Description
         uses: peter-evans/dockerhub-description@1b9a80c056b620d92cedb9d9b5a223409c68ddfa  # v5.0.0
         with:
@@ -95,6 +123,7 @@ jobs:
           repository: ${{ env.DOCKERHUB_IMAGE }}
           short-description: ${{ github.event.repository.description }}
           readme-filepath: ./DOCKER_README.md
+
       - name: Slack notification success or failure
         uses: act10ns/slack@44541246747a30eb3102d87f7a4cc5471b0ffb7d  # v2.1.0
         with:
@@ -103,6 +132,7 @@ jobs:
           channel: ${{ env.SLACK_CHANNEL }}
           message: Push to Dockerhub ${{ job.status }}!
         if: always()
+
       - name: Print image digest to summary
         run: |-
           echo "Image tags: ${{ steps.meta.outputs.tags }}" >> "${GITHUB_STEP_SUMMARY}"
