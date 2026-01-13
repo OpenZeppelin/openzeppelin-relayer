@@ -58,11 +58,7 @@ impl RedisNotificationRepository {
             });
         }
 
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "get_by_ids").await?;
         let keys: Vec<String> = ids.iter().map(|id| self.notification_key(id)).collect();
 
         debug!(count = %keys.len(), "batch fetching notification data");
@@ -141,11 +137,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
 
         let key = self.notification_key(&entity.id);
         let notification_list_key = self.notification_list_key();
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "create").await?;
 
         debug!("creating notification");
 
@@ -185,11 +177,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
             ));
         }
 
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "get_by_id").await?;
         let key = self.notification_key(&id);
 
         debug!("fetching notification");
@@ -216,11 +204,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
     }
 
     async fn list_all(&self) -> Result<Vec<NotificationRepoModel>, RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "list_all").await?;
         let notification_list_key = self.notification_list_key();
 
         debug!("fetching all notification IDs");
@@ -246,11 +230,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
             ));
         }
 
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "list_paginated").await?;
         let notification_list_key = self.notification_list_key();
 
         debug!(page = %query.page, per_page = %query.per_page, "fetching paginated notifications");
@@ -305,11 +285,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
         }
 
         let key = self.notification_key(&id);
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "update").await?;
 
         debug!("updating notification");
 
@@ -346,11 +322,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
 
         let key = self.notification_key(&id);
         let notification_list_key = self.notification_list_key();
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "delete_by_id").await?;
 
         debug!("deleting notification");
 
@@ -381,11 +353,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "count").await?;
         let notification_list_key = self.notification_list_key();
 
         debug!("counting notifications");
@@ -400,11 +368,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
     }
 
     async fn has_entries(&self) -> Result<bool, RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "has_entries").await?;
         let notification_list_key = self.notification_list_key();
 
         debug!("checking if notification entries exist");
@@ -419,11 +383,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
     }
 
     async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "drop_all_entries").await?;
         let notification_list_key = self.notification_list_key();
 
         debug!("dropping all notification entries");

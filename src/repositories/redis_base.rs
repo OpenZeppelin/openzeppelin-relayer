@@ -4,9 +4,10 @@
 //! implementations to reduce code duplication and ensure consistency.
 
 use crate::models::RepositoryError;
-use deadpool_redis::{PoolError, TimeoutType};
+use deadpool_redis::{Connection, Pool, PoolError, TimeoutType};
 use redis::RedisError;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tracing::{error, warn};
 
 /// Base trait for Redis repositories providing common functionality
@@ -108,6 +109,27 @@ pub trait RedisRepository {
                 "Redis pool error in operation '{context}': {error}"
             )),
         }
+    }
+
+    /// Get a connection from the Redis pool with error handling
+    ///
+    /// # Arguments
+    ///
+    /// * `pool` - Reference to the Redis connection pool
+    /// * `context` - Context string for error messages (e.g., "get_by_id", "create")
+    ///
+    /// # Returns
+    ///
+    /// A connection from the pool, or a RepositoryError if getting the connection fails
+    #[allow(async_fn_in_trait)]
+    async fn get_connection(
+        &self,
+        pool: &Arc<Pool>,
+        context: &str,
+    ) -> Result<Connection, RepositoryError> {
+        pool.get()
+            .await
+            .map_err(|e| self.map_pool_error(e, context))
     }
 }
 

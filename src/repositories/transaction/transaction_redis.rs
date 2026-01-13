@@ -111,10 +111,8 @@ impl RedisTransactionRepository {
         }
 
         let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "batch_fetch_transactions_get_conn"))?;
+            .get_connection(&self.pool, "batch_fetch_transactions")
+            .await?;
 
         let reverse_keys: Vec<String> = ids.iter().map(|id| self.tx_to_relayer_key(id)).collect();
 
@@ -210,11 +208,7 @@ impl RedisTransactionRepository {
         tx: &TransactionRepoModel,
         old_tx: Option<&TransactionRepoModel>,
     ) -> Result<(), RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "update_indexes_get_conn"))?;
+        let mut conn = self.get_connection(&self.pool, "update_indexes").await?;
         let mut pipe = redis::pipe();
         pipe.atomic();
 
@@ -272,10 +266,8 @@ impl RedisTransactionRepository {
     /// Remove all indexes with error recovery
     async fn remove_all_indexes(&self, tx: &TransactionRepoModel) -> Result<(), RepositoryError> {
         let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "remove_indexes_get_conn"))?;
+            .get_connection(&self.pool, "remove_all_indexes")
+            .await?;
         let mut pipe = redis::pipe();
         pipe.atomic();
 
@@ -317,11 +309,7 @@ impl RedisTransactionRepository {
         &self,
         relayer_id: &str,
     ) -> Result<Option<u64>, RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "check_and_migrate_get_conn"))?;
+        let mut conn = self.get_connection(&self.pool, "check_and_migrate").await?;
 
         // Quick check: scan for at least one transaction key to see if migration is needed
         let pattern = format!(
@@ -392,10 +380,8 @@ impl RedisTransactionRepository {
         relayer_id: &str,
     ) -> Result<usize, RepositoryError> {
         let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "migrate_transactions_get_conn"))?;
+            .get_connection(&self.pool, "migrate_transactions")
+            .await?;
 
         debug!(relayer_id = %relayer_id, "migrating old transactions to sorted set index");
 
@@ -472,10 +458,8 @@ impl RedisTransactionRepository {
         query: PaginationQuery,
     ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
         let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "find_by_relayer_fallback_get_conn"))?;
+            .get_connection(&self.pool, "find_by_relayer_id_fallback")
+            .await?;
 
         // Scan for all transaction keys for this relayer
         let pattern = format!(
@@ -562,11 +546,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
         let key = self.tx_key(&entity.relayer_id, &entity.id);
         let reverse_key = self.tx_to_relayer_key(&entity.id);
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "create_transaction_get_conn"))?;
+        let mut conn = self.get_connection(&self.pool, "create").await?;
 
         debug!(tx_id = %entity.id, "creating transaction");
 
@@ -612,11 +592,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             ));
         }
 
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "get_by_id_get_conn"))?;
+        let mut conn = self.get_connection(&self.pool, "get_by_id").await?;
 
         debug!(tx_id = %id, "fetching transaction");
 
@@ -660,11 +636,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
     // Unoptimized implementation of list_paginated. Rarely used. find_by_relayer_id is preferred.
     async fn list_all(&self) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "list_all_get_conn"))?;
+        let mut conn = self.get_connection(&self.pool, "list_all").await?;
 
         debug!("fetching all transactions sorted by created_at (newest first)");
 
@@ -712,11 +684,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             ));
         }
 
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "list_paginated_get_conn"))?;
+        let mut conn = self.get_connection(&self.pool, "list_paginated").await?;
 
         debug!(page = %query.page, per_page = %query.per_page, "fetching paginated transactions sorted by created_at (newest first)");
 
@@ -790,11 +758,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
         let old_tx = self.get_by_id(id.clone()).await?;
 
         let key = self.tx_key(&entity.relayer_id, &id);
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "update_transaction_get_conn"))?;
+        let mut conn = self.get_connection(&self.pool, "update").await?;
 
         let value = self.serialize_entity(&entity, |t| &t.id, "transaction")?;
 
@@ -825,11 +789,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
         let key = self.tx_key(&tx.relayer_id, &id);
         let reverse_key = self.tx_to_relayer_key(&id);
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "delete_transaction_get_conn"))?;
+        let mut conn = self.get_connection(&self.pool, "delete_by_id").await?;
 
         let mut pipe = redis::pipe();
         pipe.atomic();
@@ -851,11 +811,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
     // Unoptimized implementation of count. Rarely used. find_by_relayer_id is preferred.
     async fn count(&self) -> Result<usize, RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "count_get_conn"))?;
+        let mut conn = self.get_connection(&self.pool, "count").await?;
 
         debug!("counting transactions");
 
@@ -881,11 +837,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
     }
 
     async fn has_entries(&self) -> Result<bool, RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "has_entries_get_conn"))?;
+        let mut conn = self.get_connection(&self.pool, "has_entries").await?;
         let relayer_list_key = self.relayer_list_key();
 
         debug!("checking if transaction entries exist");
@@ -1078,11 +1030,7 @@ impl TransactionRepository for RedisTransactionRepository {
         relayer_id: &str,
         statuses: &[TransactionStatus],
     ) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "find_by_status_get_conn"))?;
+        let mut conn = self.get_connection(&self.pool, "find_by_status").await?;
         let mut all_ids = Vec::new();
 
         // Collect IDs from all status sets
@@ -1115,11 +1063,7 @@ impl TransactionRepository for RedisTransactionRepository {
         relayer_id: &str,
         nonce: u64,
     ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "find_by_nonce_get_conn"))?;
+        let mut conn = self.get_connection(&self.pool, "find_by_nonce").await?;
         let nonce_key = self.relayer_nonce_key(relayer_id, nonce);
 
         // Get transaction ID with this nonce for this relayer (should be single value)
@@ -1179,10 +1123,10 @@ impl TransactionRepository for RedisTransactionRepository {
         let mut last_error = None;
 
         for attempt in 0..MAX_RETRIES {
-            let mut conn = match self.pool.get().await {
+            let mut conn = match self.get_connection(&self.pool, "partial_update").await {
                 Ok(conn) => conn,
                 Err(e) => {
-                    last_error = Some(self.map_pool_error(e, "partial_update_get_conn"));
+                    last_error = Some(e);
                     if attempt < MAX_RETRIES - 1 {
                         tokio::time::sleep(tokio::time::Duration::from_millis(BACKOFF_MS)).await;
                         continue;

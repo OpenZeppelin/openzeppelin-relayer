@@ -71,11 +71,7 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         let key = self.counter_key(relayer_id, address);
         debug!(relayer_id = %relayer_id, address = %address, "getting counter for relayer and address");
 
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "get").await?;
 
         let value: Option<u64> = conn
             .get(&key)
@@ -140,11 +136,7 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         let key = self.counter_key(relayer_id, address);
         debug!(relayer_id = %relayer_id, address = %address, "decrementing counter for relayer and address");
 
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "decrement").await?;
 
         // Check if counter exists first
         let exists: bool = conn
@@ -200,11 +192,7 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         let key = self.counter_key(relayer_id, address);
         debug!(relayer_id = %relayer_id, address = %address, value = %value, "setting counter for relayer and address");
 
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "set").await?;
 
         let _: () = conn
             .set(&key, value)

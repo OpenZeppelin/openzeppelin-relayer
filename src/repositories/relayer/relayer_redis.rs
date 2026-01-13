@@ -59,10 +59,8 @@ impl RedisRelayerRepository {
         }
 
         let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "batch_fetch_relayers_get_conn"))?;
+            .get_connection(&self.pool, "batch_fetch_relayers")
+            .await?;
         let keys: Vec<String> = ids.iter().map(|id| self.relayer_key(id)).collect();
 
         debug!(count = %keys.len(), "batch fetching relayer data");
@@ -130,11 +128,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
             ));
         }
 
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "create").await?;
         let relayer_key = self.relayer_key(&entity.id);
 
         // Check if relayer already exists
@@ -173,11 +167,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
             ));
         }
 
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "get_by_id").await?;
         let relayer_key = self.relayer_key(&id);
 
         debug!(relayer_id = %id, "fetching relayer");
@@ -202,11 +192,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
     }
 
     async fn list_all(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "list_all").await?;
         let relayer_list_key = self.relayer_list_key();
 
         debug!("listing all relayers");
@@ -238,11 +224,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
             ));
         }
 
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "list_paginated").await?;
         let relayer_list_key = self.relayer_list_key();
 
         // Get total count
@@ -297,11 +279,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
             ));
         }
 
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "update").await?;
         let relayer_key = self.relayer_key(&id);
 
         // Check if relayer exists
@@ -343,11 +321,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
             ));
         }
 
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "delete_by_id").await?;
         let relayer_key = self.relayer_key(&id);
 
         // Check if relayer exists
@@ -377,11 +351,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "count").await?;
         let relayer_list_key = self.relayer_list_key();
 
         let count: u64 = conn
@@ -393,11 +363,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
     }
 
     async fn has_entries(&self) -> Result<bool, RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "has_entries").await?;
         let relayer_list_key = self.relayer_list_key();
 
         debug!("checking if relayer entries exist");
@@ -412,11 +378,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
     }
 
     async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "drop_all_entries").await?;
         let relayer_list_key = self.relayer_list_key();
 
         debug!("dropping all relayer entries");

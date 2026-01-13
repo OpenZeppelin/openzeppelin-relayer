@@ -54,11 +54,7 @@ impl RedisApiKeyRepository {
             });
         }
 
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "get_by_ids").await?;
         let keys: Vec<String> = ids.iter().map(|id| self.api_key_key(id)).collect();
 
         let values: Vec<Option<String>> = conn
@@ -123,11 +119,7 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
         let list_key = self.api_key_list_key();
         let json = self.serialize_entity(&entity, |a| &a.id, "apikey")?;
 
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "create").await?;
 
         let existing: Option<String> = conn
             .get(&key)
@@ -170,11 +162,7 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
                 "Per page count must be greater than 0".to_string(),
             ));
         }
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "list_paginated").await?;
         let api_key_list_key = self.api_key_list_key();
 
         // Get total count
@@ -219,11 +207,7 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
             ));
         }
 
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "get_by_id").await?;
         let api_key_key = self.api_key_key(id);
 
         debug!("Fetching api key with ID: {}", id);
@@ -264,11 +248,7 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
 
         let key = self.api_key_key(id);
         let api_key_list_key = self.api_key_list_key();
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "delete_by_id").await?;
 
         debug!("Deleting api key with ID: {}", id);
 
@@ -299,11 +279,7 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "count").await?;
         let api_key_list_key = self.api_key_list_key();
 
         let count: u64 = conn
@@ -315,11 +291,7 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
     }
 
     async fn has_entries(&self) -> Result<bool, RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "has_entries").await?;
         let plugin_list_key = self.api_key_list_key();
 
         debug!("Checking if plugin entries exist");
@@ -334,11 +306,7 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
     }
 
     async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "drop_all_entries").await?;
         let plugin_list_key = self.api_key_list_key();
 
         debug!("Dropping all plugin entries");

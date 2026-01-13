@@ -67,7 +67,7 @@ impl RedisPluginRepository {
         let json: Option<String> = conn
             .get(&key)
             .await
-            .map_err(|e| self.map_redis_error(e, &format!("get_plugin_by_id_{id}")))?;
+            .map_err(|e| self.map_redis_error(e, "get_plugin_by_id"))?;
 
         match json {
             Some(json) => {
@@ -94,11 +94,7 @@ impl RedisPluginRepository {
             });
         }
 
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "get_by_ids").await?;
         let keys: Vec<String> = ids.iter().map(|id| self.plugin_key(id)).collect();
 
         let values: Vec<Option<String>> = conn
@@ -148,11 +144,7 @@ impl fmt::Debug for RedisPluginRepository {
 #[async_trait]
 impl PluginRepositoryTrait for RedisPluginRepository {
     async fn get_by_id(&self, id: &str) -> Result<Option<PluginModel>, RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "get_by_id").await?;
         self.get_by_id_with_connection(id, &mut conn).await
     }
 
@@ -169,11 +161,7 @@ impl PluginRepositoryTrait for RedisPluginRepository {
             ));
         }
 
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "add").await?;
         let key = self.plugin_key(&plugin.id);
         let list_key = self.plugin_list_key();
 
@@ -183,7 +171,7 @@ impl PluginRepositoryTrait for RedisPluginRepository {
         let exists: bool = conn
             .exists(&key)
             .await
-            .map_err(|e| self.map_redis_error(e, &format!("check_plugin_exists_{}", plugin.id)))?;
+            .map_err(|e| self.map_redis_error(e, "check_plugin_exists"))?;
 
         if exists {
             return Err(RepositoryError::ConstraintViolation(format!(
@@ -203,7 +191,7 @@ impl PluginRepositoryTrait for RedisPluginRepository {
 
         pipe.exec_async(&mut conn).await.map_err(|e| {
             error!(plugin_id = %plugin.id, error = %e, "failed to add plugin");
-            self.map_redis_error(e, &format!("add_plugin_{}", plugin.id))
+            self.map_redis_error(e, "add_plugin")
         })?;
 
         debug!(plugin_id = %plugin.id, "successfully added plugin");
@@ -226,11 +214,7 @@ impl PluginRepositoryTrait for RedisPluginRepository {
             ));
         }
 
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "list_paginated").await?;
         let plugin_list_key = self.plugin_list_key();
 
         // Get total count
@@ -269,11 +253,7 @@ impl PluginRepositoryTrait for RedisPluginRepository {
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "count").await?;
         let plugin_list_key = self.plugin_list_key();
 
         let count: u64 = conn
@@ -285,11 +265,7 @@ impl PluginRepositoryTrait for RedisPluginRepository {
     }
 
     async fn has_entries(&self) -> Result<bool, RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "has_entries").await?;
         let plugin_list_key = self.plugin_list_key();
 
         debug!("checking if plugin entries exist");
@@ -304,11 +280,7 @@ impl PluginRepositoryTrait for RedisPluginRepository {
     }
 
     async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "drop_all_entries").await?;
         let plugin_list_key = self.plugin_list_key();
 
         debug!("dropping all plugin entries");

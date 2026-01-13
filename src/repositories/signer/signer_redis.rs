@@ -42,11 +42,7 @@ impl RedisSignerRepository {
 
     async fn add_to_list(&self, id: &str) -> Result<(), RepositoryError> {
         let key = self.signer_list_key();
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "add_to_list_get_conn"))?;
+        let mut conn = self.get_connection(&self.pool, "add_to_list").await?;
 
         let _: i64 = conn.sadd(&key, id).await.map_err(|e| {
             error!(signer_id = %id, error = %e, "failed to add signer to list");
@@ -59,11 +55,7 @@ impl RedisSignerRepository {
 
     async fn remove_from_list(&self, id: &str) -> Result<(), RepositoryError> {
         let key = self.signer_list_key();
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "remove_from_list_get_conn"))?;
+        let mut conn = self.get_connection(&self.pool, "remove_from_list").await?;
 
         let _: i64 = conn.srem(&key, id).await.map_err(|e| {
             error!(signer_id = %id, error = %e, "failed to remove signer from list");
@@ -76,11 +68,7 @@ impl RedisSignerRepository {
 
     async fn get_all_ids(&self) -> Result<Vec<String>, RepositoryError> {
         let key = self.signer_list_key();
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "get_all_ids_get_conn"))?;
+        let mut conn = self.get_connection(&self.pool, "get_all_ids").await?;
 
         conn.smembers(&key)
             .await
@@ -101,10 +89,8 @@ impl RedisSignerRepository {
         }
 
         let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "batch_fetch_signers_get_conn"))?;
+            .get_connection(&self.pool, "batch_fetch_signers")
+            .await?;
         let keys: Vec<String> = ids.iter().map(|id| self.signer_key(id)).collect();
 
         debug!(count = ids.len(), "batch fetching signers");
@@ -171,11 +157,7 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         }
 
         let key = self.signer_key(&signer.id);
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "create_signer_get_conn"))?;
+        let mut conn = self.get_connection(&self.pool, "create").await?;
 
         // Check if signer already exists
         let exists: bool = conn
@@ -214,11 +196,7 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         }
 
         let key = self.signer_key(&id);
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "get_by_id_get_conn"))?;
+        let mut conn = self.get_connection(&self.pool, "get_by_id").await?;
 
         let data: Option<String> = conn
             .get(&key)
@@ -259,11 +237,7 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         }
 
         let key = self.signer_key(&id);
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "update_signer_get_conn"))?;
+        let mut conn = self.get_connection(&self.pool, "update").await?;
 
         // Check if signer exists
         let exists: bool = conn
@@ -298,11 +272,7 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         }
 
         let key = self.signer_key(&id);
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "delete_signer_get_conn"))?;
+        let mut conn = self.get_connection(&self.pool, "delete_by_id").await?;
 
         // Check if signer exists
         let exists: bool = conn
@@ -404,11 +374,7 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
     }
 
     async fn has_entries(&self) -> Result<bool, RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "has_entries_get_conn"))?;
+        let mut conn = self.get_connection(&self.pool, "has_entries").await?;
         let signer_list_key = self.signer_list_key();
 
         debug!("Checking if signer entries exist");
@@ -423,11 +389,7 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
     }
 
     async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "drop_all_entries_get_conn"))?;
+        let mut conn = self.get_connection(&self.pool, "drop_all_entries").await?;
         let signer_list_key = self.signer_list_key();
 
         debug!("Dropping all signer entries");

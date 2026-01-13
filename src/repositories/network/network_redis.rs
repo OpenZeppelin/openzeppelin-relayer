@@ -80,11 +80,7 @@ impl RedisNetworkRepository {
         network: &NetworkRepoModel,
         old_network: Option<&NetworkRepoModel>,
     ) -> Result<(), RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "update_indexes").await?;
         let mut pipe = redis::pipe();
         pipe.atomic();
 
@@ -137,10 +133,8 @@ impl RedisNetworkRepository {
     /// Remove all indexes for a network
     async fn remove_all_indexes(&self, network: &NetworkRepoModel) -> Result<(), RepositoryError> {
         let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+            .get_connection(&self.pool, "remove_all_indexes")
+            .await?;
         let mut pipe = redis::pipe();
         pipe.atomic();
 
@@ -179,11 +173,7 @@ impl RedisNetworkRepository {
             });
         }
 
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "get_by_ids").await?;
         let keys: Vec<String> = ids.iter().map(|id| self.network_key(id)).collect();
 
         debug!(count = %ids.len(), "batch fetching networks");
@@ -252,11 +242,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         }
         let key = self.network_key(&entity.id);
         let network_list_key = self.network_list_key();
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "create").await?;
 
         debug!(network_id = %entity.id, "creating network");
 
@@ -300,11 +286,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         }
 
         let key = self.network_key(&id);
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "get_by_id").await?;
 
         debug!(network_id = %id, "retrieving network");
 
@@ -330,11 +312,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
 
     async fn list_all(&self) -> Result<Vec<NetworkRepoModel>, RepositoryError> {
         let network_list_key = self.network_list_key();
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "list_all").await?;
 
         debug!("listing all networks");
 
@@ -364,11 +342,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         }
 
         let network_list_key = self.network_list_key();
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "list_paginated").await?;
 
         debug!(page = %query.page, per_page = %query.per_page, "listing paginated networks");
 
@@ -426,11 +400,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         }
 
         let key = self.network_key(&id);
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "update").await?;
 
         debug!(network_id = %id, "updating network");
 
@@ -460,11 +430,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
 
         let key = self.network_key(&id);
         let network_list_key = self.network_list_key();
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "delete_by_id").await?;
 
         debug!(network_id = %id, "deleting network");
 
@@ -491,11 +457,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
 
     async fn count(&self) -> Result<usize, RepositoryError> {
         let network_list_key = self.network_list_key();
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "count").await?;
 
         debug!("counting networks");
 
@@ -512,11 +474,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
     /// This is used to determine if Redis storage is being used for networks.
     async fn has_entries(&self) -> Result<bool, RepositoryError> {
         let network_list_key = self.network_list_key();
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "has_entries").await?;
 
         debug!("checking if network storage has entries");
 
@@ -533,11 +491,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
     /// This includes all network data, indexes, and the network list.
     /// Use with caution as this will permanently delete all network data.
     async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "drop_all_entries").await?;
 
         debug!("starting to drop all network entries from Redis storage");
 
@@ -609,11 +563,7 @@ impl NetworkRepository for RedisNetworkRepository {
             ));
         }
 
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "get_by_name").await?;
 
         debug!(name = %name, network_type = ?network_type, "getting network by name");
 
@@ -656,11 +606,7 @@ impl NetworkRepository for RedisNetworkRepository {
             return Ok(None);
         }
 
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "get_by_chain_id").await?;
 
         debug!(chain_id = %chain_id, network_type = ?network_type, "getting network by chain ID");
 
