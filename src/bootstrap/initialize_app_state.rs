@@ -15,6 +15,7 @@ use crate::{
 };
 use actix_web::web;
 use color_eyre::Result;
+use deadpool_redis::Pool;
 use std::sync::Arc;
 use tracing::warn;
 
@@ -31,12 +32,20 @@ pub struct RepositoryCollection {
 
 /// Initializes repositories based on the server configuration
 ///
+/// # Arguments
+///
+/// * `config` - Server configuration
+/// * `pool` - Redis connection pool (required for Redis storage type, None for in-memory)
+///
 /// # Returns
 ///
 /// * `Result<RepositoryCollection>` - Initialized repositories
 ///
 /// # Errors
-pub async fn initialize_repositories(config: &ServerConfig) -> eyre::Result<RepositoryCollection> {
+pub async fn initialize_repositories(
+    config: &ServerConfig,
+    pool: Option<Arc<Pool>>,
+) -> eyre::Result<RepositoryCollection> {
     let repositories = match config.repository_storage_type {
         RepositoryStorageType::InMemory => RepositoryCollection {
             relayer: Arc::new(RelayerRepositoryStorage::new_in_memory()),
@@ -54,39 +63,41 @@ pub async fn initialize_repositories(config: &ServerConfig) -> eyre::Result<Repo
                 return Err(eyre::eyre!("Storage encryption key is not set. Please set the STORAGE_ENCRYPTION_KEY environment variable."));
             }
 
-            let connection_manager = initialize_redis_connection(config).await?;
+            let pool =
+                pool.ok_or_else(|| eyre::eyre!("Redis pool is required for Redis storage type"))?;
 
+            // Use the shared pool for all repositories
             RepositoryCollection {
                 relayer: Arc::new(RelayerRepositoryStorage::new_redis(
-                    connection_manager.clone(),
+                    pool.clone(),
                     config.redis_key_prefix.clone(),
                 )?),
                 transaction: Arc::new(TransactionRepositoryStorage::new_redis(
-                    connection_manager.clone(),
+                    pool.clone(),
                     config.redis_key_prefix.clone(),
                 )?),
                 signer: Arc::new(SignerRepositoryStorage::new_redis(
-                    connection_manager.clone(),
+                    pool.clone(),
                     config.redis_key_prefix.clone(),
                 )?),
                 notification: Arc::new(NotificationRepositoryStorage::new_redis(
-                    connection_manager.clone(),
+                    pool.clone(),
                     config.redis_key_prefix.clone(),
                 )?),
                 network: Arc::new(NetworkRepositoryStorage::new_redis(
-                    connection_manager.clone(),
+                    pool.clone(),
                     config.redis_key_prefix.clone(),
                 )?),
                 transaction_counter: Arc::new(TransactionCounterRepositoryStorage::new_redis(
-                    connection_manager.clone(),
+                    pool.clone(),
                     config.redis_key_prefix.clone(),
                 )?),
                 plugin: Arc::new(PluginRepositoryStorage::new_redis(
-                    connection_manager.clone(),
+                    pool.clone(),
                     config.redis_key_prefix.clone(),
                 )?),
                 api_key: Arc::new(ApiKeyRepositoryStorage::new_redis(
-                    connection_manager,
+                    pool,
                     config.redis_key_prefix.clone(),
                 )?),
             }
@@ -110,9 +121,13 @@ pub async fn initialize_repositories(config: &ServerConfig) -> eyre::Result<Repo
 pub async fn initialize_app_state(
     server_config: Arc<ServerConfig>,
 ) -> Result<web::ThinData<DefaultAppState>> {
-    let repositories = initialize_repositories(&server_config).await?;
+    // Initialize Redis pool once - shared by both repositories and job queues
+    let redis_pool = initialize_redis_connection(&server_config).await?;
 
-    let queue = Queue::setup().await?;
+    let repositories = initialize_repositories(&server_config, Some(redis_pool.clone())).await?;
+
+    // Reuse the same pool for job queues
+    let queue = Queue::setup(redis_pool).await?;
     let job_producer = Arc::new(jobs::JobProducer::new(queue.clone()));
 
     let app_state = web::ThinData(AppState {
@@ -146,7 +161,8 @@ mod tests {
     #[tokio::test]
     async fn test_initialize_repositories_in_memory() {
         let config = create_test_server_config(RepositoryStorageType::InMemory);
-        let result = initialize_repositories(&config).await;
+        // For in-memory storage, pool is not required
+        let result = initialize_repositories(&config, None).await;
 
         assert!(result.is_ok());
         let repositories = result.unwrap();
@@ -165,7 +181,8 @@ mod tests {
     #[tokio::test]
     async fn test_repository_collection_functionality() {
         let config = create_test_server_config(RepositoryStorageType::InMemory);
-        let repositories = initialize_repositories(&config).await.unwrap();
+        // For in-memory storage, pool is not required
+        let repositories = initialize_repositories(&config, None).await.unwrap();
 
         // Test basic repository operations
         let relayer = create_mock_relayer("test-relayer".to_string(), false);
