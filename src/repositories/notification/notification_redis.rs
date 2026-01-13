@@ -4,7 +4,7 @@ use crate::models::{NotificationRepoModel, PaginationQuery, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{BatchRetrievalResult, PaginatedResult, Repository};
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
+use deadpool_redis::Pool;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
@@ -15,27 +15,21 @@ const NOTIFICATION_LIST_KEY: &str = "notification_list";
 
 #[derive(Clone)]
 pub struct RedisNotificationRepository {
-    pub client: Arc<ConnectionManager>,
+    pub pool: Arc<Pool>,
     pub key_prefix: String,
 }
 
 impl RedisRepository for RedisNotificationRepository {}
 
 impl RedisNotificationRepository {
-    pub fn new(
-        connection_manager: Arc<ConnectionManager>,
-        key_prefix: String,
-    ) -> Result<Self, RepositoryError> {
+    pub fn new(pool: Arc<Pool>, key_prefix: String) -> Result<Self, RepositoryError> {
         if key_prefix.is_empty() {
             return Err(RepositoryError::InvalidData(
                 "Redis key prefix cannot be empty".to_string(),
             ));
         }
 
-        Ok(Self {
-            client: connection_manager,
-            key_prefix,
-        })
+        Ok(Self { pool, key_prefix })
     }
 
     /// Generate key for notification data: notification:{notification_id}
@@ -64,7 +58,11 @@ impl RedisNotificationRepository {
             });
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
         let keys: Vec<String> = ids.iter().map(|id| self.notification_key(id)).collect();
 
         debug!(count = %keys.len(), "batch fetching notification data");
@@ -117,7 +115,7 @@ impl RedisNotificationRepository {
 impl fmt::Debug for RedisNotificationRepository {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RedisNotificationRepository")
-            .field("client", &"<ConnectionManager>")
+            .field("pool", &"<Pool>")
             .field("key_prefix", &self.key_prefix)
             .finish()
     }
@@ -143,7 +141,11 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
 
         let key = self.notification_key(&entity.id);
         let notification_list_key = self.notification_list_key();
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
 
         debug!("creating notification");
 
@@ -183,7 +185,11 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
             ));
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
         let key = self.notification_key(&id);
 
         debug!("fetching notification");
@@ -210,7 +216,11 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
     }
 
     async fn list_all(&self) -> Result<Vec<NotificationRepoModel>, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
         let notification_list_key = self.notification_list_key();
 
         debug!("fetching all notification IDs");
@@ -236,7 +246,11 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
             ));
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
         let notification_list_key = self.notification_list_key();
 
         debug!(page = %query.page, per_page = %query.per_page, "fetching paginated notifications");
@@ -291,7 +305,11 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
         }
 
         let key = self.notification_key(&id);
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
 
         debug!("updating notification");
 
@@ -328,7 +346,11 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
 
         let key = self.notification_key(&id);
         let notification_list_key = self.notification_list_key();
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
 
         debug!("deleting notification");
 
@@ -359,7 +381,11 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
         let notification_list_key = self.notification_list_key();
 
         debug!("counting notifications");
@@ -374,7 +400,11 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
     }
 
     async fn has_entries(&self) -> Result<bool, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
         let notification_list_key = self.notification_list_key();
 
         debug!("checking if notification entries exist");
@@ -389,7 +419,11 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
     }
 
     async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
         let notification_list_key = self.notification_list_key();
 
         debug!("dropping all notification entries");
@@ -431,7 +465,6 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
 mod tests {
     use super::*;
     use crate::models::NotificationType;
-    use redis::Client;
     use tokio;
     use uuid::Uuid;
 
@@ -459,12 +492,12 @@ mod tests {
         let redis_url = std::env::var("REDIS_TEST_URL")
             .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
 
-        let client = Client::open(redis_url).expect("Failed to create Redis client");
-        let connection_manager = ConnectionManager::new(client)
-            .await
-            .expect("Failed to create connection manager");
+        let cfg = deadpool_redis::Config::from_url(&redis_url);
+        let pool = cfg
+            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+            .expect("Failed to create Redis pool");
 
-        RedisNotificationRepository::new(Arc::new(connection_manager), "test_prefix".to_string())
+        RedisNotificationRepository::new(Arc::new(pool), "test_prefix".to_string())
             .expect("Failed to create RedisNotificationRepository")
     }
 
@@ -480,12 +513,12 @@ mod tests {
     async fn test_new_repository_empty_prefix_fails() {
         let redis_url = std::env::var("REDIS_TEST_URL")
             .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-        let client = Client::open(redis_url).expect("Failed to create Redis client");
-        let connection_manager = ConnectionManager::new(client)
-            .await
-            .expect("Failed to create connection manager");
+        let cfg = deadpool_redis::Config::from_url(&redis_url);
+        let pool = cfg
+            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+            .expect("Failed to create Redis pool");
 
-        let result = RedisNotificationRepository::new(Arc::new(connection_manager), "".to_string());
+        let result = RedisNotificationRepository::new(Arc::new(pool), "".to_string());
         assert!(matches!(result, Err(RepositoryError::InvalidData(_))));
     }
 

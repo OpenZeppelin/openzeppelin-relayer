@@ -21,7 +21,7 @@
 pub mod transaction_counter_in_memory;
 pub mod transaction_counter_redis;
 
-use redis::aio::ConnectionManager;
+use deadpool_redis::Pool;
 pub use transaction_counter_in_memory::InMemoryTransactionCounter;
 pub use transaction_counter_redis::RedisTransactionCounter;
 
@@ -72,14 +72,8 @@ impl TransactionCounterRepositoryStorage {
     pub fn new_in_memory() -> Self {
         Self::InMemory(InMemoryTransactionCounter::new())
     }
-    pub fn new_redis(
-        connection_manager: Arc<ConnectionManager>,
-        key_prefix: String,
-    ) -> Result<Self, RepositoryError> {
-        Ok(Self::Redis(RedisTransactionCounter::new(
-            connection_manager,
-            key_prefix,
-        )?))
+    pub fn new_redis(pool: Arc<Pool>, key_prefix: String) -> Result<Self, RepositoryError> {
+        Ok(Self::Redis(RedisTransactionCounter::new(pool, key_prefix)?))
     }
 }
 

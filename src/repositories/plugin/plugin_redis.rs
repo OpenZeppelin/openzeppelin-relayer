@@ -4,7 +4,7 @@ use crate::models::{PaginationQuery, PluginModel, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{BatchRetrievalResult, PaginatedResult, PluginRepositoryTrait};
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
+use deadpool_redis::Pool;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
@@ -15,27 +15,21 @@ const PLUGIN_LIST_KEY: &str = "plugin_list";
 
 #[derive(Clone)]
 pub struct RedisPluginRepository {
-    pub client: Arc<ConnectionManager>,
+    pub pool: Arc<Pool>,
     pub key_prefix: String,
 }
 
 impl RedisRepository for RedisPluginRepository {}
 
 impl RedisPluginRepository {
-    pub fn new(
-        connection_manager: Arc<ConnectionManager>,
-        key_prefix: String,
-    ) -> Result<Self, RepositoryError> {
+    pub fn new(pool: Arc<Pool>, key_prefix: String) -> Result<Self, RepositoryError> {
         if key_prefix.is_empty() {
             return Err(RepositoryError::InvalidData(
                 "Redis key prefix cannot be empty".to_string(),
             ));
         }
 
-        Ok(Self {
-            client: connection_manager,
-            key_prefix,
-        })
+        Ok(Self { pool, key_prefix })
     }
 
     /// Generate key for plugin data: plugin:{plugin_id}
@@ -59,7 +53,7 @@ impl RedisPluginRepository {
     async fn get_by_id_with_connection(
         &self,
         id: &str,
-        conn: &mut ConnectionManager,
+        conn: &mut deadpool_redis::Connection,
     ) -> Result<Option<PluginModel>, RepositoryError> {
         if id.is_empty() {
             return Err(RepositoryError::InvalidData(
@@ -100,7 +94,11 @@ impl RedisPluginRepository {
             });
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
         let keys: Vec<String> = ids.iter().map(|id| self.plugin_key(id)).collect();
 
         let values: Vec<Option<String>> = conn
@@ -141,7 +139,7 @@ impl RedisPluginRepository {
 impl fmt::Debug for RedisPluginRepository {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RedisPluginRepository")
-            .field("client", &"<ConnectionManager>")
+            .field("pool", &"<Pool>")
             .field("key_prefix", &self.key_prefix)
             .finish()
     }
@@ -150,7 +148,11 @@ impl fmt::Debug for RedisPluginRepository {
 #[async_trait]
 impl PluginRepositoryTrait for RedisPluginRepository {
     async fn get_by_id(&self, id: &str) -> Result<Option<PluginModel>, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
         self.get_by_id_with_connection(id, &mut conn).await
     }
 
@@ -167,7 +169,11 @@ impl PluginRepositoryTrait for RedisPluginRepository {
             ));
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
         let key = self.plugin_key(&plugin.id);
         let list_key = self.plugin_list_key();
 
@@ -220,7 +226,11 @@ impl PluginRepositoryTrait for RedisPluginRepository {
             ));
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
         let plugin_list_key = self.plugin_list_key();
 
         // Get total count
@@ -259,7 +269,11 @@ impl PluginRepositoryTrait for RedisPluginRepository {
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
         let plugin_list_key = self.plugin_list_key();
 
         let count: u64 = conn
@@ -271,7 +285,11 @@ impl PluginRepositoryTrait for RedisPluginRepository {
     }
 
     async fn has_entries(&self) -> Result<bool, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
         let plugin_list_key = self.plugin_list_key();
 
         debug!("checking if plugin entries exist");
@@ -286,7 +304,11 @@ impl PluginRepositoryTrait for RedisPluginRepository {
     }
 
     async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
         let plugin_list_key = self.plugin_list_key();
 
         debug!("dropping all plugin entries");
@@ -348,18 +370,18 @@ mod tests {
     async fn setup_test_repo() -> RedisPluginRepository {
         let redis_url =
             std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string());
-        let client = redis::Client::open(redis_url).expect("Failed to create Redis client");
-        let mut connection_manager = ConnectionManager::new(client)
-            .await
-            .expect("Failed to create Redis connection manager");
+        let cfg = deadpool_redis::Config::from_url(&redis_url);
+        let pool = cfg
+            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+            .expect("Failed to create Redis pool");
 
         // Clear the plugin lists
-        connection_manager
-            .del::<&str, ()>("test_plugin:plugin_list")
+        let mut conn = pool.get().await.expect("Failed to get connection");
+        conn.del::<&str, ()>("test_plugin:plugin_list")
             .await
             .unwrap();
 
-        RedisPluginRepository::new(Arc::new(connection_manager), "test_plugin".to_string())
+        RedisPluginRepository::new(Arc::new(pool), "test_plugin".to_string())
             .expect("Failed to create Redis plugin repository")
     }
 
@@ -373,13 +395,13 @@ mod tests {
     #[tokio::test]
     #[ignore = "Requires active Redis instance"]
     async fn test_new_repository_empty_prefix_fails() {
-        let client =
-            redis::Client::open("redis://127.0.0.1:6379/").expect("Failed to create Redis client");
-        let connection_manager = redis::aio::ConnectionManager::new(client)
-            .await
-            .expect("Failed to create Redis connection manager");
+        let redis_url = "redis://127.0.0.1:6379/";
+        let cfg = deadpool_redis::Config::from_url(redis_url);
+        let pool = cfg
+            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+            .expect("Failed to create Redis pool");
 
-        let result = RedisPluginRepository::new(Arc::new(connection_manager), "".to_string());
+        let result = RedisPluginRepository::new(Arc::new(pool), "".to_string());
         assert!(result.is_err());
         assert!(result
             .unwrap_err()

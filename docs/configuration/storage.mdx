@@ -94,6 +94,8 @@ STORAGE_ENCRYPTION_KEY=your-encryption-key-here
 | --- | --- | --- | --- |
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection string | Full connection URL for the Redis instance. Supports Redis, Redis Sentinel, and Redis Cluster configurations. |
 | `REDIS_CONNECTION_TIMEOUT_MS` | `10000` | `number` (milliseconds) | Maximum time to wait when connecting to Redis before timing out. |
+| `REDIS_POOL_MAX_SIZE` | `500` | `number` | Maximum number of connections in the Redis connection pool. Recommended: 50-100 for production, adjust based on workload and instance count. |
+| `REDIS_POOL_TIMEOUT_MS` | `15000` | `number` (milliseconds) | Maximum time to wait for a connection from the pool before timing out. Higher values help handle traffic spikes. |
 | `REDIS_KEY_PREFIX` | `oz-relayer` | `string` | Prefix added to all Redis keys. Useful for namespacing when sharing Redis with other applications. |
 | `STORAGE_ENCRYPTION_KEY` | `` | `string` (base64) | Encryption key used to encrypt sensitive data at rest in Redis. Generate using `cargo run --example generate_encryption_key`. |
 
@@ -111,6 +113,39 @@ When using Redis storage in production:
 * ***Network isolation***: Deploy Redis in a private network
 * ***Regular backups***: Implement Redis backup strategy
 * ***Monitor access***: Log and monitor Redis access patterns
+
+</Callout>
+
+### Connection Pool Tuning
+
+Redis connection pooling improves performance and prevents connection exhaustion:
+
+***Pool Sizing Guidelines:***
+
+* ***Development***: 10 connections (low concurrent operations)
+* ***Staging***: 30 connections (moderate load testing)
+* ***Production (single instance)***: 100 connections (high concurrent operations)
+* ***Production (horizontally scaled)***: 50-100 connections per instance
+
+***Consider when tuning:***
+
+* **Transaction volume**: Higher TPS requires more connections
+* **Number of relayers**: More active relayers = more concurrent operations
+* **Instance count**: Divide total connection budget across instances
+* **ElastiCache tier**: Even small instances support 65,000+ connections
+
+***Example calculation:***
+```bash
+# Peak TPS × Average Operation Duration × Safety Margin
+# 100 TPS × 0.01s × 20x safety = 20 minimum
+# Recommended: 50-100 for headroom
+REDIS_POOL_MAX_SIZE=100
+REDIS_POOL_TIMEOUT_MS=15000
+```
+
+<Callout type='info'>
+
+**AWS ElastiCache Recommendation**: Use `cache.r6g` or `cache.r7g` instance families with Multi-AZ enabled. Monitor the `CurrConnections` CloudWatch metric and set alerts at 80% of pool capacity.
 
 </Callout>
 

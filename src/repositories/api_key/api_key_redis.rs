@@ -4,7 +4,7 @@ use crate::models::{ApiKeyRepoModel, PaginationQuery, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{ApiKeyRepositoryTrait, BatchRetrievalResult, PaginatedResult};
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
+use deadpool_redis::Pool;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
@@ -15,27 +15,21 @@ const API_KEY_LIST_KEY: &str = "apikey_list";
 
 #[derive(Clone)]
 pub struct RedisApiKeyRepository {
-    pub client: Arc<ConnectionManager>,
+    pub pool: Arc<Pool>,
     pub key_prefix: String,
 }
 
 impl RedisRepository for RedisApiKeyRepository {}
 
 impl RedisApiKeyRepository {
-    pub fn new(
-        connection_manager: Arc<ConnectionManager>,
-        key_prefix: String,
-    ) -> Result<Self, RepositoryError> {
+    pub fn new(pool: Arc<Pool>, key_prefix: String) -> Result<Self, RepositoryError> {
         if key_prefix.is_empty() {
             return Err(RepositoryError::InvalidData(
                 "Redis key prefix cannot be empty".to_string(),
             ));
         }
 
-        Ok(Self {
-            client: connection_manager,
-            key_prefix,
-        })
+        Ok(Self { pool, key_prefix })
     }
 
     /// Generate key for api key data: apikey:{api_key_id}
@@ -60,7 +54,11 @@ impl RedisApiKeyRepository {
             });
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
         let keys: Vec<String> = ids.iter().map(|id| self.api_key_key(id)).collect();
 
         let values: Vec<Option<String>> = conn
@@ -125,7 +123,11 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
         let list_key = self.api_key_list_key();
         let json = self.serialize_entity(&entity, |a| &a.id, "apikey")?;
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
 
         let existing: Option<String> = conn
             .get(&key)
@@ -168,7 +170,11 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
                 "Per page count must be greater than 0".to_string(),
             ));
         }
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
         let api_key_list_key = self.api_key_list_key();
 
         // Get total count
@@ -213,7 +219,11 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
             ));
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
         let api_key_key = self.api_key_key(id);
 
         debug!("Fetching api key with ID: {}", id);
@@ -254,7 +264,11 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
 
         let key = self.api_key_key(id);
         let api_key_list_key = self.api_key_list_key();
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
 
         debug!("Deleting api key with ID: {}", id);
 
@@ -285,7 +299,11 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
         let api_key_list_key = self.api_key_list_key();
 
         let count: u64 = conn
@@ -297,7 +315,11 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
     }
 
     async fn has_entries(&self) -> Result<bool, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
         let plugin_list_key = self.api_key_list_key();
 
         debug!("Checking if plugin entries exist");
@@ -312,7 +334,11 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
     }
 
     async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
         let plugin_list_key = self.api_key_list_key();
 
         debug!("Dropping all plugin entries");
@@ -371,18 +397,18 @@ mod tests {
     async fn setup_test_repo() -> RedisApiKeyRepository {
         let redis_url =
             std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string());
-        let client = redis::Client::open(redis_url).expect("Failed to create Redis client");
-        let mut connection_manager = ConnectionManager::new(client)
-            .await
-            .expect("Failed to create Redis connection manager");
+        let cfg = deadpool_redis::Config::from_url(&redis_url);
+        let pool = cfg
+            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+            .expect("Failed to create Redis pool");
 
         // Clear the api key list
-        connection_manager
-            .del::<&str, ()>("test_api_key:apikey_list")
+        let mut conn = pool.get().await.expect("Failed to get connection");
+        conn.del::<&str, ()>("test_api_key:apikey_list")
             .await
             .unwrap();
 
-        RedisApiKeyRepository::new(Arc::new(connection_manager), "test_api_key".to_string())
+        RedisApiKeyRepository::new(Arc::new(pool), "test_api_key".to_string())
             .expect("Failed to create Redis api key repository")
     }
 
@@ -396,13 +422,13 @@ mod tests {
     #[tokio::test]
     #[ignore = "Requires active Redis instance"]
     async fn test_new_repository_empty_prefix_fails() {
-        let client =
-            redis::Client::open("redis://127.0.0.1:6379/").expect("Failed to create Redis client");
-        let connection_manager = redis::aio::ConnectionManager::new(client)
-            .await
-            .expect("Failed to create Redis connection manager");
+        let redis_url = "redis://127.0.0.1:6379/";
+        let cfg = deadpool_redis::Config::from_url(redis_url);
+        let pool = cfg
+            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+            .expect("Failed to create Redis pool");
 
-        let result = RedisApiKeyRepository::new(Arc::new(connection_manager), "".to_string());
+        let result = RedisApiKeyRepository::new(Arc::new(pool), "".to_string());
         assert!(result.is_err());
         assert!(result
             .unwrap_err()

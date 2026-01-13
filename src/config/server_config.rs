@@ -52,6 +52,10 @@ pub struct ServerConfig {
     pub redis_connection_timeout_ms: u64,
     /// The prefix for the Redis key.
     pub redis_key_prefix: String,
+    /// Maximum number of connections in the Redis pool.
+    pub redis_pool_max_size: usize,
+    /// Timeout in milliseconds waiting to get a connection from the pool.
+    pub redis_pool_timeout_ms: u64,
     /// The number of milliseconds to wait for an RPC response.
     pub rpc_timeout_ms: u64,
     /// Maximum number of retry attempts for provider operations.
@@ -120,6 +124,8 @@ impl ServerConfig {
             enable_swagger: Self::get_enable_swagger(),
             redis_connection_timeout_ms: Self::get_redis_connection_timeout_ms(),
             redis_key_prefix: Self::get_redis_key_prefix(),
+            redis_pool_max_size: Self::get_redis_pool_max_size(),
+            redis_pool_timeout_ms: Self::get_redis_pool_timeout_ms(),
             rpc_timeout_ms: Self::get_rpc_timeout_ms(),
             provider_max_retries: Self::get_provider_max_retries(),
             provider_retry_base_delay_ms: Self::get_provider_retry_base_delay_ms(),
@@ -243,6 +249,22 @@ impl ServerConfig {
     /// Gets the Redis key prefix from environment variable or default
     pub fn get_redis_key_prefix() -> String {
         env::var("REDIS_KEY_PREFIX").unwrap_or_else(|_| "oz-relayer".to_string())
+    }
+
+    /// Gets the Redis pool max size from environment variable or default (100)
+    pub fn get_redis_pool_max_size() -> usize {
+        env::var("REDIS_POOL_MAX_SIZE")
+            .unwrap_or_else(|_| "500".to_string())
+            .parse()
+            .unwrap_or(500)
+    }
+
+    /// Gets the Redis pool timeout from environment variable or default (15000ms)
+    pub fn get_redis_pool_timeout_ms() -> u64 {
+        env::var("REDIS_POOL_TIMEOUT_MS")
+            .unwrap_or_else(|_| "10000".to_string())
+            .parse()
+            .unwrap_or(10000)
     }
 
     /// Gets the RPC timeout from environment variable or default

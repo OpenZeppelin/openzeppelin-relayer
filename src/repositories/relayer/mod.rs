@@ -33,7 +33,7 @@ use crate::{
     repositories::{PaginatedResult, Repository},
 };
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
+use deadpool_redis::Pool;
 use std::sync::Arc;
 
 #[async_trait]
@@ -111,14 +111,8 @@ impl RelayerRepositoryStorage {
         Self::InMemory(InMemoryRelayerRepository::new())
     }
 
-    pub fn new_redis(
-        connection_manager: Arc<ConnectionManager>,
-        key_prefix: String,
-    ) -> Result<Self, RepositoryError> {
-        Ok(Self::Redis(RedisRelayerRepository::new(
-            connection_manager,
-            key_prefix,
-        )?))
+    pub fn new_redis(pool: Arc<Pool>, key_prefix: String) -> Result<Self, RepositoryError> {
+        Ok(Self::Redis(RedisRelayerRepository::new(pool, key_prefix)?))
     }
 }
 

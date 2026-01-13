@@ -4,6 +4,7 @@
 //! implementations to reduce code duplication and ensure consistency.
 
 use crate::models::RepositoryError;
+use deadpool_redis::{PoolError, TimeoutType};
 use redis::RedisError;
 use serde::{Deserialize, Serialize};
 use tracing::{error, warn};
@@ -78,6 +79,34 @@ pub trait RedisRepository {
             )),
             // Default to Other for connection errors and other issues
             _ => RepositoryError::Other(format!("Redis operation '{context}' failed: {error}")),
+        }
+    }
+
+    /// Convert deadpool Pool errors to appropriate RepositoryError types
+    fn map_pool_error(&self, error: PoolError, context: &str) -> RepositoryError {
+        error!(context = %context, error = %error, "redis pool operation failed");
+
+        match error {
+            PoolError::Timeout(timeout) => {
+                let detail = match timeout {
+                    TimeoutType::Wait => "waiting for an available connection",
+                    TimeoutType::Create => "creating a new connection",
+                    TimeoutType::Recycle => "recycling a connection",
+                };
+                RepositoryError::ConnectionError(format!(
+                    "Redis pool timeout while {detail} in operation '{context}'"
+                ))
+            }
+            PoolError::Backend(redis_err) => self.map_redis_error(redis_err, context),
+            PoolError::Closed => {
+                RepositoryError::ConnectionError("Redis pool is closed".to_string())
+            }
+            PoolError::NoRuntimeSpecified => {
+                RepositoryError::ConnectionError("Redis pool has no runtime specified".to_string())
+            }
+            _ => RepositoryError::ConnectionError(format!(
+                "Redis pool error in operation '{context}': {error}"
+            )),
         }
     }
 }

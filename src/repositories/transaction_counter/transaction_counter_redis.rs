@@ -9,7 +9,7 @@ use super::TransactionCounterTrait;
 use crate::models::RepositoryError;
 use crate::repositories::redis_base::RedisRepository;
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
+use deadpool_redis::Pool;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
@@ -19,7 +19,7 @@ const COUNTER_PREFIX: &str = "transaction_counter";
 
 #[derive(Clone)]
 pub struct RedisTransactionCounter {
-    pub client: Arc<ConnectionManager>,
+    pub pool: Arc<Pool>,
     pub key_prefix: String,
 }
 
@@ -34,20 +34,14 @@ impl fmt::Debug for RedisTransactionCounter {
 }
 
 impl RedisTransactionCounter {
-    pub fn new(
-        connection_manager: Arc<ConnectionManager>,
-        key_prefix: String,
-    ) -> Result<Self, RepositoryError> {
+    pub fn new(pool: Arc<Pool>, key_prefix: String) -> Result<Self, RepositoryError> {
         if key_prefix.is_empty() {
             return Err(RepositoryError::InvalidData(
                 "Redis key prefix cannot be empty".to_string(),
             ));
         }
 
-        Ok(Self {
-            client: connection_manager,
-            key_prefix,
-        })
+        Ok(Self { pool, key_prefix })
     }
 
     /// Generate key for transaction counter: {prefix}:transaction_counter:{relayer_id}:{address}
@@ -77,7 +71,11 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         let key = self.counter_key(relayer_id, address);
         debug!(relayer_id = %relayer_id, address = %address, "getting counter for relayer and address");
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
 
         let value: Option<u64> = conn
             .get(&key)
@@ -108,7 +106,11 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         let key = self.counter_key(relayer_id, address);
         debug!(relayer_id = %relayer_id, address = %address, "getting and incrementing counter for relayer and address");
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
 
         // Use Redis INCR for atomic increment
         let new_value: u64 = conn
@@ -138,7 +140,11 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         let key = self.counter_key(relayer_id, address);
         debug!(relayer_id = %relayer_id, address = %address, "decrementing counter for relayer and address");
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
 
         // Check if counter exists first
         let exists: bool = conn
@@ -194,7 +200,11 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         let key = self.counter_key(relayer_id, address);
         debug!(relayer_id = %relayer_id, address = %address, value = %value, "setting counter for relayer and address");
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
 
         let _: () = conn
             .set(&key, value)
@@ -209,7 +219,6 @@ impl TransactionCounterTrait for RedisTransactionCounter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use redis::aio::ConnectionManager;
     use std::sync::Arc;
     use tokio;
     use uuid::Uuid;
@@ -217,12 +226,12 @@ mod tests {
     async fn setup_test_repo() -> RedisTransactionCounter {
         let redis_url =
             std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-        let client = redis::Client::open(redis_url).expect("Failed to create Redis client");
-        let connection_manager = ConnectionManager::new(client)
-            .await
-            .expect("Failed to create Redis connection manager");
+        let cfg = deadpool_redis::Config::from_url(&redis_url);
+        let pool = cfg
+            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+            .expect("Failed to create Redis pool");
 
-        RedisTransactionCounter::new(Arc::new(connection_manager), "test_counter".to_string())
+        RedisTransactionCounter::new(Arc::new(pool), "test_counter".to_string())
             .expect("Failed to create Redis transaction counter")
     }
 
