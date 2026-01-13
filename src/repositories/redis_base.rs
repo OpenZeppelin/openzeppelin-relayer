@@ -105,8 +105,8 @@ pub trait RedisRepository {
             PoolError::NoRuntimeSpecified => {
                 RepositoryError::ConnectionError("Redis pool has no runtime specified".to_string())
             }
-            _ => RepositoryError::ConnectionError(format!(
-                "Redis pool error in operation '{context}': {error}"
+            other => RepositoryError::ConnectionError(format!(
+                "Redis pool error in operation '{context}': {other}"
             )),
         }
     }

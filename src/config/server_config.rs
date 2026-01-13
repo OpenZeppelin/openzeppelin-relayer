@@ -252,18 +252,24 @@ impl ServerConfig {
     }
 
     /// Gets the Redis pool max size from environment variable or default
+    /// Returns default (500) if value is 0 or invalid
     pub fn get_redis_pool_max_size() -> usize {
         env::var("REDIS_POOL_MAX_SIZE")
             .unwrap_or_else(|_| "500".to_string())
             .parse()
+            .ok()
+            .filter(|&v| v > 0)
             .unwrap_or(500)
     }
 
     /// Gets the Redis pool timeout from environment variable or default
+    /// Returns default (10000) if value is 0 or invalid
     pub fn get_redis_pool_timeout_ms() -> u64 {
         env::var("REDIS_POOL_TIMEOUT_MS")
             .unwrap_or_else(|_| "10000".to_string())
             .parse()
+            .ok()
+            .filter(|&v| v > 0)
             .unwrap_or(10000)
     }
 
@@ -744,9 +750,9 @@ mod tests {
         env::set_var("REDIS_POOL_MAX_SIZE", "not_a_number");
         assert_eq!(ServerConfig::get_redis_pool_max_size(), 500);
 
-        // Test zero value (should be accepted)
+        // Test zero value returns default (invalid)
         env::set_var("REDIS_POOL_MAX_SIZE", "0");
-        assert_eq!(ServerConfig::get_redis_pool_max_size(), 0);
+        assert_eq!(ServerConfig::get_redis_pool_max_size(), 500);
 
         // Test large value
         env::set_var("REDIS_POOL_MAX_SIZE", "10000");
@@ -775,9 +781,9 @@ mod tests {
         env::set_var("REDIS_POOL_TIMEOUT_MS", "not_a_number");
         assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 10000);
 
-        // Test zero value (should be accepted)
+        // Test zero value returns default (invalid)
         env::set_var("REDIS_POOL_TIMEOUT_MS", "0");
-        assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 0);
+        assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 10000);
 
         // Test large value
         env::set_var("REDIS_POOL_TIMEOUT_MS", "60000");
