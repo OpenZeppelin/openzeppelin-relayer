@@ -75,19 +75,17 @@ where
 {
     let secret_content = secret.to_str();
 
-    // Encrypt with AAD
+    // Encrypt with AAD (already returns base64-encoded string)
     let encrypted = encrypt_sensitive_field_with_aad(&secret_content)
         .map_err(|e| serde::ser::Error::custom(format!("Encryption failed: {e}")))?;
 
-    let encoded = base64_encode(encrypted.as_bytes());
-
-    serializer.serialize_str(&encoded)
+    serializer.serialize_str(&encrypted)
 }
 
 /// Helper function to deserialize secrets from encrypted base64 storage.
 ///
 /// Supports three formats for backwards compatibility:
-/// 1. New format (v2): base64(encrypted data with AAD)
+/// 1. Encrypted format (v2): base64(encrypted data with AAD)
 /// 2. Legacy encrypted format (v1): base64(encrypted data without AAD)
 /// 3. Plain text format: unencrypted plain string (for data stored before encryption was added)
 ///
@@ -98,34 +96,13 @@ where
 {
     let value_str = String::deserialize(deserializer)?;
 
-    // Try to decode as base64 first (encrypted format)
-    match base64_decode(&value_str) {
-        Ok(encrypted_bytes) => {
-            // Successfully decoded base64, now try to decrypt
-            match String::from_utf8(encrypted_bytes) {
-                Ok(encrypted_str) => {
-                    // Try to decrypt - handles both v1 (no AAD) and v2 (with AAD)
-                    match decrypt_sensitive_field_auto(&encrypted_str) {
-                        Ok(decrypted) => Ok(SecretString::new(&decrypted)),
-                        Err(_) => {
-                            // Decryption failed - this might be a plain base64-encoded value
-                            // Fall back to treating the original string as plain text
-                            Ok(SecretString::new(&value_str))
-                        }
-                    }
-                }
-                Err(_) => {
-                    // Invalid UTF-8 after base64 decode - treat as plain text
-                    Ok(SecretString::new(&value_str))
-                }
-            }
-        }
-        Err(_) => {
-            // Base64 decode failed - this is plain text from before encryption was added
-            // This handles the migration case where old data was stored as plain strings
-            Ok(SecretString::new(&value_str))
-        }
+    // First try the direct decrypt path (single-layer base64 payloads).
+    if let Ok(decrypted) = decrypt_sensitive_field_auto(&value_str) {
+        return Ok(SecretString::new(&decrypted));
     }
+
+    // Fall back to treating the original string as plain text.
+    Ok(SecretString::new(&value_str))
 }
 
 /// Helper function to serialize optional secrets as encrypted base64 for storage.
@@ -143,12 +120,11 @@ where
         Some(secret_string) => {
             let secret_content = secret_string.to_str();
 
-            // Encrypt with AAD
+            // Encrypt with AAD (already returns base64-encoded string)
             let encrypted = encrypt_sensitive_field_with_aad(&secret_content)
                 .map_err(|e| serde::ser::Error::custom(format!("Encryption failed: {e}")))?;
 
-            let encoded = base64_encode(encrypted.as_bytes());
-            serializer.serialize_some(&encoded)
+            serializer.serialize_some(&encrypted)
         }
         None => serializer.serialize_none(),
     }
@@ -157,7 +133,7 @@ where
 /// Helper function to deserialize optional secrets from encrypted base64 storage.
 ///
 /// Supports three formats for backwards compatibility:
-/// 1. New format (v2): base64(encrypted data with AAD)
+/// 1. Encrypted format (v2): base64(encrypted data with AAD)
 /// 2. Legacy encrypted format (v1): base64(encrypted data without AAD)
 /// 3. Plain text format: unencrypted plain string (for data stored before encryption was added)
 ///
@@ -172,32 +148,13 @@ where
 
     match opt_value_str {
         Some(value_str) => {
-            // Try to decode as base64 first (encrypted format)
-            match base64_decode(&value_str) {
-                Ok(encrypted_bytes) => {
-                    // Successfully decoded base64, now try to decrypt
-                    match String::from_utf8(encrypted_bytes) {
-                        Ok(encrypted_str) => {
-                            // Try to decrypt - handles both v1 (no AAD) and v2 (with AAD)
-                            match decrypt_sensitive_field_auto(&encrypted_str) {
-                                Ok(decrypted) => Ok(Some(SecretString::new(&decrypted))),
-                                Err(_) => {
-                                    // Decryption failed - treat as plain text
-                                    Ok(Some(SecretString::new(&value_str)))
-                                }
-                            }
-                        }
-                        Err(_) => {
-                            // Invalid UTF-8 after base64 decode - treat as plain text
-                            Ok(Some(SecretString::new(&value_str)))
-                        }
-                    }
-                }
-                Err(_) => {
-                    // Base64 decode failed - this is plain text from before encryption was added
-                    Ok(Some(SecretString::new(&value_str)))
-                }
+            // First try the direct decrypt path (single-layer base64 payloads).
+            if let Ok(decrypted) = decrypt_sensitive_field_auto(&value_str) {
+                return Ok(Some(SecretString::new(&decrypted)));
             }
+
+            // Fall back to treating the original string as plain text.
+            Ok(Some(SecretString::new(&value_str)))
         }
         None => Ok(None),
     }
