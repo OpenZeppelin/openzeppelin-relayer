@@ -852,11 +852,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
     }
 
     async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "drop_all_entries_get_conn"))?;
+        let mut conn = self.get_connection(&self.pool, "drop_all_entries").await?;
         let relayer_list_key = self.relayer_list_key();
 
         debug!("dropping all transaction entries");
@@ -952,10 +948,8 @@ impl TransactionRepository for RedisTransactionRepository {
         query: PaginationQuery,
     ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
         let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "find_by_relayer_id_get_conn"))?;
+            .get_connection(&self.pool, "find_by_relayer_id")
+            .await?;
 
         debug!(relayer_id = %relayer_id, page = %query.page, per_page = %query.per_page, "fetching transactions for relayer sorted by created_at (newest first)");
 

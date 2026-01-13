@@ -102,11 +102,7 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         let key = self.counter_key(relayer_id, address);
         debug!(relayer_id = %relayer_id, address = %address, "getting and incrementing counter for relayer and address");
 
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| self.map_pool_error(e, "redis_op"))?;
+        let mut conn = self.get_connection(&self.pool, "get_and_increment").await?;
 
         // Use Redis INCR for atomic increment
         let new_value: u64 = conn
