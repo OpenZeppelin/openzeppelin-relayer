@@ -95,7 +95,7 @@ STORAGE_ENCRYPTION_KEY=your-encryption-key-here
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection string | Full connection URL for the Redis instance. Supports Redis, Redis Sentinel, and Redis Cluster configurations. |
 | `REDIS_CONNECTION_TIMEOUT_MS` | `10000` | `number` (milliseconds) | Maximum time to wait when connecting to Redis before timing out. |
 | `REDIS_POOL_MAX_SIZE` | `500` | `number` | Maximum number of connections in the Redis connection pool. Adjust based on your Redis instance capacity, workload, and deployment scale. |
-| `REDIS_POOL_TIMEOUT_MS` | `15000` | `number` (milliseconds) | Maximum time to wait for a connection from the pool before timing out. Higher values help handle traffic spikes. |
+| `REDIS_POOL_TIMEOUT_MS` | `10000` | `number` (milliseconds) | Maximum time to wait for a connection from the pool before timing out. Higher values help handle traffic spikes. |
 | `REDIS_KEY_PREFIX` | `oz-relayer` | `string` | Prefix added to all Redis keys. Useful for namespacing when sharing Redis with other applications. |
 | `STORAGE_ENCRYPTION_KEY` | `` | `string` (base64) | Encryption key used to encrypt sensitive data at rest in Redis. Generate using `cargo run --example generate_encryption_key`. |
 
