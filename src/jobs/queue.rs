@@ -124,7 +124,7 @@ impl Queue {
             .await?,
             relayer_health_check_queue: Self::storage(
                 &format!("{redis_key_prefix}relayer_health_check_queue"),
-                shared,
+                shared.clone(),
             )
             .await?,
         })

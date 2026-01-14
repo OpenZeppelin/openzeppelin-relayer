@@ -126,7 +126,6 @@ pub async fn initialize_app_state(
 
     let repositories = initialize_repositories(&server_config, Some(redis_pool.clone())).await?;
 
-    // Reuse the same pool for job queues
     let queue = Queue::setup().await?;
     let job_producer = Arc::new(jobs::JobProducer::new(queue.clone()));
 
