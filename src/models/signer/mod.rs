@@ -273,7 +273,15 @@ fn validate_secret_string(secret: &SecretString) -> Result<(), validator::Valida
     Ok(())
 }
 
-/// Custom validator for Google Cloud KMS universe_domain to prevent SSRF attacks
+/// Allowed Google Cloud KMS universe domains
+/// These are the legitimate Google Cloud domains where KMS services can be hosted.
+/// See: https://cloud.google.com/kms/docs/reference/rest
+const ALLOWED_KMS_DOMAINS: &[&str] = &[
+    "cloudkms.googleapis.com", // Standard Google Cloud
+];
+
+/// Custom validator for Google Cloud KMS universe_domain to prevent SSRF attacks.
+/// Uses an allowlist approach - only explicitly approved Google Cloud domains are permitted.
 fn validate_universe_domain(value: &str) -> Result<(), validator::ValidationError> {
     // Construct the URL exactly as get_base_url() does in the service
     let url = if value.starts_with("http") {
@@ -282,8 +290,10 @@ fn validate_universe_domain(value: &str) -> Result<(), validator::ValidationErro
         format!("https://cloudkms.{value}")
     };
 
-    // Use existing SSRF validation - block private IPs and metadata endpoints
-    validate_safe_url(&url, &[], true).map_err(|e| {
+    let allowed_hosts: Vec<String> = ALLOWED_KMS_DOMAINS.iter().map(|s| s.to_string()).collect();
+
+    // Only permit known Google Cloud KMS domains
+    validate_safe_url(&url, &allowed_hosts, true).map_err(|e| {
         let mut err = validator::ValidationError::new("universe_domain_ssrf");
         err.message = Some(e.into());
         err
@@ -1205,6 +1215,38 @@ mod tests {
         }
 
         let result = validate_universe_domain("http://10.0.0.1");
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(e.code, "universe_domain_ssrf");
+        }
+    }
+
+    #[test]
+    fn test_validate_universe_domain_rejects_non_allowlisted_domains() {
+        // Invalid: arbitrary public domains not in the allowlist
+        // This tests the allowlist approach - even valid public URLs are rejected if not in allowlist
+        let result = validate_universe_domain("https://evil.com");
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(e.code, "universe_domain_ssrf");
+        }
+
+        // Invalid: attacker-controlled domain with "googleapis" in subdomain
+        let result = validate_universe_domain("https://cloudkms.googleapis.com.evil.com");
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(e.code, "universe_domain_ssrf");
+        }
+
+        // Invalid: similar-looking domain
+        let result = validate_universe_domain("https://cloudkms.googleapis.org");
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(e.code, "universe_domain_ssrf");
+        }
+
+        // Invalid: using domain value directly that constructs non-allowlisted URL
+        let result = validate_universe_domain("example.com");
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(e.code, "universe_domain_ssrf");
