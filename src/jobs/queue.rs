@@ -9,12 +9,13 @@
 //! - Relayer health checks
 use std::{env, sync::Arc};
 
-use apalis_redis::{Config, RedisStorage};
+use apalis_redis::{connect, Config, ConnectionManager, RedisStorage};
 use color_eyre::{eyre, Result};
-use deadpool_redis::Pool;
-use redis::aio::MultiplexedConnection;
 use serde::{Deserialize, Serialize};
-use tokio::time::Duration;
+use tokio::time::{timeout, Duration};
+use tracing::error;
+
+use crate::config::ServerConfig;
 
 use super::{
     Job, NotificationSend, RelayerHealthCheck, TokenSwapRequest, TransactionRequest,
@@ -23,99 +24,109 @@ use super::{
 
 #[derive(Clone, Debug)]
 pub struct Queue {
-    pub transaction_request_queue: RedisStorage<Job<TransactionRequest>, MultiplexedConnection>,
-    pub transaction_submission_queue: RedisStorage<Job<TransactionSend>, MultiplexedConnection>,
+    pub transaction_request_queue: RedisStorage<Job<TransactionRequest>>,
+    pub transaction_submission_queue: RedisStorage<Job<TransactionSend>>,
     /// Default/fallback status queue for backward compatibility, Solana, and future networks
-    pub transaction_status_queue: RedisStorage<Job<TransactionStatusCheck>, MultiplexedConnection>,
+    pub transaction_status_queue: RedisStorage<Job<TransactionStatusCheck>>,
     /// EVM-specific status queue with slower retries
-    pub transaction_status_queue_evm:
-        RedisStorage<Job<TransactionStatusCheck>, MultiplexedConnection>,
+    pub transaction_status_queue_evm: RedisStorage<Job<TransactionStatusCheck>>,
     /// Stellar-specific status queue with fast retries
-    pub transaction_status_queue_stellar:
-        RedisStorage<Job<TransactionStatusCheck>, MultiplexedConnection>,
-    pub notification_queue: RedisStorage<Job<NotificationSend>, MultiplexedConnection>,
-    pub token_swap_request_queue: RedisStorage<Job<TokenSwapRequest>, MultiplexedConnection>,
-    pub relayer_health_check_queue: RedisStorage<Job<RelayerHealthCheck>, MultiplexedConnection>,
+    pub transaction_status_queue_stellar: RedisStorage<Job<TransactionStatusCheck>>,
+    pub notification_queue: RedisStorage<Job<NotificationSend>>,
+    pub token_swap_request_queue: RedisStorage<Job<TokenSwapRequest>>,
+    pub relayer_health_check_queue: RedisStorage<Job<RelayerHealthCheck>>,
 }
 
 impl Queue {
-    /// Creates a RedisStorage for a specific job type using a MultiplexedConnection.
+    /// Creates a RedisStorage for a specific job type using a ConnectionManager.
     ///
-    /// MultiplexedConnection is Clone-able (uses internal Arc), which allows the Queue
-    /// to be cloned for sharing between JobProducer and workers.
-    fn storage<T: Serialize + for<'de> Deserialize<'de>>(
+    /// ConnectionManager provides automatic reconnection on connection failures,
+    /// ensuring queue processing continues even if the Redis connection drops temporarily.
+    async fn storage<T: Serialize + for<'de> Deserialize<'de>>(
         namespace: &str,
-        conn: MultiplexedConnection,
-    ) -> RedisStorage<T, MultiplexedConnection> {
+        shared: Arc<ConnectionManager>,
+    ) -> Result<RedisStorage<T>> {
         let config = Config::default()
             .set_namespace(namespace)
             .set_enqueue_scheduled(Duration::from_secs(1)); // Sets the polling interval for scheduled jobs from default 30 seconds
 
-        RedisStorage::new_with_config(conn, config)
+        Ok(RedisStorage::new_with_config((*shared).clone(), config))
     }
 
-    /// Sets up all job queues using a MultiplexedConnection from the provided pool.
+    /// Sets up all job queues using a ConnectionManager from direct Redis connection.
     ///
-    /// The MultiplexedConnection is obtained from the pool's underlying client and is
-    /// Clone-able, allowing all 8 queues to share the same underlying connection.
-    /// This is more efficient than 8 separate connections for long-lived queue operations.
+    /// Connects directly to Redis via apalis_redis::connect and wraps it in a ConnectionManager.
+    /// ConnectionManager provides automatic reconnection on Redis connection failures,
+    /// ensuring resilient queue processing.
     ///
     /// Benefits of this approach:
-    /// - Unified connection configuration via deadpool
-    /// - Clone-able connection type for Queue sharing
-    /// - Multiplexed connection handles concurrent operations efficiently
-    pub async fn setup(pool: Arc<Pool>) -> Result<Self> {
-        // Get a connection from the pool to extract the underlying MultiplexedConnection
-        // The pool's connection wraps a MultiplexedConnection internally
-        let conn = pool
-            .get()
-            .await
-            .map_err(|e| eyre::eyre!("Failed to get Redis connection from pool: {}", e))?;
+    /// - Automatic reconnection: ConnectionManager handles connection recovery
+    /// - Simple and direct: No intermediate connection pooling layer
+    /// - Resilient: Queues continue processing even if connections temporarily drop
+    /// - Proper timeout handling: Connection attempts have configurable timeouts
+    pub async fn setup() -> Result<Self> {
+        let config = ServerConfig::from_env();
+        let redis_url = config.redis_url.clone();
+        let redis_connection_timeout_ms = config.redis_connection_timeout_ms;
+        let conn = match timeout(Duration::from_millis(redis_connection_timeout_ms), connect(redis_url.clone())).await {
+            Ok(result) => result.map_err(|e| {
+                error!(redis_url = %redis_url, error = %e, "failed to connect to redis");
+                eyre::eyre!("Failed to connect to Redis. Please ensure Redis is running and accessible at {}. Error: {}", redis_url, e)
+            })?,
+            Err(_) => {
+                error!(redis_url = %redis_url, "timeout connecting to redis");
+                return Err(eyre::eyre!("Timed out after {} milliseconds while connecting to Redis at {}", redis_connection_timeout_ms, redis_url));
+            }
+        };
 
-        // Get the underlying MultiplexedConnection by dereferencing
-        // MultiplexedConnection is Clone, so we can clone it for each queue
-        let multiplexed_conn: MultiplexedConnection = (*conn).clone();
-
+        let shared = Arc::new(conn);
         // use REDIS_KEY_PREFIX only if set, otherwise do not use it
         let redis_key_prefix = env::var("REDIS_KEY_PREFIX")
             .ok()
             .filter(|v| !v.is_empty())
             .map(|value| format!("{value}:queue:"))
             .unwrap_or_default();
-
         Ok(Self {
             transaction_request_queue: Self::storage(
                 &format!("{redis_key_prefix}transaction_request_queue"),
-                multiplexed_conn.clone(),
-            ),
+                shared.clone(),
+            )
+            .await?,
             transaction_submission_queue: Self::storage(
                 &format!("{redis_key_prefix}transaction_submission_queue"),
-                multiplexed_conn.clone(),
-            ),
+                shared.clone(),
+            )
+            .await?,
             transaction_status_queue: Self::storage(
                 &format!("{redis_key_prefix}transaction_status_queue"),
-                multiplexed_conn.clone(),
-            ),
+                shared.clone(),
+            )
+            .await?,
             transaction_status_queue_evm: Self::storage(
                 &format!("{redis_key_prefix}transaction_status_queue_evm"),
-                multiplexed_conn.clone(),
-            ),
+                shared.clone(),
+            )
+            .await?,
             transaction_status_queue_stellar: Self::storage(
                 &format!("{redis_key_prefix}transaction_status_queue_stellar"),
-                multiplexed_conn.clone(),
-            ),
+                shared.clone(),
+            )
+            .await?,
             notification_queue: Self::storage(
                 &format!("{redis_key_prefix}notification_queue"),
-                multiplexed_conn.clone(),
-            ),
+                shared.clone(),
+            )
+            .await?,
             token_swap_request_queue: Self::storage(
                 &format!("{redis_key_prefix}token_swap_request_queue"),
-                multiplexed_conn.clone(),
-            ),
+                shared.clone(),
+            )
+            .await?,
             relayer_health_check_queue: Self::storage(
                 &format!("{redis_key_prefix}relayer_health_check_queue"),
-                multiplexed_conn,
-            ),
+                shared,
+            )
+            .await?,
         })
     }
 }
