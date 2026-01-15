@@ -307,12 +307,14 @@ where
     async fn get_status(&self) -> Result<RelayerStatus, RelayerError> {
         let relayer_model = &self.relayer;
 
-        let nonce_u256 = self
-            .provider
-            .get_transaction_count(&relayer_model.address)
+        // Get nonce from transaction counter store instead of network
+        let nonce = self
+            .transaction_counter_service
+            .get()
             .await
-            .map_err(|e| RelayerError::ProviderError(format!("Failed to get nonce: {e}")))?;
-        let nonce_str = nonce_u256.to_string();
+            .unwrap_or(Some(0))
+            .unwrap_or(0);
+        let nonce_str = nonce.to_string();
 
         let balance_response = self.get_balance().await?;
 
@@ -1016,13 +1018,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_status_success() {
-        let (mut provider, relayer_repo, network_repo, mut tx_repo, job_producer, signer, counter) =
-            setup_mocks();
+        let (
+            mut provider,
+            relayer_repo,
+            network_repo,
+            mut tx_repo,
+            job_producer,
+            signer,
+            mut counter,
+        ) = setup_mocks();
         let relayer_model = create_test_relayer();
 
-        provider
-            .expect_get_transaction_count()
-            .returning(|_| Box::pin(ready(Ok(10u64))))
+        // Mock transaction counter service to return nonce
+        counter
+            .expect_get()
+            .returning(|| Box::pin(ready(Ok(Some(10u64)))))
             .once();
         provider
             .expect_get_balance()
@@ -1093,15 +1103,31 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_status_provider_nonce_error() {
-        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, mut counter) =
             setup_mocks();
         let relayer_model = create_test_relayer();
 
-        provider.expect_get_transaction_count().returning(|_| {
-            Box::pin(ready(Err(ProviderError::Other(
-                "Nonce fetch failed".to_string(),
-            ))))
-        });
+        // Mock transaction counter service to return None (defaults to 0)
+        counter
+            .expect_get()
+            .returning(|| Box::pin(ready(Ok(None))))
+            .once();
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(ready(Ok(U256::from(1000000000000000000u64)))))
+            .once();
+
+        // Mock count_by_status
+        tx_repo
+            .expect_count_by_status()
+            .returning(|_, _| Ok(0u64))
+            .once();
+
+        // Mock get_latest_confirmed_transaction
+        tx_repo
+            .expect_get_latest_confirmed_transaction()
+            .returning(|_| Ok(None))
+            .once();
 
         let relayer = EvmRelayer::new(
             relayer_model.clone(),
@@ -1116,11 +1142,13 @@ mod tests {
         )
         .unwrap();
 
-        let result = relayer.get_status().await;
-        assert!(result.is_err());
-        match result.err().unwrap() {
-            RelayerError::ProviderError(msg) => assert!(msg.contains("Failed to get nonce")),
-            _ => panic!("Expected ProviderError for nonce failure"),
+        // Should succeed with nonce defaulting to 0 when counter returns None
+        let status = relayer.get_status().await.unwrap();
+        match status {
+            RelayerStatus::Evm { nonce, .. } => {
+                assert_eq!(nonce, "0");
+            }
+            _ => panic!("Expected Evm status"),
         }
     }
 
@@ -1170,13 +1198,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_status_no_confirmed_transactions() {
-        let (mut provider, relayer_repo, network_repo, mut tx_repo, job_producer, signer, counter) =
-            setup_mocks();
+        let (
+            mut provider,
+            relayer_repo,
+            network_repo,
+            mut tx_repo,
+            job_producer,
+            signer,
+            mut counter,
+        ) = setup_mocks();
         let relayer_model = create_test_relayer();
 
-        provider
-            .expect_get_transaction_count()
-            .returning(|_| Box::pin(ready(Ok(10u64))));
+        // Mock transaction counter service to return nonce
+        counter
+            .expect_get()
+            .returning(|| Box::pin(ready(Ok(Some(10u64)))));
         provider
             .expect_get_balance()
             .returning(|_| Box::pin(ready(Ok(U256::from(1000000000000000000u64)))));

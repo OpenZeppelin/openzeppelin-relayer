@@ -955,6 +955,7 @@ impl TransactionRepository for RedisTransactionRepository {
         })
     }
 
+    // Unoptimized implementation of find_by_status. Rarely used. find_by_status_paginated is preferred.
     async fn find_by_status(
         &self,
         relayer_id: &str,
