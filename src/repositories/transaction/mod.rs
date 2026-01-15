@@ -21,7 +21,7 @@
 mod transaction_in_memory;
 mod transaction_redis;
 
-use redis::aio::ConnectionManager;
+use deadpool_redis::Pool;
 pub use transaction_in_memory::*;
 pub use transaction_redis::*;
 
@@ -137,13 +137,9 @@ impl TransactionRepositoryStorage {
     pub fn new_in_memory() -> Self {
         Self::InMemory(InMemoryTransactionRepository::new())
     }
-    pub fn new_redis(
-        connection_manager: Arc<ConnectionManager>,
-        key_prefix: String,
-    ) -> Result<Self, RepositoryError> {
+    pub fn new_redis(pool: Arc<Pool>, key_prefix: String) -> Result<Self, RepositoryError> {
         Ok(Self::Redis(RedisTransactionRepository::new(
-            connection_manager,
-            key_prefix,
+            pool, key_prefix,
         )?))
     }
 }

@@ -36,7 +36,7 @@ use crate::{
     repositories::{PaginatedResult, PaginationQuery, Repository},
 };
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
+use deadpool_redis::Pool;
 use std::sync::Arc;
 
 /// Enum wrapper for different signer repository implementations
@@ -51,11 +51,8 @@ impl SignerRepositoryStorage {
         Self::InMemory(InMemorySignerRepository::new())
     }
 
-    pub fn new_redis(
-        connection_manager: Arc<ConnectionManager>,
-        key_prefix: String,
-    ) -> Result<Self, RepositoryError> {
-        let redis_repo = RedisSignerRepository::new(connection_manager, key_prefix)?;
+    pub fn new_redis(pool: Arc<Pool>, key_prefix: String) -> Result<Self, RepositoryError> {
+        let redis_repo = RedisSignerRepository::new(pool, key_prefix)?;
         Ok(Self::Redis(redis_repo))
     }
 }

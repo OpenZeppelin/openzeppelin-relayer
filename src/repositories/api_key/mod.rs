@@ -16,7 +16,7 @@
 //! restrict the api key's access to the server.
 //!
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
+use deadpool_redis::Pool;
 use std::sync::Arc;
 
 pub mod api_key_in_memory;
@@ -62,11 +62,8 @@ impl ApiKeyRepositoryStorage {
         Self::InMemory(InMemoryApiKeyRepository::new())
     }
 
-    pub fn new_redis(
-        connection_manager: Arc<ConnectionManager>,
-        key_prefix: String,
-    ) -> Result<Self, RepositoryError> {
-        let redis_repo = RedisApiKeyRepository::new(connection_manager, key_prefix)?;
+    pub fn new_redis(pool: Arc<Pool>, key_prefix: String) -> Result<Self, RepositoryError> {
+        let redis_repo = RedisApiKeyRepository::new(pool, key_prefix)?;
         Ok(Self::Redis(redis_repo))
     }
 }

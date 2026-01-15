@@ -19,7 +19,7 @@
 //!
 
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
+use deadpool_redis::Pool;
 use std::sync::Arc;
 
 mod network_in_memory;
@@ -59,11 +59,8 @@ impl NetworkRepositoryStorage {
         Self::InMemory(InMemoryNetworkRepository::new())
     }
 
-    pub fn new_redis(
-        connection_manager: Arc<ConnectionManager>,
-        key_prefix: String,
-    ) -> Result<Self, RepositoryError> {
-        let redis_repo = RedisNetworkRepository::new(connection_manager, key_prefix)?;
+    pub fn new_redis(pool: Arc<Pool>, key_prefix: String) -> Result<Self, RepositoryError> {
+        let redis_repo = RedisNetworkRepository::new(pool, key_prefix)?;
         Ok(Self::Redis(redis_repo))
     }
 }

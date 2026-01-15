@@ -10,7 +10,7 @@ use crate::models::{NetworkRepoModel, NetworkType, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{BatchRetrievalResult, PaginatedResult, PaginationQuery, Repository};
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
+use deadpool_redis::Pool;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
@@ -23,27 +23,21 @@ const NETWORK_CHAIN_ID_INDEX_PREFIX: &str = "network_chain_id";
 
 #[derive(Clone)]
 pub struct RedisNetworkRepository {
-    pub client: Arc<ConnectionManager>,
+    pub pool: Arc<Pool>,
     pub key_prefix: String,
 }
 
 impl RedisRepository for RedisNetworkRepository {}
 
 impl RedisNetworkRepository {
-    pub fn new(
-        connection_manager: Arc<ConnectionManager>,
-        key_prefix: String,
-    ) -> Result<Self, RepositoryError> {
+    pub fn new(pool: Arc<Pool>, key_prefix: String) -> Result<Self, RepositoryError> {
         if key_prefix.is_empty() {
             return Err(RepositoryError::InvalidData(
                 "Redis key prefix cannot be empty".to_string(),
             ));
         }
 
-        Ok(Self {
-            client: connection_manager,
-            key_prefix,
-        })
+        Ok(Self { pool, key_prefix })
     }
 
     /// Generate key for network data: network:{network_id}
@@ -86,7 +80,7 @@ impl RedisNetworkRepository {
         network: &NetworkRepoModel,
         old_network: Option<&NetworkRepoModel>,
     ) -> Result<(), RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "update_indexes").await?;
         let mut pipe = redis::pipe();
         pipe.atomic();
 
@@ -138,7 +132,9 @@ impl RedisNetworkRepository {
 
     /// Remove all indexes for a network
     async fn remove_all_indexes(&self, network: &NetworkRepoModel) -> Result<(), RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(&self.pool, "remove_all_indexes")
+            .await?;
         let mut pipe = redis::pipe();
         pipe.atomic();
 
@@ -177,7 +173,7 @@ impl RedisNetworkRepository {
             });
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "get_by_ids").await?;
         let keys: Vec<String> = ids.iter().map(|id| self.network_key(id)).collect();
 
         debug!(count = %ids.len(), "batch fetching networks");
@@ -225,7 +221,7 @@ impl RedisNetworkRepository {
 impl fmt::Debug for RedisNetworkRepository {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RedisNetworkRepository")
-            .field("client", &"<ConnectionManager>")
+            .field("pool", &"<Pool>")
             .field("key_prefix", &self.key_prefix)
             .finish()
     }
@@ -246,7 +242,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         }
         let key = self.network_key(&entity.id);
         let network_list_key = self.network_list_key();
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "create").await?;
 
         debug!(network_id = %entity.id, "creating network");
 
@@ -290,7 +286,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         }
 
         let key = self.network_key(&id);
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "get_by_id").await?;
 
         debug!(network_id = %id, "retrieving network");
 
@@ -316,7 +312,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
 
     async fn list_all(&self) -> Result<Vec<NetworkRepoModel>, RepositoryError> {
         let network_list_key = self.network_list_key();
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "list_all").await?;
 
         debug!("listing all networks");
 
@@ -346,7 +342,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         }
 
         let network_list_key = self.network_list_key();
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "list_paginated").await?;
 
         debug!(page = %query.page, per_page = %query.per_page, "listing paginated networks");
 
@@ -404,7 +400,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         }
 
         let key = self.network_key(&id);
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "update").await?;
 
         debug!(network_id = %id, "updating network");
 
@@ -434,7 +430,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
 
         let key = self.network_key(&id);
         let network_list_key = self.network_list_key();
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "delete_by_id").await?;
 
         debug!(network_id = %id, "deleting network");
 
@@ -461,7 +457,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
 
     async fn count(&self) -> Result<usize, RepositoryError> {
         let network_list_key = self.network_list_key();
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "count").await?;
 
         debug!("counting networks");
 
@@ -478,7 +474,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
     /// This is used to determine if Redis storage is being used for networks.
     async fn has_entries(&self) -> Result<bool, RepositoryError> {
         let network_list_key = self.network_list_key();
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "has_entries").await?;
 
         debug!("checking if network storage has entries");
 
@@ -495,7 +491,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
     /// This includes all network data, indexes, and the network list.
     /// Use with caution as this will permanently delete all network data.
     async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "drop_all_entries").await?;
 
         debug!("starting to drop all network entries from Redis storage");
 
@@ -567,7 +563,7 @@ impl NetworkRepository for RedisNetworkRepository {
             ));
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "get_by_name").await?;
 
         debug!(name = %name, network_type = ?network_type, "getting network by name");
 
@@ -610,7 +606,7 @@ impl NetworkRepository for RedisNetworkRepository {
             return Ok(None);
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "get_by_chain_id").await?;
 
         debug!(chain_id = %chain_id, network_type = ?network_type, "getting network by chain ID");
 
@@ -651,7 +647,6 @@ mod tests {
         EvmNetworkConfig, NetworkConfigCommon, SolanaNetworkConfig, StellarNetworkConfig,
     };
     use crate::models::NetworkConfigData;
-    use redis::aio::ConnectionManager;
     use uuid::Uuid;
 
     fn create_test_network(name: &str, network_type: NetworkType) -> NetworkRepoModel {
@@ -699,12 +694,16 @@ mod tests {
         let random_id = Uuid::new_v4().to_string();
         let key_prefix = format!("test_prefix_{}", random_id);
 
-        let client = redis::Client::open(redis_url).expect("Failed to create Redis client");
-        let connection_manager = ConnectionManager::new(client)
-            .await
-            .expect("Failed to create connection manager");
+        let cfg = deadpool_redis::Config::from_url(redis_url);
+        let pool = cfg
+            .builder()
+            .expect("Failed to create pool builder")
+            .max_size(16)
+            .runtime(deadpool_redis::Runtime::Tokio1)
+            .build()
+            .expect("Failed to build Redis pool");
 
-        RedisNetworkRepository::new(Arc::new(connection_manager), key_prefix.to_string())
+        RedisNetworkRepository::new(Arc::new(pool), key_prefix.to_string())
             .expect("Failed to create repository")
     }
 

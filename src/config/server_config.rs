@@ -52,6 +52,10 @@ pub struct ServerConfig {
     pub redis_connection_timeout_ms: u64,
     /// The prefix for the Redis key.
     pub redis_key_prefix: String,
+    /// Maximum number of connections in the Redis pool.
+    pub redis_pool_max_size: usize,
+    /// Timeout in milliseconds waiting to get a connection from the pool.
+    pub redis_pool_timeout_ms: u64,
     /// The number of milliseconds to wait for an RPC response.
     pub rpc_timeout_ms: u64,
     /// Maximum number of retry attempts for provider operations.
@@ -120,6 +124,8 @@ impl ServerConfig {
             enable_swagger: Self::get_enable_swagger(),
             redis_connection_timeout_ms: Self::get_redis_connection_timeout_ms(),
             redis_key_prefix: Self::get_redis_key_prefix(),
+            redis_pool_max_size: Self::get_redis_pool_max_size(),
+            redis_pool_timeout_ms: Self::get_redis_pool_timeout_ms(),
             rpc_timeout_ms: Self::get_rpc_timeout_ms(),
             provider_max_retries: Self::get_provider_max_retries(),
             provider_retry_base_delay_ms: Self::get_provider_retry_base_delay_ms(),
@@ -243,6 +249,28 @@ impl ServerConfig {
     /// Gets the Redis key prefix from environment variable or default
     pub fn get_redis_key_prefix() -> String {
         env::var("REDIS_KEY_PREFIX").unwrap_or_else(|_| "oz-relayer".to_string())
+    }
+
+    /// Gets the Redis pool max size from environment variable or default
+    /// Returns default (500) if value is 0 or invalid
+    pub fn get_redis_pool_max_size() -> usize {
+        env::var("REDIS_POOL_MAX_SIZE")
+            .unwrap_or_else(|_| "500".to_string())
+            .parse()
+            .ok()
+            .filter(|&v| v > 0)
+            .unwrap_or(500)
+    }
+
+    /// Gets the Redis pool timeout from environment variable or default
+    /// Returns default (10000) if value is 0 or invalid
+    pub fn get_redis_pool_timeout_ms() -> u64 {
+        env::var("REDIS_POOL_TIMEOUT_MS")
+            .unwrap_or_else(|_| "10000".to_string())
+            .parse()
+            .ok()
+            .filter(|&v| v > 0)
+            .unwrap_or(10000)
     }
 
     /// Gets the RPC timeout from environment variable or default
@@ -606,6 +634,8 @@ mod tests {
         env::remove_var("RESET_STORAGE_ON_START");
         env::remove_var("STORAGE_ENCRYPTION_KEY");
         env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        env::remove_var("REDIS_POOL_MAX_SIZE");
+        env::remove_var("REDIS_POOL_TIMEOUT_MS");
 
         // Test individual getters with defaults
         assert_eq!(ServerConfig::get_host(), "0.0.0.0");
@@ -631,6 +661,8 @@ mod tests {
         assert!(!ServerConfig::get_reset_storage_on_start());
         assert!(ServerConfig::get_storage_encryption_key().is_none());
         assert_eq!(ServerConfig::get_transaction_expiration_hours(), 4);
+        assert_eq!(ServerConfig::get_redis_pool_max_size(), 500);
+        assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 10000);
     }
 
     #[test]
@@ -662,6 +694,8 @@ mod tests {
         env::set_var("RESET_STORAGE_ON_START", "true");
         env::set_var("STORAGE_ENCRYPTION_KEY", "my-encryption-key");
         env::set_var("TRANSACTION_EXPIRATION_HOURS", "12");
+        env::set_var("REDIS_POOL_MAX_SIZE", "200");
+        env::set_var("REDIS_POOL_TIMEOUT_MS", "20000");
 
         // Test individual getters with custom values
         assert_eq!(ServerConfig::get_host(), "192.168.1.1");
@@ -693,6 +727,70 @@ mod tests {
         assert!(ServerConfig::get_reset_storage_on_start());
         assert!(ServerConfig::get_storage_encryption_key().is_some());
         assert_eq!(ServerConfig::get_transaction_expiration_hours(), 12);
+        assert_eq!(ServerConfig::get_redis_pool_max_size(), 200);
+        assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 20000);
+    }
+
+    #[test]
+    fn test_get_redis_pool_max_size() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        // Test default value when env var is not set
+        env::remove_var("REDIS_POOL_MAX_SIZE");
+        assert_eq!(ServerConfig::get_redis_pool_max_size(), 500);
+
+        // Test custom value
+        env::set_var("REDIS_POOL_MAX_SIZE", "100");
+        assert_eq!(ServerConfig::get_redis_pool_max_size(), 100);
+
+        // Test invalid value returns default
+        env::set_var("REDIS_POOL_MAX_SIZE", "not_a_number");
+        assert_eq!(ServerConfig::get_redis_pool_max_size(), 500);
+
+        // Test zero value returns default (invalid)
+        env::set_var("REDIS_POOL_MAX_SIZE", "0");
+        assert_eq!(ServerConfig::get_redis_pool_max_size(), 500);
+
+        // Test large value
+        env::set_var("REDIS_POOL_MAX_SIZE", "10000");
+        assert_eq!(ServerConfig::get_redis_pool_max_size(), 10000);
+
+        // Cleanup
+        env::remove_var("REDIS_POOL_MAX_SIZE");
+    }
+
+    #[test]
+    fn test_get_redis_pool_timeout_ms() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        // Test default value when env var is not set
+        env::remove_var("REDIS_POOL_TIMEOUT_MS");
+        assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 10000);
+
+        // Test custom value
+        env::set_var("REDIS_POOL_TIMEOUT_MS", "15000");
+        assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 15000);
+
+        // Test invalid value returns default
+        env::set_var("REDIS_POOL_TIMEOUT_MS", "not_a_number");
+        assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 10000);
+
+        // Test zero value returns default (invalid)
+        env::set_var("REDIS_POOL_TIMEOUT_MS", "0");
+        assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 10000);
+
+        // Test large value
+        env::set_var("REDIS_POOL_TIMEOUT_MS", "60000");
+        assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 60000);
+
+        // Cleanup
+        env::remove_var("REDIS_POOL_TIMEOUT_MS");
     }
 
     #[test]

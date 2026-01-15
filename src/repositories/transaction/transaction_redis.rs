@@ -9,7 +9,7 @@ use crate::repositories::{
     BatchRetrievalResult, PaginatedResult, Repository, TransactionRepository,
 };
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
+use deadpool_redis::Pool;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
@@ -25,27 +25,21 @@ const TX_BY_CREATED_AT_PREFIX: &str = "tx_by_created_at";
 
 #[derive(Clone)]
 pub struct RedisTransactionRepository {
-    pub client: Arc<ConnectionManager>,
+    pub pool: Arc<Pool>,
     pub key_prefix: String,
 }
 
 impl RedisRepository for RedisTransactionRepository {}
 
 impl RedisTransactionRepository {
-    pub fn new(
-        connection_manager: Arc<ConnectionManager>,
-        key_prefix: String,
-    ) -> Result<Self, RepositoryError> {
+    pub fn new(pool: Arc<Pool>, key_prefix: String) -> Result<Self, RepositoryError> {
         if key_prefix.is_empty() {
             return Err(RepositoryError::InvalidData(
                 "Redis key prefix cannot be empty".to_string(),
             ));
         }
 
-        Ok(Self {
-            client: connection_manager,
-            key_prefix,
-        })
+        Ok(Self { pool, key_prefix })
     }
 
     /// Generate key for transaction data: relayer:{relayer_id}:tx:{tx_id}
@@ -116,7 +110,9 @@ impl RedisTransactionRepository {
             });
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(&self.pool, "batch_fetch_transactions")
+            .await?;
 
         let reverse_keys: Vec<String> = ids.iter().map(|id| self.tx_to_relayer_key(id)).collect();
 
@@ -212,7 +208,7 @@ impl RedisTransactionRepository {
         tx: &TransactionRepoModel,
         old_tx: Option<&TransactionRepoModel>,
     ) -> Result<(), RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "update_indexes").await?;
         let mut pipe = redis::pipe();
         pipe.atomic();
 
@@ -269,7 +265,9 @@ impl RedisTransactionRepository {
 
     /// Remove all indexes with error recovery
     async fn remove_all_indexes(&self, tx: &TransactionRepoModel) -> Result<(), RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(&self.pool, "remove_all_indexes")
+            .await?;
         let mut pipe = redis::pipe();
         pipe.atomic();
 
@@ -311,7 +309,7 @@ impl RedisTransactionRepository {
         &self,
         relayer_id: &str,
     ) -> Result<Option<u64>, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "check_and_migrate").await?;
 
         // Quick check: scan for at least one transaction key to see if migration is needed
         let pattern = format!(
@@ -381,7 +379,9 @@ impl RedisTransactionRepository {
         &self,
         relayer_id: &str,
     ) -> Result<usize, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(&self.pool, "migrate_transactions")
+            .await?;
 
         debug!(relayer_id = %relayer_id, "migrating old transactions to sorted set index");
 
@@ -457,7 +457,9 @@ impl RedisTransactionRepository {
         relayer_id: &str,
         query: PaginationQuery,
     ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(&self.pool, "find_by_relayer_id_fallback")
+            .await?;
 
         // Scan for all transaction keys for this relayer
         let pattern = format!(
@@ -524,7 +526,7 @@ impl RedisTransactionRepository {
 impl fmt::Debug for RedisTransactionRepository {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RedisTransactionRepository")
-            .field("client", &"<ConnectionManager>")
+            .field("pool", &"<Pool>")
             .field("key_prefix", &self.key_prefix)
             .finish()
     }
@@ -544,7 +546,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
         let key = self.tx_key(&entity.relayer_id, &entity.id);
         let reverse_key = self.tx_to_relayer_key(&entity.id);
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "create").await?;
 
         debug!(tx_id = %entity.id, "creating transaction");
 
@@ -590,7 +592,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             ));
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "get_by_id").await?;
 
         debug!(tx_id = %id, "fetching transaction");
 
@@ -634,7 +636,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
     // Unoptimized implementation of list_paginated. Rarely used. find_by_relayer_id is preferred.
     async fn list_all(&self) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "list_all").await?;
 
         debug!("fetching all transactions sorted by created_at (newest first)");
 
@@ -682,7 +684,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             ));
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "list_paginated").await?;
 
         debug!(page = %query.page, per_page = %query.per_page, "fetching paginated transactions sorted by created_at (newest first)");
 
@@ -756,7 +758,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
         let old_tx = self.get_by_id(id.clone()).await?;
 
         let key = self.tx_key(&entity.relayer_id, &id);
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "update").await?;
 
         let value = self.serialize_entity(&entity, |t| &t.id, "transaction")?;
 
@@ -787,7 +789,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
         let key = self.tx_key(&tx.relayer_id, &id);
         let reverse_key = self.tx_to_relayer_key(&id);
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "delete_by_id").await?;
 
         let mut pipe = redis::pipe();
         pipe.atomic();
@@ -809,7 +811,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
     // Unoptimized implementation of count. Rarely used. find_by_relayer_id is preferred.
     async fn count(&self) -> Result<usize, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "count").await?;
 
         debug!("counting transactions");
 
@@ -835,7 +837,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
     }
 
     async fn has_entries(&self) -> Result<bool, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "has_entries").await?;
         let relayer_list_key = self.relayer_list_key();
 
         debug!("checking if transaction entries exist");
@@ -850,7 +852,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
     }
 
     async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "drop_all_entries").await?;
         let relayer_list_key = self.relayer_list_key();
 
         debug!("dropping all transaction entries");
@@ -945,7 +947,9 @@ impl TransactionRepository for RedisTransactionRepository {
         relayer_id: &str,
         query: PaginationQuery,
     ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(&self.pool, "find_by_relayer_id")
+            .await?;
 
         debug!(relayer_id = %relayer_id, page = %query.page, per_page = %query.per_page, "fetching transactions for relayer sorted by created_at (newest first)");
 
@@ -1020,7 +1024,7 @@ impl TransactionRepository for RedisTransactionRepository {
         relayer_id: &str,
         statuses: &[TransactionStatus],
     ) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "find_by_status").await?;
         let mut all_ids = Vec::new();
 
         // Collect IDs from all status sets
@@ -1053,7 +1057,7 @@ impl TransactionRepository for RedisTransactionRepository {
         relayer_id: &str,
         nonce: u64,
     ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self.get_connection(&self.pool, "find_by_nonce").await?;
         let nonce_key = self.relayer_nonce_key(relayer_id, nonce);
 
         // Get transaction ID with this nonce for this relayer (should be single value)
@@ -1113,7 +1117,17 @@ impl TransactionRepository for RedisTransactionRepository {
         let mut last_error = None;
 
         for attempt in 0..MAX_RETRIES {
-            let mut conn = self.client.as_ref().clone();
+            let mut conn = match self.get_connection(&self.pool, "partial_update").await {
+                Ok(conn) => conn,
+                Err(e) => {
+                    last_error = Some(e);
+                    if attempt < MAX_RETRIES - 1 {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(BACKOFF_MS)).await;
+                        continue;
+                    }
+                    return Err(last_error.unwrap());
+                }
+            };
 
             // Try to update transaction data
             let result: Result<(), _> = conn.set(&key, &value).await;
@@ -1194,8 +1208,8 @@ mod tests {
     use super::*;
     use crate::models::{evm::Speed, EvmTransactionData, NetworkType};
     use alloy::primitives::U256;
+    use deadpool_redis::{Config, Runtime};
     use lazy_static::lazy_static;
-    use redis::Client;
     use std::str::FromStr;
     use tokio;
     use uuid::Uuid;
@@ -1276,15 +1290,19 @@ mod tests {
         let redis_url = std::env::var("REDIS_TEST_URL")
             .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
 
-        let client = Client::open(redis_url).expect("Failed to create Redis client");
-        let connection_manager = ConnectionManager::new(client)
-            .await
-            .expect("Failed to create connection manager");
+        let cfg = Config::from_url(&redis_url);
+        let pool = cfg
+            .builder()
+            .expect("Failed to create pool builder")
+            .max_size(16)
+            .runtime(Runtime::Tokio1)
+            .build()
+            .expect("Failed to build Redis pool");
 
         let random_id = Uuid::new_v4().to_string();
         let key_prefix = format!("test_prefix:{}", random_id);
 
-        RedisTransactionRepository::new(Arc::new(connection_manager), key_prefix)
+        RedisTransactionRepository::new(Arc::new(pool), key_prefix)
             .expect("Failed to create RedisTransactionRepository")
     }
 
@@ -1300,12 +1318,16 @@ mod tests {
     async fn test_new_repository_empty_prefix_fails() {
         let redis_url = std::env::var("REDIS_TEST_URL")
             .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-        let client = Client::open(redis_url).expect("Failed to create Redis client");
-        let connection_manager = ConnectionManager::new(client)
-            .await
-            .expect("Failed to create connection manager");
+        let cfg = Config::from_url(&redis_url);
+        let pool = cfg
+            .builder()
+            .expect("Failed to create pool builder")
+            .max_size(16)
+            .runtime(Runtime::Tokio1)
+            .build()
+            .expect("Failed to build Redis pool");
 
-        let result = RedisTransactionRepository::new(Arc::new(connection_manager), "".to_string());
+        let result = RedisTransactionRepository::new(Arc::new(pool), "".to_string());
         assert!(matches!(result, Err(RepositoryError::InvalidData(_))));
     }
 
@@ -1631,7 +1653,7 @@ mod tests {
 
         // Create transactions directly in Redis WITHOUT adding to sorted set
         // This simulates old transactions created before the sorted set index existed
-        let mut conn = repo.client.as_ref().clone();
+        let mut conn = repo.pool.get().await.unwrap();
         let relayer_list_key = repo.relayer_list_key();
         let _: () = conn.sadd(&relayer_list_key, &relayer_id).await.unwrap();
 

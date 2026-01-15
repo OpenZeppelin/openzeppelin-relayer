@@ -77,7 +77,7 @@ pub enum NetworkRpcRequest {
 ///
 /// ```rust,ignore
 /// use serde_json::json;
-/// use crate::models::{convert_to_internal_rpc_request, NetworkType};
+/// use openzeppelin_relayer::models::{convert_to_internal_rpc_request, NetworkType};
 ///
 /// let request = json!({
 ///     "jsonrpc": "2.0",
@@ -86,7 +86,7 @@ pub enum NetworkRpcRequest {
 ///     "id": 1
 /// });
 ///
-/// let result = convert_to_internal_rpc_request(request, &NetworkType::Evm)?;
+/// let result = convert_to_internal_rpc_request(request, &NetworkType::Evm).unwrap();
 /// ```
 pub fn convert_to_internal_rpc_request(
     request: serde_json::Value,

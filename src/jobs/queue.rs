@@ -9,7 +9,7 @@
 //! - Relayer health checks
 use std::{env, sync::Arc};
 
-use apalis_redis::{Config, ConnectionManager, RedisStorage};
+use apalis_redis::{connect, Config, ConnectionManager, RedisStorage};
 use color_eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
 use tokio::time::{timeout, Duration};
@@ -38,6 +38,10 @@ pub struct Queue {
 }
 
 impl Queue {
+    /// Creates a RedisStorage for a specific job type using a ConnectionManager.
+    ///
+    /// ConnectionManager provides automatic reconnection on connection failures,
+    /// ensuring queue processing continues even if the Redis connection drops temporarily.
     async fn storage<T: Serialize + for<'de> Deserialize<'de>>(
         namespace: &str,
         shared: Arc<ConnectionManager>,
@@ -49,11 +53,22 @@ impl Queue {
         Ok(RedisStorage::new_with_config((*shared).clone(), config))
     }
 
+    /// Sets up all job queues using a ConnectionManager from direct Redis connection.
+    ///
+    /// Connects directly to Redis via apalis_redis::connect and wraps it in a ConnectionManager.
+    /// ConnectionManager provides automatic reconnection on Redis connection failures,
+    /// ensuring resilient queue processing.
+    ///
+    /// Benefits of this approach:
+    /// - Automatic reconnection: ConnectionManager handles connection recovery
+    /// - Simple and direct: No intermediate connection pooling layer
+    /// - Resilient: Queues continue processing even if connections temporarily drop
+    /// - Proper timeout handling: Connection attempts have configurable timeouts
     pub async fn setup() -> Result<Self> {
         let config = ServerConfig::from_env();
         let redis_url = config.redis_url.clone();
         let redis_connection_timeout_ms = config.redis_connection_timeout_ms;
-        let conn = match timeout(Duration::from_millis(redis_connection_timeout_ms), apalis_redis::connect(redis_url.clone())).await {
+        let conn = match timeout(Duration::from_millis(redis_connection_timeout_ms), connect(redis_url.clone())).await {
             Ok(result) => result.map_err(|e| {
                 error!(redis_url = %redis_url, error = %e, "failed to connect to redis");
                 eyre::eyre!("Failed to connect to Redis. Please ensure Redis is running and accessible at {}. Error: {}", redis_url, e)
