@@ -47,12 +47,7 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
 
     /// Find transactions by relayer ID and status(es).
     ///
-    /// Results are sorted by timestamp descending (newest first):
-    /// - For Confirmed transactions: sorted by confirmed_at (on-chain confirmation order)
-    /// - For all other statuses: sorted by created_at (queue/processing order)
-    ///
-    /// For multi-status queries, transactions are merged and sorted using the same rules,
-    /// ensuring consistent ordering across different statuses.
+    /// Results are sorted by created_at descending (newest first).
     async fn find_by_status(
         &self,
         relayer_id: &str,
@@ -61,9 +56,13 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
 
     /// Find transactions by relayer ID and status(es) with pagination.
     ///
-    /// Results are sorted by timestamp descending (newest first):
+    /// Results are sorted by timestamp:
     /// - For Confirmed transactions: sorted by confirmed_at (on-chain confirmation order)
     /// - For all other statuses: sorted by created_at (queue/processing order)
+    ///
+    /// The `oldest_first` parameter controls sort direction:
+    /// - `false` (default): newest first (descending) - for displaying recent transactions
+    /// - `true`: oldest first (ascending) - for FIFO queue processing
     ///
     /// For multi-status queries, transactions are merged and sorted using the same rules,
     /// ensuring consistent ordering across different statuses.
@@ -72,6 +71,7 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
         relayer_id: &str,
         statuses: &[TransactionStatus],
         query: PaginationQuery,
+        oldest_first: bool,
     ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
 
     /// Find a transaction by relayer ID and nonce
@@ -161,7 +161,7 @@ mockall::mock! {
   impl TransactionRepository for TransactionRepository {
       async fn find_by_relayer_id(&self, relayer_id: &str, query: PaginationQuery) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
       async fn find_by_status(&self, relayer_id: &str, statuses: &[TransactionStatus]) -> Result<Vec<TransactionRepoModel>, RepositoryError>;
-      async fn find_by_status_paginated(&self, relayer_id: &str, statuses: &[TransactionStatus], query: PaginationQuery) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
+      async fn find_by_status_paginated(&self, relayer_id: &str, statuses: &[TransactionStatus], query: PaginationQuery, oldest_first: bool) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
       async fn find_by_nonce(&self, relayer_id: &str, nonce: u64) -> Result<Option<TransactionRepoModel>, RepositoryError>;
       async fn update_status(&self, tx_id: String, status: TransactionStatus) -> Result<TransactionRepoModel, RepositoryError>;
       async fn partial_update(&self, tx_id: String, update: TransactionUpdateRequest) -> Result<TransactionRepoModel, RepositoryError>;
@@ -234,14 +234,15 @@ impl TransactionRepository for TransactionRepositoryStorage {
         relayer_id: &str,
         statuses: &[TransactionStatus],
         query: PaginationQuery,
+        oldest_first: bool,
     ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
         match self {
             TransactionRepositoryStorage::InMemory(repo) => {
-                repo.find_by_status_paginated(relayer_id, statuses, query)
+                repo.find_by_status_paginated(relayer_id, statuses, query, oldest_first)
                     .await
             }
             TransactionRepositoryStorage::Redis(repo) => {
-                repo.find_by_status_paginated(relayer_id, statuses, query)
+                repo.find_by_status_paginated(relayer_id, statuses, query, oldest_first)
                     .await
             }
         }

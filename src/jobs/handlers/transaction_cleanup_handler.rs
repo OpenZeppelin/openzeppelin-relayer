@@ -265,7 +265,7 @@ async fn fetch_final_transactions_paginated(
     query: PaginationQuery,
 ) -> Result<PaginatedResult<TransactionRepoModel>> {
     transaction_repo
-        .find_by_status_paginated(relayer_id, FINAL_TRANSACTION_STATUSES, query)
+        .find_by_status_paginated(relayer_id, FINAL_TRANSACTION_STATUSES, query, true)
         .await
         .map_err(|e| {
             eyre::eyre!(

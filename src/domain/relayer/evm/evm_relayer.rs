@@ -1103,8 +1103,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_status_provider_nonce_error() {
-        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, mut counter) =
-            setup_mocks();
+        let (
+            mut provider,
+            relayer_repo,
+            network_repo,
+            mut tx_repo,
+            job_producer,
+            signer,
+            mut counter,
+        ) = setup_mocks();
         let relayer_model = create_test_relayer();
 
         // Mock transaction counter service to return None (defaults to 0)
@@ -1154,13 +1161,22 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_status_repository_pending_error() {
-        let (mut provider, relayer_repo, network_repo, mut tx_repo, job_producer, signer, counter) =
-            setup_mocks();
+        let (
+            mut provider,
+            relayer_repo,
+            network_repo,
+            mut tx_repo,
+            job_producer,
+            signer,
+            mut counter,
+        ) = setup_mocks();
         let relayer_model = create_test_relayer();
 
-        provider
-            .expect_get_transaction_count()
-            .returning(|_| Box::pin(ready(Ok(10u64))));
+        // Mock transaction counter service to return nonce
+        counter
+            .expect_get()
+            .returning(|| Box::pin(ready(Ok(Some(10u64)))))
+            .once();
         provider
             .expect_get_balance()
             .returning(|_| Box::pin(ready(Ok(U256::from(1000000000000000000u64)))));

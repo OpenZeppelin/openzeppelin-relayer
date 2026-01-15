@@ -991,19 +991,13 @@ impl TransactionRepository for RedisTransactionRepository {
         all_ids.sort();
         all_ids.dedup();
 
-        // For multiple statuses, we need to re-sort the merged results
-        // Fetch all transactions and sort using status-aware ordering
+        // Fetch all transactions and sort by created_at (newest first)
         let mut transactions = self.get_transactions_by_ids(&all_ids).await?;
 
-        // Sort using status-aware ordering: confirmed_at for Confirmed, created_at for others
-        // This ensures consistent ordering across different statuses
-        transactions.results.sort_by(|a, b| {
-            let a_score = self.status_sorted_score(a);
-            let b_score = self.status_sorted_score(b);
-            b_score
-                .partial_cmp(&a_score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        // Sort by created_at descending (newest first)
+        transactions
+            .results
+            .sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
         Ok(transactions.results)
     }
@@ -1013,6 +1007,7 @@ impl TransactionRepository for RedisTransactionRepository {
         relayer_id: &str,
         statuses: &[TransactionStatus],
         query: PaginationQuery,
+        oldest_first: bool,
     ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
         let mut conn = self.client.as_ref().clone();
 
@@ -1045,11 +1040,13 @@ impl TransactionRepository for RedisTransactionRepository {
             let end = start + query.per_page as isize - 1;
 
             // Get page of IDs directly from sorted set
-            let page_ids: Vec<String> = redis::cmd("ZRANGE")
-                .arg(&sorted_key)
-                .arg(start)
-                .arg(end)
-                .arg("REV") // Newest first
+            // REV = newest first (descending), no REV = oldest first (ascending)
+            let mut cmd = redis::cmd("ZRANGE");
+            cmd.arg(&sorted_key).arg(start).arg(end);
+            if !oldest_first {
+                cmd.arg("REV");
+            }
+            let page_ids: Vec<String> = cmd
                 .query_async(&mut conn)
                 .await
                 .map_err(|e| self.map_redis_error(e, "find_by_status_paginated"))?;
@@ -1083,7 +1080,6 @@ impl TransactionRepository for RedisTransactionRepository {
                 .arg(&sorted_key)
                 .arg(0)
                 .arg(-1)
-                .arg("REV")
                 .arg("WITHSCORES")
                 .query_async(&mut conn)
                 .await
@@ -1092,21 +1088,31 @@ impl TransactionRepository for RedisTransactionRepository {
             all_ids.extend(ids_with_scores);
         }
 
-        // Remove duplicates (keep highest score) and sort by score descending
+        // Remove duplicates (keep highest/lowest score based on sort order)
         let mut id_map: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
         for (id, score) in all_ids {
             id_map
                 .entry(id)
                 .and_modify(|s| {
-                    if score > *s {
+                    // For oldest_first, keep the lowest score; otherwise keep highest
+                    if oldest_first {
+                        if score < *s {
+                            *s = score
+                        }
+                    } else if score > *s {
                         *s = score
                     }
                 })
                 .or_insert(score);
         }
 
+        // Sort by score: descending for newest first, ascending for oldest first
         let mut sorted_ids: Vec<(String, f64)> = id_map.into_iter().collect();
-        sorted_ids.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        if oldest_first {
+            sorted_ids.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        } else {
+            sorted_ids.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        }
 
         let total = sorted_ids.len() as u64;
 
@@ -2005,7 +2011,7 @@ mod tests {
             per_page: 2,
         };
         let result = repo
-            .find_by_status_paginated(&relayer_id, &[TransactionStatus::Pending], query)
+            .find_by_status_paginated(&relayer_id, &[TransactionStatus::Pending], query, false)
             .await
             .unwrap();
 
@@ -2020,7 +2026,7 @@ mod tests {
             per_page: 2,
         };
         let result = repo
-            .find_by_status_paginated(&relayer_id, &[TransactionStatus::Pending], query)
+            .find_by_status_paginated(&relayer_id, &[TransactionStatus::Pending], query, false)
             .await
             .unwrap();
 
@@ -2034,7 +2040,7 @@ mod tests {
             per_page: 2,
         };
         let result = repo
-            .find_by_status_paginated(&relayer_id, &[TransactionStatus::Pending], query)
+            .find_by_status_paginated(&relayer_id, &[TransactionStatus::Pending], query, false)
             .await
             .unwrap();
 
@@ -2051,6 +2057,7 @@ mod tests {
                 &relayer_id,
                 &[TransactionStatus::Pending, TransactionStatus::Confirmed],
                 query,
+                false,
             )
             .await
             .unwrap();
@@ -2064,7 +2071,7 @@ mod tests {
             per_page: 10,
         };
         let result = repo
-            .find_by_status_paginated(&relayer_id, &[TransactionStatus::Failed], query)
+            .find_by_status_paginated(&relayer_id, &[TransactionStatus::Failed], query, false)
             .await
             .unwrap();
 

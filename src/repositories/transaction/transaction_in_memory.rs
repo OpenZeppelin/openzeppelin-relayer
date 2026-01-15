@@ -227,10 +227,10 @@ impl TransactionRepository for InMemoryTransactionRepository {
             .cloned()
             .collect();
 
-        // Sort using status-aware ordering: confirmed_at for Confirmed, created_at for others
+        // Sort by created_at (newest first)
         let sorted = filtered
             .into_iter()
-            .sorted_by(Self::compare_for_sort)
+            .sorted_by(|a, b| b.created_at.cmp(&a.created_at))
             .collect();
 
         Ok(sorted)
@@ -241,6 +241,7 @@ impl TransactionRepository for InMemoryTransactionRepository {
         relayer_id: &str,
         statuses: &[TransactionStatus],
         query: PaginationQuery,
+        oldest_first: bool,
     ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
         let store = Self::acquire_lock(&self.store).await?;
 
@@ -255,13 +256,26 @@ impl TransactionRepository for InMemoryTransactionRepository {
         let start = ((query.page.saturating_sub(1)) * query.per_page) as usize;
 
         // Sort using status-aware ordering: confirmed_at for Confirmed, created_at for others
-        // Then apply pagination
-        let items = filtered
-            .into_iter()
-            .sorted_by(Self::compare_for_sort)
-            .skip(start)
-            .take(query.per_page as usize)
-            .collect();
+        // oldest_first: ascending order, otherwise descending (newest first)
+        let items: Vec<TransactionRepoModel> = if oldest_first {
+            filtered
+                .into_iter()
+                .sorted_by(|a, b| {
+                    let (a_key, _) = Self::get_sort_key(a);
+                    let (b_key, _) = Self::get_sort_key(b);
+                    a_key.cmp(b_key) // Ascending (oldest first)
+                })
+                .skip(start)
+                .take(query.per_page as usize)
+                .collect()
+        } else {
+            filtered
+                .into_iter()
+                .sorted_by(Self::compare_for_sort) // Descending (newest first)
+                .skip(start)
+                .take(query.per_page as usize)
+                .collect()
+        };
 
         Ok(PaginatedResult {
             items,
@@ -1078,67 +1092,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_find_by_status_confirmed_sorted_by_confirmed_at() {
-        let repo = InMemoryTransactionRepository::new();
-
-        // Helper function to create confirmed transaction with custom confirmed_at timestamp
-        let create_confirmed_tx =
-            |id: &str, created_at: &str, confirmed_at: &str| -> TransactionRepoModel {
-                let mut tx = create_test_transaction_pending_state(id);
-                tx.created_at = created_at.to_string();
-                tx.confirmed_at = Some(confirmed_at.to_string());
-                tx.status = TransactionStatus::Confirmed;
-                tx
-            };
-
-        // Create confirmed transactions where confirmed_at order differs from created_at order
-        // This tests that we sort by confirmed_at, not created_at
-        let tx1 = create_confirmed_tx(
-            "tx1",
-            "2025-01-27T15:00:00.000000+00:00", // Created first
-            "2025-01-27T18:00:00.000000+00:00", // Confirmed last (should be first in results)
-        );
-        let tx2 = create_confirmed_tx(
-            "tx2",
-            "2025-01-27T16:00:00.000000+00:00", // Created second
-            "2025-01-27T17:00:00.000000+00:00", // Confirmed first (should be second in results)
-        );
-        let tx3 = create_confirmed_tx(
-            "tx3",
-            "2025-01-27T17:00:00.000000+00:00", // Created last
-            "2025-01-27T16:00:00.000000+00:00", // Confirmed second (should be last in results)
-        );
-
-        // Create them in non-chronological order
-        repo.create(tx1.clone()).await.unwrap();
-        repo.create(tx2.clone()).await.unwrap();
-        repo.create(tx3.clone()).await.unwrap();
-
-        let result = repo
-            .find_by_status("relayer-1", &[TransactionStatus::Confirmed])
-            .await
-            .unwrap();
-
-        // Verify they are sorted by confirmed_at (newest first), not created_at
-        assert_eq!(result.len(), 3);
-        assert_eq!(result[0].id, "tx1"); // Latest confirmed_at (18:00)
-        assert_eq!(result[1].id, "tx2"); // Middle confirmed_at (17:00)
-        assert_eq!(result[2].id, "tx3"); // Earliest confirmed_at (16:00)
-        assert_eq!(
-            result[0].confirmed_at,
-            Some("2025-01-27T18:00:00.000000+00:00".to_string())
-        );
-        assert_eq!(
-            result[1].confirmed_at,
-            Some("2025-01-27T17:00:00.000000+00:00".to_string())
-        );
-        assert_eq!(
-            result[2].confirmed_at,
-            Some("2025-01-27T16:00:00.000000+00:00".to_string())
-        );
-    }
-
-    #[tokio::test]
     async fn test_find_by_status_paginated() {
         let repo = InMemoryTransactionRepository::new();
 
@@ -1177,7 +1130,7 @@ mod tests {
             per_page: 2,
         };
         let result = repo
-            .find_by_status_paginated("relayer-1", &[TransactionStatus::Pending], query)
+            .find_by_status_paginated("relayer-1", &[TransactionStatus::Pending], query, false)
             .await
             .unwrap();
 
@@ -1195,7 +1148,7 @@ mod tests {
             per_page: 2,
         };
         let result = repo
-            .find_by_status_paginated("relayer-1", &[TransactionStatus::Pending], query)
+            .find_by_status_paginated("relayer-1", &[TransactionStatus::Pending], query, false)
             .await
             .unwrap();
 
@@ -1212,7 +1165,7 @@ mod tests {
             per_page: 2,
         };
         let result = repo
-            .find_by_status_paginated("relayer-1", &[TransactionStatus::Pending], query)
+            .find_by_status_paginated("relayer-1", &[TransactionStatus::Pending], query, false)
             .await
             .unwrap();
 
@@ -1227,7 +1180,7 @@ mod tests {
             per_page: 2,
         };
         let result = repo
-            .find_by_status_paginated("relayer-1", &[TransactionStatus::Pending], query)
+            .find_by_status_paginated("relayer-1", &[TransactionStatus::Pending], query, false)
             .await
             .unwrap();
 
@@ -1244,6 +1197,7 @@ mod tests {
                 "relayer-1",
                 &[TransactionStatus::Pending, TransactionStatus::Confirmed],
                 query,
+                false,
             )
             .await
             .unwrap();
@@ -1257,7 +1211,7 @@ mod tests {
             per_page: 10,
         };
         let result = repo
-            .find_by_status_paginated("relayer-1", &[TransactionStatus::Failed], query)
+            .find_by_status_paginated("relayer-1", &[TransactionStatus::Failed], query, false)
             .await
             .unwrap();
 
