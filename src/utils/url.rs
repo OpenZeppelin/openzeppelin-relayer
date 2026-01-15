@@ -12,7 +12,7 @@
 /// - `https://eth-mainnet.g.alchemy.com/v2/abc123` → `https://eth-mainnet.g.alchemy.com/***`
 /// - `https://mainnet.infura.io/v3/PROJECT_ID` → `https://mainnet.infura.io/***`
 /// - `http://localhost:8545` → `http://localhost:8545` (no path to mask)
-/// - `invalid-url` → `***` (fallback for unparseable URLs)
+/// - `invalid-url` → `***` (fallback for unparsable URLs)
 pub fn mask_url(url: &str) -> String {
     // Find the scheme separator "://"
     let Some(scheme_end) = url.find("://") else {
