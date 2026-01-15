@@ -390,23 +390,6 @@ impl TransactionRepository for InMemoryTransactionRepository {
             .any(|tx| tx.relayer_id == relayer_id && statuses.contains(&tx.status));
         Ok(has_any)
     }
-
-    async fn get_latest_confirmed_transaction(
-        &self,
-        relayer_id: &str,
-    ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
-        let store = Self::acquire_lock(&self.store).await?;
-        let latest = store
-            .values()
-            .filter(|tx| {
-                tx.relayer_id == relayer_id
-                    && tx.status == TransactionStatus::Confirmed
-                    && tx.confirmed_at.is_some()
-            })
-            .max_by(|a, b| a.confirmed_at.cmp(&b.confirmed_at))
-            .cloned();
-        Ok(latest)
-    }
 }
 
 impl Default for InMemoryTransactionRepository {

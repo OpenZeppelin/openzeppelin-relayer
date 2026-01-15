@@ -37,7 +37,7 @@ use crate::{
     jobs::{JobProducerTrait, RelayerHealthCheck, TokenSwapRequest},
     models::{
         produce_relayer_disabled_payload, produce_solana_dex_webhook_payload, DisabledReason,
-        HealthCheckFailure, NetworkRepoModel, NetworkTransactionData, NetworkType,
+        HealthCheckFailure, NetworkRepoModel, NetworkTransactionData, NetworkType, PaginationQuery,
         RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
         SolanaDexPayload, SolanaFeePaymentStrategy, SolanaNetwork, SolanaTransactionData,
         TransactionRepoModel, TransactionStatus,
@@ -931,12 +931,23 @@ where
             .await
             .map_err(RelayerError::from)?;
 
-        // Use optimized get_latest_confirmed_transaction - fetches only the latest instead of all
+        // Use find_by_status_paginated to get the latest confirmed transaction (newest first)
         let last_confirmed_transaction_timestamp = self
             .transaction_repository
-            .get_latest_confirmed_transaction(&self.relayer.id)
+            .find_by_status_paginated(
+                &self.relayer.id,
+                &[TransactionStatus::Confirmed],
+                PaginationQuery {
+                    page: 1,
+                    per_page: 1,
+                },
+                false, // oldest_first = false means newest first
+            )
             .await
             .map_err(RelayerError::from)?
+            .items
+            .into_iter()
+            .next()
             .and_then(|tx| tx.confirmed_at);
 
         Ok(RelayerStatus::Solana {
@@ -2543,7 +2554,7 @@ mod tests {
             )
             .returning(|_, _| Ok(2u64));
 
-        // Mock get_latest_confirmed_transaction
+        // Mock find_by_status_paginated for latest confirmed transaction
         let recent_tx = TransactionRepoModel {
             id: "recent-tx".to_string(),
             relayer_id: "test-id".to_string(),
@@ -2554,9 +2565,22 @@ mod tests {
             ..Default::default()
         };
         tx_repo
-            .expect_get_latest_confirmed_transaction()
-            .with(eq("test-id"))
-            .returning(move |_| Ok(Some(recent_tx.clone())));
+            .expect_find_by_status_paginated()
+            .withf(|relayer_id, statuses, query, oldest_first| {
+                *relayer_id == *"test-id"
+                    && statuses == [TransactionStatus::Confirmed]
+                    && query.page == 1
+                    && query.per_page == 1
+                    && *oldest_first == false
+            })
+            .returning(move |_, _, _, _| {
+                Ok(crate::repositories::PaginatedResult {
+                    items: vec![recent_tx.clone()],
+                    total: 1,
+                    page: 1,
+                    per_page: 1,
+                })
+            });
 
         let ctx = TestCtx {
             tx_repo: Arc::new(tx_repo),
@@ -2635,11 +2659,24 @@ mod tests {
             )
             .returning(|_, _| Ok(0u64));
 
-        // Mock get_latest_confirmed_transaction - no confirmed transactions
+        // Mock find_by_status_paginated for latest confirmed transaction (none)
         tx_repo
-            .expect_get_latest_confirmed_transaction()
-            .with(eq("test-id"))
-            .returning(|_| Ok(None));
+            .expect_find_by_status_paginated()
+            .withf(|relayer_id, statuses, query, oldest_first| {
+                *relayer_id == *"test-id"
+                    && statuses == [TransactionStatus::Confirmed]
+                    && query.page == 1
+                    && query.per_page == 1
+                    && *oldest_first == false
+            })
+            .returning(|_, _, _, _| {
+                Ok(crate::repositories::PaginatedResult {
+                    items: vec![],
+                    total: 0,
+                    page: 1,
+                    per_page: 1,
+                })
+            });
 
         let ctx = TestCtx {
             tx_repo: Arc::new(tx_repo),

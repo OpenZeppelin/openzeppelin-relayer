@@ -131,13 +131,6 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
         relayer_id: &str,
         statuses: &[TransactionStatus],
     ) -> Result<bool, RepositoryError>;
-
-    /// Get the latest confirmed transaction (by confirmed_at timestamp).
-    /// Returns None if no confirmed transactions exist.
-    async fn get_latest_confirmed_transaction(
-        &self,
-        relayer_id: &str,
-    ) -> Result<Option<TransactionRepoModel>, RepositoryError>;
 }
 
 #[cfg(test)]
@@ -170,7 +163,6 @@ mockall::mock! {
       async fn set_confirmed_at(&self, tx_id: String, confirmed_at: String) -> Result<TransactionRepoModel, RepositoryError>;
       async fn count_by_status(&self, relayer_id: &str, statuses: &[TransactionStatus]) -> Result<u64, RepositoryError>;
       async fn has_transactions_by_status(&self, relayer_id: &str, statuses: &[TransactionStatus]) -> Result<bool, RepositoryError>;
-      async fn get_latest_confirmed_transaction(&self, relayer_id: &str) -> Result<Option<TransactionRepoModel>, RepositoryError>;
 
   }
 }
@@ -354,20 +346,6 @@ impl TransactionRepository for TransactionRepositoryStorage {
             }
             TransactionRepositoryStorage::Redis(repo) => {
                 repo.has_transactions_by_status(relayer_id, statuses).await
-            }
-        }
-    }
-
-    async fn get_latest_confirmed_transaction(
-        &self,
-        relayer_id: &str,
-    ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
-        match self {
-            TransactionRepositoryStorage::InMemory(repo) => {
-                repo.get_latest_confirmed_transaction(relayer_id).await
-            }
-            TransactionRepositoryStorage::Redis(repo) => {
-                repo.get_latest_confirmed_transaction(relayer_id).await
             }
         }
     }

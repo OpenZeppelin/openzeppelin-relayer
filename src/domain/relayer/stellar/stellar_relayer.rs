@@ -35,10 +35,10 @@ use crate::{
     models::{
         produce_relayer_disabled_payload, DeletePendingTransactionsResponse, DisabledReason,
         HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest,
-        NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerNetworkPolicy,
-        RelayerRepoModel, RelayerStatus, RelayerStellarPolicy, RepositoryError, RpcErrorCodes,
-        StellarAllowedTokensPolicy, StellarFeePaymentStrategy, StellarNetwork, StellarRpcRequest,
-        TransactionRepoModel, TransactionStatus,
+        NetworkRpcResult, NetworkTransactionRequest, NetworkType, PaginationQuery,
+        RelayerNetworkPolicy, RelayerRepoModel, RelayerStatus, RelayerStellarPolicy,
+        RepositoryError, RpcErrorCodes, StellarAllowedTokensPolicy, StellarFeePaymentStrategy,
+        StellarNetwork, StellarRpcRequest, TransactionRepoModel, TransactionStatus,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
@@ -497,12 +497,23 @@ where
             .await
             .map_err(RelayerError::from)?;
 
-        // Use optimized get_latest_confirmed_transaction - fetches only the latest instead of all
+        // Use find_by_status_paginated to get the latest confirmed transaction (newest first)
         let last_confirmed_transaction_timestamp = self
             .transaction_repository
-            .get_latest_confirmed_transaction(&relayer_model.id)
+            .find_by_status_paginated(
+                &relayer_model.id,
+                &[TransactionStatus::Confirmed],
+                PaginationQuery {
+                    page: 1,
+                    per_page: 1,
+                },
+                false, // oldest_first = false means newest first
+            )
             .await
             .map_err(RelayerError::from)?
+            .items
+            .into_iter()
+            .next()
             .and_then(|tx| tx.confirmed_at);
 
         Ok(RelayerStatus::Stellar {
@@ -1013,7 +1024,7 @@ mod tests {
             .returning(|_, _| Ok(0u64))
             .once();
 
-        // Mock get_latest_confirmed_transaction
+        // Mock find_by_status_paginated for latest confirmed transaction
         let confirmed_tx = TransactionRepoModel {
             id: "tx1_stellar".to_string(),
             relayer_id: relayer_model.id.clone(),
@@ -1021,10 +1032,24 @@ mod tests {
             confirmed_at: Some("2023-02-01T12:00:00Z".to_string()),
             ..TransactionRepoModel::default()
         };
+        let relayer_id_clone = relayer_model.id.clone();
         tx_repo_mock
-            .expect_get_latest_confirmed_transaction()
-            .withf(|relayer_id| relayer_id == "test-relayer-id")
-            .returning(move |_| Ok(Some(confirmed_tx.clone())))
+            .expect_find_by_status_paginated()
+            .withf(move |relayer_id, statuses, query, oldest_first| {
+                *relayer_id == relayer_id_clone
+                    && statuses == [TransactionStatus::Confirmed]
+                    && query.page == 1
+                    && query.per_page == 1
+                    && *oldest_first == false
+            })
+            .returning(move |_, _, _, _| {
+                Ok(crate::repositories::PaginatedResult {
+                    items: vec![confirmed_tx.clone()],
+                    total: 1,
+                    page: 1,
+                    per_page: 1,
+                })
+            })
             .once();
         let signer = Arc::new(MockStellarSignTrait::new());
         let dex_service = create_mock_dex_service();

@@ -1350,54 +1350,6 @@ impl TransactionRepository for RedisTransactionRepository {
         debug!(relayer_id = %relayer_id, "no transactions found with specified statuses");
         Ok(false)
     }
-
-    /// Get the latest confirmed transaction by confirmed_at timestamp.
-    /// Optimized: Uses the confirmed status sorted set directly (sorted by confirmed_at).
-    /// This is O(log N) instead of O(N) since we can get the latest directly from the sorted set.
-    async fn get_latest_confirmed_transaction(
-        &self,
-        relayer_id: &str,
-    ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
-
-        // Ensure sorted set is migrated and get count
-        let confirmed_count = self
-            .ensure_status_sorted_set(relayer_id, &TransactionStatus::Confirmed)
-            .await?;
-
-        if confirmed_count == 0 {
-            debug!(relayer_id = %relayer_id, "no confirmed transactions found");
-            return Ok(None);
-        }
-
-        // Get the latest confirmed transaction directly from the sorted set
-        // The sorted set is sorted by confirmed_at (score) ascending, so the last element (highest score) is the latest
-        let sorted_key = self.relayer_status_sorted_key(relayer_id, &TransactionStatus::Confirmed);
-        let latest_ids: Vec<String> = redis::cmd("ZRANGE")
-            .arg(&sorted_key)
-            .arg(-1) // Last element (highest score = latest confirmed_at)
-            .arg(-1) // Just get the last one
-            .query_async(&mut conn)
-            .await
-            .map_err(|e| self.map_redis_error(e, "get_latest_confirmed_transaction"))?;
-
-        match latest_ids.first() {
-            Some(tx_id) => {
-                let tx = self.get_by_id(tx_id.clone()).await?;
-                debug!(
-                    relayer_id = %relayer_id,
-                    tx_id = %tx_id,
-                    confirmed_at = ?tx.confirmed_at,
-                    "found latest confirmed transaction"
-                );
-                Ok(Some(tx))
-            }
-            None => {
-                debug!(relayer_id = %relayer_id, "no confirmed transactions found in sorted set");
-                Ok(None)
-            }
-        }
-    }
 }
 
 #[cfg(test)]
