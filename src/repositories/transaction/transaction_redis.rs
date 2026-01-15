@@ -2002,6 +2002,133 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "Requires active Redis instance"]
+    async fn test_find_by_status_paginated_oldest_first() {
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+
+        // Create 5 pending transactions with ascending timestamps
+        for i in 1..=5 {
+            let tx_id = format!("tx{}-{}", i, Uuid::new_v4());
+            let mut tx = create_test_transaction(&tx_id);
+            tx.relayer_id = relayer_id.clone();
+            tx.status = TransactionStatus::Pending;
+            tx.created_at = format!("2025-01-27T{:02}:00:00.000000+00:00", 10 + i);
+            repo.create(tx).await.unwrap();
+        }
+
+        // Test oldest_first: true - should return oldest transactions first
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 3,
+        };
+        let result = repo
+            .find_by_status_paginated(
+                &relayer_id,
+                &[TransactionStatus::Pending],
+                query.clone(),
+                true,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.total, 5);
+        assert_eq!(result.items.len(), 3);
+        // Verify ordering: oldest first (11:00, 12:00, 13:00)
+        assert!(
+            result.items[0].created_at < result.items[1].created_at,
+            "First item should be older than second"
+        );
+        assert!(
+            result.items[1].created_at < result.items[2].created_at,
+            "Second item should be older than third"
+        );
+
+        // Contrast with oldest_first: false - should return newest first
+        let result_newest = repo
+            .find_by_status_paginated(&relayer_id, &[TransactionStatus::Pending], query, false)
+            .await
+            .unwrap();
+
+        assert_eq!(result_newest.items.len(), 3);
+        // Verify ordering: newest first (15:00, 14:00, 13:00)
+        assert!(
+            result_newest.items[0].created_at > result_newest.items[1].created_at,
+            "First item should be newer than second"
+        );
+        assert!(
+            result_newest.items[1].created_at > result_newest.items[2].created_at,
+            "Second item should be newer than third"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_find_by_status_paginated_oldest_first_single_item() {
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+
+        // Create transactions with specific timestamps
+        let timestamps = [
+            "2025-01-27T08:00:00.000000+00:00", // oldest
+            "2025-01-27T10:00:00.000000+00:00", // middle
+            "2025-01-27T12:00:00.000000+00:00", // newest
+        ];
+
+        let mut oldest_id = String::new();
+        let mut newest_id = String::new();
+
+        for (i, timestamp) in timestamps.iter().enumerate() {
+            let tx_id = format!("tx-{}-{}", i, Uuid::new_v4());
+            if i == 0 {
+                oldest_id = tx_id.clone();
+            }
+            if i == 2 {
+                newest_id = tx_id.clone();
+            }
+            let mut tx = create_test_transaction(&tx_id);
+            tx.relayer_id = relayer_id.clone();
+            tx.status = TransactionStatus::Pending;
+            tx.created_at = timestamp.to_string();
+            repo.create(tx).await.unwrap();
+        }
+
+        // Request just 1 item with oldest_first: true
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 1,
+        };
+        let result = repo
+            .find_by_status_paginated(
+                &relayer_id,
+                &[TransactionStatus::Pending],
+                query.clone(),
+                true,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.total, 3);
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(
+            result.items[0].id, oldest_id,
+            "With oldest_first=true and per_page=1, should return the oldest transaction"
+        );
+
+        // Contrast with oldest_first: false
+        let result = repo
+            .find_by_status_paginated(&relayer_id, &[TransactionStatus::Pending], query, false)
+            .await
+            .unwrap();
+
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(
+            result.items[0].id, newest_id,
+            "With oldest_first=false and per_page=1, should return the newest transaction"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
     async fn test_find_by_nonce() {
         let repo = setup_test_repo().await;
         let random_id = Uuid::new_v4().to_string();

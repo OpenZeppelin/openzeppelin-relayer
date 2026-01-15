@@ -1191,6 +1191,181 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_find_by_status_paginated_oldest_first() {
+        let repo = InMemoryTransactionRepository::new();
+
+        // Helper function to create transaction with custom created_at timestamp
+        let create_tx_with_timestamp =
+            |id: &str, timestamp: &str, status: TransactionStatus| -> TransactionRepoModel {
+                let mut tx = create_test_transaction_pending_state(id);
+                tx.created_at = timestamp.to_string();
+                tx.status = status;
+                tx
+            };
+
+        // Create 5 pending transactions with ascending timestamps
+        for i in 1..=5 {
+            let tx = create_tx_with_timestamp(
+                &format!("tx{}", i),
+                &format!("2025-01-27T{:02}:00:00.000000+00:00", 10 + i),
+                TransactionStatus::Pending,
+            );
+            repo.create(tx).await.unwrap();
+        }
+
+        // Test oldest_first: true - should return tx1, tx2, tx3... (ascending order)
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 3,
+        };
+        let result = repo
+            .find_by_status_paginated("relayer-1", &[TransactionStatus::Pending], query, true)
+            .await
+            .unwrap();
+
+        assert_eq!(result.total, 5);
+        assert_eq!(result.items.len(), 3);
+        // Should be oldest first (tx1, tx2, tx3)
+        assert_eq!(
+            result.items[0].id, "tx1",
+            "First item should be oldest (tx1)"
+        );
+        assert_eq!(result.items[1].id, "tx2", "Second item should be tx2");
+        assert_eq!(result.items[2].id, "tx3", "Third item should be tx3");
+
+        // Test second page with oldest_first
+        let query = PaginationQuery {
+            page: 2,
+            per_page: 3,
+        };
+        let result = repo
+            .find_by_status_paginated("relayer-1", &[TransactionStatus::Pending], query, true)
+            .await
+            .unwrap();
+
+        assert_eq!(result.total, 5);
+        assert_eq!(result.items.len(), 2);
+        // Should be tx4, tx5
+        assert_eq!(result.items[0].id, "tx4");
+        assert_eq!(result.items[1].id, "tx5");
+    }
+
+    #[tokio::test]
+    async fn test_find_by_status_paginated_oldest_first_single_item() {
+        let repo = InMemoryTransactionRepository::new();
+
+        // Create 3 pending transactions with different timestamps
+        let timestamps = [
+            ("tx-oldest", "2025-01-27T08:00:00.000000+00:00"),
+            ("tx-middle", "2025-01-27T10:00:00.000000+00:00"),
+            ("tx-newest", "2025-01-27T12:00:00.000000+00:00"),
+        ];
+
+        for (id, timestamp) in timestamps {
+            let mut tx = create_test_transaction_pending_state(id);
+            tx.created_at = timestamp.to_string();
+            tx.status = TransactionStatus::Pending;
+            repo.create(tx).await.unwrap();
+        }
+
+        // Request just 1 item with oldest_first: true - should get the oldest
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 1,
+        };
+        let result = repo
+            .find_by_status_paginated(
+                "relayer-1",
+                &[TransactionStatus::Pending],
+                query.clone(),
+                true,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.total, 3);
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(
+            result.items[0].id, "tx-oldest",
+            "With oldest_first and per_page=1, should return the oldest transaction"
+        );
+
+        // Contrast with oldest_first: false - should get the newest
+        let result = repo
+            .find_by_status_paginated("relayer-1", &[TransactionStatus::Pending], query, false)
+            .await
+            .unwrap();
+
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(
+            result.items[0].id, "tx-newest",
+            "With oldest_first=false and per_page=1, should return the newest transaction"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_find_by_status_paginated_multi_status_oldest_first() {
+        let repo = InMemoryTransactionRepository::new();
+
+        // Create transactions with different statuses and timestamps
+        let transactions = [
+            (
+                "tx-pending-old",
+                "2025-01-27T08:00:00.000000+00:00",
+                TransactionStatus::Pending,
+            ),
+            (
+                "tx-sent-mid",
+                "2025-01-27T10:00:00.000000+00:00",
+                TransactionStatus::Sent,
+            ),
+            (
+                "tx-pending-new",
+                "2025-01-27T12:00:00.000000+00:00",
+                TransactionStatus::Pending,
+            ),
+            (
+                "tx-sent-old",
+                "2025-01-27T07:00:00.000000+00:00",
+                TransactionStatus::Sent,
+            ),
+        ];
+
+        for (id, timestamp, status) in transactions {
+            let mut tx = create_test_transaction_pending_state(id);
+            tx.created_at = timestamp.to_string();
+            tx.status = status;
+            repo.create(tx).await.unwrap();
+        }
+
+        // Query multiple statuses with oldest_first: true
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 10,
+        };
+        let result = repo
+            .find_by_status_paginated(
+                "relayer-1",
+                &[TransactionStatus::Pending, TransactionStatus::Sent],
+                query,
+                true,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.total, 4);
+        assert_eq!(result.items.len(), 4);
+        // Should be sorted by created_at ascending (oldest first)
+        assert_eq!(result.items[0].id, "tx-sent-old", "Oldest should be first");
+        assert_eq!(result.items[1].id, "tx-pending-old");
+        assert_eq!(result.items[2].id, "tx-sent-mid");
+        assert_eq!(
+            result.items[3].id, "tx-pending-new",
+            "Newest should be last"
+        );
+    }
+
+    #[tokio::test]
     async fn test_has_entries() {
         let repo = InMemoryTransactionRepository::new();
         assert!(!repo.has_entries().await.unwrap());
