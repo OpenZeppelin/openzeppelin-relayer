@@ -119,18 +119,23 @@ impl From<SignerConfig> for SignerConfigResponse {
             },
             SignerConfig::GoogleCloudKms(c) => SignerConfigResponse::GoogleCloudKms {
                 service_account: GoogleCloudKmsSignerServiceAccountResponseConfig {
-                    project_id: c.service_account.project_id,
-                    client_id: c.service_account.client_id,
-                    auth_uri: c.service_account.auth_uri,
-                    token_uri: c.service_account.token_uri,
-                    auth_provider_x509_cert_url: c.service_account.auth_provider_x509_cert_url,
-                    client_x509_cert_url: c.service_account.client_x509_cert_url,
-                    universe_domain: c.service_account.universe_domain,
+                    project_id: (*c.service_account.project_id.to_str()).clone(),
+                    client_id: (*c.service_account.client_id.to_str()).clone(),
+                    auth_uri: (*c.service_account.auth_uri.to_str()).clone(),
+                    token_uri: (*c.service_account.token_uri.to_str()).clone(),
+                    auth_provider_x509_cert_url: (*c
+                        .service_account
+                        .auth_provider_x509_cert_url
+                        .to_str())
+                    .clone(),
+                    client_x509_cert_url: (*c.service_account.client_x509_cert_url.to_str())
+                        .clone(),
+                    universe_domain: (*c.service_account.universe_domain.to_str()).clone(),
                 },
                 key: GoogleCloudKmsSignerKeyResponseConfig {
-                    location: c.key.location,
-                    key_ring_id: c.key.key_ring_id,
-                    key_id: c.key.key_id,
+                    location: (*c.key.location.to_str()).clone(),
+                    key_ring_id: (*c.key.key_ring_id.to_str()).clone(),
+                    key_id: (*c.key.key_id.to_str()).clone(),
                     key_version: c.key.key_version,
                 },
             },

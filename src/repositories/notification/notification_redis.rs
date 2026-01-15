@@ -101,10 +101,8 @@ impl RedisNotificationRepository {
         }
 
         if failed_count > 0 {
-            warn!(failed_count = %failed_count, total_count = %ids.len(), "failed to deserialize notifications in batch");
+            warn!(failed_count = %failed_count, total_count = %ids.len(), failed_ids = ?failed_ids, "failed to deserialize notifications in batch");
         }
-
-        warn!(failed_ids = ?failed_ids, "failed to deserialize notifications");
 
         debug!(count = %notifications.len(), "successfully fetched notifications");
         Ok(BatchRetrievalResult {
