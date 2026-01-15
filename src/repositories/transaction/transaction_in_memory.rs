@@ -378,18 +378,6 @@ impl TransactionRepository for InMemoryTransactionRepository {
             .count() as u64;
         Ok(count)
     }
-
-    async fn has_transactions_by_status(
-        &self,
-        relayer_id: &str,
-        statuses: &[TransactionStatus],
-    ) -> Result<bool, RepositoryError> {
-        let store = Self::acquire_lock(&self.store).await?;
-        let has_any = store
-            .values()
-            .any(|tx| tx.relayer_id == relayer_id && statuses.contains(&tx.status));
-        Ok(has_any)
-    }
 }
 
 impl Default for InMemoryTransactionRepository {

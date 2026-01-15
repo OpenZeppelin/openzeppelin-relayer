@@ -1319,37 +1319,6 @@ impl TransactionRepository for RedisTransactionRepository {
         debug!(relayer_id = %relayer_id, count = %total_count, "counted transactions by status");
         Ok(total_count)
     }
-
-    /// Get the oldest transaction by status (sorted by created_at ascending).
-    /// Uses ZRANGE with LIMIT 0 1 for O(log N) efficiency.
-    /// Useful for queue processing where oldest items should be handled first.
-    /// Check if any transactions exist with the given statuses.
-    /// Uses ZCARD and short-circuits on first non-empty set.
-    async fn has_transactions_by_status(
-        &self,
-        relayer_id: &str,
-        statuses: &[TransactionStatus],
-    ) -> Result<bool, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
-
-        for status in statuses {
-            // Ensure sorted set is migrated
-            self.ensure_status_sorted_set(relayer_id, status).await?;
-
-            let sorted_key = self.relayer_status_sorted_key(relayer_id, status);
-            let count: u64 = conn
-                .zcard(&sorted_key)
-                .await
-                .map_err(|e| self.map_redis_error(e, "has_transactions_by_status"))?;
-            if count > 0 {
-                debug!(relayer_id = %relayer_id, status = %status, "found transactions with status");
-                return Ok(true);
-            }
-        }
-
-        debug!(relayer_id = %relayer_id, "no transactions found with specified statuses");
-        Ok(false)
-    }
 }
 
 #[cfg(test)]

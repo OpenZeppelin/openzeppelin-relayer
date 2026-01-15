@@ -123,14 +123,6 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
         relayer_id: &str,
         statuses: &[TransactionStatus],
     ) -> Result<u64, RepositoryError>;
-
-    /// Check if any transactions exist with the given status(es).
-    /// More efficient than count_by_status when you only need existence check.
-    async fn has_transactions_by_status(
-        &self,
-        relayer_id: &str,
-        statuses: &[TransactionStatus],
-    ) -> Result<bool, RepositoryError>;
 }
 
 #[cfg(test)]
@@ -162,7 +154,6 @@ mockall::mock! {
       async fn set_sent_at(&self, tx_id: String, sent_at: String) -> Result<TransactionRepoModel, RepositoryError>;
       async fn set_confirmed_at(&self, tx_id: String, confirmed_at: String) -> Result<TransactionRepoModel, RepositoryError>;
       async fn count_by_status(&self, relayer_id: &str, statuses: &[TransactionStatus]) -> Result<u64, RepositoryError>;
-      async fn has_transactions_by_status(&self, relayer_id: &str, statuses: &[TransactionStatus]) -> Result<bool, RepositoryError>;
 
   }
 }
@@ -331,21 +322,6 @@ impl TransactionRepository for TransactionRepositoryStorage {
             }
             TransactionRepositoryStorage::Redis(repo) => {
                 repo.count_by_status(relayer_id, statuses).await
-            }
-        }
-    }
-
-    async fn has_transactions_by_status(
-        &self,
-        relayer_id: &str,
-        statuses: &[TransactionStatus],
-    ) -> Result<bool, RepositoryError> {
-        match self {
-            TransactionRepositoryStorage::InMemory(repo) => {
-                repo.has_transactions_by_status(relayer_id, statuses).await
-            }
-            TransactionRepositoryStorage::Redis(repo) => {
-                repo.has_transactions_by_status(relayer_id, statuses).await
             }
         }
     }
