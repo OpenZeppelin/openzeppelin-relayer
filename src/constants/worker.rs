@@ -4,7 +4,7 @@ pub const WORKER_DEFAULT_MAXIMUM_RETRIES: usize = 5;
 pub const WORKER_TRANSACTION_REQUEST_RETRIES: usize = 5;
 
 // Transaction submission retry counts per command type
-pub const WORKER_TRANSACTION_SUBMIT_RETRIES: usize = 1; // Fresh transaction submission
+pub const WORKER_TRANSACTION_SUBMIT_RETRIES: usize = 3; // Fresh transaction submission (4 total attempts)
 pub const WORKER_TRANSACTION_RESUBMIT_RETRIES: usize = 1; // Gas price bump (status checker will retry)
 pub const WORKER_TRANSACTION_CANCEL_RETRIES: usize = 1; // Cancel/replacement (status checker will retry)
 pub const WORKER_TRANSACTION_RESEND_RETRIES: usize = 1; // Resend same transaction (status checker will retry)
