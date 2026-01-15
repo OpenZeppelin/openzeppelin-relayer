@@ -25,7 +25,10 @@ use crate::utils::{map_provider_error, sanitize_error_description};
 /// To use the `StellarRelayer`, create an instance using the `new` method, providing the necessary
 /// components. Then, call the appropriate methods to process transactions and manage the relayer's state.
 use crate::{
-    constants::{STELLAR_SMALLEST_UNIT_NAME, STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS},
+    constants::{
+        transactions::PENDING_TRANSACTION_STATUSES, STELLAR_SMALLEST_UNIT_NAME,
+        STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+    },
     domain::{
         create_success_response, transaction::stellar::fetch_next_sequence_from_chain,
         BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
@@ -490,10 +493,9 @@ where
         let balance_response = self.get_balance().await?;
 
         // Use optimized count_by_status
-        let pending_statuses = [TransactionStatus::Pending, TransactionStatus::Submitted];
         let pending_transactions_count = self
             .transaction_repository
-            .count_by_status(&relayer_model.id, &pending_statuses[..])
+            .count_by_status(&relayer_model.id, PENDING_TRANSACTION_STATUSES)
             .await
             .map_err(RelayerError::from)?;
 
@@ -1019,7 +1021,12 @@ mod tests {
             .expect_count_by_status()
             .withf(|relayer_id, statuses| {
                 relayer_id == "test-relayer-id"
-                    && statuses == [TransactionStatus::Pending, TransactionStatus::Submitted]
+                    && statuses
+                        == [
+                            TransactionStatus::Pending,
+                            TransactionStatus::Sent,
+                            TransactionStatus::Submitted,
+                        ]
             })
             .returning(|_, _| Ok(0u64))
             .once();

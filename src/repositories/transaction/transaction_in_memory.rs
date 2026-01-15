@@ -67,7 +67,9 @@ impl InMemoryTransactionRepository {
     fn compare_for_sort(a: &TransactionRepoModel, b: &TransactionRepoModel) -> std::cmp::Ordering {
         let (a_key, _) = Self::get_sort_key(a);
         let (b_key, _) = Self::get_sort_key(b);
-        b_key.cmp(a_key) // Descending (newest first)
+        b_key
+            .cmp(a_key) // Descending (newest first)
+            .then_with(|| b.id.cmp(&a.id)) // Tie-breaker: sort by ID for deterministic ordering
     }
 }
 
@@ -263,7 +265,9 @@ impl TransactionRepository for InMemoryTransactionRepository {
                 .sorted_by(|a, b| {
                     let (a_key, _) = Self::get_sort_key(a);
                     let (b_key, _) = Self::get_sort_key(b);
-                    a_key.cmp(b_key) // Ascending (oldest first)
+                    a_key
+                        .cmp(b_key) // Ascending (oldest first)
+                        .then_with(|| a.id.cmp(&b.id)) // Tie-breaker: sort by ID for deterministic ordering
                 })
                 .skip(start)
                 .take(query.per_page as usize)

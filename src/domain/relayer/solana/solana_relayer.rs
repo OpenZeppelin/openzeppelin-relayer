@@ -30,8 +30,8 @@ use crate::models::{
 use crate::utils::calculate_scheduled_timestamp;
 use crate::{
     constants::{
-        DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, DEFAULT_SOLANA_MIN_BALANCE,
-        SOLANA_SMALLEST_UNIT_NAME, WRAPPED_SOL_MINT,
+        transactions::PENDING_TRANSACTION_STATUSES, DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE,
+        DEFAULT_SOLANA_MIN_BALANCE, SOLANA_SMALLEST_UNIT_NAME, WRAPPED_SOL_MINT,
     },
     domain::{relayer::RelayerError, BalanceResponse, DexStrategy, SolanaRelayerDexTrait},
     jobs::{JobProducerTrait, RelayerHealthCheck, TokenSwapRequest},
@@ -924,10 +924,9 @@ where
         let balance = self.provider.get_balance(address).await?;
 
         // Use optimized count_by_status
-        let pending_statuses = [TransactionStatus::Pending, TransactionStatus::Submitted];
         let pending_transactions_count = self
             .transaction_repository
-            .count_by_status(&self.relayer.id, &pending_statuses[..])
+            .count_by_status(&self.relayer.id, PENDING_TRANSACTION_STATUSES)
             .await
             .map_err(RelayerError::from)?;
 
@@ -2549,6 +2548,7 @@ mod tests {
                 eq("test-id"),
                 eq(vec![
                     TransactionStatus::Pending,
+                    TransactionStatus::Sent,
                     TransactionStatus::Submitted,
                 ]),
             )
@@ -2654,6 +2654,7 @@ mod tests {
                 eq("test-id"),
                 eq(vec![
                     TransactionStatus::Pending,
+                    TransactionStatus::Sent,
                     TransactionStatus::Submitted,
                 ]),
             )

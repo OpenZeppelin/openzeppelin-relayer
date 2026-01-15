@@ -35,7 +35,7 @@ pub use retry::*;
 mod plugins;
 pub use plugins::*;
 
-mod transactions;
+pub mod transactions;
 pub use transactions::*;
 
 mod network_tags;

@@ -27,7 +27,10 @@
 use std::sync::Arc;
 
 use crate::{
-    constants::{EVM_SMALLEST_UNIT_NAME, EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS},
+    constants::{
+        transactions::PENDING_TRANSACTION_STATUSES, EVM_SMALLEST_UNIT_NAME,
+        EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+    },
     domain::{
         relayer::{Relayer, RelayerError},
         BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
@@ -147,7 +150,8 @@ where
             .transaction_counter_service
             .get()
             .await
-            .unwrap_or(Some(0))
+            .ok()
+            .flatten()
             .unwrap_or(0);
 
         let nonce = std::cmp::max(on_chain_nonce, transaction_counter_nonce);
@@ -312,17 +316,17 @@ where
             .transaction_counter_service
             .get()
             .await
-            .unwrap_or(Some(0))
+            .ok()
+            .flatten()
             .unwrap_or(0);
         let nonce_str = nonce.to_string();
 
         let balance_response = self.get_balance().await?;
 
         // Use optimized count_by_status
-        let pending_statuses = [TransactionStatus::Pending, TransactionStatus::Submitted];
         let pending_transactions_count = self
             .transaction_repository
-            .count_by_status(&relayer_model.id, &pending_statuses[..])
+            .count_by_status(&relayer_model.id, PENDING_TRANSACTION_STATUSES)
             .await
             .map_err(RelayerError::from)?;
 
@@ -1055,7 +1059,12 @@ mod tests {
             .expect_count_by_status()
             .withf(|relayer_id, statuses| {
                 relayer_id == "test-relayer-id"
-                    && statuses == [TransactionStatus::Pending, TransactionStatus::Submitted]
+                    && statuses
+                        == [
+                            TransactionStatus::Pending,
+                            TransactionStatus::Sent,
+                            TransactionStatus::Submitted,
+                        ]
             })
             .returning(|_, _| Ok(0u64))
             .once();
@@ -1223,7 +1232,12 @@ mod tests {
             .expect_count_by_status()
             .withf(|relayer_id, statuses| {
                 relayer_id == "test-relayer-id"
-                    && statuses == [TransactionStatus::Pending, TransactionStatus::Submitted]
+                    && statuses
+                        == [
+                            TransactionStatus::Pending,
+                            TransactionStatus::Sent,
+                            TransactionStatus::Submitted,
+                        ]
             })
             .returning(|_, _| Err(RepositoryError::Unknown("DB down".to_string())))
             .once();
@@ -1279,7 +1293,12 @@ mod tests {
             .expect_count_by_status()
             .withf(|relayer_id, statuses| {
                 relayer_id == "test-relayer-id"
-                    && statuses == [TransactionStatus::Pending, TransactionStatus::Submitted]
+                    && statuses
+                        == [
+                            TransactionStatus::Pending,
+                            TransactionStatus::Sent,
+                            TransactionStatus::Submitted,
+                        ]
             })
             .returning(|_, _| Ok(0u64))
             .once();

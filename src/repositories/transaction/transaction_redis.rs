@@ -256,26 +256,20 @@ impl RedisTransactionRepository {
         let sorted_key = self.relayer_status_sorted_key(relayer_id, status);
         let legacy_key = self.relayer_status_key(relayer_id, status);
 
-        // Check if sorted set already has data
-        let sorted_count: u64 = conn
-            .zcard(&sorted_key)
-            .await
-            .map_err(|e| self.map_redis_error(e, "ensure_status_sorted_set_zcard"))?;
-
-        if sorted_count > 0 {
-            // Already migrated, nothing to do
-            return Ok(sorted_count);
-        }
-
-        // Check if legacy set has data that needs migration
+        // Always check if legacy set has data that needs migration
+        // Even if ZSET is non-empty (could be from partial migration failure or rolling deployment)
         let legacy_count: u64 = conn
             .scard(&legacy_key)
             .await
             .map_err(|e| self.map_redis_error(e, "ensure_status_sorted_set_scard"))?;
 
         if legacy_count == 0 {
-            // No data in either set
-            return Ok(0);
+            // No legacy data to migrate, return current ZSET count
+            let sorted_count: u64 = conn
+                .zcard(&sorted_key)
+                .await
+                .map_err(|e| self.map_redis_error(e, "ensure_status_sorted_set_zcard"))?;
+            return Ok(sorted_count);
         }
 
         // Migration needed: get all IDs from legacy set
@@ -864,6 +858,11 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
                     TransactionStatus::Failed,
                     TransactionStatus::Expired,
                 ] {
+                    // Remove from sorted status set (new format)
+                    let status_sorted_key = self.relayer_status_sorted_key(relayer_id, status);
+                    pipe.zrem(&status_sorted_key, &tx_id);
+
+                    // Remove from legacy status set (for migration cleanup)
                     let status_key = self.relayer_status_key(relayer_id, status);
                     pipe.srem(&status_key, &tx_id);
                 }

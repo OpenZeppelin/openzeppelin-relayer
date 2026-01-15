@@ -224,11 +224,12 @@ where
                     page: 1,
                     per_page: 1,
                 },
-                true, // oldest_first - FIFO queue order
+                true, // oldest_first=true - query returns oldest transaction first
             )
             .await
             .map_err(TransactionError::from)?;
 
+        // oldest_first=true so .next() yields the oldest pending transaction (FIFO order)
         Ok(result.items.into_iter().next())
     }
 
@@ -900,7 +901,7 @@ mod tests {
 
         assert_eq!(
             found_tx.id, tx1.id,
-            "Should get oldest transaction (tx1) - find_by_status returns newest first, so .last() gives oldest"
+            "Should get oldest transaction (tx1) - oldest_first=true so .next() yields oldest"
         );
         assert_eq!(
             found_tx.created_at, tx1.created_at,
@@ -976,10 +977,10 @@ mod tests {
         assert!(result.is_some(), "Should find a pending transaction");
         let found_tx = result.unwrap();
 
-        // find_by_status returns newest first, so .last() gives us the oldest (FIFO)
+        // oldest_first=true so .next() yields the oldest pending transaction (FIFO order)
         assert_eq!(
             found_tx.id, tx1.id,
-            "Should get oldest transaction (tx1) - find_by_status returns newest first, so .last() gives oldest"
+            "Should get oldest transaction (tx1) - oldest_first=true so .next() yields oldest"
         );
         assert_eq!(
             found_tx.created_at, tx1.created_at,

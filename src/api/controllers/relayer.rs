@@ -253,7 +253,7 @@ where
     }
 
     if relayer.system_disabled {
-        return Err(ApiError::BadRequest("Relayer is disabled".to_string()));
+        return Err(ApiError::BadRequest("Relayer is disabled".into()));
     }
 
     // Check if notification exists (if setting one) by extracting from JSON patch
