@@ -11,7 +11,7 @@
 
 use crate::config::{ConfigFileError, ServerConfig};
 use crate::models::{deserialize_rpc_urls, RpcConfig};
-use crate::utils::{sanitize_url_for_error, validate_rpc_url};
+use crate::utils::{sanitize_url_for_error, validate_safe_url};
 use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Debug, Serialize, Clone)]
@@ -94,7 +94,7 @@ impl NetworkConfigCommon {
 
             for config in configs {
                 // Validate URL format and security
-                validate_rpc_url(&config.url, &allowed_hosts, block_private_ips).map_err(
+                validate_safe_url(&config.url, &allowed_hosts, block_private_ips).map_err(
                     |err| {
                         ConfigFileError::InvalidFormat(format!(
                             "RPC URL validation failed for '{}': {err}",
