@@ -34,6 +34,7 @@ use crate::services::provider::RetryConfig;
 use crate::services::provider::{ProviderConfig, ProviderError};
 // Reqwest client is used for raw JSON-RPC HTTP requests. Alias to avoid name clash with the
 // soroban `Client` type imported above.
+use crate::utils::{create_secure_redirect_policy, validate_safe_url};
 use reqwest::Client as ReqwestClient;
 use std::sync::Arc;
 use std::time::Duration;
@@ -380,6 +381,13 @@ impl StellarProvider {
 
     /// Initialize a Stellar client for a given URL
     fn initialize_provider(&self, url: &str) -> Result<Client, ProviderError> {
+        // Layer 2 validation: Re-validate URL security as a safety net
+        let allowed_hosts = crate::config::ServerConfig::get_rpc_allowed_hosts();
+        let block_private_ips = crate::config::ServerConfig::get_rpc_block_private_ips();
+        validate_safe_url(url, &allowed_hosts, block_private_ips).map_err(|e| {
+            ProviderError::NetworkConfiguration(format!("RPC URL security validation failed: {e}"))
+        })?;
+
         Client::new(url).map_err(|e| {
             ProviderError::NetworkConfiguration(format!(
                 "Failed to create Stellar RPC client: {e} - URL: '{url}'"
@@ -394,6 +402,9 @@ impl StellarProvider {
         ReqwestClient::builder()
             .timeout(self.timeout_seconds)
             .use_rustls_tls()
+            // Allow only HTTP→HTTPS redirects on same host to handle legitimate protocol upgrades
+            // while preventing SSRF via redirect chains to different hosts
+            .redirect(create_secure_redirect_policy())
             .build()
             .map_err(|e| {
                 ProviderError::NetworkConfiguration(format!(
@@ -1751,7 +1762,11 @@ mod stellar_rpc_tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             ProviderError::NetworkConfiguration(msg) => {
-                assert!(msg.contains("Failed to create Stellar RPC client"));
+                // Error message can be either from URL validation or client creation
+                assert!(
+                    msg.contains("Failed to create Stellar RPC client")
+                        || msg.contains("RPC URL security validation failed")
+                );
             }
             _ => panic!("Expected NetworkConfiguration error"),
         }

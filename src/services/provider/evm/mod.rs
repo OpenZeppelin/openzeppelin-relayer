@@ -44,6 +44,8 @@ use crate::{
     utils::mask_url,
 };
 
+use crate::utils::{create_secure_redirect_policy, validate_safe_url};
+
 #[cfg(test)]
 use mockall::automock;
 
@@ -201,6 +203,13 @@ impl EvmProvider {
 
     /// Initialize a provider for a given URL
     fn initialize_provider(&self, url: &str) -> Result<EvmProviderType, ProviderError> {
+        // Re-validate URL security as a safety net
+        let allowed_hosts = crate::config::ServerConfig::get_rpc_allowed_hosts();
+        let block_private_ips = crate::config::ServerConfig::get_rpc_block_private_ips();
+        validate_safe_url(url, &allowed_hosts, block_private_ips).map_err(|e| {
+            ProviderError::NetworkConfiguration(format!("RPC URL security validation failed: {e}"))
+        })?;
+
         debug!("Initializing provider for URL: {}", mask_url(url));
         let rpc_url = url
             .parse()
@@ -210,6 +219,9 @@ impl EvmProvider {
         let client = ReqwestClientBuilder::new()
             .timeout(Duration::from_secs(self.timeout_seconds))
             .use_rustls_tls()
+            // Allow only HTTP→HTTPS redirects on same host to handle legitimate protocol upgrades
+            // while preventing SSRF via redirect chains to different hosts
+            .redirect(create_secure_redirect_policy())
             .build()
             .map_err(|e| ProviderError::Other(format!("Failed to build HTTP client: {e}")))?;
 

@@ -26,6 +26,7 @@ pub use repository::*;
 mod rpc_config;
 pub use rpc_config::*;
 
+use crate::utils::{sanitize_url_for_error, validate_safe_url};
 use crate::{
     config::ConfigFileNetworkType,
     constants::ID_REGEX,
@@ -1141,10 +1142,28 @@ impl Relayer {
     /// Validates custom RPC URL configurations
     fn validate_custom_rpc_urls(&self) -> Result<(), RelayerValidationError> {
         if let Some(configs) = &self.custom_rpc_urls {
-            for config in configs {
-                reqwest::Url::parse(&config.url)
-                    .map_err(|_| RelayerValidationError::InvalidRpcUrl(config.url.clone()))?;
+            // Get security configuration from environment
+            let allowed_hosts = crate::config::ServerConfig::get_rpc_allowed_hosts();
+            let block_private_ips = crate::config::ServerConfig::get_rpc_block_private_ips();
 
+            for config in configs {
+                // Validate URL format
+                reqwest::Url::parse(&config.url).map_err(|_| {
+                    RelayerValidationError::InvalidRpcUrl(sanitize_url_for_error(&config.url))
+                })?;
+
+                // Validate URL security (SSRF protection)
+                validate_safe_url(&config.url, &allowed_hosts, block_private_ips).map_err(
+                    |err| {
+                        RelayerValidationError::InvalidRpcUrl(format!(
+                            "{}: {}",
+                            sanitize_url_for_error(&config.url),
+                            err
+                        ))
+                    },
+                )?;
+
+                // Validate weight range
                 if config.weight > 100 {
                     return Err(RelayerValidationError::InvalidRpcWeight);
                 }

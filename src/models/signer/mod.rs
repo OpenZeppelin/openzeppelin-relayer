@@ -28,7 +28,11 @@ pub use request::*;
 mod response;
 pub use response::*;
 
-use crate::{constants::ID_REGEX, models::SecretString, utils::base64_decode};
+use crate::{
+    constants::ID_REGEX,
+    models::SecretString,
+    utils::{base64_decode, validate_safe_url},
+};
 use secrets::SecretVec;
 use serde::{Deserialize, Serialize, Serializer};
 use solana_sdk::pubkey::Pubkey;
@@ -258,10 +262,16 @@ pub struct GoogleCloudKmsSignerServiceAccountConfig {
         message = "Client x509 cert URL must be a valid URL"
     ))]
     pub client_x509_cert_url: SecretString,
-    #[validate(custom(
-        function = "validate_secret_string",
-        message = "Universe domain cannot be empty"
-    ))]
+    #[validate(
+        custom(
+            function = "validate_secret_string",
+            message = "Universe domain cannot be empty"
+        ),
+        custom(
+            function = "validate_universe_domain",
+            message = "Universe domain must be a valid Google Cloud KMS domain"
+        )
+    )]
     pub universe_domain: SecretString,
 }
 
@@ -314,6 +324,34 @@ fn validate_secret_url(secret: &SecretString) -> Result<(), validator::Validatio
         }
         reqwest::Url::parse(s).map_err(|_| validator::ValidationError::new("invalid_url"))?;
         Ok(())
+    })
+}
+
+/// Allowed Google Cloud KMS universe domains
+/// These are the legitimate Google Cloud domains where KMS services can be hosted.
+/// See: https://cloud.google.com/kms/docs/reference/rest
+const ALLOWED_KMS_DOMAINS: &[&str] = &[
+    "cloudkms.googleapis.com", // Standard Google Cloud
+];
+
+/// Custom validator for Google Cloud KMS universe_domain to prevent SSRF attacks.
+/// Uses an allowlist approach - only explicitly approved Google Cloud domains are permitted.
+fn validate_universe_domain(secret: &SecretString) -> Result<(), validator::ValidationError> {
+    let value = secret.to_str();
+    // Construct the URL exactly as get_base_url() does in the service
+    let url = if value.starts_with("http") {
+        value.to_string()
+    } else {
+        format!("https://cloudkms.{}", &*value)
+    };
+
+    let allowed_hosts: Vec<String> = ALLOWED_KMS_DOMAINS.iter().map(|s| s.to_string()).collect();
+
+    // Only permit known Google Cloud KMS domains
+    validate_safe_url(&url, &allowed_hosts, true).map_err(|e| {
+        let mut err = validator::ValidationError::new("universe_domain_ssrf");
+        err.message = Some(e.into());
+        err
     })
 }
 
@@ -1184,5 +1222,102 @@ mod tests {
         let result = signer.validate();
         assert!(result.is_ok());
         assert_eq!(signer.signer_type(), SignerType::Cdp);
+    }
+
+    #[test]
+    fn test_validate_universe_domain_valid_default() {
+        // Valid: default Google domain
+        let result = validate_universe_domain(&SecretString::new("googleapis.com"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_universe_domain_valid_explicit_https() {
+        // Valid: explicit HTTPS URL
+        let result =
+            validate_universe_domain(&SecretString::new("https://cloudkms.googleapis.com"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_universe_domain_invalid_aws_metadata() {
+        // Invalid: AWS metadata endpoint
+        let result = validate_universe_domain(&SecretString::new("http://169.254.169.254"));
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(e.code, "universe_domain_ssrf");
+        }
+    }
+
+    #[test]
+    fn test_validate_universe_domain_invalid_gcp_metadata() {
+        // Invalid: GCP metadata endpoint
+        let result =
+            validate_universe_domain(&SecretString::new("http://metadata.google.internal"));
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(e.code, "universe_domain_ssrf");
+        }
+    }
+
+    #[test]
+    fn test_validate_universe_domain_invalid_localhost() {
+        // Invalid: localhost
+        let result = validate_universe_domain(&SecretString::new("http://localhost:8080"));
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(e.code, "universe_domain_ssrf");
+        }
+    }
+
+    #[test]
+    fn test_validate_universe_domain_invalid_private_ip() {
+        // Invalid: private IP addresses
+        let result = validate_universe_domain(&SecretString::new("http://192.168.1.1"));
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(e.code, "universe_domain_ssrf");
+        }
+
+        let result = validate_universe_domain(&SecretString::new("http://10.0.0.1"));
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(e.code, "universe_domain_ssrf");
+        }
+    }
+
+    #[test]
+    fn test_validate_universe_domain_rejects_non_allowlisted_domains() {
+        // Invalid: arbitrary public domains not in the allowlist
+        // This tests the allowlist approach - even valid public URLs are rejected if not in allowlist
+        let result = validate_universe_domain(&SecretString::new("https://evil.com"));
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(e.code, "universe_domain_ssrf");
+        }
+
+        // Invalid: attacker-controlled domain with "googleapis" in subdomain
+        let result = validate_universe_domain(&SecretString::new(
+            "https://cloudkms.googleapis.com.evil.com",
+        ));
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(e.code, "universe_domain_ssrf");
+        }
+
+        // Invalid: similar-looking domain
+        let result =
+            validate_universe_domain(&SecretString::new("https://cloudkms.googleapis.org"));
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(e.code, "universe_domain_ssrf");
+        }
+
+        // Invalid: using domain value directly that constructs non-allowlisted URL
+        let result = validate_universe_domain(&SecretString::new("example.com"));
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(e.code, "universe_domain_ssrf");
+        }
     }
 }
