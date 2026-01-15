@@ -365,20 +365,6 @@ impl TransactionRepository for InMemoryTransactionRepository {
         Ok(count)
     }
 
-    async fn get_oldest_by_status(
-        &self,
-        relayer_id: &str,
-        status: TransactionStatus,
-    ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
-        let store = Self::acquire_lock(&self.store).await?;
-        let oldest = store
-            .values()
-            .filter(|tx| tx.relayer_id == relayer_id && tx.status == status)
-            .min_by(|a, b| a.created_at.cmp(&b.created_at))
-            .cloned();
-        Ok(oldest)
-    }
-
     async fn has_transactions_by_status(
         &self,
         relayer_id: &str,

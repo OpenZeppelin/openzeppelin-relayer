@@ -923,7 +923,7 @@ where
         let address = &self.relayer.address;
         let balance = self.provider.get_balance(address).await?;
 
-        // Use optimized count_by_status - O(1) Redis SCARD instead of fetching all transactions
+        // Use optimized count_by_status
         let pending_statuses = [TransactionStatus::Pending, TransactionStatus::Submitted];
         let pending_transactions_count = self
             .transaction_repository

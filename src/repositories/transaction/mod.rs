@@ -124,15 +124,6 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
         statuses: &[TransactionStatus],
     ) -> Result<u64, RepositoryError>;
 
-    /// Get the oldest transaction by status (sorted by created_at ascending).
-    /// This is an O(log N) operation in Redis using ZRANGE with LIMIT.
-    /// Useful for queue processing where oldest items should be handled first.
-    async fn get_oldest_by_status(
-        &self,
-        relayer_id: &str,
-        status: TransactionStatus,
-    ) -> Result<Option<TransactionRepoModel>, RepositoryError>;
-
     /// Check if any transactions exist with the given status(es).
     /// More efficient than count_by_status when you only need existence check.
     async fn has_transactions_by_status(
@@ -178,7 +169,6 @@ mockall::mock! {
       async fn set_sent_at(&self, tx_id: String, sent_at: String) -> Result<TransactionRepoModel, RepositoryError>;
       async fn set_confirmed_at(&self, tx_id: String, confirmed_at: String) -> Result<TransactionRepoModel, RepositoryError>;
       async fn count_by_status(&self, relayer_id: &str, statuses: &[TransactionStatus]) -> Result<u64, RepositoryError>;
-      async fn get_oldest_by_status(&self, relayer_id: &str, status: TransactionStatus) -> Result<Option<TransactionRepoModel>, RepositoryError>;
       async fn has_transactions_by_status(&self, relayer_id: &str, statuses: &[TransactionStatus]) -> Result<bool, RepositoryError>;
       async fn get_latest_confirmed_transaction(&self, relayer_id: &str) -> Result<Option<TransactionRepoModel>, RepositoryError>;
 
@@ -348,21 +338,6 @@ impl TransactionRepository for TransactionRepositoryStorage {
             }
             TransactionRepositoryStorage::Redis(repo) => {
                 repo.count_by_status(relayer_id, statuses).await
-            }
-        }
-    }
-
-    async fn get_oldest_by_status(
-        &self,
-        relayer_id: &str,
-        status: TransactionStatus,
-    ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
-        match self {
-            TransactionRepositoryStorage::InMemory(repo) => {
-                repo.get_oldest_by_status(relayer_id, status).await
-            }
-            TransactionRepositoryStorage::Redis(repo) => {
-                repo.get_oldest_by_status(relayer_id, status).await
             }
         }
     }

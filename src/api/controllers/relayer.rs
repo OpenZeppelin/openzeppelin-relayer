@@ -316,7 +316,7 @@ where
     let _relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
 
     // Check if the relayer has any active transactions (pending or otherwise)
-    // Use optimized count_by_status - O(1) Redis SCARD instead of fetching all transaction data
+    // Use optimized count_by_status
     let active_transaction_count = state
         .transaction_repository
         .count_by_status(
