@@ -489,26 +489,21 @@ where
 
         let balance_response = self.get_balance().await?;
 
+        // Use optimized count_by_status - O(1) Redis SCARD instead of fetching all transactions
         let pending_statuses = [TransactionStatus::Pending, TransactionStatus::Submitted];
-        let pending_transactions = self
+        let pending_transactions_count = self
             .transaction_repository
-            .find_by_status(&relayer_model.id, &pending_statuses[..])
-            .await
-            .map_err(RelayerError::from)?;
-        let pending_transactions_count = pending_transactions.len() as u64;
-
-        let confirmed_statuses = [TransactionStatus::Confirmed];
-        let confirmed_transactions = self
-            .transaction_repository
-            .find_by_status(&relayer_model.id, &confirmed_statuses[..])
+            .count_by_status(&relayer_model.id, &pending_statuses[..])
             .await
             .map_err(RelayerError::from)?;
 
-        let last_confirmed_transaction_timestamp = confirmed_transactions
-            .iter()
-            .filter_map(|tx| tx.confirmed_at.as_ref())
-            .max()
-            .cloned();
+        // Use optimized get_latest_confirmed_transaction - fetches only the latest instead of all
+        let last_confirmed_transaction_timestamp = self
+            .transaction_repository
+            .get_latest_confirmed_transaction(&relayer_model.id)
+            .await
+            .map_err(RelayerError::from)?
+            .and_then(|tx| tx.confirmed_at);
 
         Ok(RelayerStatus::Stellar {
             balance: balance_response.balance.to_string(),
@@ -1008,15 +1003,17 @@ mod tests {
             })))
         });
 
+        // Mock count_by_status for pending transactions count
         tx_repo_mock
-            .expect_find_by_status()
+            .expect_count_by_status()
             .withf(|relayer_id, statuses| {
                 relayer_id == "test-relayer-id"
                     && statuses == [TransactionStatus::Pending, TransactionStatus::Submitted]
             })
-            .returning(|_, _| Ok(vec![]) as Result<Vec<TransactionRepoModel>, RepositoryError>)
+            .returning(|_, _| Ok(0u64))
             .once();
 
+        // Mock get_latest_confirmed_transaction
         let confirmed_tx = TransactionRepoModel {
             id: "tx1_stellar".to_string(),
             relayer_id: relayer_model.id.clone(),
@@ -1025,13 +1022,9 @@ mod tests {
             ..TransactionRepoModel::default()
         };
         tx_repo_mock
-            .expect_find_by_status()
-            .withf(|relayer_id, statuses| {
-                relayer_id == "test-relayer-id" && statuses == [TransactionStatus::Confirmed]
-            })
-            .returning(move |_, _| {
-                Ok(vec![confirmed_tx.clone()]) as Result<Vec<TransactionRepoModel>, RepositoryError>
-            })
+            .expect_get_latest_confirmed_transaction()
+            .withf(|relayer_id| relayer_id == "test-relayer-id")
+            .returning(move |_| Ok(Some(confirmed_tx.clone())))
             .once();
         let signer = Arc::new(MockStellarSignTrait::new());
         let dex_service = create_mock_dex_service();

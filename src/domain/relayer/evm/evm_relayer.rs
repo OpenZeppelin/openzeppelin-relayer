@@ -316,26 +316,21 @@ where
 
         let balance_response = self.get_balance().await?;
 
+        // Use optimized count_by_status - O(1) Redis SCARD instead of fetching all transactions
         let pending_statuses = [TransactionStatus::Pending, TransactionStatus::Submitted];
-        let pending_transactions = self
+        let pending_transactions_count = self
             .transaction_repository
-            .find_by_status(&relayer_model.id, &pending_statuses[..])
-            .await
-            .map_err(RelayerError::from)?;
-        let pending_transactions_count = pending_transactions.len() as u64;
-
-        let confirmed_statuses = [TransactionStatus::Confirmed];
-        let confirmed_transactions = self
-            .transaction_repository
-            .find_by_status(&relayer_model.id, &confirmed_statuses[..])
+            .count_by_status(&relayer_model.id, &pending_statuses[..])
             .await
             .map_err(RelayerError::from)?;
 
-        let last_confirmed_transaction_timestamp = confirmed_transactions
-            .iter()
-            .filter_map(|tx| tx.confirmed_at.as_ref())
-            .max()
-            .cloned();
+        // Use optimized get_latest_confirmed_transaction - fetches only the latest instead of all
+        let last_confirmed_transaction_timestamp = self
+            .transaction_repository
+            .get_latest_confirmed_transaction(&relayer_model.id)
+            .await
+            .map_err(RelayerError::from)?
+            .and_then(|tx| tx.confirmed_at);
 
         Ok(RelayerStatus::Evm {
             balance: balance_response.balance.to_string(),
@@ -1034,43 +1029,28 @@ mod tests {
             .returning(|_| Box::pin(ready(Ok(U256::from(1000000000000000000u64)))))
             .once();
 
-        let pending_txs_clone = vec![];
+        // Mock count_by_status for pending transactions count
         tx_repo
-            .expect_find_by_status()
+            .expect_count_by_status()
             .withf(|relayer_id, statuses| {
                 relayer_id == "test-relayer-id"
                     && statuses == [TransactionStatus::Pending, TransactionStatus::Submitted]
             })
-            .returning(move |_, _| {
-                Ok(pending_txs_clone.clone()) as Result<Vec<TransactionRepoModel>, RepositoryError>
-            })
+            .returning(|_, _| Ok(0u64))
             .once();
 
-        let confirmed_txs_clone = vec![
-            TransactionRepoModel {
-                id: "tx1".to_string(),
-                relayer_id: relayer_model.id.clone(),
-                status: TransactionStatus::Confirmed,
-                confirmed_at: Some("2023-01-01T12:00:00Z".to_string()),
-                ..TransactionRepoModel::default()
-            },
-            TransactionRepoModel {
-                id: "tx2".to_string(),
-                relayer_id: relayer_model.id.clone(),
-                status: TransactionStatus::Confirmed,
-                confirmed_at: Some("2023-01-01T10:00:00Z".to_string()),
-                ..TransactionRepoModel::default()
-            },
-        ];
+        // Mock get_latest_confirmed_transaction
+        let latest_confirmed_tx = TransactionRepoModel {
+            id: "tx1".to_string(),
+            relayer_id: relayer_model.id.clone(),
+            status: TransactionStatus::Confirmed,
+            confirmed_at: Some("2023-01-01T12:00:00Z".to_string()),
+            ..TransactionRepoModel::default()
+        };
         tx_repo
-            .expect_find_by_status()
-            .withf(|relayer_id, statuses| {
-                relayer_id == "test-relayer-id" && statuses == [TransactionStatus::Confirmed]
-            })
-            .returning(move |_, _| {
-                Ok(confirmed_txs_clone.clone())
-                    as Result<Vec<TransactionRepoModel>, RepositoryError>
-            })
+            .expect_get_latest_confirmed_transaction()
+            .withf(|relayer_id| relayer_id == "test-relayer-id")
+            .returning(move |_| Ok(Some(latest_confirmed_tx.clone())))
             .once();
 
         let relayer = EvmRelayer::new(
@@ -1158,15 +1138,12 @@ mod tests {
             .returning(|_| Box::pin(ready(Ok(U256::from(1000000000000000000u64)))));
 
         tx_repo
-            .expect_find_by_status()
+            .expect_count_by_status()
             .withf(|relayer_id, statuses| {
                 relayer_id == "test-relayer-id"
                     && statuses == [TransactionStatus::Pending, TransactionStatus::Submitted]
             })
-            .returning(|_, _| {
-                Err(RepositoryError::Unknown("DB down".to_string()))
-                    as Result<Vec<TransactionRepoModel>, RepositoryError>
-            })
+            .returning(|_, _| Err(RepositoryError::Unknown("DB down".to_string())))
             .once();
 
         let relayer = EvmRelayer::new(
@@ -1207,29 +1184,21 @@ mod tests {
             .expect_health_check()
             .returning(|| Box::pin(ready(Ok(true))));
 
-        let pending_txs_empty_clone = vec![];
+        // Mock count_by_status for pending transactions count
         tx_repo
-            .expect_find_by_status()
+            .expect_count_by_status()
             .withf(|relayer_id, statuses| {
                 relayer_id == "test-relayer-id"
                     && statuses == [TransactionStatus::Pending, TransactionStatus::Submitted]
             })
-            .returning(move |_, _| {
-                Ok(pending_txs_empty_clone.clone())
-                    as Result<Vec<TransactionRepoModel>, RepositoryError>
-            })
+            .returning(|_, _| Ok(0u64))
             .once();
 
-        let confirmed_txs_empty_clone = vec![];
+        // Mock get_latest_confirmed_transaction - no confirmed transactions
         tx_repo
-            .expect_find_by_status()
-            .withf(|relayer_id, statuses| {
-                relayer_id == "test-relayer-id" && statuses == [TransactionStatus::Confirmed]
-            })
-            .returning(move |_, _| {
-                Ok(confirmed_txs_empty_clone.clone())
-                    as Result<Vec<TransactionRepoModel>, RepositoryError>
-            })
+            .expect_get_latest_confirmed_transaction()
+            .withf(|relayer_id| relayer_id == "test-relayer-id")
+            .returning(|_| Ok(None))
             .once();
 
         let relayer = EvmRelayer::new(

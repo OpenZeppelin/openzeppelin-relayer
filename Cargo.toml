@@ -143,5 +143,9 @@ path = "helpers/generate_openapi.rs"
 name = "verify_eip712"
 path = "helpers/verify_eip712.rs"
 
+[[example]]
+name = "populate_transactions"
+path = "helpers/populate_transactions.rs"
+
 [lib]
 path = "src/lib.rs"

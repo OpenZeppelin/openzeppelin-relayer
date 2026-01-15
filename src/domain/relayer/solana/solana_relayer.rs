@@ -923,26 +923,21 @@ where
         let address = &self.relayer.address;
         let balance = self.provider.get_balance(address).await?;
 
+        // Use optimized count_by_status - O(1) Redis SCARD instead of fetching all transactions
         let pending_statuses = [TransactionStatus::Pending, TransactionStatus::Submitted];
-        let pending_transactions = self
+        let pending_transactions_count = self
             .transaction_repository
-            .find_by_status(&self.relayer.id, &pending_statuses[..])
-            .await
-            .map_err(RelayerError::from)?;
-        let pending_transactions_count = pending_transactions.len() as u64;
-
-        let confirmed_statuses = [TransactionStatus::Confirmed];
-        let confirmed_transactions = self
-            .transaction_repository
-            .find_by_status(&self.relayer.id, &confirmed_statuses[..])
+            .count_by_status(&self.relayer.id, &pending_statuses[..])
             .await
             .map_err(RelayerError::from)?;
 
-        let last_confirmed_transaction_timestamp = confirmed_transactions
-            .iter()
-            .filter_map(|tx| tx.confirmed_at.as_ref())
-            .max()
-            .cloned();
+        // Use optimized get_latest_confirmed_transaction - fetches only the latest instead of all
+        let last_confirmed_transaction_timestamp = self
+            .transaction_repository
+            .get_latest_confirmed_transaction(&self.relayer.id)
+            .await
+            .map_err(RelayerError::from)?
+            .and_then(|tx| tx.confirmed_at);
 
         Ok(RelayerStatus::Solana {
             balance: (balance as u128).to_string(),
@@ -2536,9 +2531,9 @@ mod tests {
             .expect_get_balance()
             .returning(|_| Box::pin(async { Ok(1000000) }));
 
-        // Mock transaction counts
+        // Mock count_by_status for pending transactions count
         tx_repo
-            .expect_find_by_status()
+            .expect_count_by_status()
             .with(
                 eq("test-id"),
                 eq(vec![
@@ -2546,14 +2541,9 @@ mod tests {
                     TransactionStatus::Submitted,
                 ]),
             )
-            .returning(|_, _| {
-                Ok(vec![
-                    TransactionRepoModel::default(),
-                    TransactionRepoModel::default(),
-                ])
-            });
+            .returning(|_, _| Ok(2u64));
 
-        // Mock recent confirmed transaction
+        // Mock get_latest_confirmed_transaction
         let recent_tx = TransactionRepoModel {
             id: "recent-tx".to_string(),
             relayer_id: "test-id".to_string(),
@@ -2564,9 +2554,9 @@ mod tests {
             ..Default::default()
         };
         tx_repo
-            .expect_find_by_status()
-            .with(eq("test-id"), eq(vec![TransactionStatus::Confirmed]))
-            .returning(move |_, _| Ok(vec![recent_tx.clone()]));
+            .expect_get_latest_confirmed_transaction()
+            .with(eq("test-id"))
+            .returning(move |_| Ok(Some(recent_tx.clone())));
 
         let ctx = TestCtx {
             tx_repo: Arc::new(tx_repo),
@@ -2633,9 +2623,9 @@ mod tests {
             .expect_get_balance()
             .returning(|_| Box::pin(async { Ok(500000) }));
 
-        // Mock transaction counts
+        // Mock count_by_status for pending transactions count
         tx_repo
-            .expect_find_by_status()
+            .expect_count_by_status()
             .with(
                 eq("test-id"),
                 eq(vec![
@@ -2643,12 +2633,13 @@ mod tests {
                     TransactionStatus::Submitted,
                 ]),
             )
-            .returning(|_, _| Ok(vec![]));
+            .returning(|_, _| Ok(0u64));
 
+        // Mock get_latest_confirmed_transaction - no confirmed transactions
         tx_repo
-            .expect_find_by_status()
-            .with(eq("test-id"), eq(vec![TransactionStatus::Confirmed]))
-            .returning(|_, _| Ok(vec![]));
+            .expect_get_latest_confirmed_transaction()
+            .with(eq("test-id"))
+            .returning(|_| Ok(None));
 
         let ctx = TestCtx {
             tx_repo: Arc::new(tx_repo),
