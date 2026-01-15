@@ -873,8 +873,14 @@ mod tests {
             "Found transaction ID: {}, created_at: {}",
             found_tx.id, found_tx.created_at
         );
-        println!("Expected oldest (tx1): {}, created_at: {}", tx1.id, tx1.created_at);
-        println!("Expected newest (tx3): {}, created_at: {}", tx3.id, tx3.created_at);
+        println!(
+            "Expected oldest (tx1): {}, created_at: {}",
+            tx1.id, tx1.created_at
+        );
+        println!(
+            "Expected newest (tx3): {}, created_at: {}",
+            tx3.id, tx3.created_at
+        );
 
         // Since find_by_status returns newest first and we use .next(),
         // we should get tx3 (newest), not tx1 (oldest)
