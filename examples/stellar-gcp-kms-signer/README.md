@@ -1,4 +1,4 @@
-# Using Google Cloud KMS for Secure EVM Transaction Signing in OpenZeppelin Relayer
+# Using Google Cloud KMS for Secure Stellar Transaction Signing in OpenZeppelin Relayer
 
 This example demonstrates how to use Google Cloud KMS hosted private key to securely sign Stellar transactions in OpenZeppelin Relayer.
 
