@@ -5,7 +5,7 @@
 use chrono::Utc;
 use tracing::{info, warn};
 
-use super::{is_final_state, utils::is_bad_sequence_error, StellarRelayerTransaction};
+use super::{utils::is_bad_sequence_error, StellarRelayerTransaction};
 use crate::{
     constants::STELLAR_BAD_SEQUENCE_RETRY_DELAY_SECONDS,
     jobs::JobProducerTrait,
@@ -30,20 +30,36 @@ where
 {
     /// Main submission method with robust error handling.
     /// Unlike prepare, submit doesn't claim lanes but still needs proper error handling.
+    ///
+    /// This method is idempotent - it only submits if the transaction is in Sent status.
+    /// Multiple submit jobs can be safely queued; only the first one to run will submit.
     pub async fn submit_transaction_impl(
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
         info!(tx_id = %tx.id, status = ?tx.status, "submitting stellar transaction");
 
-        // Defensive check: if transaction is in a final state or unexpected state, don't retry
-        if is_final_state(&tx.status) {
-            warn!(
+        // Idempotency check: only submit if transaction is in Sent status
+        // This allows multiple submit jobs to be queued safely
+        if tx.status != TransactionStatus::Sent {
+            info!(
                 tx_id = %tx.id,
                 status = ?tx.status,
-                "transaction already in final state, skipping submission"
+                "transaction not in Sent status, skipping submission"
             );
             return Ok(tx);
+        }
+
+        // Check if transaction has expired before attempting submission
+        if self.is_transaction_expired(&tx)? {
+            info!(
+                tx_id = %tx.id,
+                valid_until = ?tx.valid_until,
+                "transaction has expired, marking as Expired"
+            );
+            return self
+                .mark_as_expired(tx, "Transaction time_bounds expired".to_string())
+                .await;
         }
 
         // Call core submission logic with error handling
@@ -238,12 +254,35 @@ mod tests {
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
 
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Must be Sent for idempotent submit
             if let NetworkTransactionData::Stellar(ref mut d) = tx.network_data {
                 d.signatures.push(dummy_signature());
+                d.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+                // Valid XDR
             }
 
             let res = handler.submit_transaction_impl(tx).await.unwrap();
             assert_eq!(res.status, TransactionStatus::Submitted);
+        }
+
+        #[tokio::test]
+        async fn submit_transaction_skips_non_sent_status() {
+            let relayer = create_test_relayer();
+            let mocks = default_test_mocks();
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+
+            // Transaction in Pending status should be skipped
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Pending;
+
+            let res = handler.submit_transaction_impl(tx.clone()).await.unwrap();
+            assert_eq!(res.status, TransactionStatus::Pending); // Unchanged
+
+            // Transaction in Submitted status should be skipped
+            tx.status = TransactionStatus::Submitted;
+            let res = handler.submit_transaction_impl(tx.clone()).await.unwrap();
+            assert_eq!(res.status, TransactionStatus::Submitted); // Unchanged
         }
 
         #[tokio::test]
@@ -283,9 +322,11 @@ mod tests {
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Must be Sent for idempotent submit
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
                 data.sequence_number = Some(42); // Set sequence number
+                data.signed_envelope_xdr = Some("test-xdr".to_string()); // Required for submission
             }
 
             let res = handler.submit_transaction_impl(tx).await;
@@ -340,9 +381,11 @@ mod tests {
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Must be Sent for idempotent submit
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
                 data.sequence_number = Some(42); // Set sequence number
+                data.signed_envelope_xdr = Some("test-xdr".to_string()); // Required for submission
             }
 
             let res = handler.submit_transaction_impl(tx).await;
@@ -358,6 +401,7 @@ mod tests {
 
             // Create a transaction with signed_envelope_xdr set
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Must be Sent for idempotent submit
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
                 // Build and store the signed envelope XDR
@@ -432,8 +476,11 @@ mod tests {
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
 
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Must be Sent for idempotent submit
             if let NetworkTransactionData::Stellar(ref mut d) = tx.network_data {
                 d.signatures.push(dummy_signature());
+                d.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+                // Valid XDR
             }
 
             let res = handler.resubmit_transaction_impl(tx).await.unwrap();
@@ -496,9 +543,11 @@ mod tests {
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Must be Sent for idempotent submit
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
                 data.sequence_number = Some(42); // Set sequence number
+                data.signed_envelope_xdr = Some("test-xdr".to_string()); // Required for submission
             }
 
             let res = handler.submit_transaction_impl(tx).await;
@@ -581,9 +630,12 @@ mod tests {
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Must be Sent for idempotent submit
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
                 data.sequence_number = Some(42);
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+                // Valid XDR
             }
 
             let result = handler.submit_transaction_impl(tx).await;

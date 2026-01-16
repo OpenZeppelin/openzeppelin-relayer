@@ -7,10 +7,12 @@ use soroban_rs::xdr::{Error, Hash, Limits, WriteXdr};
 use tracing::{debug, info, warn};
 
 use super::{is_final_state, StellarRelayerTransaction};
-use crate::constants::get_stellar_stuck_sent_threshold;
+use crate::constants::{get_stellar_max_sent_lifetime, get_stellar_resend_timeout};
 use crate::domain::transaction::stellar::prepare::common::send_submit_transaction_job;
 use crate::domain::transaction::stellar::utils::extract_return_value_from_meta;
+use crate::domain::transaction::stellar::utils::extract_time_bounds;
 use crate::domain::transaction::util::get_age_since_created;
+use crate::domain::xdr_utils::parse_transaction_xdr;
 use crate::{
     domain::is_unsubmitted_transaction,
     jobs::JobProducerTrait,
@@ -105,11 +107,31 @@ where
                     return Err(e);
                 }
 
-                // For unsubmitted transactions (Pending/Sent), check if stuck in Sent status
+                // Recover stuck Sent transactions
                 if tx.status == TransactionStatus::Sent {
                     if let Ok(age) = get_age_since_created(&tx) {
-                        if age > get_stellar_stuck_sent_threshold() {
-                            return self.recover_stuck_sent_transaction(tx).await;
+                        if self.is_transaction_expired(&tx)? {
+                            info!(tx_id = %tx.id, valid_until = ?tx.valid_until, "Sent transaction has expired");
+                            return self
+                                .mark_as_expired(tx, "Transaction time_bounds expired".to_string())
+                                .await;
+                        }
+
+                        if age > get_stellar_max_sent_lifetime() {
+                            warn!(tx_id = %tx.id, age_minutes = age.num_minutes(),
+                                "Sent transaction exceeded max lifetime, marking as Failed");
+                            return self
+                                .mark_as_failed(
+                                    tx,
+                                    "Transaction stuck in Sent status for too long".to_string(),
+                                )
+                                .await;
+                        }
+
+                        if age > get_stellar_resend_timeout() {
+                            info!(tx_id = %tx.id, age_seconds = age.num_seconds(),
+                                "re-enqueueing submit job for stuck Sent transaction");
+                            send_submit_transaction_job(self.job_producer(), &tx, None).await?;
                         }
                     }
                 }
@@ -161,7 +183,7 @@ where
     }
 
     /// Mark a transaction as failed with a reason
-    async fn mark_as_failed(
+    pub(super) async fn mark_as_failed(
         &self,
         tx: TransactionRepoModel,
         reason: String,
@@ -186,64 +208,66 @@ where
         Ok(failed_tx)
     }
 
-    /// Maximum number of recovery attempts for stuck Sent transactions
-    const MAX_RECOVERY_ATTEMPTS: u32 = 3;
-
-    /// Recovers a transaction stuck in Sent status by re-enqueueing the submit job.
-    /// Uses noop_count to track recovery attempts and prevent infinite loops.
-    async fn recover_stuck_sent_transaction(
+    /// Mark a transaction as expired with a reason
+    pub(super) async fn mark_as_expired(
         &self,
         tx: TransactionRepoModel,
+        reason: String,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        let recovery_count = tx.noop_count.unwrap_or(0);
+        info!(tx_id = %tx.id, reason = %reason, "marking transaction as expired");
 
-        // Prevent infinite re-enqueue loops
-        if recovery_count >= Self::MAX_RECOVERY_ATTEMPTS {
-            warn!(
-                tx_id = %tx.id,
-                recovery_count = recovery_count,
-                "max recovery attempts reached for stuck Sent transaction"
-            );
-            return self
-                .mark_as_failed(
-                    tx,
-                    format!(
-                        "Transaction stuck in Sent status - exceeded {} recovery attempts",
-                        Self::MAX_RECOVERY_ATTEMPTS
-                    ),
-                )
-                .await;
+        let update_request = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Expired),
+            status_reason: Some(reason),
+            ..Default::default()
+        };
+
+        let expired_tx = self
+            .finalize_transaction_state(tx.id.clone(), update_request)
+            .await?;
+
+        // Try to enqueue next transaction
+        if let Err(e) = self.enqueue_next_pending_transaction(&tx.id).await {
+            warn!(error = %e, "failed to enqueue next pending transaction after expiration");
         }
 
-        warn!(
-            tx_id = %tx.id,
-            recovery_count = recovery_count,
-            "recovering stuck Sent transaction"
-        );
+        Ok(expired_tx)
+    }
 
+    /// Check if expired: valid_until > XDR time_bounds > false
+    pub(super) fn is_transaction_expired(
+        &self,
+        tx: &TransactionRepoModel,
+    ) -> Result<bool, TransactionError> {
+        if let Some(valid_until_str) = &tx.valid_until {
+            return Ok(Self::is_valid_until_string_expired(valid_until_str));
+        }
+
+        // Fallback: parse signed_envelope_xdr for legacy rows
         let stellar_data = tx.network_data.get_stellar_transaction_data()?;
+        if let Some(signed_xdr) = &stellar_data.signed_envelope_xdr {
+            if let Ok(envelope) = parse_transaction_xdr(signed_xdr, true) {
+                if let Some(tb) = extract_time_bounds(&envelope) {
+                    if tb.max_time.0 == 0 {
+                        return Ok(false); // unbounded
+                    }
+                    return Ok(Utc::now().timestamp() as u64 > tb.max_time.0);
+                }
+            }
+        }
 
-        if stellar_data.signed_envelope_xdr.is_some() {
-            // Increment recovery counter before re-enqueueing
-            let update_req = TransactionUpdateRequest {
-                noop_count: Some(recovery_count + 1),
-                ..Default::default()
-            };
-            self.transaction_repository()
-                .partial_update(tx.id.clone(), update_req)
-                .await?;
+        Ok(false)
+    }
 
-            // Re-enqueue submit job
-            info!(tx_id = %tx.id, "re-enqueueing submit job for stuck transaction");
-            send_submit_transaction_job(self.job_producer(), &tx, None).await?;
-            Ok(tx)
-        } else {
-            // No signed envelope - cannot submit, mark as failed
-            self.mark_as_failed(
-                tx,
-                "Transaction stuck in Sent status without signed envelope".to_string(),
-            )
-            .await
+    /// Check if a valid_until string has expired (RFC3339 or numeric timestamp).
+    fn is_valid_until_string_expired(valid_until: &str) -> bool {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(valid_until) {
+            return Utc::now() > dt.with_timezone(&Utc);
+        }
+        match valid_until.parse::<i64>() {
+            Ok(0) => false,
+            Ok(ts) => Utc::now().timestamp() > ts,
+            Err(_) => false,
         }
     }
 
@@ -1164,37 +1188,24 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn test_stuck_sent_transaction_with_signed_xdr_triggers_recovery() {
-            // Transaction in Sent status for > 5 minutes with signed XDR should re-enqueue submit
+        async fn test_stuck_sent_transaction_reenqueues_submit_job() {
+            // Transaction in Sent status for > 5 minutes should re-enqueue submit job
+            // The submit handler (not status checker) will handle signed XDR validation
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();
 
             let mut tx = create_test_transaction(&relayer.id);
             tx.id = "tx-stuck-with-xdr".to_string();
             tx.status = TransactionStatus::Sent;
-            tx.noop_count = Some(0);
             // Created 10 minutes ago - definitely stuck
             tx.created_at = (Utc::now() - Duration::minutes(10)).to_rfc3339();
-            // No hash but has signed XDR
+            // No hash (simulating stuck state)
             if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx.network_data {
                 stellar_data.hash = None;
                 stellar_data.signed_envelope_xdr = Some("AAAA...signed...".to_string());
             }
 
-            // Should increment noop_count
-            mocks
-                .tx_repo
-                .expect_partial_update()
-                .withf(|_id, update| update.noop_count == Some(1))
-                .times(1)
-                .returning(|id, _| {
-                    let mut updated = create_test_transaction("test");
-                    updated.id = id;
-                    updated.noop_count = Some(1);
-                    Ok(updated)
-                });
-
-            // Should re-enqueue submit job
+            // Should re-enqueue submit job (idempotent - submit handler will validate)
             mocks
                 .job_producer
                 .expect_produce_submit_transaction_job()
@@ -1202,90 +1213,37 @@ mod tests {
                 .returning(|_, _| Box::pin(async { Ok(()) }));
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
-            let result = handler.handle_transaction_status_impl(tx).await;
+            let result = handler.handle_transaction_status_impl(tx.clone()).await;
 
             assert!(result.is_ok());
+            let returned_tx = result.unwrap();
+            // Transaction status unchanged - submit job will handle the actual submission
+            assert_eq!(returned_tx.status, TransactionStatus::Sent);
         }
 
         #[tokio::test]
-        async fn test_stuck_sent_transaction_without_signed_xdr_marks_failed() {
-            // Transaction in Sent status for > 5 minutes WITHOUT signed XDR should mark as Failed
+        async fn test_stuck_sent_transaction_expired_marks_expired() {
+            // Expired transaction should be marked as Expired
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();
 
             let mut tx = create_test_transaction(&relayer.id);
-            tx.id = "tx-stuck-no-xdr".to_string();
+            tx.id = "tx-expired".to_string();
             tx.status = TransactionStatus::Sent;
-            tx.noop_count = Some(0);
-            // Created 10 minutes ago
+            // Created 10 minutes ago - definitely stuck
             tx.created_at = (Utc::now() - Duration::minutes(10)).to_rfc3339();
-            // No hash AND no signed XDR
-            if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx.network_data {
-                stellar_data.hash = None;
-                stellar_data.signed_envelope_xdr = None;
-            }
-
-            // Should mark as Failed
-            mocks
-                .tx_repo
-                .expect_partial_update()
-                .withf(|_id, update| update.status == Some(TransactionStatus::Failed))
-                .times(1)
-                .returning(|id, update| {
-                    let mut updated = create_test_transaction("test");
-                    updated.id = id;
-                    updated.status = update.status.unwrap();
-                    updated.status_reason = update.status_reason.clone();
-                    Ok(updated)
-                });
-
-            // Notification for failure
-            mocks
-                .job_producer
-                .expect_produce_send_notification_job()
-                .times(1)
-                .returning(|_, _| Box::pin(async { Ok(()) }));
-
-            // Try to enqueue next pending
-            mocks
-                .tx_repo
-                .expect_find_by_status()
-                .returning(|_, _| Ok(vec![]));
-
-            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
-            let result = handler.handle_transaction_status_impl(tx).await;
-
-            assert!(result.is_ok());
-            let failed_tx = result.unwrap();
-            assert_eq!(failed_tx.status, TransactionStatus::Failed);
-            assert!(failed_tx
-                .status_reason
-                .as_ref()
-                .unwrap()
-                .contains("without signed envelope"));
-        }
-
-        #[tokio::test]
-        async fn test_stuck_sent_transaction_max_recovery_attempts_marks_failed() {
-            // Transaction at max recovery attempts should mark as Failed
-            let relayer = create_test_relayer();
-            let mut mocks = default_test_mocks();
-
-            let mut tx = create_test_transaction(&relayer.id);
-            tx.id = "tx-max-recovery".to_string();
-            tx.status = TransactionStatus::Sent;
-            tx.noop_count = Some(3); // Already at max (MAX_RECOVERY_ATTEMPTS = 3)
-            tx.created_at = (Utc::now() - Duration::minutes(10)).to_rfc3339();
+            // Set valid_until to a past time (expired)
+            tx.valid_until = Some((Utc::now() - Duration::minutes(5)).to_rfc3339());
             if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx.network_data {
                 stellar_data.hash = None;
                 stellar_data.signed_envelope_xdr = Some("AAAA...signed...".to_string());
             }
 
-            // Should mark as Failed (not try to re-enqueue)
+            // Should mark as Expired
             mocks
                 .tx_repo
                 .expect_partial_update()
-                .withf(|_id, update| update.status == Some(TransactionStatus::Failed))
+                .withf(|_id, update| update.status == Some(TransactionStatus::Expired))
                 .times(1)
                 .returning(|id, update| {
                     let mut updated = create_test_transaction("test");
@@ -1295,13 +1253,13 @@ mod tests {
                     Ok(updated)
                 });
 
-            // Should NOT try to re-enqueue submit job
+            // Should NOT try to re-enqueue submit job (expired)
             mocks
                 .job_producer
                 .expect_produce_submit_transaction_job()
                 .never();
 
-            // Notification for failure
+            // Notification for expiration
             mocks
                 .job_producer
                 .expect_produce_send_notification_job()
@@ -1318,13 +1276,77 @@ mod tests {
             let result = handler.handle_transaction_status_impl(tx).await;
 
             assert!(result.is_ok());
-            let failed_tx = result.unwrap();
-            assert_eq!(failed_tx.status, TransactionStatus::Failed);
-            assert!(failed_tx
+            let expired_tx = result.unwrap();
+            assert_eq!(expired_tx.status, TransactionStatus::Expired);
+            assert!(expired_tx
                 .status_reason
                 .as_ref()
                 .unwrap()
-                .contains("exceeded 3 recovery attempts"));
+                .contains("expired"));
+        }
+    }
+
+    mod is_valid_until_expired_tests {
+        use super::*;
+        use crate::{
+            jobs::MockJobProducerTrait,
+            repositories::{
+                MockRelayerRepository, MockTransactionCounterTrait, MockTransactionRepository,
+            },
+            services::{
+                provider::MockStellarProviderTrait, signer::MockSigner,
+                stellar_dex::MockStellarDexServiceTrait,
+            },
+        };
+        use chrono::{Duration, Utc};
+
+        // Type alias for testing static methods
+        type TestHandler = StellarRelayerTransaction<
+            MockRelayerRepository,
+            MockTransactionRepository,
+            MockJobProducerTrait,
+            MockSigner,
+            MockStellarProviderTrait,
+            MockTransactionCounterTrait,
+            MockStellarDexServiceTrait,
+        >;
+
+        #[test]
+        fn test_rfc3339_expired() {
+            let past = (Utc::now() - Duration::hours(1)).to_rfc3339();
+            assert!(TestHandler::is_valid_until_string_expired(&past));
+        }
+
+        #[test]
+        fn test_rfc3339_not_expired() {
+            let future = (Utc::now() + Duration::hours(1)).to_rfc3339();
+            assert!(!TestHandler::is_valid_until_string_expired(&future));
+        }
+
+        #[test]
+        fn test_numeric_timestamp_expired() {
+            let past_timestamp = (Utc::now() - Duration::hours(1)).timestamp().to_string();
+            assert!(TestHandler::is_valid_until_string_expired(&past_timestamp));
+        }
+
+        #[test]
+        fn test_numeric_timestamp_not_expired() {
+            let future_timestamp = (Utc::now() + Duration::hours(1)).timestamp().to_string();
+            assert!(!TestHandler::is_valid_until_string_expired(
+                &future_timestamp
+            ));
+        }
+
+        #[test]
+        fn test_zero_timestamp_unbounded() {
+            // Zero means unbounded in Stellar
+            assert!(!TestHandler::is_valid_until_string_expired("0"));
+        }
+
+        #[test]
+        fn test_invalid_format_not_expired() {
+            // Invalid format should be treated as not expired (conservative)
+            assert!(!TestHandler::is_valid_until_string_expired("not-a-date"));
         }
     }
 }

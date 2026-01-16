@@ -41,12 +41,20 @@ pub fn get_stellar_sponsored_transaction_validity_duration() -> Duration {
 }
 
 // Recovery thresholds
-/// Threshold for detecting stuck Sent transactions (5 minutes)
-/// If a transaction remains in Sent status longer than this without a hash,
-/// the status checker will attempt recovery by re-enqueueing the submit job.
-pub const STELLAR_STUCK_SENT_THRESHOLD_MINUTES: i64 = 5;
+/// Minimum time before re-queuing submit job for stuck Sent transactions (30 seconds)
+/// Gives the original submit job time to complete before attempting recovery.
+pub const STELLAR_RESEND_TIMEOUT_SECONDS: i64 = 30;
 
-/// Get stuck sent transaction threshold duration
-pub fn get_stellar_stuck_sent_threshold() -> Duration {
-    Duration::minutes(STELLAR_STUCK_SENT_THRESHOLD_MINUTES)
+/// Maximum lifetime for a Sent transaction before marking as Failed (30 minutes)
+/// Safety net for transactions without time bounds - prevents infinite retries.
+pub const STELLAR_MAX_SENT_LIFETIME_MINUTES: i64 = 30;
+
+/// Get resend timeout duration for stuck Sent transactions
+pub fn get_stellar_resend_timeout() -> Duration {
+    Duration::seconds(STELLAR_RESEND_TIMEOUT_SECONDS)
+}
+
+/// Get max sent lifetime duration
+pub fn get_stellar_max_sent_lifetime() -> Duration {
+    Duration::minutes(STELLAR_MAX_SENT_LIFETIME_MINUTES)
 }

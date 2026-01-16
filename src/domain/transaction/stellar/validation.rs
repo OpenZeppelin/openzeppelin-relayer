@@ -811,7 +811,8 @@ impl StellarTransactionValidator {
             let max_time = bounds.max_time.0;
 
             // Check if transaction has expired
-            if now > max_time {
+            // max_time == 0 means unbounded in Stellar (no upper limit)
+            if max_time != 0 && now > max_time {
                 return Err(StellarTransactionValidationError::ValidationError(format!(
                     "Transaction has expired: max_time={max_time}, current_time={now}"
                 )));
@@ -849,6 +850,14 @@ impl StellarTransactionValidator {
         let time_bounds = extract_time_bounds(envelope);
 
         if let Some(bounds) = time_bounds {
+            // max_time == 0 means unbounded in Stellar (no upper limit)
+            // For duration validation, we require a bounded max_time
+            if bounds.max_time.0 == 0 {
+                return Err(StellarTransactionValidationError::ValidationError(
+                    "Transaction has unbounded validity (max_time=0), but bounded validity is required".to_string(),
+                ));
+            }
+
             let max_time =
                 DateTime::from_timestamp(bounds.max_time.0 as i64, 0).ok_or_else(|| {
                     StellarTransactionValidationError::ValidationError(
