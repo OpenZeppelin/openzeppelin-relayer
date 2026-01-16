@@ -176,19 +176,24 @@ curl -X POST http://localhost:8080/api/v1/relayers/your-relayer-id/transactions 
   -H "Content-Type: application/json" \
   -H "AUTHORIZATION: Bearer YOUR_API_KEY" \
   -d '{
-    "value": 1,
-    "data": "0x",
-    "to": "0x742d35cc6604c532532db3ae0f4d03e7c7b17e3e",
-    "gas_limit": 21000,
-    "speed": "average"
+    "network": "testnet",
+    "operations": [
+      {
+        "type": "payment",
+        "destination": "GDESTINATION_ADDRESS_HERE",
+        "asset": {"type": "native"},
+        "amount": 1000000
+      }
+    ],
+    "memo": {"type": "text", "value": "Test payment"}
   }'
 ```
 
 **What this does:**
 
-- Creates a transaction sending 1 wei to the specified address
+- Creates a payment transaction sending 0.1 XLM (1,000,000 stroops) to the specified Stellar address
 - Uses Google Cloud KMS to sign the transaction
-- Submits the signed transaction to the network
+- Submits the signed transaction to the Stellar testnet
 - Returns transaction details including the transaction hash
 
 ### Troubleshooting
