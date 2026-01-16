@@ -1087,7 +1087,8 @@ pub fn extract_time_bounds(envelope: &TransactionEnvelope) -> Option<&TimeBounds
         TransactionEnvelope::TxV0(e) => e.tx.time_bounds.as_ref(),
         TransactionEnvelope::Tx(e) => match &e.tx.cond {
             Preconditions::Time(tb) => Some(tb),
-            _ => None,
+            Preconditions::V2(v2) => v2.time_bounds.as_ref(),
+            Preconditions::None => None,
         },
         TransactionEnvelope::TxFeeBump(fb) => {
             // Extract from inner transaction
@@ -1095,7 +1096,8 @@ pub fn extract_time_bounds(envelope: &TransactionEnvelope) -> Option<&TimeBounds
                 soroban_rs::xdr::FeeBumpTransactionInnerTx::Tx(inner_tx) => {
                     match &inner_tx.tx.cond {
                         Preconditions::Time(tb) => Some(tb),
-                        _ => None,
+                        Preconditions::V2(v2) => v2.time_bounds.as_ref(),
+                        Preconditions::None => None,
                     }
                 }
             }
