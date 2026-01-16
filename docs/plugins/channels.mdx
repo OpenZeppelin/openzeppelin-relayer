@@ -31,11 +31,11 @@ pnpm add @openzeppelin/relayer-plugin-channels
 The client supports two connection modes that are automatically detected based on configuration:
 
 ```typescript
-import { ChannelsClient } from '@openzeppelin/relayer-plugin-channels';
+import { ChannelsClient } from "@openzeppelin/relayer-plugin-channels";
 
 // Direct HTTP connection to Channels service
 const directClient = new ChannelsClient({
-  baseUrl: 'https://channels.openzeppelin.com', // Channels service URL
+  baseUrl: "https://channels.openzeppelin.com", // Channels service URL
   apiKey: process.env.CHANNELS_API_KEY, // Service API key
   adminSecret: process.env.CHANNELS_ADMIN, // Optional: for management
   timeout: 30000, // Optional: request timeout
@@ -43,10 +43,10 @@ const directClient = new ChannelsClient({
 
 // Connection via OpenZeppelin Relayer plugin
 const relayerClient = new ChannelsClient({
-  pluginId: 'channels-plugin', // Plugin identifier (triggers relayer mode)
-  baseUrl: 'http://localhost:8080', // Relayer URL
+  pluginId: "channels-plugin", // Plugin identifier (triggers relayer mode)
+  baseUrl: "http://localhost:8080", // Relayer URL
   apiKey: process.env.RELAYER_API_KEY, // Relayer API key (sent as Bearer AND custom header)
-  apiKeyHeader: 'x-api-key', // Optional: header for fee tracking (default: x-api-key)
+  apiKeyHeader: "x-api-key", // Optional: header for fee tracking (default: x-api-key)
   adminSecret: process.env.CHANNELS_ADMIN, // Optional: for management
 });
 ```
@@ -58,16 +58,16 @@ Channels provides separate methods for different transaction types:
 ```typescript
 // Submit signed transaction (XDR)
 const result = await client.submitTransaction({
-  xdr: 'AAAAAgAAAABQEp+s8xGPrF...', // Complete signed envelope
+  xdr: "AAAAAgAAAABQEp+s8xGPrF...", // Complete signed envelope
 });
 
 // Submit Soroban transaction (func + auth)
 const result = await client.submitSorobanTransaction({
-  func: 'AAAABAAAAAEAAAAGc3ltYm9s...', // Host function XDR
-  auth: ['AAAACAAAAAEAAAA...', 'AAAACAAAAAEAAAB...'], // Detached auth entries
+  func: "AAAABAAAAAEAAAAGc3ltYm9s...", // Host function XDR
+  auth: ["AAAACAAAAAEAAAA...", "AAAACAAAAAEAAAB..."], // Detached auth entries
 });
 
-console.log('Transaction:', result.transactionId, result.hash, result.status);
+console.log("Transaction:", result.transactionId, result.hash, result.status);
 ```
 
 ### Managing Channel Accounts
@@ -77,15 +77,19 @@ For managing channel accounts, the SDK provides the following methods:
 ```typescript
 // List configured channel accounts
 const accounts = await client.listChannelAccounts();
-console.log('Channel accounts:', accounts.relayerIds);
+console.log("Channel accounts:", accounts.relayerIds);
 
 // Update channel accounts (requires adminSecret)
-const result = await client.setChannelAccounts(['channel-001', 'channel-002', 'channel-003']);
-console.log('Update successful:', result.ok, result.appliedRelayerIds);
+const result = await client.setChannelAccounts([
+  "channel-001",
+  "channel-002",
+  "channel-003",
+]);
+console.log("Update successful:", result.ok, result.appliedRelayerIds);
 
 // Query fee usage (requires adminSecret)
-const usage = await client.getFeeUsage('client-api-key');
-console.log('Fee usage:', usage);
+const usage = await client.getFeeUsage("client-api-key");
+console.log("Fee usage:", usage);
 ```
 
 ### Example Scripts
@@ -134,7 +138,7 @@ mkdir -p plugins/channels
 Create `plugins/channels/index.ts`:
 
 ```typescript
-export { handler } from '@openzeppelin/relayer-plugin-channels';
+export { handler } from "@openzeppelin/relayer-plugin-channels";
 ```
 
 ## Configuration
@@ -436,24 +440,51 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels-plugin/call \
 
 Use the `@stellar/stellar-sdk` to generate the required XDR values:
 
+#### Who Signs the Transaction?
+
+The transaction must be signed by **the user's keypair** (the account invoking the smart contract), **not** the channel or fund accounts. Channels handles fee payment separately through fee bumping - your transaction signature authorizes the contract call, while the fund account pays the network fees.
+
+For Soroban contract calls:
+
+- **Full XDR mode**: Sign the entire transaction envelope with the invoker's key
+- **func + auth mode**: Sign only the authorization entries with the invoker's key
+
+#### Tools for Creating and Signing Transactions
+
+While you can use the Stellar SDK programmatically, several tools make the process easier:
+
+**[Stellar Laboratory](https://lab.stellar.org/)** - Official web-based tool for:
+
+- Building and signing transactions visually
+- Inspecting and decoding XDR data
+
+**Popular Stellar Wallets with XDR Signing Support:**
+
+- **[Freighter](https://www.freighter.app/)** - Browser extension wallet with Soroban support and XDR signing
+- **[Albedo](https://albedo.link/)** - Web-based wallet supporting transaction signing and XDR export
+- **[Lobstr](https://lobstr.co/)** - Mobile and web wallet with transaction signing capabilities
+
+These wallets can sign transactions and export the signed XDR for submission to Channels.
+
 #### Full Transaction Envelope XDR
 
 ```typescript
-import { Networks, TransactionBuilder, rpc } from '@stellar/stellar-sdk';
+import { Networks, TransactionBuilder, rpc } from "@stellar/stellar-sdk";
 
 // Build your transaction
 const tx = new TransactionBuilder(account, {
-  fee: '100',
+  fee: "100",
   networkPassphrase: Networks.TESTNET,
 })
   .addOperation(/* Operation.invokeHostFunction from Contract.call(...) */)
   .setTimeout(30)
   .build();
 
-// Sign the transaction
-tx.sign(keypair);
+// Sign with the USER's keypair (the account invoking the contract)
+// This is NOT the channel or fund account - it's your end user's key
+tx.sign(userKeypair);
 
-// Export base64 envelope XDR
+// Export base64 envelope XDR for submission to Channels
 const envelopeXdr = tx.toXDR();
 ```
 
