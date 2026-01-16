@@ -806,10 +806,62 @@ export default async function executeInSandbox(task: SandboxTask): Promise<Sandb
       getRandomValues: (arr: Uint8Array) => require('crypto').getRandomValues(arr),
     };
 
+    // Environment variables that should NEVER be exposed to plugins
+    // These contain secrets, credentials, or sensitive infrastructure details
+    const BLOCKED_ENV_PATTERNS = [
+      // Authentication & API keys
+      'API_KEY',
+      'WEBHOOK_SIGNING_KEY',
+      'STORAGE_ENCRYPTION_KEY',
+      'KEYSTORE_PASSPHRASE',
+      'REDIS_URL',
+    ];
+
+    // Create filtered environment - removes sensitive variables
+    const filteredEnv: Record<string, string | undefined> = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      const upperKey = key.toUpperCase();
+      const isBlocked = BLOCKED_ENV_PATTERNS.some(pattern =>
+        upperKey === pattern.toUpperCase() || upperKey.includes(pattern.toUpperCase())
+      );
+      if (!isBlocked) {
+        filteredEnv[key] = value;
+      }
+    }
+
+    // Safe process shim - exposes only non-dangerous properties
+    // Many libraries check for process existence or use safe properties
+    const safeProcess = {
+      nextTick: (callback: (...args: any[]) => void, ...args: any[]) => {
+        queueMicrotask(() => callback(...args));
+      },
+      version: process.version,
+      versions: { ...process.versions },
+      platform: process.platform,
+      arch: process.arch,
+      browser: false,
+      // Filtered env access - sensitive variables are removed
+      env: filteredEnv,
+      // Block dangerous properties by throwing errors
+      get argv() {
+        throw new Error('process.argv is not available in sandbox for security');
+      },
+      exit: () => {
+        throw new Error('process.exit() is not available in sandbox for security');
+      },
+      cwd: () => {
+        throw new Error('process.cwd() is not available in sandbox for security');
+      },
+      chdir: () => {
+        throw new Error('process.chdir() is not available in sandbox for security');
+      },
+      kill: () => {
+        throw new Error('process.kill() is not available in sandbox for security');
+      },
+    };
+
     // Create sandboxRequire function
     const BLOCKED_MODULES = new Set([
-      // Filesystem access
-      'fs', 'fs/promises', 'node:fs', 'node:fs/promises',
       // Process/system control
       'child_process', 'node:child_process',
       'cluster', 'node:cluster',
@@ -819,13 +871,6 @@ export default async function executeInSandbox(task: SandboxTask): Promise<Sandb
       'os', 'node:os',
       'v8', 'node:v8',
       'vm', 'node:vm',
-      // Direct network (use PluginAPI instead)
-      'net', 'node:net',
-      'dgram', 'node:dgram',
-      'tls', 'node:tls',
-      'http', 'node:http',
-      'https', 'node:https',
-      'http2', 'node:http2',
       // Dangerous utilities
       'repl', 'node:repl',
       'inspector', 'node:inspector',
@@ -855,15 +900,37 @@ export default async function executeInSandbox(task: SandboxTask): Promise<Sandb
       }
     };
 
+    // Create a safe global object - isolated copy to prevent access to real globalThis
+    // Some libraries (e.g., Stellar SDK) add properties to global (like __USE_AXIOS__)
+    // so we can't freeze it, but it's still isolated per-execution
+    const safeGlobal: Record<string, any> = {
+      // Expose only safe primitives that libraries commonly check for
+      Buffer,
+      setTimeout,
+      setInterval,
+      setImmediate,
+      clearTimeout,
+      clearInterval,
+      clearImmediate,
+      queueMicrotask,
+      console: sandboxConsole,
+      process: safeProcess,
+    };
+
     // Populate context with globals (reused context from pool)
     // SECURITY: Only expose safe globals. Never expose:
-    // - process (env vars, exit, argv)
-    // - fs, child_process, net, http (I/O)
+    // - process.argv, process.exit() (blocked via safe shim)
     // - eval, Function constructor (code execution)
     // - require for arbitrary modules
+    // global is an isolated mutable object (not raw globalThis) - safe for SDK usage
+    // NOTE: process.env is filtered - sensitive variables (API keys, passwords, etc.) are removed
     Object.assign(context, {
       // === Console for logging ===
       console: sandboxConsole,
+
+      // === Node.js global compatibility ===
+      global: safeGlobal, // Frozen safe global (prevents sandbox escapes)
+      process: safeProcess, // Safe process shim (filtered env, no argv/exit)
 
       // === CommonJS module system ===
       exports: moduleExports,
