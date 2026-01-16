@@ -39,6 +39,20 @@ pub const DEFAULT_POOL_MAX_THREADS_FLOOR: usize = 8;
 /// Internal constant, not user-configurable.
 pub const DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER: usize = 20;
 
+/// Headroom multiplier for calculating concurrent tasks per worker.
+/// Applied to base task calculation to provide buffer for:
+///   - Queue buildup during traffic spikes
+///   - Variable plugin execution latency
+///   - Temporary load imbalances across workers
+///     Internal constant, not user-configurable.
+pub const CONCURRENT_TASKS_HEADROOM_MULTIPLIER: f64 = 1.2;
+
+/// Maximum concurrent tasks per worker thread (hard cap).
+/// This cap prevents excessive memory usage and GC pressure per worker.
+/// Validated through load testing as a stable upper bound.
+/// Internal constant, not user-configurable.
+pub const MAX_CONCURRENT_TASKS_PER_WORKER: usize = 250;
+
 /// Worker idle timeout in milliseconds.
 /// Internal constant, not user-configurable.
 pub const DEFAULT_POOL_IDLE_TIMEOUT_MS: u64 = 60000; // 60 seconds

@@ -167,6 +167,18 @@ impl CircuitBreaker {
     /// Idle timeout for auto-closing circuit (2 minutes of no activity)
     const IDLE_AUTO_CLOSE_MS: u64 = 120_000;
 
+    /// Initial backoff delay in milliseconds before attempting recovery.
+    /// First recovery attempt waits this long after circuit opens.
+    const INITIAL_BACKOFF_MS: u64 = 5000;
+
+    /// Maximum number of backoff attempts before capping the delay.
+    /// Exponential backoff doubles each attempt: 5s, 10s, 20s, 40s, then capped.
+    const MAX_BACKOFF_ATTEMPTS: u32 = 4;
+
+    /// Maximum backoff delay in milliseconds (hard cap).
+    /// Prevents excessive wait times between recovery attempts.
+    const MAX_BACKOFF_MS: u64 = 60_000;
+
     pub fn new() -> Self {
         Self {
             state: AtomicU32::new(0), // Closed
@@ -290,10 +302,12 @@ impl CircuitBreaker {
             .unwrap_or_default()
             .as_millis() as u64;
 
-        // Wait at least 5 seconds before trying recovery
-        // Exponential backoff: 5s, 10s, 20s, 40s, max 60s
+        // Exponential backoff: INITIAL_BACKOFF_MS, 2x, 4x, 8x, 16x, capped at MAX_BACKOFF_MS
+        // This prevents rapid restart attempts that could worsen the situation
         let attempts = self.restart_attempts.load(Ordering::Relaxed);
-        let backoff_ms = (5000u64 * (1 << attempts.min(4))).min(60000);
+        let backoff_ms = (Self::INITIAL_BACKOFF_MS
+            * (1 << attempts.min(Self::MAX_BACKOFF_ATTEMPTS)))
+        .min(Self::MAX_BACKOFF_MS);
 
         if now - opened_at >= backoff_ms {
             tracing::info!(

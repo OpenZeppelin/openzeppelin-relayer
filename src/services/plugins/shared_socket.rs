@@ -245,10 +245,18 @@ impl SharedSocketService {
 
         // Spawn background cleanup task for stale executions (prevents memory leaks)
         let executions_clone = executions.clone();
+        let mut cleanup_shutdown_rx = shutdown_tx.subscribe();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             loop {
-                interval.tick().await;
+                tokio::select! {
+                    _ = interval.tick() => {}
+                    _ = cleanup_shutdown_rx.changed() => {
+                        if *cleanup_shutdown_rx.borrow() {
+                            break;
+                        }
+                    }
+                }
                 let now = Instant::now();
                 let mut map = executions_clone.write().await;
                 // Remove entries older than 5 minutes
@@ -292,9 +300,14 @@ impl SharedSocketService {
         }
     }
 
-    /// Get current active connection count (semaphore available permits)
-    pub fn active_connection_count(&self) -> usize {
+    /// Get current number of available connection slots
+    pub fn available_connection_slots(&self) -> usize {
         self.connection_semaphore.available_permits()
+    }
+
+    /// Get current active connection count
+    pub fn active_connection_count(&self) -> usize {
+        get_config().socket_max_connections - self.connection_semaphore.available_permits()
     }
 
     /// Signal shutdown to the listener and wait for active connections to drain
@@ -635,15 +648,24 @@ impl SharedSocketService {
             } else {
                 // Legacy protocol (no "type" field)
                 if let Ok(request) = serde_json::from_value::<Request>(json_value.clone()) {
-                    // Legacy format
-                    traces.push(json_value);
+                    // Legacy format - API requests are not trace events
 
                     // Set execution_id from http_request_id or request_id if not bound
                     if bound_execution_id.is_none() {
-                        bound_execution_id = request
+                        let candidate_id = request
                             .http_request_id
                             .clone()
                             .or_else(|| Some(request.request_id.clone()));
+
+                        // Validate execution_id exists (same as new protocol)
+                        if let Some(ref id) = candidate_id {
+                            let map = executions.read().await;
+                            if map.contains_key(id) {
+                                bound_execution_id = candidate_id;
+                            } else {
+                                debug!("Legacy request with unknown execution_id: {}", id);
+                            }
+                        }
                     }
 
                     // Handle legacy request
@@ -672,10 +694,25 @@ impl SharedSocketService {
             let map = executions.read().await;
             if let Some(ctx) = map.get(&exec_id) {
                 // Send traces with timeout to prevent blocking
+                let trace_count = traces.len();
                 match tokio::time::timeout(Duration::from_secs(5), ctx.traces_tx.send(traces)).await
                 {
                     Ok(Ok(())) => {}
-                    Ok(Err(_)) => warn!("Trace channel closed for execution_id: {}", exec_id),
+                    Ok(Err(_)) => {
+                        // Only warn if traces were collected but couldn't be delivered
+                        // Channel closed with empty traces is expected when emit_traces=false
+                        if trace_count > 0 {
+                            warn!(
+                                "Trace channel closed for execution_id: {} ({} traces lost)",
+                                exec_id, trace_count
+                            );
+                        } else {
+                            debug!(
+                                "Trace channel closed for execution_id: {} (no traces to deliver)",
+                                exec_id
+                            );
+                        }
+                    }
                     Err(_) => warn!("Timeout sending traces for execution_id: {}", exec_id),
                 }
             }

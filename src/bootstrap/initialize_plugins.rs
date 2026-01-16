@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tracing::{info, warn};
 
 use crate::repositories::PluginRepositoryTrait;
-use crate::services::plugins::{get_pool_manager, PoolManager};
+use crate::services::plugins::{get_pool_manager, PluginRunner, PluginService, PoolManager};
 
 /// Initialize the plugin worker pool if plugins are configured.
 ///
@@ -92,11 +92,7 @@ pub async fn precompile_plugins<PR: PluginRepositoryTrait>(
     let mut compiled_count = 0;
 
     for plugin in plugins.items {
-        let plugin_path = if plugin.path.starts_with("plugins/") {
-            plugin.path.clone()
-        } else {
-            format!("plugins/{}", plugin.path)
-        };
+        let plugin_path = PluginService::<PluginRunner>::resolve_plugin_path(&plugin.path);
 
         match pool_manager
             .precompile_plugin(plugin.id.clone(), Some(plugin_path), None)

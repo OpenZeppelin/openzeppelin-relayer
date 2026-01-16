@@ -20,12 +20,13 @@
 //! ```
 
 use crate::constants::{
-    DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER, DEFAULT_POOL_CONNECT_RETRIES,
-    DEFAULT_POOL_HEALTH_CHECK_INTERVAL_SECS, DEFAULT_POOL_IDLE_TIMEOUT_MS,
-    DEFAULT_POOL_MAX_CONNECTIONS, DEFAULT_POOL_MAX_THREADS_FLOOR, DEFAULT_POOL_MIN_THREADS,
-    DEFAULT_POOL_QUEUE_SEND_TIMEOUT_MS, DEFAULT_POOL_REQUEST_TIMEOUT_SECS,
-    DEFAULT_POOL_SOCKET_BACKLOG, DEFAULT_SOCKET_IDLE_TIMEOUT_SECS,
-    DEFAULT_SOCKET_READ_TIMEOUT_SECS, DEFAULT_TRACE_TIMEOUT_MS,
+    CONCURRENT_TASKS_HEADROOM_MULTIPLIER, DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER,
+    DEFAULT_POOL_CONNECT_RETRIES, DEFAULT_POOL_HEALTH_CHECK_INTERVAL_SECS,
+    DEFAULT_POOL_IDLE_TIMEOUT_MS, DEFAULT_POOL_MAX_CONNECTIONS, DEFAULT_POOL_MAX_THREADS_FLOOR,
+    DEFAULT_POOL_MIN_THREADS, DEFAULT_POOL_QUEUE_SEND_TIMEOUT_MS,
+    DEFAULT_POOL_REQUEST_TIMEOUT_SECS, DEFAULT_POOL_SOCKET_BACKLOG,
+    DEFAULT_SOCKET_IDLE_TIMEOUT_SECS, DEFAULT_SOCKET_READ_TIMEOUT_SECS, DEFAULT_TRACE_TIMEOUT_MS,
+    MAX_CONCURRENT_TASKS_PER_WORKER,
 };
 use std::sync::OnceLock;
 
@@ -258,17 +259,20 @@ impl PluginConfig {
         let nodejs_pool_max_threads = env_parse("PLUGIN_POOL_MAX_THREADS", derived_max_threads);
 
         // concurrentTasksPerWorker: Node.js async can handle many concurrent tasks
-        // Formula: (concurrency / max_threads) * 1.2 for some headroom
-        // The 1.2x multiplier provides headroom for:
+        // Formula: (concurrency / max_threads) * CONCURRENT_TASKS_HEADROOM_MULTIPLIER for some headroom
+        // The multiplier provides headroom for:
         //   - Queue buildup during traffic spikes
         //   - Variable plugin execution latency
         // Examples with new formula (on 16GB system with ~8 threads):
-        //   - 10000 VUs / 16 threads * 1.2 = 750, capped at 250
-        //   - 5000 VUs / 8 threads * 1.2 = 750, capped at 250
+        //   - 10000 VUs / 16 threads * 1.2 = 750, capped at MAX_CONCURRENT_TASKS_PER_WORKER
+        //   - 5000 VUs / 8 threads * 1.2 = 750, capped at MAX_CONCURRENT_TASKS_PER_WORKER
         //   - 1000 VUs / 8 threads * 1.2 = 150
         let base_tasks = max_concurrency / nodejs_pool_max_threads.max(1);
-        let derived_concurrent_tasks = ((base_tasks as f64 * 1.2) as usize)
-            .clamp(DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER, 250); // Cap at 250 (validated stable by testing)
+        let derived_concurrent_tasks =
+            ((base_tasks as f64 * CONCURRENT_TASKS_HEADROOM_MULTIPLIER) as usize).clamp(
+                DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER,
+                MAX_CONCURRENT_TASKS_PER_WORKER,
+            );
         let nodejs_pool_concurrent_tasks =
             env_parse("PLUGIN_POOL_CONCURRENT_TASKS", derived_concurrent_tasks);
 
@@ -405,12 +409,8 @@ impl Default for PluginConfig {
     /// but without any environment variable overrides.
     /// This ensures tests and production use consistent formulas.
     fn default() -> Self {
-        // Clear any test environment variables to ensure pure defaults
-        // Note: This only affects the Default impl, not from_env() usage
-        std::env::remove_var("PLUGIN_MAX_CONCURRENCY");
-
-        // Use the same derivation logic as from_env()
-        // This ensures Default matches production behavior
+        // Use hardcoded defaults without reading environment variables
+        // Note: This differs from from_env() which reads env vars
         let max_concurrency = DEFAULT_POOL_MAX_CONNECTIONS;
         let cpu_count = std::thread::available_parallelism()
             .map(|n| n.get())
@@ -435,8 +435,11 @@ impl Default for PluginConfig {
         let nodejs_pool_min_threads = DEFAULT_POOL_MIN_THREADS.max(cpu_count / 2);
 
         let base_tasks = max_concurrency / nodejs_pool_max_threads.max(1);
-        let nodejs_pool_concurrent_tasks = ((base_tasks as f64 * 1.2) as usize)
-            .clamp(DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER, 250);
+        let nodejs_pool_concurrent_tasks =
+            ((base_tasks as f64 * CONCURRENT_TASKS_HEADROOM_MULTIPLIER) as usize).clamp(
+                DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER,
+                MAX_CONCURRENT_TASKS_PER_WORKER,
+            );
 
         // Worker heap for Default impl (same formula as from_env)
         let base_worker_heap = 512_usize;
@@ -613,11 +616,12 @@ mod tests {
 
         // Concurrent tasks per worker
         let base_tasks = max_concurrency / nodejs_pool_max_threads;
-        let derived_concurrent_tasks = ((base_tasks as f64 * 1.2) as usize)
+        let derived_concurrent_tasks = ((base_tasks as f64 * CONCURRENT_TASKS_HEADROOM_MULTIPLIER)
+            as usize)
             .max(DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER)
-            .min(250);
-        // Should be capped at 250
-        assert!(derived_concurrent_tasks <= 250);
+            .min(MAX_CONCURRENT_TASKS_PER_WORKER);
+        // Should be capped at MAX_CONCURRENT_TASKS_PER_WORKER
+        assert!(derived_concurrent_tasks <= MAX_CONCURRENT_TASKS_PER_WORKER);
     }
 
     #[test]

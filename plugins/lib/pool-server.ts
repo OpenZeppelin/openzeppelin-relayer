@@ -17,7 +17,7 @@
  * - Response: { taskId, success, result?, error?, logs? }
  *
  * Configuration:
- * 
+ *
  * All configuration is derived from PLUGIN_MAX_CONCURRENCY in Rust's config.rs
  * and passed via environment variables when spawning this process.
  * See: src/services/plugins/config.rs
@@ -80,15 +80,15 @@ class PoolServerMemoryMonitor {
 
   start(): void {
     if (this.checkInterval) return;
-    
+
     // Check memory pressure every 5 seconds (more frequent for faster response)
     this.checkInterval = setInterval(() => {
       this.checkMemoryPressure();
     }, 5000);
-    
+
     // Don't prevent process exit
     this.checkInterval.unref();
-    
+
     console.error('[pool-server] Memory monitoring started (thresholds: 75%/80%/85%/92%)');
   }
 
@@ -235,7 +235,7 @@ class PoolServerMemoryMonitor {
     const heapUsedMB = Math.round(heapUsed / 1024 / 1024);
     const heapLimitMB = Math.round(heapLimit / 1024 / 1024);
     const percent = Math.round((heapUsed / heapLimit) * 100);
-    
+
     console.error(
       `[pool-server] WARNING: Heap at ${heapUsedMB}MB / ${heapLimitMB}MB limit (${percent}%).`
     );
@@ -330,9 +330,9 @@ class PoolServer {
 
   constructor(socketPath: string) {
     this.socketPath = socketPath;
-    
+
     const cpuCount = require('os').cpus().length;
-    
+
     // =========================================================================
     // Configuration - ALL values are passed from Rust (single source of truth)
     // =========================================================================
@@ -358,10 +358,10 @@ class PoolServer {
       process.env.PLUGIN_POOL_IDLE_TIMEOUT || String(DEFAULT_POOL_IDLE_TIMEOUT_MS),
       10
     );
-    
+
     // Log effective configuration (received from Rust)
     console.error(`[pool-server] Configuration (from Rust): maxConcurrency=${maxConcurrency}, minThreads=${minThreads}, maxThreads=${maxThreads}, concurrentTasksPerWorker=${concurrentTasksPerWorker}, idleTimeout=${idleTimeout}ms`);
-    
+
     // WorkerPoolManager handles cache lifecycle with active eviction (runs every 5 mins)
     // Cache is properly cleaned up on shutdown via pool.destroy()
     this.pool = new WorkerPoolManager({
@@ -394,13 +394,13 @@ class PoolServer {
       debug('net.createServer callback - new connection');
       this.handleConnection(socket);
     });
-    
-    
+
+
     // Log any server-level errors
     this.server.on('error', (err) => {
       console.error('[pool-server] Server error:', err);
     });
-    
+
     this.server.on('connection', (socket) => {
       debug('Server connection event from:', socket.remoteAddress);
     });
@@ -418,7 +418,7 @@ class PoolServer {
       this.server!.listen(this.socketPath, backlog, () => {
         this.running = true;
         debug(`Listening on ${this.socketPath} (backlog=${backlog})`);
-        
+
         // Verify the socket file exists
         try {
           const stats = fs.statSync(this.socketPath);
@@ -426,12 +426,12 @@ class PoolServer {
         } catch (e: any) {
           console.warn(`[pool-server] Socket file check failed:`, e.message);
         }
-        
+
         // Verify server state
         const addr = this.server!.address();
         debug(`Server address:`, addr);
         debug(`Server listening:`, this.server!.listening);
-        
+
         resolve();
       });
     });
@@ -443,11 +443,11 @@ class PoolServer {
   private handleConnection(socket: net.Socket): void {
     const clientId = Math.random().toString(36).substring(7);
     debug(`[${clientId}] Client connected`);
-    
+
     // Enable keep-alive to prevent connection drops
     socket.setKeepAlive(true, 30000); // 30 second keep-alive probe
     socket.setNoDelay(true); // Disable Nagle's algorithm for lower latency
-    
+
     let buffer = '';
     let processingPromise: Promise<void> | null = null;
     const pendingLines: string[] = [];
@@ -460,14 +460,14 @@ class PoolServer {
       if (processingPromise) {
         await processingPromise;
       }
-      
+
       if (pendingLines.length === 0) return;
-      
+
       processingPromise = (async () => {
         while (pendingLines.length > 0) {
           const line = pendingLines.shift()!;
           if (!line.trim()) continue;
-          
+
           try {
             const message = JSON.parse(line) as Message;
             debug('Processing message type:', message.type);
@@ -496,7 +496,7 @@ class PoolServer {
           }
         }
       })();
-      
+
       await processingPromise;
       processingPromise = null;
     };
@@ -523,7 +523,7 @@ class PoolServer {
         pendingLines.push(line);
         debug(`[${clientId}] Queued message: ${line.substring(0, 100)}...`);
       }
-      
+
       // Process queue (async but don't await here)
       processQueue().catch((err) => {
         console.error(`[pool-server] [${clientId}] Error in processQueue:`, err);
@@ -547,7 +547,7 @@ class PoolServer {
         console.error(`[pool-server] [${clientId}] Socket error:`, err.message);
       }
     };
-    
+
     const closeHandler = (): void => {
       // Explicit cleanup of listeners (good practice for long-running servers)
       socket.removeListener('data', dataHandler);
@@ -606,7 +606,7 @@ class PoolServer {
           return await this.handleExecute(message);
         case 'precompile':
           return await this.handlePrecompile(message);
-        default:
+        default: {
           // TypeScript exhaustiveness check
           const _exhaustive: never = message;
           return {
@@ -614,6 +614,7 @@ class PoolServer {
             success: false,
             error: { message: 'Unknown work request type', code: 'UNKNOWN_TYPE' },
           };
+        }
       }
     } catch (err) {
       const error = err as Error;
@@ -714,7 +715,7 @@ class PoolServer {
     } catch (err) {
       debug('runPlugin threw error:', err);
       const error = err as any;
-      
+
       // Provide detailed error context
       return {
         taskId: message.taskId,
@@ -808,7 +809,7 @@ class PoolServer {
   private handleHealth(message: HealthMessage): Response {
     const stats = this.pool.getStats();
     const memUsage = process.memoryUsage();
-    
+
     return {
       taskId: message.taskId,
       success: true,
@@ -860,8 +861,8 @@ class PoolServer {
     return {
       taskId: message.taskId,
       success: true,
-      result: { 
-        status: 'draining', 
+      result: {
+        status: 'draining',
         activeRequests: this.activeRequests,
         timeoutMs: this.shutdownTimeoutMs,
       },
@@ -1002,8 +1003,8 @@ async function main(): Promise<void> {
   const maxOldSpaceMatch = nodeOptions.match(/--max-old-space-size=(\d+)/);
   const configuredHeapMB = maxOldSpaceMatch ? parseInt(maxOldSpaceMatch[1], 10) : 'default';
   const currentHeapMB = Math.round(process.memoryUsage().heapTotal / 1024 / 1024);
-  
-  console.error(
+
+  console.info(
     `[pool-server] Heap configuration: ${configuredHeapMB}MB max ` +
     `(current: ${currentHeapMB}MB, will grow as needed)`
   );
@@ -1012,7 +1013,7 @@ async function main(): Promise<void> {
 
   // Start memory monitoring for pool server process
   const memoryMonitor = new PoolServerMemoryMonitor();
-  
+
   // Connect memory monitor to pool for cache eviction
   memoryMonitor.onCacheEviction(() => {
     console.error('[pool-server] Memory pressure - clearing code cache');
@@ -1072,10 +1073,10 @@ async function main(): Promise<void> {
     debug('Server started successfully, listening on', socketPath);
     // Write ready signal to stdout for Rust to detect
     console.log('POOL_SERVER_READY');
-    
+
     // Keep the process alive forever - the server will handle connections
     debug('Entering event loop, waiting for connections...');
-    
+
     // Periodic heartbeat to verify event loop is running (debug mode only)
     if (process.env.PLUGIN_POOL_DEBUG) {
       let heartbeatCount = 0;
@@ -1086,7 +1087,7 @@ async function main(): Promise<void> {
         }
       }, 1000);
     }
-    
+
     // Keep process alive
     await new Promise<void>(() => {});
   } catch (err) {

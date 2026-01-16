@@ -242,6 +242,12 @@ impl ConnectionPool {
     pub async fn clear(&self) {
         while self.available.pop().is_some() {}
     }
+
+    /// Get the next connection ID from the atomic counter.
+    /// This is useful for creating connections outside the pool (e.g., shutdown requests).
+    pub fn next_connection_id(&self) -> usize {
+        self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
 }
 
 /// RAII wrapper that returns connection to pool on drop

@@ -413,6 +413,8 @@ export class DefaultPluginAPI implements PluginAPI {
   private _connectionPromise: Promise<void> | null = null;
   private _connected: boolean = false;
   private _httpRequestId?: string;
+  private _registered: boolean = false;
+  private _registrationPromise: Promise<void> | null = null;
 
   constructor(socketPath: string, httpRequestId?: string) {
     this.socket = net.createConnection(socketPath);
@@ -420,8 +422,10 @@ export class DefaultPluginAPI implements PluginAPI {
     this._httpRequestId = httpRequestId;
 
     this._connectionPromise = new Promise((resolve, reject) => {
-      this.socket.on('connect', () => {
+      this.socket.on('connect', async () => {
         this._connected = true;
+        // Register with execution_id immediately after connection (new protocol)
+        await this._register();
         resolve();
       });
 
@@ -446,17 +450,67 @@ export class DefaultPluginAPI implements PluginAPI {
         .forEach((msg: string) => {
           try {
             const parsed = JSON.parse(msg);
-            const { requestId, result, error } = parsed;
-            const resolver = this.pending.get(requestId);
-            if (resolver) {
-              error ? resolver.reject(error) : resolver.resolve(result);
-              this.pending.delete(requestId);
+
+            // Handle new protocol ApiResponse format
+            if (parsed.type === 'api_response') {
+              const { request_id, result, error } = parsed;
+              const resolver = this.pending.get(request_id);
+              if (resolver) {
+                error ? resolver.reject(new Error(error)) : resolver.resolve(result);
+                this.pending.delete(request_id);
+              }
+            }
+            // Fallback to legacy format for backward compatibility
+            else if (parsed.requestId) {
+              const { requestId, result, error } = parsed;
+              const resolver = this.pending.get(requestId);
+              if (resolver) {
+                error ? resolver.reject(error) : resolver.resolve(result);
+                this.pending.delete(requestId);
+              }
             }
           } catch {
             // Ignore malformed messages
           }
         });
     });
+  }
+
+  /**
+   * Register execution_id with the server (new protocol requirement)
+   * This must be the first message sent after connection
+   */
+  private async _register(): Promise<void> {
+    if (this._registered || !this._httpRequestId) {
+      return;
+    }
+
+    if (this._registrationPromise) {
+      return this._registrationPromise;
+    }
+
+    this._registrationPromise = new Promise((resolve, reject) => {
+      const registerMsg = {
+        type: 'register',
+        execution_id: this._httpRequestId,
+      };
+      const message = JSON.stringify(registerMsg) + '\n';
+
+      try {
+        this.socket.write(message, (err) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          this._registered = true;
+          resolve();
+        });
+      } catch (err) {
+        reject(err);
+      }
+    });
+
+    return this._registrationPromise;
   }
 
   /**
@@ -543,15 +597,37 @@ export class DefaultPluginAPI implements PluginAPI {
 
   async _send<T>(relayerId: string, method: string, payload: any): Promise<T> {
     const requestId = uuidv4();
-    const msg: any = { requestId, relayerId, method, payload };
-    if (this._httpRequestId) {
-      msg.httpRequestId = this._httpRequestId;
-    }
-    const message = JSON.stringify(msg) + '\n';
 
+    // Ensure connection and registration are complete
     if (!this._connected) {
       await this._connectionPromise;
     }
+
+    // Ensure registration is sent (for new protocol)
+    // If httpRequestId is available, use new protocol; otherwise fall back to legacy
+    if (this._httpRequestId && !this._registered) {
+      await this._register();
+    }
+
+    // Use new protocol format if registered, otherwise fall back to legacy format
+    let msg: any;
+    if (this._registered && this._httpRequestId) {
+      // New protocol: ApiRequest message
+      msg = {
+        type: 'api_request',
+        request_id: requestId,
+        relayer_id: relayerId,
+        method: method,
+        payload: payload,
+      };
+    } else {
+      // Legacy protocol format (for backward compatibility when httpRequestId is missing)
+      msg = { requestId, relayerId, method, payload };
+      if (this._httpRequestId) {
+        msg.httpRequestId = this._httpRequestId;
+      }
+    }
+    const message = JSON.stringify(msg) + '\n';
 
     return new Promise((resolve, reject) => {
       let timeoutId: NodeJS.Timeout | undefined;
@@ -585,6 +661,16 @@ export class DefaultPluginAPI implements PluginAPI {
   }
 
   close() {
+    // Send shutdown message before closing (new protocol)
+    if (this._connected && this._registered) {
+      try {
+        const shutdownMsg = { type: 'shutdown' };
+        const message = JSON.stringify(shutdownMsg) + '\n';
+        this.socket.write(message);
+      } catch {
+        // Ignore errors when sending shutdown (socket might already be closed)
+      }
+    }
     this.socket.end();
   }
 

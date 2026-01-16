@@ -77,6 +77,24 @@ impl Default for PoolManager {
 }
 
 impl PoolManager {
+    /// Base heap size in MB for the pool server process.
+    /// This provides the minimum memory needed for the Node.js runtime and core pool infrastructure.
+    const BASE_HEAP_MB: usize = 512;
+
+    /// Concurrency divisor for heap calculation.
+    /// Heap is incremented for every N concurrent requests to scale with load.
+    const CONCURRENCY_DIVISOR: usize = 10;
+
+    /// Heap increment in MB per CONCURRENCY_DIVISOR concurrent requests.
+    /// Formula: BASE_HEAP_MB + ((max_concurrency / CONCURRENCY_DIVISOR) * HEAP_INCREMENT_PER_DIVISOR_MB)
+    /// This accounts for additional memory needed per concurrent plugin execution context.
+    const HEAP_INCREMENT_PER_DIVISOR_MB: usize = 32;
+
+    /// Maximum heap size in MB (hard cap) for the pool server process.
+    /// Prevents excessive memory allocation that could cause system instability.
+    /// Set to 8GB (8192 MB) as a reasonable upper bound for Node.js processes.
+    const MAX_HEAP_MB: usize = 8192;
+
     /// Create a new PoolManager with default socket path
     pub fn new() -> Self {
         Self::init(format!("/tmp/relayer-plugin-pool-{}.sock", Uuid::new_v4()))
@@ -608,10 +626,14 @@ impl PoolManager {
 
         let config = get_config();
 
-        let calculated_heap = 512 + ((config.max_concurrency / 10) * 32);
-        let pool_server_heap_mb = calculated_heap.min(8192);
+        // Calculate heap size based on concurrency: base + (concurrency / divisor) * increment
+        // This scales memory allocation with expected load while maintaining a reasonable minimum
+        let calculated_heap = Self::BASE_HEAP_MB
+            + ((config.max_concurrency / Self::CONCURRENCY_DIVISOR)
+                * Self::HEAP_INCREMENT_PER_DIVISOR_MB);
+        let pool_server_heap_mb = calculated_heap.min(Self::MAX_HEAP_MB);
 
-        if calculated_heap > 8192 {
+        if calculated_heap > Self::MAX_HEAP_MB {
             tracing::warn!(
                 calculated_heap_mb = calculated_heap,
                 capped_heap_mb = pool_server_heap_mb,
@@ -1387,7 +1409,10 @@ impl PoolManager {
             task_id: Uuid::new_v4().to_string(),
         };
 
-        let mut conn = match PoolConnection::new(&self.socket_path, 999999).await {
+        // Use the pool's connection ID counter to ensure unique IDs
+        // even for shutdown connections that bypass the pool
+        let connection_id = self.connection_pool.next_connection_id();
+        let mut conn = match PoolConnection::new(&self.socket_path, connection_id).await {
             Ok(c) => c,
             Err(e) => {
                 return Err(PluginError::PluginExecutionError(format!(

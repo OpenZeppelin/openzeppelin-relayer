@@ -239,7 +239,7 @@ impl PluginRunner {
 
         // Collect traces from the guard
         let mut traces_rx = guard.into_receiver();
-        let traces = match tokio::time::timeout(Duration::from_secs(5), traces_rx.recv()).await {
+        let traces = match tokio::time::timeout(get_trace_timeout(), traces_rx.recv()).await {
             Ok(Some(traces)) => traces,
             Ok(None) => Vec::new(),
             Err(_) => {
@@ -304,14 +304,9 @@ impl PluginRunner {
             .clone()
             .unwrap_or_else(|| format!("exec-{}", Uuid::new_v4()));
 
-        // Only register for traces if emit_traces is enabled
+        // Always register execution so API calls from plugin can be validated
         // ExecutionGuard will auto-unregister on drop (RAII pattern)
-        let mut traces_rx = if emit_traces {
-            let guard = shared_socket.register_execution(execution_id.clone()).await;
-            Some(guard.into_receiver())
-        } else {
-            None
-        };
+        let execution_guard = shared_socket.register_execution(execution_id.clone()).await;
 
         // Execute via pool manager (using shared socket path)
         let pool_manager = get_pool_manager();
@@ -344,7 +339,7 @@ impl PluginRunner {
                 params,
                 headers,
                 shared_socket_path, // Use shared socket path instead of unique one
-                http_request_id,
+                Some(execution_id.clone()), // Pass the registered execution_id
                 Some(timeout_duration.as_secs()),
                 route,
                 config,
@@ -362,7 +357,9 @@ impl PluginRunner {
         };
 
         // Collect traces only if emit_traces is enabled
-        let traces = if let Some(ref mut rx) = traces_rx {
+        let traces = if emit_traces {
+            // Convert guard to receiver only now, keeping guard alive during execution
+            let mut rx = execution_guard.into_receiver();
             // Wait for traces with short timeout - they arrive immediately if the plugin used the API
             let trace_timeout = get_trace_timeout().min(timeout_duration);
             match timeout(trace_timeout, rx.recv()).await {
@@ -370,10 +367,12 @@ impl PluginRunner {
                 Ok(None) | Err(_) => Vec::new(),
             }
         } else {
+            // Drop the guard without waiting for traces
+            drop(execution_guard);
             Vec::new()
         };
 
-        // ExecutionGuard auto-unregisters when traces_rx is dropped
+        // ExecutionGuard auto-unregisters when guard is dropped (after trace collection)
 
         match exec_outcome {
             Ok(mut script_result) => {

@@ -231,7 +231,7 @@ impl<R: PluginRunnerTrait> PluginService<R> {
         Self { runner }
     }
 
-    fn resolve_plugin_path(plugin_path: &str) -> String {
+    pub fn resolve_plugin_path(plugin_path: &str) -> String {
         if plugin_path.starts_with("plugins/") {
             plugin_path.to_string()
         } else {

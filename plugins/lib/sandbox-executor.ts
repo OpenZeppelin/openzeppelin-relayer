@@ -133,21 +133,19 @@ class ScriptCache {
     // causing false positive pressure detection (e.g., 28MB/30MB = 93% when max is 26GB)
     const heapUsedRatio = usage.heapUsed / heapStats.heap_size_limit;
 
-    // At 70% heap usage, evict 25% of cache
-    if (heapUsedRatio >= 0.70 && this.cache.size > 0) {
-      const evictCount = Math.max(1, Math.ceil(this.cache.size * 0.25));
-      console.warn(
-        `[worker-cache] Memory pressure (${Math.round(heapUsedRatio * 100)}% of heap limit), ` +
-        `evicting ${evictCount} scripts`
-      );
-      this.evictOldest(evictCount);
-    }
-
     // At 85% heap usage, evict 50% of cache
     if (heapUsedRatio >= 0.85 && this.cache.size > 0) {
       const evictCount = Math.max(1, Math.ceil(this.cache.size * 0.5));
       console.warn(
         `[worker-cache] HIGH memory pressure (${Math.round(heapUsedRatio * 100)}% of heap limit), ` +
+        `evicting ${evictCount} scripts`
+      );
+      this.evictOldest(evictCount);
+    } else if (heapUsedRatio >= 0.70 && this.cache.size > 0) {
+      // At 70% heap usage, evict 25% of cache
+      const evictCount = Math.max(1, Math.ceil(this.cache.size * 0.25));
+      console.warn(
+        `[worker-cache] Memory pressure (${Math.round(heapUsedRatio * 100)}% of heap limit), ` +
         `evicting ${evictCount} scripts`
       );
       this.evictOldest(evictCount);
@@ -720,7 +718,7 @@ function createSandboxConsole(logs: LogEntry[]): Console {
       _stringified: false,
       _message: '',
     };
-    
+
     // Lazy getter for message
     Object.defineProperty(entry, 'message', {
       get() {
@@ -737,7 +735,7 @@ function createSandboxConsole(logs: LogEntry[]): Console {
       enumerable: true,
       configurable: true,
     });
-    
+
     logs.push(entry);
   };
 
@@ -778,7 +776,7 @@ export default async function executeInSandbox(task: SandboxTask): Promise<Sandb
   const logs: LogEntry[] = [];
   const api = new SandboxPluginAPI(task.socketPath, task.httpRequestId);
   const kv = new DefaultPluginKVStore(task.pluginId);
-  
+
   // Acquire context from pool (much faster than creating new)
   const context = contextPool.acquire();
 
@@ -788,7 +786,7 @@ export default async function executeInSandbox(task: SandboxTask): Promise<Sandb
 
     // Prepare the module wrapper
     const wrappedCode = wrapForVm(task.compiledCode);
-    
+
     // Try to get cached script, otherwise compile and cache
     let script = scriptCache.get(task.compiledCode);
     if (!script) {
@@ -1014,17 +1012,17 @@ export default async function executeInSandbox(task: SandboxTask): Promise<Sandb
     };
   } catch (error) {
     const err = error as any;
-    
+
     // Extract detailed error information
     let errorCode = 'PLUGIN_ERROR';
     let errorMessage = String(error);
     let errorStack: string | undefined;
     let errorDetails: any = undefined;
     let errorStatus = 500;
-    
+
     if (err && typeof err === 'object') {
       errorMessage = err.message || String(error);
-      
+
       // Determine error code from error type
       if (err.name === 'SyntaxError') {
         errorCode = 'SYNTAX_ERROR';
@@ -1043,7 +1041,7 @@ export default async function executeInSandbox(task: SandboxTask): Promise<Sandb
       } else if (err.code) {
         errorCode = err.code;
       }
-      
+
       // Capture stack trace (sanitize paths)
       if (err.stack) {
         errorStack = err.stack
@@ -1051,18 +1049,18 @@ export default async function executeInSandbox(task: SandboxTask): Promise<Sandb
           .slice(0, 10)  // Limit stack trace length
           .join('\n');
       }
-      
+
       // Capture any additional details
       if (err.details) {
         errorDetails = err.details;
       }
-      
+
       // Use status if provided
       if (typeof err.status === 'number') {
         errorStatus = err.status;
       }
     }
-    
+
     return {
       taskId: task.taskId,
       success: false,
@@ -1080,14 +1078,14 @@ export default async function executeInSandbox(task: SandboxTask): Promise<Sandb
   } finally {
     // Return context to pool for reuse
     contextPool.release(context);
-    
+
     // Close API socket (non-blocking, don't throw)
     try {
       api.close();
     } catch (err) {
       // Log but don't fail - cleanup is best-effort
     }
-    
+
     // Disconnect KV (async, don't throw)
     try {
       await kv.disconnect();

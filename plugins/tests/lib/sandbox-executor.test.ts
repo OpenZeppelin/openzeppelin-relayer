@@ -84,7 +84,7 @@ describe('ContextPool logic', () => {
   it('should reset context state before reuse', () => {
     const pool = new MockContextPool();
     const ctx = pool.acquire();
-    
+
     // Simulate plugin pollution
     (ctx as any).__pluginState = { dirty: true };
     pool.release(ctx);
@@ -96,7 +96,7 @@ describe('ContextPool logic', () => {
   it('should clear all contexts', () => {
     const pool = new MockContextPool();
     const contexts: any[] = [];
-    
+
     for (let i = 0; i < 5; i++) {
       const ctx = pool.acquire();
       contexts.push(ctx);
@@ -174,7 +174,7 @@ describe('ScriptCache logic', () => {
     expect(result).toBeUndefined();
   });
 
-  it('should update timestamp on cache hit (LRU)', () => {
+  it('should update timestamp on cache hit (LRU)', async () => {
     const cache = new MockScriptCache();
     const code = 'test';
     const script = { compiled: true };
@@ -182,12 +182,11 @@ describe('ScriptCache logic', () => {
     cache.set(code, script);
     const timestamp1 = (cache as any).cache.get(code).timestamp;
 
-    // Wait a bit and access again
-    setTimeout(() => {
-      cache.get(code);
-      const timestamp2 = (cache as any).cache.get(code).timestamp;
-      expect(timestamp2).toBeGreaterThanOrEqual(timestamp1);
-    }, 10);
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    cache.get(code);
+    const timestamp2 = (cache as any).cache.get(code).timestamp;
+    expect(timestamp2).toBeGreaterThanOrEqual(timestamp1);
   });
 
   it('should evict oldest entry when at capacity', () => {
@@ -1117,35 +1116,35 @@ describe('executeInSandbox function', () => {
 describe('Error handling in sandbox', () => {
   it('should categorize SyntaxError', () => {
     const error = new SyntaxError('Unexpected token');
-    
+
     const errorCode = error.name === 'SyntaxError' ? 'SYNTAX_ERROR' : 'PLUGIN_ERROR';
-    
+
     expect(errorCode).toBe('SYNTAX_ERROR');
   });
 
   it('should categorize TypeError', () => {
     const error = new TypeError('Cannot read property');
-    
+
     const errorCode = error.name === 'TypeError' ? 'TYPE_ERROR' : 'PLUGIN_ERROR';
-    
+
     expect(errorCode).toBe('TYPE_ERROR');
   });
 
   it('should categorize ReferenceError', () => {
     const error = new ReferenceError('x is not defined');
-    
+
     const errorCode = error.name === 'ReferenceError' ? 'REFERENCE_ERROR' : 'PLUGIN_ERROR';
-    
+
     expect(errorCode).toBe('REFERENCE_ERROR');
   });
 
   it('should handle timeout errors', () => {
     const error: any = new Error('Timeout');
     error.code = 'ERR_SCRIPT_EXECUTION_TIMEOUT';
-    
+
     const errorCode = error.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT' ? 'TIMEOUT' : 'PLUGIN_ERROR';
     const errorStatus = errorCode === 'TIMEOUT' ? 504 : 500;
-    
+
     expect(errorCode).toBe('TIMEOUT');
     expect(errorStatus).toBe(504);
   });
@@ -1153,17 +1152,17 @@ describe('Error handling in sandbox', () => {
   it('should handle handler timeout errors', () => {
     const error: any = new Error('Handler timeout');
     error.code = 'ERR_HANDLER_TIMEOUT';
-    
+
     const errorCode = error.code === 'ERR_HANDLER_TIMEOUT' ? 'TIMEOUT' : 'PLUGIN_ERROR';
-    
+
     expect(errorCode).toBe('TIMEOUT');
   });
 
   it('should capture stack trace', () => {
     const error = new Error('Test error');
-    
+
     const stack = error.stack?.split('\n').slice(0, 10).join('\n');
-    
+
     expect(stack).toBeDefined();
     expect(stack).toContain('Test error');
   });
@@ -1171,9 +1170,9 @@ describe('Error handling in sandbox', () => {
   it('should use custom status if provided', () => {
     const error: any = new Error('Bad request');
     error.status = 400;
-    
+
     const errorStatus = typeof error.status === 'number' ? error.status : 500;
-    
+
     expect(errorStatus).toBe(400);
   });
 });

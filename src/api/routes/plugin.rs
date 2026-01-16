@@ -63,11 +63,12 @@ fn extract_query_params(http_req: &HttpRequest) -> HashMap<String, Vec<String>> 
 /// Resolves the effective route from path and query parameters.
 /// Path route takes precedence; if empty, falls back to `route` query parameter.
 fn resolve_route(path_route: &str, http_req: &HttpRequest) -> String {
+    // Early return to avoid unnecessary query parameter parsing when path_route is provided
     if !path_route.is_empty() {
         return path_route.to_string();
     }
 
-    // Check for route in query parameters
+    // Only parse query parameters when path_route is empty (lazy evaluation)
     let query_params = extract_query_params(http_req);
     query_params
         .get("route")
