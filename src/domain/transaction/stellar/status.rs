@@ -1284,6 +1284,70 @@ mod tests {
                 .unwrap()
                 .contains("expired"));
         }
+
+        #[tokio::test]
+        async fn test_stuck_sent_transaction_max_lifetime_marks_failed() {
+            // Transaction stuck beyond max lifetime should be marked as Failed
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.id = "tx-max-lifetime".to_string();
+            tx.status = TransactionStatus::Sent;
+            // Created 35 minutes ago - beyond 30 min max lifetime
+            tx.created_at = (Utc::now() - Duration::minutes(35)).to_rfc3339();
+            // No valid_until (unbounded transaction)
+            tx.valid_until = None;
+            if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx.network_data {
+                stellar_data.hash = None;
+                stellar_data.signed_envelope_xdr = Some("AAAA...signed...".to_string());
+            }
+
+            // Should mark as Failed (not Expired, since no time bounds)
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_id, update| update.status == Some(TransactionStatus::Failed))
+                .times(1)
+                .returning(|id, update| {
+                    let mut updated = create_test_transaction("test");
+                    updated.id = id;
+                    updated.status = update.status.unwrap();
+                    updated.status_reason = update.status_reason.clone();
+                    Ok(updated)
+                });
+
+            // Should NOT try to re-enqueue submit job
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .never();
+
+            // Notification for failure
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            // Try to enqueue next pending
+            mocks
+                .tx_repo
+                .expect_find_by_status()
+                .returning(|_, _| Ok(vec![]));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let result = handler.handle_transaction_status_impl(tx).await;
+
+            assert!(result.is_ok());
+            let failed_tx = result.unwrap();
+            assert_eq!(failed_tx.status, TransactionStatus::Failed);
+            assert!(failed_tx
+                .status_reason
+                .as_ref()
+                .unwrap()
+                .contains("stuck in Sent status for too long"));
+        }
     }
 
     mod is_valid_until_expired_tests {
