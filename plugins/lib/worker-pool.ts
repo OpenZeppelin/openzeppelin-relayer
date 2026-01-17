@@ -29,7 +29,7 @@ import * as os from 'node:os';
 import * as v8 from 'node:v8';
 import { v4 as uuidv4 } from 'uuid';
 import { compilePlugin, compilePluginSource, type CompilationResult } from './compiler';
-import type { SandboxTask, SandboxResult, LogEntry } from './sandbox-executor';
+import type { ExecutorTask, ExecutorResult, LogEntry } from './direct-executor';
 import type { PluginHeaders } from './plugin';
 import {
   DEFAULT_POOL_MIN_THREADS,
@@ -121,7 +121,7 @@ const DEFAULT_OPTIONS: Required<WorkerPoolOptions> = {
  * Path to the pre-compiled sandbox executor.
  * This file is generated at build time by running: npx ts-node build-executor.ts
  */
-const PRECOMPILED_EXECUTOR_PATH = path.resolve(__dirname, 'sandbox-executor.js');
+const PRECOMPILED_EXECUTOR_PATH = path.resolve(__dirname, 'direct-executor.js');
 
 /**
  * Metrics tracking for plugin execution
@@ -261,7 +261,7 @@ class CompiledCodeCache {
           `evicting ${evictCount} oldest entries`
         );
         this.evictOldest(evictCount);
-        
+
         // Force GC if available
         if (global.gc) {
           try {
@@ -282,7 +282,7 @@ class CompiledCodeCache {
           `evicting ${evictCount} entries`
         );
         this.evictOldest(evictCount);
-        
+
         // Force GC
         if (global.gc) {
           try {
@@ -361,7 +361,7 @@ class CompiledCodeCache {
 
   set(pluginPath: string, code: string): void {
     const size = Buffer.byteLength(code, 'utf8');
-    
+
     // Evict if adding this would exceed max cache size
     while (this.totalCacheSize + size > this.maxCacheSize && this.cache.size > 0) {
       this.evictOldest(1);
@@ -487,10 +487,10 @@ export class WorkerPoolManager {
   /**
    * Initialize the worker pool.
    * Call this before executing any plugins.
-   * 
-   * Uses pre-compiled sandbox-executor.js if available,
+   *
+   * Uses pre-compiled direct-executor.js if available,
    * otherwise compiles it on-the-fly (slower first startup).
-   * 
+   *
    * Thread-safe: multiple concurrent calls will await the same initialization.
    */
   async initialize(): Promise<void> {
@@ -518,7 +518,7 @@ export class WorkerPoolManager {
    * Internal initialization logic.
    */
   private async doInitialize(): Promise<void> {
-    // Use pre-compiled sandbox-executor.js if it exists
+    // Use pre-compiled direct-executor.js if it exists
     if (fs.existsSync(PRECOMPILED_EXECUTOR_PATH)) {
       this.compiledWorkerPath = PRECOMPILED_EXECUTOR_PATH;
       this.isTemporaryWorkerFile = false;
@@ -536,7 +536,7 @@ export class WorkerPoolManager {
     // Formula: 512 + (concurrent_tasks * 8) MB - ensures enough heap for burst context creation
     // Default to 2048MB if not passed (conservative for high load)
     const workerHeapMb = parseInt(process.env.PLUGIN_WORKER_HEAP_MB || '2048', 10);
-    
+
     console.error(`[worker-pool] Worker heap size: ${workerHeapMb}MB (per worker thread)`);
 
     this.pool = new Piscina({
@@ -617,7 +617,7 @@ export class WorkerPoolManager {
    * This is slower but ensures the pool can start in any environment.
    */
   private async compileExecutorOnTheFly(): Promise<string> {
-    const sandboxExecutorPath = path.resolve(__dirname, 'sandbox-executor.ts');
+    const sandboxExecutorPath = path.resolve(__dirname, 'direct-executor.ts');
 
     const esbuild = await import('esbuild');
     const result = await esbuild.build({
@@ -633,7 +633,7 @@ export class WorkerPoolManager {
     });
 
     // Write to temp file
-    const tempPath = path.join(os.tmpdir(), `sandbox-executor-${uuidv4()}.js`);
+    const tempPath = path.join(os.tmpdir(), `direct-executor-${uuidv4()}.js`);
     fs.writeFileSync(tempPath, result.outputFiles[0].text);
     return tempPath;
   }
@@ -779,7 +779,7 @@ export class WorkerPoolManager {
     }
 
     // Create task for the worker
-    const task: SandboxTask = {
+    const task: ExecutorTask = {
       taskId: uuidv4(),
       pluginId: request.pluginId,
       compiledCode,
@@ -798,7 +798,7 @@ export class WorkerPoolManager {
     incrementBoundedMap(this.metrics.pluginExecutions, request.pluginId, MAX_METRICS_ENTRIES);
 
     // Use task timeout to prevent permanently stuck workers
-    // This is a safety net beyond the handler-level timeout in sandbox-executor
+    // This is a safety net beyond the handler-level timeout in direct-executor
     const taskTimeout = this.options.taskTimeout;
     let timeoutId: NodeJS.Timeout | undefined;
 
@@ -811,7 +811,7 @@ export class WorkerPoolManager {
         }, taskTimeout);
       });
 
-      const result: SandboxResult = await Promise.race([runPromise, timeoutPromise]);
+      const result: ExecutorResult = await Promise.race([runPromise, timeoutPromise]);
 
       // Update execution metrics
       const executionTime = Date.now() - executionStartTime;

@@ -57,7 +57,7 @@ Developer guide for understanding and modifying the plugin execution system.
 |--------|---------|
 | `pool-server.ts` | Main server - accepts connections, routes to workers, manages memory |
 | `worker-pool.ts` | Piscina wrapper with dynamic scaling and cache management |
-| `sandbox-executor.ts` | VM-based plugin execution with security restrictions |
+| `direct-executor.ts` | Plugin execution |
 | `compiler.ts` | TypeScript/JavaScript compilation with esbuild |
 | `plugin.ts` | Plugin SDK (PluginContext, PluginAPI) |
 | `kv.ts` | Redis-backed key-value store for plugins |
@@ -129,7 +129,7 @@ Per-request socket at `/tmp/relayer-shared-{uuid}.sock` for plugin API calls.
    │
 5. pool-server routes to Piscina worker
    │
-6. sandbox-executor.ts runs plugin in VM
+6. direct-executor.ts runs plugin in VM
    │
    ├─ Plugin calls api.useRelayer().sendTransaction()
    │  └─ Communicates via shared socket to Rust

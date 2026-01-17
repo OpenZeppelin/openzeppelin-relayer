@@ -643,8 +643,8 @@ describe('Socket pool with age tracking', () => {
   });
 });
 
-describe('SandboxPluginAPI socket handling', () => {
-  class MockSandboxPluginAPI {
+describe('PluginAPIImpl socket handling', () => {
+  class MockPluginAPIImpl {
     private socket: any = null;
     private pending = new Map<string, any>();
     private connected = false;
@@ -735,7 +735,7 @@ describe('SandboxPluginAPI socket handling', () => {
   }
 
   it('should establish connection on first request', async () => {
-    const api = new MockSandboxPluginAPI('/tmp/test.sock');
+    const api = new MockPluginAPIImpl('/tmp/test.sock');
 
     expect(api.isConnected()).toBe(false);
 
@@ -745,7 +745,7 @@ describe('SandboxPluginAPI socket handling', () => {
   });
 
   it('should reuse existing connection', async () => {
-    const api = new MockSandboxPluginAPI('/tmp/test.sock');
+    const api = new MockPluginAPIImpl('/tmp/test.sock');
 
     await api.send('method1', {});
     const wasConnected = api.isConnected();
@@ -755,7 +755,7 @@ describe('SandboxPluginAPI socket handling', () => {
   });
 
   it('should handle socket error and reject pending requests', async () => {
-    const api = new MockSandboxPluginAPI('/tmp/test.sock');
+    const api = new MockPluginAPIImpl('/tmp/test.sock');
 
     await api.send('method1', {});
 
@@ -767,7 +767,7 @@ describe('SandboxPluginAPI socket handling', () => {
   });
 
   it('should handle socket close and reset connection', async () => {
-    const api = new MockSandboxPluginAPI('/tmp/test.sock');
+    const api = new MockPluginAPIImpl('/tmp/test.sock');
 
     await api.send('method1', {});
     expect(api.isConnected()).toBe(true);
@@ -779,7 +779,7 @@ describe('SandboxPluginAPI socket handling', () => {
   });
 
   it('should enforce max pending requests limit', async () => {
-    const api = new MockSandboxPluginAPI('/tmp/test.sock');
+    const api = new MockPluginAPIImpl('/tmp/test.sock');
 
     // Mock the pending count to be at limit
     for (let i = 0; i < 100; i++) {
@@ -790,7 +790,7 @@ describe('SandboxPluginAPI socket handling', () => {
   });
 
   it('should reconnect after socket close', async () => {
-    const api = new MockSandboxPluginAPI('/tmp/test.sock');
+    const api = new MockPluginAPIImpl('/tmp/test.sock');
 
     await api.send('method1', {});
     api.handleSocketClose();
@@ -803,7 +803,7 @@ describe('SandboxPluginAPI socket handling', () => {
   });
 
   it('should reject with ESOCKETCLOSED code on socket close', async () => {
-    const api = new MockSandboxPluginAPI('/tmp/test.sock');
+    const api = new MockPluginAPIImpl('/tmp/test.sock');
 
     await api.send('method1', {});
 
@@ -826,7 +826,7 @@ describe('SandboxPluginAPI socket handling', () => {
   });
 
   it('should track socket creation time', async () => {
-    const api = new MockSandboxPluginAPI('/tmp/test.sock');
+    const api = new MockPluginAPIImpl('/tmp/test.sock');
     const beforeConnect = Date.now();
 
     await api.send('method1', {});
@@ -839,13 +839,13 @@ describe('SandboxPluginAPI socket handling', () => {
   });
 });
 
-describe('Sandbox console implementation', () => {
+describe('Plugin console implementation', () => {
   interface LogEntry {
     level: 'error' | 'warn' | 'info' | 'log' | 'debug' | 'result';
     message: string;
   }
 
-  function createMockSandboxConsole(logs: LogEntry[]): Console {
+  function createMockPluginConsole(logs: LogEntry[]): Console {
     const log = (level: LogEntry['level']) => (...args: any[]) => {
       const message = args.map(arg =>
         typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
@@ -864,7 +864,7 @@ describe('Sandbox console implementation', () => {
 
   it('should capture log messages', () => {
     const logs: LogEntry[] = [];
-    const console = createMockSandboxConsole(logs);
+    const console = createMockPluginConsole(logs);
 
     console.log('test message');
 
@@ -874,7 +874,7 @@ describe('Sandbox console implementation', () => {
 
   it('should capture error messages', () => {
     const logs: LogEntry[] = [];
-    const console = createMockSandboxConsole(logs);
+    const console = createMockPluginConsole(logs);
 
     console.error('error occurred');
 
@@ -884,7 +884,7 @@ describe('Sandbox console implementation', () => {
 
   it('should capture warn messages', () => {
     const logs: LogEntry[] = [];
-    const console = createMockSandboxConsole(logs);
+    const console = createMockPluginConsole(logs);
 
     console.warn('warning message');
 
@@ -894,7 +894,7 @@ describe('Sandbox console implementation', () => {
 
   it('should stringify objects', () => {
     const logs: LogEntry[] = [];
-    const console = createMockSandboxConsole(logs);
+    const console = createMockPluginConsole(logs);
 
     console.log({ foo: 'bar', num: 42 });
 
@@ -904,7 +904,7 @@ describe('Sandbox console implementation', () => {
 
   it('should handle multiple arguments', () => {
     const logs: LogEntry[] = [];
-    const console = createMockSandboxConsole(logs);
+    const console = createMockPluginConsole(logs);
 
     console.log('Hello', 'world', 123);
 
@@ -914,7 +914,7 @@ describe('Sandbox console implementation', () => {
 
   it('should handle mixed types', () => {
     const logs: LogEntry[] = [];
-    const console = createMockSandboxConsole(logs);
+    const console = createMockPluginConsole(logs);
 
     console.log('Count:', 42, { status: 'ok' });
 
@@ -923,7 +923,7 @@ describe('Sandbox console implementation', () => {
   });
 });
 
-describe('Sandbox require blocking', () => {
+describe('Plugin require blocking', () => {
   const BLOCKED_MODULES = new Set([
     'fs', 'child_process', 'net', 'http', 'https',
     'cluster', 'process', 'vm', 'os', 'v8',
@@ -943,19 +943,19 @@ describe('Sandbox require blocking', () => {
   }
 
   it('should block dangerous built-in modules', () => {
-    const sandboxRequire = createSandboxRequire(BLOCKED_MODULES);
+    const pluginRequire = createSandboxRequire(BLOCKED_MODULES);
 
-    expect(() => sandboxRequire('fs')).toThrow('Module \'fs\' is blocked for security');
-    expect(() => sandboxRequire('child_process')).toThrow('blocked for security');
-    expect(() => sandboxRequire('net')).toThrow('blocked for security');
-    expect(() => sandboxRequire('http')).toThrow('blocked for security');
+    expect(() => pluginRequire('fs')).toThrow('Module \'fs\' is blocked for security');
+    expect(() => pluginRequire('child_process')).toThrow('blocked for security');
+    expect(() => pluginRequire('net')).toThrow('blocked for security');
+    expect(() => pluginRequire('http')).toThrow('blocked for security');
   });
 
   it('should allow safe modules', () => {
-    const sandboxRequire = createSandboxRequire(BLOCKED_MODULES);
+    const pluginRequire = createSandboxRequire(BLOCKED_MODULES);
 
     // Should not throw
-    expect(() => sandboxRequire('uuid')).not.toThrow();
+    expect(() => pluginRequire('uuid')).not.toThrow();
   });
 
   it('should block with node: prefix', () => {
@@ -963,15 +963,15 @@ describe('Sandbox require blocking', () => {
       'fs', 'node:fs',
       'net', 'node:net',
     ]);
-    const sandboxRequire = createSandboxRequire(extendedBlocked);
+    const pluginRequire = createSandboxRequire(extendedBlocked);
 
-    expect(() => sandboxRequire('node:fs')).toThrow('blocked for security');
-    expect(() => sandboxRequire('node:net')).toThrow('blocked for security');
+    expect(() => pluginRequire('node:fs')).toThrow('blocked for security');
+    expect(() => pluginRequire('node:net')).toThrow('blocked for security');
   });
 });
 
-describe('executeInSandbox function', () => {
-  interface SandboxTask {
+describe('executePlugin function', () => {
+  interface ExecutorTask {
     taskId: string;
     pluginId: string;
     compiledCode: string;
@@ -982,7 +982,7 @@ describe('executeInSandbox function', () => {
     timeout: number;
   }
 
-  interface SandboxResult {
+  interface ExecutorResult {
     taskId: string;
     success: boolean;
     result?: any;
@@ -995,7 +995,7 @@ describe('executeInSandbox function', () => {
     logs: any[];
   }
 
-  async function mockExecuteInSandbox(task: SandboxTask): Promise<SandboxResult> {
+  async function mockExecuteInSandbox(task: ExecutorTask): Promise<ExecutorResult> {
     const logs: any[] = [];
 
     try {
@@ -1029,7 +1029,7 @@ describe('executeInSandbox function', () => {
   }
 
   it('should execute plugin successfully', async () => {
-    const task: SandboxTask = {
+    const task: ExecutorTask = {
       taskId: 'task-1',
       pluginId: 'plugin-1',
       compiledCode: 'return params;',
@@ -1046,7 +1046,7 @@ describe('executeInSandbox function', () => {
   });
 
   it('should handle plugin errors', async () => {
-    const task: SandboxTask = {
+    const task: ExecutorTask = {
       taskId: 'task-2',
       pluginId: 'plugin-2',
       compiledCode: 'throw new Error("test error");',
@@ -1064,7 +1064,7 @@ describe('executeInSandbox function', () => {
   });
 
   it('should include headers in execution context', async () => {
-    const task: SandboxTask = {
+    const task: ExecutorTask = {
       taskId: 'task-3',
       pluginId: 'plugin-3',
       compiledCode: 'return headers;',
@@ -1080,7 +1080,7 @@ describe('executeInSandbox function', () => {
   });
 
   it('should respect execution timeout', async () => {
-    const task: SandboxTask = {
+    const task: ExecutorTask = {
       taskId: 'task-4',
       pluginId: 'plugin-4',
       compiledCode: 'timeout',
@@ -1098,7 +1098,7 @@ describe('executeInSandbox function', () => {
   });
 
   it('should provide httpRequestId for tracing', async () => {
-    const task: SandboxTask = {
+    const task: ExecutorTask = {
       taskId: 'task-5',
       pluginId: 'plugin-5',
       compiledCode: 'return httpRequestId;',
@@ -1113,7 +1113,7 @@ describe('executeInSandbox function', () => {
   });
 });
 
-describe('Error handling in sandbox', () => {
+describe('Error handling in executor', () => {
   it('should categorize SyntaxError', () => {
     const error = new SyntaxError('Unexpected token');
 

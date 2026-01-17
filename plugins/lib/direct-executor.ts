@@ -1,24 +1,19 @@
 /**
- * Sandbox Executor Module
+ * Plugin Executor Module
  *
- * Piscina worker that executes compiled JavaScript plugins in isolated node:vm contexts.
- * Each task gets a fresh vm.createContext() for complete isolation between executions.
+ * Piscina worker that executes compiled JavaScript plugins.
+ * Plugins run in worker threads for parallelism.
  */
 
-import * as vm from 'node:vm';
 import * as v8 from 'node:v8';
 import * as net from 'node:net';
 import { v4 as uuidv4 } from 'uuid';
-import type { PluginKVStore } from './kv';
 import { DefaultPluginKVStore } from './kv';
-import { LogInterceptor } from './logger';
-import { wrapForVm } from './compiler';
 import type { PluginAPI, PluginContext, PluginHeaders, Relayer } from './plugin';
 import {
   ApiResponseRelayerResponseData,
   ApiResponseRelayerStatusData,
   JsonRpcRequestNetworkRpcRequest,
-  JsonRpcResponseNetworkRpcResult,
   NetworkTransactionRequest,
   SignTransactionResponse,
   SignTransactionRequest,
@@ -29,70 +24,17 @@ import {
 import { DEFAULT_SOCKET_REQUEST_TIMEOUT_MS } from './constants';
 
 /**
- * Context Pool - Reuses VM contexts to avoid expensive createContext() calls.
- * Creating a VM context takes 5-20ms. By pooling, we reduce this to near-zero for warm workers.
- */
-class ContextPool {
-  private available: vm.Context[] = [];
-  private readonly maxSize = 10; // Max contexts to cache per worker
-
-  acquire(): vm.Context {
-    const ctx = this.available.pop();
-    if (ctx) {
-      // Reuse context - reset any mutable state
-      this.resetContext(ctx);
-      return ctx;
-    }
-    // Create new context if pool is empty
-    return this.createFreshContext();
-  }
-
-  release(ctx: vm.Context): void {
-    // Return to pool if not at capacity
-    if (this.available.length < this.maxSize) {
-      this.available.push(ctx);
-    }
-    // Otherwise let GC collect it
-  }
-
-  private createFreshContext(): vm.Context {
-    // This will be populated with globals in executeInSandbox
-    return vm.createContext({});
-  }
-
-  private resetContext(ctx: vm.Context): void {
-    // Reset any global pollution from previous execution
-    // This is much faster than creating a new context
-    try {
-      vm.runInContext(`
-        // Clear any plugin-added globals
-        if (typeof globalThis.__pluginState !== 'undefined') {
-          delete globalThis.__pluginState;
-        }
-      `, ctx, { timeout: 100 });
-    } catch {
-      // Ignore reset errors - context will be replaced
-    }
-  }
-
-  clear(): void {
-    // Emergency cleanup - drop all cached contexts
-    this.available = [];
-  }
-}
-
-/**
- * Script Cache - Reuses compiled VM scripts to avoid recompilation.
- * Compiling a script takes 1-5ms. Caching eliminates this for repeated code.
+ * Function Cache - Caches compiled plugin factory functions.
+ * Compiling with Function constructor takes 1-5ms. Caching eliminates this for repeated code.
  * Memory-aware: monitors heap usage and proactively evicts under pressure.
  */
-class ScriptCache {
-  private cache = new Map<string, { script: vm.Script; timestamp: number }>();
-  private readonly maxSize = 100; // Max scripts to cache per worker
+class FunctionCache {
+  private cache = new Map<string, { factory: Function; timestamp: number }>();
+  private readonly maxSize = 100; // Max functions to cache per worker
   private lastMemoryCheck = 0;
   private readonly memoryCheckInterval = 5000; // Check every 5s
 
-  get(code: string): vm.Script | undefined {
+  get(code: string): Function | undefined {
     // Periodic memory check on get operations
     this.maybeCheckMemory();
 
@@ -100,12 +42,12 @@ class ScriptCache {
     if (entry) {
       // Update access timestamp for LRU
       entry.timestamp = Date.now();
-      return entry.script;
+      return entry.factory;
     }
     return undefined;
   }
 
-  set(code: string, script: vm.Script): void {
+  set(code: string, factory: Function): void {
     // Check memory before adding
     this.maybeCheckMemory();
 
@@ -113,7 +55,7 @@ class ScriptCache {
     if (this.cache.size >= this.maxSize) {
       this.evictOldest(1);
     }
-    this.cache.set(code, { script, timestamp: Date.now() });
+    this.cache.set(code, { factory, timestamp: Date.now() });
   }
 
   /**
@@ -138,7 +80,7 @@ class ScriptCache {
       const evictCount = Math.max(1, Math.ceil(this.cache.size * 0.5));
       console.warn(
         `[worker-cache] HIGH memory pressure (${Math.round(heapUsedRatio * 100)}% of heap limit), ` +
-        `evicting ${evictCount} scripts`
+        `evicting ${evictCount} functions`
       );
       this.evictOldest(evictCount);
     } else if (heapUsedRatio >= 0.70 && this.cache.size > 0) {
@@ -146,7 +88,7 @@ class ScriptCache {
       const evictCount = Math.max(1, Math.ceil(this.cache.size * 0.25));
       console.warn(
         `[worker-cache] Memory pressure (${Math.round(heapUsedRatio * 100)}% of heap limit), ` +
-        `evicting ${evictCount} scripts`
+        `evicting ${evictCount} functions`
       );
       this.evictOldest(evictCount);
     }
@@ -165,16 +107,16 @@ class ScriptCache {
       evicted++;
     }
     if (evicted > 0) {
-      console.log(`[worker-cache] Evicted ${evicted} oldest scripts`);
+      console.log(`[worker-cache] Evicted ${evicted} oldest functions`);
     }
   }
 
   clear(): void {
-    // Emergency cleanup - drop all cached scripts
+    // Emergency cleanup - drop all cached functions
     const size = this.cache.size;
     this.cache.clear();
     if (size > 0) {
-      console.log(`[worker-cache] Emergency eviction: cleared ${size} cached scripts`);
+      console.log(`[worker-cache] Emergency eviction: cleared ${size} cached functions`);
     }
   }
 
@@ -286,15 +228,14 @@ class SocketPool {
   }
 }
 
-// Worker-level pools (thread-safe since Piscina workers are single-threaded)
-const contextPool = new ContextPool();
-const scriptCache = new ScriptCache();
+// Worker-level caches (thread-safe since Piscina workers are single-threaded)
+const functionCache = new FunctionCache();
 const socketPool = new SocketPool();
 
 /**
  * Task payload received from the worker pool
  */
-export interface SandboxTask {
+export interface ExecutorTask {
   /** Unique task ID for correlation */
   taskId: string;
   /** Plugin ID for KV namespacing */
@@ -322,9 +263,9 @@ export interface SandboxTask {
 }
 
 /**
- * Result returned from sandbox execution
+ * Result returned from plugin execution
  */
-export interface SandboxResult {
+export interface ExecutorResult {
   /** Task ID for correlation */
   taskId: string;
   /** Whether execution succeeded */
@@ -348,12 +289,11 @@ export interface LogEntry {
 }
 
 /**
- * Sandboxed Plugin API that communicates with the relayer via Unix socket.
- * This is a minimal implementation for use within the vm context.
+ * Plugin API that communicates with the relayer via Unix socket.
  * Connection is lazy - only established when first API call is made.
  * Uses socket pooling to reduce connection overhead.
  */
-class SandboxPluginAPI implements PluginAPI {
+class PluginAPIImpl implements PluginAPI {
   private socket: net.Socket | null = null;
   private pending: Map<string, { resolve: (value: any) => void; reject: (reason: any) => void }>;
   private connectionPromise: Promise<void> | null = null;
@@ -709,7 +649,7 @@ function safeStringify(value: unknown): string {
  * Creates a console-like object that captures logs with lazy stringification.
  * Stringification is deferred until logs are accessed to reduce overhead.
  */
-function createSandboxConsole(logs: LogEntry[]): Console {
+function createPluginConsole(logs: LogEntry[]): Console {
   const log = (level: LogEntry['level']) => (...args: any[]) => {
     // Store raw args, stringify lazily when accessed
     const entry: any = {
@@ -768,266 +708,42 @@ function createSandboxConsole(logs: LogEntry[]): Console {
 }
 
 /**
- * Executes a compiled plugin in an isolated vm context.
+ * Executes a compiled plugin.
  * This is the Piscina worker function.
- * Uses context pooling and script caching for performance.
+ * Uses function caching for performance.
  */
-export default async function executeInSandbox(task: SandboxTask): Promise<SandboxResult> {
+export default async function executePlugin(task: ExecutorTask): Promise<ExecutorResult> {
   const logs: LogEntry[] = [];
-  const api = new SandboxPluginAPI(task.socketPath, task.httpRequestId);
+  const api = new PluginAPIImpl(task.socketPath, task.httpRequestId);
   const kv = new DefaultPluginKVStore(task.pluginId);
 
-  // Acquire context from pool (much faster than creating new)
-  const context = contextPool.acquire();
-
   try {
-    // Create isolated context with limited globals
-    const sandboxConsole = createSandboxConsole(logs);
-
-    // Prepare the module wrapper
-    const wrappedCode = wrapForVm(task.compiledCode);
-
-    // Try to get cached script, otherwise compile and cache
-    let script = scriptCache.get(task.compiledCode);
-    if (!script) {
-      script = new vm.Script(wrappedCode, {
-        filename: `plugin-${task.pluginId}.js`,
-      });
-      scriptCache.set(task.compiledCode, script);
-    }
+    // Create console that captures logs
+    const pluginConsole = createPluginConsole(logs);
 
     // Create module-like objects for CommonJS compatibility
     const moduleExports: any = {};
     const moduleObject = { exports: moduleExports };
 
-    // Minimal crypto exposure - only safe ID generation
-    const safeCrypto = {
-      randomUUID: () => require('crypto').randomUUID(),
-      getRandomValues: (arr: Uint8Array) => require('crypto').getRandomValues(arr),
-    };
-
-    // Environment variables that should NEVER be exposed to plugins
-    // These contain secrets, credentials, or sensitive infrastructure details
-    const BLOCKED_ENV_PATTERNS = [
-      // Authentication & API keys
-      'API_KEY',
-      'WEBHOOK_SIGNING_KEY',
-      'STORAGE_ENCRYPTION_KEY',
-      'KEYSTORE_PASSPHRASE',
-      'REDIS_URL',
-    ];
-
-    // Create filtered environment - removes sensitive variables
-    const filteredEnv: Record<string, string | undefined> = {};
-    for (const [key, value] of Object.entries(process.env)) {
-      const upperKey = key.toUpperCase();
-      const isBlocked = BLOCKED_ENV_PATTERNS.some(pattern =>
-        upperKey === pattern.toUpperCase() || upperKey.includes(pattern.toUpperCase())
+    // Try to get cached factory function, otherwise compile and cache
+    let factory = functionCache.get(task.compiledCode);
+    if (!factory) {
+      // eslint-disable-next-line no-new-func
+      factory = new Function(
+        'exports',
+        'require',
+        'module',
+        '__filename',
+        '__dirname',
+        'console',
+        task.compiledCode
       );
-      if (!isBlocked) {
-        filteredEnv[key] = value;
-      }
+      functionCache.set(task.compiledCode, factory);
     }
 
-    // Safe process shim - exposes only non-dangerous properties
-    // Many libraries check for process existence or use safe properties
-    const safeProcess = {
-      nextTick: (callback: (...args: any[]) => void, ...args: any[]) => {
-        queueMicrotask(() => callback(...args));
-      },
-      version: process.version,
-      versions: { ...process.versions },
-      platform: process.platform,
-      arch: process.arch,
-      browser: false,
-      // Filtered env access - sensitive variables are removed
-      env: filteredEnv,
-      // Block dangerous properties by throwing errors
-      get argv() {
-        throw new Error('process.argv is not available in sandbox for security');
-      },
-      exit: () => {
-        throw new Error('process.exit() is not available in sandbox for security');
-      },
-      cwd: () => {
-        throw new Error('process.cwd() is not available in sandbox for security');
-      },
-      chdir: () => {
-        throw new Error('process.chdir() is not available in sandbox for security');
-      },
-      kill: () => {
-        throw new Error('process.kill() is not available in sandbox for security');
-      },
-    };
-
-    // Create sandboxRequire function
-    const BLOCKED_MODULES = new Set([
-      // Process/system control
-      'child_process', 'node:child_process',
-      'cluster', 'node:cluster',
-      'worker_threads', 'node:worker_threads',
-      'process', 'node:process',
-      // Low-level system
-      'os', 'node:os',
-      'v8', 'node:v8',
-      'vm', 'node:vm',
-      // Dangerous utilities
-      'repl', 'node:repl',
-      'inspector', 'node:inspector',
-      'perf_hooks', 'node:perf_hooks',
-      'async_hooks', 'node:async_hooks',
-      'trace_events', 'node:trace_events',
-      // Native modules (potential escape)
-      'module', 'node:module',
-    ]);
-
-    const sandboxRequire = (id: string): any => {
-      // Block dangerous built-in modules
-      if (BLOCKED_MODULES.has(id)) {
-        throw new Error(
-          `Module '${id}' is blocked for security. ` +
-          `Use the PluginAPI for network operations.`
-        );
-      }
-
-      // Allow everything else (SDK, npm packages like uuid, ethers, etc.)
-      try {
-        return require(id);
-      } catch (err) {
-        throw new Error(
-          `Module '${id}' not found. Ensure it's installed in plugins/node_modules.`
-        );
-      }
-    };
-
-    // Create a safe global object - isolated copy to prevent access to real globalThis
-    // Some libraries (e.g., Stellar SDK) add properties to global (like __USE_AXIOS__)
-    // so we can't freeze it, but it's still isolated per-execution
-    const safeGlobal: Record<string, any> = {
-      // Expose only safe primitives that libraries commonly check for
-      Buffer,
-      setTimeout,
-      setInterval,
-      setImmediate,
-      clearTimeout,
-      clearInterval,
-      clearImmediate,
-      queueMicrotask,
-      console: sandboxConsole,
-      process: safeProcess,
-    };
-
-    // Populate context with globals (reused context from pool)
-    // SECURITY: Only expose safe globals. Never expose:
-    // - process.argv, process.exit() (blocked via safe shim)
-    // - eval, Function constructor (code execution)
-    // - require for arbitrary modules
-    // global is an isolated mutable object (not raw globalThis) - safe for SDK usage
-    // NOTE: process.env is filtered - sensitive variables (API keys, passwords, etc.) are removed
-    Object.assign(context, {
-      // === Console for logging ===
-      console: sandboxConsole,
-
-      // === Node.js global compatibility ===
-      global: safeGlobal, // Frozen safe global (prevents sandbox escapes)
-      process: safeProcess, // Safe process shim (filtered env, no argv/exit)
-
-      // === CommonJS module system ===
-      exports: moduleExports,
-      require: sandboxRequire,
-      module: moduleObject,
-      __filename: `plugin-${task.pluginId}.js`,
-      __dirname: '/plugins',
-
-      // === Async primitives ===
-      setTimeout,
-      setInterval,
-      setImmediate,
-      clearTimeout,
-      clearInterval,
-      clearImmediate,
-      Promise,
-      queueMicrotask,
-
-      // === Core JS types (often needed explicitly) ===
-      Object,
-      Array,
-      String,
-      Number,
-      Boolean,
-      Symbol,
-      BigInt,
-      Map,
-      Set,
-      WeakMap,
-      WeakSet,
-      Date,
-      RegExp,
-      Math,
-      JSON,
-
-      // === Error types ===
-      Error,
-      TypeError,
-      RangeError,
-      SyntaxError,
-      ReferenceError,
-      URIError,
-      EvalError,
-
-      // === Number utilities ===
-      parseInt,
-      parseFloat,
-      isNaN,
-      isFinite,
-      Infinity,
-      NaN,
-
-      // === String/URL encoding ===
-      encodeURI,
-      decodeURI,
-      encodeURIComponent,
-      decodeURIComponent,
-      atob,
-      btoa,
-      URL,
-      URLSearchParams,
-
-      // === Binary data ===
-      Buffer,
-      ArrayBuffer,
-      SharedArrayBuffer,
-      Uint8Array,
-      Uint16Array,
-      Uint32Array,
-      Int8Array,
-      Int16Array,
-      Int32Array,
-      Float32Array,
-      Float64Array,
-      BigInt64Array,
-      BigUint64Array,
-      DataView,
-      TextEncoder,
-      TextDecoder,
-
-      // === Cancellation (modern async patterns) ===
-      AbortController,
-      AbortSignal,
-
-      // === Safe crypto subset (no signing/hashing secrets) ===
-      crypto: safeCrypto,
-
-      // === Reflection (needed by some libraries) ===
-      Reflect,
-      Proxy,
-    });
-
-    // Run cached script in reused context
-    const factory = script.runInContext(context, { timeout: task.timeout });
-
     // Execute the factory to populate module.exports
-    factory(moduleExports, sandboxRequire, moduleObject, `plugin-${task.pluginId}.js`, '/plugins');
+    // Pass our custom console to capture logs
+    factory(moduleExports, require, moduleObject, `plugin-${task.pluginId}.js`, '/plugins', pluginConsole);
 
     // Get the handler from exports
     const handler = moduleObject.exports.handler || moduleExports.handler;
@@ -1143,13 +859,10 @@ export default async function executeInSandbox(task: SandboxTask): Promise<Sandb
       logs,
     };
   } finally {
-    // Return context to pool for reuse
-    contextPool.release(context);
-
     // Close API socket (non-blocking, don't throw)
     try {
       api.close();
-    } catch (err) {
+    } catch {
       // Log but don't fail - cleanup is best-effort
     }
 

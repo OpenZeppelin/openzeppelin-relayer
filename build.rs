@@ -9,11 +9,11 @@ fn main() {
     }
 
     let node_modules = plugins_dir.join("node_modules");
-    let sandbox_executor_ts = plugins_dir.join("lib/sandbox-executor.ts");
-    let sandbox_executor_js = plugins_dir.join("lib/sandbox-executor.js");
+    let direct_executor_ts = plugins_dir.join("lib/direct-executor.ts");
+    let direct_executor_js = plugins_dir.join("lib/direct-executor.js");
 
     // Tell Cargo when to rerun this script
-    println!("cargo:rerun-if-changed=plugins/lib/sandbox-executor.ts");
+    println!("cargo:rerun-if-changed=plugins/lib/direct-executor.ts");
     println!("cargo:rerun-if-changed=plugins/package.json");
 
     // Check if pnpm is available
@@ -49,14 +49,14 @@ fn main() {
         }
     }
 
-    // Build sandbox-executor if source is newer than output (or output missing)
-    let needs_build = if !sandbox_executor_js.exists() {
+    // Build direct-executor if source is newer than output (or output missing)
+    let needs_build = if !direct_executor_js.exists() {
         true
     } else {
         // Compare modification times
         match (
-            sandbox_executor_ts.metadata().and_then(|m| m.modified()),
-            sandbox_executor_js.metadata().and_then(|m| m.modified()),
+            direct_executor_ts.metadata().and_then(|m| m.modified()),
+            direct_executor_js.metadata().and_then(|m| m.modified()),
         ) {
             (Ok(src_time), Ok(out_time)) => src_time > out_time,
             _ => true, // Rebuild if we can't determine
@@ -64,7 +64,7 @@ fn main() {
     };
 
     if needs_build {
-        println!("cargo:warning=Building sandbox-executor...");
+        println!("cargo:warning=Building direct-executor...");
         let output = Command::new("pnpm")
             .arg("run")
             .arg("build")
@@ -73,14 +73,14 @@ fn main() {
 
         match output {
             Ok(output) if output.status.success() => {
-                println!("cargo:warning=✓ sandbox-executor built successfully");
+                println!("cargo:warning=✓ direct-executor built successfully");
             }
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                println!("cargo:warning=sandbox-executor build failed: {stderr}");
+                println!("cargo:warning=direct-executor build failed: {stderr}");
             }
             Err(e) => {
-                println!("cargo:warning=Failed to build sandbox-executor: {e}");
+                println!("cargo:warning=Failed to build direct-executor: {e}");
             }
         }
     }
