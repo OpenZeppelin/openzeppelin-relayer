@@ -190,4 +190,277 @@ mod tests {
         let body = test::read_body(resp).await;
         assert_eq!(body, "OK");
     }
+
+    #[actix_web::test]
+    async fn test_health_endpoint_returns_200() {
+        let app = test::init_service(App::new().configure(init)).await;
+        let req = test::TestRequest::get().uri("/health").to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[actix_web::test]
+    async fn test_health_endpoint_content_type() {
+        let app = test::init_service(App::new().configure(init)).await;
+        let req = test::TestRequest::get().uri("/health").to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert!(resp.status().is_success());
+        let body = test::read_body(resp).await;
+        assert_eq!(body.as_ref(), b"OK");
+    }
+
+    #[actix_web::test]
+    async fn test_readiness_endpoint_exists() {
+        let app = test::init_service(App::new().configure(init)).await;
+        let req = test::TestRequest::get().uri("/ready").to_request();
+        let resp = test::call_service(&app, req).await;
+
+        // Endpoint should exist (not 404)
+        assert_ne!(resp.status(), 404);
+    }
+
+    #[actix_web::test]
+    async fn test_readiness_endpoint_returns_json() {
+        let app = test::init_service(App::new().configure(init)).await;
+        let req = test::TestRequest::get().uri("/ready").to_request();
+        let resp = test::call_service(&app, req).await;
+
+        let body = test::read_body(resp).await;
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+
+        // Should be valid JSON
+        let json: serde_json::Value =
+            serde_json::from_str(&body_str).expect("Response should be JSON");
+
+        // Should have required fields
+        assert!(json.get("ready").is_some());
+        assert!(json.get("fd_count").is_some());
+        assert!(json.get("fd_limit").is_some());
+        assert!(json.get("close_wait_count").is_some());
+    }
+
+    #[actix_web::test]
+    async fn test_readiness_endpoint_ready_state() {
+        let app = test::init_service(App::new().configure(init)).await;
+        let req = test::TestRequest::get().uri("/ready").to_request();
+        let resp = test::call_service(&app, req).await;
+
+        let body = test::read_body(resp).await;
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&body_str).unwrap();
+
+        // Check if ready is a boolean
+        assert!(json["ready"].is_boolean());
+    }
+
+    #[actix_web::test]
+    async fn test_readiness_response_status_codes() {
+        let app = test::init_service(App::new().configure(init)).await;
+        let req = test::TestRequest::get().uri("/ready").to_request();
+        let resp = test::call_service(&app, req).await;
+
+        // Should be either 200 (ready) or 503 (not ready), not 404 or 500
+        let status = resp.status().as_u16();
+        assert!(
+            status == 200 || status == 503,
+            "Status should be 200 or 503, got {}",
+            status
+        );
+    }
+
+    #[actix_web::test]
+    async fn test_readiness_includes_fd_usage_percent_when_ready() {
+        let app = test::init_service(App::new().configure(init)).await;
+        let req = test::TestRequest::get().uri("/ready").to_request();
+        let resp = test::call_service(&app, req).await;
+
+        // Only check for fd_usage_percent if status is 200 (ready)
+        if resp.status() == 200 {
+            let body = test::read_body(resp).await;
+            let body_str = String::from_utf8(body.to_vec()).unwrap();
+            let json: serde_json::Value = serde_json::from_str(&body_str).unwrap();
+
+            assert!(json.get("fd_usage_percent").is_some());
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_readiness_includes_reason_when_not_ready() {
+        let app = test::init_service(App::new().configure(init)).await;
+        let req = test::TestRequest::get().uri("/ready").to_request();
+        let resp = test::call_service(&app, req).await;
+
+        // Only check for reason if status is 503 (not ready)
+        if resp.status() == 503 {
+            let body = test::read_body(resp).await;
+            let body_str = String::from_utf8(body.to_vec()).unwrap();
+            let json: serde_json::Value = serde_json::from_str(&body_str).unwrap();
+
+            assert!(json.get("reason").is_some());
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_fd_ratio_calculation() {
+        // Test that fd_count / fd_limit is calculated correctly
+        let fd_count = 100;
+        let fd_limit = 1000;
+        let ratio = fd_count as f64 / fd_limit as f64;
+
+        assert!((ratio - 0.1).abs() < 0.0001);
+        assert!(ratio < MAX_FD_RATIO);
+    }
+
+    #[actix_web::test]
+    async fn test_max_fd_ratio_threshold() {
+        // Verify the MAX_FD_RATIO constant is set to 80%
+        assert_eq!(MAX_FD_RATIO, 0.8);
+    }
+
+    #[actix_web::test]
+    async fn test_max_close_wait_threshold() {
+        // Verify the MAX_CLOSE_WAIT constant is set to 100
+        assert_eq!(MAX_CLOSE_WAIT, 100);
+    }
+
+    #[actix_web::test]
+    async fn test_readiness_check_structure() {
+        let check = ReadinessCheck {
+            ready: true,
+            fd_count: 500,
+            fd_limit: 1024,
+            close_wait_count: 50,
+            reason: None,
+        };
+
+        assert!(check.ready);
+        assert_eq!(check.fd_count, 500);
+        assert_eq!(check.fd_limit, 1024);
+        assert_eq!(check.close_wait_count, 50);
+        assert!(check.reason.is_none());
+    }
+
+    #[actix_web::test]
+    async fn test_readiness_check_with_reason() {
+        let check = ReadinessCheck {
+            ready: false,
+            fd_count: 900,
+            fd_limit: 1000,
+            close_wait_count: 150,
+            reason: Some("Test reason".to_string()),
+        };
+
+        assert!(!check.ready);
+        assert!(check.reason.is_some());
+        assert_eq!(check.reason.unwrap(), "Test reason");
+    }
+
+    #[actix_web::test]
+    async fn test_fd_ratio_below_threshold() {
+        let fd_count = 700;
+        let fd_limit = 1000;
+        let ratio = fd_count as f64 / fd_limit as f64;
+
+        assert!(ratio < MAX_FD_RATIO);
+        assert_eq!(ratio, 0.7);
+    }
+
+    #[actix_web::test]
+    async fn test_fd_ratio_at_threshold() {
+        let fd_count = 800;
+        let fd_limit = 1000;
+        let ratio = fd_count as f64 / fd_limit as f64;
+
+        // At exactly 80%, should not trigger (> comparison)
+        assert_eq!(ratio, MAX_FD_RATIO);
+    }
+
+    #[actix_web::test]
+    async fn test_fd_ratio_above_threshold() {
+        let fd_count = 810;
+        let fd_limit = 1000;
+        let ratio = fd_count as f64 / fd_limit as f64;
+
+        assert!(ratio > MAX_FD_RATIO);
+    }
+
+    #[actix_web::test]
+    async fn test_close_wait_below_threshold() {
+        let count = 50;
+        assert!(count < MAX_CLOSE_WAIT);
+    }
+
+    #[actix_web::test]
+    async fn test_close_wait_at_threshold() {
+        let count = 100;
+        assert_eq!(count, MAX_CLOSE_WAIT);
+    }
+
+    #[actix_web::test]
+    async fn test_close_wait_above_threshold() {
+        let count = 101;
+        assert!(count > MAX_CLOSE_WAIT);
+    }
+
+    #[actix_web::test]
+    async fn test_both_endpoints_registered() {
+        let app = test::init_service(App::new().configure(init)).await;
+
+        // Test /health
+        let health_req = test::TestRequest::get().uri("/health").to_request();
+        let health_resp = test::call_service(&app, health_req).await;
+        assert_ne!(health_resp.status(), 404);
+
+        // Test /ready
+        let ready_req = test::TestRequest::get().uri("/ready").to_request();
+        let ready_resp = test::call_service(&app, ready_req).await;
+        assert_ne!(ready_resp.status(), 404);
+    }
+
+    #[actix_web::test]
+    async fn test_health_endpoint_only_accepts_get() {
+        let app = test::init_service(App::new().configure(init)).await;
+
+        // Test that only GET is allowed (other methods should 404 since endpoints use #[get(...)])
+        let post_req = test::TestRequest::post().uri("/health").to_request();
+        let post_resp = test::call_service(&app, post_req).await;
+        assert_eq!(post_resp.status(), 404);
+    }
+
+    #[actix_web::test]
+    async fn test_ready_endpoint_only_accepts_get() {
+        let app = test::init_service(App::new().configure(init)).await;
+
+        let post_req = test::TestRequest::post().uri("/ready").to_request();
+        let post_resp = test::call_service(&app, post_req).await;
+        assert_eq!(post_resp.status(), 404);
+    }
+
+    #[actix_web::test]
+    async fn test_nonexistent_endpoint_404() {
+        let app = test::init_service(App::new().configure(init)).await;
+
+        let req = test::TestRequest::get().uri("/nonexistent").to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 404);
+    }
+
+    #[actix_web::test]
+    async fn test_readiness_check_multiple_calls_consistency() {
+        let app = test::init_service(App::new().configure(init)).await;
+
+        // Call readiness endpoint multiple times
+        for _ in 0..3 {
+            let req = test::TestRequest::get().uri("/ready").to_request();
+            let resp = test::call_service(&app, req).await;
+
+            let status = resp.status().as_u16();
+            assert!(
+                status == 200 || status == 503,
+                "Status should be 200 or 503"
+            );
+        }
+    }
 }

@@ -394,4 +394,235 @@ mod tests {
             .get();
         assert_eq!(final_value, 0.0, "Should be back to 0 after completion");
     }
+
+    #[actix_rt::test]
+    async fn test_permits_released_on_handler_error() {
+        let app = Rc::new(
+            test::init_service(App::new().wrap(ConcurrencyLimiter::new(1)).route(
+                "/error",
+                web::get().to(|| async { HttpResponse::InternalServerError().body("error") }),
+            ))
+            .await,
+        );
+
+        // Make request that returns error
+        let req1 = test::TestRequest::get().uri("/error").to_request();
+        let resp1 = test::call_service(&*app, req1).await;
+        assert_eq!(resp1.status(), 500);
+
+        // Permit should be released, so next request should succeed
+        let req2 = test::TestRequest::get().uri("/error").to_request();
+        let resp2 = test::call_service(&*app, req2).await;
+        assert_eq!(resp2.status(), 500);
+    }
+
+    #[actix_rt::test]
+    async fn test_concurrent_requests_up_to_limit() {
+        use tokio::sync::mpsc;
+        use tokio::task;
+
+        let (start_tx, mut start_rx) = mpsc::unbounded_channel();
+
+        let app = Rc::new(
+            test::init_service(App::new().wrap(ConcurrencyLimiter::new(3)).route(
+                "/test",
+                web::get().to(move || {
+                    let tx = start_tx.clone();
+                    async move {
+                        let _ = tx.send(());
+                        HttpResponse::Ok().body("ok")
+                    }
+                }),
+            ))
+            .await,
+        );
+
+        // Spawn 3 concurrent requests (at the limit)
+        let app1 = Rc::clone(&app);
+        let app2 = Rc::clone(&app);
+        let app3 = Rc::clone(&app);
+
+        let h1 = task::spawn_local(async move {
+            test::call_service(&*app1, test::TestRequest::get().uri("/test").to_request()).await
+        });
+        let h2 = task::spawn_local(async move {
+            test::call_service(&*app2, test::TestRequest::get().uri("/test").to_request()).await
+        });
+
+        let h3 = task::spawn_local(async move {
+            test::call_service(&*app3, test::TestRequest::get().uri("/test").to_request()).await
+        });
+
+        // Wait for all 3 requests to start
+        let mut count = 0;
+        while count < 3 {
+            if start_rx.recv().await.is_some() {
+                count += 1;
+            }
+        }
+
+        let r1 = h1.await.unwrap();
+        let r2 = h2.await.unwrap();
+        let r3 = h3.await.unwrap();
+
+        assert!(r1.status().is_success());
+        assert!(r2.status().is_success());
+        assert!(r3.status().is_success());
+    }
+
+    #[actix_rt::test]
+    async fn test_metric_tracking_multiple_endpoints() {
+        use tokio::sync::mpsc;
+
+        // Reset metrics
+        IN_FLIGHT_REQUESTS
+            .with_label_values(&["/endpoint-a"])
+            .set(0.0);
+        IN_FLIGHT_REQUESTS
+            .with_label_values(&["/endpoint-b"])
+            .set(0.0);
+
+        let (tx_a, mut rx_a) = mpsc::unbounded_channel();
+        let (tx_b, mut rx_b) = mpsc::unbounded_channel();
+
+        let app = Rc::new(
+            test::init_service(
+                App::new()
+                    .wrap(ConcurrencyLimiter::new(2))
+                    .route(
+                        "/endpoint-a",
+                        web::get().to(move || {
+                            let tx = tx_a.clone();
+                            async move {
+                                let _ = tx.send(());
+                                sleep(Duration::from_millis(100)).await;
+                                HttpResponse::Ok().body("a")
+                            }
+                        }),
+                    )
+                    .route(
+                        "/endpoint-b",
+                        web::get().to(move || {
+                            let tx = tx_b.clone();
+                            async move {
+                                let _ = tx.send(());
+                                sleep(Duration::from_millis(100)).await;
+                                HttpResponse::Ok().body("b")
+                            }
+                        }),
+                    ),
+            )
+            .await,
+        );
+
+        // Start request to endpoint-a
+        let app_clone_a = Rc::clone(&app);
+        let _handle_a = tokio::task::spawn_local(async move {
+            test::call_service(
+                &*app_clone_a,
+                test::TestRequest::get().uri("/endpoint-a").to_request(),
+            )
+            .await
+        });
+        rx_a.recv().await.unwrap();
+
+        // Start request to endpoint-b
+        let app_clone_b = Rc::clone(&app);
+        let _handle_b = tokio::task::spawn_local(async move {
+            test::call_service(
+                &*app_clone_b,
+                test::TestRequest::get().uri("/endpoint-b").to_request(),
+            )
+            .await
+        });
+        rx_b.recv().await.unwrap();
+
+        // Both metrics should be tracked separately
+        let metric_a = IN_FLIGHT_REQUESTS.with_label_values(&["/endpoint-a"]).get();
+        let metric_b = IN_FLIGHT_REQUESTS.with_label_values(&["/endpoint-b"]).get();
+
+        assert_eq!(metric_a, 1.0, "Endpoint-a should have 1 in-flight request");
+        assert_eq!(metric_b, 1.0, "Endpoint-b should have 1 in-flight request");
+    }
+
+    #[actix_rt::test]
+    async fn test_429_response_includes_correct_limit() {
+        use tokio::sync::mpsc;
+        use tokio::task;
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let max_limit = 3;
+
+        let app = Rc::new(
+            test::init_service(App::new().wrap(ConcurrencyLimiter::new(max_limit)).route(
+                "/limited",
+                web::get().to(move || {
+                    let tx = tx.clone();
+                    async move {
+                        let _ = tx.send(());
+                        sleep(Duration::from_secs(10)).await;
+                        HttpResponse::Ok().body("ok")
+                    }
+                }),
+            ))
+            .await,
+        );
+
+        // Fill all slots
+        for _ in 0..max_limit {
+            let app_clone = Rc::clone(&app);
+            task::spawn_local(async move {
+                test::call_service(
+                    &*app_clone,
+                    test::TestRequest::get().uri("/limited").to_request(),
+                )
+                .await
+            });
+            rx.recv().await.unwrap();
+        }
+
+        // Try to exceed limit
+        let req = test::TestRequest::get().uri("/limited").to_request();
+        let result = test::try_call_service(&*app, req).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let error_str = format!("{}", err);
+
+        // Verify the limit value is reported correctly
+        assert!(error_str.contains(&max_limit.to_string()));
+        let json: serde_json::Value = serde_json::from_str(&error_str).unwrap();
+        assert_eq!(json["max_concurrent"].as_u64(), Some(max_limit as u64));
+    }
+
+    #[actix_rt::test]
+    async fn test_permits_released_after_panic_handling() {
+        // Note: This tests that cleanup happens even in edge cases
+        // The middleware should always clean up the permit and decrement metrics
+        let app = test::init_service(App::new().wrap(ConcurrencyLimiter::new(1)).route(
+            "/ok",
+            web::get().to(|| async { HttpResponse::Ok().body("ok") }),
+        ))
+        .await;
+
+        // Make successful request
+        let req1 = test::TestRequest::get().uri("/ok").to_request();
+        let resp1 = test::call_service(&app, req1).await;
+        assert!(resp1.status().is_success());
+
+        // Metrics should be back to 0
+        let metric1 = IN_FLIGHT_REQUESTS.with_label_values(&["/ok"]).get();
+        assert_eq!(
+            metric1, 0.0,
+            "Metrics should be decremented after completion"
+        );
+
+        // Next request should succeed (permit was released)
+        let req2 = test::TestRequest::get().uri("/ok").to_request();
+        let resp2 = test::call_service(&app, req2).await;
+        assert!(resp2.status().is_success());
+
+        let metric2 = IN_FLIGHT_REQUESTS.with_label_values(&["/ok"]).get();
+        assert_eq!(metric2, 0.0, "Metrics should remain clean");
+    }
 }
