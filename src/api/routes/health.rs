@@ -26,9 +26,11 @@ struct ReadinessCheck {
 }
 
 /// Maximum file descriptor ratio (80%)
+/// Maximum file descriptor usage ratio before marking service as unhealthy
 const MAX_FD_RATIO: f64 = 0.8;
 
 /// Maximum CLOSE_WAIT socket count
+/// Maximum number of CLOSE_WAIT state sockets before marking service as unhealthy
 const MAX_CLOSE_WAIT: usize = 100;
 
 /// Get file descriptor count for current process.

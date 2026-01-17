@@ -148,11 +148,16 @@ async fn main() -> Result<()> {
     })
     .bind((config.host.as_str(), config.port))
     .wrap_err_with(|| format!("Failed to bind server to {}:{}", config.host, config.port))?
-    .max_connections(config.max_connections) // Safety net: max concurrent connections server-wide
-    .backlog(config.connection_backlog) // TCP listen queue size
-    .keep_alive(Duration::from_secs(55)) // Set to 55s (less than ALB's 60s idle timeout)
-    .client_request_timeout(Duration::from_secs(config.request_timeout_seconds + 5)) // Overall request timeout (server-level safety net, 5 seconds more than request timeout to prevent connection drops)
-    .client_disconnect_timeout(Duration::from_secs(DEFAULT_CLIENT_DISCONNECT_TIMEOUT_SECONDS)) // Disconnect timeout
+    // Safety net: max concurrent connections server-wide
+    .max_connections(config.max_connections)
+    // TCP listen queue size
+    .backlog(config.connection_backlog)
+    // 55s (less than ALB's 60s idle timeout)
+    .keep_alive(Duration::from_secs(55))
+    // Overall request timeout (server-level safety net, 5 seconds more than request timeout to prevent connection drops)
+    .client_request_timeout(Duration::from_secs(config.request_timeout_seconds + 5))
+    // Disconnect timeout
+    .client_disconnect_timeout(Duration::from_secs(DEFAULT_CLIENT_DISCONNECT_TIMEOUT_SECONDS))
     .shutdown_timeout(5)
     .run();
 
