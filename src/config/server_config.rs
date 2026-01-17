@@ -82,6 +82,13 @@ pub struct ServerConfig {
     pub rpc_block_private_ips: bool,
     /// Maximum number of concurrent requests allowed for /api/v1/relayers/* endpoints.
     pub relayer_concurrency_limit: usize,
+    /// Maximum number of concurrent TCP connections server-wide.
+    pub max_connections: usize,
+    /// TCP listen connection backlog size (pending connections queue).
+    /// Higher values allow more connections to be queued during traffic bursts.
+    pub connection_backlog: u32,
+    /// Request handler timeout in seconds for API endpoints.
+    pub request_timeout_seconds: u64,
 }
 
 impl ServerConfig {
@@ -109,6 +116,8 @@ impl ServerConfig {
     /// - `PROVIDER_FAILURE_EXPIRATION_SECS` defaults to `60` (1 minute).
     /// - `REPOSITORY_STORAGE_TYPE` defaults to `"in_memory"`.
     /// - `TRANSACTION_EXPIRATION_HOURS` defaults to `4`.
+    /// - `REQUEST_TIMEOUT_SECONDS` defaults to `30` (security measure for DoS protection).
+    /// - `CONNECTION_BACKLOG` defaults to `511` (production-ready value for traffic bursts).
     pub fn from_env() -> Self {
         Self {
             host: Self::get_host(),
@@ -137,6 +146,9 @@ impl ServerConfig {
             rpc_allowed_hosts: Self::get_rpc_allowed_hosts(),
             rpc_block_private_ips: Self::get_rpc_block_private_ips(),
             relayer_concurrency_limit: Self::get_relayer_concurrency_limit(),
+            max_connections: Self::get_max_connections(),
+            connection_backlog: Self::get_connection_backlog(),
+            request_timeout_seconds: Self::get_request_timeout_seconds(),
         }
     }
 
@@ -376,6 +388,38 @@ impl ServerConfig {
             .unwrap_or_else(|_| "100".to_string())
             .parse()
             .unwrap_or(100)
+    }
+
+    /// Gets the max connections from environment variable or default (256)
+    pub fn get_max_connections() -> usize {
+        env::var("MAX_CONNECTIONS")
+            .unwrap_or_else(|_| "256".to_string())
+            .parse()
+            .unwrap_or(256)
+    }
+
+    /// Gets the connection backlog from environment variable or default (511)
+    ///
+    /// TCP listen backlog controls the size of the queue for pending connections.
+    /// Higher values allow more connections to be queued during traffic bursts,
+    /// preventing connection drops. Default of 511.
+    pub fn get_connection_backlog() -> u32 {
+        env::var("CONNECTION_BACKLOG")
+            .unwrap_or_else(|_| "511".to_string())
+            .parse()
+            .unwrap_or(511)
+    }
+
+    /// Gets the request timeout in seconds from environment variable or default (30)
+    ///
+    /// This is a security measure to prevent resource exhaustion attacks (DoS).
+    /// It limits how long a request handler can run, preventing slowloris-style
+    /// attacks and ensuring resources are freed promptly.
+    pub fn get_request_timeout_seconds() -> u64 {
+        env::var("REQUEST_TIMEOUT_SECONDS")
+            .unwrap_or_else(|_| "30".to_string())
+            .parse()
+            .unwrap_or(30)
     }
 
     /// Get worker concurrency from environment variable or use default

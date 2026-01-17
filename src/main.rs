@@ -46,16 +46,13 @@ use std::env;
 use tracing::info;
 
 use openzeppelin_relayer::{
-    api::{
-        self,
-        routes::{api_keys, health, metrics as api_metrics, network, notification, plugin, signer},
-    },
+    api,
     bootstrap::{
         initialize_app_state, initialize_relayers, initialize_token_swap_workers,
         initialize_workers, process_config_file,
     },
     config,
-    constants::PUBLIC_ENDPOINTS,
+    constants::{DEFAULT_CLIENT_DISCONNECT_TIMEOUT_SECONDS, PUBLIC_ENDPOINTS},
     logging::setup_logging,
     metrics,
     observability::RequestIdMiddleware,
@@ -143,30 +140,18 @@ async fn main() -> Result<()> {
             .wrap(middleware::DefaultHeaders::new())
             .wrap(middleware::NormalizePath::trim())
             .wrap(middleware::Compress::default())
+            .wrap(api::middleware::ConcurrencyLimiter::new(config.relayer_concurrency_limit))
             .app_data(app_state.clone())
-            .service(
-                web::scope("/api/v1")
-                    .wrap(api::middleware::TimeoutMiddleware::new(10)) // 10 second timeout for all /api/v1 routes
-                    .service(
-                        web::scope("/relayers")
-                            .wrap(api::middleware::ConcurrencyLimiter::new(config.relayer_concurrency_limit))
-                            .configure(api::routes::relayer::init)
-                    )
-                    .configure(health::init)
-                    .configure(plugin::init)
-                    .configure(api_metrics::init)
-                    .configure(notification::init)
-                    .configure(signer::init)
-                    .configure(api_keys::init)
-                    .configure(network::init)
-            )
+            .service(web::scope("/api/v1").configure(api::routes::configure_routes))
         }
     })
     .bind((config.host.as_str(), config.port))
     .wrap_err_with(|| format!("Failed to bind server to {}:{}", config.host, config.port))?
+    .max_connections(config.max_connections) // Safety net: max concurrent connections server-wide
+    .backlog(config.connection_backlog) // TCP listen queue size
     .keep_alive(Duration::from_secs(55)) // Set to 55s (less than ALB's 60s idle timeout)
-    .client_request_timeout(Duration::from_secs(10)) // Overall request timeout
-    .client_disconnect_timeout(Duration::from_secs(5)) // Disconnect timeout
+    .client_request_timeout(Duration::from_secs(config.request_timeout_seconds + 5)) // Overall request timeout (server-level safety net, 5 seconds more than request timeout to prevent connection drops)
+    .client_disconnect_timeout(Duration::from_secs(DEFAULT_CLIENT_DISCONNECT_TIMEOUT_SECONDS)) // Disconnect timeout
     .shutdown_timeout(5)
     .run();
 

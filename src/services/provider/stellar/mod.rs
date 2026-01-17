@@ -25,6 +25,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(test)]
 use mockall::automock;
 
+use crate::constants::{
+    DEFAULT_HTTP_CLIENT_CONNECT_TIMEOUT_SECONDS,
+    DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_INTERVAL_SECONDS,
+    DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_TIMEOUT_SECONDS,
+    DEFAULT_HTTP_CLIENT_POOL_IDLE_TIMEOUT_SECONDS, DEFAULT_HTTP_CLIENT_POOL_MAX_IDLE_PER_HOST,
+    DEFAULT_HTTP_CLIENT_TCP_KEEPALIVE_SECONDS,
+};
 use crate::models::{JsonRpcId, RpcConfig};
 use crate::services::provider::is_retriable_error;
 use crate::services::provider::retry::retry_rpc_call;
@@ -401,12 +408,16 @@ impl StellarProvider {
     fn initialize_raw_provider(&self, url: &str) -> Result<ReqwestClient, ProviderError> {
         ReqwestClient::builder()
             .timeout(self.timeout_seconds)
-            .connect_timeout(Duration::from_secs(2)) // Connection timeout: 2 seconds
-            .pool_max_idle_per_host(25) // Limit idle connections per host
-            .pool_idle_timeout(Duration::from_secs(30)) // Close idle connections after 30s
-            .tcp_keepalive(Duration::from_secs(30)) // TCP keepalive
-            .http2_keep_alive_interval(Some(Duration::from_secs(30))) // HTTP/2 keep-alive
-            .http2_keep_alive_timeout(Duration::from_secs(10)) // HTTP/2 keep-alive timeout
+            .connect_timeout(Duration::from_secs(DEFAULT_HTTP_CLIENT_CONNECT_TIMEOUT_SECONDS))
+            .pool_max_idle_per_host(DEFAULT_HTTP_CLIENT_POOL_MAX_IDLE_PER_HOST)
+            .pool_idle_timeout(Duration::from_secs(DEFAULT_HTTP_CLIENT_POOL_IDLE_TIMEOUT_SECONDS))
+            .tcp_keepalive(Duration::from_secs(DEFAULT_HTTP_CLIENT_TCP_KEEPALIVE_SECONDS))
+            .http2_keep_alive_interval(Some(Duration::from_secs(
+                DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_INTERVAL_SECONDS,
+            )))
+            .http2_keep_alive_timeout(Duration::from_secs(
+                DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_TIMEOUT_SECONDS,
+            ))
             .use_rustls_tls()
             // Allow only HTTP→HTTPS redirects on same host to handle legitimate protocol upgrades
             // while preventing SSRF via redirect chains to different hosts
