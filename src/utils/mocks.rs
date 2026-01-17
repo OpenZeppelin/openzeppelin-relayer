@@ -333,6 +333,7 @@ pub mod mockutils {
             transaction_expiration_hours: 4,
             rpc_allowed_hosts: vec![],
             rpc_block_private_ips: false,
+            relayer_concurrency_limit: 100,
         }
     }
 }

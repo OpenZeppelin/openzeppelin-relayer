@@ -80,6 +80,8 @@ pub struct ServerConfig {
     pub rpc_allowed_hosts: Vec<String>,
     /// If true, block private IP addresses (RFC 1918, loopback, link-local). Cloud metadata endpoints are always blocked.
     pub rpc_block_private_ips: bool,
+    /// Maximum number of concurrent requests allowed for /api/v1/relayers/* endpoints.
+    pub relayer_concurrency_limit: usize,
 }
 
 impl ServerConfig {
@@ -134,6 +136,7 @@ impl ServerConfig {
             transaction_expiration_hours: Self::get_transaction_expiration_hours(),
             rpc_allowed_hosts: Self::get_rpc_allowed_hosts(),
             rpc_block_private_ips: Self::get_rpc_block_private_ips(),
+            relayer_concurrency_limit: Self::get_relayer_concurrency_limit(),
         }
     }
 
@@ -365,6 +368,14 @@ impl ServerConfig {
         env::var("RPC_BLOCK_PRIVATE_IPS")
             .map(|v| v.to_lowercase() == "true")
             .unwrap_or(false)
+    }
+
+    /// Gets the relayer concurrency limit from environment variable or default (100)
+    pub fn get_relayer_concurrency_limit() -> usize {
+        env::var("RELAYER_CONCURRENCY_LIMIT")
+            .unwrap_or_else(|_| "100".to_string())
+            .parse()
+            .unwrap_or(100)
     }
 
     /// Get worker concurrency from environment variable or use default

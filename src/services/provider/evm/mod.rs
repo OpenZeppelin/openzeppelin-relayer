@@ -218,6 +218,12 @@ impl EvmProvider {
         // Using use_rustls_tls() forces the use of rustls instead of native-tls to support TLS 1.3
         let client = ReqwestClientBuilder::new()
             .timeout(Duration::from_secs(self.timeout_seconds))
+            .connect_timeout(Duration::from_secs(2)) // Connection timeout: 2 seconds
+            .pool_max_idle_per_host(25) // Limit idle connections per host
+            .pool_idle_timeout(Duration::from_secs(30)) // Close idle connections after 30s
+            .tcp_keepalive(Duration::from_secs(30)) // TCP keepalive
+            .http2_keep_alive_interval(Some(Duration::from_secs(30))) // HTTP/2 keep-alive
+            .http2_keep_alive_timeout(Duration::from_secs(10)) // HTTP/2 keep-alive timeout
             .use_rustls_tls()
             // Allow only HTTP→HTTPS redirects on same host to handle legitimate protocol upgrades
             // while preventing SSRF via redirect chains to different hosts

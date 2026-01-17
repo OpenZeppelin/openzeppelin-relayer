@@ -96,8 +96,13 @@ impl CdpService {
             .map_err(|e| CdpError::ConfigError(format!("Invalid CDP configuration: {e}")))?;
 
         let inner = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(5))
-            .timeout(Duration::from_secs(10))
+            .connect_timeout(Duration::from_secs(2)) // Connection timeout: 2 seconds
+            .timeout(Duration::from_secs(10)) // Overall timeout: 10 seconds
+            .pool_max_idle_per_host(25) // Limit idle connections per host
+            .pool_idle_timeout(Duration::from_secs(30)) // Close idle connections after 30s
+            .tcp_keepalive(Duration::from_secs(30)) // TCP keepalive
+            .http2_keep_alive_interval(Some(Duration::from_secs(30))) // HTTP/2 keep-alive
+            .http2_keep_alive_timeout(Duration::from_secs(10)) // HTTP/2 keep-alive timeout
             .build()
             .map_err(|e| CdpError::ConfigError(format!("Failed to build HTTP client: {e}")))?;
         let wallet_client = ClientBuilder::new(inner).with(wallet_auth).build();

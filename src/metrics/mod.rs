@@ -6,7 +6,7 @@
 pub mod middleware;
 use lazy_static::lazy_static;
 use prometheus::{
-    CounterVec, Encoder, Gauge, HistogramOpts, HistogramVec, Opts, Registry, TextEncoder,
+    CounterVec, Encoder, Gauge, GaugeVec, HistogramOpts, HistogramVec, Opts, Registry, TextEncoder,
 };
 use sysinfo::{Disks, System};
 
@@ -96,6 +96,38 @@ lazy_static! {
       REGISTRY.register(Box::new(gauge.clone())).unwrap();
       gauge
     };
+
+    // Gauge for in-flight requests.
+    pub static ref IN_FLIGHT_REQUESTS: GaugeVec = {
+        let gauge_vec = GaugeVec::new(
+            Opts::new("in_flight_requests", "Number of in-flight requests"),
+            &["endpoint"]
+        ).unwrap();
+        REGISTRY.register(Box::new(gauge_vec.clone())).unwrap();
+        gauge_vec
+    };
+
+    // Counter for request timeouts.
+    pub static ref TIMEOUT_COUNTER: CounterVec = {
+        let opts = Opts::new("request_timeouts_total", "Total number of request timeouts");
+        let counter_vec = CounterVec::new(opts, &["endpoint", "method", "timeout_type"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
+
+    // Gauge for file descriptor count.
+    pub static ref FILE_DESCRIPTORS: Gauge = {
+        let gauge = Gauge::new("file_descriptors_count", "Current file descriptor count").unwrap();
+        REGISTRY.register(Box::new(gauge.clone())).unwrap();
+        gauge
+    };
+
+    // Gauge for CLOSE_WAIT socket count.
+    pub static ref CLOSE_WAIT_SOCKETS: Gauge = {
+        let gauge = Gauge::new("close_wait_sockets_count", "Number of CLOSE_WAIT sockets").unwrap();
+        REGISTRY.register(Box::new(gauge.clone())).unwrap();
+        gauge
+    };
 }
 
 /// Gather all metrics and encode into the provided format.
@@ -105,6 +137,56 @@ pub fn gather_metrics() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let mut buffer = Vec::new();
     encoder.encode(&metric_families, &mut buffer)?;
     Ok(buffer)
+}
+
+/// Get file descriptor count for current process.
+fn get_fd_count() -> Result<usize, std::io::Error> {
+    let pid = std::process::id();
+
+    #[cfg(target_os = "linux")]
+    {
+        let fd_dir = format!("/proc/{}/fd", pid);
+        std::fs::read_dir(fd_dir).map(|entries| entries.count())
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        let output = Command::new("lsof")
+            .args(["-p", &pid.to_string()])
+            .output()?;
+        let count = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .count()
+            .saturating_sub(1); // Subtract header line
+        Ok(count)
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        Ok(0) // Unsupported platform
+    }
+}
+
+/// Get CLOSE_WAIT socket count.
+fn get_close_wait_count() -> Result<usize, std::io::Error> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        use std::process::Command;
+        let output = Command::new("sh")
+            .args(["-c", "netstat -an | grep CLOSE_WAIT | wc -l"])
+            .output()?;
+        let count = String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse()
+            .unwrap_or(0);
+        Ok(count)
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        Ok(0) // Unsupported platform
+    }
 }
 
 /// Updates the system metrics for CPU and memory usage.
@@ -156,6 +238,16 @@ pub fn update_system_metrics() {
         0.0
     };
     DISK_USAGE_PERCENT.set(disk_percentage);
+
+    // Update file descriptor count.
+    if let Ok(fd_count) = get_fd_count() {
+        FILE_DESCRIPTORS.set(fd_count as f64);
+    }
+
+    // Update CLOSE_WAIT socket count.
+    if let Ok(close_wait) = get_close_wait_count() {
+        CLOSE_WAIT_SOCKETS.set(close_wait as f64);
+    }
 }
 
 #[cfg(test)]
