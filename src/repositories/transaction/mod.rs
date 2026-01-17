@@ -45,12 +45,34 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
         query: PaginationQuery,
     ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
 
-    /// Find transactions by relayer ID and status(es)
+    /// Find transactions by relayer ID and status(es).
+    ///
+    /// Results are sorted by created_at descending (newest first).
     async fn find_by_status(
         &self,
         relayer_id: &str,
         statuses: &[TransactionStatus],
     ) -> Result<Vec<TransactionRepoModel>, RepositoryError>;
+
+    /// Find transactions by relayer ID and status(es) with pagination.
+    ///
+    /// Results are sorted by timestamp:
+    /// - For Confirmed transactions: sorted by confirmed_at (on-chain confirmation order)
+    /// - For all other statuses: sorted by created_at (queue/processing order)
+    ///
+    /// The `oldest_first` parameter controls sort direction:
+    /// - `false` (default): newest first (descending) - for displaying recent transactions
+    /// - `true`: oldest first (ascending) - for FIFO queue processing
+    ///
+    /// For multi-status queries, transactions are merged and sorted using the same rules,
+    /// ensuring consistent ordering across different statuses.
+    async fn find_by_status_paginated(
+        &self,
+        relayer_id: &str,
+        statuses: &[TransactionStatus],
+        query: PaginationQuery,
+        oldest_first: bool,
+    ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
 
     /// Find a transaction by relayer ID and nonce
     async fn find_by_nonce(
@@ -93,6 +115,14 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
         tx_id: String,
         confirmed_at: String,
     ) -> Result<TransactionRepoModel, RepositoryError>;
+
+    /// Count transactions by status(es) without fetching full transaction data.
+    /// This is an optimized O(1) operation in Redis using ZCARD.
+    async fn count_by_status(
+        &self,
+        relayer_id: &str,
+        statuses: &[TransactionStatus],
+    ) -> Result<u64, RepositoryError>;
 }
 
 #[cfg(test)]
@@ -116,12 +146,14 @@ mockall::mock! {
   impl TransactionRepository for TransactionRepository {
       async fn find_by_relayer_id(&self, relayer_id: &str, query: PaginationQuery) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
       async fn find_by_status(&self, relayer_id: &str, statuses: &[TransactionStatus]) -> Result<Vec<TransactionRepoModel>, RepositoryError>;
+      async fn find_by_status_paginated(&self, relayer_id: &str, statuses: &[TransactionStatus], query: PaginationQuery, oldest_first: bool) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
       async fn find_by_nonce(&self, relayer_id: &str, nonce: u64) -> Result<Option<TransactionRepoModel>, RepositoryError>;
       async fn update_status(&self, tx_id: String, status: TransactionStatus) -> Result<TransactionRepoModel, RepositoryError>;
       async fn partial_update(&self, tx_id: String, update: TransactionUpdateRequest) -> Result<TransactionRepoModel, RepositoryError>;
       async fn update_network_data(&self, tx_id: String, network_data: NetworkTransactionData) -> Result<TransactionRepoModel, RepositoryError>;
       async fn set_sent_at(&self, tx_id: String, sent_at: String) -> Result<TransactionRepoModel, RepositoryError>;
       async fn set_confirmed_at(&self, tx_id: String, confirmed_at: String) -> Result<TransactionRepoModel, RepositoryError>;
+      async fn count_by_status(&self, relayer_id: &str, statuses: &[TransactionStatus]) -> Result<u64, RepositoryError>;
 
   }
 }
@@ -176,6 +208,25 @@ impl TransactionRepository for TransactionRepositoryStorage {
             }
             TransactionRepositoryStorage::Redis(repo) => {
                 repo.find_by_status(relayer_id, statuses).await
+            }
+        }
+    }
+
+    async fn find_by_status_paginated(
+        &self,
+        relayer_id: &str,
+        statuses: &[TransactionStatus],
+        query: PaginationQuery,
+        oldest_first: bool,
+    ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
+        match self {
+            TransactionRepositoryStorage::InMemory(repo) => {
+                repo.find_by_status_paginated(relayer_id, statuses, query, oldest_first)
+                    .await
+            }
+            TransactionRepositoryStorage::Redis(repo) => {
+                repo.find_by_status_paginated(relayer_id, statuses, query, oldest_first)
+                    .await
             }
         }
     }
@@ -256,6 +307,21 @@ impl TransactionRepository for TransactionRepositoryStorage {
             }
             TransactionRepositoryStorage::Redis(repo) => {
                 repo.set_confirmed_at(tx_id, confirmed_at).await
+            }
+        }
+    }
+
+    async fn count_by_status(
+        &self,
+        relayer_id: &str,
+        statuses: &[TransactionStatus],
+    ) -> Result<u64, RepositoryError> {
+        match self {
+            TransactionRepositoryStorage::InMemory(repo) => {
+                repo.count_by_status(relayer_id, statuses).await
+            }
+            TransactionRepositoryStorage::Redis(repo) => {
+                repo.count_by_status(relayer_id, statuses).await
             }
         }
     }

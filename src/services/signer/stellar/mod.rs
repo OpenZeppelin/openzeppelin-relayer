@@ -58,7 +58,7 @@ pub trait StellarSignTrait: Sync + Send {
 pub enum StellarSigner {
     Local(Box<LocalSigner>),
     Vault(VaultSigner<VaultService>),
-    GoogleCloudKms(GoogleCloudKmsSigner),
+    GoogleCloudKms(Box<GoogleCloudKmsSigner>),
     AwsKms(AwsKmsSigner),
     Turnkey(TurnkeySigner),
 }
@@ -155,7 +155,7 @@ impl StellarSignerFactory {
             SignerConfig::GoogleCloudKms(config) => {
                 let service = GoogleCloudKmsService::new(config)
                     .map_err(|e| SignerFactoryError::CreationFailed(e.to_string()))?;
-                StellarSigner::GoogleCloudKms(GoogleCloudKmsSigner::new(service))
+                StellarSigner::GoogleCloudKms(Box::new(GoogleCloudKmsSigner::new(service)))
             }
             SignerConfig::Turnkey(config) => {
                 let service = TurnkeyService::new(config.clone())

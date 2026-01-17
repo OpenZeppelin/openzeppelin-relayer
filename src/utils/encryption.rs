@@ -4,7 +4,7 @@
 //! It's designed to be used transparently in the repository layer to protect data at rest.
 
 use aes_gcm::{
-    aead::{rand_core::RngCore, Aead, KeyInit, OsRng},
+    aead::{rand_core::RngCore, Aead, KeyInit, OsRng, Payload},
     Aes256Gcm, Key, Nonce,
 };
 use serde::{Deserialize, Serialize};
@@ -14,7 +14,7 @@ use zeroize::Zeroize;
 
 use crate::{
     models::SecretString,
-    utils::{base64_decode, base64_encode},
+    utils::{base64_decode, base64_encode, EncryptionContext},
 };
 
 #[derive(Error, Debug, Clone)]
@@ -31,6 +31,10 @@ pub enum EncryptionError {
     MissingKey(String),
     #[error("Invalid key length: expected 32 bytes, got {0}")]
     InvalidKeyLength(usize),
+    #[error("Missing AAD for v2 decryption")]
+    MissingAAD,
+    #[error("Unsupported encryption version: {0}")]
+    UnsupportedVersion(u8),
 }
 
 /// Encrypted data container that holds the nonce and ciphertext
@@ -113,7 +117,7 @@ impl FieldEncryption {
         })
     }
 
-    /// Decrypts an EncryptedData structure and returns the plaintext
+    /// Decrypts an EncryptedData structure and returns the plaintext (v1, no AAD)
     pub fn decrypt(&self, encrypted_data: &EncryptedData) -> Result<Vec<u8>, EncryptionError> {
         if encrypted_data.version != 1 {
             return Err(EncryptionError::InvalidFormat(format!(
@@ -149,6 +153,113 @@ impl FieldEncryption {
             .map_err(|e| EncryptionError::DecryptionFailed(e.to_string()))?;
 
         Ok(plaintext)
+    }
+
+    /// Encrypts plaintext data with AAD and returns an EncryptedData structure (version 2)
+    ///
+    /// AAD (Additional Authenticated Data) binds the ciphertext to a specific context,
+    /// preventing ciphertext swap attacks where encrypted data could be moved between
+    /// different storage locations.
+    pub fn encrypt_with_aad(
+        &self,
+        plaintext: &[u8],
+        aad: &[u8],
+    ) -> Result<EncryptedData, EncryptionError> {
+        // Generate random 12-byte nonce for GCM
+        let mut nonce_bytes = [0u8; 12];
+        OsRng.fill_bytes(&mut nonce_bytes);
+        let nonce = Nonce::from(nonce_bytes);
+
+        // Encrypt the data with AAD
+        let ciphertext = self
+            .cipher
+            .encrypt(
+                &nonce,
+                Payload {
+                    msg: plaintext,
+                    aad,
+                },
+            )
+            .map_err(|e| EncryptionError::EncryptionFailed(e.to_string()))?;
+
+        Ok(EncryptedData {
+            nonce: base64_encode(&nonce_bytes),
+            ciphertext: base64_encode(&ciphertext),
+            version: 2, // Version 2 indicates AAD was used
+        })
+    }
+
+    /// Decrypts an EncryptedData structure with AAD and returns the plaintext (version 2)
+    ///
+    /// The AAD must match what was used during encryption, otherwise decryption will fail.
+    /// This prevents ciphertext swap attacks.
+    pub fn decrypt_with_aad(
+        &self,
+        encrypted_data: &EncryptedData,
+        aad: &[u8],
+    ) -> Result<Vec<u8>, EncryptionError> {
+        if encrypted_data.version != 2 {
+            return Err(EncryptionError::InvalidFormat(format!(
+                "Expected version 2 for AAD decryption, got {}",
+                encrypted_data.version
+            )));
+        }
+
+        // Decode nonce and ciphertext
+        let nonce_bytes = base64_decode(&encrypted_data.nonce)
+            .map_err(|e| EncryptionError::InvalidFormat(format!("Invalid nonce: {e}")))?;
+
+        let ciphertext_bytes = base64_decode(&encrypted_data.ciphertext)
+            .map_err(|e| EncryptionError::InvalidFormat(format!("Invalid ciphertext: {e}")))?;
+
+        if nonce_bytes.len() != 12 {
+            return Err(EncryptionError::InvalidFormat(format!(
+                "Invalid nonce length: expected 12, got {}",
+                nonce_bytes.len()
+            )));
+        }
+
+        let nonce_array: [u8; 12] = nonce_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| EncryptionError::InvalidFormat("Invalid nonce length".to_string()))?;
+        let nonce = Nonce::from(nonce_array);
+
+        // Decrypt the data with AAD
+        let plaintext = self
+            .cipher
+            .decrypt(
+                &nonce,
+                Payload {
+                    msg: &ciphertext_bytes,
+                    aad,
+                },
+            )
+            .map_err(|e| EncryptionError::DecryptionFailed(e.to_string()))?;
+
+        Ok(plaintext)
+    }
+
+    /// Auto-detect version and decrypt accordingly
+    ///
+    /// - Version 1: Decrypts without AAD (legacy)
+    /// - Version 2: Decrypts with AAD (requires aad parameter)
+    ///
+    /// This enables backwards compatibility with existing v1 encrypted data
+    /// while supporting the new v2 format with AAD.
+    pub fn decrypt_auto(
+        &self,
+        encrypted_data: &EncryptedData,
+        aad: Option<&[u8]>,
+    ) -> Result<Vec<u8>, EncryptionError> {
+        match encrypted_data.version {
+            1 => self.decrypt(encrypted_data),
+            2 => {
+                let aad = aad.ok_or(EncryptionError::MissingAAD)?;
+                self.decrypt_with_aad(encrypted_data, aad)
+            }
+            v => Err(EncryptionError::UnsupportedVersion(v)),
+        }
     }
 
     /// Encrypts a string and returns base64-encoded encrypted data (opaque format)
@@ -242,6 +353,76 @@ pub fn decrypt_sensitive_field(data: &str) -> Result<String, EncryptionError> {
             if let Ok(encrypted_data) = serde_json::from_str::<EncryptedData>(&json_str) {
                 // This is encrypted data, decrypt it
                 let plaintext_bytes = encryption.decrypt(&encrypted_data)?;
+                return String::from_utf8(plaintext_bytes).map_err(|e| {
+                    EncryptionError::DecryptionFailed(format!("Invalid UTF-8 in plaintext: {e}"))
+                });
+            }
+        }
+    }
+
+    // If we get here, either encryption is not configured, or this is fallback data
+    // Try to parse as JSON string (fallback format)
+    serde_json::from_str(&json_str)
+        .map_err(|e| EncryptionError::DecryptionFailed(format!("Invalid JSON string: {e}")))
+}
+
+/// Encrypts sensitive data with AAD (Additional Authenticated Data)
+///
+/// AAD is automatically retrieved from `EncryptionContext` and binds the ciphertext
+/// to a specific context (e.g., Redis key), preventing ciphertext swap attacks.
+/// The `EncryptionContext` must be set before calling this function.
+pub fn encrypt_sensitive_field_with_aad(data: &str) -> Result<String, EncryptionError> {
+    // Get AAD from context (required)
+    let aad = EncryptionContext::get().ok_or_else(|| {
+        EncryptionError::EncryptionFailed("EncryptionContext not set".to_string())
+    })?;
+
+    if FieldEncryption::is_configured() {
+        match get_encryption() {
+            Ok(encryption) => {
+                let encrypted_data =
+                    encryption.encrypt_with_aad(data.as_bytes(), aad.as_bytes())?;
+                let json_data = serde_json::to_string(&encrypted_data).map_err(|e| {
+                    EncryptionError::EncryptionFailed(format!("Serialization failed: {e}"))
+                })?;
+                Ok(base64_encode(json_data.as_bytes()))
+            }
+            Err(e) => Err(e.clone()),
+        }
+    } else {
+        // For development/testing when encryption is not configured,
+        // base64-encode the JSON string for consistency
+        let json_data = serde_json::to_string(data)
+            .map_err(|e| EncryptionError::EncryptionFailed(format!("JSON encoding failed: {e}")))?;
+        Ok(base64_encode(json_data.as_bytes()))
+    }
+}
+
+/// Decrypts sensitive data with automatic version detection
+///
+/// - Version 1: Decrypts without AAD (legacy, backwards compatible)
+/// - Version 2: Decrypts with AAD (retrieved from `EncryptionContext` if available)
+///
+/// The `EncryptionContext` is automatically retrieved if set for v2 decryption.
+pub fn decrypt_sensitive_field_auto(data: &str) -> Result<String, EncryptionError> {
+    // Get AAD from context if available (for v2 decryption)
+    let aad = EncryptionContext::get();
+
+    // Always try to decode base64 first
+    let json_bytes = base64_decode(data)
+        .map_err(|e| EncryptionError::InvalidFormat(format!("Invalid base64: {e}")))?;
+
+    let json_str = String::from_utf8(json_bytes)
+        .map_err(|e| EncryptionError::InvalidFormat(format!("Invalid UTF-8: {e}")))?;
+
+    // Try to parse as encrypted data first (if encryption is configured)
+    if FieldEncryption::is_configured() {
+        if let Ok(encryption) = get_encryption() {
+            // Check if this looks like encrypted data by trying to parse as EncryptedData
+            if let Ok(encrypted_data) = serde_json::from_str::<EncryptedData>(&json_str) {
+                // Use auto-detect to handle both v1 and v2
+                let aad_bytes = aad.as_deref().map(|s| s.as_bytes());
+                let plaintext_bytes = encryption.decrypt_auto(&encrypted_data, aad_bytes)?;
                 return String::from_utf8(plaintext_bytes).map_err(|e| {
                     EncryptionError::DecryptionFailed(format!("Invalid UTF-8 in plaintext: {e}"))
                 });
@@ -392,18 +573,25 @@ mod tests {
 
     #[test]
     fn test_high_level_encryption_functions() {
+        // Use direct FieldEncryption instance to avoid global OnceLock issues
+        // that cause test flakiness when tests run in different orders
+        let key = [8u8; 32];
+        let encryption = FieldEncryption::new_with_key(&key).unwrap();
+
         let plaintext = "sensitive data";
 
-        // Test that the high-level encrypt/decrypt functions work together
-        let encoded = encrypt_sensitive_field(plaintext).unwrap();
-        let decoded = decrypt_sensitive_field(&encoded).unwrap();
+        // Test that encrypt_string/decrypt_string work together
+        let encoded = encryption.encrypt_string(plaintext).unwrap();
+        let decoded = encryption.decrypt_string(&encoded).unwrap();
         assert_eq!(plaintext, decoded);
 
-        // All outputs should now be base64-encoded (whether encrypted or fallback)
+        // All outputs should be base64-encoded
         assert!(base64_decode(&encoded).is_ok());
 
-        // Just verify it works - don't make assumptions about internal format
-        // since global encryption state may vary between test runs
+        // Test raw encrypt/decrypt as well
+        let encrypted_data = encryption.encrypt(plaintext.as_bytes()).unwrap();
+        let decrypted_bytes = encryption.decrypt(&encrypted_data).unwrap();
+        assert_eq!(plaintext.as_bytes(), decrypted_bytes.as_slice());
     }
 
     #[test]
@@ -471,5 +659,435 @@ mod tests {
         // Should decrypt correctly
         let decrypted = encryption.decrypt_string(&encrypted).unwrap();
         assert_eq!(plaintext, decrypted);
+    }
+
+    // ========== AAD (Additional Authenticated Data) Tests ==========
+
+    #[test]
+    fn test_encrypt_decrypt_with_aad() {
+        let key = [0u8; 32];
+        let encryption = FieldEncryption::new_with_key(&key).unwrap();
+        let plaintext = b"secret";
+        let aad = b"oz-relayer:signer:test-id";
+
+        let encrypted = encryption.encrypt_with_aad(plaintext, aad).unwrap();
+        assert_eq!(encrypted.version, 2);
+
+        let decrypted = encryption.decrypt_with_aad(&encrypted, aad).unwrap();
+        assert_eq!(plaintext, decrypted.as_slice());
+    }
+
+    #[test]
+    fn test_wrong_aad_fails() {
+        let key = [0u8; 32];
+        let encryption = FieldEncryption::new_with_key(&key).unwrap();
+        let plaintext = b"secret";
+
+        let encrypted = encryption.encrypt_with_aad(plaintext, b"key-A").unwrap();
+        let result = encryption.decrypt_with_aad(&encrypted, b"key-B");
+
+        assert!(result.is_err()); // AAD mismatch → decryption fails
+        if let Err(EncryptionError::DecryptionFailed(_)) = result {
+            // Expected
+        } else {
+            panic!("Expected DecryptionFailed error for AAD mismatch");
+        }
+    }
+
+    #[test]
+    fn test_v1_backwards_compatibility() {
+        let key = [0u8; 32];
+        let encryption = FieldEncryption::new_with_key(&key).unwrap();
+        let plaintext = b"secret";
+
+        // Encrypt with v1 (no AAD)
+        let encrypted = encryption.encrypt(plaintext).unwrap();
+        assert_eq!(encrypted.version, 1);
+
+        // Decrypt with auto-detect (no AAD needed for v1)
+        let decrypted = encryption.decrypt_auto(&encrypted, None).unwrap();
+        assert_eq!(plaintext, decrypted.as_slice());
+    }
+
+    #[test]
+    fn test_v2_requires_aad() {
+        let key = [0u8; 32];
+        let encryption = FieldEncryption::new_with_key(&key).unwrap();
+        let plaintext = b"secret";
+        let aad = b"storage-key";
+
+        // Encrypt with v2 (with AAD)
+        let encrypted = encryption.encrypt_with_aad(plaintext, aad).unwrap();
+        assert_eq!(encrypted.version, 2);
+
+        // Decrypt with auto-detect but no AAD → should fail
+        let result = encryption.decrypt_auto(&encrypted, None);
+        assert!(matches!(result, Err(EncryptionError::MissingAAD)));
+
+        // Decrypt with correct AAD → should succeed
+        let decrypted = encryption.decrypt_auto(&encrypted, Some(aad)).unwrap();
+        assert_eq!(plaintext, decrypted.as_slice());
+    }
+
+    #[test]
+    fn test_decrypt_auto_unsupported_version() {
+        let key = [0u8; 32];
+        let encryption = FieldEncryption::new_with_key(&key).unwrap();
+
+        let invalid_data = EncryptedData {
+            nonce: base64_encode(&[0u8; 12]),
+            ciphertext: base64_encode(b"fake"),
+            version: 99, // Unsupported version
+        };
+
+        let result = encryption.decrypt_auto(&invalid_data, None);
+        assert!(matches!(
+            result,
+            Err(EncryptionError::UnsupportedVersion(99))
+        ));
+    }
+
+    #[test]
+    fn test_encrypt_sensitive_field_with_aad() {
+        // Use direct FieldEncryption instance to avoid global OnceLock issues
+        let key = [11u8; 32];
+        let encryption = FieldEncryption::new_with_key(&key).unwrap();
+
+        let plaintext = b"sensitive-api-key";
+        let aad = b"oz-relayer:signer:my-signer-id";
+
+        let encrypted = encryption.encrypt_with_aad(plaintext, aad).unwrap();
+        assert_eq!(encrypted.version, 2);
+
+        let decrypted = encryption.decrypt_auto(&encrypted, Some(aad)).unwrap();
+        assert_eq!(plaintext, decrypted.as_slice());
+    }
+
+    #[test]
+    fn test_decrypt_sensitive_field_auto_v1_compat() {
+        // Use direct FieldEncryption instance to avoid global OnceLock issues
+        let key = [12u8; 32];
+        let encryption = FieldEncryption::new_with_key(&key).unwrap();
+
+        let plaintext = b"legacy-secret";
+
+        // Encrypt with v1 (no AAD)
+        let encrypted = encryption.encrypt(plaintext).unwrap();
+        assert_eq!(encrypted.version, 1);
+
+        // Decrypt with auto (should work without AAD for v1)
+        let decrypted = encryption.decrypt_auto(&encrypted, None).unwrap();
+        assert_eq!(plaintext, decrypted.as_slice());
+
+        // Decrypt with auto (should also work with AAD provided for v1)
+        let decrypted_with_aad = encryption
+            .decrypt_auto(&encrypted, Some(b"ignored"))
+            .unwrap();
+        assert_eq!(plaintext, decrypted_with_aad.as_slice());
+    }
+
+    #[test]
+    fn test_ciphertext_swap_prevention() {
+        let key = [0u8; 32];
+        let encryption = FieldEncryption::new_with_key(&key).unwrap();
+
+        let secret_a = b"secret-for-signer-a";
+        let secret_b = b"secret-for-signer-b";
+        let aad_a = b"oz-relayer:signer:signer-a";
+        let aad_b = b"oz-relayer:signer:signer-b";
+
+        // Encrypt secrets with their respective AADs
+        let encrypted_a = encryption.encrypt_with_aad(secret_a, aad_a).unwrap();
+        let encrypted_b = encryption.encrypt_with_aad(secret_b, aad_b).unwrap();
+
+        // Attempting to decrypt encrypted_a with aad_b should fail (ciphertext swap attack)
+        let swap_result = encryption.decrypt_with_aad(&encrypted_a, aad_b);
+        assert!(swap_result.is_err());
+
+        // Correct decryption should work
+        let correct_a = encryption.decrypt_with_aad(&encrypted_a, aad_a).unwrap();
+        let correct_b = encryption.decrypt_with_aad(&encrypted_b, aad_b).unwrap();
+
+        assert_eq!(secret_a, correct_a.as_slice());
+        assert_eq!(secret_b, correct_b.as_slice());
+    }
+
+    #[test]
+    fn test_decrypt_with_aad_version_mismatch() {
+        let key = [0u8; 32];
+        let encryption = FieldEncryption::new_with_key(&key).unwrap();
+
+        // Encrypt with v1 (no AAD)
+        let encrypted_v1 = encryption.encrypt(b"secret").unwrap();
+        assert_eq!(encrypted_v1.version, 1);
+
+        // Try to decrypt v1 data with decrypt_with_aad (expects v2)
+        let result = encryption.decrypt_with_aad(&encrypted_v1, b"some-aad");
+        assert!(result.is_err());
+        if let Err(EncryptionError::InvalidFormat(msg)) = result {
+            assert!(msg.contains("Expected version 2"));
+            assert!(msg.contains("got 1"));
+        } else {
+            panic!("Expected InvalidFormat error for version mismatch");
+        }
+    }
+
+    #[test]
+    fn test_decrypt_with_aad_invalid_nonce_base64() {
+        let key = [0u8; 32];
+        let encryption = FieldEncryption::new_with_key(&key).unwrap();
+
+        let invalid_data = EncryptedData {
+            nonce: "not-valid-base64!!!".to_string(),
+            ciphertext: base64_encode(b"fake"),
+            version: 2,
+        };
+
+        let result = encryption.decrypt_with_aad(&invalid_data, b"aad");
+        assert!(result.is_err());
+        if let Err(EncryptionError::InvalidFormat(msg)) = result {
+            assert!(msg.contains("Invalid nonce"));
+        } else {
+            panic!("Expected InvalidFormat error for invalid nonce base64");
+        }
+    }
+
+    #[test]
+    fn test_decrypt_with_aad_invalid_ciphertext_base64() {
+        let key = [0u8; 32];
+        let encryption = FieldEncryption::new_with_key(&key).unwrap();
+
+        let invalid_data = EncryptedData {
+            nonce: base64_encode(&[0u8; 12]),
+            ciphertext: "not-valid-base64!!!".to_string(),
+            version: 2,
+        };
+
+        let result = encryption.decrypt_with_aad(&invalid_data, b"aad");
+        assert!(result.is_err());
+        if let Err(EncryptionError::InvalidFormat(msg)) = result {
+            assert!(msg.contains("Invalid ciphertext"));
+        } else {
+            panic!("Expected InvalidFormat error for invalid ciphertext base64");
+        }
+    }
+
+    #[test]
+    fn test_decrypt_with_aad_invalid_nonce_length() {
+        let key = [0u8; 32];
+        let encryption = FieldEncryption::new_with_key(&key).unwrap();
+
+        // Nonce should be 12 bytes, use 8 bytes instead
+        let invalid_data = EncryptedData {
+            nonce: base64_encode(&[0u8; 8]),
+            ciphertext: base64_encode(b"fake-ciphertext"),
+            version: 2,
+        };
+
+        let result = encryption.decrypt_with_aad(&invalid_data, b"aad");
+        assert!(result.is_err());
+        if let Err(EncryptionError::InvalidFormat(msg)) = result {
+            assert!(msg.contains("Invalid nonce length"));
+        } else {
+            panic!("Expected InvalidFormat error for invalid nonce length");
+        }
+    }
+
+    #[test]
+    fn test_decrypt_auto_v2_wrong_aad() {
+        let key = [0u8; 32];
+        let encryption = FieldEncryption::new_with_key(&key).unwrap();
+        let plaintext = b"secret";
+        let correct_aad = b"correct-aad";
+        let wrong_aad = b"wrong-aad";
+
+        let encrypted = encryption.encrypt_with_aad(plaintext, correct_aad).unwrap();
+
+        // decrypt_auto with wrong AAD should fail
+        let result = encryption.decrypt_auto(&encrypted, Some(wrong_aad));
+        assert!(result.is_err());
+        if let Err(EncryptionError::DecryptionFailed(_)) = result {
+            // Expected
+        } else {
+            panic!("Expected DecryptionFailed error for wrong AAD");
+        }
+    }
+
+    #[test]
+    fn test_encrypt_with_aad_empty_plaintext() {
+        let key = [0u8; 32];
+        let encryption = FieldEncryption::new_with_key(&key).unwrap();
+        let aad = b"context";
+
+        // Empty plaintext should work
+        let encrypted = encryption.encrypt_with_aad(b"", aad).unwrap();
+        assert_eq!(encrypted.version, 2);
+
+        let decrypted = encryption.decrypt_with_aad(&encrypted, aad).unwrap();
+        assert!(decrypted.is_empty());
+    }
+
+    #[test]
+    fn test_encrypt_with_aad_empty_aad() {
+        let key = [0u8; 32];
+        let encryption = FieldEncryption::new_with_key(&key).unwrap();
+        let plaintext = b"secret";
+
+        // Empty AAD should work
+        let encrypted = encryption.encrypt_with_aad(plaintext, b"").unwrap();
+        assert_eq!(encrypted.version, 2);
+
+        let decrypted = encryption.decrypt_with_aad(&encrypted, b"").unwrap();
+        assert_eq!(plaintext, decrypted.as_slice());
+
+        // Empty AAD != non-empty AAD
+        let result = encryption.decrypt_with_aad(&encrypted, b"some-aad");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_encrypt_with_aad_large_data() {
+        let key = [0u8; 32];
+        let encryption = FieldEncryption::new_with_key(&key).unwrap();
+        let large_plaintext = vec![0xABu8; 10_000];
+        let aad = b"large-data-context";
+
+        let encrypted = encryption.encrypt_with_aad(&large_plaintext, aad).unwrap();
+        assert_eq!(encrypted.version, 2);
+
+        let decrypted = encryption.decrypt_with_aad(&encrypted, aad).unwrap();
+        assert_eq!(large_plaintext, decrypted);
+    }
+
+    #[test]
+    fn test_encrypt_with_aad_nonce_uniqueness() {
+        let key = [0u8; 32];
+        let encryption = FieldEncryption::new_with_key(&key).unwrap();
+        let plaintext = b"same message";
+        let aad = b"same-aad";
+
+        let encrypted1 = encryption.encrypt_with_aad(plaintext, aad).unwrap();
+        let encrypted2 = encryption.encrypt_with_aad(plaintext, aad).unwrap();
+
+        // Same plaintext and AAD should produce different ciphertext due to random nonces
+        assert_ne!(encrypted1.nonce, encrypted2.nonce);
+        assert_ne!(encrypted1.ciphertext, encrypted2.ciphertext);
+
+        // Both should decrypt correctly
+        assert_eq!(
+            encryption.decrypt_with_aad(&encrypted1, aad).unwrap(),
+            plaintext
+        );
+        assert_eq!(
+            encryption.decrypt_with_aad(&encrypted2, aad).unwrap(),
+            plaintext
+        );
+    }
+
+    #[test]
+    fn test_encrypt_sensitive_field_with_aad_fallback() {
+        // Temporarily clear encryption key to test fallback
+        let old_key = env::var("STORAGE_ENCRYPTION_KEY").ok();
+        env::remove_var("STORAGE_ENCRYPTION_KEY");
+
+        let plaintext = "fallback-secret";
+        let aad = "context-aad".to_string();
+
+        // Should use fallback mode (base64-encoded JSON)
+        let encoded = EncryptionContext::with_aad_sync(aad.clone(), || {
+            encrypt_sensitive_field_with_aad(plaintext).unwrap()
+        });
+        let decoded = EncryptionContext::with_aad_sync(aad, || {
+            decrypt_sensitive_field_auto(&encoded).unwrap()
+        });
+        assert_eq!(plaintext, decoded);
+
+        // Should be base64-encoded JSON (fallback ignores AAD)
+        let expected_json = serde_json::to_string(plaintext).unwrap();
+        let expected_b64 = base64_encode(expected_json.as_bytes());
+        assert_eq!(encoded, expected_b64);
+
+        // Restore original environment
+        if let Some(key) = old_key {
+            env::set_var("STORAGE_ENCRYPTION_KEY", key);
+        }
+    }
+
+    #[test]
+    fn test_encrypt_sensitive_field_with_aad_wrong_aad_on_decrypt() {
+        // Use direct FieldEncryption instance to avoid global OnceLock issues
+        let key = [10u8; 32];
+        let encryption = FieldEncryption::new_with_key(&key).unwrap();
+
+        let plaintext = b"sensitive-data";
+        let correct_aad = b"correct-context";
+        let wrong_aad = b"wrong-context";
+
+        let encrypted = encryption.encrypt_with_aad(plaintext, correct_aad).unwrap();
+        assert_eq!(encrypted.version, 2);
+
+        // Decrypting with wrong AAD should fail
+        let result = encryption.decrypt_auto(&encrypted, Some(wrong_aad));
+        assert!(result.is_err());
+        if let Err(EncryptionError::DecryptionFailed(_)) = result {
+            // Expected
+        } else {
+            panic!("Expected DecryptionFailed error for wrong AAD");
+        }
+
+        // Decrypting with correct AAD should succeed
+        let decrypted = encryption
+            .decrypt_auto(&encrypted, Some(correct_aad))
+            .unwrap();
+        assert_eq!(plaintext, decrypted.as_slice());
+    }
+
+    #[test]
+    fn test_decrypt_auto_v1_ignores_aad() {
+        let key = [0u8; 32];
+        let encryption = FieldEncryption::new_with_key(&key).unwrap();
+        let plaintext = b"secret";
+
+        // Encrypt with v1 (no AAD)
+        let encrypted = encryption.encrypt(plaintext).unwrap();
+        assert_eq!(encrypted.version, 1);
+
+        // Decrypt with AAD provided - should be ignored for v1
+        let decrypted = encryption
+            .decrypt_auto(&encrypted, Some(b"any-aad"))
+            .unwrap();
+        assert_eq!(plaintext, decrypted.as_slice());
+
+        // Decrypt with different AAD - still works (ignored for v1)
+        let decrypted2 = encryption
+            .decrypt_auto(&encrypted, Some(b"different-aad"))
+            .unwrap();
+        assert_eq!(plaintext, decrypted2.as_slice());
+    }
+
+    #[test]
+    fn test_decrypt_with_aad_tampered_ciphertext() {
+        let key = [0u8; 32];
+        let encryption = FieldEncryption::new_with_key(&key).unwrap();
+        let plaintext = b"secret";
+        let aad = b"context";
+
+        let mut encrypted = encryption.encrypt_with_aad(plaintext, aad).unwrap();
+
+        // Tamper with the ciphertext
+        let mut ciphertext_bytes = base64_decode(&encrypted.ciphertext).unwrap();
+        if !ciphertext_bytes.is_empty() {
+            ciphertext_bytes[0] ^= 0xFF; // Flip bits
+        }
+        encrypted.ciphertext = base64_encode(&ciphertext_bytes);
+
+        // Decryption should fail due to authentication failure
+        let result = encryption.decrypt_with_aad(&encrypted, aad);
+        assert!(result.is_err());
+        if let Err(EncryptionError::DecryptionFailed(_)) = result {
+            // Expected - GCM authentication failed
+        } else {
+            panic!("Expected DecryptionFailed error for tampered ciphertext");
+        }
     }
 }

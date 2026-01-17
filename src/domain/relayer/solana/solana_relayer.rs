@@ -30,14 +30,14 @@ use crate::models::{
 use crate::utils::calculate_scheduled_timestamp;
 use crate::{
     constants::{
-        DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, DEFAULT_SOLANA_MIN_BALANCE,
-        SOLANA_SMALLEST_UNIT_NAME, WRAPPED_SOL_MINT,
+        transactions::PENDING_TRANSACTION_STATUSES, DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE,
+        DEFAULT_SOLANA_MIN_BALANCE, SOLANA_SMALLEST_UNIT_NAME, WRAPPED_SOL_MINT,
     },
     domain::{relayer::RelayerError, BalanceResponse, DexStrategy, SolanaRelayerDexTrait},
     jobs::{JobProducerTrait, RelayerHealthCheck, TokenSwapRequest},
     models::{
         produce_relayer_disabled_payload, produce_solana_dex_webhook_payload, DisabledReason,
-        HealthCheckFailure, NetworkRepoModel, NetworkTransactionData, NetworkType,
+        HealthCheckFailure, NetworkRepoModel, NetworkTransactionData, NetworkType, PaginationQuery,
         RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
         SolanaDexPayload, SolanaFeePaymentStrategy, SolanaNetwork, SolanaTransactionData,
         TransactionRepoModel, TransactionStatus,
@@ -923,26 +923,31 @@ where
         let address = &self.relayer.address;
         let balance = self.provider.get_balance(address).await?;
 
-        let pending_statuses = [TransactionStatus::Pending, TransactionStatus::Submitted];
-        let pending_transactions = self
+        // Use optimized count_by_status
+        let pending_transactions_count = self
             .transaction_repository
-            .find_by_status(&self.relayer.id, &pending_statuses[..])
-            .await
-            .map_err(RelayerError::from)?;
-        let pending_transactions_count = pending_transactions.len() as u64;
-
-        let confirmed_statuses = [TransactionStatus::Confirmed];
-        let confirmed_transactions = self
-            .transaction_repository
-            .find_by_status(&self.relayer.id, &confirmed_statuses[..])
+            .count_by_status(&self.relayer.id, PENDING_TRANSACTION_STATUSES)
             .await
             .map_err(RelayerError::from)?;
 
-        let last_confirmed_transaction_timestamp = confirmed_transactions
-            .iter()
-            .filter_map(|tx| tx.confirmed_at.as_ref())
-            .max()
-            .cloned();
+        // Use find_by_status_paginated to get the latest confirmed transaction (newest first)
+        let last_confirmed_transaction_timestamp = self
+            .transaction_repository
+            .find_by_status_paginated(
+                &self.relayer.id,
+                &[TransactionStatus::Confirmed],
+                PaginationQuery {
+                    page: 1,
+                    per_page: 1,
+                },
+                false, // oldest_first = false means newest first
+            )
+            .await
+            .map_err(RelayerError::from)?
+            .items
+            .into_iter()
+            .next()
+            .and_then(|tx| tx.confirmed_at);
 
         Ok(RelayerStatus::Solana {
             balance: (balance as u128).to_string(),
@@ -2536,24 +2541,20 @@ mod tests {
             .expect_get_balance()
             .returning(|_| Box::pin(async { Ok(1000000) }));
 
-        // Mock transaction counts
+        // Mock count_by_status for pending transactions count
         tx_repo
-            .expect_find_by_status()
+            .expect_count_by_status()
             .with(
                 eq("test-id"),
                 eq(vec![
                     TransactionStatus::Pending,
+                    TransactionStatus::Sent,
                     TransactionStatus::Submitted,
                 ]),
             )
-            .returning(|_, _| {
-                Ok(vec![
-                    TransactionRepoModel::default(),
-                    TransactionRepoModel::default(),
-                ])
-            });
+            .returning(|_, _| Ok(2u64));
 
-        // Mock recent confirmed transaction
+        // Mock find_by_status_paginated for latest confirmed transaction
         let recent_tx = TransactionRepoModel {
             id: "recent-tx".to_string(),
             relayer_id: "test-id".to_string(),
@@ -2564,9 +2565,22 @@ mod tests {
             ..Default::default()
         };
         tx_repo
-            .expect_find_by_status()
-            .with(eq("test-id"), eq(vec![TransactionStatus::Confirmed]))
-            .returning(move |_, _| Ok(vec![recent_tx.clone()]));
+            .expect_find_by_status_paginated()
+            .withf(|relayer_id, statuses, query, oldest_first| {
+                *relayer_id == *"test-id"
+                    && statuses == [TransactionStatus::Confirmed]
+                    && query.page == 1
+                    && query.per_page == 1
+                    && *oldest_first == false
+            })
+            .returning(move |_, _, _, _| {
+                Ok(crate::repositories::PaginatedResult {
+                    items: vec![recent_tx.clone()],
+                    total: 1,
+                    page: 1,
+                    per_page: 1,
+                })
+            });
 
         let ctx = TestCtx {
             tx_repo: Arc::new(tx_repo),
@@ -2633,22 +2647,37 @@ mod tests {
             .expect_get_balance()
             .returning(|_| Box::pin(async { Ok(500000) }));
 
-        // Mock transaction counts
+        // Mock count_by_status for pending transactions count
         tx_repo
-            .expect_find_by_status()
+            .expect_count_by_status()
             .with(
                 eq("test-id"),
                 eq(vec![
                     TransactionStatus::Pending,
+                    TransactionStatus::Sent,
                     TransactionStatus::Submitted,
                 ]),
             )
-            .returning(|_, _| Ok(vec![]));
+            .returning(|_, _| Ok(0u64));
 
+        // Mock find_by_status_paginated for latest confirmed transaction (none)
         tx_repo
-            .expect_find_by_status()
-            .with(eq("test-id"), eq(vec![TransactionStatus::Confirmed]))
-            .returning(|_, _| Ok(vec![]));
+            .expect_find_by_status_paginated()
+            .withf(|relayer_id, statuses, query, oldest_first| {
+                *relayer_id == *"test-id"
+                    && statuses == [TransactionStatus::Confirmed]
+                    && query.page == 1
+                    && query.per_page == 1
+                    && *oldest_first == false
+            })
+            .returning(|_, _, _, _| {
+                Ok(crate::repositories::PaginatedResult {
+                    items: vec![],
+                    total: 0,
+                    page: 1,
+                    per_page: 1,
+                })
+            });
 
         let ctx = TestCtx {
             tx_repo: Arc::new(tx_repo),
