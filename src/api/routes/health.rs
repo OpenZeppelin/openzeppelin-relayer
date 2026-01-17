@@ -5,21 +5,11 @@
 use actix_web::{get, web, HttpResponse};
 use serde_json::json;
 
-/// Health routes implementation
-///
-/// Note: OpenAPI documentation for these endpoints can be found in the `openapi.rs` file
 /// Handles the `/health` endpoint.
 ///
 /// Returns an `HttpResponse` with a status of `200 OK` and a body of `"OK"`.
-#[utoipa::path(
-    get,
-    path = "/v1/health",
-    tag = "Health",
-    responses(
-        (status = 200, description = "Service is healthy", body = String),
-        (status = 500, description = "Internal server error", body = String),
-    )
-)]
+///
+/// Note: OpenAPI documentation for this endpoint can be found in `docs/health_docs.rs`
 #[get("/health")]
 async fn health() -> Result<HttpResponse, actix_web::Error> {
     Ok(HttpResponse::Ok().body("OK"))
@@ -113,15 +103,9 @@ fn get_close_wait_count() -> Result<usize, std::io::Error> {
 /// Readiness endpoint that checks system resources
 ///
 /// Returns 200 OK if the service is ready to accept traffic, or 503 Service Unavailable if not.
-#[utoipa::path(
-    get,
-    path = "/v1/ready",
-    tag = "Health",
-    responses(
-        (status = 200, description = "Service is ready"),
-        (status = 503, description = "Service is not ready"),
-    )
-)]
+/// Checks file descriptor usage and CLOSE_WAIT socket count to determine readiness.
+///
+/// Note: OpenAPI documentation for this endpoint can be found in `docs/health_docs.rs`
 #[get("/ready")]
 async fn readiness() -> Result<HttpResponse, actix_web::Error> {
     let fd_count = get_fd_count().unwrap_or(0);

@@ -141,6 +141,7 @@ async fn main() -> Result<()> {
             .wrap(middleware::NormalizePath::trim())
             .wrap(middleware::Compress::default())
             .wrap(api::middleware::ConcurrencyLimiter::new(config.relayer_concurrency_limit))
+            .wrap(api::middleware::TimeoutMiddleware::new(config.request_timeout_seconds))
             .app_data(app_state.clone())
             .service(web::scope("/api/v1").configure(api::routes::configure_routes))
         }
