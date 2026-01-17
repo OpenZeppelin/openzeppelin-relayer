@@ -97,3 +97,129 @@ where
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix_web::{test, web, App, HttpResponse};
+    use std::time::Duration;
+
+    #[actix_web::test]
+    async fn test_request_completes_before_timeout() {
+        let app = test::init_service(App::new().wrap(TimeoutMiddleware::new(5)).route(
+            "/fast",
+            web::get().to(|| async { HttpResponse::Ok().body("OK") }),
+        ))
+        .await;
+
+        let req = test::TestRequest::get().uri("/fast").to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert!(resp.status().is_success());
+    }
+
+    #[actix_web::test]
+    async fn test_request_exceeds_timeout_returns_error() {
+        let app = test::init_service(App::new().wrap(TimeoutMiddleware::new(1)).route(
+            "/slow",
+            web::get().to(|| async {
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                HttpResponse::Ok().body("OK")
+            }),
+        ))
+        .await;
+
+        let req = test::TestRequest::get().uri("/slow").to_request();
+        let result = test::try_call_service(&app, req).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.as_response_error().status_code(),
+            actix_web::http::StatusCode::GATEWAY_TIMEOUT
+        );
+    }
+
+    #[actix_web::test]
+    async fn test_request_just_under_timeout_succeeds() {
+        let app = test::init_service(App::new().wrap(TimeoutMiddleware::new(2)).route(
+            "/almost",
+            web::get().to(|| async {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                HttpResponse::Ok().body("OK")
+            }),
+        ))
+        .await;
+
+        let req = test::TestRequest::get().uri("/almost").to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert!(resp.status().is_success());
+    }
+
+    #[actix_web::test]
+    async fn test_timeout_middleware_new_sets_duration() {
+        let middleware = TimeoutMiddleware::new(10);
+        assert_eq!(middleware.duration, Duration::from_secs(10));
+    }
+
+    #[actix_web::test]
+    async fn test_post_request_timeout() {
+        let app = test::init_service(App::new().wrap(TimeoutMiddleware::new(1)).route(
+            "/slow-post",
+            web::post().to(|| async {
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                HttpResponse::Ok().body("OK")
+            }),
+        ))
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri("/slow-post")
+            .set_payload("test body")
+            .to_request();
+        let result = test::try_call_service(&app, req).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.as_response_error().status_code(),
+            actix_web::http::StatusCode::GATEWAY_TIMEOUT
+        );
+    }
+
+    #[actix_web::test]
+    async fn test_multiple_requests_independent_timeouts() {
+        let app = test::init_service(
+            App::new()
+                .wrap(TimeoutMiddleware::new(2))
+                .route(
+                    "/fast",
+                    web::get().to(|| async { HttpResponse::Ok().body("OK") }),
+                )
+                .route(
+                    "/slow",
+                    web::get().to(|| async {
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        HttpResponse::Ok().body("OK")
+                    }),
+                ),
+        )
+        .await;
+
+        // Fast request should succeed
+        let req = test::TestRequest::get().uri("/fast").to_request();
+        let resp = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+
+        // Slow request should timeout
+        let req = test::TestRequest::get().uri("/slow").to_request();
+        let result = test::try_call_service(&app, req).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.as_response_error().status_code(),
+            actix_web::http::StatusCode::GATEWAY_TIMEOUT
+        );
+    }
+}

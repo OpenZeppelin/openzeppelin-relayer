@@ -1113,4 +1113,360 @@ mod tests {
             env::remove_var(&env_var);
         }
     }
+
+    mod get_relayer_concurrency_limit_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_not_set() {
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(result, 100, "Should return default value of 100");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_env_value_when_set() {
+            env::set_var("RELAYER_CONCURRENCY_LIMIT", "250");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(result, 250, "Should return env var value");
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_invalid() {
+            env::set_var("RELAYER_CONCURRENCY_LIMIT", "not_a_number");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(result, 100, "Should return default value when invalid");
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_empty() {
+            env::set_var("RELAYER_CONCURRENCY_LIMIT", "");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(result, 100, "Should return default value when empty");
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+        }
+
+        #[test]
+        #[serial]
+        fn test_zero_value() {
+            env::set_var("RELAYER_CONCURRENCY_LIMIT", "0");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(result, 0, "Should accept zero as valid value");
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+        }
+
+        #[test]
+        #[serial]
+        fn test_large_value() {
+            env::set_var("RELAYER_CONCURRENCY_LIMIT", "5000");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(result, 5000, "Should accept large values");
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+        }
+
+        #[test]
+        #[serial]
+        fn test_negative_value_returns_default() {
+            env::set_var("RELAYER_CONCURRENCY_LIMIT", "-10");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(result, 100, "Should return default for negative value");
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+        }
+
+        #[test]
+        #[serial]
+        fn test_float_value_returns_default() {
+            env::set_var("RELAYER_CONCURRENCY_LIMIT", "100.5");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(result, 100, "Should return default for float value");
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+        }
+
+        #[test]
+        #[serial]
+        fn test_whitespace_value_returns_default() {
+            env::set_var("RELAYER_CONCURRENCY_LIMIT", "  150  ");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(
+                result, 100,
+                "Should return default when value has whitespace"
+            );
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+        }
+    }
+
+    mod get_max_connections_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_not_set() {
+            env::remove_var("MAX_CONNECTIONS");
+            let result = ServerConfig::get_max_connections();
+            assert_eq!(result, 256, "Should return default value of 256");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_env_value_when_set() {
+            env::set_var("MAX_CONNECTIONS", "512");
+            let result = ServerConfig::get_max_connections();
+            assert_eq!(result, 512, "Should return env var value");
+            env::remove_var("MAX_CONNECTIONS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_invalid() {
+            env::set_var("MAX_CONNECTIONS", "invalid");
+            let result = ServerConfig::get_max_connections();
+            assert_eq!(result, 256, "Should return default value when invalid");
+            env::remove_var("MAX_CONNECTIONS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_empty() {
+            env::set_var("MAX_CONNECTIONS", "");
+            let result = ServerConfig::get_max_connections();
+            assert_eq!(result, 256, "Should return default value when empty");
+            env::remove_var("MAX_CONNECTIONS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_zero_value() {
+            env::set_var("MAX_CONNECTIONS", "0");
+            let result = ServerConfig::get_max_connections();
+            assert_eq!(result, 0, "Should accept zero as valid value");
+            env::remove_var("MAX_CONNECTIONS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_large_value() {
+            env::set_var("MAX_CONNECTIONS", "10000");
+            let result = ServerConfig::get_max_connections();
+            assert_eq!(result, 10000, "Should accept large values");
+            env::remove_var("MAX_CONNECTIONS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_negative_value_returns_default() {
+            env::set_var("MAX_CONNECTIONS", "-100");
+            let result = ServerConfig::get_max_connections();
+            assert_eq!(result, 256, "Should return default for negative value");
+            env::remove_var("MAX_CONNECTIONS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_float_value_returns_default() {
+            env::set_var("MAX_CONNECTIONS", "256.5");
+            let result = ServerConfig::get_max_connections();
+            assert_eq!(result, 256, "Should return default for float value");
+            env::remove_var("MAX_CONNECTIONS");
+        }
+    }
+
+    mod get_connection_backlog_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_not_set() {
+            env::remove_var("CONNECTION_BACKLOG");
+            let result = ServerConfig::get_connection_backlog();
+            assert_eq!(result, 511, "Should return default value of 511");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_env_value_when_set() {
+            env::set_var("CONNECTION_BACKLOG", "1024");
+            let result = ServerConfig::get_connection_backlog();
+            assert_eq!(result, 1024, "Should return env var value");
+            env::remove_var("CONNECTION_BACKLOG");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_invalid() {
+            env::set_var("CONNECTION_BACKLOG", "not_a_number");
+            let result = ServerConfig::get_connection_backlog();
+            assert_eq!(result, 511, "Should return default value when invalid");
+            env::remove_var("CONNECTION_BACKLOG");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_empty() {
+            env::set_var("CONNECTION_BACKLOG", "");
+            let result = ServerConfig::get_connection_backlog();
+            assert_eq!(result, 511, "Should return default value when empty");
+            env::remove_var("CONNECTION_BACKLOG");
+        }
+
+        #[test]
+        #[serial]
+        fn test_zero_value() {
+            env::set_var("CONNECTION_BACKLOG", "0");
+            let result = ServerConfig::get_connection_backlog();
+            assert_eq!(result, 0, "Should accept zero as valid value");
+            env::remove_var("CONNECTION_BACKLOG");
+        }
+
+        #[test]
+        #[serial]
+        fn test_large_value() {
+            env::set_var("CONNECTION_BACKLOG", "65535");
+            let result = ServerConfig::get_connection_backlog();
+            assert_eq!(result, 65535, "Should accept large values");
+            env::remove_var("CONNECTION_BACKLOG");
+        }
+
+        #[test]
+        #[serial]
+        fn test_negative_value_returns_default() {
+            env::set_var("CONNECTION_BACKLOG", "-50");
+            let result = ServerConfig::get_connection_backlog();
+            assert_eq!(result, 511, "Should return default for negative value");
+            env::remove_var("CONNECTION_BACKLOG");
+        }
+
+        #[test]
+        #[serial]
+        fn test_float_value_returns_default() {
+            env::set_var("CONNECTION_BACKLOG", "511.5");
+            let result = ServerConfig::get_connection_backlog();
+            assert_eq!(result, 511, "Should return default for float value");
+            env::remove_var("CONNECTION_BACKLOG");
+        }
+
+        #[test]
+        #[serial]
+        fn test_common_production_values() {
+            // Test common production values
+            let test_cases = vec![
+                (128, "Small server"),
+                (511, "Default"),
+                (1024, "Medium server"),
+                (2048, "Large server"),
+            ];
+
+            for (value, description) in test_cases {
+                env::set_var("CONNECTION_BACKLOG", value.to_string());
+                let result = ServerConfig::get_connection_backlog();
+                assert_eq!(result, value, "Should accept {}: {}", description, value);
+            }
+
+            env::remove_var("CONNECTION_BACKLOG");
+        }
+    }
+
+    mod get_request_timeout_seconds_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_not_set() {
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+            let result = ServerConfig::get_request_timeout_seconds();
+            assert_eq!(result, 30, "Should return default value of 30");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_env_value_when_set() {
+            env::set_var("REQUEST_TIMEOUT_SECONDS", "60");
+            let result = ServerConfig::get_request_timeout_seconds();
+            assert_eq!(result, 60, "Should return env var value");
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_invalid() {
+            env::set_var("REQUEST_TIMEOUT_SECONDS", "invalid");
+            let result = ServerConfig::get_request_timeout_seconds();
+            assert_eq!(result, 30, "Should return default value when invalid");
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_empty() {
+            env::set_var("REQUEST_TIMEOUT_SECONDS", "");
+            let result = ServerConfig::get_request_timeout_seconds();
+            assert_eq!(result, 30, "Should return default value when empty");
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_zero_value() {
+            env::set_var("REQUEST_TIMEOUT_SECONDS", "0");
+            let result = ServerConfig::get_request_timeout_seconds();
+            assert_eq!(result, 0, "Should accept zero as valid value");
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_large_value() {
+            env::set_var("REQUEST_TIMEOUT_SECONDS", "300");
+            let result = ServerConfig::get_request_timeout_seconds();
+            assert_eq!(result, 300, "Should accept large values");
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_negative_value_returns_default() {
+            env::set_var("REQUEST_TIMEOUT_SECONDS", "-10");
+            let result = ServerConfig::get_request_timeout_seconds();
+            assert_eq!(result, 30, "Should return default for negative value");
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_float_value_returns_default() {
+            env::set_var("REQUEST_TIMEOUT_SECONDS", "30.5");
+            let result = ServerConfig::get_request_timeout_seconds();
+            assert_eq!(result, 30, "Should return default for float value");
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_common_timeout_values() {
+            // Test common timeout values
+            let test_cases = vec![
+                (10, "Short timeout"),
+                (30, "Default timeout"),
+                (60, "Moderate timeout"),
+                (120, "Long timeout"),
+            ];
+
+            for (value, description) in test_cases {
+                env::set_var("REQUEST_TIMEOUT_SECONDS", value.to_string());
+                let result = ServerConfig::get_request_timeout_seconds();
+                assert_eq!(result, value, "Should accept {}: {}", description, value);
+            }
+
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+        }
+    }
 }

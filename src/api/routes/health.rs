@@ -47,7 +47,7 @@ fn get_fd_count() -> Result<usize, std::io::Error> {
 
     #[cfg(target_os = "linux")]
     {
-        let fd_dir = format!("/proc/{}/fd", pid);
+        let fd_dir = format!("/proc/{pid}/fd");
         std::fs::read_dir(fd_dir).map(|entries| entries.count())
     }
 
