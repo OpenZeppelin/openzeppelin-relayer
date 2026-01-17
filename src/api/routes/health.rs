@@ -120,28 +120,36 @@ async fn readiness() -> Result<HttpResponse, actix_web::Error> {
         reason: None,
     };
 
+    let mut reasons: Vec<String> = Vec::new();
+
     // Check file descriptor usage
     let fd_ratio = fd_count as f64 / fd_limit as f64;
     if fd_ratio > MAX_FD_RATIO {
         check.ready = false;
-        check.reason = Some(format!(
+        let reason = format!(
             "File descriptor limit exceeded: {}/{} ({:.1}% > {:.1}%)",
             fd_count,
             fd_limit,
             fd_ratio * 100.0,
             MAX_FD_RATIO * 100.0
-        ));
-        tracing::warn!("{}", check.reason.as_ref().unwrap());
+        );
+        tracing::warn!("{}", reason);
+        reasons.push(reason);
     }
 
     // Check CLOSE_WAIT sockets
     if close_wait_count > MAX_CLOSE_WAIT {
         check.ready = false;
-        check.reason = Some(format!(
-            "Too many CLOSE_WAIT sockets: {close_wait_count} > {MAX_CLOSE_WAIT}"
-        ));
-        tracing::warn!("{}", check.reason.as_ref().unwrap());
+        let reason = format!("Too many CLOSE_WAIT sockets: {close_wait_count} > {MAX_CLOSE_WAIT}");
+        tracing::warn!("{}", reason);
+        reasons.push(reason);
     }
+
+    check.reason = if reasons.is_empty() {
+        None
+    } else {
+        Some(reasons.join("; "))
+    };
 
     if check.ready {
         Ok(HttpResponse::Ok().json(json!({
