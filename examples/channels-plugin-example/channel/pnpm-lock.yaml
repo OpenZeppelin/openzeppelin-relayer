@@ -7,11 +7,11 @@ importers:
   .:
     dependencies:
       '@openzeppelin/relayer-plugin-channels':
-        specifier: ^0.5.0
-        version: 0.5.0
+        specifier: ^0.6.0
+        version: 0.6.0
       '@openzeppelin/relayer-sdk':
-        specifier: ^1.8.0
-        version: 1.8.0
+        specifier: ^1.9.0
+        version: 1.9.0
     devDependencies:
       '@types/jest':
         specifier: ^29.5.12
@@ -252,11 +252,11 @@ packages:
   '@noble/hashes@1.8.0':
     resolution: {integrity: sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==}
     engines: {node: ^14.21.3 || >=16}
-  '@openzeppelin/relayer-plugin-channels@0.5.0':
-    resolution: {integrity: sha512-mn8TklTFwwqKVVOjYQtJGGX/8IKJwg4hbwfAsz7kvb5L5EhjJzwCjgfT84TL6ZVmHb7DoQ6h2lPgNussDiHy5g==}
+  '@openzeppelin/relayer-plugin-channels@0.6.0':
+    resolution: {integrity: sha512-vqNi6TXuu7LNbc1NoGfUD9vh+egBMB/vhwf03idzWhKPdNLVUzGE+PV7fzQNjHkpbTROs+d7vnBEdA8CJxo5gQ==}
     engines: {node: '>=22.18.0', npm: use pnpm, pnpm: '>=9', yarn: use pnpm}
-  '@openzeppelin/relayer-sdk@1.8.0':
-    resolution: {integrity: sha512-2nMn9Sg0j52kp/GdhavvL8zgwRJqDqXq4yM1uYewfYndns6WGUS3zxcDICgHenMVURo8YWdJG7E7Ockck3SNFg==}
+  '@openzeppelin/relayer-sdk@1.9.0':
+    resolution: {integrity: sha512-G3Zhg0imaT9Ej1cE9Cq5d4uQvW+DinD2GvRuiPWo3+O9KI8ivBnGJkjEGgK9Ja3/QsUNIfx8Gk5Mdw2sPXjVWA==}
     engines: {node: '>=22.14.0', npm: use pnpm, pnpm: '>=9', yarn: use pnpm}
   '@sinclair/typebox@0.27.8':
     resolution: {integrity: sha512-+Fj43pSMwJs4KRrH/938Uf+uAELIgVBmQzg/q1YG10djyfA3TnrU8N8XzqCh/okZdszqBQTZf96idMfE5lnwTA==}
@@ -1460,15 +1460,15 @@ snapshots:
     dependencies:
       '@noble/hashes': 1.8.0
   '@noble/hashes@1.8.0': {}
-  '@openzeppelin/relayer-plugin-channels@0.5.0':
+  '@openzeppelin/relayer-plugin-channels@0.6.0':
     dependencies:
       '@actions/exec': 1.1.1
-      '@openzeppelin/relayer-sdk': 1.8.0
+      '@openzeppelin/relayer-sdk': 1.9.0
       '@stellar/stellar-sdk': 14.4.3
       axios: 1.13.2
     transitivePeerDependencies:
       - debug
-  '@openzeppelin/relayer-sdk@1.8.0':
+  '@openzeppelin/relayer-sdk@1.9.0':
     dependencies:
       axios: 1.13.2
     transitivePeerDependencies:
