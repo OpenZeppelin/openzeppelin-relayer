@@ -2,20 +2,23 @@
 //! It includes methods for checking transaction status with robust error handling,
 //! ensuring proper transaction state management and lane cleanup.
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use soroban_rs::xdr::{Error, Hash, Limits, WriteXdr};
 use tracing::{debug, info, warn};
 
 use super::{is_final_state, StellarRelayerTransaction};
-use crate::constants::{get_stellar_max_sent_lifetime, get_stellar_resend_timeout};
+use crate::constants::{
+    get_stellar_max_pending_lifetime, get_stellar_max_sent_lifetime, get_stellar_resend_timeout,
+};
+use crate::domain::is_unsubmitted_transaction;
 use crate::domain::transaction::stellar::prepare::common::send_submit_transaction_job;
 use crate::domain::transaction::stellar::utils::extract_return_value_from_meta;
 use crate::domain::transaction::stellar::utils::extract_time_bounds;
 use crate::domain::transaction::util::get_age_since_created;
 use crate::domain::xdr_utils::parse_transaction_xdr;
 use crate::{
-    domain::is_unsubmitted_transaction,
-    jobs::JobProducerTrait,
+    constants::STELLAR_PENDING_RECOVERY_TRIGGER_SECONDS,
+    jobs::{JobProducerTrait, TransactionRequest},
     models::{
         NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
         TransactionStatus, TransactionUpdateRequest,
@@ -98,42 +101,24 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
+        // Early check for Pending transactions - avoid unnecessary hash parsing
+        if tx.status == TransactionStatus::Pending {
+            return self.handle_pending_state(tx).await;
+        }
+
         let stellar_hash = match self.parse_and_validate_hash(&tx) {
             Ok(hash) => hash,
             Err(e) => {
-                // Only warn if transaction SHOULD have a hash (Submitted or later)
+                warn!(tx_id = %tx.id, error = ?e, "failed to parse and validate hash");
                 if !is_unsubmitted_transaction(&tx.status) {
-                    warn!(tx_id = %tx.id, error = ?e, "failed to parse and validate hash");
-                    return Err(e);
+                    info!(tx_id = %tx.id, status = ?tx.status, "transaction is not unsubmitted, marking as failed due to hash validation error");
+                    return self
+                        .mark_as_failed(tx, format!("Failed to parse and validate hash: {e}"))
+                        .await;
                 }
-
                 // Recover stuck Sent transactions
                 if tx.status == TransactionStatus::Sent {
-                    if let Ok(age) = get_age_since_created(&tx) {
-                        if self.is_transaction_expired(&tx)? {
-                            info!(tx_id = %tx.id, valid_until = ?tx.valid_until, "Sent transaction has expired");
-                            return self
-                                .mark_as_expired(tx, "Transaction time_bounds expired".to_string())
-                                .await;
-                        }
-
-                        if age > get_stellar_max_sent_lifetime() {
-                            warn!(tx_id = %tx.id, age_minutes = age.num_minutes(),
-                                "Sent transaction exceeded max lifetime, marking as Failed");
-                            return self
-                                .mark_as_failed(
-                                    tx,
-                                    "Transaction stuck in Sent status for too long".to_string(),
-                                )
-                                .await;
-                        }
-
-                        if age > get_stellar_resend_timeout() {
-                            info!(tx_id = %tx.id, age_seconds = age.num_seconds(),
-                                "re-enqueueing submit job for stuck Sent transaction");
-                            send_submit_transaction_job(self.job_producer(), &tx, None).await?;
-                        }
-                    }
+                    return self.handle_sent_state(tx).await;
                 }
                 return Ok(tx);
             }
@@ -351,6 +336,115 @@ where
         self.enqueue_next_pending_transaction(&tx.id).await?;
 
         Ok(updated_tx)
+    }
+
+    /// Handles Sent transactions that failed hash parsing.
+    /// Checks for expiration, max lifetime, and re-enqueues submit job if needed.
+    async fn handle_sent_state(
+        &self,
+        tx: TransactionRepoModel,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        let age = get_age_since_created(&tx)?;
+
+        // Check if transaction has expired
+        if self.is_transaction_expired(&tx)? {
+            info!(tx_id = %tx.id, valid_until = ?tx.valid_until, "Sent transaction has expired");
+            return self
+                .mark_as_expired(tx, "Transaction time_bounds expired".to_string())
+                .await;
+        }
+
+        // Check if transaction exceeded max lifetime
+        if age > get_stellar_max_sent_lifetime() {
+            warn!(tx_id = %tx.id, age_minutes = age.num_minutes(),
+                "Sent transaction exceeded max lifetime, marking as Failed");
+            return self
+                .mark_as_failed(
+                    tx,
+                    "Transaction stuck in Sent status for too long".to_string(),
+                )
+                .await;
+        }
+
+        // Re-enqueue submit job if transaction exceeded resend timeout
+        if age > get_stellar_resend_timeout() {
+            info!(tx_id = %tx.id, age_seconds = age.num_seconds(),
+                "re-enqueueing submit job for stuck Sent transaction");
+            send_submit_transaction_job(self.job_producer(), &tx, None).await?;
+        }
+
+        Ok(tx)
+    }
+
+    /// Handles pending transactions without a hash (e.g., reset after bad sequence error).
+    /// Schedules a recovery job if the transaction is old enough to prevent it from being stuck.
+    async fn handle_pending_state(
+        &self,
+        tx: TransactionRepoModel,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        // Check transaction age to determine if recovery is needed
+        let age = self.get_time_since_created_at(&tx)?;
+
+        // Check if transaction exceeded max lifetime
+        if age > get_stellar_max_pending_lifetime() {
+            warn!(tx_id = %tx.id, age_minutes = age.num_minutes(),
+                "Pending transaction exceeded max lifetime, marking as Failed");
+            return self
+                .mark_as_failed(
+                    tx,
+                    "Transaction stuck in Pending status for too long".to_string(),
+                )
+                .await;
+        }
+
+        // Only schedule recovery job if transaction exceeds recovery trigger timeout
+        // This prevents scheduling a job on every status check
+        if age.num_seconds() >= STELLAR_PENDING_RECOVERY_TRIGGER_SECONDS {
+            info!(
+                tx_id = %tx.id,
+                age_seconds = age.num_seconds(),
+                "pending transaction without hash may be stuck, scheduling recovery job"
+            );
+
+            let transaction_request = TransactionRequest::new(tx.id.clone(), tx.relayer_id.clone());
+            if let Err(e) = self
+                .job_producer()
+                .produce_transaction_request_job(transaction_request, None)
+                .await
+            {
+                warn!(
+                    tx_id = %tx.id,
+                    error = %e,
+                    "failed to schedule recovery job for pending transaction"
+                );
+            }
+        } else {
+            debug!(
+                tx_id = %tx.id,
+                age_seconds = age.num_seconds(),
+                "pending transaction without hash too young for recovery check"
+            );
+        }
+
+        Ok(tx)
+    }
+
+    /// Get time since transaction was created.
+    /// Returns an error if created_at is missing or invalid.
+    fn get_time_since_created_at(
+        &self,
+        tx: &TransactionRepoModel,
+    ) -> Result<chrono::Duration, TransactionError> {
+        match DateTime::parse_from_rfc3339(&tx.created_at) {
+            Ok(dt) => Ok(Utc::now().signed_duration_since(dt.with_timezone(&Utc))),
+            Err(e) => {
+                warn!(tx_id = %tx.id, ts = %tx.created_at, error = %e, "failed to parse created_at timestamp");
+                Err(TransactionError::UnexpectedError(format!(
+                    "Invalid created_at timestamp for transaction {}: {}",
+                    tx.id, e
+                )))
+            }
+        }
     }
 
     /// Handles the logic when a Stellar transaction is still pending or in an unknown state.
@@ -828,8 +922,8 @@ mod tests {
                     .status_reason
                     .as_ref()
                     .unwrap()
-                    .contains("Validation error"),
-                "Expected validation error in status_reason, got: {:?}",
+                    .contains("Failed to parse and validate hash"),
+                "Expected hash validation error in status_reason, got: {:?}",
                 updated_tx.status_reason
             );
         }
@@ -1354,6 +1448,205 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .contains("expired"));
+        }
+    }
+
+    mod handle_pending_state_tests {
+        use super::*;
+        use crate::constants::get_stellar_max_pending_lifetime;
+        use crate::constants::STELLAR_PENDING_RECOVERY_TRIGGER_SECONDS;
+
+        #[tokio::test]
+        async fn test_pending_exceeds_max_lifetime_marks_failed() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.id = "tx-pending-old".to_string();
+            tx.status = TransactionStatus::Pending;
+            // Created more than max lifetime ago (16 minutes > 15 minutes)
+            tx.created_at =
+                (Utc::now() - get_stellar_max_pending_lifetime() - Duration::minutes(1))
+                    .to_rfc3339();
+
+            // Should mark as Failed
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_id, update| update.status == Some(TransactionStatus::Failed))
+                .times(1)
+                .returning(|id, update| {
+                    let mut updated = create_test_transaction("test");
+                    updated.id = id;
+                    updated.status = update.status.unwrap();
+                    updated.status_reason = update.status_reason.clone();
+                    Ok(updated)
+                });
+
+            // Notification for failure
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            // Try to enqueue next pending
+            mocks
+                .tx_repo
+                .expect_find_by_status()
+                .returning(|_, _| Ok(vec![]));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let result = handler.handle_transaction_status_impl(tx).await;
+
+            assert!(result.is_ok());
+            let failed_tx = result.unwrap();
+            assert_eq!(failed_tx.status, TransactionStatus::Failed);
+            assert!(failed_tx
+                .status_reason
+                .as_ref()
+                .unwrap()
+                .contains("stuck in Pending status for too long"));
+        }
+
+        #[tokio::test]
+        async fn test_pending_triggers_recovery_job_when_old_enough() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.id = "tx-pending-recovery".to_string();
+            tx.status = TransactionStatus::Pending;
+            // Created more than recovery trigger seconds ago
+            tx.created_at = (Utc::now()
+                - Duration::seconds(STELLAR_PENDING_RECOVERY_TRIGGER_SECONDS + 5))
+            .to_rfc3339();
+
+            // Should schedule recovery job
+            mocks
+                .job_producer
+                .expect_produce_transaction_request_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let result = handler.handle_transaction_status_impl(tx).await;
+
+            assert!(result.is_ok());
+            let tx_result = result.unwrap();
+            assert_eq!(tx_result.status, TransactionStatus::Pending);
+        }
+
+        #[tokio::test]
+        async fn test_pending_too_young_does_not_schedule_recovery() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.id = "tx-pending-young".to_string();
+            tx.status = TransactionStatus::Pending;
+            // Created less than recovery trigger seconds ago
+            tx.created_at = (Utc::now()
+                - Duration::seconds(STELLAR_PENDING_RECOVERY_TRIGGER_SECONDS - 5))
+            .to_rfc3339();
+
+            // Should NOT schedule recovery job
+            mocks
+                .job_producer
+                .expect_produce_transaction_request_job()
+                .never();
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let result = handler.handle_transaction_status_impl(tx).await;
+
+            assert!(result.is_ok());
+            let tx_result = result.unwrap();
+            assert_eq!(tx_result.status, TransactionStatus::Pending);
+        }
+
+        #[tokio::test]
+        async fn test_sent_without_hash_handles_stuck_recovery() {
+            use crate::constants::get_stellar_resend_timeout;
+
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.id = "tx-sent-no-hash".to_string();
+            tx.status = TransactionStatus::Sent;
+            // Created more than resend timeout ago (31 seconds > 30 seconds)
+            tx.created_at =
+                (Utc::now() - get_stellar_resend_timeout() - Duration::seconds(1)).to_rfc3339();
+            if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx.network_data {
+                stellar_data.hash = None; // No hash
+            }
+
+            // Should handle stuck Sent transaction and re-enqueue submit job
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let result = handler.handle_transaction_status_impl(tx).await;
+
+            assert!(result.is_ok());
+            let tx_result = result.unwrap();
+            assert_eq!(tx_result.status, TransactionStatus::Sent);
+        }
+
+        #[tokio::test]
+        async fn test_submitted_without_hash_marks_failed() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.id = "tx-submitted-no-hash".to_string();
+            tx.status = TransactionStatus::Submitted;
+            tx.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
+            if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx.network_data {
+                stellar_data.hash = None; // No hash
+            }
+
+            // Should mark as Failed
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_id, update| update.status == Some(TransactionStatus::Failed))
+                .times(1)
+                .returning(|id, update| {
+                    let mut updated = create_test_transaction("test");
+                    updated.id = id;
+                    updated.status = update.status.unwrap();
+                    updated.status_reason = update.status_reason.clone();
+                    Ok(updated)
+                });
+
+            // Notification for failure
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            // Try to enqueue next pending
+            mocks
+                .tx_repo
+                .expect_find_by_status()
+                .returning(|_, _| Ok(vec![]));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let result = handler.handle_transaction_status_impl(tx).await;
+
+            assert!(result.is_ok());
+            let failed_tx = result.unwrap();
+            assert_eq!(failed_tx.status, TransactionStatus::Failed);
+            assert!(failed_tx
+                .status_reason
+                .as_ref()
+                .unwrap()
+                .contains("Failed to parse and validate hash"));
         }
     }
 
