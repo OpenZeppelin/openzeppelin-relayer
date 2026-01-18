@@ -48,13 +48,6 @@ where
             return Ok(tx);
         }
 
-        // Early exit for unsubmitted states - they don't have on-chain hashes to check yet
-        // The submit handler will schedule status checks after submission
-        if is_unsubmitted_transaction(&tx.status) {
-            debug!(tx_id = %tx.id, status = ?tx.status, "transaction not yet submitted, skipping status check");
-            return Ok(tx);
-        }
-
         match self.status_core(tx.clone()).await {
             Ok(updated_tx) => {
                 debug!(
@@ -108,12 +101,8 @@ where
         let stellar_hash = match self.parse_and_validate_hash(&tx) {
             Ok(hash) => hash,
             Err(e) => {
-                // For unsubmitted transactions (Pending, Sent), this is expected - no hash yet
-                if is_unsubmitted_transaction(&tx.status) {
-                    // Handle stuck Sent transactions (existing recovery logic below)
-                    // No warning needed - this is normal for unsubmitted states
-                } else {
-                    // Transaction SHOULD have a hash (Submitted or later) - this is an error
+                // Only warn if transaction SHOULD have a hash (Submitted or later)
+                if !is_unsubmitted_transaction(&tx.status) {
                     warn!(tx_id = %tx.id, error = ?e, "failed to parse and validate hash");
                     return Err(e);
                 }
