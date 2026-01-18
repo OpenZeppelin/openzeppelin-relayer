@@ -21,9 +21,10 @@ pub const STELLAR_HORIZON_TESTNET_URL: &str = "https://horizon-testnet.stellar.o
 /// Set to 2s for faster detection of transaction state changes
 pub const STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS: i64 = 2;
 
-// Other delays
-/// Default delay (in seconds) for retrying transaction after bad sequence error
-pub const STELLAR_BAD_SEQUENCE_RETRY_DELAY_SECONDS: i64 = 2;
+/// Minimum age before triggering Pending status recovery (in seconds)
+/// Only schedule a recovery job if Pending transaction without hash exceeds this age
+/// This prevents scheduling a job on every status check
+pub const STELLAR_PENDING_RECOVERY_TRIGGER_SECONDS: i64 = 10;
 
 // Transaction validity
 /// Default transaction validity duration (in minutes) for sponsored transactions
@@ -47,7 +48,11 @@ pub const STELLAR_RESEND_TIMEOUT_SECONDS: i64 = 30;
 
 /// Maximum lifetime for a Sent transaction before marking as Failed (30 minutes)
 /// Safety net for transactions without time bounds - prevents infinite retries.
-pub const STELLAR_MAX_SENT_LIFETIME_MINUTES: i64 = 30;
+pub const STELLAR_MAX_SENT_LIFETIME_MINUTES: i64 = 15;
+
+/// Maximum lifetime for a Pending transaction before marking as Failed (30 minutes)
+/// Safety net for transactions stuck in Pending state - prevents infinite retries.
+pub const STELLAR_MAX_PENDING_LIFETIME_MINUTES: i64 = 15;
 
 /// Get resend timeout duration for stuck Sent transactions
 pub fn get_stellar_resend_timeout() -> Duration {
@@ -57,4 +62,9 @@ pub fn get_stellar_resend_timeout() -> Duration {
 /// Get max sent lifetime duration
 pub fn get_stellar_max_sent_lifetime() -> Duration {
     Duration::minutes(STELLAR_MAX_SENT_LIFETIME_MINUTES)
+}
+
+/// Get max pending lifetime duration
+pub fn get_stellar_max_pending_lifetime() -> Duration {
+    Duration::minutes(STELLAR_MAX_PENDING_LIFETIME_MINUTES)
 }
