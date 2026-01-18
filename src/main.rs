@@ -25,6 +25,7 @@
 //! ```
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use actix_governor::{Governor, GovernorConfigBuilder};
 use actix_web::HttpResponse;
@@ -52,7 +53,7 @@ use openzeppelin_relayer::{
         shutdown_plugin_pool,
     },
     config,
-    constants::PUBLIC_ENDPOINTS,
+    constants::{DEFAULT_CLIENT_DISCONNECT_TIMEOUT_SECONDS, PUBLIC_ENDPOINTS},
     logging::setup_logging,
     metrics,
     observability::RequestIdMiddleware,
@@ -141,10 +142,12 @@ async fn main() -> Result<()> {
         let app_state = app_state.clone();
         move || {
             let config = Arc::clone(&server_config_clone);
+            let config_for_auth = Arc::clone(&config);
             let app = App::new();
 
             app
             .wrap_fn(move |req, srv| {
+                let config = Arc::clone(&config_for_auth);
                 let path = req.path();
                 let is_public = PUBLIC_ENDPOINTS.iter().any(|p| path.starts_with(p));
                 let authorized = is_public || check_authorization_header(&req, &config.api_key);
@@ -165,12 +168,24 @@ async fn main() -> Result<()> {
             .wrap(middleware::DefaultHeaders::new())
             .wrap(middleware::NormalizePath::trim())
             .wrap(middleware::Compress::default())
+            .wrap(api::middleware::ConcurrencyLimiter::new(config.relayer_concurrency_limit))
+            .wrap(api::middleware::TimeoutMiddleware::new(config.request_timeout_seconds))
             .app_data(app_state.clone())
             .service(web::scope("/api/v1").configure(api::routes::configure_routes))
         }
     })
     .bind((config.host.as_str(), config.port))
     .wrap_err_with(|| format!("Failed to bind server to {}:{}", config.host, config.port))?
+    // Safety net: max concurrent connections server-wide
+    .max_connections(config.max_connections)
+    // TCP listen queue size
+    .backlog(config.connection_backlog)
+    // 55s (less than ALB's 60s idle timeout)
+    .keep_alive(Duration::from_secs(55))
+    // Overall request timeout (server-level safety net, 5 seconds more than request timeout to prevent connection drops)
+    .client_request_timeout(Duration::from_secs(config.request_timeout_seconds + 5))
+    // Disconnect timeout
+    .client_disconnect_timeout(Duration::from_secs(DEFAULT_CLIENT_DISCONNECT_TIMEOUT_SECONDS))
     .shutdown_timeout(5)
     .run();
 
