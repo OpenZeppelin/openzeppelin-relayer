@@ -46,6 +46,18 @@ where
             return Ok(tx);
         }
 
+        // Check if transaction has expired before attempting submission
+        if self.is_transaction_expired(&tx)? {
+            info!(
+                tx_id = %tx.id,
+                valid_until = ?tx.valid_until,
+                "transaction has expired, marking as Expired"
+            );
+            return self
+                .mark_as_expired(tx, "Transaction time_bounds expired".to_string())
+                .await;
+        }
+
         // Call core submission logic with error handling
         match self.submit_core(tx.clone()).await {
             Ok(submitted_tx) => Ok(submitted_tx),
@@ -241,8 +253,11 @@ mod tests {
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
 
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Must be Sent for idempotent submit
             if let NetworkTransactionData::Stellar(ref mut d) = tx.network_data {
                 d.signatures.push(dummy_signature());
+                d.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+                // Valid XDR
             }
 
             let res = handler.submit_transaction_impl(tx).await.unwrap();
@@ -293,9 +308,11 @@ mod tests {
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Must be Sent for idempotent submit
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
                 data.sequence_number = Some(42); // Set sequence number
+                data.signed_envelope_xdr = Some("test-xdr".to_string()); // Required for submission
             }
 
             let res = handler.submit_transaction_impl(tx).await;
@@ -357,9 +374,11 @@ mod tests {
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Must be Sent for idempotent submit
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
                 data.sequence_number = Some(42); // Set sequence number
+                data.signed_envelope_xdr = Some("test-xdr".to_string()); // Required for submission
             }
 
             let res = handler.submit_transaction_impl(tx).await;
@@ -375,6 +394,7 @@ mod tests {
 
             // Create a transaction with signed_envelope_xdr set
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Must be Sent for idempotent submit
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
                 // Build and store the signed envelope XDR
@@ -449,8 +469,11 @@ mod tests {
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
 
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Must be Sent for idempotent submit
             if let NetworkTransactionData::Stellar(ref mut d) = tx.network_data {
                 d.signatures.push(dummy_signature());
+                d.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+                // Valid XDR
             }
 
             let res = handler.resubmit_transaction_impl(tx).await.unwrap();
@@ -524,9 +547,11 @@ mod tests {
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Must be Sent for idempotent submit
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
                 data.sequence_number = Some(42); // Set sequence number
+                data.signed_envelope_xdr = Some("test-xdr".to_string()); // Required for submission
             }
 
             let res = handler.submit_transaction_impl(tx).await;
@@ -609,9 +634,12 @@ mod tests {
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Must be Sent for idempotent submit
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
                 data.sequence_number = Some(42);
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+                // Valid XDR
             }
 
             let result = handler.submit_transaction_impl(tx).await;

@@ -39,3 +39,22 @@ pub fn get_stellar_status_check_initial_delay() -> Duration {
 pub fn get_stellar_sponsored_transaction_validity_duration() -> Duration {
     Duration::minutes(STELLAR_SPONSORED_TRANSACTION_VALIDITY_MINUTES)
 }
+
+// Recovery thresholds
+/// Minimum time before re-queuing submit job for stuck Sent transactions (30 seconds)
+/// Gives the original submit job time to complete before attempting recovery.
+pub const STELLAR_RESEND_TIMEOUT_SECONDS: i64 = 30;
+
+/// Maximum lifetime for a Sent transaction before marking as Failed (30 minutes)
+/// Safety net for transactions without time bounds - prevents infinite retries.
+pub const STELLAR_MAX_SENT_LIFETIME_MINUTES: i64 = 30;
+
+/// Get resend timeout duration for stuck Sent transactions
+pub fn get_stellar_resend_timeout() -> Duration {
+    Duration::seconds(STELLAR_RESEND_TIMEOUT_SECONDS)
+}
+
+/// Get max sent lifetime duration
+pub fn get_stellar_max_sent_lifetime() -> Duration {
+    Duration::minutes(STELLAR_MAX_SENT_LIFETIME_MINUTES)
+}
