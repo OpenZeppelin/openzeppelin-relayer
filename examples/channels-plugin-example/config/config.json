@@ -8,7 +8,8 @@
       "network_type": "stellar",
       "signer_id": "channels-fund-signer",
       "policies": {
-        "concurrent_transactions": true
+        "concurrent_transactions": true,
+        "fee_payment_strategy": "relayer"
       }
     },
     {
@@ -17,7 +18,10 @@
       "network": "testnet",
       "paused": false,
       "network_type": "stellar",
-      "signer_id": "channel-001-signer"
+      "signer_id": "channel-001-signer",
+      "policies": {
+        "fee_payment_strategy": "relayer"
+      }
     },
     {
       "id": "channel-002",
@@ -25,7 +29,10 @@
       "network": "testnet",
       "paused": false,
       "network_type": "stellar",
-      "signer_id": "channel-002-signer"
+      "signer_id": "channel-002-signer",
+      "policies": {
+        "fee_payment_strategy": "relayer"
+      }
     }
   ],
   "notifications": [],

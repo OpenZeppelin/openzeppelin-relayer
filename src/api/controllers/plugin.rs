@@ -2,12 +2,14 @@
 //!
 //! Handles HTTP endpoints for plugin operations including:
 //! - Calling plugins
+//! - Listing plugins
+//! - Updating plugin configuration
 use crate::{
     jobs::JobProducerTrait,
     models::{
         ApiError, ApiResponse, NetworkRepoModel, NotificationRepoModel, PaginationMeta,
-        PaginationQuery, PluginCallRequest, PluginModel, RelayerRepoModel, SignerRepoModel,
-        ThinDataAppState, TransactionRepoModel,
+        PaginationQuery, PluginCallRequest, PluginModel, PluginValidationError, RelayerRepoModel,
+        SignerRepoModel, ThinDataAppState, TransactionRepoModel, UpdatePluginRequest,
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
@@ -166,6 +168,91 @@ where
     )))
 }
 
+/// Get plugin by ID
+///
+/// # Arguments
+///
+/// * `plugin_id` - The ID of the plugin to retrieve.
+/// * `state` - The application state containing the plugin repository.
+///
+/// # Returns
+///
+/// The plugin model if found.
+pub async fn get_plugin<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    plugin_id: String,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+) -> Result<HttpResponse, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    let plugin = state
+        .plugin_repository
+        .get_by_id(&plugin_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Plugin with id {plugin_id} not found")))?;
+
+    Ok(HttpResponse::Ok().json(ApiResponse::success(plugin)))
+}
+
+/// Update plugin configuration
+///
+/// Updates mutable plugin fields such as timeout, emit_logs, emit_traces,
+/// raw_response, allow_get_invocation, config, and forward_logs.
+/// The plugin id and path cannot be changed after creation.
+///
+/// # Arguments
+///
+/// * `plugin_id` - The ID of the plugin to update.
+/// * `update_request` - The update request containing the fields to update.
+/// * `state` - The application state containing the plugin repository.
+///
+/// # Returns
+///
+/// The updated plugin model.
+pub async fn update_plugin<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    plugin_id: String,
+    update_request: UpdatePluginRequest,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+) -> Result<HttpResponse, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    // Get existing plugin
+    let plugin = state
+        .plugin_repository
+        .get_by_id(&plugin_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Plugin with id {plugin_id} not found")))?;
+
+    // Apply updates
+    let updated_plugin = plugin.apply_update(update_request).map_err(|e| match e {
+        PluginValidationError::InvalidTimeout(msg) => ApiError::BadRequest(msg),
+    })?;
+
+    // Save the updated plugin
+    let saved_plugin = state.plugin_repository.update(updated_plugin).await?;
+
+    tracing::info!(plugin_id = %plugin_id, "Plugin configuration updated");
+
+    Ok(HttpResponse::Ok().json(ApiResponse::success(saved_plugin)))
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -322,6 +409,42 @@ mod tests {
         assert!(response.is_ok());
         let http_response = response.unwrap();
         assert_eq!(http_response.status(), StatusCode::OK);
+    }
+
+    #[actix_web::test]
+    async fn test_get_plugin_success() {
+        // Tests getting a plugin by ID
+        let plugin = PluginModel {
+            id: "test-plugin".to_string(),
+            path: "test-path".to_string(),
+            timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+            emit_logs: true,
+            emit_traces: false,
+            raw_response: false,
+            allow_get_invocation: true,
+            config: None,
+            forward_logs: true,
+        };
+        let app_state =
+            create_mock_app_state(None, None, None, None, Some(vec![plugin]), None).await;
+
+        let response = get_plugin("test-plugin".to_string(), web::ThinData(app_state)).await;
+        assert!(response.is_ok());
+        let http_response = response.unwrap();
+        assert_eq!(http_response.status(), StatusCode::OK);
+    }
+
+    #[actix_web::test]
+    async fn test_get_plugin_not_found() {
+        // Tests getting a non-existent plugin
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        let response = get_plugin("non-existent".to_string(), web::ThinData(app_state)).await;
+        assert!(response.is_err());
+        match response.unwrap_err() {
+            ApiError::NotFound(msg) => assert!(msg.contains("non-existent")),
+            _ => panic!("Expected NotFound error"),
+        }
     }
 
     #[actix_web::test]
@@ -566,5 +689,255 @@ mod tests {
         assert_eq!(response.data, Some(plugin_result.result));
         assert!(response.metadata.is_none());
         assert!(response.error.is_none());
+    }
+
+    // ============================================================================
+    // UPDATE PLUGIN CONTROLLER TESTS
+    // ============================================================================
+
+    #[actix_web::test]
+    async fn test_update_plugin_success() {
+        // Tests successful plugin update
+        let plugin = PluginModel {
+            id: "test-plugin".to_string(),
+            path: "test-path".to_string(),
+            timeout: Duration::from_secs(30),
+            emit_logs: false,
+            emit_traces: false,
+            raw_response: false,
+            allow_get_invocation: false,
+            config: None,
+            forward_logs: false,
+        };
+        let app_state =
+            create_mock_app_state(None, None, None, None, Some(vec![plugin]), None).await;
+
+        let update_request = UpdatePluginRequest {
+            timeout: Some(60),
+            emit_logs: Some(true),
+            forward_logs: Some(true),
+            ..Default::default()
+        };
+
+        let response = update_plugin(
+            "test-plugin".to_string(),
+            update_request,
+            web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(response.is_ok());
+        let http_response = response.unwrap();
+        assert_eq!(http_response.status(), StatusCode::OK);
+    }
+
+    #[actix_web::test]
+    async fn test_update_plugin_not_found() {
+        // Tests update on non-existent plugin
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        let update_request = UpdatePluginRequest {
+            timeout: Some(60),
+            ..Default::default()
+        };
+
+        let response = update_plugin(
+            "non-existent".to_string(),
+            update_request,
+            web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(response.is_err());
+        match response.unwrap_err() {
+            ApiError::NotFound(msg) => assert!(msg.contains("non-existent")),
+            _ => panic!("Expected NotFound error"),
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_update_plugin_invalid_timeout() {
+        // Tests that timeout=0 returns BadRequest
+        let plugin = PluginModel {
+            id: "test-plugin".to_string(),
+            path: "test-path".to_string(),
+            timeout: Duration::from_secs(30),
+            emit_logs: false,
+            emit_traces: false,
+            raw_response: false,
+            allow_get_invocation: false,
+            config: None,
+            forward_logs: false,
+        };
+        let app_state =
+            create_mock_app_state(None, None, None, None, Some(vec![plugin]), None).await;
+
+        let update_request = UpdatePluginRequest {
+            timeout: Some(0), // Invalid: timeout must be > 0
+            ..Default::default()
+        };
+
+        let response = update_plugin(
+            "test-plugin".to_string(),
+            update_request,
+            web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(response.is_err());
+        match response.unwrap_err() {
+            ApiError::BadRequest(msg) => assert!(msg.contains("Timeout")),
+            _ => panic!("Expected BadRequest error"),
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_update_plugin_with_config() {
+        // Tests updating plugin config
+        let plugin = PluginModel {
+            id: "test-plugin".to_string(),
+            path: "test-path".to_string(),
+            timeout: Duration::from_secs(30),
+            emit_logs: false,
+            emit_traces: false,
+            raw_response: false,
+            allow_get_invocation: false,
+            config: None,
+            forward_logs: false,
+        };
+        let app_state =
+            create_mock_app_state(None, None, None, None, Some(vec![plugin]), None).await;
+
+        let mut config_map = serde_json::Map::new();
+        config_map.insert("feature_flag".to_string(), serde_json::json!(true));
+        config_map.insert("api_key".to_string(), serde_json::json!("secret123"));
+
+        let update_request = UpdatePluginRequest {
+            config: Some(Some(config_map)),
+            ..Default::default()
+        };
+
+        let response = update_plugin(
+            "test-plugin".to_string(),
+            update_request,
+            web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(response.is_ok());
+        let http_response = response.unwrap();
+        assert_eq!(http_response.status(), StatusCode::OK);
+    }
+
+    #[actix_web::test]
+    async fn test_update_plugin_clear_config() {
+        // Tests clearing plugin config by setting it to null
+        let mut initial_config = serde_json::Map::new();
+        initial_config.insert("existing".to_string(), serde_json::json!("value"));
+
+        let plugin = PluginModel {
+            id: "test-plugin".to_string(),
+            path: "test-path".to_string(),
+            timeout: Duration::from_secs(30),
+            emit_logs: false,
+            emit_traces: false,
+            raw_response: false,
+            allow_get_invocation: false,
+            config: Some(initial_config),
+            forward_logs: false,
+        };
+        let app_state =
+            create_mock_app_state(None, None, None, None, Some(vec![plugin]), None).await;
+
+        // Setting config to Some(None) should clear it
+        let update_request = UpdatePluginRequest {
+            config: Some(None),
+            ..Default::default()
+        };
+
+        let response = update_plugin(
+            "test-plugin".to_string(),
+            update_request,
+            web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(response.is_ok());
+        let http_response = response.unwrap();
+        assert_eq!(http_response.status(), StatusCode::OK);
+    }
+
+    #[actix_web::test]
+    async fn test_update_plugin_all_fields() {
+        // Tests updating all mutable fields at once
+        let plugin = PluginModel {
+            id: "test-plugin".to_string(),
+            path: "test-path".to_string(),
+            timeout: Duration::from_secs(30),
+            emit_logs: false,
+            emit_traces: false,
+            raw_response: false,
+            allow_get_invocation: false,
+            config: None,
+            forward_logs: false,
+        };
+        let app_state =
+            create_mock_app_state(None, None, None, None, Some(vec![plugin]), None).await;
+
+        let mut config_map = serde_json::Map::new();
+        config_map.insert("key".to_string(), serde_json::json!("value"));
+
+        let update_request = UpdatePluginRequest {
+            timeout: Some(120),
+            emit_logs: Some(true),
+            emit_traces: Some(true),
+            raw_response: Some(true),
+            allow_get_invocation: Some(true),
+            config: Some(Some(config_map)),
+            forward_logs: Some(true),
+        };
+
+        let response = update_plugin(
+            "test-plugin".to_string(),
+            update_request,
+            web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(response.is_ok());
+        let http_response = response.unwrap();
+        assert_eq!(http_response.status(), StatusCode::OK);
+    }
+
+    #[actix_web::test]
+    async fn test_update_plugin_empty_request() {
+        // Tests that an empty update request doesn't change anything (no-op)
+        let plugin = PluginModel {
+            id: "test-plugin".to_string(),
+            path: "test-path".to_string(),
+            timeout: Duration::from_secs(30),
+            emit_logs: true,
+            emit_traces: true,
+            raw_response: false,
+            allow_get_invocation: false,
+            config: None,
+            forward_logs: true,
+        };
+        let app_state =
+            create_mock_app_state(None, None, None, None, Some(vec![plugin]), None).await;
+
+        // Empty update request - all fields are None
+        let update_request = UpdatePluginRequest::default();
+
+        let response = update_plugin(
+            "test-plugin".to_string(),
+            update_request,
+            web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(response.is_ok());
+        let http_response = response.unwrap();
+        assert_eq!(http_response.status(), StatusCode::OK);
     }
 }

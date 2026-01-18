@@ -213,8 +213,14 @@ describe('PluginAPI', () => {
       expect(mockWrite).toHaveBeenCalled();
     });
 
-    it('should throw error if write fails', async () => {
-      mockWrite.mockReturnValue(false);
+    it('should throw error if write callback returns error', async () => {
+      // Simulate write error via callback (this is how Node.js socket.write reports errors)
+      const writeError = new Error('EPIPE: broken pipe');
+      mockWrite.mockImplementation((data: string, callback: (error?: Error) => void) => {
+        // Call the callback with an error to simulate write failure
+        callback(writeError);
+        return true;
+      });
 
       const payload: NetworkTransactionRequest = {
         to: '0x1234567890123456789012345678901234567890',
@@ -225,7 +231,7 @@ describe('PluginAPI', () => {
       };
 
       await expect(pluginAPI._send('test-relayer', 'sendTransaction', payload))
-        .rejects.toThrow('Failed to send message to relayer');
+        .rejects.toThrow('EPIPE: broken pipe');
     });
   });
 
@@ -275,6 +281,160 @@ describe('PluginAPI', () => {
         expect.any(Function)
       );
     });
+  });
+});
+
+describe('Socket error handling', () => {
+  let pluginAPI: DefaultPluginAPI;
+  let mockSocket: jest.Mocked<net.Socket>;
+  let mockWrite: jest.Mock;
+  let mockEnd: jest.Mock;
+  let mockDestroy: jest.Mock;
+  let eventHandlers: Map<string, Function>;
+
+  beforeEach(() => {
+    eventHandlers = new Map();
+    mockWrite = jest.fn().mockReturnValue(true);
+    mockEnd = jest.fn();
+    mockDestroy = jest.fn();
+
+    mockSocket = {
+      write: mockWrite,
+      end: mockEnd,
+      destroy: mockDestroy,
+      on: jest.fn((event: string, handler: Function) => {
+        eventHandlers.set(event, handler);
+        return mockSocket;
+      }),
+    } as any;
+
+    jest.spyOn(net, 'createConnection').mockReturnValue(mockSocket);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('should reject pending requests when socket closes', async () => {
+    pluginAPI = new DefaultPluginAPI('/tmp/test.sock');
+
+    // Simulate established connection by triggering connect event
+    const connectHandler = eventHandlers.get('connect');
+    if (connectHandler) {
+      connectHandler();
+    }
+
+    const payload: NetworkTransactionRequest = {
+      to: '0x1234567890123456789012345678901234567890',
+      value: 1000000,
+      data: '0x',
+      gas_limit: 21000,
+      speed: Speed.FAST,
+    };
+
+    // Start the send (won't complete)
+    const sendPromise = pluginAPI._send('test-relayer', 'sendTransaction', payload);
+
+    // Trigger socket close
+    const closeHandler = eventHandlers.get('close');
+    if (closeHandler) {
+      closeHandler();
+    }
+
+    // Should reject with SocketClosedError
+    await expect(sendPromise).rejects.toThrow('Socket closed by server');
+  });
+
+  it('should have ESOCKETCLOSED code on socket close error', async () => {
+    pluginAPI = new DefaultPluginAPI('/tmp/test.sock');
+
+    // Simulate established connection
+    const connectHandler = eventHandlers.get('connect');
+    if (connectHandler) {
+      connectHandler();
+    }
+
+    const payload: NetworkTransactionRequest = {
+      to: '0x1234567890123456789012345678901234567890',
+      value: 1000000,
+      data: '0x',
+      gas_limit: 21000,
+      speed: Speed.FAST,
+    };
+
+    const sendPromise = pluginAPI._send('test-relayer', 'sendTransaction', payload);
+
+    // Trigger socket close
+    const closeHandler = eventHandlers.get('close');
+    if (closeHandler) {
+      closeHandler();
+    }
+
+    try {
+      await sendPromise;
+      fail('Should have thrown');
+    } catch (error: any) {
+      expect(error.code).toBe('ESOCKETCLOSED');
+      expect(error.name).toBe('SocketClosedError');
+    }
+  });
+
+  it('should handle multiple pending requests on socket close', async () => {
+    pluginAPI = new DefaultPluginAPI('/tmp/test.sock');
+
+    // Simulate established connection
+    const connectHandler = eventHandlers.get('connect');
+    if (connectHandler) {
+      connectHandler();
+    }
+
+    const payload: NetworkTransactionRequest = {
+      to: '0x1234567890123456789012345678901234567890',
+      value: 1000000,
+      data: '0x',
+      gas_limit: 21000,
+      speed: Speed.FAST,
+    };
+
+    // Start multiple sends
+    const promises = [
+      pluginAPI._send('test-relayer', 'sendTransaction', payload),
+      pluginAPI._send('test-relayer', 'getRelayer', {}),
+      pluginAPI._send('test-relayer', 'getRelayerStatus', {}),
+    ];
+
+    expect(pluginAPI.pending.size).toBe(3);
+
+    // Trigger socket close
+    const closeHandler = eventHandlers.get('close');
+    if (closeHandler) {
+      closeHandler();
+    }
+
+    // All should reject
+    for (const promise of promises) {
+      await expect(promise).rejects.toThrow();
+    }
+
+    // Pending should be cleared
+    expect(pluginAPI.pending.size).toBe(0);
+  });
+
+  it('should reject connection promise on socket error during connect', async () => {
+    pluginAPI = new DefaultPluginAPI('/tmp/test.sock');
+
+    // Trigger error before connection is established
+    const errorHandler = eventHandlers.get('error');
+    const socketError = new Error('ECONNREFUSED');
+
+    // The connection promise should reject
+    const connectionPromise = (pluginAPI as any)._connectionPromise;
+
+    if (errorHandler) {
+      errorHandler(socketError);
+    }
+
+    await expect(connectionPromise).rejects.toThrow('ECONNREFUSED');
   });
 });
 

@@ -4,6 +4,29 @@ export interface LogEntry {
   message: string;
 }
 
+/**
+ * Safely stringify a value, handling circular references and BigInt.
+ * Falls back to String() if JSON.stringify fails.
+ */
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value, (_, v) => {
+      // Handle BigInt which JSON.stringify can't serialize
+      if (typeof v === 'bigint') {
+        return v.toString() + 'n';
+      }
+      return v;
+    });
+  } catch {
+    // Handle circular references or other stringify failures
+    try {
+      return String(value);
+    } catch {
+      return '[Unstringifiable value]';
+    }
+  }
+}
+
 export class LogInterceptor {
   private logs: LogEntry[] = [];
   private originalConsole: {
@@ -34,13 +57,13 @@ export class LogInterceptor {
       const message = args.map(arg =>
         typeof arg === 'string' ? arg :
         arg instanceof Error ? arg.message :
-        JSON.stringify(arg)
+        safeStringify(arg)
       ).join(' ');
 
       const logEntry: LogEntry = { level, message };
       this.logs.push(logEntry);
 
-      this.originalConsole.log(JSON.stringify(logEntry));
+      this.originalConsole.log(safeStringify(logEntry));
     };
 
     console.log = createLogger("log");
@@ -59,7 +82,7 @@ export class LogInterceptor {
       message: message,
     };
     this.logs.push(logEntry);
-    this.originalConsole.log(JSON.stringify(logEntry));
+    this.originalConsole.log(safeStringify(logEntry));
   }
 
   /**

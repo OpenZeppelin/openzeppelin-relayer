@@ -43,8 +43,23 @@ import {
 import { DefaultPluginKVStore } from './kv';
 import { LogInterceptor } from './logger';
 import type { PluginKVStore } from './kv';
+import { DEFAULT_SOCKET_REQUEST_TIMEOUT_MS } from './constants';
 import net from 'node:net';
 import { v4 as uuidv4 } from 'uuid';
+
+/**
+ * Custom error for socket closure - provides a recognizable error code
+ * for server-side connection termination (e.g., Rust's 60-second connection lifetime).
+ */
+class SocketClosedError extends Error {
+  code: string;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'SocketClosedError';
+    this.code = 'ESOCKETCLOSED';
+  }
+}
 
 /**
  * Smart serialization for plugin return values
@@ -386,7 +401,27 @@ export async function loadAndExecutePlugin<T, R>(
 }
 
 /**
- * The plugin API.
+ * Plugin API implementation for direct execution mode (ts-node).
+ *
+ * **⚠️ Legacy/Fallback Implementation**
+ * This implementation is used by `executor.ts` when Rust calls plugins via `ts-node` directly
+ * (see `src/services/plugins/script_executor.rs`). This is the legacy execution path, enabled
+ * only when `PLUGIN_USE_POOL=false`. The default execution mode uses the pool executor
+ * (`PluginAPIImpl` in `pool-executor.ts`), which is faster and more efficient.
+ *
+ * **Note**: New features should be added to the pool executor (`PluginAPIImpl`), not this
+ * implementation, as pool executor is the default and preferred path.
+ *
+ * **Why a separate implementation?**
+ * This implementation has different requirements than the worker pool implementation:
+ *
+ * - **Registration protocol**: Sends a `register` message with `execution_id` after connection
+ *   (required by the direct execution protocol)
+ * - **One-shot lifecycle**: Process exits after plugin completes, so no socket pooling needed
+ * - **Immediate connection**: Connects in constructor since it's a single-use process
+ * - **Protocol support**: Handles both new protocol (`api_request`/`api_response`) and legacy format
+ *
+ * **See also**: `PluginAPIImpl` in `pool-executor.ts` for the worker pool implementation (default).
  *
  * @property useRelayer - Creates a relayer API for the given relayer ID.
  * @property sendTransaction - Sends a transaction to the relayer.
@@ -398,6 +433,8 @@ export class DefaultPluginAPI implements PluginAPI {
   private _connectionPromise: Promise<void> | null = null;
   private _connected: boolean = false;
   private _httpRequestId?: string;
+  private _registered: boolean = false;
+  private _registrationPromise: Promise<void> | null = null;
 
   constructor(socketPath: string, httpRequestId?: string) {
     this.socket = net.createConnection(socketPath);
@@ -405,14 +442,23 @@ export class DefaultPluginAPI implements PluginAPI {
     this._httpRequestId = httpRequestId;
 
     this._connectionPromise = new Promise((resolve, reject) => {
-      this.socket.on('connect', () => {
+      this.socket.on('connect', async () => {
         this._connected = true;
+        // Register with execution_id immediately after connection (new protocol)
+        await this._register();
         resolve();
       });
 
       this.socket.on('error', (error) => {
         console.error('Socket ERROR:', error);
+        this._rejectAllPending(error);
         reject(error);
+      });
+
+      this.socket.on('close', () => {
+        this._connected = false;
+        // Use SocketClosedError so callers can identify server-side closure
+        this._rejectAllPending(new SocketClosedError('Socket closed by server (connection lifetime exceeded)'));
       });
     });
 
@@ -422,15 +468,80 @@ export class DefaultPluginAPI implements PluginAPI {
         .split('\n')
         .filter(Boolean)
         .forEach((msg: string) => {
-          const parsed = JSON.parse(msg);
-          const { requestId, result, error } = parsed;
-          const resolver = this.pending.get(requestId);
-          if (resolver) {
-            error ? resolver.reject(error) : resolver.resolve(result);
-            this.pending.delete(requestId);
+          try {
+            const parsed = JSON.parse(msg);
+
+            // Handle new protocol ApiResponse format
+            if (parsed.type === 'api_response') {
+              const { request_id, result, error } = parsed;
+              const resolver = this.pending.get(request_id);
+              if (resolver) {
+                error ? resolver.reject(new Error(error)) : resolver.resolve(result);
+                this.pending.delete(request_id);
+              }
+            }
+            // Fallback to legacy format for backward compatibility
+            else if (parsed.requestId) {
+              const { requestId, result, error } = parsed;
+              const resolver = this.pending.get(requestId);
+              if (resolver) {
+                error ? resolver.reject(error) : resolver.resolve(result);
+                this.pending.delete(requestId);
+              }
+            }
+          } catch {
+            // Ignore malformed messages
           }
         });
     });
+  }
+
+  /**
+   * Register execution_id with the server (new protocol requirement)
+   * This must be the first message sent after connection
+   */
+  private async _register(): Promise<void> {
+    if (this._registered || !this._httpRequestId) {
+      return;
+    }
+
+    if (this._registrationPromise) {
+      return this._registrationPromise;
+    }
+
+    this._registrationPromise = new Promise((resolve, reject) => {
+      const registerMsg = {
+        type: 'register',
+        execution_id: this._httpRequestId,
+      };
+      const message = JSON.stringify(registerMsg) + '\n';
+
+      try {
+        this.socket.write(message, (err) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          this._registered = true;
+          resolve();
+        });
+      } catch (err) {
+        reject(err);
+      }
+    });
+
+    return this._registrationPromise;
+  }
+
+  /**
+   * Reject all pending requests with the given error.
+   * Called on socket error or close to prevent hanging promises.
+   */
+  private _rejectAllPending(error: Error): void {
+    for (const [requestId, resolver] of this.pending.entries()) {
+      resolver.reject(error);
+      this.pending.delete(requestId);
+    }
   }
 
   /**
@@ -506,32 +617,80 @@ export class DefaultPluginAPI implements PluginAPI {
 
   async _send<T>(relayerId: string, method: string, payload: any): Promise<T> {
     const requestId = uuidv4();
-    const msg: any = { requestId, relayerId, method, payload };
-    if (this._httpRequestId) {
-      msg.httpRequestId = this._httpRequestId;
-    }
-    const message = JSON.stringify(msg) + '\n';
 
+    // Ensure connection and registration are complete
     if (!this._connected) {
       await this._connectionPromise;
     }
 
-    const result = this.socket.write(message, (error) => {
-      if (error) {
-        console.error('Error sending message:', error);
-      }
-    });
-
-    if (!result) {
-      throw new Error(`Failed to send message to relayer: ${message}`);
+    // Ensure registration is sent (for new protocol)
+    // If httpRequestId is available, use new protocol; otherwise fall back to legacy
+    if (this._httpRequestId && !this._registered) {
+      await this._register();
     }
 
+    // Use new protocol format if registered, otherwise fall back to legacy format
+    let msg: any;
+    if (this._registered && this._httpRequestId) {
+      // New protocol: ApiRequest message
+      msg = {
+        type: 'api_request',
+        request_id: requestId,
+        relayer_id: relayerId,
+        method: method,
+        payload: payload,
+      };
+    } else {
+      // Legacy protocol format (for backward compatibility when httpRequestId is missing)
+      msg = { requestId, relayerId, method, payload };
+      if (this._httpRequestId) {
+        msg.httpRequestId = this._httpRequestId;
+      }
+    }
+    const message = JSON.stringify(msg) + '\n';
+
     return new Promise((resolve, reject) => {
-      this.pending.set(requestId, { resolve, reject });
+      let timeoutId: NodeJS.Timeout | undefined;
+
+      // Set up timeout to prevent hanging forever
+      timeoutId = setTimeout(() => {
+        this.pending.delete(requestId);
+        reject(new Error(`Socket request '${method}' timed out after ${DEFAULT_SOCKET_REQUEST_TIMEOUT_MS}ms`));
+      }, DEFAULT_SOCKET_REQUEST_TIMEOUT_MS);
+
+      // Wrap resolvers to clear timeout on completion
+      this.pending.set(requestId, {
+        resolve: (value) => {
+          if (timeoutId) clearTimeout(timeoutId);
+          resolve(value);
+        },
+        reject: (reason) => {
+          if (timeoutId) clearTimeout(timeoutId);
+          reject(reason);
+        },
+      });
+
+      this.socket.write(message, (error) => {
+        if (error) {
+          if (timeoutId) clearTimeout(timeoutId);
+          this.pending.delete(requestId);
+          reject(error);
+        }
+      });
     });
   }
 
   close() {
+    // Send shutdown message before closing (new protocol)
+    if (this._connected && this._registered) {
+      try {
+        const shutdownMsg = { type: 'shutdown' };
+        const message = JSON.stringify(shutdownMsg) + '\n';
+        this.socket.write(message);
+      } catch {
+        // Ignore errors when sending shutdown (socket might already be closed)
+      }
+    }
     this.socket.end();
   }
 

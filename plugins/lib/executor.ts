@@ -1,12 +1,21 @@
 #!/usr/bin/env node
 
 /**
- * Plugin executor script for executing user plugins
+ * Legacy Plugin Executor (ts-node mode)
  *
- * This is the main entry point for executing specific plugins from the Rust environment.
- * It serves as a bridge between the Rust relayer and TypeScript plugin ecosystem.
+ * **⚠️ Legacy/Fallback Implementation**
+ * This executor is used only when pool-based execution is disabled (`PLUGIN_USE_POOL=false`).
+ * The default execution mode uses the pool executor (`pool-executor.ts`), which is faster
+ * and more efficient. This ts-node executor spawns a new process per request, which is
+ * slower but simpler.
  *
- * Called from: src/services/plugins/script_executor.rs
+ * **Default Execution Path**: Pool executor (`pool-executor.ts`) via `pool-server.ts` →
+ * `worker-pool.ts` → `pool-executor.ts` (Piscina workers)
+ *
+ * **Legacy Execution Path**: This executor (`executor.ts`) via `script_executor.rs` →
+ * ts-node → `executor.ts` (one-shot process per request)
+ *
+ * Called from: `src/services/plugins/script_executor.rs` (only when `PLUGIN_USE_POOL=false`)
  * The Rust code invokes this script via ts-node and passes parameters as command line arguments.
  *
  * This script:
