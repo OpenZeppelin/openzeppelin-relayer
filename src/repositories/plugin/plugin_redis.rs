@@ -399,18 +399,19 @@ impl PluginRepositoryTrait for RedisPluginRepository {
 
         debug!(plugin_id = %plugin_id, "storing compiled code in Redis");
 
-        // Store the compiled code
-        conn.set::<_, _, ()>(&code_key, compiled_code)
-            .await
-            .map_err(|e| self.map_redis_error(e, &format!("store_compiled_code_{plugin_id}")))?;
+        // Use pipeline to store both code and hash atomically
+        let mut pipe = redis::pipe();
+        pipe.atomic();
+        pipe.set(&code_key, compiled_code);
 
-        // Store source hash if provided
         if let Some(hash) = source_hash {
             let hash_key = self.source_hash_key(plugin_id);
-            conn.set::<_, _, ()>(&hash_key, hash)
-                .await
-                .map_err(|e| self.map_redis_error(e, &format!("store_source_hash_{plugin_id}")))?;
+            pipe.set(&hash_key, hash);
         }
+
+        pipe.exec_async(&mut conn)
+            .await
+            .map_err(|e| self.map_redis_error(e, &format!("store_compiled_code_{plugin_id}")))?;
 
         Ok(())
     }
@@ -422,14 +423,15 @@ impl PluginRepositoryTrait for RedisPluginRepository {
 
         debug!(plugin_id = %plugin_id, "invalidating compiled code in Redis");
 
-        // Delete the compiled code and hash
-        conn.del::<_, ()>(&code_key)
-            .await
-            .map_err(|e| self.map_redis_error(e, &format!("delete_compiled_code_{plugin_id}")))?;
+        // Use pipeline to delete both keys atomically
+        let mut pipe = redis::pipe();
+        pipe.atomic();
+        pipe.del(&code_key);
+        pipe.del(&hash_key);
 
-        conn.del::<_, ()>(&hash_key)
-            .await
-            .map_err(|e| self.map_redis_error(e, &format!("delete_source_hash_{plugin_id}")))?;
+        pipe.exec_async(&mut conn).await.map_err(|e| {
+            self.map_redis_error(e, &format!("invalidate_compiled_code_{plugin_id}"))
+        })?;
 
         Ok(())
     }

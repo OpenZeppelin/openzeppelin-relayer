@@ -26,7 +26,7 @@ fn main() {
 
     // Only run pnpm install if node_modules is missing
     if !node_modules.exists() {
-        println!("cargo:warning=Installing plugin dependencies...");
+        println!("Installing plugin dependencies...");
         let output = Command::new("pnpm")
             .arg("install")
             .arg("--ignore-scripts") // Skip postinstall, we'll build explicitly below
@@ -35,7 +35,7 @@ fn main() {
 
         match output {
             Ok(output) if output.status.success() => {
-                println!("cargo:warning=✓ pnpm install completed");
+                println!("✓ pnpm install completed");
             }
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -64,7 +64,7 @@ fn main() {
     };
 
     if needs_build {
-        println!("cargo:warning=Building direct-executor...");
+        println!("Building executor...");
         let output = Command::new("pnpm")
             .arg("run")
             .arg("build")
@@ -73,14 +73,14 @@ fn main() {
 
         match output {
             Ok(output) if output.status.success() => {
-                println!("cargo:warning=✓ direct-executor built successfully");
+                println!("✓ executor built successfully");
             }
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                println!("cargo:warning=direct-executor build failed: {stderr}");
+                println!("cargo:warning=executor build failed: {stderr}");
             }
             Err(e) => {
-                println!("cargo:warning=Failed to build direct-executor: {e}");
+                println!("cargo:warning=Failed to build executor: {e}");
             }
         }
     }

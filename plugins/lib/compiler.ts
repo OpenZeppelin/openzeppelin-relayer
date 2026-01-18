@@ -15,7 +15,6 @@ import * as esbuild from 'esbuild';
 import type { Message } from 'esbuild';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import * as os from 'node:os';
 
 /** Maximum source file size (5MB) */
 const MAX_SOURCE_SIZE = 5 * 1024 * 1024;
@@ -130,33 +129,20 @@ function normalizeErrorCode(code: unknown): CompilationErrorCode {
 
 /**
  * Sanitize file path for safe error messages.
- * Replaces user home directories and absolute paths with safe alternatives.
+ * Replaces absolute paths with relative alternatives for cleaner, portable error messages.
  *
  * @param filePath - The file path to sanitize
  * @returns Sanitized path safe for error messages
  */
 function sanitizePath(filePath: string): string {
-  let sanitized = filePath;
-
-  // Replace current working directory with '.'
+  // Replace current working directory with '.' for relative paths
   const cwd = process.cwd();
-  if (sanitized.startsWith(cwd)) {
-    sanitized = '.' + sanitized.slice(cwd.length);
+  if (filePath.startsWith(cwd)) {
+    return '.' + filePath.slice(cwd.length);
   }
 
-  // Replace home directories with '~'
-  const homeDir = os.homedir();
-  if (sanitized.startsWith(homeDir)) {
-    sanitized = '~' + sanitized.slice(homeDir.length);
-  }
-
-  // Platform-specific home directory patterns
-  sanitized = sanitized
-    .replace(/\/home\/[^/]+/g, '~')
-    .replace(/\/Users\/[^/]+/g, '~')
-    .replace(/C:\\Users\\[^\\]+/gi, '~');
-
-  return sanitized;
+  // If path is outside CWD, return as-is (already absolute or relative)
+  return filePath;
 }
 
 /**
@@ -394,7 +380,6 @@ export async function compilePluginSource(
   const doCompile = async (): Promise<CompilationResult> => {
     try {
       // Use esbuild.build() with stdin to bundle imports
-      // This is CRITICAL - transform() does not resolve imports!
       const result = await esbuild.build({
         stdin: {
           contents: sourceCode,
@@ -405,7 +390,7 @@ export async function compilePluginSource(
         bundle: true, // CRITICAL: Bundle to resolve and inline all imports
         platform: 'node',
         target: opts.target,
-        format: 'cjs', // CommonJS for vm.Script compatibility
+        format: 'cjs', // CommonJS for Function constructor compatibility (executed via new Function())
         sourcemap: opts.sourcemap === 'external' ? true : opts.sourcemap === 'inline' ? 'inline' : false,
         minify: opts.minify,
         write: false, // Keep in memory, don't write to disk
@@ -545,19 +530,20 @@ export async function compilePlugins(
 
 /**
  * Creates a wrapped version of compiled code that exports the handler.
- * This wrapping is necessary for vm.Script execution.
+ *
+ * @deprecated This function is no longer used internally. The compiled code is executed
+ * directly via `new Function()` constructor in direct-executor.ts. This function is kept
+ * for backward compatibility but may be removed in a future version.
  *
  * @param compiledCode - The compiled JavaScript code
- * @returns Wrapped code ready for vm.Script
+ * @returns Wrapped code as an IIFE
  * @throws Error if input is invalid
  *
  * @example
  * ```typescript
  * const compiled = await compilePluginSource(source, 'plugin.ts');
  * const wrapped = wrapForVm(compiled.code);
- * const script = new vm.Script(wrapped);
- * const factory = script.runInContext(context);
- * factory(exports, require, module, __filename, __dirname);
+ * // Note: This is legacy code. Current execution uses new Function() directly.
  * ```
  */
 export function wrapForVm(compiledCode: string): string {
@@ -577,11 +563,10 @@ export function wrapForVm(compiledCode: string): string {
   }
 
   // The compiled code uses CommonJS (module.exports / exports.handler)
-  // We wrap it in an IIFE to capture the exports in the vm context
+  // We wrap it in an IIFE for legacy vm.Script compatibility
   return `
 (function(exports, require, module, __filename, __dirname) {
 ${compiledCode}
 });
 `;
 }
-

@@ -23,50 +23,28 @@ import * as fs from 'node:fs';
 import * as crypto from 'node:crypto';
 import * as vm from 'node:vm';
 import * as os from 'node:os';
+import * as esbuild from 'esbuild';
 
-const inputPath = path.resolve(__dirname, 'direct-executor.ts');
-const outputPath = path.resolve(__dirname, 'direct-executor.js');
-const hashPath = path.resolve(__dirname, 'direct-executor.js.sha256');
-const cacheHashPath = path.resolve(__dirname, '.build-cache-hash');
-
-/**
- * Check if esbuild is available
- */
-async function validateDependencies(): Promise<typeof import('esbuild')> {
-  try {
-    return await import('esbuild');
-  } catch {
-    throw new Error(
-      'esbuild is not installed. Run: npm install esbuild\n' +
-      'Or if using yarn: yarn add esbuild'
-    );
-  }
-}
+const INPUT_PATH = path.resolve(__dirname, 'direct-executor.ts');
+const OUTPUT_PATH = path.resolve(__dirname, 'direct-executor.js');
+const HASH_PATH = path.resolve(__dirname, 'direct-executor.js.sha256');
+const CACHE_HASH_PATH = path.resolve(__dirname, '.build-cache-hash');
 
 /**
  * Calculate SHA256 hash of file content
  */
-function calculateHash(filePath: string): string {
-  const content = fs.readFileSync(filePath);
-  return crypto.createHash('sha256').update(content).digest('hex');
-}
-
-/**
- * Calculate SHA256 hash of string content
- */
-function calculateContentHash(content: string): string {
+async function calculateHash(filePath: string): Promise<string> {
+  const content = await fs.promises.readFile(filePath);
   return crypto.createHash('sha256').update(content).digest('hex');
 }
 
 /**
  * Safe file deletion - handles EBUSY, ENOENT gracefully
  */
-function safeUnlink(filePath: string): boolean {
+async function safeUnlink(filePath: string): Promise<boolean> {
   try {
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-      return true;
-    }
+    await fs.promises.unlink(filePath);
+    return true;
   } catch (err) {
     const error = err as NodeJS.ErrnoException;
     // Ignore common non-critical errors
@@ -82,73 +60,68 @@ function safeUnlink(filePath: string): boolean {
     // Re-throw unexpected errors
     throw err;
   }
-  return false;
 }
 
 /**
  * Clean up partial output files on failure
  */
-function cleanup(tempPath?: string): void {
+async function cleanup(tempPath?: string): Promise<void> {
   console.log('Cleaning up...');
-  if (tempPath) safeUnlink(tempPath);
-  safeUnlink(outputPath);
-  safeUnlink(hashPath);
+  if (tempPath) await safeUnlink(tempPath);
+  await safeUnlink(OUTPUT_PATH);
+  await safeUnlink(HASH_PATH);
 }
 
 /**
  * Validate input file exists and is readable
  */
-function validateInput(): void {
-  if (!fs.existsSync(inputPath)) {
-    throw new Error(`Input file not found: ${inputPath}`);
+async function validateInput(): Promise<void> {
+  try {
+    await fs.promises.access(INPUT_PATH, fs.constants.R_OK);
+  } catch (err) {
+    const error = err as NodeJS.ErrnoException;
+    if (error.code === 'ENOENT') {
+      throw new Error(`Input file not found: ${INPUT_PATH}`);
+    }
+    throw new Error(`Input file is not readable: ${INPUT_PATH}`);
   }
 
-  const stats = fs.statSync(inputPath);
+  const stats = await fs.promises.stat(INPUT_PATH);
   if (!stats.isFile()) {
-    throw new Error(`Input path is not a file: ${inputPath}`);
+    throw new Error(`Input path is not a file: ${INPUT_PATH}`);
   }
 
   if (stats.size === 0) {
-    throw new Error(`Input file is empty: ${inputPath}`);
-  }
-
-  try {
-    fs.accessSync(inputPath, fs.constants.R_OK);
-  } catch {
-    throw new Error(`Input file is not readable: ${inputPath}`);
+    throw new Error(`Input file is empty: ${INPUT_PATH}`);
   }
 }
 
 /**
  * Check if build can be skipped (input unchanged)
  */
-function checkBuildCache(inputHash: string, force: boolean): boolean {
+async function checkBuildCache(inputHash: string, force: boolean): Promise<boolean> {
   if (force) {
     console.log('  → Force flag set, skipping cache check');
     return false;
   }
 
   // Check if output exists
-  if (!fs.existsSync(outputPath)) {
+  try {
+    await fs.promises.access(OUTPUT_PATH);
+  } catch {
     console.log('  → Output file missing, rebuild required');
     return false;
   }
 
-  // Check if hash file exists
-  if (!fs.existsSync(cacheHashPath)) {
-    console.log('  → Cache hash missing, rebuild required');
-    return false;
-  }
-
-  // Compare input hash with cached hash
+  // Check if hash file exists and compare
   try {
-    const cachedHash = fs.readFileSync(cacheHashPath, 'utf-8').trim();
+    const cachedHash = (await fs.promises.readFile(CACHE_HASH_PATH, 'utf-8')).trim();
     if (cachedHash === inputHash) {
       return true; // Cache hit - no rebuild needed
     }
     console.log('  → Input changed, rebuild required');
   } catch {
-    console.log('  → Cache read failed, rebuild required');
+    console.log('  → Cache hash missing or read failed, rebuild required');
   }
 
   return false;
@@ -157,8 +130,8 @@ function checkBuildCache(inputHash: string, force: boolean): boolean {
 /**
  * Verify output file has valid JavaScript syntax (without executing)
  */
-function verifySyntax(filePath: string): void {
-  const content = fs.readFileSync(filePath, 'utf-8');
+async function verifySyntax(filePath: string): Promise<void> {
+  const content = await fs.promises.readFile(filePath, 'utf-8');
 
   try {
     // Use vm.Script to parse without executing
@@ -173,31 +146,33 @@ function verifySyntax(filePath: string): void {
 /**
  * Verify output file is valid
  */
-function verifyOutput(filePath: string): void {
-  if (!fs.existsSync(filePath)) {
+async function verifyOutput(filePath: string): Promise<void> {
+  try {
+    await fs.promises.access(filePath);
+  } catch {
     throw new Error(`Output file was not created: ${filePath}`);
   }
 
-  const stats = fs.statSync(filePath);
+  const stats = await fs.promises.stat(filePath);
   if (stats.size === 0) {
     throw new Error(`Output file is empty: ${filePath}`);
   }
 
   // Syntax check without execution (no side effects)
-  verifySyntax(filePath);
+  await verifySyntax(filePath);
 }
 
 /**
  * Atomic file write: write to temp, then rename
  */
-function atomicWriteFile(targetPath: string, content: string): string {
+async function atomicWriteFile(targetPath: string, content: string): Promise<string> {
   const tempPath = path.join(
     os.tmpdir(),
     `build-executor-${crypto.randomUUID()}.tmp`
   );
 
-  fs.writeFileSync(tempPath, content, 'utf-8');
-  fs.renameSync(tempPath, targetPath);
+  await fs.promises.writeFile(tempPath, content, 'utf-8');
+  await fs.promises.rename(tempPath, targetPath);
 
   return tempPath;
 }
@@ -205,16 +180,16 @@ function atomicWriteFile(targetPath: string, content: string): string {
 /**
  * Write hash to .sha256 file for runtime verification
  */
-function writeHashFile(hash: string): void {
+async function writeHashFile(hash: string): Promise<void> {
   const content = `${hash}  direct-executor.js\n`;
-  atomicWriteFile(hashPath, content);
+  await atomicWriteFile(HASH_PATH, content);
 }
 
 /**
  * Save input hash for build caching
  */
-function saveBuildCache(inputHash: string): void {
-  atomicWriteFile(cacheHashPath, inputHash);
+async function saveBuildCache(inputHash: string): Promise<void> {
+  await atomicWriteFile(CACHE_HASH_PATH, inputHash);
 }
 
 /**
@@ -238,23 +213,22 @@ async function build(): Promise<void> {
   let tempOutputPath: string | undefined;
 
   console.log('=== Building direct-executor ===');
-  console.log(`Input:  ${inputPath}`);
-  console.log(`Output: ${outputPath}`);
+  console.log(`Input:  ${INPUT_PATH}`);
+  console.log(`Output: ${OUTPUT_PATH}`);
 
   // Step 1: Validate dependencies
   console.log('\n[1/7] Checking dependencies...');
-  const esbuild = await validateDependencies();
   console.log('  ✓ esbuild available');
 
   // Step 2: Validate input
   console.log('\n[2/7] Validating input file...');
-  validateInput();
-  const inputHash = calculateHash(inputPath);
+  await validateInput();
+  const inputHash = await calculateHash(INPUT_PATH);
   console.log(`  ✓ Input valid (SHA256: ${inputHash.substring(0, 16)}...)`);
 
   // Step 3: Check build cache
   console.log('\n[3/7] Checking build cache...');
-  if (checkBuildCache(inputHash, forceRebuild)) {
+  if (await checkBuildCache(inputHash, forceRebuild)) {
     console.log('  ✓ Build cache valid - skipping rebuild');
     console.log('\n=== Build skipped (up to date) ===');
     return;
@@ -265,7 +239,7 @@ async function build(): Promise<void> {
   tempOutputPath = path.join(os.tmpdir(), `direct-executor-${crypto.randomUUID()}.js`);
 
   const result = await esbuild.build({
-    entryPoints: [inputPath],
+    entryPoints: [INPUT_PATH],
     bundle: true,
     platform: 'node',
     target: 'node18',
@@ -289,7 +263,7 @@ async function build(): Promise<void> {
         console.error(`    at ${error.location.file}:${error.location.line}:${error.location.column}`);
       }
     }
-    cleanup(tempOutputPath);
+    await cleanup(tempOutputPath);
     process.exit(1);
   }
 
@@ -308,29 +282,29 @@ async function build(): Promise<void> {
 
   // Step 5: Verify output (syntax check, no execution)
   console.log('\n[5/7] Verifying output syntax...');
-  verifyOutput(tempOutputPath);
+  await verifyOutput(tempOutputPath);
   console.log('  ✓ Output has valid JavaScript syntax');
 
   // Step 6: Atomic move to final location
   console.log('\n[6/7] Finalizing output...');
-  fs.renameSync(tempOutputPath, outputPath);
+  await fs.promises.rename(tempOutputPath, OUTPUT_PATH);
   tempOutputPath = undefined; // Clear so cleanup doesn't try to delete
   console.log('  ✓ Output written atomically');
 
   // Step 7: Write hash files and cache
   console.log('\n[7/7] Writing integrity hash...');
-  const outputHash = calculateHash(outputPath);
-  writeHashFile(outputHash);
-  saveBuildCache(inputHash);
+  const outputHash = await calculateHash(OUTPUT_PATH);
+  await writeHashFile(outputHash);
+  await saveBuildCache(inputHash);
   console.log(`  ✓ SHA256: ${outputHash}`);
-  console.log(`  ✓ Hash saved to: ${hashPath}`);
+  console.log(`  ✓ Hash saved to: ${HASH_PATH}`);
 
   // Print summary
-  const stats = fs.statSync(outputPath);
+  const stats = await fs.promises.stat(OUTPUT_PATH);
   console.log('\n=== Build complete! ===');
   console.log('─'.repeat(50));
-  console.log(`  Output:     ${outputPath}`);
-  console.log(`  Hash file:  ${hashPath}`);
+  console.log(`  Output:     ${OUTPUT_PATH}`);
+  console.log(`  Hash file:  ${HASH_PATH}`);
   console.log(`  Size:       ${(stats.size / 1024).toFixed(1)} KB`);
   console.log(`  Input hash: ${inputHash.substring(0, 16)}...`);
   console.log(`  Output hash: ${outputHash.substring(0, 16)}...`);
@@ -338,13 +312,13 @@ async function build(): Promise<void> {
 }
 
 // Run build with proper error handling
-build().catch((err) => {
+build().catch(async (err) => {
   const error = err as Error;
   console.error(`\n❌ Build failed: ${error.message}`);
   if (error.stack) {
     console.error('\nStack trace:');
     console.error(error.stack.split('\n').slice(1, 5).join('\n'));
   }
-  cleanup();
+  await cleanup();
   process.exit(1);
 });

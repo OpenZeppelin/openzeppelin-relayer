@@ -777,15 +777,21 @@ export default async function executePlugin(task: ExecutorTask): Promise<Executo
     })();
 
     // Race handler against timeout to prevent worker starvation
+    let timeoutId: NodeJS.Timeout | undefined;
     const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => {
+      timeoutId = setTimeout(() => {
         const error = new Error(`Plugin handler timed out after ${task.timeout}ms`);
         (error as any).code = 'ERR_HANDLER_TIMEOUT';
         reject(error);
       }, task.timeout);
     });
 
-    result = await Promise.race([handlerPromise, timeoutPromise]);
+    try {
+      result = await Promise.race([handlerPromise, timeoutPromise]);
+    } finally {
+      // Clear timeout if handler completed before timeout
+      if (timeoutId) clearTimeout(timeoutId);
+    }
 
     return {
       taskId: task.taskId,
