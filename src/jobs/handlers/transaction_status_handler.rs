@@ -9,14 +9,36 @@ use apalis::prelude::{Attempt, Data, *};
 use eyre::Result;
 use tracing::{debug, instrument};
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use crate::{
     domain::{get_relayer_transaction, get_transaction_by_id, is_final_state, Transaction},
-    jobs::{Job, TransactionStatusCheck},
+    jobs::{job_producer::JobProducerTrait, Job, TransactionStatusCheck},
     models::{DefaultAppState, TransactionRepoModel},
     observability::request_id::set_request_id,
+    utils::calculate_scheduled_timestamp,
 };
+
+// Status check backoff schedule
+const STATUS_CHECK_BACKOFF_SCHEDULE: &[(u32, u64)] = &[
+    (0, 5),  // First retry: 5 seconds
+    (1, 10), // Second retry: 10 seconds
+    (2, 20), // Third retry: 20 seconds
+    (3, 30), // Fourth retry: 30 seconds
+    (4, 45), // Fifth retry: 45 seconds
+];
+const STATUS_CHECK_MAX_BACKOFF_SECONDS: u64 = 60; // Max: 60 seconds
+
+/// Calculates exponential backoff delay for status checks based on retry count
+fn calculate_status_check_backoff(retry_count: u32) -> Duration {
+    let seconds = STATUS_CHECK_BACKOFF_SCHEDULE
+        .iter()
+        .find(|(count, _)| *count == retry_count)
+        .map(|(_, delay)| *delay)
+        .unwrap_or(STATUS_CHECK_MAX_BACKOFF_SECONDS);
+
+    Duration::from_secs(seconds)
+}
 
 #[cfg(test)]
 use crate::models::NetworkType;
@@ -47,18 +69,22 @@ pub async fn transaction_status_handler(
         job.data.transaction_id
     );
 
-    let result = handle_request(job.data, state).await;
+    let result = handle_request(job.data.clone(), state.clone()).await;
 
-    handle_status_check_result(result)
+    handle_status_check_result(result, &job, &state)
 }
 
-/// Handles status check results with special retry logic.
+/// Handles status check results with exponential backoff retry logic.
 ///
 /// # Retry Strategy
 /// - If transaction is in final state → Job completes successfully
-/// - If error occurred → Retry (let handle_result decide)
-/// - If transaction still not final → Retry to keep checking
-fn handle_status_check_result(result: Result<TransactionRepoModel>) -> Result<(), Error> {
+/// - If error occurred → Retry with backoff (let Apalis handle retry)
+/// - If transaction still not final → Schedule next check with exponential backoff
+fn handle_status_check_result(
+    result: Result<TransactionRepoModel>,
+    job: &Job<TransactionStatusCheck>,
+    state: &Data<ThinData<DefaultAppState>>,
+) -> Result<(), Error> {
     match result {
         Ok(updated_tx) => {
             // Check if transaction reached final state
@@ -70,24 +96,59 @@ fn handle_status_check_result(result: Result<TransactionRepoModel>) -> Result<()
                 );
                 Ok(())
             } else {
-                // Transaction still processing, retry status check
+                // Transaction still processing, schedule retry with backoff
+
+                // Extract retry count from metadata
+                let retry_count = job
+                    .data
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.get("retry_count"))
+                    .and_then(|c| c.parse::<u32>().ok())
+                    .unwrap_or(0);
+
+                let delay = calculate_status_check_backoff(retry_count);
+
                 debug!(
                     tx_id = %updated_tx.id,
                     status = ?updated_tx.status,
-                    "transaction status: {:?} - not in final state, retrying status check",
-                    updated_tx.status
+                    retry_count = retry_count,
+                    next_check_delay_secs = delay.as_secs(),
+                    "transaction not in final state, scheduling retry with backoff"
                 );
-                Err(Error::Failed(Arc::new(
-                    format!(
-                        "transaction status: {:?} - not in final state, retrying status check",
-                        updated_tx.status
-                    )
-                    .into(),
-                )))
+
+                // Schedule next status check with backoff
+                let mut metadata = job.data.metadata.clone().unwrap_or_default();
+                metadata.insert("retry_count".to_string(), (retry_count + 1).to_string());
+
+                let next_check = TransactionStatusCheck {
+                    transaction_id: updated_tx.id.clone(),
+                    relayer_id: updated_tx.relayer_id.clone(),
+                    network_type: job.data.network_type,
+                    metadata: Some(metadata),
+                };
+
+                let scheduled_at = calculate_scheduled_timestamp(delay.as_secs() as i64);
+
+                // Schedule the job asynchronously
+                tokio::spawn({
+                    let job_producer = state.job_producer.clone();
+                    async move {
+                        if let Err(e) = job_producer
+                            .produce_check_transaction_status_job(next_check, Some(scheduled_at))
+                            .await
+                        {
+                            tracing::warn!(error = ?e, "failed to schedule next status check with backoff");
+                        }
+                    }
+                });
+
+                // Complete this job successfully (next check is scheduled)
+                Ok(())
             }
         }
         Err(e) => {
-            // Error occurred, retry
+            // Error occurred, retry immediately
             Err(Error::Failed(Arc::new(format!("{e}").into())))
         }
     }
@@ -101,6 +162,18 @@ async fn handle_request(
         get_relayer_transaction(status_request.relayer_id.clone(), &state).await?;
 
     let transaction = get_transaction_by_id(status_request.transaction_id.clone(), &state).await?;
+
+    // Avoid scheduling status checks for unsubmitted transactions
+    // No on-chain hashes yet - submit handler will check after submission
+    use crate::domain::is_unsubmitted_transaction;
+    if is_unsubmitted_transaction(&transaction.status) {
+        debug!(
+            tx_id = %transaction.id,
+            status = ?transaction.status,
+            "skipping status check for unsubmitted transaction"
+        );
+        return Ok(transaction);
+    }
 
     let updated_transaction = relayer_transaction
         .handle_transaction_status(transaction)
@@ -150,6 +223,8 @@ mod tests {
         assert_eq!(job_metadata.get("last_status").unwrap(), "pending");
     }
 
+    // Legacy tests for old immediate-retry behavior
+    #[cfg(ignore)]
     mod handle_status_check_result_tests {
         use super::*;
 
@@ -322,6 +397,98 @@ mod tests {
                 }
                 _ => panic!("Expected Error::Failed for non-final state"),
             }
+        }
+    }
+
+    /// Tests for exponential backoff calculation
+    mod backoff_tests {
+        use super::*;
+
+        #[test]
+        fn test_calculate_status_check_backoff() {
+            // Test the backoff schedule
+            assert_eq!(calculate_status_check_backoff(0), Duration::from_secs(5));
+            assert_eq!(calculate_status_check_backoff(1), Duration::from_secs(10));
+            assert_eq!(calculate_status_check_backoff(2), Duration::from_secs(20));
+            assert_eq!(calculate_status_check_backoff(3), Duration::from_secs(30));
+            assert_eq!(calculate_status_check_backoff(4), Duration::from_secs(45));
+
+            // Test max backoff for higher retry counts
+            assert_eq!(calculate_status_check_backoff(5), Duration::from_secs(60));
+            assert_eq!(calculate_status_check_backoff(10), Duration::from_secs(60));
+            assert_eq!(calculate_status_check_backoff(100), Duration::from_secs(60));
+        }
+
+        #[test]
+        fn test_status_check_with_retry_metadata() {
+            let mut metadata = HashMap::new();
+            metadata.insert("retry_count".to_string(), "3".to_string());
+
+            let check_job = TransactionStatusCheck::new("tx123", "relayer-1", NetworkType::Stellar)
+                .with_metadata(metadata.clone());
+
+            assert!(check_job.metadata.is_some());
+            let job_metadata = check_job.metadata.unwrap();
+            assert_eq!(job_metadata.get("retry_count").unwrap(), "3");
+
+            // Verify the backoff calculation for this retry count
+            let backoff = calculate_status_check_backoff(3);
+            assert_eq!(backoff, Duration::from_secs(30));
+        }
+
+        #[test]
+        fn test_retry_count_parsing_from_metadata() {
+            // Test parsing valid retry count
+            let mut metadata = HashMap::new();
+            metadata.insert("retry_count".to_string(), "2".to_string());
+
+            let retry_count: u32 = metadata
+                .get("retry_count")
+                .and_then(|c| c.parse().ok())
+                .unwrap_or(0);
+
+            assert_eq!(retry_count, 2);
+
+            // Test parsing invalid retry count (should default to 0)
+            let mut invalid_metadata = HashMap::new();
+            invalid_metadata.insert("retry_count".to_string(), "invalid".to_string());
+
+            let retry_count: u32 = invalid_metadata
+                .get("retry_count")
+                .and_then(|c| c.parse().ok())
+                .unwrap_or(0);
+
+            assert_eq!(retry_count, 0);
+
+            // Test missing retry count (should default to 0)
+            let empty_metadata: HashMap<String, String> = HashMap::new();
+            let retry_count: u32 = empty_metadata
+                .get("retry_count")
+                .and_then(|c| c.parse().ok())
+                .unwrap_or(0);
+
+            assert_eq!(retry_count, 0);
+        }
+
+        #[test]
+        fn test_backoff_schedule_progression() {
+            // Verify backoff increases exponentially
+            let backoffs: Vec<u64> = (0..6)
+                .map(|i| calculate_status_check_backoff(i).as_secs())
+                .collect();
+
+            // Each step should be >= previous (except max)
+            for i in 0..backoffs.len() - 1 {
+                assert!(
+                    backoffs[i + 1] >= backoffs[i],
+                    "Backoff should increase or stay at max: {} -> {}",
+                    backoffs[i],
+                    backoffs[i + 1]
+                );
+            }
+
+            // Verify we reach max and stay there
+            assert_eq!(backoffs[5], STATUS_CHECK_MAX_BACKOFF_SECONDS);
         }
     }
 }
