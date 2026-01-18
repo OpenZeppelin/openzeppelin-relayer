@@ -1,0 +1,286 @@
+---
+title: x402 Facilitator
+---
+
+## Overview
+
+x402 Facilitator is a plugin for OpenZeppelin Relayer that enables payment verification and settlement for x402 payments on Stellar. The plugin implements the X402 payment facilitation protocol, allowing applications to accept payments in Stellar assets (like USDC) for API access or content.
+
+The plugin features:
+
+- **Payment verification**: Validates payment payloads against payment requirements
+- **Transaction settlement**: Submits verified payments on-chain via the relayer or an optional channel service
+- **Auth entry validation**: Verifies authorization entries are properly signed
+- **Multi-network support**: Configure multiple Stellar networks and assets
+- **Channel service integration**: Optional integration with the Channels plugin for high-throughput settlement
+
+## Prerequisites
+
+- Node.js >= 18
+- pnpm >= 10
+- OpenZeppelin Relayer (installed and configured)
+- Stellar relayer account (for transaction submission)
+
+## Example Setup
+
+For a complete working example with Docker Compose, refer to the x402 Facilitator plugin example in the OpenZeppelin Relayer repository:
+
+- **Location**: [examples/x402-facilitator-plugin-example](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples/x402-facilitator-plugin-example)
+- **Documentation**: [README.md](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples/x402-facilitator-plugin-example/README.md)
+
+## Installation
+
+x402 Facilitator can be added to any OpenZeppelin Relayer installation.
+
+**Resources:**
+
+- **npm package**: [@openzeppelin/relayer-plugin-x402-facilitator](https://www.npmjs.com/package/@openzeppelin/relayer-plugin-x402-facilitator)
+- **GitHub repository**: https://github.com/OpenZeppelin/relayer-plugin-x402-facilitator
+- **Example setup**: [x402-facilitator-plugin-example](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples/x402-facilitator-plugin-example)
+
+### Install from npm
+
+```bash
+# From the root of your Relayer repository
+cd plugins
+pnpm add @openzeppelin/relayer-plugin-x402-facilitator
+```
+
+### Create the plugin wrapper
+
+Inside your Relayer, create a directory for the plugin and expose its handler:
+
+```bash
+mkdir -p plugins/x402-facilitator
+```
+
+Create `plugins/x402-facilitator/index.ts`:
+
+```typescript
+export { handler } from '@openzeppelin/relayer-plugin-x402-facilitator';
+```
+
+## Configuration
+
+### Plugin Registration
+
+Register the plugin in your `config/config.json` file:
+
+```json
+{
+  "plugins": [
+    {
+      "id": "x402-facilitator",
+      "path": "x402-facilitator/index.ts",
+      "timeout": 30,
+      "emit_logs": false,
+      "emit_traces": false,
+      "raw_response": true,
+      "allow_get_invocation": true,
+      "config": {
+        "networks": [
+          {
+            "network": "stellar-testnet",
+            "type": "stellar",
+            "relayer_id": "stellar-example",
+            "assets": [
+              "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+Note on `path`: this is the plugin entrypoint path as seen by the running Relayer process.
+
+- If you run Relayer locally, ensure the file exists at that path under your `plugins/` directory.
+- If you run Relayer in Docker, ensure the file exists at that path inside the container (for example by mounting your plugin folder into `/app/plugins/x402-facilitator` in the container).
+
+**_Configuration Options:_**
+
+- `id`: Unique identifier for the plugin
+- `path`: Path to the plugin file (relative to `plugins/` directory)
+- `timeout`: Maximum execution time in seconds (default: 30)
+- `emit_logs`: Whether to include plugin logs in API responses (default: false)
+- `emit_traces`: Whether to include plugin traces in API responses (default: false)
+- `raw_response`: Whether to return raw plugin response without ApiResponse wrapper (default: false, recommended for x402 compatibility)
+- `config.networks`: Array of network configurations
+  - `network`: Network identifier (e.g., "stellar-testnet", "stellar")
+  - `type`: Network type (must be "stellar")
+  - `relayer_id`: ID of the relayer to use for this network
+  - `assets`: Array of supported asset contract addresses
+  - `channel_service_api_url` (optional): Channel service API URL for settlement
+  - `channel_service_api_key` (optional): Channel service API key
+
+### Relayer Configuration
+
+The plugin requires at least one Stellar relayer configured for transaction submission:
+
+```json
+{
+  "relayers": [
+    {
+      "id": "stellar-example",
+      "name": "Stellar Example",
+      "network": "testnet",
+      "paused": false,
+      "network_type": "stellar",
+      "signer_id": "local-signer",
+      "policies": {
+        "fee_payment_strategy": "relayer",
+        "min_balance": 0
+      }
+    }
+  ],
+  "signers": [
+    {
+      "id": "local-signer",
+      "type": "local",
+      "config": {
+        "path": "config/keys/local-signer.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE"
+        }
+      }
+    }
+  ]
+}
+```
+
+**Important configuration notes:**
+
+- **Relayer account**: Must be configured with `network_type: "stellar"` and a valid signer
+- **Network**: Use `testnet` for testing or `mainnet` for production
+- **Signers**: Each relayer references a signer by `signer_id`; signers are defined separately with keystore paths
+- **Keystore files**: Create keystore files for each account; see the [OpenZeppelin Relayer documentation](https://docs.openzeppelin.com/relayer) for key management
+- **Assets**: Configure the contract addresses of assets you want to accept payments in (for example, a USDC contract address)
+
+### Channel Service Integration (Optional)
+
+For high-throughput settlement, you can configure the plugin to use the Channels plugin:
+
+```json
+{
+  "plugins": [
+    {
+      "id": "x402-facilitator",
+      "path": "x402-facilitator/index.ts",
+      "timeout": 30,
+      "raw_response": true,
+      "config": {
+        "networks": [
+          {
+            "network": "stellar-testnet",
+            "type": "stellar",
+            "relayer_id": "stellar-example",
+            "assets": ["CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA"],
+            "channel_service_api_url": "http://localhost:8080/api/v1/plugins/channels-plugin/call",
+            "channel_service_api_key": "YOUR_CHANNELS_API_KEY"
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+When `channel_service_api_url` and `channel_service_api_key` are configured, the plugin will use the Channels service for settlement instead of the relayer API, enabling parallel transaction processing.
+
+## API Usage
+
+The x402 Facilitator plugin implements the X402 v1 specification API, providing three main endpoints:
+
+- **`/verify`**: Verifies a payment payload against payment requirements
+- **`/settle`**: Settles a verified payment by submitting the transaction on-chain
+- **`/supported`**: Returns supported payment kinds with current max ledger information
+
+### Invocation
+
+The plugin is invoked via the standard Relayer plugin endpoint with route-based routing:
+
+```bash
+POST /api/v1/plugins/{plugin-id}/call/{route}
+```
+
+Where `{route}` is one of:
+- `verify` - Payment verification
+- `settle` - Payment settlement
+- `supported` - Supported payment kinds
+
+## Integration with x402 Ecosystem
+
+The plugin implements the API defined by the x402 v1 spec, making it compatible with any packages in the x402 ecosystem. For more information on available packages, see [https://github.com/coinbase/x402](https://github.com/coinbase/x402).
+
+### x402-express Example
+
+To use OpenZeppelin Relayer and its x402-facilitator plugin with x402-express (and similar packages), point the facilitator to your Relayer plugin URL and pass the Relayer API key via `createAuthHeaders`:
+
+```typescript
+import { paymentMiddleware } from "x402-express";
+
+const facilitatorUrl = "https://your-relayer-host/api/v1/plugins/x402-facilitator/call";
+const network = "stellar-testnet";
+const payTo = "G..."; // Payment receiver G address
+
+app.use(
+  paymentMiddleware(
+    payTo,
+    {
+      "GET /weather": {
+        // USDC amount in dollars
+        price: "$0.001",
+        network,
+      }
+    },
+    {
+      url: facilitatorUrl,
+      createAuthHeaders: async () => ({
+        // Use your Relayer API key for the plugin
+        verify: { Authorization: "Bearer RELAYER_API_KEY" },
+        settle: { Authorization: "Bearer RELAYER_API_KEY" },
+        supported: { Authorization: "Bearer RELAYER_API_KEY" },
+      }),
+    },
+  ),
+);
+```
+
+## How It Works
+
+### Verification Flow
+
+1. **Protocol Validation**: Validates X402 version, scheme, and network
+2. **Transaction Parsing**: Decodes transaction XDR and extracts operation details
+3. **Operation Validation**: Ensures it's an `invokeHostFunction` calling `transfer`
+4. **Amount & Recipient Validation**: Validates transfer amount and recipient match requirements
+5. **Auth Entry Validation**: Verifies auth entries are present and signed by the payer
+6. **Envelope Signature Check**: Ensures transaction envelope has no signatures (for relayer rebuild)
+7. **Simulation**: Simulates transaction to ensure it will succeed
+8. **Security Checks**: Validates transaction source is not the relayer
+
+### Settlement Flow
+
+1. **Verification**: Verifies payment before settlement
+2. **Operation Extraction**: Extracts operation details and signed auth entries from transaction
+3. **Submission**:
+   - **If channel service configured**: Submits via channel service API with `func` and `auth` XDRs
+   - **Otherwise**: Submits via relayer API with operations format
+4. **Confirmation**: Waits for transaction confirmation
+
+### Channel Service vs Relayer API
+
+The plugin supports two settlement methods:
+
+- **Relayer API** (default): Uses the relayer's `sendTransaction` with operations format
+- **Channel Service API** (optional): Uses external channel service when `channel_service_api_url` and `channel_service_api_key` are configured
+
+## Additional Resources
+
+- **_OpenZeppelin Relayer Documentation_**: https://docs.openzeppelin.com/relayer
+- **_Stellar SDK Documentation_**: https://stellar.github.io/js-stellar-sdk/
+- **_Coinbase x402 GitHub Repository_**: https://github.com/coinbase/x402
+- **_x402 Facilitator Plugin Repository_**: https://github.com/OpenZeppelin/relayer-plugin-x402-facilitator
