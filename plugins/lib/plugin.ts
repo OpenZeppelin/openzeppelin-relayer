@@ -401,7 +401,27 @@ export async function loadAndExecutePlugin<T, R>(
 }
 
 /**
- * The plugin API.
+ * Plugin API implementation for direct execution mode (ts-node).
+ *
+ * **⚠️ Legacy/Fallback Implementation**
+ * This implementation is used by `executor.ts` when Rust calls plugins via `ts-node` directly
+ * (see `src/services/plugins/script_executor.rs`). This is the legacy execution path, enabled
+ * only when `PLUGIN_USE_POOL=false`. The default execution mode uses the pool executor
+ * (`PluginAPIImpl` in `pool-executor.ts`), which is faster and more efficient.
+ *
+ * **Note**: New features should be added to the pool executor (`PluginAPIImpl`), not this
+ * implementation, as pool executor is the default and preferred path.
+ *
+ * **Why a separate implementation?**
+ * This implementation has different requirements than the worker pool implementation:
+ *
+ * - **Registration protocol**: Sends a `register` message with `execution_id` after connection
+ *   (required by the direct execution protocol)
+ * - **One-shot lifecycle**: Process exits after plugin completes, so no socket pooling needed
+ * - **Immediate connection**: Connects in constructor since it's a single-use process
+ * - **Protocol support**: Handles both new protocol (`api_request`/`api_response`) and legacy format
+ *
+ * **See also**: `PluginAPIImpl` in `pool-executor.ts` for the worker pool implementation (default).
  *
  * @property useRelayer - Creates a relayer API for the given relayer ID.
  * @property sendTransaction - Sends a transaction to the relayer.

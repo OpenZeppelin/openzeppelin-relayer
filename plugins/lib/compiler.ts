@@ -532,7 +532,7 @@ export async function compilePlugins(
  * Creates a wrapped version of compiled code that exports the handler.
  *
  * @deprecated This function is no longer used internally. The compiled code is executed
- * directly via `new Function()` constructor in direct-executor.ts. This function is kept
+ * directly via `new Function()` constructor in pool-executor.ts. This function is kept
  * for backward compatibility but may be removed in a future version.
  *
  * @param compiledCode - The compiled JavaScript code

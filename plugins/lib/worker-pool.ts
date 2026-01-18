@@ -29,7 +29,7 @@ import * as os from 'node:os';
 import * as v8 from 'node:v8';
 import { v4 as uuidv4 } from 'uuid';
 import { compilePlugin, compilePluginSource, type CompilationResult } from './compiler';
-import type { ExecutorTask, ExecutorResult, LogEntry } from './direct-executor';
+import type { ExecutorTask, ExecutorResult, LogEntry } from './pool-executor';
 import type { PluginHeaders } from './plugin';
 import {
   DEFAULT_POOL_MIN_THREADS,
@@ -121,7 +121,7 @@ const DEFAULT_OPTIONS: Required<WorkerPoolOptions> = {
  * Path to the pre-compiled sandbox executor.
  * This file is generated at build time by running: npx ts-node build-executor.ts
  */
-const PRECOMPILED_EXECUTOR_PATH = path.resolve(__dirname, 'direct-executor.js');
+const PRECOMPILED_EXECUTOR_PATH = path.resolve(__dirname, 'pool-executor.js');
 
 /**
  * Metrics tracking for plugin execution
@@ -488,7 +488,7 @@ export class WorkerPoolManager {
    * Initialize the worker pool.
    * Call this before executing any plugins.
    *
-   * Uses pre-compiled direct-executor.js if available,
+   * Uses pre-compiled pool-executor.js if available,
    * otherwise compiles it on-the-fly (slower first startup).
    *
    * Thread-safe: multiple concurrent calls will await the same initialization.
@@ -518,7 +518,7 @@ export class WorkerPoolManager {
    * Internal initialization logic.
    */
   private async doInitialize(): Promise<void> {
-    // Use pre-compiled direct-executor.js if it exists
+    // Use pre-compiled pool-executor.js if it exists
     if (fs.existsSync(PRECOMPILED_EXECUTOR_PATH)) {
       this.compiledWorkerPath = PRECOMPILED_EXECUTOR_PATH;
       this.isTemporaryWorkerFile = false;
@@ -617,7 +617,7 @@ export class WorkerPoolManager {
    * This is slower but ensures the pool can start in any environment.
    */
   private async compileExecutorOnTheFly(): Promise<string> {
-    const sandboxExecutorPath = path.resolve(__dirname, 'direct-executor.ts');
+    const sandboxExecutorPath = path.resolve(__dirname, 'pool-executor.ts');
 
     const esbuild = await import('esbuild');
     const result = await esbuild.build({
@@ -633,7 +633,7 @@ export class WorkerPoolManager {
     });
 
     // Write to temp file
-    const tempPath = path.join(os.tmpdir(), `direct-executor-${uuidv4()}.js`);
+    const tempPath = path.join(os.tmpdir(), `pool-executor-${uuidv4()}.js`);
     fs.writeFileSync(tempPath, result.outputFiles[0].text);
     return tempPath;
   }
@@ -798,7 +798,7 @@ export class WorkerPoolManager {
     incrementBoundedMap(this.metrics.pluginExecutions, request.pluginId, MAX_METRICS_ENTRIES);
 
     // Use task timeout to prevent permanently stuck workers
-    // This is a safety net beyond the handler-level timeout in direct-executor
+    // This is a safety net beyond the handler-level timeout in pool-executor
     const taskTimeout = this.options.taskTimeout;
     let timeoutId: NodeJS.Timeout | undefined;
 

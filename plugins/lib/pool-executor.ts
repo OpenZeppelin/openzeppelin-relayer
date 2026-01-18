@@ -289,9 +289,29 @@ export interface LogEntry {
 }
 
 /**
- * Plugin API that communicates with the relayer via Unix socket.
- * Connection is lazy - only established when first API call is made.
- * Uses socket pooling to reduce connection overhead.
+ * Plugin API implementation for worker pool execution mode (Piscina workers).
+ *
+ * **✅ Default Implementation (Preferred)**
+ * This is the default and preferred plugin execution path. It's used when plugins run in
+ * Piscina worker threads (see `pool-server.ts` → `worker-pool.ts` → `pool-executor.ts`).
+ * Pool mode is enabled by default for better performance and is the recommended execution
+ * mode for production deployments.
+ *
+ * **Why a separate implementation?**
+ * This implementation has different requirements than the legacy ts-node execution:
+ *
+ * - **Socket pooling**: Reuses sockets across multiple plugin executions in the same worker thread
+ *   (critical for performance in high-concurrency scenarios)
+ * - **No registration protocol**: Worker pool uses a different communication model that doesn't
+ *   require registration messages (simpler and more efficient)
+ * - **Lazy connection**: Connects only when first API call is made (better for worker lifecycle)
+ * - **EPIPE retry logic**: Handles stale pooled sockets that were closed by the server but client
+ *   doesn't know yet (common with 60-second connection lifetime)
+ * - **Handler cleanup**: Properly removes socket listeners before returning to pool to prevent
+ *   listener accumulation (MaxListenersExceededWarning)
+ *
+ * **See also**: `DefaultPluginAPI` in `plugin.ts` for the legacy ts-node execution implementation
+ * (fallback mode, enabled only when `PLUGIN_USE_POOL=false`).
  */
 class PluginAPIImpl implements PluginAPI {
   private socket: net.Socket | null = null;

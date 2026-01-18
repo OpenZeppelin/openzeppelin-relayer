@@ -9,11 +9,11 @@ fn main() {
     }
 
     let node_modules = plugins_dir.join("node_modules");
-    let direct_executor_ts = plugins_dir.join("lib/direct-executor.ts");
-    let direct_executor_js = plugins_dir.join("lib/direct-executor.js");
+    let pool_executor_ts = plugins_dir.join("lib/pool-executor.ts");
+    let pool_executor_js = plugins_dir.join("lib/pool-executor.js");
 
     // Tell Cargo when to rerun this script
-    println!("cargo:rerun-if-changed=plugins/lib/direct-executor.ts");
+    println!("cargo:rerun-if-changed=plugins/lib/pool-executor.ts");
     println!("cargo:rerun-if-changed=plugins/package.json");
 
     // Check if pnpm is available
@@ -49,14 +49,14 @@ fn main() {
         }
     }
 
-    // Build direct-executor if source is newer than output (or output missing)
-    let needs_build = if !direct_executor_js.exists() {
+    // Build pool-executor if source is newer than output (or output missing)
+    let needs_build = if !pool_executor_js.exists() {
         true
     } else {
         // Compare modification times
         match (
-            direct_executor_ts.metadata().and_then(|m| m.modified()),
-            direct_executor_js.metadata().and_then(|m| m.modified()),
+            pool_executor_ts.metadata().and_then(|m| m.modified()),
+            pool_executor_js.metadata().and_then(|m| m.modified()),
         ) {
             (Ok(src_time), Ok(out_time)) => src_time > out_time,
             _ => true, // Rebuild if we can't determine
