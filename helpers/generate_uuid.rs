@@ -14,7 +14,7 @@ use uuid::Uuid;
 fn main() -> Result<()> {
     let uuid = Uuid::new_v4().to_string();
 
-    println!("Generated new uuid: {}", uuid);
+    println!("Generated new uuid: {uuid}");
 
     Ok(())
 }
