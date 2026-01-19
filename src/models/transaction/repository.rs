@@ -108,8 +108,11 @@ impl TransactionRepoModel {
     }
 
     /// Calculate when this transaction should be deleted based on its status and expiration hours
-    fn calculate_delete_at(expiration_hours: u64) -> Option<String> {
-        let delete_time = Utc::now() + Duration::hours(expiration_hours as i64);
+    /// Supports fractional hours (e.g., 0.1 = 6 minutes).
+    fn calculate_delete_at(expiration_hours: f64) -> Option<String> {
+        // Convert fractional hours to seconds (e.g., 0.1 hours = 360 seconds)
+        let seconds = (expiration_hours * 3600.0) as i64;
+        let delete_time = Utc::now() + Duration::seconds(seconds);
         Some(delete_time.to_rfc3339())
     }
 
@@ -2820,7 +2823,7 @@ mod tests {
         // Verify the env var is actually set correctly
         let actual_hours = ServerConfig::get_transaction_expiration_hours();
         assert_eq!(
-            actual_hours, 3,
+            actual_hours, 3.0,
             "Environment variable should be set to 3 hours"
         );
 
@@ -2971,7 +2974,7 @@ mod tests {
 
         for hours in test_cases {
             let before_calc = Utc::now();
-            let result = TransactionRepoModel::calculate_delete_at(hours);
+            let result = TransactionRepoModel::calculate_delete_at(hours as f64);
             let after_calc = Utc::now();
 
             assert!(
