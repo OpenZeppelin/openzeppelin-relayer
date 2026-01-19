@@ -6,7 +6,8 @@ use crate::models::{
 };
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{
-    BatchRetrievalResult, PaginatedResult, Repository, TransactionRepository,
+    BatchDeleteResult, BatchRetrievalResult, PaginatedResult, Repository, TransactionDeleteRequest,
+    TransactionRepository,
 };
 use async_trait::async_trait;
 use redis::aio::ConnectionManager;
@@ -1317,6 +1318,126 @@ impl TransactionRepository for RedisTransactionRepository {
 
         debug!(relayer_id = %relayer_id, count = %total_count, "counted transactions by status");
         Ok(total_count)
+    }
+
+    async fn delete_by_ids(&self, ids: Vec<String>) -> Result<BatchDeleteResult, RepositoryError> {
+        if ids.is_empty() {
+            debug!("no transaction IDs provided for batch delete");
+            return Ok(BatchDeleteResult::default());
+        }
+
+        debug!(count = %ids.len(), "batch deleting transactions by IDs (with fetch)");
+
+        // Fetch transactions to get their data for index cleanup
+        let batch_result = self.get_transactions_by_ids(&ids).await?;
+
+        // Convert to delete requests
+        let requests: Vec<TransactionDeleteRequest> = batch_result
+            .results
+            .iter()
+            .map(|tx| TransactionDeleteRequest {
+                id: tx.id.clone(),
+                relayer_id: tx.relayer_id.clone(),
+                nonce: self.extract_nonce(&tx.network_data),
+            })
+            .collect();
+
+        // Track IDs that weren't found
+        let mut result = self.delete_by_requests(requests).await?;
+
+        // Add the IDs that weren't found during fetch
+        for id in batch_result.failed_ids {
+            result
+                .failed
+                .push((id.clone(), format!("Transaction with ID {id} not found")));
+        }
+
+        Ok(result)
+    }
+
+    async fn delete_by_requests(
+        &self,
+        requests: Vec<TransactionDeleteRequest>,
+    ) -> Result<BatchDeleteResult, RepositoryError> {
+        if requests.is_empty() {
+            debug!("no delete requests provided for batch delete");
+            return Ok(BatchDeleteResult::default());
+        }
+
+        debug!(count = %requests.len(), "batch deleting transactions by requests (no fetch)");
+
+        let mut conn = self.client.as_ref().clone();
+        let mut pipe = redis::pipe();
+        pipe.atomic();
+
+        // All possible statuses for index cleanup
+        let all_statuses = [
+            TransactionStatus::Canceled,
+            TransactionStatus::Pending,
+            TransactionStatus::Sent,
+            TransactionStatus::Submitted,
+            TransactionStatus::Mined,
+            TransactionStatus::Confirmed,
+            TransactionStatus::Failed,
+            TransactionStatus::Expired,
+        ];
+
+        // Build pipeline for all deletions and index removals
+        for req in &requests {
+            // Delete transaction data
+            let tx_key = self.tx_key(&req.relayer_id, &req.id);
+            pipe.del(&tx_key);
+
+            // Delete reverse lookup
+            let reverse_key = self.tx_to_relayer_key(&req.id);
+            pipe.del(&reverse_key);
+
+            // Remove from all possible status indexes
+            for status in &all_statuses {
+                let status_sorted_key = self.relayer_status_sorted_key(&req.relayer_id, status);
+                pipe.zrem(&status_sorted_key, &req.id);
+
+                let status_legacy_key = self.relayer_status_key(&req.relayer_id, status);
+                pipe.srem(&status_legacy_key, &req.id);
+            }
+
+            // Remove nonce index if exists
+            if let Some(nonce) = req.nonce {
+                let nonce_key = self.relayer_nonce_key(&req.relayer_id, nonce);
+                pipe.del(&nonce_key);
+            }
+
+            // Remove from per-relayer sorted set by created_at
+            let relayer_sorted_key = self.relayer_tx_by_created_at_key(&req.relayer_id);
+            pipe.zrem(&relayer_sorted_key, &req.id);
+        }
+
+        // Execute the entire pipeline in one round-trip
+        match pipe.exec_async(&mut conn).await {
+            Ok(_) => {
+                let deleted_count = requests.len();
+                debug!(
+                    deleted_count = %deleted_count,
+                    "batch delete completed"
+                );
+                Ok(BatchDeleteResult {
+                    deleted_count,
+                    failed: vec![],
+                })
+            }
+            Err(e) => {
+                error!(error = %e, "batch delete pipeline failed");
+                // Mark all requests as failed
+                let failed: Vec<(String, String)> = requests
+                    .iter()
+                    .map(|req| (req.id.clone(), format!("Redis pipeline error: {e}")))
+                    .collect();
+                Ok(BatchDeleteResult {
+                    deleted_count: 0,
+                    failed,
+                })
+            }
+        }
     }
 }
 
@@ -2652,5 +2773,260 @@ mod tests {
 
         // Cleanup
         env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+    }
+
+    // Tests for delete_by_ids batch delete functionality
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_delete_by_ids_empty_list() {
+        let repo = setup_test_repo().await;
+        let tx_id = format!("test-empty-{}", Uuid::new_v4());
+
+        // Create a transaction to ensure repo is not empty
+        let tx = create_test_transaction(&tx_id);
+        repo.create(tx).await.unwrap();
+
+        // Delete with empty list should succeed and not affect existing data
+        let result = repo.delete_by_ids(vec![]).await.unwrap();
+
+        assert_eq!(result.deleted_count, 0);
+        assert!(result.failed.is_empty());
+
+        // Original transaction should still exist
+        assert!(repo.get_by_id(tx_id).await.is_ok());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_delete_by_ids_single_transaction() {
+        let repo = setup_test_repo().await;
+        let tx_id = format!("test-single-{}", Uuid::new_v4());
+
+        let tx = create_test_transaction(&tx_id);
+        repo.create(tx).await.unwrap();
+
+        let result = repo.delete_by_ids(vec![tx_id.clone()]).await.unwrap();
+
+        assert_eq!(result.deleted_count, 1);
+        assert!(result.failed.is_empty());
+
+        // Verify transaction was deleted
+        assert!(repo.get_by_id(tx_id).await.is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_delete_by_ids_multiple_transactions() {
+        let repo = setup_test_repo().await;
+        let base_id = Uuid::new_v4();
+
+        // Create multiple transactions
+        let mut created_ids = Vec::new();
+        for i in 1..=5 {
+            let tx_id = format!("test-multi-{}-{}", base_id, i);
+            let tx = create_test_transaction(&tx_id);
+            repo.create(tx).await.unwrap();
+            created_ids.push(tx_id);
+        }
+
+        // Delete 3 of them
+        let ids_to_delete = vec![
+            created_ids[0].clone(),
+            created_ids[2].clone(),
+            created_ids[4].clone(),
+        ];
+        let result = repo.delete_by_ids(ids_to_delete).await.unwrap();
+
+        assert_eq!(result.deleted_count, 3);
+        assert!(result.failed.is_empty());
+
+        // Verify correct transactions were deleted
+        assert!(repo.get_by_id(created_ids[0].clone()).await.is_err());
+        assert!(repo.get_by_id(created_ids[1].clone()).await.is_ok()); // Not deleted
+        assert!(repo.get_by_id(created_ids[2].clone()).await.is_err());
+        assert!(repo.get_by_id(created_ids[3].clone()).await.is_ok()); // Not deleted
+        assert!(repo.get_by_id(created_ids[4].clone()).await.is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_delete_by_ids_nonexistent_transactions() {
+        let repo = setup_test_repo().await;
+        let base_id = Uuid::new_v4();
+
+        // Try to delete transactions that don't exist
+        let ids_to_delete = vec![
+            format!("nonexistent-{}-1", base_id),
+            format!("nonexistent-{}-2", base_id),
+        ];
+        let result = repo.delete_by_ids(ids_to_delete.clone()).await.unwrap();
+
+        assert_eq!(result.deleted_count, 0);
+        assert_eq!(result.failed.len(), 2);
+
+        // Verify error messages contain the IDs
+        let failed_ids: Vec<&String> = result.failed.iter().map(|(id, _)| id).collect();
+        assert!(failed_ids.contains(&&ids_to_delete[0]));
+        assert!(failed_ids.contains(&&ids_to_delete[1]));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_delete_by_ids_mixed_existing_and_nonexistent() {
+        let repo = setup_test_repo().await;
+        let base_id = Uuid::new_v4();
+
+        // Create some transactions
+        let existing_ids: Vec<String> = (1..=3)
+            .map(|i| format!("test-mixed-existing-{}-{}", base_id, i))
+            .collect();
+
+        for id in &existing_ids {
+            let tx = create_test_transaction(id);
+            repo.create(tx).await.unwrap();
+        }
+
+        let nonexistent_ids: Vec<String> = (1..=2)
+            .map(|i| format!("test-mixed-nonexistent-{}-{}", base_id, i))
+            .collect();
+
+        // Try to delete mix of existing and non-existing
+        let ids_to_delete = vec![
+            existing_ids[0].clone(),
+            nonexistent_ids[0].clone(),
+            existing_ids[1].clone(),
+            nonexistent_ids[1].clone(),
+        ];
+        let result = repo.delete_by_ids(ids_to_delete).await.unwrap();
+
+        assert_eq!(result.deleted_count, 2);
+        assert_eq!(result.failed.len(), 2);
+
+        // Verify existing transactions were deleted
+        assert!(repo.get_by_id(existing_ids[0].clone()).await.is_err());
+        assert!(repo.get_by_id(existing_ids[1].clone()).await.is_err());
+
+        // Verify remaining transaction still exists
+        assert!(repo.get_by_id(existing_ids[2].clone()).await.is_ok());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_delete_by_ids_removes_all_indexes() {
+        let repo = setup_test_repo().await;
+        let relayer_id = format!("relayer-{}", Uuid::new_v4());
+        let tx_id = format!("test-indexes-{}", Uuid::new_v4());
+
+        // Create a transaction with specific status
+        let mut tx = create_test_transaction(&tx_id);
+        tx.relayer_id = relayer_id.clone();
+        tx.status = TransactionStatus::Confirmed;
+        repo.create(tx).await.unwrap();
+
+        // Verify transaction exists and is indexed
+        let found = repo
+            .find_by_status(&relayer_id, &[TransactionStatus::Confirmed])
+            .await
+            .unwrap();
+        assert!(found.iter().any(|t| t.id == tx_id));
+
+        // Delete the transaction
+        let result = repo.delete_by_ids(vec![tx_id.clone()]).await.unwrap();
+        assert_eq!(result.deleted_count, 1);
+
+        // Verify transaction is no longer in status index
+        let found_after = repo
+            .find_by_status(&relayer_id, &[TransactionStatus::Confirmed])
+            .await
+            .unwrap();
+        assert!(!found_after.iter().any(|t| t.id == tx_id));
+
+        // Verify transaction cannot be found
+        assert!(repo.get_by_id(tx_id).await.is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_delete_by_ids_removes_nonce_index() {
+        let repo = setup_test_repo().await;
+        let relayer_id = format!("relayer-{}", Uuid::new_v4());
+        let tx_id = format!("test-nonce-{}", Uuid::new_v4());
+        let nonce = 12345u64;
+
+        // Create a transaction with a specific nonce
+        let tx = create_test_transaction_with_nonce(&tx_id, nonce, &relayer_id);
+        repo.create(tx).await.unwrap();
+
+        // Verify nonce index works
+        let found = repo.find_by_nonce(&relayer_id, nonce).await.unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().id, tx_id);
+
+        // Delete the transaction
+        let result = repo.delete_by_ids(vec![tx_id.clone()]).await.unwrap();
+        assert_eq!(result.deleted_count, 1);
+
+        // Verify nonce index was cleaned up
+        let found_after = repo.find_by_nonce(&relayer_id, nonce).await.unwrap();
+        assert!(found_after.is_none());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_delete_by_ids_large_batch() {
+        let repo = setup_test_repo().await;
+        let base_id = Uuid::new_v4();
+
+        // Create many transactions to test batch performance
+        let count = 50;
+        let mut created_ids = Vec::new();
+
+        for i in 0..count {
+            let tx_id = format!("test-large-{}-{}", base_id, i);
+            let tx = create_test_transaction(&tx_id);
+            repo.create(tx).await.unwrap();
+            created_ids.push(tx_id);
+        }
+
+        // Delete all of them in one batch
+        let result = repo.delete_by_ids(created_ids.clone()).await.unwrap();
+
+        assert_eq!(result.deleted_count, count);
+        assert!(result.failed.is_empty());
+
+        // Verify all were deleted
+        for id in created_ids {
+            assert!(repo.get_by_id(id).await.is_err());
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_delete_by_ids_preserves_other_relayer_transactions() {
+        let repo = setup_test_repo().await;
+        let relayer_1 = format!("relayer-1-{}", Uuid::new_v4());
+        let relayer_2 = format!("relayer-2-{}", Uuid::new_v4());
+        let tx_id_1 = format!("tx-relayer-1-{}", Uuid::new_v4());
+        let tx_id_2 = format!("tx-relayer-2-{}", Uuid::new_v4());
+
+        // Create transactions for different relayers
+        let tx1 = create_test_transaction_with_relayer(&tx_id_1, &relayer_1);
+        let tx2 = create_test_transaction_with_relayer(&tx_id_2, &relayer_2);
+
+        repo.create(tx1).await.unwrap();
+        repo.create(tx2).await.unwrap();
+
+        // Delete only relayer-1's transaction
+        let result = repo.delete_by_ids(vec![tx_id_1.clone()]).await.unwrap();
+
+        assert_eq!(result.deleted_count, 1);
+
+        // relayer-1's transaction should be deleted
+        assert!(repo.get_by_id(tx_id_1).await.is_err());
+
+        // relayer-2's transaction should still exist
+        let remaining = repo.get_by_id(tx_id_2).await.unwrap();
+        assert_eq!(remaining.relayer_id, relayer_2);
     }
 }
