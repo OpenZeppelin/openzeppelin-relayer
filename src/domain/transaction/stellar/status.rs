@@ -10,7 +10,6 @@ use super::{is_final_state, StellarRelayerTransaction};
 use crate::constants::{
     get_stellar_max_pending_lifetime, get_stellar_max_sent_lifetime, get_stellar_resend_timeout,
 };
-use crate::domain::is_unsubmitted_transaction;
 use crate::domain::transaction::stellar::prepare::common::send_submit_transaction_job;
 use crate::domain::transaction::stellar::utils::extract_return_value_from_meta;
 use crate::domain::transaction::stellar::utils::extract_time_bounds;
@@ -101,26 +100,50 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        // Early check for Pending transactions - avoid unnecessary hash parsing
+        // Check if transaction has exceeded maximum status check lifetime
+        const MAX_STATUS_CHECK_LIFETIME_MINUTES: i64 = 30;
+        let age = get_age_since_created(&tx)?;
+        if age.num_minutes() > MAX_STATUS_CHECK_LIFETIME_MINUTES {
+            warn!(
+                tx_id = %tx.id,
+                age_minutes = age.num_minutes(),
+                status = ?tx.status,
+                "transaction exceeded maximum status check lifetime, marking as failed"
+            );
+            return self
+                .mark_as_failed(
+                    tx,
+                    format!(
+                        "Transaction status checks exceeded maximum lifetime of {MAX_STATUS_CHECK_LIFETIME_MINUTES} minutes"
+                    ),
+                )
+                .await;
+        }
+
+        // Early exits for unsubmitted transactions - they don't have on-chain hashes yet
+        // The submit handler will schedule status checks after submission
         if tx.status == TransactionStatus::Pending {
             return self.handle_pending_state(tx).await;
+        }
+
+        if tx.status == TransactionStatus::Sent {
+            return self.handle_sent_state(tx).await;
         }
 
         let stellar_hash = match self.parse_and_validate_hash(&tx) {
             Ok(hash) => hash,
             Err(e) => {
-                warn!(tx_id = %tx.id, error = ?e, "failed to parse and validate hash");
-                if !is_unsubmitted_transaction(&tx.status) {
-                    info!(tx_id = %tx.id, status = ?tx.status, "transaction is not unsubmitted, marking as failed due to hash validation error");
-                    return self
-                        .mark_as_failed(tx, format!("Failed to parse and validate hash: {e}"))
-                        .await;
-                }
-                // Recover stuck Sent transactions
-                if tx.status == TransactionStatus::Sent {
-                    return self.handle_sent_state(tx).await;
-                }
-                return Ok(tx);
+                // Transaction should be in Submitted or later state
+                // If hash is missing, this is a database inconsistency that won't fix itself
+                warn!(
+                    tx_id = %tx.id,
+                    status = ?tx.status,
+                    error = ?e,
+                    "failed to parse and validate hash for submitted transaction"
+                );
+                return self
+                    .mark_as_failed(tx, format!("Failed to parse and validate hash: {e}"))
+                    .await;
             }
         };
 
@@ -597,7 +620,7 @@ mod tests {
                         && statuses == [TransactionStatus::Pending]
                         && query.page == 1
                         && query.per_page == 1
-                        && *oldest_first == true
+                        && *oldest_first
                 })
                 .times(1)
                 .returning(move |_, _, _, _| {
@@ -753,7 +776,7 @@ mod tests {
                         && statuses == [TransactionStatus::Pending]
                         && query.page == 1
                         && query.per_page == 1
-                        && *oldest_first == true
+                        && *oldest_first
                 })
                 .times(1)
                 .returning(move |_, _, _, _| {
@@ -898,7 +921,7 @@ mod tests {
                         && statuses == [TransactionStatus::Pending]
                         && query.page == 1
                         && query.per_page == 1
-                        && *oldest_first == true
+                        && *oldest_first
                 })
                 .times(1)
                 .returning(move |_, _, _, _| {
@@ -1170,7 +1193,7 @@ mod tests {
                     id == "tx-with-result"
                         && update.status == Some(TransactionStatus::Confirmed)
                         && update.confirmed_at.is_some()
-                        && update.network_data.as_ref().map_or(false, |and| {
+                        && update.network_data.as_ref().is_some_and(|and| {
                             if let NetworkTransactionData::Stellar(stellar_data) = and {
                                 // Verify transaction_result_xdr is present
                                 stellar_data.transaction_result_xdr.is_some()
