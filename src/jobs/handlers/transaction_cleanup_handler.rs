@@ -14,8 +14,8 @@ use tracing::{debug, error, info, instrument, warn};
 use crate::{
     constants::{FINAL_TRANSACTION_STATUSES, WORKER_TRANSACTION_CLEANUP_RETRIES},
     jobs::handle_result,
-    models::{DefaultAppState, RelayerRepoModel, TransactionRepoModel},
-    repositories::{Repository, TransactionRepository},
+    models::{DefaultAppState, PaginationQuery, RelayerRepoModel, TransactionRepoModel},
+    repositories::{PaginatedResult, Repository, TransactionRepository},
 };
 
 /// Maximum number of relayers to process concurrently
@@ -23,6 +23,9 @@ const MAX_CONCURRENT_RELAYERS: usize = 10;
 
 /// Maximum number of transactions to process concurrently per relayer
 const MAX_CONCURRENT_TRANSACTIONS_PER_RELAYER: usize = 50;
+
+/// Number of transactions to fetch per page during cleanup
+const CLEANUP_PAGE_SIZE: u32 = 100;
 
 /// Handles periodic transaction cleanup jobs from the queue.
 ///
@@ -149,7 +152,10 @@ struct RelayerCleanupResult {
     error: Option<String>,
 }
 
-/// Processes cleanup for a single relayer.
+/// Processes cleanup for a single relayer using pagination.
+///
+/// Iterates through pages of final transactions to avoid loading all
+/// transactions into memory at once.
 ///
 /// # Arguments
 /// * `relayer` - The relayer to process
@@ -168,65 +174,98 @@ async fn process_single_relayer(
         "processing cleanup for relayer"
     );
 
-    match fetch_final_transactions(&relayer.id, &transaction_repo).await {
-        Ok(final_transactions) => {
-            debug!(
-                transaction_count = final_transactions.len(),
-                relayer_id = %relayer.id,
-                "found transactions with final statuses"
-            );
+    let mut total_cleaned = 0usize;
+    let mut current_page = 1u32;
 
-            let cleaned_count = process_transactions_for_cleanup(
-                final_transactions,
-                &transaction_repo,
-                &relayer.id,
-                now,
-            )
-            .await;
+    loop {
+        let query = PaginationQuery {
+            page: current_page,
+            per_page: CLEANUP_PAGE_SIZE,
+        };
 
-            if cleaned_count > 0 {
-                info!(
-                    cleaned_count,
+        match fetch_final_transactions_paginated(&relayer.id, &transaction_repo, query).await {
+            Ok(page_result) => {
+                let page_count = page_result.items.len();
+
+                if page_count == 0 {
+                    // No more transactions to process
+                    break;
+                }
+
+                debug!(
+                    page = current_page,
+                    page_count = page_count,
+                    total = page_result.total,
                     relayer_id = %relayer.id,
-                    "cleaned up expired transactions"
+                    "processing page of final transactions"
                 );
-            }
 
-            RelayerCleanupResult {
-                relayer_id: relayer.id,
-                cleaned_count,
-                error: None,
+                let cleaned_count = process_transactions_for_cleanup(
+                    page_result.items,
+                    &transaction_repo,
+                    &relayer.id,
+                    now,
+                )
+                .await;
+
+                total_cleaned += cleaned_count;
+
+                // Check if we've processed all pages
+                let total_pages =
+                    (page_result.total as f64 / CLEANUP_PAGE_SIZE as f64).ceil() as u32;
+                if current_page >= total_pages {
+                    break;
+                }
+
+                current_page += 1;
             }
-        }
-        Err(e) => {
-            error!(
-                error = %e,
-                relayer_id = %relayer.id,
-                "failed to fetch final transactions"
-            );
-            RelayerCleanupResult {
-                relayer_id: relayer.id,
-                cleaned_count: 0,
-                error: Some(e.to_string()),
+            Err(e) => {
+                error!(
+                    error = %e,
+                    relayer_id = %relayer.id,
+                    page = current_page,
+                    "failed to fetch final transactions page"
+                );
+                return RelayerCleanupResult {
+                    relayer_id: relayer.id,
+                    cleaned_count: total_cleaned,
+                    error: Some(e.to_string()),
+                };
             }
         }
     }
+
+    if total_cleaned > 0 {
+        info!(
+            cleaned_count = total_cleaned,
+            relayer_id = %relayer.id,
+            "cleaned up expired transactions"
+        );
+    }
+
+    RelayerCleanupResult {
+        relayer_id: relayer.id,
+        cleaned_count: total_cleaned,
+        error: None,
+    }
 }
 
-/// Fetches all transactions with final statuses for a specific relayer.
+/// Fetches a page of transactions with final statuses for a specific relayer.
 ///
 /// # Arguments
 /// * `relayer_id` - ID of the relayer
 /// * `transaction_repo` - Reference to the transaction repository
+/// * `query` - Pagination query specifying page and page size
 ///
 /// # Returns
-/// * `Result<Vec<TransactionRepoModel>>` - List of transactions with final statuses or error
-async fn fetch_final_transactions(
+/// * `Result<PaginatedResult<TransactionRepoModel>>` - Paginated transactions with final statuses
+async fn fetch_final_transactions_paginated(
     relayer_id: &str,
     transaction_repo: &Arc<impl TransactionRepository>,
-) -> Result<Vec<TransactionRepoModel>> {
+    query: PaginationQuery,
+) -> Result<PaginatedResult<TransactionRepoModel>> {
     transaction_repo
-        .find_by_status(relayer_id, FINAL_TRANSACTION_STATUSES)
+        .find_by_status_paginated(relayer_id, FINAL_TRANSACTION_STATUSES, query, true)
         .await
         .map_err(|e| {
             eyre::eyre!(
@@ -704,7 +743,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_fetch_final_transactions() {
+    async fn test_fetch_final_transactions_paginated() {
         let transaction_repo = Arc::new(InMemoryTransactionRepository::new());
         let relayer_id = "test-relayer";
 
@@ -725,14 +764,19 @@ mod tests {
         transaction_repo.create(pending_tx).await.unwrap();
         transaction_repo.create(failed_tx).await.unwrap();
 
-        // Fetch final transactions
-        let final_transactions = fetch_final_transactions(relayer_id, &transaction_repo)
+        // Fetch final transactions with pagination
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 10,
+        };
+        let result = fetch_final_transactions_paginated(relayer_id, &transaction_repo, query)
             .await
             .unwrap();
 
         // Should only return transactions with final statuses (Confirmed, Failed)
-        assert_eq!(final_transactions.len(), 2);
-        let final_ids: Vec<&String> = final_transactions.iter().map(|tx| &tx.id).collect();
+        assert_eq!(result.total, 2);
+        assert_eq!(result.items.len(), 2);
+        let final_ids: Vec<&String> = result.items.iter().map(|tx| &tx.id).collect();
         assert!(final_ids.contains(&&"confirmed-tx".to_string()));
         assert!(final_ids.contains(&&"failed-tx".to_string()));
         assert!(!final_ids.contains(&&"pending-tx".to_string()));
@@ -981,7 +1025,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_fetch_final_transactions_with_mixed_statuses() {
+    async fn test_fetch_final_transactions_paginated_with_mixed_statuses() {
         let transaction_repo = Arc::new(InMemoryTransactionRepository::new());
         let relayer_id = "test-relayer";
 
@@ -1010,19 +1054,81 @@ mod tests {
         transaction_repo.create(pending_tx).await.unwrap();
         transaction_repo.create(sent_tx).await.unwrap();
 
-        // Fetch final transactions
-        let final_transactions = fetch_final_transactions(relayer_id, &transaction_repo)
+        // Fetch final transactions with pagination
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 10,
+        };
+        let result = fetch_final_transactions_paginated(relayer_id, &transaction_repo, query)
             .await
             .unwrap();
 
         // Should only return the 4 final status transactions
-        assert_eq!(final_transactions.len(), 4);
-        let final_ids: Vec<&String> = final_transactions.iter().map(|tx| &tx.id).collect();
+        assert_eq!(result.total, 4);
+        assert_eq!(result.items.len(), 4);
+        let final_ids: Vec<&String> = result.items.iter().map(|tx| &tx.id).collect();
         assert!(final_ids.contains(&&"confirmed-tx".to_string()));
         assert!(final_ids.contains(&&"failed-tx".to_string()));
         assert!(final_ids.contains(&&"canceled-tx".to_string()));
         assert!(final_ids.contains(&&"expired-tx".to_string()));
         assert!(!final_ids.contains(&&"pending-tx".to_string()));
         assert!(!final_ids.contains(&&"sent-tx".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_final_transactions_paginated_pagination() {
+        let transaction_repo = Arc::new(InMemoryTransactionRepository::new());
+        let relayer_id = "test-relayer";
+
+        // Create 5 confirmed transactions
+        for i in 1..=5 {
+            let mut tx = create_test_transaction(
+                &format!("tx-{}", i),
+                relayer_id,
+                TransactionStatus::Confirmed,
+                None,
+            );
+            tx.created_at = format!("2025-01-27T{:02}:00:00.000000+00:00", 10 + i);
+            transaction_repo.create(tx).await.unwrap();
+        }
+
+        // Test first page with 2 items
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 2,
+        };
+        let result = fetch_final_transactions_paginated(relayer_id, &transaction_repo, query)
+            .await
+            .unwrap();
+
+        assert_eq!(result.total, 5);
+        assert_eq!(result.items.len(), 2);
+        assert_eq!(result.page, 1);
+
+        // Test second page
+        let query = PaginationQuery {
+            page: 2,
+            per_page: 2,
+        };
+        let result = fetch_final_transactions_paginated(relayer_id, &transaction_repo, query)
+            .await
+            .unwrap();
+
+        assert_eq!(result.total, 5);
+        assert_eq!(result.items.len(), 2);
+        assert_eq!(result.page, 2);
+
+        // Test last page (partial)
+        let query = PaginationQuery {
+            page: 3,
+            per_page: 2,
+        };
+        let result = fetch_final_transactions_paginated(relayer_id, &transaction_repo, query)
+            .await
+            .unwrap();
+
+        assert_eq!(result.total, 5);
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.page, 3);
     }
 }

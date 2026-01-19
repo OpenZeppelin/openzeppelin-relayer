@@ -213,7 +213,10 @@ mod tests {
     use crate::domain::transaction::stellar::test_helpers::*;
 
     mod submit_transaction_tests {
-        use crate::{models::RepositoryError, services::provider::ProviderError};
+        use crate::{
+            models::RepositoryError, repositories::PaginatedResult,
+            services::provider::ProviderError,
+        };
 
         use super::*;
 
@@ -290,11 +293,18 @@ mod tests {
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
 
-            // Mock find_by_status for enqueue_next_pending_transaction
+            // Mock find_by_status_paginated for enqueue_next_pending_transaction
             mocks
                 .tx_repo
-                .expect_find_by_status()
-                .returning(|_, _| Ok(vec![])); // No pending transactions
+                .expect_find_by_status_paginated()
+                .returning(move |_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                }); // No pending transactions
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
@@ -349,11 +359,18 @@ mod tests {
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
 
-            // Mock find_by_status for enqueue_next_pending_transaction
+            // Mock find_by_status_paginated for enqueue_next_pending_transaction
             mocks
                 .tx_repo
-                .expect_find_by_status()
-                .returning(|_, _| Ok(vec![])); // No pending transactions
+                .expect_find_by_status_paginated()
+                .returning(move |_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                }); // No pending transactions
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
@@ -499,15 +516,26 @@ mod tests {
             pending_tx.id = "next-pending-tx".to_string();
             pending_tx.status = TransactionStatus::Pending;
             let captured_pending_tx = pending_tx.clone();
+            let relayer_id_clone = relayer.id.clone();
             mocks
                 .tx_repo
-                .expect_find_by_status()
-                .with(
-                    mockall::predicate::eq(relayer.id.clone()),
-                    mockall::predicate::eq(vec![TransactionStatus::Pending]),
-                )
+                .expect_find_by_status_paginated()
+                .withf(move |relayer_id, statuses, query, oldest_first| {
+                    *relayer_id == relayer_id_clone
+                        && statuses == [TransactionStatus::Pending]
+                        && query.page == 1
+                        && query.per_page == 1
+                        && *oldest_first == true
+                })
                 .times(1)
-                .returning(move |_, _| Ok(vec![captured_pending_tx.clone()]));
+                .returning(move |_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![captured_pending_tx.clone()],
+                        total: 1,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
 
             // Mock produce_transaction_request_job for the next pending transaction
             mocks

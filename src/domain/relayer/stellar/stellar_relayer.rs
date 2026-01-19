@@ -25,7 +25,10 @@ use crate::utils::{map_provider_error, sanitize_error_description};
 /// To use the `StellarRelayer`, create an instance using the `new` method, providing the necessary
 /// components. Then, call the appropriate methods to process transactions and manage the relayer's state.
 use crate::{
-    constants::{STELLAR_SMALLEST_UNIT_NAME, STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS},
+    constants::{
+        transactions::PENDING_TRANSACTION_STATUSES, STELLAR_SMALLEST_UNIT_NAME,
+        STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+    },
     domain::{
         create_success_response, transaction::stellar::fetch_next_sequence_from_chain,
         BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
@@ -35,10 +38,10 @@ use crate::{
     models::{
         produce_relayer_disabled_payload, DeletePendingTransactionsResponse, DisabledReason,
         HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest,
-        NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerNetworkPolicy,
-        RelayerRepoModel, RelayerStatus, RelayerStellarPolicy, RepositoryError, RpcErrorCodes,
-        StellarAllowedTokensPolicy, StellarFeePaymentStrategy, StellarNetwork, StellarRpcRequest,
-        TransactionRepoModel, TransactionStatus,
+        NetworkRpcResult, NetworkTransactionRequest, NetworkType, PaginationQuery,
+        RelayerNetworkPolicy, RelayerRepoModel, RelayerStatus, RelayerStellarPolicy,
+        RepositoryError, RpcErrorCodes, StellarAllowedTokensPolicy, StellarFeePaymentStrategy,
+        StellarNetwork, StellarRpcRequest, TransactionRepoModel, TransactionStatus,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
@@ -489,26 +492,31 @@ where
 
         let balance_response = self.get_balance().await?;
 
-        let pending_statuses = [TransactionStatus::Pending, TransactionStatus::Submitted];
-        let pending_transactions = self
+        // Use optimized count_by_status
+        let pending_transactions_count = self
             .transaction_repository
-            .find_by_status(&relayer_model.id, &pending_statuses[..])
-            .await
-            .map_err(RelayerError::from)?;
-        let pending_transactions_count = pending_transactions.len() as u64;
-
-        let confirmed_statuses = [TransactionStatus::Confirmed];
-        let confirmed_transactions = self
-            .transaction_repository
-            .find_by_status(&relayer_model.id, &confirmed_statuses[..])
+            .count_by_status(&relayer_model.id, PENDING_TRANSACTION_STATUSES)
             .await
             .map_err(RelayerError::from)?;
 
-        let last_confirmed_transaction_timestamp = confirmed_transactions
-            .iter()
-            .filter_map(|tx| tx.confirmed_at.as_ref())
-            .max()
-            .cloned();
+        // Use find_by_status_paginated to get the latest confirmed transaction (newest first)
+        let last_confirmed_transaction_timestamp = self
+            .transaction_repository
+            .find_by_status_paginated(
+                &relayer_model.id,
+                &[TransactionStatus::Confirmed],
+                PaginationQuery {
+                    page: 1,
+                    per_page: 1,
+                },
+                false, // oldest_first = false means newest first
+            )
+            .await
+            .map_err(RelayerError::from)?
+            .items
+            .into_iter()
+            .next()
+            .and_then(|tx| tx.confirmed_at);
 
         Ok(RelayerStatus::Stellar {
             balance: balance_response.balance.to_string(),
@@ -1008,15 +1016,22 @@ mod tests {
             })))
         });
 
+        // Mock count_by_status for pending transactions count
         tx_repo_mock
-            .expect_find_by_status()
+            .expect_count_by_status()
             .withf(|relayer_id, statuses| {
                 relayer_id == "test-relayer-id"
-                    && statuses == [TransactionStatus::Pending, TransactionStatus::Submitted]
+                    && statuses
+                        == [
+                            TransactionStatus::Pending,
+                            TransactionStatus::Sent,
+                            TransactionStatus::Submitted,
+                        ]
             })
-            .returning(|_, _| Ok(vec![]) as Result<Vec<TransactionRepoModel>, RepositoryError>)
+            .returning(|_, _| Ok(0u64))
             .once();
 
+        // Mock find_by_status_paginated for latest confirmed transaction
         let confirmed_tx = TransactionRepoModel {
             id: "tx1_stellar".to_string(),
             relayer_id: relayer_model.id.clone(),
@@ -1024,13 +1039,23 @@ mod tests {
             confirmed_at: Some("2023-02-01T12:00:00Z".to_string()),
             ..TransactionRepoModel::default()
         };
+        let relayer_id_clone = relayer_model.id.clone();
         tx_repo_mock
-            .expect_find_by_status()
-            .withf(|relayer_id, statuses| {
-                relayer_id == "test-relayer-id" && statuses == [TransactionStatus::Confirmed]
+            .expect_find_by_status_paginated()
+            .withf(move |relayer_id, statuses, query, oldest_first| {
+                *relayer_id == relayer_id_clone
+                    && statuses == [TransactionStatus::Confirmed]
+                    && query.page == 1
+                    && query.per_page == 1
+                    && *oldest_first == false
             })
-            .returning(move |_, _| {
-                Ok(vec![confirmed_tx.clone()]) as Result<Vec<TransactionRepoModel>, RepositoryError>
+            .returning(move |_, _, _, _| {
+                Ok(crate::repositories::PaginatedResult {
+                    items: vec![confirmed_tx.clone()],
+                    total: 1,
+                    page: 1,
+                    per_page: 1,
+                })
             })
             .once();
         let signer = Arc::new(MockStellarSignTrait::new());

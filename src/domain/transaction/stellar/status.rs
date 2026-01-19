@@ -368,6 +368,7 @@ where
 mod tests {
     use super::*;
     use crate::models::{NetworkTransactionData, RepositoryError};
+    use crate::repositories::PaginatedResult;
     use chrono::Duration;
     use mockall::predicate::eq;
     use soroban_rs::stellar_rpc_client::GetTransactionResponse;
@@ -488,17 +489,31 @@ mod tests {
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
 
-            // 3. Mock find_by_status for pending transactions
+            // 3. Mock find_by_status_paginated for pending transactions
             let mut oldest_pending_tx = create_test_transaction(&relayer.id);
             oldest_pending_tx.id = "tx-oldest-pending".to_string();
             oldest_pending_tx.status = TransactionStatus::Pending;
             let captured_oldest_pending_tx = oldest_pending_tx.clone();
+            let relayer_id_clone = relayer.id.clone();
             mocks
                 .tx_repo
-                .expect_find_by_status()
-                .with(eq(relayer.id.clone()), eq(vec![TransactionStatus::Pending]))
+                .expect_find_by_status_paginated()
+                .withf(move |relayer_id, statuses, query, oldest_first| {
+                    *relayer_id == relayer_id_clone
+                        && statuses == [TransactionStatus::Pending]
+                        && query.page == 1
+                        && query.per_page == 1
+                        && *oldest_first == true
+                })
                 .times(1)
-                .returning(move |_, _| Ok(vec![captured_oldest_pending_tx.clone()]));
+                .returning(move |_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![captured_oldest_pending_tx.clone()],
+                        total: 1,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
 
             // 4. Mock produce_transaction_request_job for the next pending transaction
             mocks
@@ -634,13 +649,27 @@ mod tests {
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
 
-            // 3. Mock find_by_status for pending transactions (should be called by enqueue_next_pending_transaction)
+            // 3. Mock find_by_status_paginated for pending transactions (should be called by enqueue_next_pending_transaction)
+            let relayer_id_clone = relayer.id.clone();
             mocks
                 .tx_repo
-                .expect_find_by_status()
-                .with(eq(relayer.id.clone()), eq(vec![TransactionStatus::Pending]))
+                .expect_find_by_status_paginated()
+                .withf(move |relayer_id, statuses, query, oldest_first| {
+                    *relayer_id == relayer_id_clone
+                        && statuses == [TransactionStatus::Pending]
+                        && query.page == 1
+                        && query.per_page == 1
+                        && *oldest_first == true
+                })
                 .times(1)
-                .returning(move |_, _| Ok(vec![])); // No pending transactions
+                .returning(move |_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                }); // No pending transactions
 
             // Should NOT try to enqueue next transaction since there are no pending ones
             mocks
@@ -765,13 +794,27 @@ mod tests {
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
 
-            // Expect find_by_status to be called when enqueuing next transaction
+            // Expect find_by_status_paginated to be called when enqueuing next transaction
+            let relayer_id_clone = relayer.id.clone();
             mocks
                 .tx_repo
-                .expect_find_by_status()
-                .with(eq(relayer.id.clone()), eq(vec![TransactionStatus::Pending]))
+                .expect_find_by_status_paginated()
+                .withf(move |relayer_id, statuses, query, oldest_first| {
+                    *relayer_id == relayer_id_clone
+                        && statuses == [TransactionStatus::Pending]
+                        && query.page == 1
+                        && query.per_page == 1
+                        && *oldest_first == true
+                })
                 .times(1)
-                .returning(move |_, _| Ok(vec![])); // No pending transactions
+                .returning(move |_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                }); // No pending transactions
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let result = handler.handle_transaction_status_impl(tx_to_handle).await;
@@ -842,11 +885,18 @@ mod tests {
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
 
-            // Mock find_by_status
+            // Mock find_by_status_paginated
             mocks
                 .tx_repo
-                .expect_find_by_status()
-                .returning(move |_, _| Ok(vec![]));
+                .expect_find_by_status_paginated()
+                .returning(move |_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let initial_tx = tx_to_handle.clone();
@@ -915,11 +965,18 @@ mod tests {
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
 
-            // Mock find_by_status for next transaction
+            // Mock find_by_status_paginated for next transaction
             mocks
                 .tx_repo
-                .expect_find_by_status()
-                .returning(move |_, _| Ok(vec![]));
+                .expect_find_by_status_paginated()
+                .returning(move |_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let initial_tx = tx_to_handle.clone();
@@ -1047,11 +1104,18 @@ mod tests {
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
 
-            // Mock find_by_status
+            // Mock find_by_status_paginated
             mocks
                 .tx_repo
-                .expect_find_by_status()
-                .returning(move |_, _| Ok(vec![]));
+                .expect_find_by_status_paginated()
+                .returning(move |_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let result = handler.handle_transaction_status_impl(tx_to_handle).await;
@@ -1130,11 +1194,18 @@ mod tests {
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
 
-            // Mock find_by_status
+            // Mock find_by_status_paginated
             mocks
                 .tx_repo
-                .expect_find_by_status()
-                .returning(move |_, _| Ok(vec![]));
+                .expect_find_by_status_paginated()
+                .returning(move |_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let result = handler.handle_transaction_status_impl(tx_to_handle).await;
