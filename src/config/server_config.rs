@@ -75,7 +75,8 @@ pub struct ServerConfig {
     /// The encryption key for the storage.
     pub storage_encryption_key: Option<SecretString>,
     /// Transaction expiration time in hours for transactions in final states.
-    pub transaction_expiration_hours: u64,
+    /// Supports fractional values (e.g., 0.1 = 6 minutes).
+    pub transaction_expiration_hours: f64,
     /// Comma-separated list of allowed RPC hosts (domains or IPs). If non-empty, only these hosts are permitted.
     pub rpc_allowed_hosts: Vec<String>,
     /// If true, block private IP addresses (RFC 1918, loopback, link-local). Cloud metadata endpoints are always blocked.
@@ -355,11 +356,12 @@ impl ServerConfig {
     }
 
     /// Gets the transaction expiration hours from environment variable or default
-    pub fn get_transaction_expiration_hours() -> u64 {
+    /// Supports fractional values (e.g., 0.1 = 6 minutes).
+    pub fn get_transaction_expiration_hours() -> f64 {
         env::var("TRANSACTION_EXPIRATION_HOURS")
             .unwrap_or_else(|_| "4".to_string())
             .parse()
-            .unwrap_or(4)
+            .unwrap_or(4.0)
     }
 
     /// Gets the allowed RPC hosts from environment variable or default (empty list)
@@ -511,7 +513,7 @@ mod tests {
             RepositoryStorageType::InMemory
         );
         assert!(!config.reset_storage_on_start);
-        assert_eq!(config.transaction_expiration_hours, 4);
+        assert_eq!(config.transaction_expiration_hours, 4.0);
     }
 
     #[test]
@@ -554,7 +556,7 @@ mod tests {
             RepositoryStorageType::InMemory
         );
         assert!(!config.reset_storage_on_start);
-        assert_eq!(config.transaction_expiration_hours, 4);
+        assert_eq!(config.transaction_expiration_hours, 4.0);
     }
 
     #[test]
@@ -607,7 +609,7 @@ mod tests {
             RepositoryStorageType::InMemory
         );
         assert!(config.reset_storage_on_start);
-        assert_eq!(config.transaction_expiration_hours, 6);
+        assert_eq!(config.transaction_expiration_hours, 6.0);
     }
 
     #[test]
@@ -685,7 +687,7 @@ mod tests {
         );
         assert!(!ServerConfig::get_reset_storage_on_start());
         assert!(ServerConfig::get_storage_encryption_key().is_none());
-        assert_eq!(ServerConfig::get_transaction_expiration_hours(), 4);
+        assert_eq!(ServerConfig::get_transaction_expiration_hours(), 4.0);
     }
 
     #[test]
@@ -747,7 +749,31 @@ mod tests {
         );
         assert!(ServerConfig::get_reset_storage_on_start());
         assert!(ServerConfig::get_storage_encryption_key().is_some());
-        assert_eq!(ServerConfig::get_transaction_expiration_hours(), 12);
+        assert_eq!(ServerConfig::get_transaction_expiration_hours(), 12.0);
+    }
+
+    #[test]
+    fn test_fractional_transaction_expiration_hours() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        setup();
+
+        // Test fractional hours (0.1 hours = 6 minutes)
+        env::set_var("TRANSACTION_EXPIRATION_HOURS", "0.1");
+        assert_eq!(ServerConfig::get_transaction_expiration_hours(), 0.1);
+
+        // Test another fractional value
+        env::set_var("TRANSACTION_EXPIRATION_HOURS", "0.5");
+        assert_eq!(ServerConfig::get_transaction_expiration_hours(), 0.5);
+
+        // Test integer value still works
+        env::set_var("TRANSACTION_EXPIRATION_HOURS", "24");
+        assert_eq!(ServerConfig::get_transaction_expiration_hours(), 24.0);
+
+        // Cleanup
+        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
     }
 
     #[test]

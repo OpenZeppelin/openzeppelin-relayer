@@ -382,6 +382,42 @@ impl TransactionRepository for InMemoryTransactionRepository {
             .count() as u64;
         Ok(count)
     }
+
+    async fn delete_by_ids(&self, ids: Vec<String>) -> Result<BatchDeleteResult, RepositoryError> {
+        if ids.is_empty() {
+            return Ok(BatchDeleteResult::default());
+        }
+
+        let mut store = Self::acquire_lock(&self.store).await?;
+        let mut deleted_count = 0;
+        let mut failed = Vec::new();
+
+        for id in ids {
+            if store.remove(&id).is_some() {
+                deleted_count += 1;
+            } else {
+                failed.push((id.clone(), format!("Transaction with ID {id} not found")));
+            }
+        }
+
+        Ok(BatchDeleteResult {
+            deleted_count,
+            failed,
+        })
+    }
+
+    async fn delete_by_requests(
+        &self,
+        requests: Vec<TransactionDeleteRequest>,
+    ) -> Result<BatchDeleteResult, RepositoryError> {
+        if requests.is_empty() {
+            return Ok(BatchDeleteResult::default());
+        }
+
+        // For in-memory storage, we only need the IDs (no separate indexes to clean up)
+        let ids: Vec<String> = requests.into_iter().map(|r| r.id).collect();
+        self.delete_by_ids(ids).await
+    }
 }
 
 impl Default for InMemoryTransactionRepository {
@@ -1699,5 +1735,200 @@ mod tests {
 
         // Cleanup
         env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+    }
+
+    // Tests for delete_by_ids batch delete functionality
+
+    #[tokio::test]
+    async fn test_delete_by_ids_empty_list() {
+        let repo = InMemoryTransactionRepository::new();
+
+        // Create a transaction to ensure repo is not empty
+        let tx = create_test_transaction("test-1");
+        repo.create(tx).await.unwrap();
+
+        // Delete with empty list should succeed and not affect existing data
+        let result = repo.delete_by_ids(vec![]).await.unwrap();
+
+        assert_eq!(result.deleted_count, 0);
+        assert!(result.failed.is_empty());
+
+        // Original transaction should still exist
+        assert!(repo.get_by_id("test-1".to_string()).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_delete_by_ids_single_transaction() {
+        let repo = InMemoryTransactionRepository::new();
+
+        let tx = create_test_transaction("test-1");
+        repo.create(tx).await.unwrap();
+
+        let result = repo
+            .delete_by_ids(vec!["test-1".to_string()])
+            .await
+            .unwrap();
+
+        assert_eq!(result.deleted_count, 1);
+        assert!(result.failed.is_empty());
+
+        // Verify transaction was deleted
+        assert!(repo.get_by_id("test-1".to_string()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_delete_by_ids_multiple_transactions() {
+        let repo = InMemoryTransactionRepository::new();
+
+        // Create multiple transactions
+        for i in 1..=5 {
+            let tx = create_test_transaction(&format!("test-{}", i));
+            repo.create(tx).await.unwrap();
+        }
+
+        assert_eq!(repo.count().await.unwrap(), 5);
+
+        // Delete 3 of them
+        let ids_to_delete = vec![
+            "test-1".to_string(),
+            "test-3".to_string(),
+            "test-5".to_string(),
+        ];
+        let result = repo.delete_by_ids(ids_to_delete).await.unwrap();
+
+        assert_eq!(result.deleted_count, 3);
+        assert!(result.failed.is_empty());
+
+        // Verify correct transactions were deleted
+        assert!(repo.get_by_id("test-1".to_string()).await.is_err());
+        assert!(repo.get_by_id("test-2".to_string()).await.is_ok()); // Not deleted
+        assert!(repo.get_by_id("test-3".to_string()).await.is_err());
+        assert!(repo.get_by_id("test-4".to_string()).await.is_ok()); // Not deleted
+        assert!(repo.get_by_id("test-5".to_string()).await.is_err());
+
+        assert_eq!(repo.count().await.unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_delete_by_ids_nonexistent_transactions() {
+        let repo = InMemoryTransactionRepository::new();
+
+        // Try to delete transactions that don't exist
+        let ids_to_delete = vec!["nonexistent-1".to_string(), "nonexistent-2".to_string()];
+        let result = repo.delete_by_ids(ids_to_delete).await.unwrap();
+
+        assert_eq!(result.deleted_count, 0);
+        assert_eq!(result.failed.len(), 2);
+
+        // Verify error messages contain the IDs
+        assert!(result.failed.iter().any(|(id, _)| id == "nonexistent-1"));
+        assert!(result.failed.iter().any(|(id, _)| id == "nonexistent-2"));
+    }
+
+    #[tokio::test]
+    async fn test_delete_by_ids_mixed_existing_and_nonexistent() {
+        let repo = InMemoryTransactionRepository::new();
+
+        // Create some transactions
+        for i in 1..=3 {
+            let tx = create_test_transaction(&format!("test-{}", i));
+            repo.create(tx).await.unwrap();
+        }
+
+        // Try to delete mix of existing and non-existing
+        let ids_to_delete = vec![
+            "test-1".to_string(),        // exists
+            "nonexistent-1".to_string(), // doesn't exist
+            "test-2".to_string(),        // exists
+            "nonexistent-2".to_string(), // doesn't exist
+        ];
+        let result = repo.delete_by_ids(ids_to_delete).await.unwrap();
+
+        assert_eq!(result.deleted_count, 2);
+        assert_eq!(result.failed.len(), 2);
+
+        // Verify existing transactions were deleted
+        assert!(repo.get_by_id("test-1".to_string()).await.is_err());
+        assert!(repo.get_by_id("test-2".to_string()).await.is_err());
+
+        // Verify remaining transaction still exists
+        assert!(repo.get_by_id("test-3".to_string()).await.is_ok());
+
+        // Verify failed IDs are reported
+        let failed_ids: Vec<&String> = result.failed.iter().map(|(id, _)| id).collect();
+        assert!(failed_ids.contains(&&"nonexistent-1".to_string()));
+        assert!(failed_ids.contains(&&"nonexistent-2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_delete_by_ids_all_transactions() {
+        let repo = InMemoryTransactionRepository::new();
+
+        // Create transactions
+        for i in 1..=10 {
+            let tx = create_test_transaction(&format!("test-{}", i));
+            repo.create(tx).await.unwrap();
+        }
+
+        assert_eq!(repo.count().await.unwrap(), 10);
+
+        // Delete all
+        let ids_to_delete: Vec<String> = (1..=10).map(|i| format!("test-{}", i)).collect();
+        let result = repo.delete_by_ids(ids_to_delete).await.unwrap();
+
+        assert_eq!(result.deleted_count, 10);
+        assert!(result.failed.is_empty());
+        assert_eq!(repo.count().await.unwrap(), 0);
+        assert!(!repo.has_entries().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_delete_by_ids_duplicate_ids() {
+        let repo = InMemoryTransactionRepository::new();
+
+        let tx = create_test_transaction("test-1");
+        repo.create(tx).await.unwrap();
+
+        // Try to delete same ID multiple times in one call
+        let ids_to_delete = vec![
+            "test-1".to_string(),
+            "test-1".to_string(), // duplicate
+            "test-1".to_string(), // duplicate
+        ];
+        let result = repo.delete_by_ids(ids_to_delete).await.unwrap();
+
+        // First delete succeeds, subsequent ones fail (already deleted)
+        assert_eq!(result.deleted_count, 1);
+        assert_eq!(result.failed.len(), 2);
+
+        // Verify transaction was deleted
+        assert!(repo.get_by_id("test-1".to_string()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_delete_by_ids_preserves_other_relayer_transactions() {
+        let repo = InMemoryTransactionRepository::new();
+
+        // Create transactions for different relayers
+        let mut tx1 = create_test_transaction("tx-relayer-1");
+        tx1.relayer_id = "relayer-1".to_string();
+
+        let mut tx2 = create_test_transaction("tx-relayer-2");
+        tx2.relayer_id = "relayer-2".to_string();
+
+        repo.create(tx1).await.unwrap();
+        repo.create(tx2).await.unwrap();
+
+        // Delete only relayer-1's transaction
+        let result = repo
+            .delete_by_ids(vec!["tx-relayer-1".to_string()])
+            .await
+            .unwrap();
+
+        assert_eq!(result.deleted_count, 1);
+
+        // relayer-2's transaction should still exist
+        let remaining = repo.get_by_id("tx-relayer-2".to_string()).await.unwrap();
+        assert_eq!(remaining.relayer_id, "relayer-2");
     }
 }

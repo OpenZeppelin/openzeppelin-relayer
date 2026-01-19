@@ -221,8 +221,8 @@ where
         .concurrency(ServerConfig::get_worker_concurrency(TRANSACTION_CLEANUP, 1)) // Default to 1 to avoid DB conflicts
         .data(app_state.clone())
         .backend(CronStream::new(
-            // every 30 minutes
-            apalis_cron::Schedule::from_str("0 */30 * * * *")?,
+            // every 10 minutes
+            apalis_cron::Schedule::from_str("0 */10 * * * *")?,
         ))
         .build_fn(transaction_cleanup_handler);
 

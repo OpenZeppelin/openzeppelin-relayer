@@ -29,7 +29,7 @@ use crate::{
     models::{
         NetworkTransactionData, TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
     },
-    repositories::*,
+    repositories::{BatchDeleteResult, TransactionDeleteRequest, *},
 };
 use async_trait::async_trait;
 use eyre::Result;
@@ -123,6 +123,38 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
         relayer_id: &str,
         statuses: &[TransactionStatus],
     ) -> Result<u64, RepositoryError>;
+
+    /// Delete multiple transactions by their IDs in a single batch operation.
+    ///
+    /// This is more efficient than calling `delete_by_id` multiple times as it
+    /// reduces the number of round-trips to the storage backend.
+    ///
+    /// Note: This method requires fetching transaction data first to clean up indexes.
+    /// If you already have transaction data, use `delete_by_requests` instead for
+    /// better performance.
+    ///
+    /// # Arguments
+    /// * `ids` - List of transaction IDs to delete
+    ///
+    /// # Returns
+    /// * `BatchDeleteResult` containing the count of successful deletions and any failures
+    async fn delete_by_ids(&self, ids: Vec<String>) -> Result<BatchDeleteResult, RepositoryError>;
+
+    /// Delete multiple transactions using pre-extracted data.
+    ///
+    /// This is the most efficient batch delete method as it doesn't require
+    /// re-fetching transaction data. Use this when you already have the transaction
+    /// data (e.g., from a previous query).
+    ///
+    /// # Arguments
+    /// * `requests` - List of delete requests containing transaction data needed for cleanup
+    ///
+    /// # Returns
+    /// * `BatchDeleteResult` containing the count of successful deletions and any failures
+    async fn delete_by_requests(
+        &self,
+        requests: Vec<TransactionDeleteRequest>,
+    ) -> Result<BatchDeleteResult, RepositoryError>;
 }
 
 #[cfg(test)]
@@ -154,7 +186,8 @@ mockall::mock! {
       async fn set_sent_at(&self, tx_id: String, sent_at: String) -> Result<TransactionRepoModel, RepositoryError>;
       async fn set_confirmed_at(&self, tx_id: String, confirmed_at: String) -> Result<TransactionRepoModel, RepositoryError>;
       async fn count_by_status(&self, relayer_id: &str, statuses: &[TransactionStatus]) -> Result<u64, RepositoryError>;
-
+      async fn delete_by_ids(&self, ids: Vec<String>) -> Result<BatchDeleteResult, RepositoryError>;
+      async fn delete_by_requests(&self, requests: Vec<TransactionDeleteRequest>) -> Result<BatchDeleteResult, RepositoryError>;
   }
 }
 
@@ -323,6 +356,23 @@ impl TransactionRepository for TransactionRepositoryStorage {
             TransactionRepositoryStorage::Redis(repo) => {
                 repo.count_by_status(relayer_id, statuses).await
             }
+        }
+    }
+
+    async fn delete_by_ids(&self, ids: Vec<String>) -> Result<BatchDeleteResult, RepositoryError> {
+        match self {
+            TransactionRepositoryStorage::InMemory(repo) => repo.delete_by_ids(ids).await,
+            TransactionRepositoryStorage::Redis(repo) => repo.delete_by_ids(ids).await,
+        }
+    }
+
+    async fn delete_by_requests(
+        &self,
+        requests: Vec<TransactionDeleteRequest>,
+    ) -> Result<BatchDeleteResult, RepositoryError> {
+        match self {
+            TransactionRepositoryStorage::InMemory(repo) => repo.delete_by_requests(requests).await,
+            TransactionRepositoryStorage::Redis(repo) => repo.delete_by_requests(requests).await,
         }
     }
 }
