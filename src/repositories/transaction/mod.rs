@@ -211,6 +211,24 @@ impl TransactionRepositoryStorage {
             key_prefix,
         )?))
     }
+
+    /// Returns the underlying connection manager and key prefix if this is a persistent storage backend.
+    ///
+    /// This is useful for operations that need direct storage access, such as
+    /// distributed locking. The key prefix is used to namespace keys for multi-tenant
+    /// deployments. Currently supports Redis, but the design allows for future backends.
+    ///
+    /// # Returns
+    /// * `Some((connection, prefix))` - If using persistent storage (e.g., Redis)
+    /// * `None` - If using in-memory storage
+    pub fn connection_info(&self) -> Option<(Arc<ConnectionManager>, &str)> {
+        match self {
+            TransactionRepositoryStorage::InMemory(_) => None,
+            TransactionRepositoryStorage::Redis(repo) => {
+                Some((repo.client.clone(), &repo.key_prefix))
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -520,6 +538,14 @@ mod tests {
                 panic!("Expected InMemory variant, got Redis");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_connection_info_returns_none_for_in_memory() {
+        let storage = TransactionRepositoryStorage::new_in_memory();
+
+        // In-memory storage should return None for connection_info
+        assert!(storage.connection_info().is_none());
     }
 
     #[tokio::test]
