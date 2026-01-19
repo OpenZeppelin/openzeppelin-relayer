@@ -1466,8 +1466,15 @@ mod tests {
             // Try to enqueue next pending
             mocks
                 .tx_repo
-                .expect_find_by_status()
-                .returning(|_, _| Ok(vec![]));
+                .expect_find_by_status_paginated()
+                .returning(|_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let result = handler.handle_transaction_status_impl(tx).await;
@@ -1530,8 +1537,15 @@ mod tests {
             // Try to enqueue next pending
             mocks
                 .tx_repo
-                .expect_find_by_status()
-                .returning(|_, _| Ok(vec![]));
+                .expect_find_by_status_paginated()
+                .returning(|_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let result = handler.handle_transaction_status_impl(tx).await;
@@ -1589,8 +1603,15 @@ mod tests {
             // Try to enqueue next pending
             mocks
                 .tx_repo
-                .expect_find_by_status()
-                .returning(|_, _| Ok(vec![]));
+                .expect_find_by_status_paginated()
+                .returning(|_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let result = handler.handle_transaction_status_impl(tx).await;
@@ -1729,8 +1750,15 @@ mod tests {
             // Try to enqueue next pending
             mocks
                 .tx_repo
-                .expect_find_by_status()
-                .returning(|_, _| Ok(vec![]));
+                .expect_find_by_status_paginated()
+                .returning(|_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let result = handler.handle_transaction_status_impl(tx).await;
@@ -1799,8 +1827,15 @@ mod tests {
             // Try to enqueue next pending
             mocks
                 .tx_repo
-                .expect_find_by_status()
-                .returning(|_, _| Ok(vec![]));
+                .expect_find_by_status_paginated()
+                .returning(|_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let result = handler.handle_transaction_status_impl(tx).await;
@@ -1868,8 +1903,15 @@ mod tests {
             // Try to enqueue next pending
             mocks
                 .tx_repo
-                .expect_find_by_status()
-                .returning(|_, _| Ok(vec![]));
+                .expect_find_by_status_paginated()
+                .returning(|_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let result = handler.handle_transaction_status_impl(tx).await;
