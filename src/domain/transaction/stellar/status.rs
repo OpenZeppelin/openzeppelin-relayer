@@ -11,7 +11,7 @@ use crate::constants::{get_stellar_max_stuck_transaction_lifetime, get_stellar_r
 use crate::domain::transaction::stellar::prepare::common::send_submit_transaction_job;
 use crate::domain::transaction::stellar::utils::extract_return_value_from_meta;
 use crate::domain::transaction::stellar::utils::extract_time_bounds;
-use crate::domain::transaction::util::get_age_since_created;
+use crate::domain::transaction::util::{get_age_since_created, get_age_since_sent_or_created};
 use crate::domain::xdr_utils::parse_transaction_xdr;
 use crate::{
     constants::STELLAR_PENDING_RECOVERY_TRIGGER_SECONDS,
@@ -388,7 +388,7 @@ where
         }
 
         // Re-enqueue submit job if transaction exceeded resend timeout
-        let age = get_age_since_created(&tx)?;
+        let age = get_age_since_sent_or_created(&tx)?;
         if age > get_stellar_resend_timeout() {
             info!(tx_id = %tx.id, age_seconds = age.num_seconds(),
                 "re-enqueueing submit job for stuck Sent transaction");
