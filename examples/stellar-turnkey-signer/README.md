@@ -139,7 +139,7 @@ curl -X GET http://localhost:8080/api/v1/relayers \
   -H "AUTHORIZATION: Bearer YOUR_API_KEY"
 ```
 
-This should return information about your relayer, including its address derived from the Google Cloud KMS public key.
+This should return information about your relayer, including its address derived from the Turnkey public key.
 
 #### 7.2 Test Stellar Transaction Signing
 
@@ -150,13 +150,25 @@ curl -X POST http://localhost:8080/api/v1/relayers/your-relayer-id/transactions 
   -H "Content-Type: application/json" \
   -H "AUTHORIZATION: Bearer YOUR_API_KEY" \
   -d '{
-    "value": 1,
-    "data": "0x",
-    "to": "0x742d35cc6604c532532db3ae0f4d03e7c7b17e3e",
-    "gas_limit": 21000,
-    "speed": "average"
+    "network": "testnet",
+    "operations": [
+      {
+        "type": "payment",
+        "destination": "GDESTINATION_ADDRESS_HERE",
+        "asset": {"type": "native"},
+        "amount": 1000000
+      }
+    ],
+    "memo": {"type": "text", "value": "Test payment"}
   }'
 ```
+
+**What this does:**
+
+- Creates a payment transaction sending 0.1 XLM (1,000,000 stroops) to the specified Stellar address
+- Uses Turnkey to sign the transaction
+- Submits the signed transaction to the Stellar testnet
+- Returns transaction details including the transaction hash
 
 ### Troubleshooting
 
