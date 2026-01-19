@@ -8,7 +8,6 @@ use tracing::{debug, info, warn};
 
 use super::{is_final_state, StellarRelayerTransaction};
 use crate::constants::{get_stellar_max_stuck_transaction_lifetime, get_stellar_resend_timeout};
-use crate::domain::is_unsubmitted_transaction;
 use crate::domain::transaction::stellar::prepare::common::send_submit_transaction_job;
 use crate::domain::transaction::stellar::utils::extract_return_value_from_meta;
 use crate::domain::transaction::stellar::utils::extract_time_bounds;
@@ -99,26 +98,30 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        // Early check for Pending transactions - avoid unnecessary hash parsing
+        // Early exits for unsubmitted transactions - they don't have on-chain hashes yet
+        // The submit handler will schedule status checks after submission
         if tx.status == TransactionStatus::Pending {
             return self.handle_pending_state(tx).await;
+        }
+
+        if tx.status == TransactionStatus::Sent {
+            return self.handle_sent_state(tx).await;
         }
 
         let stellar_hash = match self.parse_and_validate_hash(&tx) {
             Ok(hash) => hash,
             Err(e) => {
-                warn!(tx_id = %tx.id, error = ?e, "failed to parse and validate hash");
-                if !is_unsubmitted_transaction(&tx.status) {
-                    info!(tx_id = %tx.id, status = ?tx.status, "transaction is not unsubmitted, marking as failed due to hash validation error");
-                    return self
-                        .mark_as_failed(tx, format!("Failed to parse and validate hash: {e}"))
-                        .await;
-                }
-                // Recover stuck Sent transactions
-                if tx.status == TransactionStatus::Sent {
-                    return self.handle_sent_state(tx).await;
-                }
-                return Ok(tx);
+                // Transaction should be in Submitted or later state
+                // If hash is missing, this is a database inconsistency that won't fix itself
+                warn!(
+                    tx_id = %tx.id,
+                    status = ?tx.status,
+                    error = ?e,
+                    "failed to parse and validate hash for submitted transaction"
+                );
+                return self
+                    .mark_as_failed(tx, format!("Failed to parse and validate hash: {e}"))
+                    .await;
             }
         };
 
