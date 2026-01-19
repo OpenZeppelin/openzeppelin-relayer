@@ -1,7 +1,7 @@
-//! Apalis Redis queue metadata cleanup worker implementation.
+//! System cleanup worker implementation for Redis queue metadata.
 //!
 //! This module implements a cleanup worker that removes stale job metadata from Redis.
-//! The apalis library stores job metadata in Redis that never gets automatically cleaned up.
+//! The job queue library stores job metadata in Redis that never gets automatically cleaned up.
 //! When jobs complete, keys accumulate in:
 //! - `{namespace}:done` - Sorted set of completed job IDs (score = timestamp)
 //! - `{namespace}:data` - Hash storing job payloads (field = job_id)
@@ -27,20 +27,20 @@ use std::time::Duration;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
-    constants::WORKER_APALIS_CLEANUP_RETRIES, jobs::handle_result, models::DefaultAppState,
+    constants::WORKER_SYSTEM_CLEANUP_RETRIES, jobs::handle_result, models::DefaultAppState,
     utils::DistributedLock,
 };
 
-/// Distributed lock name for apalis queue cleanup.
+/// Distributed lock name for queue cleanup.
 /// Only one instance across the cluster should run cleanup at a time.
-const APALIS_CLEANUP_LOCK_NAME: &str = "apalis_queue_cleanup";
+const SYSTEM_CLEANUP_LOCK_NAME: &str = "system_queue_cleanup";
 
 /// TTL for the distributed lock (55 minutes).
 ///
 /// This value should be:
 /// 1. Greater than the worst-case cleanup runtime to prevent concurrent execution
 /// 2. Less than the cron interval (1 hour) to ensure availability for the next run
-const APALIS_CLEANUP_LOCK_TTL_SECS: u64 = 55 * 60;
+const SYSTEM_CLEANUP_LOCK_TTL_SECS: u64 = 55 * 60;
 
 /// Age threshold for job metadata cleanup (1 hour).
 /// Jobs older than this threshold will be cleaned up.
@@ -51,7 +51,7 @@ const JOB_AGE_THRESHOLD_SECS: i64 = 3600;
 const CLEANUP_BATCH_SIZE: isize = 500;
 
 /// Queue names to clean up.
-/// These are the apalis queue namespaces used by the relayer.
+/// These are the queue namespaces used by the relayer.
 const QUEUE_NAMES: &[&str] = &[
     "transaction_request_queue",
     "transaction_submission_queue",
@@ -66,11 +66,11 @@ const QUEUE_NAMES: &[&str] = &[
 /// Sorted set suffixes that contain job IDs to clean up.
 const SORTED_SET_SUFFIXES: &[&str] = &[":done", ":failed", ":dead"];
 
-/// Represents a cron reminder job for triggering apalis cleanup operations.
+/// Represents a cron reminder job for triggering system cleanup operations.
 #[derive(Default, Debug, Clone)]
-pub struct ApalisCleanupCronReminder();
+pub struct SystemCleanupCronReminder();
 
-/// Handles periodic apalis queue metadata cleanup jobs.
+/// Handles periodic queue metadata cleanup jobs.
 ///
 /// This function processes stale job metadata by:
 /// 1. Acquiring a distributed lock to prevent concurrent cleanup
@@ -89,13 +89,13 @@ pub struct ApalisCleanupCronReminder();
     level = "debug",
     skip(job, data),
     fields(
-        job_type = "apalis_cleanup",
+        job_type = "system_cleanup",
         attempt = %attempt.current(),
     ),
     err
 )]
-pub async fn apalis_cleanup_handler(
-    job: ApalisCleanupCronReminder,
+pub async fn system_cleanup_handler(
+    job: SystemCleanupCronReminder,
     data: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
 ) -> Result<(), Error> {
@@ -104,18 +104,18 @@ pub async fn apalis_cleanup_handler(
     handle_result(
         result,
         attempt,
-        "ApalisCleanup",
-        WORKER_APALIS_CLEANUP_RETRIES,
+        "SystemCleanup",
+        WORKER_SYSTEM_CLEANUP_RETRIES,
     )
 }
 
-/// Handles the actual apalis cleanup request logic.
+/// Handles the actual system cleanup request logic.
 ///
 /// This function first attempts to acquire a distributed lock to ensure only
 /// one instance processes cleanup at a time. If the lock is already held by
 /// another instance, this returns early without doing any work.
 async fn handle_cleanup_request(
-    _job: ApalisCleanupCronReminder,
+    _job: SystemCleanupCronReminder,
     data: Data<ThinData<DefaultAppState>>,
     _attempt: Attempt,
 ) -> Result<()> {
@@ -125,26 +125,26 @@ async fn handle_cleanup_request(
     let (conn, prefix) = match transaction_repo.connection_info() {
         Some(info) => info,
         None => {
-            debug!("in-memory repository detected, skipping apalis cleanup");
+            debug!("in-memory repository detected, skipping system cleanup");
             return Ok(());
         }
     };
 
     // Attempt to acquire distributed lock
-    let lock_key = format!("{prefix}:lock:{APALIS_CLEANUP_LOCK_NAME}");
+    let lock_key = format!("{prefix}:lock:{SYSTEM_CLEANUP_LOCK_NAME}");
     let lock = DistributedLock::new(
         conn.clone(),
         &lock_key,
-        Duration::from_secs(APALIS_CLEANUP_LOCK_TTL_SECS),
+        Duration::from_secs(SYSTEM_CLEANUP_LOCK_TTL_SECS),
     );
 
     let _lock_guard = match lock.try_acquire().await {
         Ok(Some(guard)) => {
-            debug!(lock_key = %lock_key, "acquired distributed lock for apalis cleanup");
+            debug!(lock_key = %lock_key, "acquired distributed lock for system cleanup");
             guard
         }
         Ok(None) => {
-            info!(lock_key = %lock_key, "apalis cleanup skipped - another instance is processing");
+            info!(lock_key = %lock_key, "system cleanup skipped - another instance is processing");
             return Ok(());
         }
         Err(e) => {
@@ -159,11 +159,11 @@ async fn handle_cleanup_request(
         }
     };
 
-    info!("executing apalis queue metadata cleanup");
+    info!("executing queue metadata cleanup");
 
-    // Queue keys are created by apalis directly at the root level
+    // Queue keys are created by the job library directly at the root level
     // Format: {queue_name}:done, {queue_name}:data, etc.
-    // No prefix is added - apalis doesn't use the REDIS_KEY_PREFIX for queue keys
+    // No prefix is added - the library doesn't use the REDIS_KEY_PREFIX for queue keys
     let redis_key_prefix = "";
 
     let cutoff_timestamp = chrono::Utc::now().timestamp() - JOB_AGE_THRESHOLD_SECS;
@@ -201,12 +201,12 @@ async fn handle_cleanup_request(
         total_cleaned,
         total_errors,
         queues_processed = QUEUE_NAMES.len(),
-        "apalis cleanup completed"
+        "system cleanup completed"
     );
 
     if total_errors > 0 {
         Err(eyre::eyre!(
-            "Apalis cleanup completed with {} errors",
+            "System cleanup completed with {} errors",
             total_errors
         ))
     } else {
@@ -331,7 +331,7 @@ mod tests {
 
     #[test]
     fn test_constants() {
-        assert_eq!(APALIS_CLEANUP_LOCK_TTL_SECS, 55 * 60); // 55 minutes
+        assert_eq!(SYSTEM_CLEANUP_LOCK_TTL_SECS, 55 * 60); // 55 minutes
         assert_eq!(JOB_AGE_THRESHOLD_SECS, 3600); // 1 hour
         assert_eq!(CLEANUP_BATCH_SIZE, 500);
     }
@@ -362,8 +362,8 @@ mod tests {
     #[test]
     fn test_lock_key_format() {
         let prefix = "oz-relayer";
-        let lock_key = format!("{prefix}:lock:{APALIS_CLEANUP_LOCK_NAME}");
-        assert_eq!(lock_key, "oz-relayer:lock:apalis_queue_cleanup");
+        let lock_key = format!("{prefix}:lock:{SYSTEM_CLEANUP_LOCK_NAME}");
+        assert_eq!(lock_key, "oz-relayer:lock:system_queue_cleanup");
     }
 
     #[test]

@@ -9,13 +9,13 @@ use crate::{
         DEFAULT_CONCURRENCY_STATUS_CHECKER, DEFAULT_CONCURRENCY_STATUS_CHECKER_EVM,
         DEFAULT_CONCURRENCY_STATUS_CHECKER_STELLAR, DEFAULT_CONCURRENCY_TOKEN_SWAP,
         DEFAULT_CONCURRENCY_TRANSACTION_REQUEST, DEFAULT_CONCURRENCY_TRANSACTION_SENDER,
-        WORKER_APALIS_CLEANUP_RETRIES, WORKER_NOTIFICATION_SENDER_RETRIES,
-        WORKER_RELAYER_HEALTH_CHECK_RETRIES, WORKER_TOKEN_SWAP_REQUEST_RETRIES,
+        WORKER_NOTIFICATION_SENDER_RETRIES, WORKER_RELAYER_HEALTH_CHECK_RETRIES,
+        WORKER_SYSTEM_CLEANUP_RETRIES, WORKER_TOKEN_SWAP_REQUEST_RETRIES,
         WORKER_TRANSACTION_CLEANUP_RETRIES, WORKER_TRANSACTION_REQUEST_RETRIES,
         WORKER_TRANSACTION_STATUS_CHECKER_RETRIES, WORKER_TRANSACTION_SUBMIT_RETRIES,
     },
     jobs::{
-        apalis_cleanup_handler, notification_handler, relayer_health_check_handler,
+        notification_handler, relayer_health_check_handler, system_cleanup_handler,
         token_swap_cron_handler, token_swap_request_handler, transaction_cleanup_handler,
         transaction_request_handler, transaction_status_handler, transaction_submission_handler,
         JobProducerTrait,
@@ -55,7 +55,7 @@ const NOTIFICATION_SENDER: &str = "notification_sender";
 const TOKEN_SWAP_REQUEST: &str = "token_swap_request";
 const TRANSACTION_CLEANUP: &str = "transaction_cleanup";
 const RELAYER_HEALTH_CHECK: &str = "relayer_health_check";
-const APALIS_CLEANUP: &str = "apalis_cleanup";
+const SYSTEM_CLEANUP: &str = "system_cleanup";
 
 /// Creates an exponential backoff with configurable parameters
 ///
@@ -228,12 +228,12 @@ where
         ))
         .build_fn(transaction_cleanup_handler);
 
-    let apalis_cleanup_queue_worker = WorkerBuilder::new(APALIS_CLEANUP)
+    let system_cleanup_queue_worker = WorkerBuilder::new(SYSTEM_CLEANUP)
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
         .catch_panic()
         .retry(
-            RetryPolicy::retries(WORKER_APALIS_CLEANUP_RETRIES)
+            RetryPolicy::retries(WORKER_SYSTEM_CLEANUP_RETRIES)
                 .with_backoff(create_backoff(5000, 20000, 0.99)?.make_backoff()),
         )
         .concurrency(1)
@@ -242,7 +242,7 @@ where
             // Runs at the start of every hour
             apalis_cron::Schedule::from_str("0 0 * * * *")?,
         ))
-        .build_fn(apalis_cleanup_handler);
+        .build_fn(system_cleanup_handler);
 
     let relayer_health_check_worker = WorkerBuilder::new(RELAYER_HEALTH_CHECK)
         .layer(ErrorHandlingLayer::new())
@@ -269,7 +269,7 @@ where
         .register(notification_queue_worker)
         .register(token_swap_request_queue_worker)
         .register(transaction_cleanup_queue_worker)
-        .register(apalis_cleanup_queue_worker)
+        .register(system_cleanup_queue_worker)
         .register(relayer_health_check_worker)
         .on_event(monitor_handle_event)
         .shutdown_timeout(Duration::from_millis(5000));
