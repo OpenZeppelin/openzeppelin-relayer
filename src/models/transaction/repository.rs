@@ -4,10 +4,12 @@ use crate::{
     constants::{
         DEFAULT_GAS_LIMIT, DEFAULT_TRANSACTION_SPEED, FINAL_TRANSACTION_STATUSES,
         STELLAR_DEFAULT_MAX_FEE, STELLAR_DEFAULT_TRANSACTION_FEE,
+        STELLAR_SPONSORED_TRANSACTION_VALIDITY_MINUTES,
     },
     domain::{
         evm::PriceParams,
         stellar::validation::{validate_operations, validate_soroban_memo_restriction},
+        transaction::stellar::utils::extract_time_bounds,
         xdr_utils::{is_signed, parse_transaction_xdr},
         SignTransactionResponseEvm,
     },
@@ -805,6 +807,35 @@ impl StellarTransactionData {
     }
 }
 
+/// Extract valid_until: request > XDR time_bounds > default (for operations) > None (for XDR)
+fn extract_stellar_valid_until(
+    stellar_request: &StellarTransactionRequest,
+    now: chrono::DateTime<Utc>,
+) -> Option<String> {
+    if let Some(vu) = &stellar_request.valid_until {
+        return Some(vu.clone());
+    }
+
+    if let Some(xdr) = &stellar_request.transaction_xdr {
+        if let Ok(envelope) = parse_transaction_xdr(xdr, false) {
+            if let Some(tb) = extract_time_bounds(&envelope) {
+                if tb.max_time.0 == 0 {
+                    return None; // unbounded
+                }
+                if let Ok(timestamp) = i64::try_from(tb.max_time.0) {
+                    if let Some(dt) = chrono::DateTime::from_timestamp(timestamp, 0) {
+                        return Some(dt.to_rfc3339());
+                    }
+                }
+            }
+        }
+        return None;
+    }
+
+    let default = now + Duration::minutes(STELLAR_SPONSORED_TRANSACTION_VALIDITY_MINUTES);
+    Some(default.to_rfc3339())
+}
+
 impl
     TryFrom<(
         &NetworkTransactionRequest,
@@ -884,11 +915,12 @@ impl
                 // Store the source account before consuming the request
                 let source_account = stellar_request.source_account.clone();
 
-                // Create the TransactionData before consuming the request
+                let valid_until = extract_stellar_valid_until(stellar_request, Utc::now());
+
                 let stellar_data = StellarTransactionData {
                     source_account: source_account.unwrap_or_else(|| relayer_model.address.clone()),
                     memo: stellar_request.memo.clone(),
-                    valid_until: stellar_request.valid_until.clone(),
+                    valid_until: valid_until.clone(),
                     network_passphrase: StellarNetwork::try_from(network_model.clone())?.passphrase,
                     signatures: Vec::new(),
                     hash: None,
@@ -909,7 +941,7 @@ impl
                     created_at: now,
                     sent_at: None,
                     confirmed_at: None,
-                    valid_until: None,
+                    valid_until,
                     delete_at: None,
                     network_type: NetworkType::Stellar,
                     network_data: NetworkTransactionData::Stellar(stellar_data),
@@ -1884,7 +1916,11 @@ mod tests {
         assert_eq!(transaction.relayer_id, relayer_model.id);
         assert_eq!(transaction.status, TransactionStatus::Pending);
         assert_eq!(transaction.network_type, NetworkType::Stellar);
-        assert_eq!(transaction.valid_until, None);
+        // valid_until should be set from the request
+        assert_eq!(
+            transaction.valid_until,
+            Some("2024-12-31T23:59:59Z".to_string())
+        );
 
         if let NetworkTransactionData::Stellar(stellar_data) = transaction.network_data {
             assert_eq!(
@@ -3148,5 +3184,75 @@ mod tests {
         assert_eq!(transaction.noop_count, original_transaction.noop_count);
         assert_eq!(transaction.is_canceled, original_transaction.is_canceled);
         assert_eq!(transaction.delete_at, original_transaction.delete_at);
+    }
+
+    mod extract_stellar_valid_until_tests {
+        use super::*;
+        use crate::models::transaction::request::stellar::StellarTransactionRequest;
+        use chrono::{Duration, Utc};
+
+        fn make_stellar_request(
+            valid_until: Option<String>,
+            transaction_xdr: Option<String>,
+        ) -> StellarTransactionRequest {
+            StellarTransactionRequest {
+                source_account: Some(
+                    "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+                ),
+                network: "testnet".to_string(),
+                operations: Some(vec![OperationSpec::Payment {
+                    destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+                        .to_string(),
+                    amount: 1000000,
+                    asset: AssetSpec::Native,
+                }]),
+                memo: None,
+                valid_until,
+                transaction_xdr,
+                fee_bump: None,
+                max_fee: None,
+            }
+        }
+
+        #[test]
+        fn test_with_explicit_valid_until_from_request() {
+            let request = make_stellar_request(Some("2025-12-31T23:59:59Z".to_string()), None);
+            let now = Utc::now();
+
+            let result = extract_stellar_valid_until(&request, now);
+
+            assert_eq!(result, Some("2025-12-31T23:59:59Z".to_string()));
+        }
+
+        #[test]
+        fn test_operations_without_valid_until_uses_default() {
+            let request = make_stellar_request(None, None);
+            let now = Utc::now();
+
+            let result = extract_stellar_valid_until(&request, now);
+
+            // Should be now + STELLAR_SPONSORED_TRANSACTION_VALIDITY_MINUTES (2 min)
+            assert!(result.is_some());
+            let valid_until = result.unwrap();
+            let parsed = chrono::DateTime::parse_from_rfc3339(&valid_until).unwrap();
+            let expected_min = now + Duration::minutes(1);
+            let expected_max = now + Duration::minutes(3);
+            assert!(parsed.with_timezone(&Utc) > expected_min);
+            assert!(parsed.with_timezone(&Utc) < expected_max);
+        }
+
+        #[test]
+        fn test_xdr_without_time_bounds_returns_none() {
+            // Create a minimal unsigned XDR without time bounds
+            // This is a base64 encoded transaction envelope without time bounds
+            // For simplicity, we'll test with invalid XDR which should also return None
+            let request = make_stellar_request(None, Some("invalid_xdr".to_string()));
+            let now = Utc::now();
+
+            let result = extract_stellar_valid_until(&request, now);
+
+            // XDR parse failed or no time_bounds - should return None (unbounded)
+            assert!(result.is_none());
+        }
     }
 }

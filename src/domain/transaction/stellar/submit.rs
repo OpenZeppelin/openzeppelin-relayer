@@ -7,7 +7,6 @@ use tracing::{info, warn};
 
 use super::{is_final_state, utils::is_bad_sequence_error, StellarRelayerTransaction};
 use crate::{
-    constants::STELLAR_BAD_SEQUENCE_RETRY_DELAY_SECONDS,
     jobs::JobProducerTrait,
     models::{
         NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
@@ -15,7 +14,6 @@ use crate::{
     },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
     services::{provider::StellarProviderTrait, signer::Signer},
-    utils::calculate_scheduled_timestamp,
 };
 
 impl<R, T, J, S, P, C, D> StellarRelayerTransaction<R, T, J, S, P, C, D>
@@ -44,6 +42,18 @@ where
                 "transaction already in final state, skipping submission"
             );
             return Ok(tx);
+        }
+
+        // Check if transaction has expired before attempting submission
+        if self.is_transaction_expired(&tx)? {
+            info!(
+                tx_id = %tx.id,
+                valid_until = ?tx.valid_until,
+                "transaction has expired, marking as Expired"
+            );
+            return self
+                .mark_as_expired(tx, "Transaction time_bounds expired".to_string())
+                .await;
         }
 
         // Call core submission logic with error handling
@@ -125,28 +135,15 @@ where
                 }
             }
 
-            // Reset the transaction and re-enqueue it
-            info!("bad sequence error detected, resetting and re-enqueueing");
-
             // Reset the transaction to pending state
+            // Status check will handle resubmission when it detects a pending transaction without hash
+            info!("bad sequence error detected, resetting transaction to pending state");
             match self.reset_transaction_for_retry(tx.clone()).await {
                 Ok(reset_tx) => {
-                    // Re-enqueue the transaction to go through the pipeline again
-                    if let Err(e) = self
-                        .send_transaction_request_job(
-                            &reset_tx,
-                            Some(calculate_scheduled_timestamp(
-                                STELLAR_BAD_SEQUENCE_RETRY_DELAY_SECONDS,
-                            )),
-                        )
-                        .await
-                    {
-                        warn!(error = %e, "failed to re-enqueue transaction after reset");
-                    } else {
-                        info!("transaction reset and re-enqueued for retry through pipeline");
-                    }
-
-                    // Return success since we're handling the retry
+                    info!("transaction reset to pending, status check will handle resubmission");
+                    // Return success since we've reset the transaction
+                    // Status check job (scheduled with delay) will detect pending without hash
+                    // and schedule a recovery job to go through the pipeline again
                     return Ok(reset_tx);
                 }
                 Err(reset_error) => {
@@ -241,8 +238,11 @@ mod tests {
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
 
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Must be Sent for idempotent submit
             if let NetworkTransactionData::Stellar(ref mut d) = tx.network_data {
                 d.signatures.push(dummy_signature());
+                d.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+                // Valid XDR
             }
 
             let res = handler.submit_transaction_impl(tx).await.unwrap();
@@ -293,9 +293,11 @@ mod tests {
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Must be Sent for idempotent submit
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
                 data.sequence_number = Some(42); // Set sequence number
+                data.signed_envelope_xdr = Some("test-xdr".to_string()); // Required for submission
             }
 
             let res = handler.submit_transaction_impl(tx).await;
@@ -357,9 +359,11 @@ mod tests {
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Must be Sent for idempotent submit
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
                 data.sequence_number = Some(42); // Set sequence number
+                data.signed_envelope_xdr = Some("test-xdr".to_string()); // Required for submission
             }
 
             let res = handler.submit_transaction_impl(tx).await;
@@ -375,6 +379,7 @@ mod tests {
 
             // Create a transaction with signed_envelope_xdr set
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Must be Sent for idempotent submit
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
                 // Build and store the signed envelope XDR
@@ -449,8 +454,11 @@ mod tests {
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
 
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Must be Sent for idempotent submit
             if let NetworkTransactionData::Stellar(ref mut d) = tx.network_data {
                 d.signatures.push(dummy_signature());
+                d.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+                // Valid XDR
             }
 
             let res = handler.resubmit_transaction_impl(tx).await.unwrap();
@@ -524,9 +532,11 @@ mod tests {
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Must be Sent for idempotent submit
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
                 data.sequence_number = Some(42); // Set sequence number
+                data.signed_envelope_xdr = Some("test-xdr".to_string()); // Required for submission
             }
 
             let res = handler.submit_transaction_impl(tx).await;
@@ -600,18 +610,17 @@ mod tests {
                     Ok::<_, RepositoryError>(tx)
                 });
 
-            // Mock produce_transaction_request_job for re-enqueue
-            mocks
-                .job_producer
-                .expect_produce_transaction_request_job()
-                .times(1)
-                .returning(|_, _| Box::pin(async { Ok(()) }));
+            // Note: Status check will handle resubmission when it detects a pending transaction without hash
+            // We don't schedule the job here - it will be scheduled by status check when the transaction is old enough
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Must be Sent for idempotent submit
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
                 data.sequence_number = Some(42);
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+                // Valid XDR
             }
 
             let result = handler.submit_transaction_impl(tx).await;
