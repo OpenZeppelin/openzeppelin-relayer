@@ -473,14 +473,16 @@ impl Repository<TransactionRepoModel, String> for TransactionRepositoryStorage {
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
+    use color_eyre::Result;
+    use redis::Client;
+
     use super::*;
     use crate::models::{
         EvmTransactionData, NetworkTransactionData, TransactionStatus, TransactionUpdateRequest,
     };
     use crate::repositories::PaginationQuery;
     use crate::utils::mocks::mockutils::create_mock_transaction;
-    use chrono::Utc;
-    use color_eyre::Result;
 
     fn create_test_transaction(id: &str, relayer_id: &str) -> TransactionRepoModel {
         let mut transaction = create_mock_transaction();
@@ -546,6 +548,31 @@ mod tests {
 
         // In-memory storage should return None for connection_info
         assert!(storage.connection_info().is_none());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_connection_info_returns_some_for_redis() -> Result<()> {
+        let redis_url = std::env::var("REDIS_TEST_URL")
+            .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+        let client = Client::open(redis_url)?;
+        let connection_manager = ConnectionManager::new(client).await?;
+        let connection_manager = Arc::new(connection_manager);
+        let key_prefix = "test_prefix".to_string();
+
+        let storage = TransactionRepositoryStorage::new_redis(
+            connection_manager.clone(),
+            key_prefix.clone(),
+        )?;
+
+        let (returned_connection, returned_prefix) = storage
+            .connection_info()
+            .expect("Expected Redis connection info");
+
+        assert!(Arc::ptr_eq(&connection_manager, &returned_connection));
+        assert_eq!(returned_prefix, key_prefix);
+
+        Ok(())
     }
 
     #[tokio::test]
