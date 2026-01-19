@@ -14,18 +14,22 @@ use tracing::{debug, error, info, instrument, warn};
 use crate::{
     constants::{FINAL_TRANSACTION_STATUSES, WORKER_TRANSACTION_CLEANUP_RETRIES},
     jobs::handle_result,
-    models::{DefaultAppState, PaginationQuery, RelayerRepoModel, TransactionRepoModel},
-    repositories::{PaginatedResult, Repository, TransactionRepository},
+    models::{
+        DefaultAppState, NetworkTransactionData, PaginationQuery, RelayerRepoModel,
+        TransactionRepoModel,
+    },
+    repositories::{PaginatedResult, Repository, TransactionDeleteRequest, TransactionRepository},
 };
 
 /// Maximum number of relayers to process concurrently
 const MAX_CONCURRENT_RELAYERS: usize = 10;
 
-/// Maximum number of transactions to process concurrently per relayer
-const MAX_CONCURRENT_TRANSACTIONS_PER_RELAYER: usize = 50;
-
 /// Number of transactions to fetch per page during cleanup
 const CLEANUP_PAGE_SIZE: u32 = 100;
+
+/// Maximum number of transactions to delete in a single batch operation.
+/// This prevents overwhelming Redis with very large pipelines.
+const DELETE_BATCH_SIZE: usize = 100;
 
 /// Handles periodic transaction cleanup jobs from the queue.
 ///
@@ -276,10 +280,11 @@ async fn fetch_final_transactions_paginated(
         })
 }
 
-/// Processes a list of transactions for cleanup in parallel, deleting expired ones.
+/// Processes a list of transactions for cleanup using batch delete, deleting expired ones.
 ///
 /// This function validates that transactions are in final states before deletion,
 /// ensuring data integrity by preventing accidental deletion of active transactions.
+/// Uses batch deletion for improved performance with large numbers of transactions.
 ///
 /// # Arguments
 /// * `transactions` - List of transactions to process
@@ -291,12 +296,10 @@ async fn fetch_final_transactions_paginated(
 /// * `usize` - Number of transactions successfully cleaned up
 async fn process_transactions_for_cleanup(
     transactions: Vec<TransactionRepoModel>,
-    transaction_repo: &Arc<impl Repository<TransactionRepoModel, String>>,
+    transaction_repo: &Arc<impl TransactionRepository>,
     relayer_id: &str,
     now: DateTime<Utc>,
 ) -> usize {
-    use futures::stream::{self, StreamExt};
-
     if transactions.is_empty() {
         return 0;
     }
@@ -304,16 +307,34 @@ async fn process_transactions_for_cleanup(
     debug!(
         transaction_count = transactions.len(),
         relayer_id = %relayer_id,
-        "processing transactions in parallel"
+        "processing transactions for cleanup"
     );
 
-    // Filter expired transactions first (this is fast and synchronous)
-    let expired_transactions: Vec<TransactionRepoModel> = transactions
+    // Filter expired transactions and validate they are in final states,
+    // then convert to delete requests with pre-extracted data
+    let delete_requests: Vec<TransactionDeleteRequest> = transactions
         .into_iter()
-        .filter(|tx| should_delete_transaction(tx, now))
+        .filter(|tx| {
+            // Must be in a final state
+            if !FINAL_TRANSACTION_STATUSES.contains(&tx.status) {
+                warn!(
+                    tx_id = %tx.id,
+                    status = ?tx.status,
+                    "skipping transaction not in final state"
+                );
+                return false;
+            }
+            // Must be expired
+            should_delete_transaction(tx, now)
+        })
+        .map(|tx| {
+            // Extract nonce from network data for index cleanup
+            let nonce = extract_nonce_from_network_data(&tx.network_data);
+            TransactionDeleteRequest::new(tx.id, tx.relayer_id, nonce)
+        })
         .collect();
 
-    if expired_transactions.is_empty() {
+    if delete_requests.is_empty() {
         debug!(
             relayer_id = %relayer_id,
             "no expired transactions found"
@@ -321,46 +342,75 @@ async fn process_transactions_for_cleanup(
         return 0;
     }
 
+    let total_expired = delete_requests.len();
     debug!(
-        expired_count = expired_transactions.len(),
+        expired_count = total_expired,
         relayer_id = %relayer_id,
         "found expired transactions to delete"
     );
 
-    // Process deletions in parallel with limited concurrency
-    let deletion_results: Vec<bool> = stream::iter(expired_transactions)
-        .map(|transaction| {
-            let repo_clone = Arc::clone(transaction_repo);
-            let relayer_id = relayer_id.to_string();
-            async move {
-                match delete_expired_transaction(&transaction, &repo_clone, &relayer_id).await {
-                    Ok(()) => true,
-                    Err(e) => {
+    // Process deletions in batches to avoid overwhelming Redis with large pipelines
+    let mut total_deleted = 0;
+    let mut total_failed = 0;
+
+    for (batch_idx, batch) in delete_requests.chunks(DELETE_BATCH_SIZE).enumerate() {
+        let batch_requests: Vec<TransactionDeleteRequest> = batch.to_vec();
+        let batch_size = batch_requests.len();
+
+        debug!(
+            batch = batch_idx + 1,
+            batch_size = batch_size,
+            relayer_id = %relayer_id,
+            "processing delete batch"
+        );
+
+        match transaction_repo.delete_by_requests(batch_requests).await {
+            Ok(result) => {
+                if !result.failed.is_empty() {
+                    for (id, error) in &result.failed {
                         error!(
-                            tx_id = %transaction.id,
-                            error = %e,
-                            "failed to delete expired transaction"
+                            tx_id = %id,
+                            error = %error,
+                            relayer_id = %relayer_id,
+                            "failed to delete expired transaction in batch"
                         );
-                        false
                     }
                 }
-            }
-        })
-        .buffer_unordered(MAX_CONCURRENT_TRANSACTIONS_PER_RELAYER)
-        .collect()
-        .await;
 
-    // Count successful deletions
-    let cleaned_count = deletion_results.iter().filter(|&&success| success).count();
+                total_deleted += result.deleted_count;
+                total_failed += result.failed.len();
+            }
+            Err(e) => {
+                error!(
+                    error = %e,
+                    relayer_id = %relayer_id,
+                    batch = batch_idx + 1,
+                    batch_size = batch_size,
+                    "batch delete failed completely"
+                );
+                total_failed += batch_size;
+            }
+        }
+    }
 
     debug!(
-        cleaned_count,
-        total_attempted = deletion_results.len(),
+        total_deleted,
+        total_failed,
+        total_expired,
         relayer_id = %relayer_id,
-        "successfully deleted expired transactions"
+        "batch delete completed"
     );
 
-    cleaned_count
+    total_deleted
+}
+
+/// Extracts the nonce from network transaction data if available.
+/// This is used for cleaning up nonce indexes during deletion.
+fn extract_nonce_from_network_data(network_data: &NetworkTransactionData) -> Option<u64> {
+    match network_data {
+        NetworkTransactionData::Evm(evm_data) => evm_data.nonce,
+        _ => None,
+    }
 }
 
 /// Determines if a transaction should be deleted based on its delete_at timestamp.
@@ -396,51 +446,6 @@ fn should_delete_transaction(transaction: &TransactionRepoModel, now: DateTime<U
             }
             false
         })
-}
-
-/// Deletes an expired transaction from the repository.
-///
-/// # Arguments
-/// * `transaction` - The transaction to delete
-/// * `transaction_repo` - Reference to the transaction repository
-/// * `relayer_id` - ID of the relayer (for logging)
-///
-/// # Returns
-/// * `Result<()>` - Success or failure of the deletion
-async fn delete_expired_transaction(
-    transaction: &TransactionRepoModel,
-    transaction_repo: &Arc<impl Repository<TransactionRepoModel, String>>,
-    relayer_id: &str,
-) -> Result<()> {
-    // Validate that the transaction is in a final state before deletion
-    if !FINAL_TRANSACTION_STATUSES.contains(&transaction.status) {
-        return Err(eyre::eyre!(
-            "Transaction {} is not in a final state (current: {:?})",
-            transaction.id,
-            transaction.status
-        ));
-    }
-
-    debug!(
-        tx_id = %transaction.id,
-        status = ?transaction.status,
-        relayer_id = %relayer_id,
-        "deleting expired transaction"
-    );
-
-    transaction_repo
-        .delete_by_id(transaction.id.clone())
-        .await
-        .map_err(|e| eyre::eyre!("Failed to delete transaction {}: {}", transaction.id, e))?;
-
-    info!(
-        tx_id = %transaction.id,
-        status = ?transaction.status,
-        relayer_id = %relayer_id,
-        "successfully deleted expired transaction"
-    );
-
-    Ok(())
 }
 
 /// Reports the aggregated results of the cleanup operation.
@@ -636,110 +641,102 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_delete_expired_transaction() {
+    async fn test_batch_delete_expired_transactions() {
+        let transaction_repo = Arc::new(InMemoryTransactionRepository::new());
+        let relayer_id = "test-relayer";
+        let now = Utc::now();
+
+        // Create multiple expired transactions
+        let expired_delete_at = (now - Duration::hours(1)).to_rfc3339();
+
+        for i in 0..5 {
+            let tx = create_test_transaction(
+                &format!("expired-tx-{}", i),
+                relayer_id,
+                TransactionStatus::Confirmed,
+                Some(expired_delete_at.clone()),
+            );
+            transaction_repo.create(tx).await.unwrap();
+        }
+
+        // Verify they exist
+        assert_eq!(transaction_repo.count().await.unwrap(), 5);
+
+        // Delete them using batch delete
+        let ids: Vec<String> = (0..5).map(|i| format!("expired-tx-{}", i)).collect();
+        let result = transaction_repo.delete_by_ids(ids).await.unwrap();
+
+        assert_eq!(result.deleted_count, 5);
+        assert!(result.failed.is_empty());
+
+        // Verify they were deleted
+        assert_eq!(transaction_repo.count().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_batch_delete_with_nonexistent_ids() {
         let transaction_repo = Arc::new(InMemoryTransactionRepository::new());
         let relayer_id = "test-relayer";
 
-        let transaction = create_test_transaction(
-            "test-tx",
+        // Create one transaction
+        let tx = create_test_transaction(
+            "existing-tx",
             relayer_id,
-            TransactionStatus::Confirmed, // Final status
+            TransactionStatus::Confirmed,
             Some(Utc::now().to_rfc3339()),
         );
+        transaction_repo.create(tx).await.unwrap();
 
-        // Store transaction
-        transaction_repo.create(transaction.clone()).await.unwrap();
+        // Try to delete existing and non-existing transactions
+        let ids = vec![
+            "existing-tx".to_string(),
+            "nonexistent-1".to_string(),
+            "nonexistent-2".to_string(),
+        ];
+        let result = transaction_repo.delete_by_ids(ids).await.unwrap();
 
-        // Verify it exists
+        // Should delete the existing one and report failures for the others
+        assert_eq!(result.deleted_count, 1);
+        assert_eq!(result.failed.len(), 2);
+
+        // Verify the existing one was deleted
         assert!(transaction_repo
-            .get_by_id("test-tx".to_string())
-            .await
-            .is_ok());
-
-        // Delete it
-        let result = delete_expired_transaction(&transaction, &transaction_repo, relayer_id).await;
-        assert!(result.is_ok());
-
-        // Verify it was deleted
-        assert!(transaction_repo
-            .get_by_id("test-tx".to_string())
+            .get_by_id("existing-tx".to_string())
             .await
             .is_err());
     }
 
     #[tokio::test]
-    async fn test_delete_expired_transaction_validates_final_status() {
+    async fn test_process_transactions_skips_non_final_status() {
         let transaction_repo = Arc::new(InMemoryTransactionRepository::new());
         let relayer_id = "test-relayer";
+        let now = Utc::now();
 
-        let transaction = create_test_transaction(
-            "test-tx",
+        // Create a transaction with non-final status but expired delete_at
+        let expired_delete_at = (now - Duration::hours(1)).to_rfc3339();
+        let pending_tx = create_test_transaction(
+            "pending-tx",
             relayer_id,
             TransactionStatus::Pending, // Non-final status
-            Some(Utc::now().to_rfc3339()),
+            Some(expired_delete_at),
         );
+        transaction_repo.create(pending_tx.clone()).await.unwrap();
 
-        // Store transaction
-        transaction_repo.create(transaction.clone()).await.unwrap();
+        let transactions = vec![pending_tx];
 
-        // Verify it exists
+        // Process should skip non-final status transactions
+        let cleaned_count =
+            process_transactions_for_cleanup(transactions, &transaction_repo, relayer_id, now)
+                .await;
+
+        // Should not have cleaned any transactions
+        assert_eq!(cleaned_count, 0);
+
+        // Transaction should still exist
         assert!(transaction_repo
-            .get_by_id("test-tx".to_string())
+            .get_by_id("pending-tx".to_string())
             .await
             .is_ok());
-
-        // Try to delete it - should fail due to validation
-        let result = delete_expired_transaction(&transaction, &transaction_repo, relayer_id).await;
-        assert!(result.is_err());
-
-        let error_message = result.unwrap_err().to_string();
-        assert!(error_message.contains("is not in a final state"));
-        assert!(error_message.contains("Pending"));
-
-        // Verify it still exists (wasn't deleted)
-        assert!(transaction_repo
-            .get_by_id("test-tx".to_string())
-            .await
-            .is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_delete_expired_transaction_validates_all_final_statuses() {
-        let transaction_repo = Arc::new(InMemoryTransactionRepository::new());
-        let relayer_id = "test-relayer";
-
-        // Test each final status to ensure they all pass validation
-        let final_statuses = [
-            TransactionStatus::Confirmed,
-            TransactionStatus::Failed,
-            TransactionStatus::Canceled,
-            TransactionStatus::Expired,
-        ];
-
-        for (i, status) in final_statuses.iter().enumerate() {
-            let tx_id = format!("test-tx-{}", i);
-            let transaction = create_test_transaction(
-                &tx_id,
-                relayer_id,
-                status.clone(),
-                Some(Utc::now().to_rfc3339()),
-            );
-
-            // Store transaction
-            transaction_repo.create(transaction.clone()).await.unwrap();
-
-            // Delete it - should succeed for all final statuses
-            let result =
-                delete_expired_transaction(&transaction, &transaction_repo, relayer_id).await;
-            assert!(
-                result.is_ok(),
-                "Failed to delete transaction with status: {:?}",
-                status
-            );
-
-            // Verify it was deleted
-            assert!(transaction_repo.get_by_id(tx_id).await.is_err());
-        }
     }
 
     #[tokio::test]
@@ -995,26 +992,6 @@ mod tests {
 
         // Should have cleaned 2 out of 3 transactions (one failed due to NotFound)
         assert_eq!(cleaned_count, 2);
-    }
-
-    #[tokio::test]
-    async fn test_delete_expired_transaction_repository_error() {
-        let transaction_repo = Arc::new(InMemoryTransactionRepository::new());
-        let relayer_id = "test-relayer";
-
-        let transaction = create_test_transaction(
-            "nonexistent-tx",
-            relayer_id,
-            TransactionStatus::Confirmed,
-            Some(Utc::now().to_rfc3339()),
-        );
-
-        // Don't store the transaction, so delete will fail with NotFound
-        let result = delete_expired_transaction(&transaction, &transaction_repo, relayer_id).await;
-
-        assert!(result.is_err());
-        let error_message = result.unwrap_err().to_string();
-        assert!(error_message.contains("Failed to delete transaction"));
     }
 
     #[tokio::test]
