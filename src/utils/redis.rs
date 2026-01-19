@@ -243,18 +243,21 @@ impl Drop for LockGuard {
 
 /// Generates a unique value for lock ownership verification.
 ///
-/// Uses a combination of process ID and timestamp to create a unique
-/// identifier for this lock acquisition. This is sufficient for lock
-/// ownership verification as the same process will always generate
-/// the same prefix within a single run.
+/// Uses a combination of process ID, timestamp, and a monotonic counter
+/// to create a unique identifier for this lock acquisition. This avoids
+/// collisions in the same process even when calls share a timestamp.
 fn generate_lock_value() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static LOCK_VALUE_COUNTER: AtomicU64 = AtomicU64::new(0);
     let process_id = std::process::id();
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
+    let counter = LOCK_VALUE_COUNTER.fetch_add(1, Ordering::Relaxed);
 
-    format!("{process_id}:{timestamp}")
+    format!("{process_id}:{timestamp}:{counter}")
 }
 
 #[cfg(test)]
@@ -264,10 +267,9 @@ mod tests {
     #[test]
     fn test_generate_lock_value_is_unique() {
         let value1 = generate_lock_value();
-        std::thread::sleep(std::time::Duration::from_nanos(1));
         let value2 = generate_lock_value();
 
-        // Values should be different due to timestamp
+        // Values should be different due to monotonic counter
         assert_ne!(value1, value2);
     }
 
@@ -280,7 +282,7 @@ mod tests {
 
         // Should have two parts: process_id and timestamp
         let parts: Vec<&str> = value.split(':').collect();
-        assert_eq!(parts.len(), 2);
+        assert_eq!(parts.len(), 3);
 
         // First part should be parseable as u32 (process ID)
         assert!(parts[0].parse::<u32>().is_ok());
