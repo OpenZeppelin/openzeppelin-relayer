@@ -22,6 +22,9 @@ pub use token_swap_request_handler::*;
 mod transaction_cleanup_handler;
 pub use transaction_cleanup_handler::*;
 
+mod apalis_cleanup_handler;
+pub use apalis_cleanup_handler::*;
+
 // Handles job results for simple handlers (no transaction state management).
 //
 // Used by: notification_handler, solana_swap_request_handler, transaction_cleanup_handler
