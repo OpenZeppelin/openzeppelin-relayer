@@ -26,6 +26,9 @@ pub const WORKER_TRANSACTION_CLEANUP_RETRIES: usize = 5;
 // Number of retries for the relayer health check job
 pub const WORKER_RELAYER_HEALTH_CHECK_RETRIES: usize = 2;
 
+// Number of retries for the system queue cleanup job
+pub const WORKER_SYSTEM_CLEANUP_RETRIES: usize = 3;
+
 // Default concurrency for the workers (fallback)
 pub const DEFAULT_CONCURRENCY: usize = 100;
 
