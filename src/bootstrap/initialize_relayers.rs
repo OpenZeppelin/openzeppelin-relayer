@@ -564,4 +564,290 @@ mod tests {
             "Second relayer should initialize successfully"
         );
     }
+
+    // Tests for count_results function
+    #[test]
+    fn test_count_results_empty() {
+        let results: Vec<(String, RelayerInitResult)> = vec![];
+        let (initialized, skipped_recent, skipped_lock, failed) = count_results(&results);
+
+        assert_eq!(initialized, 0);
+        assert_eq!(skipped_recent, 0);
+        assert_eq!(skipped_lock, 0);
+        assert_eq!(failed, 0);
+    }
+
+    #[test]
+    fn test_count_results_all_initialized() {
+        let results = vec![
+            ("relayer-1".to_string(), RelayerInitResult::Initialized),
+            ("relayer-2".to_string(), RelayerInitResult::Initialized),
+            ("relayer-3".to_string(), RelayerInitResult::Initialized),
+        ];
+        let (initialized, skipped_recent, skipped_lock, failed) = count_results(&results);
+
+        assert_eq!(initialized, 3);
+        assert_eq!(skipped_recent, 0);
+        assert_eq!(skipped_lock, 0);
+        assert_eq!(failed, 0);
+    }
+
+    #[test]
+    fn test_count_results_all_skipped_recent_sync() {
+        let results = vec![
+            (
+                "relayer-1".to_string(),
+                RelayerInitResult::SkippedRecentSync,
+            ),
+            (
+                "relayer-2".to_string(),
+                RelayerInitResult::SkippedRecentSync,
+            ),
+        ];
+        let (initialized, skipped_recent, skipped_lock, failed) = count_results(&results);
+
+        assert_eq!(initialized, 0);
+        assert_eq!(skipped_recent, 2);
+        assert_eq!(skipped_lock, 0);
+        assert_eq!(failed, 0);
+    }
+
+    #[test]
+    fn test_count_results_all_skipped_lock_held() {
+        let results = vec![
+            ("relayer-1".to_string(), RelayerInitResult::SkippedLockHeld),
+            ("relayer-2".to_string(), RelayerInitResult::SkippedLockHeld),
+        ];
+        let (initialized, skipped_recent, skipped_lock, failed) = count_results(&results);
+
+        assert_eq!(initialized, 0);
+        assert_eq!(skipped_recent, 0);
+        assert_eq!(skipped_lock, 2);
+        assert_eq!(failed, 0);
+    }
+
+    #[test]
+    fn test_count_results_all_failed() {
+        let results = vec![
+            (
+                "relayer-1".to_string(),
+                RelayerInitResult::Failed("error 1".to_string()),
+            ),
+            (
+                "relayer-2".to_string(),
+                RelayerInitResult::Failed("error 2".to_string()),
+            ),
+        ];
+        let (initialized, skipped_recent, skipped_lock, failed) = count_results(&results);
+
+        assert_eq!(initialized, 0);
+        assert_eq!(skipped_recent, 0);
+        assert_eq!(skipped_lock, 0);
+        assert_eq!(failed, 2);
+    }
+
+    #[test]
+    fn test_count_results_mixed() {
+        let results = vec![
+            ("relayer-1".to_string(), RelayerInitResult::Initialized),
+            (
+                "relayer-2".to_string(),
+                RelayerInitResult::SkippedRecentSync,
+            ),
+            ("relayer-3".to_string(), RelayerInitResult::SkippedLockHeld),
+            (
+                "relayer-4".to_string(),
+                RelayerInitResult::Failed("connection error".to_string()),
+            ),
+            ("relayer-5".to_string(), RelayerInitResult::Initialized),
+            (
+                "relayer-6".to_string(),
+                RelayerInitResult::SkippedRecentSync,
+            ),
+        ];
+        let (initialized, skipped_recent, skipped_lock, failed) = count_results(&results);
+
+        assert_eq!(initialized, 2);
+        assert_eq!(skipped_recent, 2);
+        assert_eq!(skipped_lock, 1);
+        assert_eq!(failed, 1);
+    }
+
+    // Tests for RelayerInitResult enum
+    #[test]
+    fn test_relayer_init_result_debug() {
+        // Test Debug trait implementation for all variants
+        let initialized = RelayerInitResult::Initialized;
+        let skipped_recent = RelayerInitResult::SkippedRecentSync;
+        let skipped_lock = RelayerInitResult::SkippedLockHeld;
+        let failed = RelayerInitResult::Failed("test error".to_string());
+
+        assert_eq!(format!("{:?}", initialized), "Initialized");
+        assert_eq!(format!("{:?}", skipped_recent), "SkippedRecentSync");
+        assert_eq!(format!("{:?}", skipped_lock), "SkippedLockHeld");
+        assert!(format!("{:?}", failed).contains("Failed"));
+        assert!(format!("{:?}", failed).contains("test error"));
+    }
+
+    #[test]
+    fn test_relayer_init_result_failed_preserves_message() {
+        let error_msg = "RPC connection timeout after 30 seconds".to_string();
+        let result = RelayerInitResult::Failed(error_msg.clone());
+
+        if let RelayerInitResult::Failed(msg) = result {
+            assert_eq!(msg, error_msg);
+        } else {
+            panic!("Expected Failed variant");
+        }
+    }
+
+    // Tests for constants
+    #[test]
+    fn test_lock_ttl_is_reasonable() {
+        // Lock TTL should be at least 60 seconds to handle slow initializations
+        assert!(
+            RELAYER_INIT_LOCK_TTL_SECS >= 60,
+            "Lock TTL should be at least 60 seconds"
+        );
+        // But not too long (more than 10 minutes would be excessive)
+        assert!(
+            RELAYER_INIT_LOCK_TTL_SECS <= 600,
+            "Lock TTL should not exceed 10 minutes"
+        );
+    }
+
+    #[test]
+    fn test_staleness_threshold_is_reasonable() {
+        // Staleness threshold should be at least 60 seconds
+        assert!(
+            RELAYER_SYNC_STALENESS_THRESHOLD_SECS >= 60,
+            "Staleness threshold should be at least 60 seconds"
+        );
+        // But not too long (more than 1 hour would be excessive)
+        assert!(
+            RELAYER_SYNC_STALENESS_THRESHOLD_SECS <= 3600,
+            "Staleness threshold should not exceed 1 hour"
+        );
+    }
+
+    #[test]
+    fn test_lock_prefix_is_valid() {
+        assert!(!RELAYER_INIT_LOCK_PREFIX.is_empty());
+        assert!(!RELAYER_INIT_LOCK_PREFIX.contains(':'));
+        assert!(!RELAYER_INIT_LOCK_PREFIX.contains(' '));
+    }
+
+    // Tests for get_relayer_ids_to_initialize edge cases
+    #[test]
+    fn test_get_relayer_ids_preserves_order() {
+        let relayers = vec![
+            create_mock_relayer("z-relayer".to_string(), false),
+            create_mock_relayer("a-relayer".to_string(), false),
+            create_mock_relayer("m-relayer".to_string(), false),
+        ];
+
+        let ids = get_relayer_ids_to_initialize(&relayers);
+
+        // Should preserve insertion order, not sort
+        assert_eq!(ids[0], "z-relayer");
+        assert_eq!(ids[1], "a-relayer");
+        assert_eq!(ids[2], "m-relayer");
+    }
+
+    #[test]
+    fn test_get_relayer_ids_with_special_characters() {
+        let relayers = vec![
+            create_mock_relayer("relayer-with-dashes".to_string(), false),
+            create_mock_relayer("relayer_with_underscores".to_string(), false),
+            create_mock_relayer("relayer.with.dots".to_string(), false),
+        ];
+
+        let ids = get_relayer_ids_to_initialize(&relayers);
+
+        assert_eq!(ids.len(), 3);
+        assert!(ids.contains(&"relayer-with-dashes".to_string()));
+        assert!(ids.contains(&"relayer_with_underscores".to_string()));
+        assert!(ids.contains(&"relayer.with.dots".to_string()));
+    }
+
+    #[test]
+    fn test_get_relayer_ids_with_large_list() {
+        let relayers: Vec<RelayerRepoModel> = (0..100)
+            .map(|i| create_mock_relayer(format!("relayer-{:03}", i), false))
+            .collect();
+
+        let ids = get_relayer_ids_to_initialize(&relayers);
+
+        assert_eq!(ids.len(), 100);
+        assert_eq!(ids[0], "relayer-000");
+        assert_eq!(ids[99], "relayer-099");
+    }
+
+    // Test error message formatting
+    #[tokio::test]
+    async fn test_initialize_relayer_with_service_error_includes_relayer_id() {
+        use crate::domain::MockRelayer;
+        use crate::models::RelayerError;
+
+        let mut mock_relayer = MockRelayer::new();
+        mock_relayer
+            .expect_initialize_relayer()
+            .times(1)
+            .returning(|| {
+                Box::pin(async {
+                    Err(RelayerError::NetworkConfiguration("bad config".to_string()))
+                })
+            });
+
+        let result = initialize_relayer_with_service("my-special-relayer-id", &mock_relayer).await;
+
+        assert!(result.is_err());
+        let err_str = result.unwrap_err().to_string();
+        assert!(
+            err_str.contains("my-special-relayer-id"),
+            "Error should contain relayer ID, got: {}",
+            err_str
+        );
+    }
+
+    #[tokio::test]
+    async fn test_initialize_relayer_with_service_provider_error() {
+        use crate::domain::MockRelayer;
+        use crate::models::RelayerError;
+
+        let mut mock_relayer = MockRelayer::new();
+        mock_relayer
+            .expect_initialize_relayer()
+            .times(1)
+            .returning(|| {
+                Box::pin(async { Err(RelayerError::ProviderError("provider failed".to_string())) })
+            });
+
+        let result = initialize_relayer_with_service("test-relayer", &mock_relayer).await;
+        assert!(result.is_err(), "Should fail for ProviderError");
+    }
+
+    #[tokio::test]
+    async fn test_initialize_relayer_with_service_network_config_error() {
+        use crate::domain::MockRelayer;
+        use crate::models::RelayerError;
+
+        let mut mock_relayer = MockRelayer::new();
+        mock_relayer
+            .expect_initialize_relayer()
+            .times(1)
+            .returning(|| {
+                Box::pin(async {
+                    Err(RelayerError::NetworkConfiguration(
+                        "network config error".to_string(),
+                    ))
+                })
+            });
+
+        let result = initialize_relayer_with_service("test-relayer", &mock_relayer).await;
+        assert!(
+            result.is_err(),
+            "Should fail for NetworkConfiguration error"
+        );
+    }
 }
