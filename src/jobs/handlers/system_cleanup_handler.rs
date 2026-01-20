@@ -5,6 +5,7 @@
 //! When jobs complete, keys accumulate in:
 //! - `{namespace}:done` - Sorted set of completed job IDs (score = timestamp)
 //! - `{namespace}:data` - Hash storing job payloads (field = job_id)
+//! - `{namespace}:result` - Hash storing job results (field = job_id)
 //! - `{namespace}:failed` - Sorted set of failed jobs
 //! - `{namespace}:dead` - Sorted set of dead-letter jobs
 //!
@@ -22,13 +23,14 @@ use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Data, *};
 use eyre::Result;
 use redis::aio::ConnectionManager;
+use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
-    constants::WORKER_SYSTEM_CLEANUP_RETRIES, jobs::handle_result, models::DefaultAppState,
-    utils::DistributedLock,
+    config::ServerConfig, constants::WORKER_SYSTEM_CLEANUP_RETRIES, jobs::handle_result,
+    models::DefaultAppState, utils::DistributedLock,
 };
 
 /// Distributed lock name for queue cleanup.
@@ -114,24 +116,40 @@ pub async fn system_cleanup_handler(
 /// This function first attempts to acquire a distributed lock to ensure only
 /// one instance processes cleanup at a time. If the lock is already held by
 /// another instance, this returns early without doing any work.
+///
+/// Note: Queue metadata cleanup runs regardless of repository storage type
+/// (in-memory or Redis) because queues always use Redis persistence.
 async fn handle_cleanup_request(
     _job: SystemCleanupCronReminder,
-    data: Data<ThinData<DefaultAppState>>,
+    _data: Data<ThinData<DefaultAppState>>,
     _attempt: Attempt,
 ) -> Result<()> {
-    let transaction_repo = data.transaction_repository();
+    // Connect to Redis directly - queues always use Redis regardless of repository storage type
+    let redis_url = ServerConfig::get_redis_url();
+    let timeout_ms = ServerConfig::get_redis_connection_timeout_ms();
 
-    // Get Redis connection info - if using in-memory repo, skip cleanup
-    let (conn, prefix) = match transaction_repo.connection_info() {
-        Some(info) => info,
-        None => {
-            debug!("in-memory repository detected, skipping system cleanup");
+    let conn = match tokio::time::timeout(
+        Duration::from_millis(timeout_ms),
+        redis::Client::open(redis_url.as_str())?.get_connection_manager(),
+    )
+    .await
+    {
+        Ok(Ok(conn)) => Arc::new(conn),
+        Ok(Err(e)) => {
+            warn!(error = %e, "failed to connect to Redis for system cleanup");
+            return Ok(());
+        }
+        Err(_) => {
+            warn!(timeout_ms = %timeout_ms, "timeout connecting to Redis for system cleanup");
             return Ok(());
         }
     };
 
-    // Attempt to acquire distributed lock
-    let lock_key = format!("{prefix}:lock:{SYSTEM_CLEANUP_LOCK_NAME}");
+    // Get the key prefix used for the distributed lock
+    // This uses the same REDIS_KEY_PREFIX as the repositories
+    let lock_prefix = ServerConfig::get_redis_key_prefix();
+    let lock_key = format!("{lock_prefix}:lock:{SYSTEM_CLEANUP_LOCK_NAME}");
+
     let lock = DistributedLock::new(
         conn.clone(),
         &lock_key,
@@ -161,10 +179,14 @@ async fn handle_cleanup_request(
 
     info!("executing queue metadata cleanup");
 
-    // Queue keys are created by the job library directly at the root level
-    // Format: {queue_name}:done, {queue_name}:data, etc.
-    // No prefix is added - the library doesn't use the REDIS_KEY_PREFIX for queue keys
-    let redis_key_prefix = "";
+    // Queue keys use REDIS_KEY_PREFIX if set, with ":queue:" suffix
+    // Format: {REDIS_KEY_PREFIX}:queue:{queue_name}:done, etc.
+    // If REDIS_KEY_PREFIX is not set, keys are just {queue_name}:done, etc.
+    let redis_key_prefix = env::var("REDIS_KEY_PREFIX")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .map(|value| format!("{value}:queue:"))
+        .unwrap_or_default();
 
     let cutoff_timestamp = chrono::Utc::now().timestamp() - JOB_AGE_THRESHOLD_SECS;
 
@@ -230,35 +252,44 @@ async fn cleanup_queue(
 ) -> Result<usize> {
     let mut total_cleaned = 0usize;
     let data_key = format!("{namespace}:data");
+    let result_key = format!("{namespace}:result");
 
-    // Clean up each sorted set (done, failed, dead)
+    // Clean up each sorted set (done, failed, dead) and associated hash entries
     for suffix in SORTED_SET_SUFFIXES {
         let sorted_set_key = format!("{namespace}{suffix}");
-        let cleaned =
-            cleanup_sorted_set_and_data(conn, &sorted_set_key, &data_key, cutoff_timestamp).await?;
+        let cleaned = cleanup_sorted_set_and_hashes(
+            conn,
+            &sorted_set_key,
+            &data_key,
+            &result_key,
+            cutoff_timestamp,
+        )
+        .await?;
         total_cleaned += cleaned;
     }
 
     Ok(total_cleaned)
 }
 
-/// Cleans up job IDs from a sorted set and their associated data from the hash.
+/// Cleans up job IDs from a sorted set and their associated data/result hashes.
 ///
-/// Uses ZRANGEBYSCORE to find old job IDs, then removes them from both the
-/// sorted set and the data hash in a pipeline for efficiency.
+/// Uses ZRANGEBYSCORE to find old job IDs, then removes them from the
+/// sorted set and both the data and result hashes in a pipeline for efficiency.
 ///
 /// # Arguments
 /// * `conn` - Redis connection manager
 /// * `sorted_set_key` - Key of the sorted set (e.g., "queue:transaction_request_queue:done")
 /// * `data_key` - Key of the data hash (e.g., "queue:transaction_request_queue:data")
+/// * `result_key` - Key of the result hash (e.g., "queue:transaction_request_queue:result")
 /// * `cutoff_timestamp` - Unix timestamp; jobs with score older than this will be cleaned up
 ///
 /// # Returns
 /// * `Result<usize>` - Number of jobs cleaned up
-async fn cleanup_sorted_set_and_data(
+async fn cleanup_sorted_set_and_hashes(
     conn: &Arc<ConnectionManager>,
     sorted_set_key: &str,
     data_key: &str,
+    result_key: &str,
     cutoff_timestamp: i64,
 ) -> Result<usize> {
     let mut total_cleaned = 0usize;
@@ -283,7 +314,7 @@ async fn cleanup_sorted_set_and_data(
 
         let batch_size = job_ids.len();
 
-        // Use pipeline to remove from sorted set and data hash atomically
+        // Use pipeline to remove from sorted set and both hashes atomically
         let mut pipe = redis::pipe();
 
         // ZREM sorted_set_key job_id1 job_id2 ...
@@ -295,6 +326,13 @@ async fn cleanup_sorted_set_and_data(
 
         // HDEL data_key job_id1 job_id2 ...
         pipe.cmd("HDEL").arg(data_key);
+        for job_id in &job_ids {
+            pipe.arg(job_id);
+        }
+        pipe.ignore();
+
+        // HDEL result_key job_id1 job_id2 ...
+        pipe.cmd("HDEL").arg(result_key);
         for job_id in &job_ids {
             pipe.arg(job_id);
         }
@@ -337,8 +375,8 @@ mod tests {
     }
 
     #[test]
-    fn test_namespace_format() {
-        // Queue keys are at root level without prefix
+    fn test_namespace_format_without_prefix() {
+        // When REDIS_KEY_PREFIX is not set, queue keys are at root level
         let redis_key_prefix = "";
         let queue_name = "transaction_request_queue";
         let namespace = format!("{redis_key_prefix}{queue_name}");
@@ -346,17 +384,60 @@ mod tests {
     }
 
     #[test]
+    fn test_namespace_format_with_prefix() {
+        // When REDIS_KEY_PREFIX is set, queue keys include the prefix
+        let redis_key_prefix = "oz-relayer:queue:";
+        let queue_name = "transaction_request_queue";
+        let namespace = format!("{redis_key_prefix}{queue_name}");
+        assert_eq!(namespace, "oz-relayer:queue:transaction_request_queue");
+    }
+
+    #[test]
     fn test_sorted_set_key_format() {
+        // Without prefix
         let namespace = "transaction_request_queue";
         let sorted_set_key = format!("{namespace}:done");
         assert_eq!(sorted_set_key, "transaction_request_queue:done");
+
+        // With prefix
+        let namespace_with_prefix = "oz-relayer:queue:transaction_request_queue";
+        let sorted_set_key_with_prefix = format!("{namespace_with_prefix}:done");
+        assert_eq!(
+            sorted_set_key_with_prefix,
+            "oz-relayer:queue:transaction_request_queue:done"
+        );
     }
 
     #[test]
     fn test_data_key_format() {
+        // Without prefix
         let namespace = "transaction_request_queue";
         let data_key = format!("{namespace}:data");
         assert_eq!(data_key, "transaction_request_queue:data");
+
+        // With prefix
+        let namespace_with_prefix = "oz-relayer:queue:transaction_request_queue";
+        let data_key_with_prefix = format!("{namespace_with_prefix}:data");
+        assert_eq!(
+            data_key_with_prefix,
+            "oz-relayer:queue:transaction_request_queue:data"
+        );
+    }
+
+    #[test]
+    fn test_result_key_format() {
+        // Without prefix
+        let namespace = "transaction_request_queue";
+        let result_key = format!("{namespace}:result");
+        assert_eq!(result_key, "transaction_request_queue:result");
+
+        // With prefix
+        let namespace_with_prefix = "oz-relayer:queue:transaction_request_queue";
+        let result_key_with_prefix = format!("{namespace_with_prefix}:result");
+        assert_eq!(
+            result_key_with_prefix,
+            "oz-relayer:queue:transaction_request_queue:result"
+        );
     }
 
     #[test]
