@@ -1280,7 +1280,7 @@ mod tests {
 
         let provider_initializer = move |url: &str| -> Result<String, TestError> {
             let count = attempt_count_clone.fetch_add(1, AtomicOrdering::SeqCst);
-            if count == 0 && url.contains("9988") {
+            if count == 0 {
                 Err(TestError("First provider init failed".to_string()))
             } else {
                 Ok(url.to_string())
