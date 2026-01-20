@@ -252,7 +252,7 @@ async fn cleanup_queue(
 ) -> Result<usize> {
     let mut total_cleaned = 0usize;
     let data_key = format!("{namespace}:data");
-    let result_key = format!("{namespace}:result");
+    let result_key = format!("{data_key}::result");
 
     // Clean up each sorted set (done, failed, dead) and associated hash entries
     for suffix in SORTED_SET_SUFFIXES {
