@@ -2,6 +2,18 @@
 //!
 //! This module contains functions for initializing relayers, ensuring they are
 //! properly configured and ready for operation.
+//!
+//! ## Distributed Locking
+//!
+//! When multiple instances of the relayer service start simultaneously, this module
+//! uses distributed locking to coordinate initialization and prevent duplicate work:
+//!
+//! - **Per-relayer locks**: Each relayer is locked independently to allow parallel
+//!   initialization of different relayers across instances.
+//! - **Recent sync check**: Skips initialization for relayers that were recently
+//!   synced (within the staleness threshold) to handle rolling restarts efficiently.
+//! - **In-memory fallback**: When using in-memory storage, locking is skipped since
+//!   coordination across instances is not possible or needed.
 use crate::{
     domain::{get_network_relayer, Relayer},
     jobs::JobProducerTrait,
@@ -13,10 +25,37 @@ use crate::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
         Repository, TransactionCounterTrait, TransactionRepository,
     },
+    utils::{is_relayer_recently_synced, set_relayer_last_sync, DistributedLock},
 };
 use color_eyre::{eyre::WrapErr, Result};
-use futures::future::try_join_all;
-use tracing::debug;
+use redis::aio::ConnectionManager;
+use std::sync::Arc;
+use std::time::Duration;
+use tracing::{debug, info, warn};
+
+/// TTL for the per-relayer initialization lock in seconds.
+/// Set to 2 minutes (2x worst case init time) as a safety net for crashes.
+const RELAYER_INIT_LOCK_TTL_SECS: u64 = 120;
+
+/// Staleness threshold in seconds. Relayers synced within this time are skipped.
+/// Set to 5 minutes to prevent redundant initialization on rolling restarts.
+const RELAYER_SYNC_STALENESS_THRESHOLD_SECS: u64 = 300;
+
+/// Lock name prefix for relayer initialization locks.
+const RELAYER_INIT_LOCK_PREFIX: &str = "relayer_init";
+
+/// Result of attempting to initialize a single relayer.
+#[derive(Debug)]
+enum RelayerInitResult {
+    /// Successfully initialized the relayer.
+    Initialized,
+    /// Skipped because another instance recently synced this relayer.
+    SkippedRecentSync,
+    /// Skipped because another instance currently holds the lock.
+    SkippedLockHeld,
+    /// Initialization failed with an error.
+    Failed(String),
+}
 
 /// Internal function for initializing a relayer using a provided relayer service.
 /// This allows for easier testing with mocked relayers.
@@ -84,20 +123,244 @@ where
 
     debug!(count = relayers.len(), "Initializing relayers concurrently");
 
-    let relayer_futures = relayers.iter().map(|relayer| {
+    // Check if using persistent storage for distributed coordination
+    let connection_info = app_state.relayer_repository.connection_info();
+
+    // Initialize relayers with appropriate locking strategy
+    let results = if let Some((conn, prefix)) = connection_info {
+        // Persistent storage mode: use distributed locking
+        initialize_relayers_with_locking(&relayers, &app_state, &conn, &prefix).await
+    } else {
+        // In-memory mode: skip locking, initialize all relayers directly
+        debug!("In-memory storage detected, skipping distributed locking");
+        initialize_relayers_without_locking(&relayers, &app_state).await
+    };
+
+    // Log summary
+    let (initialized, skipped_recent, skipped_lock, failed) = count_results(&results);
+    info!(
+        initialized = initialized,
+        skipped_recent_sync = skipped_recent,
+        skipped_lock_held = skipped_lock,
+        failed = failed,
+        "Relayer initialization completed"
+    );
+
+    // Fail if any initialization failed
+    if failed > 0 {
+        let failure_messages: Vec<String> = results
+            .into_iter()
+            .filter_map(|(id, result)| {
+                if let RelayerInitResult::Failed(msg) = result {
+                    Some(format!("{id}: {msg}"))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        return Err(eyre::eyre!(
+            "Failed to initialize {} relayer(s): {}",
+            failed,
+            failure_messages.join("; ")
+        ));
+    }
+
+    Ok(())
+}
+
+/// Initializes relayers with distributed locking for coordination across instances.
+///
+/// For each relayer:
+/// 1. Checks if recently synced (skip if yes)
+/// 2. Attempts to acquire a per-relayer lock
+/// 3. If lock acquired: initializes and records sync time
+/// 4. If lock held: skips (another instance is handling it)
+async fn initialize_relayers_with_locking<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    relayers: &[RelayerRepoModel],
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    conn: &Arc<ConnectionManager>,
+    prefix: &str,
+) -> Vec<(String, RelayerInitResult)>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    let futures = relayers.iter().map(|relayer| {
         let app_state = app_state.clone();
-        async move { initialize_relayer(relayer.id.clone(), app_state).await }
+        let conn = conn.clone();
+        let prefix = prefix.to_string();
+        let relayer_id = relayer.id.clone();
+
+        async move {
+            let result =
+                initialize_single_relayer_with_lock(&relayer_id, &app_state, &conn, &prefix).await;
+            (relayer_id, result)
+        }
     });
 
-    try_join_all(relayer_futures)
-        .await
-        .wrap_err("Failed to initialize relayers")?;
+    futures::future::join_all(futures).await
+}
 
-    debug!(
-        count = relayers.len(),
-        "All relayers initialized successfully"
+/// Initializes a single relayer with distributed locking.
+async fn initialize_single_relayer_with_lock<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    relayer_id: &str,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    conn: &Arc<ConnectionManager>,
+    prefix: &str,
+) -> RelayerInitResult
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    // Step 1: Check if recently synced
+    match is_relayer_recently_synced(
+        conn,
+        prefix,
+        relayer_id,
+        RELAYER_SYNC_STALENESS_THRESHOLD_SECS,
+    )
+    .await
+    {
+        Ok(true) => {
+            debug!(relayer_id = %relayer_id, "skipping initialization - recently synced");
+            return RelayerInitResult::SkippedRecentSync;
+        }
+        Ok(false) => {}
+        Err(e) => {
+            // Log warning but proceed with initialization (graceful degradation)
+            warn!(
+                relayer_id = %relayer_id,
+                error = %e,
+                "failed to check recent sync status, proceeding with initialization"
+            );
+        }
+    }
+
+    // Step 2: Attempt to acquire per-relayer lock
+    let lock_key = format!("{prefix}:lock:{RELAYER_INIT_LOCK_PREFIX}:{relayer_id}");
+    let lock = DistributedLock::new(
+        conn.clone(),
+        &lock_key,
+        Duration::from_secs(RELAYER_INIT_LOCK_TTL_SECS),
     );
-    Ok(())
+
+    let lock_guard = match lock.try_acquire().await {
+        Ok(Some(guard)) => {
+            debug!(relayer_id = %relayer_id, lock_key = %lock_key, "acquired initialization lock");
+            Some(guard)
+        }
+        Ok(None) => {
+            debug!(
+                relayer_id = %relayer_id,
+                lock_key = %lock_key,
+                "initialization skipped - lock held by another instance"
+            );
+            return RelayerInitResult::SkippedLockHeld;
+        }
+        Err(e) => {
+            // Log warning but proceed without lock (graceful degradation)
+            warn!(
+                relayer_id = %relayer_id,
+                error = %e,
+                lock_key = %lock_key,
+                "failed to acquire lock, proceeding with initialization anyway"
+            );
+            None
+        }
+    };
+
+    // Step 3: Initialize the relayer
+    let init_result = initialize_relayer(relayer_id.to_string(), app_state.clone()).await;
+
+    // Step 4: Record sync time on success
+    match &init_result {
+        Ok(()) => {
+            if let Err(e) = set_relayer_last_sync(conn, prefix, relayer_id).await {
+                warn!(
+                    relayer_id = %relayer_id,
+                    error = %e,
+                    "failed to record last sync time"
+                );
+            }
+        }
+        Err(e) => {
+            debug!(relayer_id = %relayer_id, error = %e, "initialization failed");
+        }
+    }
+
+    // Lock guard is automatically released when dropped
+    drop(lock_guard);
+
+    match init_result {
+        Ok(()) => RelayerInitResult::Initialized,
+        Err(e) => RelayerInitResult::Failed(e.to_string()),
+    }
+}
+
+/// Initializes relayers without distributed locking (for in-memory storage).
+async fn initialize_relayers_without_locking<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    relayers: &[RelayerRepoModel],
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+) -> Vec<(String, RelayerInitResult)>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    let futures = relayers.iter().map(|relayer| {
+        let app_state = app_state.clone();
+        let relayer_id = relayer.id.clone();
+
+        async move {
+            let result = match initialize_relayer(relayer_id.clone(), app_state).await {
+                Ok(()) => RelayerInitResult::Initialized,
+                Err(e) => RelayerInitResult::Failed(e.to_string()),
+            };
+            (relayer_id, result)
+        }
+    });
+
+    futures::future::join_all(futures).await
+}
+
+/// Counts the results of initialization attempts.
+fn count_results(results: &[(String, RelayerInitResult)]) -> (usize, usize, usize, usize) {
+    let mut initialized = 0;
+    let mut skipped_recent = 0;
+    let mut skipped_lock = 0;
+    let mut failed = 0;
+
+    for (_, result) in results {
+        match result {
+            RelayerInitResult::Initialized => initialized += 1,
+            RelayerInitResult::SkippedRecentSync => skipped_recent += 1,
+            RelayerInitResult::SkippedLockHeld => skipped_lock += 1,
+            RelayerInitResult::Failed(_) => failed += 1,
+        }
+    }
+
+    (initialized, skipped_recent, skipped_lock, failed)
 }
 
 #[cfg(test)]

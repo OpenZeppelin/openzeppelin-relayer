@@ -166,6 +166,8 @@ impl RelayerRepository for InMemoryRelayerRepository {
     fn is_persistent_storage(&self) -> bool {
         false
     }
+
+    // Uses the trait default implementation which returns None
 }
 
 #[async_trait]

@@ -260,6 +260,134 @@ fn generate_lock_value() -> String {
     format!("{process_id}:{timestamp}:{counter}")
 }
 
+// ============================================================================
+// Relayer Sync Metadata Functions
+// ============================================================================
+//
+// These functions track when relayers were last synchronized/initialized.
+// This allows multiple instances to skip redundant initialization when
+// a relayer was recently synced by another instance.
+
+/// The Redis hash key suffix for storing relayer sync metadata.
+const RELAYER_SYNC_META_KEY: &str = "relayer_sync_meta";
+
+/// Sets the last sync timestamp for a relayer to the current time.
+///
+/// This should be called after a relayer has been successfully initialized
+/// to record when the initialization occurred.
+///
+/// # Arguments
+/// * `conn` - Redis connection manager
+/// * `prefix` - Key prefix for multi-tenant support
+/// * `relayer_id` - The relayer's unique identifier
+///
+/// # Redis Key Format
+/// Hash key: `{prefix}:relayer_sync_meta`
+/// Hash field: `{relayer_id}:last_sync`
+/// Value: Unix timestamp in seconds
+pub async fn set_relayer_last_sync(
+    conn: &Arc<ConnectionManager>,
+    prefix: &str,
+    relayer_id: &str,
+) -> Result<()> {
+    use chrono::Utc;
+    use redis::AsyncCommands;
+
+    let mut conn = (**conn).clone();
+    let hash_key = format!("{prefix}:{RELAYER_SYNC_META_KEY}");
+    let field = format!("{relayer_id}:last_sync");
+    let timestamp = Utc::now().timestamp();
+
+    conn.hset::<_, _, _, ()>(&hash_key, &field, timestamp)
+        .await
+        .map_err(|e| eyre::eyre!("Failed to set relayer last sync: {}", e))?;
+
+    debug!(
+        relayer_id = %relayer_id,
+        timestamp = %timestamp,
+        "recorded relayer last sync time"
+    );
+
+    Ok(())
+}
+
+/// Gets the last sync timestamp for a relayer.
+///
+/// # Arguments
+/// * `conn` - Redis connection manager
+/// * `prefix` - Key prefix for multi-tenant support
+/// * `relayer_id` - The relayer's unique identifier
+///
+/// # Returns
+/// * `Ok(Some(DateTime))` - The last sync time if recorded
+/// * `Ok(None)` - If the relayer has never been synced
+/// * `Err(_)` - Redis communication error
+pub async fn get_relayer_last_sync(
+    conn: &Arc<ConnectionManager>,
+    prefix: &str,
+    relayer_id: &str,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+    use chrono::{TimeZone, Utc};
+    use redis::AsyncCommands;
+
+    let mut conn = (**conn).clone();
+    let hash_key = format!("{prefix}:{RELAYER_SYNC_META_KEY}");
+    let field = format!("{relayer_id}:last_sync");
+
+    let timestamp: Option<i64> = conn
+        .hget(&hash_key, &field)
+        .await
+        .map_err(|e| eyre::eyre!("Failed to get relayer last sync: {}", e))?;
+
+    Ok(timestamp.and_then(|ts| Utc.timestamp_opt(ts, 0).single()))
+}
+
+/// Checks if a relayer was recently synced within the given threshold.
+///
+/// This is used to skip initialization for relayers that were recently
+/// initialized by another instance (e.g., during rolling restarts).
+///
+/// # Arguments
+/// * `conn` - Redis connection manager
+/// * `prefix` - Key prefix for multi-tenant support
+/// * `relayer_id` - The relayer's unique identifier
+/// * `threshold_secs` - Number of seconds to consider as "recent"
+///
+/// # Returns
+/// * `Ok(true)` - If the relayer was synced within the threshold
+/// * `Ok(false)` - If the relayer was not synced or sync is stale
+/// * `Err(_)` - Redis communication error
+pub async fn is_relayer_recently_synced(
+    conn: &Arc<ConnectionManager>,
+    prefix: &str,
+    relayer_id: &str,
+    threshold_secs: u64,
+) -> Result<bool> {
+    use chrono::Utc;
+
+    let last_sync = get_relayer_last_sync(conn, prefix, relayer_id).await?;
+
+    match last_sync {
+        Some(sync_time) => {
+            let elapsed = Utc::now().signed_duration_since(sync_time);
+            let is_recent = elapsed.num_seconds() < threshold_secs as i64;
+
+            if is_recent {
+                debug!(
+                    relayer_id = %relayer_id,
+                    last_sync = %sync_time.to_rfc3339(),
+                    elapsed_secs = %elapsed.num_seconds(),
+                    threshold_secs = %threshold_secs,
+                    "relayer was recently synced"
+                );
+            }
+
+            Ok(is_recent)
+        }
+        None => Ok(false),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -581,6 +709,153 @@ mod tests {
             if let Some(g) = guard2 {
                 g.release().await.expect("Redis error");
             }
+        }
+
+        // =====================================================================
+        // Relayer Sync Metadata Tests
+        // =====================================================================
+
+        #[tokio::test]
+        #[ignore] // Requires running Redis instance
+        async fn test_set_and_get_relayer_last_sync() {
+            let conn = create_test_redis_connection()
+                .await
+                .expect("Redis connection required for this test");
+
+            let prefix = "test_sync";
+            let relayer_id = "test-relayer-sync";
+
+            // Set the last sync time
+            set_relayer_last_sync(&conn, prefix, relayer_id)
+                .await
+                .expect("Should set last sync time");
+
+            // Get the last sync time
+            let last_sync = get_relayer_last_sync(&conn, prefix, relayer_id)
+                .await
+                .expect("Should get last sync time");
+
+            assert!(last_sync.is_some(), "Should have a last sync time");
+
+            // Verify the timestamp is recent (within last minute)
+            let elapsed = chrono::Utc::now()
+                .signed_duration_since(last_sync.unwrap())
+                .num_seconds();
+            assert!(elapsed < 60, "Last sync should be within last minute");
+
+            // Cleanup: delete the hash
+            let mut conn_clone = (*conn).clone();
+            let hash_key = format!("{prefix}:relayer_sync_meta");
+            let _: () = redis::AsyncCommands::del(&mut conn_clone, &hash_key)
+                .await
+                .expect("Cleanup failed");
+        }
+
+        #[tokio::test]
+        #[ignore] // Requires running Redis instance
+        async fn test_get_relayer_last_sync_returns_none_when_not_set() {
+            let conn = create_test_redis_connection()
+                .await
+                .expect("Redis connection required for this test");
+
+            let prefix = "test_sync_none";
+            let relayer_id = "nonexistent-relayer";
+
+            // Get the last sync time for a relayer that hasn't been synced
+            let last_sync = get_relayer_last_sync(&conn, prefix, relayer_id)
+                .await
+                .expect("Should not error");
+
+            assert!(
+                last_sync.is_none(),
+                "Should return None for unsynced relayer"
+            );
+        }
+
+        #[tokio::test]
+        #[ignore] // Requires running Redis instance
+        async fn test_is_relayer_recently_synced_returns_true_for_recent_sync() {
+            let conn = create_test_redis_connection()
+                .await
+                .expect("Redis connection required for this test");
+
+            let prefix = "test_recent_sync";
+            let relayer_id = "recent-relayer";
+
+            // Set the last sync time
+            set_relayer_last_sync(&conn, prefix, relayer_id)
+                .await
+                .expect("Should set last sync time");
+
+            // Check if recently synced (within 5 minutes)
+            let is_recent = is_relayer_recently_synced(&conn, prefix, relayer_id, 300)
+                .await
+                .expect("Should check recent sync");
+
+            assert!(is_recent, "Should be recently synced");
+
+            // Cleanup
+            let mut conn_clone = (*conn).clone();
+            let hash_key = format!("{prefix}:relayer_sync_meta");
+            let _: () = redis::AsyncCommands::del(&mut conn_clone, &hash_key)
+                .await
+                .expect("Cleanup failed");
+        }
+
+        #[tokio::test]
+        #[ignore] // Requires running Redis instance
+        async fn test_is_relayer_recently_synced_returns_false_when_not_set() {
+            let conn = create_test_redis_connection()
+                .await
+                .expect("Redis connection required for this test");
+
+            let prefix = "test_not_synced";
+            let relayer_id = "never-synced-relayer";
+
+            // Check if recently synced for a relayer that hasn't been synced
+            let is_recent = is_relayer_recently_synced(&conn, prefix, relayer_id, 300)
+                .await
+                .expect("Should check recent sync");
+
+            assert!(!is_recent, "Should not be recently synced");
+        }
+
+        #[tokio::test]
+        #[ignore] // Requires running Redis instance
+        async fn test_is_relayer_recently_synced_returns_false_for_stale_sync() {
+            let conn = create_test_redis_connection()
+                .await
+                .expect("Redis connection required for this test");
+
+            let prefix = "test_stale_sync";
+            let relayer_id = "stale-relayer";
+
+            // Manually set an old timestamp (10 minutes ago)
+            let mut conn_clone = (*conn).clone();
+            let hash_key = format!("{prefix}:relayer_sync_meta");
+            let field = format!("{relayer_id}:last_sync");
+            let old_timestamp = chrono::Utc::now().timestamp() - 600; // 10 minutes ago
+
+            redis::AsyncCommands::hset::<_, _, _, ()>(
+                &mut conn_clone,
+                &hash_key,
+                &field,
+                old_timestamp,
+            )
+            .await
+            .expect("Should set old timestamp");
+
+            // Check if recently synced with 5 minute threshold
+            let is_recent = is_relayer_recently_synced(&conn, prefix, relayer_id, 300)
+                .await
+                .expect("Should check recent sync");
+
+            assert!(!is_recent, "Should not be recently synced (stale)");
+
+            // Cleanup
+            let _: () = redis::AsyncCommands::del(&mut conn_clone, &hash_key)
+                .await
+                .expect("Cleanup failed");
         }
     }
 }

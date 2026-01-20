@@ -532,6 +532,10 @@ impl RelayerRepository for RedisRelayerRepository {
     fn is_persistent_storage(&self) -> bool {
         true
     }
+
+    fn connection_info(&self) -> Option<(Arc<ConnectionManager>, String)> {
+        Some((self.client.clone(), self.key_prefix.clone()))
+    }
 }
 
 #[cfg(test)]
