@@ -166,8 +166,8 @@ interface AcquiredSocket {
 class SocketPool {
   private available: PooledSocket[] = [];
   private readonly maxSize = 5; // Max sockets to cache per worker
-  // Rust server connection lifetime is 60s. Discard sockets older than 50s.
-  private readonly maxSocketAgeMs = 50_000;
+  // Rust server connection lifetime is 60s. Discard sockets older than 45s.
+  private readonly maxSocketAgeMs = 45_000;
 
   acquire(): AcquiredSocket | null {
     const now = Date.now();
@@ -335,12 +335,17 @@ class PluginAPIImpl implements PluginAPI {
     this.httpRequestId = httpRequestId;
   }
 
-  private async ensureConnected(): Promise<void> {
+  /**
+   * Ensure socket is connected.
+   * @param forceNewSocket If true, skip the pool and create a fresh socket.
+   *                       Used after retryable errors to avoid getting another stale socket.
+   */
+  private async ensureConnected(forceNewSocket: boolean = false): Promise<void> {
     if (this.connected) return;
 
     if (!this.connectionPromise) {
-      // Try to get socket from pool first
-      const acquired = socketPool.acquire();
+      // Try to get socket from pool first (unless forced to create new)
+      const acquired = forceNewSocket ? null : socketPool.acquire();
 
       if (acquired) {
         this.socket = acquired.socket;
@@ -544,19 +549,23 @@ class PluginAPIImpl implements PluginAPI {
   }
 
   private async send<T>(relayerId: string, method: string, payload: any): Promise<T> {
-    return this.sendWithRetry(relayerId, method, payload, false);
+    return this.sendWithRetry(relayerId, method, payload, false, false);
   }
 
   /**
    * Send request with EPIPE retry logic.
    * EPIPE occurs when the pooled socket was closed by the server but client doesn't know yet.
    * On EPIPE, we destroy the stale socket and retry with a fresh connection.
+   *
+   * @param forceNewSocket If true, skip the socket pool and create a fresh connection.
+   *                       Used on retries to avoid getting another stale socket from pool.
    */
   private async sendWithRetry<T>(
     relayerId: string,
     method: string,
     payload: any,
-    isRetry: boolean
+    isRetry: boolean,
+    forceNewSocket: boolean
   ): Promise<T> {
     const requestId = uuidv4();
     const msg: any = { requestId, relayerId, method, payload };
@@ -574,7 +583,8 @@ class PluginAPIImpl implements PluginAPI {
     }
 
     // Ensure we're connected before sending
-    await this.ensureConnected();
+    // On retry, force new socket to avoid getting another stale socket from pool
+    await this.ensureConnected(forceNewSocket);
 
     try {
       // Capture socket reference locally to guard against TOCTOU race condition.
@@ -639,8 +649,8 @@ class PluginAPIImpl implements PluginAPI {
         this.connected = false;
         this.connectionPromise = null;
 
-        // Retry with fresh connection (bypass pool by clearing state)
-        return this.sendWithRetry(relayerId, method, payload, true);
+        // Retry with fresh connection, forcing new socket to bypass pool
+        return this.sendWithRetry(relayerId, method, payload, true, true);
       }
       throw error;
     }
