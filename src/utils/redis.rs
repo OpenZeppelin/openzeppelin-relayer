@@ -857,5 +857,228 @@ mod tests {
                 .await
                 .expect("Cleanup failed");
         }
+
+        #[tokio::test]
+        #[ignore] // Requires running Redis instance
+        async fn test_get_relayer_last_sync_multiple_relayers() {
+            let conn = create_test_redis_connection()
+                .await
+                .expect("Redis connection required for this test");
+
+            let prefix = "test_multi_sync";
+
+            // Set sync times for multiple relayers
+            set_relayer_last_sync(&conn, prefix, "relayer-1")
+                .await
+                .expect("Should set sync time");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            set_relayer_last_sync(&conn, prefix, "relayer-2")
+                .await
+                .expect("Should set sync time");
+
+            let sync1 = get_relayer_last_sync(&conn, prefix, "relayer-1")
+                .await
+                .expect("Should get sync time");
+            let sync2 = get_relayer_last_sync(&conn, prefix, "relayer-2")
+                .await
+                .expect("Should get sync time");
+
+            assert!(sync1.is_some(), "Relayer 1 should have sync time");
+            assert!(sync2.is_some(), "Relayer 2 should have sync time");
+            assert!(
+                sync2.unwrap() >= sync1.unwrap(),
+                "Relayer 2 should be synced at same time or after relayer 1"
+            );
+
+            // Cleanup
+            let mut conn_clone = (*conn).clone();
+            let hash_key = format!("{prefix}:relayer_sync_meta");
+            let _: () = redis::AsyncCommands::del(&mut conn_clone, &hash_key)
+                .await
+                .expect("Cleanup failed");
+        }
+
+        #[tokio::test]
+        #[ignore] // Requires running Redis instance
+        async fn test_get_relayer_last_sync_update_existing() {
+            let conn = create_test_redis_connection()
+                .await
+                .expect("Redis connection required for this test");
+
+            let prefix = "test_update_sync";
+            let relayer_id = "update-relayer";
+
+            // Set initial sync time
+            set_relayer_last_sync(&conn, prefix, relayer_id)
+                .await
+                .expect("Should set sync time");
+
+            let first_sync = get_relayer_last_sync(&conn, prefix, relayer_id)
+                .await
+                .expect("Should get sync time")
+                .expect("Should have sync time");
+
+            // Wait and update
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
+            set_relayer_last_sync(&conn, prefix, relayer_id)
+                .await
+                .expect("Should update sync time");
+
+            let second_sync = get_relayer_last_sync(&conn, prefix, relayer_id)
+                .await
+                .expect("Should get sync time")
+                .expect("Should have sync time");
+
+            assert!(
+                second_sync > first_sync,
+                "Updated sync time should be later than first"
+            );
+
+            // Cleanup
+            let mut conn_clone = (*conn).clone();
+            let hash_key = format!("{prefix}:relayer_sync_meta");
+            let _: () = redis::AsyncCommands::del(&mut conn_clone, &hash_key)
+                .await
+                .expect("Cleanup failed");
+        }
+
+        #[tokio::test]
+        #[ignore] // Requires running Redis instance
+        async fn test_is_relayer_recently_synced_threshold_boundary() {
+            let conn = create_test_redis_connection()
+                .await
+                .expect("Redis connection required for this test");
+
+            let prefix = "test_boundary_sync";
+            let relayer_id = "boundary-relayer";
+
+            // Set timestamp exactly at threshold (should be considered NOT recent)
+            let mut conn_clone = (*conn).clone();
+            let hash_key = format!("{prefix}:relayer_sync_meta");
+            let field = format!("{relayer_id}:last_sync");
+            let threshold_secs: u64 = 60;
+            let boundary_timestamp = chrono::Utc::now().timestamp() - (threshold_secs as i64);
+
+            redis::AsyncCommands::hset::<_, _, _, ()>(
+                &mut conn_clone,
+                &hash_key,
+                &field,
+                boundary_timestamp,
+            )
+            .await
+            .expect("Should set boundary timestamp");
+
+            let is_recent = is_relayer_recently_synced(&conn, prefix, relayer_id, threshold_secs)
+                .await
+                .expect("Should check recent sync");
+
+            assert!(!is_recent, "Should not be recent at exact threshold");
+
+            // Cleanup
+            let _: () = redis::AsyncCommands::del(&mut conn_clone, &hash_key)
+                .await
+                .expect("Cleanup failed");
+        }
+
+        #[tokio::test]
+        #[ignore] // Requires running Redis instance
+        async fn test_is_relayer_recently_synced_just_before_threshold() {
+            let conn = create_test_redis_connection()
+                .await
+                .expect("Redis connection required for this test");
+
+            let prefix = "test_just_before_sync";
+            let relayer_id = "just-before-relayer";
+
+            // Set timestamp just before threshold (should be considered recent)
+            let mut conn_clone = (*conn).clone();
+            let hash_key = format!("{prefix}:relayer_sync_meta");
+            let field = format!("{relayer_id}:last_sync");
+            let threshold_secs: u64 = 60;
+            let just_before_timestamp =
+                chrono::Utc::now().timestamp() - (threshold_secs as i64) + 5;
+
+            redis::AsyncCommands::hset::<_, _, _, ()>(
+                &mut conn_clone,
+                &hash_key,
+                &field,
+                just_before_timestamp,
+            )
+            .await
+            .expect("Should set just-before timestamp");
+
+            let is_recent = is_relayer_recently_synced(&conn, prefix, relayer_id, threshold_secs)
+                .await
+                .expect("Should check recent sync");
+
+            assert!(is_recent, "Should be recent just before threshold");
+
+            // Cleanup
+            let _: () = redis::AsyncCommands::del(&mut conn_clone, &hash_key)
+                .await
+                .expect("Cleanup failed");
+        }
+
+        #[tokio::test]
+        #[ignore] // Requires running Redis instance
+        async fn test_is_relayer_recently_synced_different_prefixes() {
+            let conn = create_test_redis_connection()
+                .await
+                .expect("Redis connection required for this test");
+
+            let relayer_id = "shared-relayer";
+
+            // Set sync for prefix1 only
+            set_relayer_last_sync(&conn, "prefix1", relayer_id)
+                .await
+                .expect("Should set sync time");
+
+            let is_recent_prefix1 = is_relayer_recently_synced(&conn, "prefix1", relayer_id, 300)
+                .await
+                .expect("Should check sync");
+            let is_recent_prefix2 = is_relayer_recently_synced(&conn, "prefix2", relayer_id, 300)
+                .await
+                .expect("Should check sync");
+
+            assert!(is_recent_prefix1, "Should be recent for prefix1");
+            assert!(!is_recent_prefix2, "Should not be recent for prefix2");
+
+            // Cleanup
+            let mut conn_clone = (*conn).clone();
+            let hash_key = "prefix1:relayer_sync_meta";
+            let _: () = redis::AsyncCommands::del(&mut conn_clone, hash_key)
+                .await
+                .expect("Cleanup failed");
+        }
+
+        #[tokio::test]
+        #[ignore] // Requires running Redis instance
+        async fn test_is_relayer_recently_synced_zero_threshold() {
+            let conn = create_test_redis_connection()
+                .await
+                .expect("Redis connection required for this test");
+
+            let prefix = "test_zero_threshold";
+            let relayer_id = "zero-threshold-relayer";
+
+            set_relayer_last_sync(&conn, prefix, relayer_id)
+                .await
+                .expect("Should set sync time");
+
+            // With zero threshold, even immediate sync should be considered stale
+            let is_recent = is_relayer_recently_synced(&conn, prefix, relayer_id, 0)
+                .await
+                .expect("Should check sync");
+
+            assert!(!is_recent, "Should not be recent with zero threshold");
+
+            // Cleanup
+            let mut conn_clone = (*conn).clone();
+            let hash_key = format!("{prefix}:relayer_sync_meta");
+            let _: () = redis::AsyncCommands::del(&mut conn_clone, &hash_key)
+                .await
+                .expect("Cleanup failed");
+        }
     }
 }
