@@ -546,4 +546,30 @@ mod tests {
         // In-memory storage should return None for connection_info
         assert!(storage.connection_info().is_none());
     }
+
+    #[tokio::test]
+    async fn test_is_persistent_storage_returns_false_for_in_memory() {
+        let storage = RelayerRepositoryStorage::new_in_memory();
+
+        // In-memory storage should return false for is_persistent_storage
+        assert!(!storage.is_persistent_storage());
+    }
+
+    #[tokio::test]
+    async fn test_trait_connection_info_returns_none_for_in_memory() {
+        let storage = RelayerRepositoryStorage::new_in_memory();
+
+        // Test the RelayerRepository trait's connection_info method
+        let trait_ref: &dyn RelayerRepository = &storage;
+        assert!(trait_ref.connection_info().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_struct_connection_info_returns_none_for_in_memory() {
+        let storage = RelayerRepositoryStorage::new_in_memory();
+
+        // Test the struct's own connection_info method (different return type)
+        let result: Option<(Arc<ConnectionManager>, &str)> = storage.connection_info();
+        assert!(result.is_none());
+    }
 }
