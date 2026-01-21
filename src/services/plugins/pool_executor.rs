@@ -819,10 +819,6 @@ impl PoolManager {
                                 "Detected dead pool server error, triggering health check for restart"
                             );
                             self.health_check_needed.store(true, Ordering::Relaxed);
-                            let pool = self.connection_pool.clone();
-                            tokio::spawn(async move {
-                                pool.clear().await;
-                            });
                         } else {
                             // Plugin executed but returned error - infrastructure is healthy
                             circuit_breaker.record_success(elapsed_ms);
@@ -923,10 +919,6 @@ impl PoolManager {
                                 "Detected dead pool server error (queued path), triggering health check for restart"
                             );
                             self.health_check_needed.store(true, Ordering::Relaxed);
-                            let pool = self.connection_pool.clone();
-                            tokio::spawn(async move {
-                                pool.clear().await;
-                            });
                         } else {
                             // Plugin executed but returned error - infrastructure is healthy
                             circuit_breaker.record_success(elapsed_ms);
@@ -1204,22 +1196,19 @@ impl PoolManager {
                     })
                 }
             }
-            Err(e) => {
-                conn.mark_unhealthy();
-                Ok(HealthStatus {
-                    healthy: false,
-                    status: format!("request_failed: {e}"),
-                    uptime_ms: None,
-                    memory: None,
-                    pool_completed: None,
-                    pool_queued: None,
-                    success_rate: None,
-                    circuit_state,
-                    avg_response_time_ms: avg_rt,
-                    recovering,
-                    recovery_percent: recovery_pct,
-                })
-            }
+            Err(e) => Ok(HealthStatus {
+                healthy: false,
+                status: format!("request_failed: {e}"),
+                uptime_ms: None,
+                memory: None,
+                pool_completed: None,
+                pool_queued: None,
+                success_rate: None,
+                circuit_state,
+                avg_response_time_ms: avg_rt,
+                recovering,
+                recovery_percent: recovery_pct,
+            }),
         }
     }
 
@@ -1260,8 +1249,6 @@ impl PoolManager {
     /// Internal restart without lock (must be called with restart_lock held)
     async fn restart_internal(&self) -> Result<(), PluginError> {
         tracing::info!("Restarting plugin pool server");
-
-        self.connection_pool.clear().await;
 
         {
             let mut process_guard = self.process.lock().await;
@@ -1337,8 +1324,6 @@ impl PoolManager {
         tracing::info!("Initiating graceful shutdown of plugin pool server");
 
         self.shutdown_signal.notify_waiters();
-
-        self.connection_pool.clear().await;
 
         let shutdown_timeout = std::time::Duration::from_secs(35);
         let shutdown_result = self.send_shutdown_request(shutdown_timeout).await;

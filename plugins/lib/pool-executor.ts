@@ -322,6 +322,7 @@ class PluginAPIImpl implements PluginAPI {
   private socketPath: string;
   private readonly maxPendingRequests = 100; // Prevent memory leak from unbounded pending
   private socketCreatedAt: number = 0; // Track socket creation time for pool age-based eviction
+  private socketBuffer: string = ''; // Accumulator for TCP stream data (handles partial messages)
 
   // Store handler references for proper cleanup (prevents listener accumulation)
   private boundErrorHandler: ((error: Error) => void) | null = null;
@@ -392,6 +393,7 @@ class PluginAPIImpl implements PluginAPI {
   /**
    * Remove socket handlers before returning to pool.
    * Prevents listener accumulation (MaxListenersExceededWarning).
+   * Also clears the socket buffer to prevent data leakage between executions.
    */
   private removeSocketHandlers(socket: net.Socket): void {
     if (this.boundErrorHandler) {
@@ -406,6 +408,8 @@ class PluginAPIImpl implements PluginAPI {
       socket.removeListener('data', this.boundDataHandler);
       this.boundDataHandler = null;
     }
+    // Clear buffer to prevent data leakage between pool reuses
+    this.socketBuffer = '';
   }
 
   /**
@@ -417,6 +421,7 @@ class PluginAPIImpl implements PluginAPI {
     this.connected = false;
     this.connectionPromise = null;
     this.socket = null;
+    this.socketBuffer = ''; // Clear any partial data in buffer
   }
 
   /**
@@ -430,29 +435,38 @@ class PluginAPIImpl implements PluginAPI {
     // Reset connection state to force reconnection on next call
     this.connectionPromise = null;
     this.socket = null;
+    this.socketBuffer = ''; // Clear any partial data in buffer
   }
 
   /**
-   * Handle incoming data from socket
+   * Handle incoming data from socket.
+   * Uses a persistent buffer to handle TCP stream fragmentation - data may arrive
+   * in chunks that don't align with message boundaries (newline-delimited JSON).
    */
   private handleSocketData(data: Buffer): void {
-    data
-      .toString()
-      .split('\n')
-      .filter(Boolean)
-      .forEach((msg: string) => {
-        try {
-          const parsed = JSON.parse(msg);
-          const { requestId, result, error } = parsed;
-          const resolver = this.pending.get(requestId);
-          if (resolver) {
-            error ? resolver.reject(error) : resolver.resolve(result);
-            this.pending.delete(requestId);
-          }
-        } catch {
-          // Ignore malformed messages
+    this.socketBuffer += data.toString();
+
+    // Extract and process complete messages (newline-delimited)
+    let newlineIndex;
+    while ((newlineIndex = this.socketBuffer.indexOf('\n')) !== -1) {
+      const line = this.socketBuffer.slice(0, newlineIndex);
+      this.socketBuffer = this.socketBuffer.slice(newlineIndex + 1);
+
+      if (!line) continue;
+
+      try {
+        const parsed = JSON.parse(line);
+        const { requestId, result, error } = parsed;
+        const resolver = this.pending.get(requestId);
+        if (resolver) {
+          error ? resolver.reject(error) : resolver.resolve(result);
+          this.pending.delete(requestId);
         }
-      });
+      } catch (e) {
+        // Log parse errors for debugging - this shouldn't happen with complete messages
+        console.error('[PluginAPIImpl] Failed to parse response line:', line.substring(0, 200), e);
+      }
+    }
   }
 
   /**
