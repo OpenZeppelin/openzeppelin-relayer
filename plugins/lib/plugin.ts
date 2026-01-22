@@ -208,6 +208,10 @@ export interface PluginContext {
   params: any;
   kv: PluginKVStore;
   headers: PluginHeaders;
+  route: string;
+  config?: Record<string, any>;
+  method: string;
+  query: Record<string, string[]>;
 }
 
 /**
@@ -290,13 +294,18 @@ export async function runPlugin<T, R>(main: Plugin<T, R>): Promise<void> {
  * @param kv - KV store instance for plugins
  * @param params - Plugin parameters
  * @param headers - HTTP headers from the incoming request (optional)
+ * @param route - Wildcard route from the endpoint (optional)
  */
 export async function loadAndExecutePlugin<T, R>(
   userScriptPath: string,
   api: PluginAPI,
   kv: PluginKVStore,
   params: T,
-  headers?: PluginHeaders
+  headers?: PluginHeaders,
+  route?: string,
+  config?: Record<string, any>,
+  method?: string,
+  query?: Record<string, string[]>
 ): Promise<R> {
   try {
     // IMPORTANT: Path normalization required because executor is in plugins/lib/
@@ -333,8 +342,17 @@ export async function loadAndExecutePlugin<T, R>(
     if (handler && typeof handler === 'function') {
       // Detect handler signature by parameter count
       if (handler.length === 1) {
-        // Modern context handler - ONLY these get KV and headers access
-        const context: PluginContext = { api, params, kv, headers: headers ?? {} };
+        // Modern context handler - ONLY these get KV, headers, config, method, and query access
+        const context: PluginContext = {
+          api,
+          params,
+          kv,
+          headers: headers ?? {},
+          route: route ?? '',
+          config,
+          method: method ?? 'POST',
+          query: query ?? {}
+        };
         return await handler(context);
       } else {
         // Legacy handler - NO KV or headers access, just (api, params)
@@ -534,6 +552,7 @@ export class DefaultPluginAPI implements PluginAPI {
  * @param userScriptPath - Path to the user's plugin file to execute
  * @param httpRequestId - HTTP request ID for tracing (optional)
  * @param headers - HTTP headers from the incoming request (optional)
+ * @param route - Wildcard route from the endpoint (optional)
  */
 export async function runUserPlugin<T = any, R = any>(
   socketPath: string,
@@ -541,13 +560,17 @@ export async function runUserPlugin<T = any, R = any>(
   pluginParams: T,
   userScriptPath: string,
   httpRequestId?: string,
-  headers?: PluginHeaders
+  headers?: PluginHeaders,
+  route?: string,
+  config?: Record<string, any>,
+  method?: string,
+  query?: Record<string, string[]>
 ): Promise<R> {
   const plugin = new DefaultPluginAPI(socketPath, httpRequestId);
   const kv = new DefaultPluginKVStore(pluginId);
 
   try {
-    const result: R = await loadAndExecutePlugin<T, R>(userScriptPath, plugin, kv, pluginParams, headers);
+    const result: R = await loadAndExecutePlugin<T, R>(userScriptPath, plugin, kv, pluginParams, headers, route, config, method, query);
     return result;
   } catch (error) {
     // If plugin threw an error, write normalized error to stderr

@@ -540,6 +540,7 @@ mod tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
 
         let result = signer
@@ -616,6 +617,7 @@ mod tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
 
         let result = signer
@@ -669,6 +671,7 @@ mod tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
 
         let result = signer
@@ -757,6 +760,7 @@ mod tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
 
         let result = signer

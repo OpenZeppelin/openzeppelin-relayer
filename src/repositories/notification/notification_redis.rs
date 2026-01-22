@@ -3,6 +3,7 @@
 use crate::models::{NotificationRepoModel, PaginationQuery, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{BatchRetrievalResult, PaginatedResult, Repository};
+use crate::utils::EncryptionContext;
 use async_trait::async_trait;
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
@@ -80,11 +81,15 @@ impl RedisNotificationRepository {
         for (i, value) in values.into_iter().enumerate() {
             match value {
                 Some(json) => {
-                    match self.deserialize_entity::<NotificationRepoModel>(
-                        &json,
-                        &ids[i],
-                        "notification",
-                    ) {
+                    // Deserialize with AAD context (decryption bound to storage key)
+                    let key = keys[i].clone();
+                    match EncryptionContext::with_aad_sync(key, || {
+                        self.deserialize_entity::<NotificationRepoModel>(
+                            &json,
+                            &ids[i],
+                            "notification",
+                        )
+                    }) {
                         Ok(notification) => notifications.push(notification),
                         Err(e) => {
                             failed_count += 1;
@@ -101,10 +106,8 @@ impl RedisNotificationRepository {
         }
 
         if failed_count > 0 {
-            warn!(failed_count = %failed_count, total_count = %ids.len(), "failed to deserialize notifications in batch");
+            warn!(failed_count = %failed_count, total_count = %ids.len(), failed_ids = ?failed_ids, "failed to deserialize notifications in batch");
         }
-
-        warn!(failed_ids = ?failed_ids, "failed to deserialize notifications");
 
         debug!(count = %notifications.len(), "successfully fetched notifications");
         Ok(BatchRetrievalResult {
@@ -147,7 +150,10 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
 
         debug!("creating notification");
 
-        let value = self.serialize_entity(&entity, |n| &n.id, "notification")?;
+        // Serialize notification with AAD context (encryption bound to storage key)
+        let value = EncryptionContext::with_aad_sync(key.clone(), || {
+            self.serialize_entity(&entity, |n| &n.id, "notification")
+        })?;
 
         // Check if notification already exists
         let existing: Option<String> = conn
@@ -195,8 +201,10 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
 
         match value {
             Some(json) => {
-                let notification =
-                    self.deserialize_entity::<NotificationRepoModel>(&json, &id, "notification")?;
+                // Deserialize notification with AAD context (decryption bound to storage key)
+                let notification = EncryptionContext::with_aad_sync(key, || {
+                    self.deserialize_entity::<NotificationRepoModel>(&json, &id, "notification")
+                })?;
                 debug!("successfully fetched notification");
                 Ok(notification)
             }
@@ -307,7 +315,10 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
             )));
         }
 
-        let value = self.serialize_entity(&entity, |n| &n.id, "notification")?;
+        // Serialize notification with AAD context (encryption bound to storage key)
+        let value = EncryptionContext::with_aad_sync(key.clone(), || {
+            self.serialize_entity(&entity, |n| &n.id, "notification")
+        })?;
 
         // Update notification data
         let _: () = conn
@@ -506,17 +517,21 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "Requires active Redis instance"]
-
     async fn test_serialize_deserialize_notification() {
         let repo = setup_test_repo().await;
         let random_id = Uuid::new_v4().to_string();
         let notification = create_test_notification(&random_id);
+        let test_key = format!("test_prefix:notification:{}", random_id);
 
-        let serialized = repo
-            .serialize_entity(&notification, |n| &n.id, "notification")
-            .expect("Serialization should succeed");
-        let deserialized: NotificationRepoModel = repo
-            .deserialize_entity(&serialized, &random_id, "notification")
+        let serialized = EncryptionContext::with_aad_sync(test_key.clone(), || {
+            repo.serialize_entity(&notification, |n| &n.id, "notification")
+        })
+        .expect("Serialization should succeed");
+
+        let deserialized: NotificationRepoModel =
+            EncryptionContext::with_aad_sync(test_key, || {
+                repo.deserialize_entity(&serialized, &random_id, "notification")
+            })
             .expect("Deserialization should succeed");
 
         assert_eq!(notification.id, deserialized.id);

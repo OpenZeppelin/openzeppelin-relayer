@@ -421,6 +421,7 @@ mod tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
 
         let dex_service = MockStellarDexServiceTrait::new();
@@ -504,6 +505,7 @@ mod tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
 
         let dex_service = MockStellarDexServiceTrait::new();
@@ -591,6 +593,7 @@ mod tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
 
         let dex_service = MockStellarDexServiceTrait::new();
@@ -664,6 +667,7 @@ mod tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
 
         let dex_service = MockStellarDexServiceTrait::new();
@@ -716,6 +720,7 @@ mod tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
 
         let dex_service = MockStellarDexServiceTrait::new();
@@ -796,6 +801,7 @@ mod tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
 
         let policy = RelayerStellarPolicy {
@@ -1228,11 +1234,18 @@ mod xdr_transaction_tests {
             .times(1)
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
-        // Mock find_by_status for enqueue_next_pending_transaction
+        // Mock find_by_status_paginated for enqueue_next_pending_transaction
         mocks
             .tx_repo
-            .expect_find_by_status()
-            .returning(|_, _| Ok(vec![])); // No pending transactions
+            .expect_find_by_status_paginated()
+            .returning(move |_, _, _, _| {
+                Ok(crate::repositories::PaginatedResult {
+                    items: vec![],
+                    total: 0,
+                    page: 1,
+                    per_page: 1,
+                })
+            }); // No pending transactions
 
         let handler = make_stellar_tx_handler(relayer.clone(), mocks);
 

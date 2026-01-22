@@ -134,7 +134,7 @@ where
 pub struct RelayerApi;
 
 impl RelayerApi {
-    #[instrument(name = "Plugin::handle_request", skip_all, fields(method = %request.method, relayer_id = %request.relayer_id, plugin_req_id = %request.request_id))]
+    #[instrument(name = "Plugin::handle_request", skip_all, fields(method = %request.method, relayer_id = %request.relayer_id, plugin_req_id = %request.http_request_id.as_ref().unwrap_or(&request.request_id)))]
     pub async fn handle_request<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         &self,
         request: Request,

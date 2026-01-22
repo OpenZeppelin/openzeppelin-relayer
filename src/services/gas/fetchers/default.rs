@@ -43,7 +43,9 @@ mod tests {
         let fetcher = DefaultGasPriceFetcher;
         let network = EvmNetwork {
             network: "ethereum".to_string(),
-            rpc_urls: vec!["https://mainnet.infura.io".to_string()],
+            rpc_urls: vec![crate::models::RpcConfig::new(
+                "https://mainnet.infura.io".to_string(),
+            )],
             explorer_urls: None,
             average_blocktime_ms: 12000,
             is_testnet: false,
@@ -71,7 +73,9 @@ mod tests {
         let fetcher = DefaultGasPriceFetcher;
         let network = EvmNetwork {
             network: "ethereum".to_string(),
-            rpc_urls: vec!["https://mainnet.infura.io".to_string()],
+            rpc_urls: vec![crate::models::RpcConfig::new(
+                "https://mainnet.infura.io".to_string(),
+            )],
             explorer_urls: None,
             average_blocktime_ms: 12000,
             is_testnet: false,
@@ -98,7 +102,9 @@ mod tests {
         let fetcher = DefaultGasPriceFetcher;
         let network = EvmNetwork {
             network: "polygon".to_string(),
-            rpc_urls: vec!["https://polygon-rpc.com".to_string()],
+            rpc_urls: vec![crate::models::RpcConfig::new(
+                "https://polygon-rpc.com".to_string(),
+            )],
             explorer_urls: None,
             average_blocktime_ms: 2000,
             is_testnet: false,
@@ -126,7 +132,9 @@ mod tests {
         let fetcher = DefaultGasPriceFetcher;
         let network = EvmNetwork {
             network: "ethereum".to_string(),
-            rpc_urls: vec!["https://mainnet.infura.io".to_string()],
+            rpc_urls: vec![crate::models::RpcConfig::new(
+                "https://mainnet.infura.io".to_string(),
+            )],
             explorer_urls: None,
             average_blocktime_ms: 12000,
             is_testnet: false,
@@ -154,7 +162,9 @@ mod tests {
         let fetcher = DefaultGasPriceFetcher;
         let network = EvmNetwork {
             network: "polygon".to_string(),
-            rpc_urls: vec!["https://polygon-rpc.com".to_string()],
+            rpc_urls: vec![crate::models::RpcConfig::new(
+                "https://polygon-rpc.com".to_string(),
+            )],
             explorer_urls: None,
             average_blocktime_ms: 2000,
             is_testnet: false,

@@ -241,6 +241,7 @@ mod tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
         let response = signer
             .sign_transaction(NetworkTransactionData::Stellar(tx_data))
@@ -302,6 +303,7 @@ mod tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
 
         let response = signer
@@ -385,6 +387,7 @@ mod tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
 
         let response = signer

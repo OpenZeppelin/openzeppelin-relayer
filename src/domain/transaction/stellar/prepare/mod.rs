@@ -235,6 +235,7 @@ mod prepare_transaction_tests {
     use crate::{
         domain::SignTransactionResponse,
         models::{NetworkTransactionData, OperationSpec, RepositoryError, TransactionStatus},
+        repositories::PaginatedResult,
         services::provider::ProviderError,
     };
     use soroban_rs::xdr::{Limits, ReadXdr, TransactionEnvelope};
@@ -447,11 +448,18 @@ mod prepare_transaction_tests {
             .times(1)
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
-        // Mock find_by_status for enqueue_next_pending_transaction
+        // Mock find_by_status_paginated for enqueue_next_pending_transaction
         mocks
             .tx_repo
-            .expect_find_by_status()
-            .returning(|_, _| Ok(vec![])); // No pending transactions
+            .expect_find_by_status_paginated()
+            .returning(move |_, _, _, _| {
+                Ok(PaginatedResult {
+                    items: vec![],
+                    total: 0,
+                    page: 1,
+                    per_page: 1,
+                })
+            }); // No pending transactions
 
         let handler = make_stellar_tx_handler(relayer.clone(), mocks);
         let mut tx = create_test_transaction(&relayer.id);
@@ -546,11 +554,18 @@ mod prepare_transaction_tests {
             .times(1)
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
-        // Mock find_by_status for enqueue_next_pending_transaction
+        // Mock find_by_status_paginated for enqueue_next_pending_transaction
         mocks
             .tx_repo
-            .expect_find_by_status()
-            .returning(|_, _| Ok(vec![])); // No pending transactions
+            .expect_find_by_status_paginated()
+            .returning(move |_, _, _, _| {
+                Ok(PaginatedResult {
+                    items: vec![],
+                    total: 0,
+                    page: 1,
+                    per_page: 1,
+                })
+            }); // No pending transactions
 
         let handler = make_stellar_tx_handler(relayer.clone(), mocks);
         let tx = create_test_transaction(&relayer.id);
@@ -671,11 +686,18 @@ mod prepare_transaction_tests {
             .times(1)
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
-        // Mock find_by_status for enqueue_next_pending_transaction
+        // Mock find_by_status_paginated for enqueue_next_pending_transaction
         mocks
             .tx_repo
-            .expect_find_by_status()
-            .returning(|_, _| Ok(vec![]));
+            .expect_find_by_status_paginated()
+            .returning(move |_, _, _, _| {
+                Ok(PaginatedResult {
+                    items: vec![],
+                    total: 0,
+                    page: 1,
+                    per_page: 1,
+                })
+            });
 
         let handler = make_stellar_tx_handler(relayer.clone(), mocks);
         let tx = create_test_transaction(&relayer.id);
@@ -771,8 +793,15 @@ mod prepare_transaction_tests {
 
         mocks
             .tx_repo
-            .expect_find_by_status()
-            .returning(|_, _| Ok(vec![]));
+            .expect_find_by_status_paginated()
+            .returning(move |_, _, _, _| {
+                Ok(PaginatedResult {
+                    items: vec![],
+                    total: 0,
+                    page: 1,
+                    per_page: 1,
+                })
+            });
 
         let handler = make_stellar_tx_handler(relayer.clone(), mocks);
 
@@ -858,8 +887,15 @@ mod prepare_transaction_tests {
 
         mocks
             .tx_repo
-            .expect_find_by_status()
-            .returning(|_, _| Ok(vec![]));
+            .expect_find_by_status_paginated()
+            .returning(move |_, _, _, _| {
+                Ok(PaginatedResult {
+                    items: vec![],
+                    total: 0,
+                    page: 1,
+                    per_page: 1,
+                })
+            });
 
         let handler = make_stellar_tx_handler(relayer.clone(), mocks);
 
@@ -1020,7 +1056,7 @@ mod refactoring_tests {
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
         // In concurrent mode, should NOT look for pending transactions
-        mocks.tx_repo.expect_find_by_status().times(0); // Should not be called
+        mocks.tx_repo.expect_find_by_status_paginated().times(0); // Should not be called
 
         let handler = make_stellar_tx_handler(relayer.clone(), mocks);
         let tx = create_test_transaction(&relayer.id);
@@ -1047,6 +1083,7 @@ mod refactoring_tests {
             hash: None,
             simulation_transaction_data: None,
             signed_envelope_xdr: Some("test-xdr".to_string()),
+            transaction_result_xdr: None,
         };
 
         let expected_xdr = expected_stellar_data.signed_envelope_xdr.clone();

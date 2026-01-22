@@ -154,21 +154,21 @@ mod tests {
 
         let config = GoogleCloudKmsSignerConfig {
             service_account: GoogleCloudKmsSignerServiceAccountConfig {
-                project_id: "test-project".to_string(),
+                project_id: SecretString::new("test-project"),
                 private_key_id: SecretString::new("test-private-key-id"),
                 private_key: SecretString::new("-----BEGIN EXAMPLE PRIVATE KEY-----\nFAKEKEYDATA\n-----END EXAMPLE PRIVATE KEY-----\n"),
                 client_email: SecretString::new("test-service-account@example.com"),
-                client_id: "test-client-id".to_string(),
-                auth_uri: "https://accounts.google.com/o/oauth2/auth".to_string(),
-                token_uri: "https://oauth2.googleapis.com/token".to_string(),
-                client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/test-service-account%40example.com".to_string(),
-                auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs".to_string(),
-                universe_domain: base_url,
+                client_id: SecretString::new("test-client-id"),
+                auth_uri: SecretString::new("https://accounts.google.com/o/oauth2/auth"),
+                token_uri: SecretString::new("https://oauth2.googleapis.com/token"),
+                client_x509_cert_url: SecretString::new("https://www.googleapis.com/robot/v1/metadata/x509/test-service-account%40example.com"),
+                auth_provider_x509_cert_url: SecretString::new("https://www.googleapis.com/oauth2/v1/certs"),
+                universe_domain: SecretString::new(&base_url),
             },
             key: GoogleCloudKmsSignerKeyConfig {
-                location: "global".to_string(),
-                key_id: "test-key".to_string(),
-                key_ring_id: "test-ring".to_string(),
+                location: SecretString::new("global"),
+                key_id: SecretString::new("test-key"),
+                key_ring_id: SecretString::new("test-ring"),
                 key_version: 1,
             },
         };

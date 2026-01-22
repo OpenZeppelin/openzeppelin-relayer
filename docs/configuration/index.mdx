@@ -9,17 +9,18 @@ Please ensure appropriate access permissions on all configuration files (for `./
 
 <Callout type='warn'>
 
-
 The OpenZeppelin Relayer supports two configuration approaches:
 
-***File-based Configuration:***
-1. ***`config.json`***: Contains relayer definitions, signer configurations, and network policies
-2. ***`.env`*** file: Contains environment variables like API keys and connection strings
+**_File-based Configuration:_**
 
-***API-based Configuration:***
+1. **_`config.json`_**: Contains relayer definitions, signer configurations, and network policies
+2. **_`.env`_** file: Contains environment variables like API keys and connection strings
+
+**_API-based Configuration:_**
+
 - Full CRUD operations for relayers, signers, and notifications via REST API
 - Changes take effect immediately (no container restart required)
-- See the ***API Reference*** page for detailed endpoints documentation
+- See the **_API Reference_** page for detailed endpoints documentation
 
 See [Storage Configuration](./configuration/storage) for detailed information about how file-based and API-based configurations work together, storage behavior, and best practices.
 
@@ -39,43 +40,52 @@ cp .env.example .env
 
 This table lists the environment variables and their default values.
 
-| Environment Variable | Default Value | Accepted Values | Description |
-| --- | --- | --- | --- |
-| `RUST_LOG` | `info` | `info, debug, warn, error, trace` | Log level. |
-| `REPOSITORY_STORAGE_TYPE` | `in-memory` | `in-memory, redis` | Type of storage used for storing repository config and resources. See [Storage Configuration](./configuration/storage) for detailed information. |
-| `RESET_STORAGE_ON_START` | `false` | `bool` | Clears all resources from storage on startup and reloads entries from the config file. See [Storage Configuration](./configuration/storage) for usage details. |
-| `TRANSACTION_EXPIRATION_HOURS` | `4` | `number` | Number of hours after which transactions in a final state are removed from storage. See [Storage Configuration](./configuration/storage) for more information. |
-| `CONFIG_DIR` | `./config` | `<any relative file path where config.json is located>` | Relative path of directory where config files reside |
-| `CONFIG_FILE_NAME` | `config.json` | `<any file name>` | File Name of the configuration file. |
-| `RATE_LIMIT_REQUESTS_PER_SECOND` | `100` | `<any value>` | Rate limit for the API in requests per second. |
-| `RATE_LIMIT_BURST_SIZE` | `300` | `<any value>` | Rate limit burst size. |
-| `API_KEY` | `` | `string`, | API key to use for authentication to the relayer server. Minimum length 32 characters. |
-| `WEBHOOK_SIGNING_KEY` | `` | `string` | Signing key to use for webhook notifications. Minimum length 32 characters. |
-| `LOG_MODE` | `stdout` | `stdout, file` | Write logs either to console or to file. |
-| `LOG_DATA_DIR` | `./logs` | `<any file path>` | Directory to persist log files on host. |
-| `LOG_MAX_SIZE (in bytes)` | `1073741824` | `<any value in bytes>` | Size after which logs needs to be rolled. |
-| `METRICS_ENABLED` | `false` | `bool` | Enable metrics server for external tools to scrape metrics. |
-| `METRICS_PORT` | `8081` | `<any tcp port (preferably choose non-privileged ports i.e. (1024-65535))>` | Port to use for metrics server. |
-| `REDIS_URL` | `redis://localhost:6379` | `<redis connection string>` | Redis connection URL for the relayer. See [Storage Configuration](./configuration/storage) for Redis setup details. |
-| `REDIS_CONNECTION_TIMEOUT_MS` | `10000` | `<timeout in milliseconds>` | Connection timeout for Redis in milliseconds. See [Storage Configuration](./configuration/storage) for Redis configuration. |
-| `REDIS_KEY_PREFIX` | `oz-relayer` | `string` | Redis key prefix for namespacing. See [Storage Configuration](./configuration/storage) for more information. |
-| `STORAGE_ENCRYPTION_KEY` | `` | `string` | Encryption key used to encrypt data at rest in Redis storage. See [Storage Configuration](./configuration/storage) for security details. |
-| `RPC_TIMEOUT_MS` | `10000` | `<timeout in milliseconds>` | Sets the maximum time to wait for RPC connections before timing out. |
-| `PROVIDER_MAX_RETRIES` | `3` | `<number of retries>` | Maximum number of retry attempts for provider operations. |
-| `PROVIDER_RETRY_BASE_DELAY_MS` | `100` | `<delay in milliseconds>` | Base delay between retry attempts in milliseconds. |
-| `PROVIDER_RETRY_MAX_DELAY_MS` | `2000` | `<delay in milliseconds>` | Maximum delay between retry attempts in milliseconds. |
-| `PROVIDER_MAX_FAILOVERS` | `3` | `<number of failovers>` | Maximum number of failovers (switching to different providers). |
-| `ENABLE_SWAGGER` | `false` | `true, false` | Enable or disable Swagger UI for API documentation. |
-| `KEYSTORE_PASSPHRASE` | `` | `<keystore passphrase>` | Passphrase for the keystore file used for signing transactions. |
-| `BACKGROUND_WORKER_TRANSACTION_REQUEST_CONCURRENCY` | `50` | `<any positive number>` | Maximum number of concurrent transaction request jobs that can be processed simultaneously. |
-| `BACKGROUND_WORKER_TRANSACTION_SENDER_CONCURRENCY` | `75` | `<any positive number>` | Maximum number of concurrent transaction submission jobs that can be processed simultaneously. |
-| `BACKGROUND_WORKER_TRANSACTION_STATUS_CHECKER_CONCURRENCY` | `50` | `<any positive number>` | Maximum number of concurrent generic/default transaction status check jobs that can be processed simultaneously. This worker handles Solana and any future networks that don’t have dedicated status checkers. |
-| `BACKGROUND_WORKER_TRANSACTION_STATUS_CHECKER_EVM_CONCURRENCY` | `100` | `<any positive number>` | Maximum number of concurrent EVM transaction status check invocations that can be processed simultaneously. EVM handles the highest volume (~75% of all status checks) and uses optimized retries (8-20s) to avoid triggering premature resubmission. |
-| `BACKGROUND_WORKER_TRANSACTION_STATUS_CHECKER_STELLAR_CONCURRENCY` | `50` | `<any positive number>` | Maximum number of concurrent Stellar transaction status checks that can be processed simultaneously. Stellar status checker uses fast retries (2-3s) optimized for Stellar’s faster block times. |
-| `BACKGROUND_WORKER_NOTIFICATION_SENDER_CONCURRENCY` | `30` | `<any positive number>` | Maximum number of concurrent notifications that can be processed simultaneously. |
-| `BACKGROUND_WORKER_SOLANA_TOKEN_SWAP_REQUEST_CONCURRENCY` | `10` | `<any positive number>` | Maximum number of concurrent Solana token swap requests that can be processed simultaneously. Low volume worker. |
-| `BACKGROUND_WORKER_TRANSACTION_CLEANUP_CONCURRENCY` | `1` | `<any positive number>` | Maximum number of concurrent transaction cleanup invocations that can be processed simultaneously. Defaults to 1 to avoid database conflicts. |
-| `BACKGROUND_WORKER_RELAYER_HEALTH_CHECK_CONCURRENCY` | `10` | `<any positive number>` | Maximum number of concurrent relayer health check invocations that can be processed simultaneously. Low volume worker. |
+| Environment Variable                                               | Default Value            | Accepted Values                                                             | Description                                                                                                                                                                                                                                                                          |
+| ------------------------------------------------------------------ | ------------------------ | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `RUST_LOG`                                                         | `info`                   | `info, debug, warn, error, trace`                                           | Log level.                                                                                                                                                                                                                                                                           |
+| `REPOSITORY_STORAGE_TYPE`                                          | `in-memory`              | `in-memory, redis`                                                          | Type of storage used for storing repository config and resources. See [Storage Configuration](./configuration/storage) for detailed information.                                                                                                                                     |
+| `RESET_STORAGE_ON_START`                                           | `false`                  | `bool`                                                                      | Clears all resources from storage on startup and reloads entries from the config file. See [Storage Configuration](./configuration/storage) for usage details.                                                                                                                       |
+| `TRANSACTION_EXPIRATION_HOURS`                                     | `4`                      | `number`                                                                    | Number of hours after which transactions in a final state are removed from storage. See [Storage Configuration](./configuration/storage) for more information.                                                                                                                       |
+| `CONFIG_DIR`                                                       | `./config`               | `<any relative file path where config.json is located>`                     | Relative path of directory where config files reside                                                                                                                                                                                                                                 |
+| `CONFIG_FILE_NAME`                                                 | `config.json`            | `<any file name>`                                                           | File Name of the configuration file.                                                                                                                                                                                                                                                 |
+| `RATE_LIMIT_REQUESTS_PER_SECOND`                                   | `100`                    | `<any value>`                                                               | Rate limit for the API in requests per second.                                                                                                                                                                                                                                       |
+| `RATE_LIMIT_BURST_SIZE`                                            | `300`                    | `<any value>`                                                               | Rate limit burst size.                                                                                                                                                                                                                                                               |
+| `API_KEY`                                                          | ``                       | `string`,                                                                   | API key to use for authentication to the relayer server. Minimum length 32 characters.                                                                                                                                                                                               |
+| `WEBHOOK_SIGNING_KEY`                                              | ``                       | `string`                                                                    | Signing key to use for webhook notifications. Minimum length 32 characters.                                                                                                                                                                                                          |
+| `LOG_MODE`                                                         | `stdout`                 | `stdout, file`                                                              | Write logs either to console or to file.                                                                                                                                                                                                                                             |
+| `LOG_DATA_DIR`                                                     | `./logs`                 | `<any file path>`                                                           | Directory to persist log files on host.                                                                                                                                                                                                                                              |
+| `LOG_MAX_SIZE (in bytes)`                                          | `1073741824`             | `<any value in bytes>`                                                      | Size after which logs needs to be rolled.                                                                                                                                                                                                                                            |
+| `METRICS_ENABLED`                                                  | `false`                  | `bool`                                                                      | Enable metrics server for external tools to scrape metrics.                                                                                                                                                                                                                          |
+| `METRICS_PORT`                                                     | `8081`                   | `<any tcp port (preferably choose non-privileged ports i.e. (1024-65535))>` | Port to use for metrics server.                                                                                                                                                                                                                                                      |
+| `REDIS_URL`                                                        | `redis://localhost:6379` | `<redis connection string>`                                                 | Redis connection URL for the relayer. See [Storage Configuration](./configuration/storage) for Redis setup details.                                                                                                                                                                  |
+| `REDIS_CONNECTION_TIMEOUT_MS`                                      | `10000`                  | `<timeout in milliseconds>`                                                 | Connection timeout for Redis in milliseconds. See [Storage Configuration](./configuration/storage) for Redis configuration.                                                                                                                                                          |
+| `REDIS_KEY_PREFIX`                                                 | `oz-relayer`             | `string`                                                                    | Redis key prefix for namespacing. See [Storage Configuration](./configuration/storage) for more information.                                                                                                                                                                         |
+| `STORAGE_ENCRYPTION_KEY`                                           | ``                       | `string`                                                                    | Encryption key used to encrypt data at rest in Redis storage. See [Storage Configuration](./configuration/storage) for security details.                                                                                                                                             |
+| `RPC_TIMEOUT_MS`                                                   | `10000`                  | `<timeout in milliseconds>`                                                 | Sets the maximum time to wait for RPC connections before timing out.                                                                                                                                                                                                                 |
+| `PROVIDER_MAX_RETRIES`                                             | `3`                      | `<number of retries>`                                                       | Maximum number of retry attempts for provider operations.                                                                                                                                                                                                                            |
+| `PROVIDER_RETRY_BASE_DELAY_MS`                                     | `100`                    | `<delay in milliseconds>`                                                   | Base delay between retry attempts in milliseconds.                                                                                                                                                                                                                                   |
+| `PROVIDER_RETRY_MAX_DELAY_MS`                                      | `2000`                   | `<delay in milliseconds>`                                                   | Maximum delay between retry attempts in milliseconds.                                                                                                                                                                                                                                |
+| `PROVIDER_MAX_FAILOVERS`                                           | `3`                      | `<number of failovers>`                                                     | Maximum number of failovers (switching to different providers).                                                                                                                                                                                                                      |
+| `PROVIDER_FAILURE_THRESHOLD`                                       | `3`                      | `<number>`                                                                  | Number of consecutive failures before a provider is temporarily paused. When a provider reaches this threshold, it will be paused for the duration specified by `PROVIDER_PAUSE_DURATION_SECS`. Supports legacy env var `RPC_FAILURE_THRESHOLD`.                                     |
+| `PROVIDER_PAUSE_DURATION_SECS`                                     | `60`                     | `<seconds>`                                                                 | Duration in seconds that a provider remains paused after reaching the failure threshold. During this time, the relayer will attempt to use other available providers. Supports legacy env var `RPC_PAUSE_DURATION_SECS`.                                                             |
+| `PROVIDER_FAILURE_EXPIRATION_SECS`                                 | `60`                     | `<seconds>`                                                                 | Duration in seconds after which individual failure records are considered stale and automatically removed. This allows providers to naturally recover over time even without explicit success calls. Failures older than this duration are not counted toward the failure threshold. |
+| `RPC_ALLOWED_HOSTS`                                                | ``                       | `<comma-separated hostnames>`                                               | Comma-separated list of allowed RPC hostnames/IPs. If non-empty, only URLs with these hosts are permitted. Example: `eth-mainnet.g.alchemy.com,mainnet.infura.io`                                                                                                                    |
+| `RPC_BLOCK_PRIVATE_IPS`                                            | `false`                  | `bool`                                                                      | Block private IP addresses (RFC 1918, loopback, link-local) in RPC URLs. Set to `true` to prevent RPC URLs from targeting private networks.                                                                                                                                          |
+| `CONNECTION_BACKLOG`                                               | `511`                    | `<number>`                                                                  | TCP listen backlog size (pending connections queue). Higher values allow more connections to be queued during traffic bursts, preventing connection drops. Default of 511 is a production-ready value that balances memory usage with burst capacity.                              |
+| `REQUEST_TIMEOUT_SECONDS`                                           | `30`                     | `<seconds>`                                                                  | Request handler timeout in seconds for API endpoints. This is a security measure to prevent resource exhaustion attacks (DoS). It limits how long a request handler can run, preventing slowloris-style attacks and ensuring resources are freed promptly.                         |
+| `RELAYER_CONCURRENCY_LIMIT`                                        | `100`                    | `<any positive number>`                                                     | Maximum number of concurrent requests allowed for `/api/v1/relayers/*` endpoints. When this limit is reached, additional requests will be rejected with a 429 Too Many Requests error. This helps prevent resource exhaustion and ensures fair resource allocation.                    |
+| `MAX_CONNECTIONS`                                                  | `256`                    | `<any positive number>`                                                     | Maximum number of concurrent TCP connections allowed server-wide. This is a safety net that prevents the server from accepting more connections than it can handle. When this limit is reached, new connections will be rejected.                                                |
+| `ENABLE_SWAGGER`                                                   | `false`                  | `true, false`                                                               | Enable or disable Swagger UI for API documentation.                                                                                                                                                                                                                                  |
+| `KEYSTORE_PASSPHRASE`                                              | ``                       | `<keystore passphrase>`                                                     | Passphrase for the keystore file used for signing transactions.                                                                                                                                                                                                                      |
+| `BACKGROUND_WORKER_TRANSACTION_REQUEST_CONCURRENCY`                | `50`                     | `<any positive number>`                                                     | Maximum number of concurrent transaction request jobs that can be processed simultaneously.                                                                                                                                                                                          |
+| `BACKGROUND_WORKER_TRANSACTION_SENDER_CONCURRENCY`                 | `75`                     | `<any positive number>`                                                     | Maximum number of concurrent transaction submission jobs that can be processed simultaneously.                                                                                                                                                                                       |
+| `BACKGROUND_WORKER_TRANSACTION_STATUS_CHECKER_CONCURRENCY`         | `50`                     | `<any positive number>`                                                     | Maximum number of concurrent generic/default transaction status check jobs that can be processed simultaneously. This worker handles Solana and any future networks that don’t have dedicated status checkers.                                                                       |
+| `BACKGROUND_WORKER_TRANSACTION_STATUS_CHECKER_EVM_CONCURRENCY`     | `100`                    | `<any positive number>`                                                     | Maximum number of concurrent EVM transaction status check invocations that can be processed simultaneously. EVM handles the highest volume (~75% of all status checks) and uses optimized retries (8-20s) to avoid triggering premature resubmission.                                |
+| `BACKGROUND_WORKER_TRANSACTION_STATUS_CHECKER_STELLAR_CONCURRENCY` | `50`                     | `<any positive number>`                                                     | Maximum number of concurrent Stellar transaction status checks that can be processed simultaneously. Stellar status checker uses fast retries (2-3s) optimized for Stellar’s faster block times.                                                                                     |
+| `BACKGROUND_WORKER_NOTIFICATION_SENDER_CONCURRENCY`                | `30`                     | `<any positive number>`                                                     | Maximum number of concurrent notifications that can be processed simultaneously.                                                                                                                                                                                                     |
+| `BACKGROUND_WORKER_SOLANA_TOKEN_SWAP_REQUEST_CONCURRENCY`          | `10`                     | `<any positive number>`                                                     | Maximum number of concurrent Solana token swap requests that can be processed simultaneously. Low volume worker.                                                                                                                                                                     |
+| `BACKGROUND_WORKER_TRANSACTION_CLEANUP_CONCURRENCY`                | `1`                      | `<any positive number>`                                                     | Maximum number of concurrent transaction cleanup invocations that can be processed simultaneously. Defaults to 1 to avoid database conflicts.                                                                                                                                        |
+| `BACKGROUND_WORKER_RELAYER_HEALTH_CHECK_CONCURRENCY`               | `10`                     | `<any positive number>`                                                     | Maximum number of concurrent relayer health check invocations that can be processed simultaneously. Low volume worker.                                                                                                                                                               |
 
 ### Environment configuration example
 
@@ -99,6 +109,15 @@ PROVIDER_MAX_RETRIES=3
 PROVIDER_RETRY_BASE_DELAY_MS=100
 PROVIDER_RETRY_MAX_DELAY_MS=2000
 PROVIDER_MAX_FAILOVERS=3
+PROVIDER_FAILURE_THRESHOLD=3
+PROVIDER_PAUSE_DURATION_SECS=60
+PROVIDER_FAILURE_EXPIRATION_SECS=60
+RPC_BLOCK_PRIVATE_IPS=true
+RPC_ALLOWED_HOSTS=eth-mainnet.g.alchemy.com,mainnet.infura.io
+CONNECTION_BACKLOG=511
+REQUEST_TIMEOUT_SECONDS=30
+RELAYER_CONCURRENCY_LIMIT=100
+MAX_CONNECTIONS=256
 ENABLE_SWAGGER=false
 KEYSTORE_PASSPHRASE=your_keystore_passphrase
 STORAGE_ENCRYPTION_KEY=X67aXacJB+krEldv9i2w7NCSFwwOzVV/1ELM2KJJjQw=
@@ -113,18 +132,17 @@ This file can exist in any directory, but the default location is `./config/conf
 
 <Callout>
 
-
-All components defined in `config.json` can also be managed via REST API endpoints. This provides runtime flexibility for adding, updating, or removing relayers, signers, and notifications without restarting the service. See the ***API Reference*** page for detailed endpoints documentation.
+All components defined in `config.json` can also be managed via REST API endpoints. This provides runtime flexibility for adding, updating, or removing relayers, signers, and notifications without restarting the service. See the **_API Reference_** page for detailed endpoints documentation.
 
 </Callout>
 
 Key sections in this file include:
 
-* Signers: Defines transaction signing methods.
-* Notifications: Sets up status alerts
-* Relayers: Configures networks, notifications channels, policies & singers.
-* Networks: Defines blockchain network configurations.
-* Plugins: Configures plugins.
+- Signers: Defines transaction signing methods.
+- Notifications: Sets up status alerts
+- Relayers: Configures networks, notifications channels, policies & singers.
+- Networks: Defines blockchain network configurations.
+- Plugins: Configures plugins.
 
 ### 1. Signers
 
@@ -132,25 +150,22 @@ Transaction signers are responsible for cryptographically signing transactions b
 
 For comprehensive details on configuring all supported signer types including:
 
-* Local keystore file signers
-* HashiCorp Vault (secret and transit)
-* Cloud KMS providers (Google Cloud, AWS)
-* Turnkey signers
-* CDP signers
-* Security best practices and troubleshooting
+- Local keystore file signers
+- HashiCorp Vault (secret and transit)
+- Cloud KMS providers (Google Cloud, AWS)
+- Turnkey signers
+- CDP signers
+- Security best practices and troubleshooting
 
 See the dedicated [Signers Configuration](./configuration/signers) guide.
 
-
-
 Signers can also be managed via API endpoints.
 
-See the ***API Reference*** page for detailed endpoints documentation.
-
+See the **_API Reference_** page for detailed endpoints documentation.
 
 ### 2. Notifications
 
-* `notifications` array containing notification entries:
+- `notifications` array containing notification entries:
 
 ```json
 "notifications": [
@@ -165,6 +180,7 @@ See the ***API Reference*** page for detailed endpoints documentation.
   }
 ]
 ```
+
 Available configuration fields
 | Field | Type | Description |
 | --- | --- | --- |
@@ -174,16 +190,13 @@ Available configuration fields
 | signing_key.type | String | Type of key used in signing the notification (`env` or `plain`) |
 | signing_key.value | String | Signing key value, env variable name, ... |
 
-
-
 Notifications can also be managed via API endpoints.
 
-See the ***API Reference*** page for detailed endpoints documentation.
-
+See the **_API Reference_** page for detailed endpoints documentation.
 
 ### 3. Relayers
 
-* `relayers` array, containing relayer entries:
+- `relayers` array, containing relayer entries:
 
 ```json
 "relayers": [
@@ -259,8 +272,8 @@ Available configuration fields
 
 The relayer supports two ways to configure RPC URLs:
 
-1. ***Public RPC URLs***: These are the default RPC endpoints provided by the network. They are automatically selected based on the network configuration.
-2. ***Custom RPC URLs***: You can specify custom RPC URLs using the `custom_rpc_urls` field in the relayer configuration. Each URL can be configured with an optional weight for high availability:
+1. **_Public RPC URLs_**: These are the default RPC endpoints provided by the network. They are automatically selected based on the network configuration.
+2. **_Custom RPC URLs_**: You can specify custom RPC URLs using the `custom_rpc_urls` field in the relayer configuration. Each URL can be configured with an optional weight for high availability:
 
 ```json
 "custom_rpc_urls": [
@@ -283,13 +296,15 @@ The relayer supports two ways to configure RPC URLs:
 ```
 
 This is useful when you want to:
-   * Use your own RPC nodes with load balancing
-   * Use a paid service provider for better reliability and performance
-   * Override the default public RPC URLs
-   * Access custom network endpoints
-   * Configure primary and backup endpoints with different weights
+
+- Use your own RPC nodes with load balancing
+- Use a paid service provider for better reliability and performance
+- Override the default public RPC URLs
+- Access custom network endpoints
+- Configure primary and backup endpoints with different weights
 
 When both are available, the relayer will:
+
 1. First attempt to use the `custom_rpc_urls` if configured.
 2. Fall back to the public RPC URLs if no custom URL is configured.
 
@@ -299,33 +314,72 @@ For backward compatibility, string arrays are still supported:
 "custom_rpc_urls": ["https://your-rpc.example.com"]
 ```
 
-<Callout type='warn'>
+#### Provider Health Management
 
+The relayer automatically tracks the health of RPC providers and manages failover:
 
-When using custom RPC URLs:
+- **Failure Tracking**: When a provider fails, the failure is recorded with a timestamp. Failures older than `PROVIDER_FAILURE_EXPIRATION_SECS` (default: 60 seconds) are automatically considered stale and removed.
 
-* Ensure the URLs are secure (HTTPS) when accessing over public networks
-* Keep your API keys and authentication tokens secure
-* Test the RPC endpoints' reliability and performance before using it in production
-* Configure weights to prioritize endpoints, assigning higher values to more reliable or performant ones.
-* The weight must be an integer between 0 and 100 (inclusive).
-* A weight of 0 disables the endpoint.
-* If a weight is not specified for an endpoint, it defaults to 100.
+- **Automatic Pausing**: When a provider reaches `PROVIDER_FAILURE_THRESHOLD` (default: 3) failures within the expiration window, it is automatically paused for `PROVIDER_PAUSE_DURATION_SECS` (default: 60 seconds). During this pause period, the relayer will attempt to use other available providers.
+
+- **Automatic Recovery**: After the pause duration expires, the provider becomes available again. Additionally, if all failures expire (older than `PROVIDER_FAILURE_EXPIRATION_SECS`), the provider automatically recovers even if it hasn't reached the pause expiration time.
+
+- **Fallback Behavior**: If all non-paused providers are unavailable, the relayer will fall back to paused providers as a last resort, ensuring maximum availability.
+
+You can configure these behaviors using the environment variables:
+
+- `PROVIDER_FAILURE_THRESHOLD`: Number of failures before pausing (default: 3)
+- `PROVIDER_PAUSE_DURATION_SECS`: How long to pause a failed provider (default: 60 seconds)
+- `PROVIDER_FAILURE_EXPIRATION_SECS`: How long failures are remembered (default: 60 seconds)
+
+#### RPC URL Security
+
+You can configure the following security features via environment variables:
+
+- **`RPC_ALLOWED_HOSTS`**: Comma-separated list of allowed RPC hostnames/IPs. If non-empty, only URLs with these hosts are permitted.
+
+  - Example: `RPC_ALLOWED_HOSTS=eth-mainnet.g.alchemy.com,mainnet.infura.io`
+
+- **`RPC_BLOCK_PRIVATE_IPS`**: Block private IP addresses (RFC 1918, loopback, link-local). Set to `true` to prevent RPC URLs from targeting private networks.
+  - Example: `RPC_BLOCK_PRIVATE_IPS=true`
+  - Default: `false` (for backwards compatibility)
+
+<Callout type='info'>
+
+Cloud metadata endpoints (`169.254.169.254`, `fd00:ec2::254`) are **always blocked** to prevent credential theft, regardless of configuration.
 
 </Callout>
 
+**Recommended Production Configuration:**
 
+```bash
+RPC_BLOCK_PRIVATE_IPS=true
+RPC_ALLOWED_HOSTS=eth-mainnet.g.alchemy.com,mainnet.infura.io,eth.llamarpc.com
+```
+
+<Callout type='warn'>
+
+When using custom RPC URLs:
+
+- Ensure the URLs are secure (HTTPS) when accessing over public networks
+- Keep your API keys and authentication tokens secure
+- Test the RPC endpoints' reliability and performance before using it in production
+- Configure weights to prioritize endpoints, assigning higher values to more reliable or performant ones.
+- The weight must be an integer between 0 and 100 (inclusive).
+- A weight of 0 disables the endpoint.
+- If a weight is not specified for an endpoint, it defaults to 100.
+
+</Callout>
 
 Relayers could also be managed via API endpoints.
 
-See the ***API Reference*** page for detailed endpoints documentation.
-
+See the **_API Reference_** page for detailed endpoints documentation.
 
 ### 4. Plugins
 
 For more information on how to write a plugin, please refer to the [Plugins](/relayer/plugins) page.
 
-* `plugins` array, containing plugin configurations:
+- `plugins` array, containing plugin configurations:
 
 ```json
 "plugins": [
@@ -346,16 +400,16 @@ Available configuration fields
 
 You can configure networks either:
 
-* In separate JSON files (recommended for better organization)
-* Directly in your main `config.json`
+- In separate JSON files (recommended for better organization)
+- Directly in your main `config.json`
 
 For comprehensive network configuration details, including:
 
-* Network field reference
-* Configuration examples for all network types
-* Network inheritance
-* Special tags and their behavior
-* Best practices and troubleshooting
+- Network field reference
+- Configuration examples for all network types
+- Network inheritance
+- Special tags and their behavior
+- Best practices and troubleshooting
 
 See the dedicated [Network Configuration](/relayer/network_configuration) guide.
 
@@ -487,9 +541,7 @@ Full `config/config.json` example with evm and solana relayers definitions using
         "https://api-sepolia.etherscan.io/api",
         "https://sepolia.etherscan.io"
       ],
-      "features": [
-        "eip1559"
-      ],
+      "features": ["eip1559"],
       "is_testnet": true,
       "network": "sepolia",
       "required_confirmations": 6,
@@ -500,9 +552,7 @@ Full `config/config.json` example with evm and solana relayers definitions using
         "https://ethereum-sepolia-public.nodies.app"
       ],
       "symbol": "ETH",
-      "tags": [
-        "deprecated"
-      ],
+      "tags": ["deprecated"],
       "type": "evm"
     },
     {
@@ -530,19 +580,20 @@ Full `config/config.json` example with evm and solana relayers definitions using
 The OpenZeppelin Relayer supports two complementary approaches for configuration management:
 
 ### File-based Configuration
-* Ideal for initial setup and deployment
-* Configuration persists across restarts
-* Requires container restart for changes to take effect
-* Suitable for infrastructure-as-code workflows
+
+- Ideal for initial setup and deployment
+- Configuration persists across restarts
+- Requires container restart for changes to take effect
+- Suitable for infrastructure-as-code workflows
 
 ### API-based Configuration
-* Enables runtime configuration changes
-* No service restarts required
-* Perfect for dynamic environments
-* Supports automated configuration management
+
+- Enables runtime configuration changes
+- No service restarts required
+- Perfect for dynamic environments
+- Supports automated configuration management
 
 <Callout>
-
 
 See [Storage Configuration](./configuration/storage) for detailed information about how file-based and API-based configurations work together, storage behavior, and best practices.
 

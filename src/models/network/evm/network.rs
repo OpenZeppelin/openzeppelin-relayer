@@ -3,7 +3,7 @@ use crate::constants::{
     ARBITRUM_BASED_TAG, LACKS_MEMPOOL_TAGS, OPTIMISM_BASED_TAG, OPTIMISM_TAG, POLYGON_ZKEVM_TAG,
     ROLLUP_TAG,
 };
-use crate::models::{NetworkConfigData, NetworkRepoModel, RepositoryError};
+use crate::models::{NetworkConfigData, NetworkRepoModel, RepositoryError, RpcConfig};
 use std::time::Duration;
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -11,8 +11,8 @@ pub struct EvmNetwork {
     // Common network fields (flattened from NetworkConfigCommon)
     /// Unique network identifier (e.g., "mainnet", "sepolia", "custom-devnet").
     pub network: String,
-    /// List of RPC endpoint URLs for connecting to the network.
-    pub rpc_urls: Vec<String>,
+    /// List of RPC endpoint configurations for connecting to the network.
+    pub rpc_urls: Vec<RpcConfig>,
     /// List of Explorer endpoint URLs for connecting to the network.
     pub explorer_urls: Option<Vec<String>>,
     /// Estimated average time between blocks in milliseconds.
@@ -157,7 +157,7 @@ impl EvmNetwork {
         self.explorer_urls.as_deref()
     }
 
-    pub fn public_rpc_urls(&self) -> Option<&[String]> {
+    pub fn public_rpc_urls(&self) -> Option<&[RpcConfig]> {
         if self.rpc_urls.is_empty() {
             None
         } else {
@@ -174,9 +174,10 @@ mod tests {
     use crate::models::{NetworkConfigData, NetworkRepoModel, NetworkType};
 
     fn create_test_evm_network_with_tags(tags: Vec<&str>) -> EvmNetwork {
+        use crate::models::RpcConfig;
         EvmNetwork {
             network: "test-network".to_string(),
-            rpc_urls: vec!["https://rpc.example.com".to_string()],
+            rpc_urls: vec![RpcConfig::new("https://rpc.example.com".to_string())],
             explorer_urls: None,
             average_blocktime_ms: 12000,
             is_testnet: false,
@@ -282,11 +283,12 @@ mod tests {
 
     #[test]
     fn test_try_from_with_tags() {
+        use crate::models::RpcConfig;
         let config = EvmNetworkConfig {
             common: NetworkConfigCommon {
                 network: "test-network".to_string(),
                 from: None,
-                rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+                rpc_urls: Some(vec![RpcConfig::new("https://rpc.example.com".to_string())]),
                 explorer_urls: None,
                 average_blocktime_ms: Some(12000),
                 is_testnet: Some(false),

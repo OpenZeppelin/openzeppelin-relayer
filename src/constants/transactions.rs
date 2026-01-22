@@ -17,6 +17,12 @@ pub const FINAL_TRANSACTION_STATUSES: &[TransactionStatus] = &[
     TransactionStatus::Expired,
 ];
 
+pub const PENDING_TRANSACTION_STATUSES: &[TransactionStatus] = &[
+    TransactionStatus::Pending,
+    TransactionStatus::Sent,
+    TransactionStatus::Submitted,
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -36,5 +42,22 @@ mod tests {
         assert!(!FINAL_TRANSACTION_STATUSES.contains(&TransactionStatus::Sent));
         assert!(!FINAL_TRANSACTION_STATUSES.contains(&TransactionStatus::Submitted));
         assert!(!FINAL_TRANSACTION_STATUSES.contains(&TransactionStatus::Mined));
+    }
+
+    #[test]
+    fn test_pending_transaction_statuses_contains_expected_values() {
+        assert_eq!(PENDING_TRANSACTION_STATUSES.len(), 3);
+        assert!(PENDING_TRANSACTION_STATUSES.contains(&TransactionStatus::Pending));
+        assert!(PENDING_TRANSACTION_STATUSES.contains(&TransactionStatus::Sent));
+        assert!(PENDING_TRANSACTION_STATUSES.contains(&TransactionStatus::Submitted));
+    }
+
+    #[test]
+    fn test_pending_transaction_statuses_excludes_final_states() {
+        assert!(!PENDING_TRANSACTION_STATUSES.contains(&TransactionStatus::Canceled));
+        assert!(!PENDING_TRANSACTION_STATUSES.contains(&TransactionStatus::Confirmed));
+        assert!(!PENDING_TRANSACTION_STATUSES.contains(&TransactionStatus::Failed));
+        assert!(!PENDING_TRANSACTION_STATUSES.contains(&TransactionStatus::Expired));
+        assert!(!PENDING_TRANSACTION_STATUSES.contains(&TransactionStatus::Mined));
     }
 }

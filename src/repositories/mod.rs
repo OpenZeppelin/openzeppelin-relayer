@@ -48,6 +48,37 @@ pub struct BatchRetrievalResult<T> {
     pub failed_ids: Vec<String>,
 }
 
+/// Result of a batch delete operation
+#[derive(Debug, Default)]
+pub struct BatchDeleteResult {
+    /// Number of entities successfully deleted
+    pub deleted_count: usize,
+    /// IDs that failed to delete with their error messages
+    pub failed: Vec<(String, String)>,
+}
+
+/// Request to delete a transaction with pre-extracted data needed for index cleanup.
+/// This avoids re-fetching transaction data when the caller already has it.
+#[derive(Debug, Clone)]
+pub struct TransactionDeleteRequest {
+    /// Transaction ID
+    pub id: String,
+    /// Relayer ID (needed for building index keys)
+    pub relayer_id: String,
+    /// Nonce if available (needed for nonce index cleanup, EVM-specific)
+    pub nonce: Option<u64>,
+}
+
+impl TransactionDeleteRequest {
+    pub fn new(id: String, relayer_id: String, nonce: Option<u64>) -> Self {
+        Self {
+            id,
+            relayer_id,
+            nonce,
+        }
+    }
+}
+
 #[cfg(test)]
 use mockall::automock;
 use utoipa::ToSchema;

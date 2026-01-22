@@ -226,7 +226,9 @@ mod tests {
     fn create_standard_network() -> EvmNetwork {
         EvmNetwork {
             network: "ethereum".to_string(),
-            rpc_urls: vec!["https://mainnet.infura.io".to_string()],
+            rpc_urls: vec![crate::models::RpcConfig::new(
+                "https://mainnet.infura.io".to_string(),
+            )],
             explorer_urls: None,
             average_blocktime_ms: 12000,
             is_testnet: false,
@@ -240,9 +242,10 @@ mod tests {
     }
 
     fn create_arbitrum_network() -> EvmNetwork {
+        use crate::models::RpcConfig;
         EvmNetwork {
             network: "arbitrum".to_string(),
-            rpc_urls: vec!["https://arb1.arbitrum.io/rpc".to_string()],
+            rpc_urls: vec![RpcConfig::new("https://arb1.arbitrum.io/rpc".to_string())],
             explorer_urls: None,
             average_blocktime_ms: 1000,
             is_testnet: false,
@@ -256,9 +259,10 @@ mod tests {
     }
 
     fn create_arbitrum_nova_network() -> EvmNetwork {
+        use crate::models::RpcConfig;
         EvmNetwork {
             network: "arbitrum-nova".to_string(),
-            rpc_urls: vec!["https://nova.arbitrum.io/rpc".to_string()],
+            rpc_urls: vec![RpcConfig::new("https://nova.arbitrum.io/rpc".to_string())],
             explorer_urls: None,
             average_blocktime_ms: 1000,
             is_testnet: false,

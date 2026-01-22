@@ -16,7 +16,7 @@ pub mod mockutils {
             ApiKeyRepoModel, AppState, EvmTransactionData, EvmTransactionRequest,
             LocalSignerConfigStorage, NetworkConfigData, NetworkRepoModel, NetworkTransactionData,
             NetworkType, NotificationRepoModel, PluginModel, RelayerEvmPolicy,
-            RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy, SecretString,
+            RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy, RpcConfig, SecretString,
             SignerConfigStorage, SignerRepoModel, SolanaTransactionData, TransactionRepoModel,
             TransactionStatus,
         },
@@ -99,7 +99,9 @@ pub mod mockutils {
                 common: NetworkConfigCommon {
                     network: "test".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["http://localhost:8545".to_string()]),
+                    rpc_urls: Some(vec![crate::models::RpcConfig::new(
+                        "http://localhost:8545".to_string(),
+                    )]),
                     explorer_urls: None,
                     average_blocktime_ms: Some(1000),
                     is_testnet: Some(true),
@@ -123,7 +125,7 @@ pub mod mockutils {
                 common: NetworkConfigCommon {
                     network: "devnet".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["http://localhost:8545".to_string()]),
+                    rpc_urls: Some(vec![RpcConfig::new("http://localhost:8545".to_string())]),
                     explorer_urls: None,
                     average_blocktime_ms: Some(1000),
                     is_testnet: Some(true),
@@ -320,12 +322,21 @@ pub mod mockutils {
             provider_retry_base_delay_ms: 100,
             provider_retry_max_delay_ms: 2000,
             provider_max_failovers: 3,
+            provider_failure_threshold: 3,
+            provider_pause_duration_secs: 60,
+            provider_failure_expiration_secs: 60,
             repository_storage_type: storage_type,
             reset_storage_on_start: false,
             storage_encryption_key: Some(SecretString::new(
                 "test_encryption_key_1234567890_test_key_32",
             )),
-            transaction_expiration_hours: 4,
+            transaction_expiration_hours: 4.0,
+            rpc_allowed_hosts: vec![],
+            rpc_block_private_ips: false,
+            relayer_concurrency_limit: 100,
+            max_connections: 256,
+            connection_backlog: 511,
+            request_timeout_seconds: 30,
         }
     }
 }

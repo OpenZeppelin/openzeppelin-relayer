@@ -1,34 +1,57 @@
+---
+codecov:
+  notify:
+    after_n_builds: 3  # Wait for all 3 flag uploads (ai, dev, properties)
+    wait_for_ci: true  # Wait for CI to complete before sending status
 coverage:
   precision: 2
   round: down
   range: 70..100
-
   status:
     project:
       default:
         target: 85%
         threshold: 2%
+        flags:
+          - ai
+          - dev
+          - properties
+      # TODO: Integration tests will be included in the future when test cases are considerable enough
+      # integration:
+      #   informational: true
+      #   target: auto
+      #   flags:
+      #     - integration
     patch:
       default:
         target: auto
         threshold: 1%
-
+        flags:
+          - ai
+          - dev
+          - properties
 flags:
   ai:
     paths:
-      - "src/"
+      - src/
     carryforward: true
-
   dev:
     paths:
-      - "src/"
+      - src/
     carryforward: true
-
+  properties:
+    paths:
+      - src/
+    carryforward: true
+  # TODO: Integration flag will be re-enabled when test cases are considerable enough to include
+  # integration:
+  #   paths:
+  #     - src/
+  #   carryforward: false  # Don't carry forward manual test coverage
 comment:
-  layout: "flags, diff, files"
+  layout: flags, diff, files
   require_changes: false
   behavior: default
-
 ignore:
-  - "tests/*"
-  - "target/*"
+  - tests/*
+  - target/*

@@ -28,7 +28,11 @@ pub use request::*;
 mod response;
 pub use response::*;
 
-use crate::{constants::ID_REGEX, models::SecretString, utils::base64_decode};
+use crate::{
+    constants::ID_REGEX,
+    models::SecretString,
+    utils::{base64_decode, validate_safe_url},
+};
 use secrets::SecretVec;
 use serde::{Deserialize, Serialize, Serializer};
 use solana_sdk::pubkey::Pubkey;
@@ -208,6 +212,9 @@ pub struct CdpSignerConfig {
 }
 
 /// Google Cloud KMS service account configuration
+///
+/// All fields are stored as SecretString to ensure they are encrypted at rest
+/// in Redis.
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct GoogleCloudKmsSignerServiceAccountConfig {
     #[validate(custom(
@@ -220,34 +227,75 @@ pub struct GoogleCloudKmsSignerServiceAccountConfig {
         message = "Private key ID cannot be empty"
     ))]
     pub private_key_id: SecretString,
-    #[validate(length(min = 1, message = "Project ID cannot be empty"))]
-    pub project_id: String,
+    #[validate(custom(
+        function = "validate_secret_string",
+        message = "Project ID cannot be empty"
+    ))]
+    pub project_id: SecretString,
     #[validate(custom(
         function = "validate_secret_string",
         message = "Client email cannot be empty"
     ))]
     pub client_email: SecretString,
-    #[validate(length(min = 1, message = "Client ID cannot be empty"))]
-    pub client_id: String,
-    #[validate(url(message = "Auth URI must be a valid URL"))]
-    pub auth_uri: String,
-    #[validate(url(message = "Token URI must be a valid URL"))]
-    pub token_uri: String,
-    #[validate(url(message = "Auth provider x509 cert URL must be a valid URL"))]
-    pub auth_provider_x509_cert_url: String,
-    #[validate(url(message = "Client x509 cert URL must be a valid URL"))]
-    pub client_x509_cert_url: String,
-    pub universe_domain: String,
+    #[validate(custom(
+        function = "validate_secret_string",
+        message = "Client ID cannot be empty"
+    ))]
+    pub client_id: SecretString,
+    #[validate(custom(
+        function = "validate_secret_url",
+        message = "Auth URI must be a valid URL"
+    ))]
+    pub auth_uri: SecretString,
+    #[validate(custom(
+        function = "validate_secret_url",
+        message = "Token URI must be a valid URL"
+    ))]
+    pub token_uri: SecretString,
+    #[validate(custom(
+        function = "validate_secret_url",
+        message = "Auth provider x509 cert URL must be a valid URL"
+    ))]
+    pub auth_provider_x509_cert_url: SecretString,
+    #[validate(custom(
+        function = "validate_secret_url",
+        message = "Client x509 cert URL must be a valid URL"
+    ))]
+    pub client_x509_cert_url: SecretString,
+    #[validate(
+        custom(
+            function = "validate_secret_string",
+            message = "Universe domain cannot be empty"
+        ),
+        custom(
+            function = "validate_universe_domain",
+            message = "Universe domain must be a valid Google Cloud KMS domain"
+        )
+    )]
+    pub universe_domain: SecretString,
 }
 
 /// Google Cloud KMS key configuration
+///
+/// All string fields are stored as SecretString to ensure they are encrypted
+/// at rest in Redis, preventing attackers from modifying key identifiers.
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct GoogleCloudKmsSignerKeyConfig {
-    pub location: String,
-    #[validate(length(min = 1, message = "Key ring ID cannot be empty"))]
-    pub key_ring_id: String,
-    #[validate(length(min = 1, message = "Key ID cannot be empty"))]
-    pub key_id: String,
+    #[validate(custom(
+        function = "validate_secret_string",
+        message = "Location cannot be empty"
+    ))]
+    pub location: SecretString,
+    #[validate(custom(
+        function = "validate_secret_string",
+        message = "Key ring ID cannot be empty"
+    ))]
+    pub key_ring_id: SecretString,
+    #[validate(custom(
+        function = "validate_secret_string",
+        message = "Key ID cannot be empty"
+    ))]
+    pub key_id: SecretString,
     pub key_version: u32,
 }
 
@@ -266,6 +314,45 @@ fn validate_secret_string(secret: &SecretString) -> Result<(), validator::Valida
         return Err(validator::ValidationError::new("empty_secret"));
     }
     Ok(())
+}
+
+/// Custom validator for SecretString that must contain a valid URL
+fn validate_secret_url(secret: &SecretString) -> Result<(), validator::ValidationError> {
+    secret.as_str(|s| {
+        if s.is_empty() {
+            return Err(validator::ValidationError::new("empty_url"));
+        }
+        reqwest::Url::parse(s).map_err(|_| validator::ValidationError::new("invalid_url"))?;
+        Ok(())
+    })
+}
+
+/// Allowed Google Cloud KMS universe domains
+/// These are the legitimate Google Cloud domains where KMS services can be hosted.
+/// See: https://cloud.google.com/kms/docs/reference/rest
+const ALLOWED_KMS_DOMAINS: &[&str] = &[
+    "cloudkms.googleapis.com", // Standard Google Cloud
+];
+
+/// Custom validator for Google Cloud KMS universe_domain to prevent SSRF attacks.
+/// Uses an allowlist approach - only explicitly approved Google Cloud domains are permitted.
+fn validate_universe_domain(secret: &SecretString) -> Result<(), validator::ValidationError> {
+    let value = secret.to_str();
+    // Construct the URL exactly as get_base_url() does in the service
+    let url = if value.starts_with("http") {
+        value.to_string()
+    } else {
+        format!("https://cloudkms.{}", &*value)
+    };
+
+    let allowed_hosts: Vec<String> = ALLOWED_KMS_DOMAINS.iter().map(|s| s.to_string()).collect();
+
+    // Only permit known Google Cloud KMS domains
+    validate_safe_url(&url, &allowed_hosts, true).map_err(|e| {
+        let mut err = validator::ValidationError::new("universe_domain_ssrf");
+        err.message = Some(e.into());
+        err
+    })
 }
 
 /// Custom validator for CDP signer configuration
@@ -331,7 +418,7 @@ pub enum SignerConfig {
     AwsKms(AwsKmsSignerConfig),
     Turnkey(TurnkeySignerConfig),
     Cdp(CdpSignerConfig),
-    GoogleCloudKms(GoogleCloudKmsSignerConfig),
+    GoogleCloudKms(Box<GoogleCloudKmsSignerConfig>),
 }
 
 impl SignerConfig {
@@ -369,7 +456,7 @@ impl SignerConfig {
                     format_validation_errors(&e)
                 ))
             }),
-            Self::GoogleCloudKms(config) => Validate::validate(config).map_err(|e| {
+            Self::GoogleCloudKms(config) => Validate::validate(config.as_ref()).map_err(|e| {
                 SignerValidationError::InvalidConfig(format!(
                     "Google Cloud KMS validation failed: {}",
                     format_validation_errors(&e)
@@ -777,28 +864,30 @@ mod tests {
 
     #[test]
     fn test_valid_google_cloud_kms_signer() {
-        let config = SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
+        let config = SignerConfig::GoogleCloudKms(Box::new(GoogleCloudKmsSignerConfig {
             service_account: GoogleCloudKmsSignerServiceAccountConfig {
                 private_key: SecretString::new("private-key"),
                 private_key_id: SecretString::new("key-id"),
-                project_id: "project".to_string(),
+                project_id: SecretString::new("project"),
                 client_email: SecretString::new("client@example.com"),
-                client_id: "client-id".to_string(),
-                auth_uri: "https://accounts.google.com/o/oauth2/auth".to_string(),
-                token_uri: "https://oauth2.googleapis.com/token".to_string(),
-                auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs"
-                    .to_string(),
-                client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/test"
-                    .to_string(),
-                universe_domain: "googleapis.com".to_string(),
+                client_id: SecretString::new("client-id"),
+                auth_uri: SecretString::new("https://accounts.google.com/o/oauth2/auth"),
+                token_uri: SecretString::new("https://oauth2.googleapis.com/token"),
+                auth_provider_x509_cert_url: SecretString::new(
+                    "https://www.googleapis.com/oauth2/v1/certs",
+                ),
+                client_x509_cert_url: SecretString::new(
+                    "https://www.googleapis.com/robot/v1/metadata/x509/test",
+                ),
+                universe_domain: SecretString::new("googleapis.com"),
             },
             key: GoogleCloudKmsSignerKeyConfig {
-                location: "us-central1".to_string(),
-                key_ring_id: "test-ring".to_string(),
-                key_id: "test-key".to_string(),
+                location: SecretString::new("us-central1"),
+                key_ring_id: SecretString::new("test-ring"),
+                key_id: SecretString::new("test-key"),
                 key_version: 1,
             },
-        });
+        }));
 
         let signer = Signer::new("gcp-kms-signer".to_string(), config);
         assert!(signer.validate().is_ok());
@@ -807,28 +896,30 @@ mod tests {
 
     #[test]
     fn test_invalid_google_cloud_kms_urls() {
-        let config = SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
+        let config = SignerConfig::GoogleCloudKms(Box::new(GoogleCloudKmsSignerConfig {
             service_account: GoogleCloudKmsSignerServiceAccountConfig {
                 private_key: SecretString::new("private-key"),
                 private_key_id: SecretString::new("key-id"),
-                project_id: "project".to_string(),
+                project_id: SecretString::new("project"),
                 client_email: SecretString::new("client@example.com"),
-                client_id: "client-id".to_string(),
-                auth_uri: "not-a-url".to_string(), // Invalid URL
-                token_uri: "https://oauth2.googleapis.com/token".to_string(),
-                auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs"
-                    .to_string(),
-                client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/test"
-                    .to_string(),
-                universe_domain: "googleapis.com".to_string(),
+                client_id: SecretString::new("client-id"),
+                auth_uri: SecretString::new("not-a-url"), // Invalid URL
+                token_uri: SecretString::new("https://oauth2.googleapis.com/token"),
+                auth_provider_x509_cert_url: SecretString::new(
+                    "https://www.googleapis.com/oauth2/v1/certs",
+                ),
+                client_x509_cert_url: SecretString::new(
+                    "https://www.googleapis.com/robot/v1/metadata/x509/test",
+                ),
+                universe_domain: SecretString::new("googleapis.com"),
             },
             key: GoogleCloudKmsSignerKeyConfig {
-                location: "us-central1".to_string(),
-                key_ring_id: "test-ring".to_string(),
-                key_id: "test-key".to_string(),
+                location: SecretString::new("us-central1"),
+                key_ring_id: SecretString::new("test-ring"),
+                key_id: SecretString::new("test-key"),
                 key_version: 1,
             },
-        });
+        }));
 
         let signer = Signer::new("gcp-kms-signer".to_string(), config);
         let result = signer.validate();
@@ -862,21 +953,23 @@ mod tests {
             service_account: GoogleCloudKmsSignerServiceAccountConfig {
                 private_key: SecretString::new(""), // Invalid: empty
                 private_key_id: SecretString::new("key-id"),
-                project_id: "project".to_string(),
+                project_id: SecretString::new("project"),
                 client_email: SecretString::new("client@example.com"),
-                client_id: "".to_string(),         // Invalid: empty
-                auth_uri: "not-a-url".to_string(), // Invalid: not a URL
-                token_uri: "https://oauth2.googleapis.com/token".to_string(),
-                auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs"
-                    .to_string(),
-                client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/test"
-                    .to_string(),
-                universe_domain: "googleapis.com".to_string(),
+                client_id: SecretString::new(""), // Invalid: empty
+                auth_uri: SecretString::new("not-a-url"), // Invalid: not a URL
+                token_uri: SecretString::new("https://oauth2.googleapis.com/token"),
+                auth_provider_x509_cert_url: SecretString::new(
+                    "https://www.googleapis.com/oauth2/v1/certs",
+                ),
+                client_x509_cert_url: SecretString::new(
+                    "https://www.googleapis.com/robot/v1/metadata/x509/test",
+                ),
+                universe_domain: SecretString::new("googleapis.com"),
             },
             key: GoogleCloudKmsSignerKeyConfig {
-                location: "us-central1".to_string(),
-                key_ring_id: "".to_string(), // Invalid: empty
-                key_id: "test-key".to_string(),
+                location: SecretString::new("us-central1"),
+                key_ring_id: SecretString::new(""), // Invalid: empty
+                key_id: SecretString::new("test-key"),
                 key_version: 1,
             },
         };
@@ -940,25 +1033,27 @@ mod tests {
             service_account: GoogleCloudKmsSignerServiceAccountConfig {
                 private_key: SecretString::new("private-key"),
                 private_key_id: SecretString::new("key-id"),
-                project_id: "project".to_string(),
+                project_id: SecretString::new("project"),
                 client_email: SecretString::new("client@example.com"),
-                client_id: "client-id".to_string(),
-                auth_uri: "https://accounts.google.com/o/oauth2/auth".to_string(),
-                token_uri: "https://oauth2.googleapis.com/token".to_string(),
-                auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs"
-                    .to_string(),
-                client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/test"
-                    .to_string(),
-                universe_domain: "googleapis.com".to_string(),
+                client_id: SecretString::new("client-id"),
+                auth_uri: SecretString::new("https://accounts.google.com/o/oauth2/auth"),
+                token_uri: SecretString::new("https://oauth2.googleapis.com/token"),
+                auth_provider_x509_cert_url: SecretString::new(
+                    "https://www.googleapis.com/oauth2/v1/certs",
+                ),
+                client_x509_cert_url: SecretString::new(
+                    "https://www.googleapis.com/robot/v1/metadata/x509/test",
+                ),
+                universe_domain: SecretString::new("googleapis.com"),
             },
             key: GoogleCloudKmsSignerKeyConfig {
-                location: "us-central1".to_string(),
-                key_ring_id: "test-ring".to_string(),
-                key_id: "test-key".to_string(),
+                location: SecretString::new("us-central1"),
+                key_ring_id: SecretString::new("test-ring"),
+                key_id: SecretString::new("test-key"),
                 key_version: 1,
             },
         };
-        let config = SignerConfig::GoogleCloudKms(gcp_config);
+        let config = SignerConfig::GoogleCloudKms(Box::new(gcp_config));
         assert!(config.get_google_cloud_kms().is_some());
         assert!(config.get_local().is_none());
     }
@@ -1127,5 +1222,102 @@ mod tests {
         let result = signer.validate();
         assert!(result.is_ok());
         assert_eq!(signer.signer_type(), SignerType::Cdp);
+    }
+
+    #[test]
+    fn test_validate_universe_domain_valid_default() {
+        // Valid: default Google domain
+        let result = validate_universe_domain(&SecretString::new("googleapis.com"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_universe_domain_valid_explicit_https() {
+        // Valid: explicit HTTPS URL
+        let result =
+            validate_universe_domain(&SecretString::new("https://cloudkms.googleapis.com"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_universe_domain_invalid_aws_metadata() {
+        // Invalid: AWS metadata endpoint
+        let result = validate_universe_domain(&SecretString::new("http://169.254.169.254"));
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(e.code, "universe_domain_ssrf");
+        }
+    }
+
+    #[test]
+    fn test_validate_universe_domain_invalid_gcp_metadata() {
+        // Invalid: GCP metadata endpoint
+        let result =
+            validate_universe_domain(&SecretString::new("http://metadata.google.internal"));
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(e.code, "universe_domain_ssrf");
+        }
+    }
+
+    #[test]
+    fn test_validate_universe_domain_invalid_localhost() {
+        // Invalid: localhost
+        let result = validate_universe_domain(&SecretString::new("http://localhost:8080"));
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(e.code, "universe_domain_ssrf");
+        }
+    }
+
+    #[test]
+    fn test_validate_universe_domain_invalid_private_ip() {
+        // Invalid: private IP addresses
+        let result = validate_universe_domain(&SecretString::new("http://192.168.1.1"));
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(e.code, "universe_domain_ssrf");
+        }
+
+        let result = validate_universe_domain(&SecretString::new("http://10.0.0.1"));
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(e.code, "universe_domain_ssrf");
+        }
+    }
+
+    #[test]
+    fn test_validate_universe_domain_rejects_non_allowlisted_domains() {
+        // Invalid: arbitrary public domains not in the allowlist
+        // This tests the allowlist approach - even valid public URLs are rejected if not in allowlist
+        let result = validate_universe_domain(&SecretString::new("https://evil.com"));
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(e.code, "universe_domain_ssrf");
+        }
+
+        // Invalid: attacker-controlled domain with "googleapis" in subdomain
+        let result = validate_universe_domain(&SecretString::new(
+            "https://cloudkms.googleapis.com.evil.com",
+        ));
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(e.code, "universe_domain_ssrf");
+        }
+
+        // Invalid: similar-looking domain
+        let result =
+            validate_universe_domain(&SecretString::new("https://cloudkms.googleapis.org"));
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(e.code, "universe_domain_ssrf");
+        }
+
+        // Invalid: using domain value directly that constructs non-allowlisted URL
+        let result = validate_universe_domain(&SecretString::new("example.com"));
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(e.code, "universe_domain_ssrf");
+        }
     }
 }

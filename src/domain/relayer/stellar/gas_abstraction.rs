@@ -403,6 +403,7 @@ where
             simulation_transaction_data: None,
             transaction_input: TransactionInput::Operations(ops.clone()),
             signed_envelope_xdr: None,
+            transaction_result_xdr: None,
         };
 
         // Build unsigned envelope from operations
@@ -446,7 +447,7 @@ mod tests {
         jobs::MockJobProducerTrait,
         models::{
             transaction::stellar::OperationSpec, AssetSpec, NetworkConfigData, NetworkRepoModel,
-            NetworkType, RelayerNetworkPolicy, RelayerRepoModel, RelayerStellarPolicy,
+            NetworkType, RelayerNetworkPolicy, RelayerRepoModel, RelayerStellarPolicy, RpcConfig,
             SponsoredTransactionBuildRequest, SponsoredTransactionQuoteRequest,
         },
         repositories::{
@@ -565,7 +566,9 @@ mod tests {
                 common: NetworkConfigCommon {
                     network: "testnet".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["https://horizon-testnet.stellar.org".to_string()]),
+                    rpc_urls: Some(vec![RpcConfig::new(
+                        "https://horizon-testnet.stellar.org".to_string(),
+                    )]),
                     explorer_urls: None,
                     average_blocktime_ms: Some(5000),
                     is_testnet: Some(true),

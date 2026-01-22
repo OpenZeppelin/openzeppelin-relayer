@@ -13,7 +13,7 @@ use soroban_rs::xdr::{
     AccountId, AlphaNum12, AlphaNum4, Asset, ChangeTrustAsset, ContractDataEntry, ContractId, Hash,
     LedgerEntryData, LedgerKey, LedgerKeyContractData, Limits, Operation, Preconditions,
     PublicKey as XdrPublicKey, ReadXdr, ScAddress, ScSymbol, ScVal, TimeBounds, TimePoint,
-    TransactionEnvelope, Uint256, VecM,
+    TransactionEnvelope, TransactionMeta, Uint256, VecM,
 };
 use std::str::FromStr;
 use stellar_strkey::ed25519::PublicKey;
@@ -585,6 +585,30 @@ pub fn extract_scval_from_contract_data(
     }
 }
 
+/// Extracts the return value from TransactionMeta if available.
+///
+/// Supports both V3 and V4 TransactionMeta versions for backward compatibility.
+/// - V3: soroban_meta.return_value (ScVal, required)
+/// - V4: soroban_meta.return_value (Option<ScVal>, optional)
+///
+/// # Arguments
+///
+/// * `result_meta` - TransactionMeta to extract return value from
+///
+/// # Returns
+///
+/// Some(&ScVal) if return value is available, None otherwise
+pub fn extract_return_value_from_meta(result_meta: &TransactionMeta) -> Option<&ScVal> {
+    match result_meta {
+        TransactionMeta::V3(meta_v3) => meta_v3.soroban_meta.as_ref().map(|m| &m.return_value),
+        TransactionMeta::V4(meta_v4) => meta_v4
+            .soroban_meta
+            .as_ref()
+            .and_then(|m| m.return_value.as_ref()),
+        _ => None,
+    }
+}
+
 /// Extract a u32 value from an ScVal.
 ///
 /// Handles multiple ScVal types that can represent numeric values.
@@ -1063,7 +1087,8 @@ pub fn extract_time_bounds(envelope: &TransactionEnvelope) -> Option<&TimeBounds
         TransactionEnvelope::TxV0(e) => e.tx.time_bounds.as_ref(),
         TransactionEnvelope::Tx(e) => match &e.tx.cond {
             Preconditions::Time(tb) => Some(tb),
-            _ => None,
+            Preconditions::V2(v2) => v2.time_bounds.as_ref(),
+            Preconditions::None => None,
         },
         TransactionEnvelope::TxFeeBump(fb) => {
             // Extract from inner transaction
@@ -1071,7 +1096,8 @@ pub fn extract_time_bounds(envelope: &TransactionEnvelope) -> Option<&TimeBounds
                 soroban_rs::xdr::FeeBumpTransactionInnerTx::Tx(inner_tx) => {
                     match &inner_tx.tx.cond {
                         Preconditions::Time(tb) => Some(tb),
-                        _ => None,
+                        Preconditions::V2(v2) => v2.time_bounds.as_ref(),
+                        Preconditions::None => None,
                     }
                 }
             }
@@ -1378,6 +1404,7 @@ mod tests {
                 simulation_transaction_data: None,
                 transaction_input: TransactionInput::Operations(vec![]),
                 signed_envelope_xdr: None,
+                transaction_result_xdr: None,
             });
             tx
         }

@@ -13,6 +13,7 @@ pub mod api_keys;
 pub mod docs;
 pub mod health;
 pub mod metrics;
+pub mod network;
 pub mod notification;
 pub mod plugin;
 pub mod relayer;
@@ -26,5 +27,6 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         .configure(metrics::init)
         .configure(notification::init)
         .configure(signer::init)
-        .configure(api_keys::init);
+        .configure(api_keys::init)
+        .configure(network::init);
 }

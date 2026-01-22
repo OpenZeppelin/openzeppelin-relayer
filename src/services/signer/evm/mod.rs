@@ -281,7 +281,7 @@ pub enum EvmSigner {
     Turnkey(TurnkeySigner),
     Cdp(CdpSigner),
     AwsKms(AwsKmsSigner),
-    GoogleCloudKms(GoogleCloudKmsSigner),
+    GoogleCloudKms(Box<GoogleCloudKmsSigner>),
 }
 
 #[async_trait]
@@ -395,7 +395,7 @@ impl EvmSignerFactory {
                         "Google Cloud KMS service error: {e}"
                     ))
                 })?;
-                EvmSigner::GoogleCloudKms(GoogleCloudKmsSigner::new(gcp_service))
+                EvmSigner::GoogleCloudKms(Box::new(GoogleCloudKmsSigner::new(gcp_service)))
             }
         };
 
@@ -728,26 +728,26 @@ mod tests {
     async fn test_create_evm_signer_google_cloud_kms() {
         let signer_model = SignerDomainModel {
             id: "test".to_string(),
-            config: SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
+            config: SignerConfig::GoogleCloudKms(Box::new(GoogleCloudKmsSignerConfig {
                 service_account: GoogleCloudKmsSignerServiceAccountConfig {
-                    project_id: "project_id".to_string(),
+                    project_id: SecretString::new("project_id"),
                     private_key_id: SecretString::new("private_key_id"),
                     private_key: SecretString::new("-----BEGIN EXAMPLE PRIVATE KEY-----\nFAKEKEYDATA\n-----END EXAMPLE PRIVATE KEY-----\n"),
                     client_email: SecretString::new("client_email@example.com"),
-                    client_id: "client_id".to_string(),
-                    auth_uri: "https://accounts.google.com/o/oauth2/auth".to_string(),
-                    token_uri: "https://oauth2.googleapis.com/token".to_string(),
-                    auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs".to_string(),
-                    client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/client_email%40example.com".to_string(),
-                    universe_domain: "googleapis.com".to_string(),
+                    client_id: SecretString::new("client_id"),
+                    auth_uri: SecretString::new("https://accounts.google.com/o/oauth2/auth"),
+                    token_uri: SecretString::new("https://oauth2.googleapis.com/token"),
+                    auth_provider_x509_cert_url: SecretString::new("https://www.googleapis.com/oauth2/v1/certs"),
+                    client_x509_cert_url: SecretString::new("https://www.googleapis.com/robot/v1/metadata/x509/client_email%40example.com"),
+                    universe_domain: SecretString::new("googleapis.com"),
                 },
                 key: GoogleCloudKmsSignerKeyConfig {
-                    location: "global".to_string(),
-                    key_id: "id".to_string(),
-                    key_ring_id: "key_ring".to_string(),
+                    location: SecretString::new("global"),
+                    key_id: SecretString::new("id"),
+                    key_ring_id: SecretString::new("key_ring"),
                     key_version: 1,
                 },
-            }),
+            })),
         };
 
         let result = EvmSignerFactory::create_evm_signer(signer_model).await;

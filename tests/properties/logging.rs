@@ -37,7 +37,7 @@ proptest! {
       // Ensure base does not end with ".log"
       let base_non_log = if base.ends_with(".log")
       {
-        format!("{}x", base)
+        format!("{base}x")
       } else {
         base
       };

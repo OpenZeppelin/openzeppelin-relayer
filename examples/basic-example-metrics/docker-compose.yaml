@@ -36,8 +36,6 @@ services:
       - metrics-network
   redis:
     image: redis:bookworm
-    ports:
-      - 6379:6379/tcp
     security_opt:
       - no-new-privileges
     volumes:
@@ -69,6 +67,8 @@ services:
   prometheus:
     container_name: openzeppelin-relayer-prometheus
     image: prom/prometheus:v3.1.0
+    user: 65534:65534
+    read_only: true
     security_opt:
       - no-new-privileges
     command: --log.level=warn --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus --storage.tsdb.retention.time=30d --web.console.libraries=/usr/share/prometheus/console_libraries --web.console.templates=/usr/share/prometheus/consoles
@@ -78,12 +78,17 @@ services:
       - metrics-network
       - relayer-network
     volumes:
-      - ./cmd/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ../../cmd/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    tmpfs:
+      - /tmp
     restart: on-failure:5
     profiles:
       - metrics
   grafana:
     image: grafana/grafana:11.5.1
+    user: 472:472
+    read_only: true
     security_opt:
       - no-new-privileges
     ports:
@@ -92,9 +97,13 @@ services:
       - metrics-network
       - relayer-network
     volumes:
-      - ./cmd/prometheus/grafana.ini:/etc/grafana/grafana.ini
-      - ./cmd/prometheus/datasources:/etc/grafana/provisioning/datasources
-      - ./cmd/prometheus/dashboards:/etc/grafana/provisioning/dashboards
+      - ../../cmd/prometheus/grafana.ini:/etc/grafana/grafana.ini:ro
+      - ../../cmd/prometheus/datasources:/etc/grafana/provisioning/datasources:ro
+      - ../../cmd/prometheus/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    tmpfs:
+      - /tmp
+      - /var/log/grafana
     restart: on-failure:5
     profiles:
       - metrics
@@ -105,6 +114,10 @@ networks:
     driver: bridge
 volumes:
   redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
     driver: local
 secrets:
   api_key:

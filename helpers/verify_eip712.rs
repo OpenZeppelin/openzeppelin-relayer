@@ -195,7 +195,7 @@ fn main() -> Result<()> {
     println!("Signature Components:");
     println!("  r: 0x{}", hex::encode(&r_bytes));
     println!("  s: 0x{}", hex::encode(&s_bytes));
-    println!("  v: {}", v_value);
+    println!("  v: {v_value}");
     println!("  Full: 0x{}\n", hex::encode(&sig_bytes));
 
     // Parse signature using alloy
@@ -208,14 +208,14 @@ fn main() -> Result<()> {
         .wrap_err("Failed to recover signer address from signature")?;
 
     println!("Verification Result:");
-    println!("  Recovered Address: {}", recovered_address);
+    println!("  Recovered Address: {recovered_address}");
 
     // Compare with expected address if provided
     if let Some(expected_str) = args.expected_address {
         let expected_address =
             Address::from_str(&expected_str).wrap_err("Failed to parse expected address")?;
 
-        println!("  Expected Address:  {}", expected_address);
+        println!("  Expected Address:  {expected_address}");
 
         if recovered_address == expected_address {
             println!("\nSUCCESS: Signature is valid!");
@@ -231,7 +231,7 @@ fn main() -> Result<()> {
         println!("\nWARNING: No expected address provided for verification.");
         println!("Use --expected-address to verify the signer.");
         println!("\nThe signature is structurally valid and was created by:");
-        println!("{}", recovered_address);
+        println!("{recovered_address}");
         Ok(())
     }
 }

@@ -253,7 +253,7 @@ where
     }
 
     if relayer.system_disabled {
-        return Err(ApiError::BadRequest("Relayer is disabled".to_string()));
+        return Err(ApiError::BadRequest("Relayer is disabled".into()));
     }
 
     // Check if notification exists (if setting one) by extracting from JSON patch
@@ -315,10 +315,11 @@ where
     // Check if the relayer exists
     let _relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
 
-    // Check if the relayer has any transactions (pending or otherwise)
-    let transactions = state
+    // Check if the relayer has any active transactions (pending or otherwise)
+    // Use optimized count_by_status
+    let active_transaction_count = state
         .transaction_repository
-        .find_by_status(
+        .count_by_status(
             &relayer_id,
             &[
                 TransactionStatus::Pending,
@@ -328,11 +329,9 @@ where
         )
         .await?;
 
-    if !transactions.is_empty() {
+    if active_transaction_count > 0 {
         return Err(ApiError::BadRequest(format!(
-            "Cannot delete relayer '{}' because it has {} transaction(s). Please wait for all transactions to complete or cancel them before deleting the relayer.",
-            relayer_id,
-            transactions.len()
+            "Cannot delete relayer '{relayer_id}' because it has {active_transaction_count} transaction(s). Please wait for all transactions to complete or cancel them before deleting the relayer.",
         )));
     }
 
@@ -965,7 +964,7 @@ mod tests {
     /// Helper function to create a mock Solana network
     fn create_mock_solana_network() -> crate::models::NetworkRepoModel {
         use crate::config::{NetworkConfigCommon, SolanaNetworkConfig};
-        use crate::models::{NetworkConfigData, NetworkRepoModel, NetworkType};
+        use crate::models::{NetworkConfigData, NetworkRepoModel, NetworkType, RpcConfig};
 
         NetworkRepoModel {
             id: "test".to_string(),
@@ -975,7 +974,7 @@ mod tests {
                 common: NetworkConfigCommon {
                     network: "test".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["http://localhost:8899".to_string()]),
+                    rpc_urls: Some(vec![RpcConfig::new("http://localhost:8899".to_string())]),
                     explorer_urls: None,
                     average_blocktime_ms: Some(400),
                     is_testnet: Some(true),
@@ -988,7 +987,7 @@ mod tests {
     /// Helper function to create a mock Stellar network
     fn create_mock_stellar_network() -> crate::models::NetworkRepoModel {
         use crate::config::{NetworkConfigCommon, StellarNetworkConfig};
-        use crate::models::{NetworkConfigData, NetworkRepoModel, NetworkType};
+        use crate::models::{NetworkConfigData, NetworkRepoModel, NetworkType, RpcConfig};
 
         NetworkRepoModel {
             id: "test".to_string(),
@@ -998,7 +997,9 @@ mod tests {
                 common: NetworkConfigCommon {
                     network: "test".to_string(),
                     from: None,
-                    rpc_urls: Some(vec!["https://horizon-testnet.stellar.org".to_string()]),
+                    rpc_urls: Some(vec![RpcConfig::new(
+                        "https://horizon-testnet.stellar.org".to_string(),
+                    )]),
                     explorer_urls: None,
                     average_blocktime_ms: Some(5000),
                     is_testnet: Some(true),
@@ -1836,6 +1837,7 @@ mod tests {
         relayer.custom_rpc_urls = Some(vec![crate::models::RpcConfig {
             url: "https://custom-rpc.example.com".to_string(),
             weight: 50,
+            ..Default::default()
         }]);
         let app_state =
             create_mock_app_state(None, Some(vec![relayer]), None, None, None, None).await;
