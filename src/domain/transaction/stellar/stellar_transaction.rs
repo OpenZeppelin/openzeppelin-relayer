@@ -6,7 +6,7 @@
 use crate::{
     constants::DEFAULT_STELLAR_CONCURRENT_TRANSACTIONS,
     domain::transaction::{stellar::fetch_next_sequence_from_chain, Transaction},
-    jobs::{JobProducer, JobProducerTrait, TransactionRequest},
+    jobs::{JobProducer, JobProducerTrait, StatusCheckContext, TransactionRequest},
     models::{
         produce_transaction_update_notification_payload, NetworkTransactionRequest,
         PaginationQuery, RelayerNetworkPolicy, RelayerRepoModel, TransactionError,
@@ -315,8 +315,9 @@ where
     async fn handle_transaction_status(
         &self,
         tx: TransactionRepoModel,
+        context: Option<StatusCheckContext>,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        self.handle_transaction_status_impl(tx).await
+        self.handle_transaction_status_impl(tx, context).await
     }
 
     async fn cancel_transaction(

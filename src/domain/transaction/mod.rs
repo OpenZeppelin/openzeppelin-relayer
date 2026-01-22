@@ -13,7 +13,7 @@
 //! for error handling.
 use crate::{
     constants::{STELLAR_HORIZON_MAINNET_URL, STELLAR_HORIZON_TESTNET_URL},
-    jobs::JobProducer,
+    jobs::{JobProducer, StatusCheckContext},
     models::{
         EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerRepoModel, SignerRepoModel,
         SolanaNetwork, StellarNetwork, TransactionError, TransactionRepoModel,
@@ -106,6 +106,9 @@ pub trait Transaction {
     ///
     /// * `tx` - A `TransactionRepoModel` representing the transaction whose status is to be
     ///   handled.
+    /// * `context` - Optional `StatusCheckContext` containing failure tracking information
+    ///   for circuit breaker decisions. When provided, handlers can use this to decide
+    ///   whether to force-finalize a transaction that has exceeded retry limits.
     ///
     /// # Returns
     ///
@@ -113,6 +116,7 @@ pub trait Transaction {
     async fn handle_transaction_status(
         &self,
         tx: TransactionRepoModel,
+        context: Option<StatusCheckContext>,
     ) -> Result<TransactionRepoModel, TransactionError>;
 
     /// Cancels a transaction.
@@ -249,6 +253,8 @@ impl Transaction for NetworkTransaction {
     ///
     /// * `tx` - A `TransactionRepoModel` representing the transaction whose status is to be
     ///   handled.
+    /// * `context` - Optional `StatusCheckContext` containing failure tracking information
+    ///   for circuit breaker decisions.
     ///
     /// # Returns
     ///
@@ -256,11 +262,18 @@ impl Transaction for NetworkTransaction {
     async fn handle_transaction_status(
         &self,
         tx: TransactionRepoModel,
+        context: Option<StatusCheckContext>,
     ) -> Result<TransactionRepoModel, TransactionError> {
         match self {
-            NetworkTransaction::Evm(relayer) => relayer.handle_transaction_status(tx).await,
-            NetworkTransaction::Solana(relayer) => relayer.handle_transaction_status(tx).await,
-            NetworkTransaction::Stellar(relayer) => relayer.handle_transaction_status(tx).await,
+            NetworkTransaction::Evm(relayer) => {
+                relayer.handle_transaction_status(tx, context).await
+            }
+            NetworkTransaction::Solana(relayer) => {
+                relayer.handle_transaction_status(tx, context).await
+            }
+            NetworkTransaction::Stellar(relayer) => {
+                relayer.handle_transaction_status(tx, context).await
+            }
         }
     }
 

@@ -26,7 +26,7 @@ use crate::models::{EvmNetwork, NetworkRepoModel, NetworkType};
 use crate::repositories::{NetworkRepository, RelayerRepository};
 use crate::{
     domain::transaction::evm::price_calculator::PriceCalculatorTrait,
-    jobs::JobProducerTrait,
+    jobs::{JobProducerTrait, StatusCheckContext},
     models::{
         NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
         TransactionStatus, TransactionUpdateRequest,
@@ -445,6 +445,100 @@ where
         self.update_transaction_status_if_needed(tx, status).await
     }
 
+    /// Marks a transaction as Failed with a given reason.
+    async fn mark_as_failed(
+        &self,
+        tx: TransactionRepoModel,
+        reason: String,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        warn!(tx_id = %tx.id, reason = %reason, "force-failing transaction due to circuit breaker");
+
+        let update = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Failed),
+            status_reason: Some(reason),
+            ..Default::default()
+        };
+
+        let updated_tx = self
+            .transaction_repository()
+            .partial_update(tx.id.clone(), update)
+            .await?;
+
+        // Send notification (best effort)
+        if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
+            error!(
+                tx_id = %updated_tx.id,
+                error = %e,
+                "failed to send notification for force-failed transaction"
+            );
+        }
+
+        Ok(updated_tx)
+    }
+
+    /// Handles circuit breaker safely based on transaction status.
+    ///
+    /// This method implements the safe circuit breaker logic:
+    /// - **Pending/Sent**: Safe to mark as Failed (never broadcast to network)
+    /// - **Submitted**: Must trigger NOOP to clear nonce slot (regardless of expiry)
+    ///
+    /// For Submitted transactions, we always issue a NOOP because the nonce slot is
+    /// occupied and the original transaction could still execute. Simply marking as
+    /// Failed/Expired would leave the nonce blocked and risk the relayer stopping.
+    ///
+    /// Note: NOOP transactions are filtered out before entering this function.
+    async fn handle_circuit_breaker_safely(
+        &self,
+        tx: TransactionRepoModel,
+        ctx: &StatusCheckContext,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        let reason = format!(
+            "Transaction status monitoring failed after {} consecutive errors (total: {}). \
+             Last status: {:?}.",
+            ctx.consecutive_failures, ctx.total_failures, tx.status
+        );
+
+        match tx.status {
+            TransactionStatus::Pending | TransactionStatus::Sent => {
+                // Pending: no nonce assigned yet
+                // Sent: nonce assigned but never broadcast to network
+                // Both are safe to mark as Failed - transaction can't execute on-chain
+                debug!(
+                    tx_id = %tx.id,
+                    status = ?tx.status,
+                    "circuit breaker: transaction never broadcast - safe to mark as Failed"
+                );
+                self.mark_as_failed(tx, reason).await
+            }
+            TransactionStatus::Submitted => {
+                // Submitted transactions occupy a nonce slot and could still execute.
+                // Regardless of expiry status, we MUST issue a NOOP to:
+                // 1. Clear the nonce slot so subsequent transactions can proceed
+                // 2. Prevent the original transaction from executing later
+                // Note: NOOP transactions are filtered out before entering this function.
+                warn!(
+                    tx_id = %tx.id,
+                    "circuit breaker: Submitted transaction - triggering NOOP to safely clear nonce"
+                );
+                let noop_reason = Some(format!(
+                    "{reason}. Replacing with NOOP to clear nonce slot."
+                ));
+                let updated_tx = self.process_noop_transaction(&tx, noop_reason).await?;
+                self.send_transaction_resubmit_job(&updated_tx).await?;
+                Ok(updated_tx)
+            }
+            _ => {
+                // Final states shouldn't reach here, but handle gracefully
+                debug!(
+                    tx_id = %tx.id,
+                    status = ?tx.status,
+                    "circuit breaker: unexpected status, returning transaction unchanged"
+                );
+                Ok(tx)
+            }
+        }
+    }
+
     /// Inherent status-handling method.
     ///
     /// This method encapsulates the full logic for handling transaction status,
@@ -452,6 +546,7 @@ where
     pub async fn handle_status_impl(
         &self,
         tx: TransactionRepoModel,
+        context: Option<StatusCheckContext>,
     ) -> Result<TransactionRepoModel, TransactionError> {
         debug!("checking transaction status {}", tx.id);
 
@@ -459,6 +554,37 @@ where
         if is_final_state(&tx.status) {
             debug!(status = ?tx.status, "transaction already in final state");
             return Ok(tx);
+        }
+
+        // 1.1. Check if circuit breaker should force finalization
+        // Skip circuit breaker for NOOP transactions - they're already safe (just clearing nonce)
+        // and should be handled by normal status logic which will eventually resolve them.
+        if let Some(ref ctx) = context {
+            let is_noop_tx = tx
+                .network_data
+                .get_evm_transaction_data()
+                .map(|data| is_noop(&data))
+                .unwrap_or(false);
+
+            if ctx.should_force_finalize() && !is_noop_tx {
+                warn!(
+                    tx_id = %tx.id,
+                    consecutive_failures = ctx.consecutive_failures,
+                    total_failures = ctx.total_failures,
+                    max_consecutive = ctx.max_consecutive_failures,
+                    status = ?tx.status,
+                    "circuit breaker triggered - handling safely based on transaction state"
+                );
+                return self.handle_circuit_breaker_safely(tx, ctx).await;
+            }
+
+            if ctx.should_force_finalize() && is_noop_tx {
+                debug!(
+                    tx_id = %tx.id,
+                    consecutive_failures = ctx.consecutive_failures,
+                    "circuit breaker would trigger but transaction is NOOP - continuing with normal status logic"
+                );
+            }
         }
 
         // 2. Check transaction status first
@@ -1935,7 +2061,7 @@ mod tests {
                 });
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let result = evm_transaction.handle_status_impl(tx).await.unwrap();
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
             assert_eq!(result.status, TransactionStatus::Submitted);
         }
 
@@ -1986,7 +2112,7 @@ mod tests {
                 });
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let result = evm_transaction.handle_status_impl(tx).await.unwrap();
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
             assert_eq!(result.status, TransactionStatus::Mined);
         }
 
@@ -2009,7 +2135,7 @@ mod tests {
                 });
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let result = evm_transaction.handle_status_impl(tx).await.unwrap();
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
             assert_eq!(result.status, TransactionStatus::Confirmed);
         }
 
@@ -2030,7 +2156,7 @@ mod tests {
                 });
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let result = evm_transaction.handle_status_impl(tx).await.unwrap();
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
             assert_eq!(result.status, TransactionStatus::Failed);
         }
 
@@ -2051,8 +2177,372 @@ mod tests {
                 });
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let result = evm_transaction.handle_status_impl(tx).await.unwrap();
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
             assert_eq!(result.status, TransactionStatus::Expired);
+        }
+    }
+
+    // Tests for circuit breaker functionality
+    mod circuit_breaker_tests {
+        use super::*;
+        use crate::jobs::StatusCheckContext;
+
+        /// Helper to create a context that should trigger the circuit breaker
+        fn create_triggered_context() -> StatusCheckContext {
+            StatusCheckContext::new(
+                30, // consecutive_failures: exceeds EVM threshold of 25
+                50, // total_failures
+                60, // total_retries
+                25, // max_consecutive_failures (EVM default)
+                75, // max_total_failures (EVM default)
+                NetworkType::Evm,
+            )
+        }
+
+        /// Helper to create a context that should NOT trigger the circuit breaker
+        fn create_safe_context() -> StatusCheckContext {
+            StatusCheckContext::new(
+                5,  // consecutive_failures: below threshold
+                10, // total_failures
+                15, // total_retries
+                25, // max_consecutive_failures
+                75, // max_total_failures
+                NetworkType::Evm,
+            )
+        }
+
+        /// Helper to create a context that triggers via total failures (safety net)
+        fn create_total_triggered_context() -> StatusCheckContext {
+            StatusCheckContext::new(
+                5,   // consecutive_failures: below threshold
+                80,  // total_failures: exceeds EVM threshold of 75
+                100, // total_retries
+                25,  // max_consecutive_failures
+                75,  // max_total_failures
+                NetworkType::Evm,
+            )
+        }
+
+        #[tokio::test]
+        async fn test_circuit_breaker_pending_marks_as_failed() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+            let tx = make_test_transaction(TransactionStatus::Pending);
+
+            // Expect partial_update to be called with Failed status
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, update| update.status == Some(TransactionStatus::Failed))
+                .returning(|_, update| {
+                    let mut updated_tx = make_test_transaction(TransactionStatus::Pending);
+                    updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                    updated_tx.status_reason = update.status_reason.clone();
+                    Ok(updated_tx)
+                });
+
+            // Mock notification (best effort, may or may not be called)
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let ctx = create_triggered_context();
+
+            let result = evm_transaction
+                .handle_status_impl(tx, Some(ctx))
+                .await
+                .unwrap();
+
+            assert_eq!(result.status, TransactionStatus::Failed);
+            assert!(result.status_reason.is_some());
+            assert!(result.status_reason.unwrap().contains("consecutive errors"));
+        }
+
+        #[tokio::test]
+        async fn test_circuit_breaker_sent_marks_as_failed() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+            let tx = make_test_transaction(TransactionStatus::Sent);
+
+            // Expect partial_update to be called with Failed status
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, update| update.status == Some(TransactionStatus::Failed))
+                .returning(|_, update| {
+                    let mut updated_tx = make_test_transaction(TransactionStatus::Sent);
+                    updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                    updated_tx.status_reason = update.status_reason.clone();
+                    Ok(updated_tx)
+                });
+
+            // Mock notification
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let ctx = create_triggered_context();
+
+            let result = evm_transaction
+                .handle_status_impl(tx, Some(ctx))
+                .await
+                .unwrap();
+
+            assert_eq!(result.status, TransactionStatus::Failed);
+        }
+
+        #[tokio::test]
+        async fn test_circuit_breaker_submitted_triggers_noop() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            tx.sent_at = Some((Utc::now() - Duration::seconds(120)).to_rfc3339());
+
+            // Mock network repository for NOOP processing
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            // Expect partial_update to be called with NOOP indicator
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .returning(|_, update| {
+                    let mut updated_tx = make_test_transaction(TransactionStatus::Submitted);
+                    updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                    updated_tx.status_reason = update.status_reason.clone();
+                    updated_tx.noop_count = update.noop_count;
+                    Ok(updated_tx)
+                });
+
+            // Mock resubmit job (NOOP triggers resubmit)
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let ctx = create_triggered_context();
+
+            let result = evm_transaction
+                .handle_status_impl(tx, Some(ctx))
+                .await
+                .unwrap();
+
+            // NOOP processing should succeed
+            assert!(result.noop_count.is_some());
+        }
+
+        #[tokio::test]
+        async fn test_circuit_breaker_noop_tx_excluded() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            // Create a NOOP transaction (to: self, value: 0, data: None/empty)
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            tx.sent_at = Some((Utc::now() - Duration::seconds(120)).to_rfc3339());
+            if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
+                evm_data.to = Some(evm_data.from.clone()); // to == from (NOOP indicator)
+                evm_data.value = U256::from(0);
+                evm_data.data = None;
+                evm_data.hash = Some("0xFakeHash".to_string());
+            }
+
+            // NOOP transactions should NOT trigger circuit breaker
+            // Instead, they should go through normal status checking
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(|_| Box::pin(async { Ok(None) }));
+
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            mocks
+                .job_producer
+                .expect_produce_check_transaction_status_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            // Mock resubmit job (may be triggered by normal status flow for stuck transactions)
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .returning(|_, update| {
+                    let mut updated_tx = make_test_transaction(TransactionStatus::Submitted);
+                    updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                    Ok(updated_tx)
+                });
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let ctx = create_triggered_context();
+
+            let result = evm_transaction
+                .handle_status_impl(tx, Some(ctx))
+                .await
+                .unwrap();
+
+            // NOOP tx should continue normal processing, not be force-failed
+            assert_eq!(result.status, TransactionStatus::Submitted);
+        }
+
+        #[tokio::test]
+        async fn test_circuit_breaker_total_failures_triggers() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+            let tx = make_test_transaction(TransactionStatus::Pending);
+
+            // Expect partial_update to be called with Failed status
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, update| update.status == Some(TransactionStatus::Failed))
+                .returning(|_, update| {
+                    let mut updated_tx = make_test_transaction(TransactionStatus::Pending);
+                    updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                    updated_tx.status_reason = update.status_reason.clone();
+                    Ok(updated_tx)
+                });
+
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            // Use context that triggers via total failures (safety net)
+            let ctx = create_total_triggered_context();
+
+            let result = evm_transaction
+                .handle_status_impl(tx, Some(ctx))
+                .await
+                .unwrap();
+
+            assert_eq!(result.status, TransactionStatus::Failed);
+            assert!(result.status_reason.is_some());
+        }
+
+        #[tokio::test]
+        async fn test_circuit_breaker_below_threshold_continues_normally() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            tx.sent_at = Some((Utc::now() - Duration::seconds(120)).to_rfc3339());
+
+            if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
+                evm_data.hash = Some("0xFakeHash".to_string());
+            }
+
+            // Below threshold, should continue with normal status checking
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(|_| Box::pin(async { Ok(None) }));
+
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            mocks
+                .job_producer
+                .expect_produce_check_transaction_status_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .returning(|_, update| {
+                    let mut updated_tx = make_test_transaction(TransactionStatus::Submitted);
+                    updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                    Ok(updated_tx)
+                });
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let ctx = create_safe_context();
+
+            let result = evm_transaction
+                .handle_status_impl(tx, Some(ctx))
+                .await
+                .unwrap();
+
+            // Should continue normal processing, not trigger circuit breaker
+            assert_eq!(result.status, TransactionStatus::Submitted);
+        }
+
+        #[tokio::test]
+        async fn test_circuit_breaker_no_context_continues_normally() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            tx.sent_at = Some((Utc::now() - Duration::seconds(120)).to_rfc3339());
+
+            if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
+                evm_data.hash = Some("0xFakeHash".to_string());
+            }
+
+            // No context means no circuit breaker, should continue normally
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(|_| Box::pin(async { Ok(None) }));
+
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            mocks
+                .job_producer
+                .expect_produce_check_transaction_status_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .returning(|_, update| {
+                    let mut updated_tx = make_test_transaction(TransactionStatus::Submitted);
+                    updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                    Ok(updated_tx)
+                });
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+
+            // Pass None for context
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
+
+            // Should continue normal processing
+            assert_eq!(result.status, TransactionStatus::Submitted);
+        }
+
+        #[tokio::test]
+        async fn test_circuit_breaker_final_state_early_return() {
+            let mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+            // Transaction is already in final state
+            let tx = make_test_transaction(TransactionStatus::Confirmed);
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let ctx = create_triggered_context();
+
+            // Even with triggered context, final states should return early
+            let result = evm_transaction
+                .handle_status_impl(tx, Some(ctx))
+                .await
+                .unwrap();
+
+            assert_eq!(result.status, TransactionStatus::Confirmed);
         }
     }
 
