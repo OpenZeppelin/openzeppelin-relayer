@@ -7,7 +7,7 @@
 use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Data, *};
 use eyre::Result;
-use tracing::{debug, instrument, warn};
+use tracing::{debug, instrument};
 
 use std::sync::Arc;
 
@@ -17,9 +17,6 @@ use crate::{
     models::{DefaultAppState, TransactionRepoModel},
     observability::request_id::set_request_id,
 };
-
-// Circuit breaker: Maximum consecutive failures before giving up
-const MAX_CONSECUTIVE_FAILURES: u32 = 10;
 
 #[cfg(test)]
 use crate::models::NetworkType;
@@ -45,25 +42,6 @@ pub async fn transaction_status_handler(
         set_request_id(request_id);
     }
 
-    // Circuit breaker: Check for too many consecutive failures
-    let consecutive_failures = job
-        .data
-        .metadata
-        .as_ref()
-        .and_then(|m| m.get("consecutive_failures"))
-        .and_then(|c| c.parse::<u32>().ok())
-        .unwrap_or(0);
-
-    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
-        warn!(
-            tx_id = %job.data.transaction_id,
-            consecutive_failures = consecutive_failures,
-            "transaction exceeded maximum consecutive failures, giving up"
-        );
-        // Return Ok to complete the job (stop retrying)
-        return Ok(());
-    }
-
     debug!(
         "handling transaction status check for tx_id {}",
         job.data.transaction_id
@@ -71,25 +49,16 @@ pub async fn transaction_status_handler(
 
     let result = handle_request(job.data, state).await;
 
-    handle_status_check_result(result, consecutive_failures)
+    handle_status_check_result(result)
 }
 
-/// Handles status check results with special retry logic and circuit breaker.
+/// Handles status check results with special retry logic.
 ///
 /// # Retry Strategy
-/// - If transaction is in final state → Job completes successfully (reset failure count)
-/// - If error occurred → Increment failure count and retry
-/// - If transaction still not final → Reset failure count and retry
-/// - If too many consecutive failures → Job completes (circuit breaker stops retrying)
-///
-/// # Circuit Breaker
-/// Tracks consecutive failures to prevent infinite retry loops. Success or non-final
-/// states reset the counter. This allows transient errors to recover while stopping
-/// permanently broken transactions.
-fn handle_status_check_result(
-    result: Result<TransactionRepoModel>,
-    current_consecutive_failures: u32,
-) -> Result<(), Error> {
+/// - If transaction is in final state → Job completes successfully
+/// - If error occurred → Retry (let handle_result decide)
+/// - If transaction still not final → Retry to keep checking
+fn handle_status_check_result(result: Result<TransactionRepoModel>) -> Result<(), Error> {
     match result {
         Ok(updated_tx) => {
             // Check if transaction reached final state
@@ -101,8 +70,7 @@ fn handle_status_check_result(
                 );
                 Ok(())
             } else {
-                // Transaction still processing - this is NOT a failure, reset counter
-                // The transaction is just waiting for network confirmation
+                // Transaction still processing, retry status check
                 debug!(
                     tx_id = %updated_tx.id,
                     status = ?updated_tx.status,
@@ -119,18 +87,7 @@ fn handle_status_check_result(
             }
         }
         Err(e) => {
-            // Error occurred - increment consecutive failure counter
-            let new_failure_count = current_consecutive_failures + 1;
-            warn!(
-                error = %e,
-                consecutive_failures = new_failure_count,
-                "status check failed, incrementing failure counter"
-            );
-
-            // Note: We can't easily update job metadata here since we don't have access to the job
-            // The circuit breaker check happens at the start of transaction_status_handler
-            // Apalis retry mechanism will create a new job attempt which will check the counter
-            // For now, we just log and retry - the counter is checked on next attempt
+            // Error occurred, retry the job
             Err(Error::Failed(Arc::new(format!("{e}").into())))
         }
     }
@@ -202,7 +159,7 @@ mod tests {
             tx.status = TransactionStatus::Confirmed;
             let result = Ok(tx);
 
-            let check_result = handle_status_check_result(result, 0);
+            let check_result = handle_status_check_result(result);
 
             assert!(
                 check_result.is_ok(),
@@ -216,7 +173,7 @@ mod tests {
             tx.status = TransactionStatus::Failed;
             let result = Ok(tx);
 
-            let check_result = handle_status_check_result(result, 0);
+            let check_result = handle_status_check_result(result);
 
             assert!(
                 check_result.is_ok(),
@@ -230,7 +187,7 @@ mod tests {
             tx.status = TransactionStatus::Expired;
             let result = Ok(tx);
 
-            let check_result = handle_status_check_result(result, 0);
+            let check_result = handle_status_check_result(result);
 
             assert!(
                 check_result.is_ok(),
@@ -244,7 +201,7 @@ mod tests {
             tx.status = TransactionStatus::Canceled;
             let result = Ok(tx);
 
-            let check_result = handle_status_check_result(result, 0);
+            let check_result = handle_status_check_result(result);
 
             assert!(
                 check_result.is_ok(),
@@ -258,7 +215,7 @@ mod tests {
             tx.status = TransactionStatus::Pending;
             let result = Ok(tx);
 
-            let check_result = handle_status_check_result(result, 0);
+            let check_result = handle_status_check_result(result);
 
             assert!(
                 check_result.is_err(),
@@ -272,7 +229,7 @@ mod tests {
             tx.status = TransactionStatus::Sent;
             let result = Ok(tx);
 
-            let check_result = handle_status_check_result(result, 0);
+            let check_result = handle_status_check_result(result);
 
             assert!(
                 check_result.is_err(),
@@ -286,7 +243,7 @@ mod tests {
             tx.status = TransactionStatus::Submitted;
             let result = Ok(tx);
 
-            let check_result = handle_status_check_result(result, 0);
+            let check_result = handle_status_check_result(result);
 
             assert!(
                 check_result.is_err(),
@@ -300,7 +257,7 @@ mod tests {
             tx.status = TransactionStatus::Mined;
             let result = Ok(tx);
 
-            let check_result = handle_status_check_result(result, 0);
+            let check_result = handle_status_check_result(result);
 
             assert!(
                 check_result.is_err(),
@@ -313,7 +270,7 @@ mod tests {
             let result: Result<TransactionRepoModel> =
                 Err(eyre::eyre!("Network timeout during status check"));
 
-            let check_result = handle_status_check_result(result, 0);
+            let check_result = handle_status_check_result(result);
 
             assert!(
                 check_result.is_err(),
@@ -326,7 +283,7 @@ mod tests {
             let error_message = "RPC call failed: connection timeout";
             let result: Result<TransactionRepoModel> = Err(eyre::eyre!(error_message));
 
-            let check_result = handle_status_check_result(result, 0);
+            let check_result = handle_status_check_result(result);
 
             match check_result {
                 Err(Error::Failed(arc)) => {
@@ -346,7 +303,7 @@ mod tests {
             tx.status = TransactionStatus::Submitted;
             let result = Ok(tx);
 
-            let check_result = handle_status_check_result(result, 0);
+            let check_result = handle_status_check_result(result);
 
             match check_result {
                 Err(Error::Failed(arc)) => {

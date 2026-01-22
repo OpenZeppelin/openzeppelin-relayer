@@ -11,8 +11,7 @@ pub const WORKER_TRANSACTION_RESEND_RETRIES: usize = 1; // Resend same transacti
 
 // Number of retries for the transaction status checker job
 // Maximum retries for the transaction status checker job until tx is in final state
-// Hardcode explicit value to prevent infinite retry loops that saturate worker pool
-pub const WORKER_TRANSACTION_STATUS_CHECKER_RETRIES: usize = 50;
+pub const WORKER_TRANSACTION_STATUS_CHECKER_RETRIES: usize = usize::MAX;
 
 // Number of retries for the notification sender job
 pub const WORKER_NOTIFICATION_SENDER_RETRIES: usize = 5;
