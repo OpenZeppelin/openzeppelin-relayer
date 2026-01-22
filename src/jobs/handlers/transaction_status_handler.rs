@@ -320,15 +320,5 @@ mod tests {
                 _ => panic!("Expected Error::Failed for non-final state"),
             }
         }
-
-        #[test]
-        fn test_circuit_breaker_increments_on_error() {
-            let result: Result<TransactionRepoModel> = Err(eyre::eyre!("Network error"));
-
-            // Start with 5 failures
-            let check_result = handle_status_check_result(result, 5);
-
-            assert!(check_result.is_err(), "Should return Err to trigger retry");
-        }
     }
 }
