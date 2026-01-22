@@ -22,7 +22,7 @@ use super::{
     TransactionSend, TransactionStatusCheck,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Queue {
     pub transaction_request_queue: RedisStorage<Job<TransactionRequest>>,
     pub transaction_submission_queue: RedisStorage<Job<TransactionSend>>,
@@ -35,6 +35,24 @@ pub struct Queue {
     pub notification_queue: RedisStorage<Job<NotificationSend>>,
     pub token_swap_request_queue: RedisStorage<Job<TokenSwapRequest>>,
     pub relayer_health_check_queue: RedisStorage<Job<RelayerHealthCheck>>,
+    /// Shared Redis connection manager for direct Redis operations
+    pub connection_manager: Arc<ConnectionManager>,
+}
+
+impl std::fmt::Debug for Queue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Queue")
+            .field("transaction_request_queue", &"RedisStorage<...>")
+            .field("transaction_submission_queue", &"RedisStorage<...>")
+            .field("transaction_status_queue", &"RedisStorage<...>")
+            .field("transaction_status_queue_evm", &"RedisStorage<...>")
+            .field("transaction_status_queue_stellar", &"RedisStorage<...>")
+            .field("notification_queue", &"RedisStorage<...>")
+            .field("token_swap_request_queue", &"RedisStorage<...>")
+            .field("relayer_health_check_queue", &"RedisStorage<...>")
+            .field("connection_manager", &"ConnectionManager")
+            .finish()
+    }
 }
 
 impl Queue {
@@ -112,6 +130,7 @@ impl Queue {
                 shared.clone(),
             )
             .await?,
+            connection_manager: shared,
         })
     }
 }

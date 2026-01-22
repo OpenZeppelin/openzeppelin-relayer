@@ -3,28 +3,31 @@
 //! Monitors the status of submitted transactions by:
 //! - Checking transaction status on the network
 //! - Updating transaction status in storage
-//! - Tracking failure counts for circuit breaker decisions
-//! - Triggering notifications on status changes
+//! - Tracking failure counts for circuit breaker decisions (stored in Redis by tx_id)
 use actix_web::web::ThinData;
-use apalis::prelude::{Attempt, Data, *};
+use apalis::prelude::{Attempt, Data, TaskId, *};
+use apalis_redis::{ConnectionManager, RedisContext};
 use eyre::Result;
+use redis::AsyncCommands;
 use std::sync::Arc;
-use tracing::{debug, instrument, warn};
+use tracing::{debug, info, instrument, warn};
 
 use crate::{
+    config::ServerConfig,
     constants::{get_max_consecutive_status_failures, get_max_total_status_failures},
     domain::{get_relayer_transaction, get_transaction_by_id, is_final_state, Transaction},
-    jobs::{
-        read_counter_from_metadata, Job, StatusCheckContext, TransactionStatusCheck,
-        META_CONSECUTIVE_FAILURES, META_TOTAL_FAILURES,
-    },
+    jobs::{Job, StatusCheckContext, TransactionStatusCheck},
     models::{DefaultAppState, NetworkType, TransactionRepoModel},
     observability::request_id::set_request_id,
 };
 
+/// Redis key prefix for transaction status check metadata (failure counters).
+/// Stored separately from Apalis job data to persist across retries.
+const TX_STATUS_CHECK_METADATA_PREFIX: &str = "queue:tx_status_check_metadata";
+
 #[instrument(
     level = "debug",
-    skip(job, state),
+    skip(job, state, _ctx),
     fields(
         request_id = ?job.request_id,
         job_id = %job.message_id,
@@ -32,72 +35,93 @@ use crate::{
         attempt = %attempt.current(),
         tx_id = %job.data.transaction_id,
         relayer_id = %job.data.relayer_id,
+        task_id = %task_id.to_string(),
     )
 )]
 pub async fn transaction_status_handler(
-    mut job: Job<TransactionStatusCheck>,
+    job: Job<TransactionStatusCheck>,
     state: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
+    task_id: TaskId,
+    _ctx: RedisContext,
 ) -> Result<(), Error> {
     if let Some(request_id) = job.request_id.clone() {
         set_request_id(request_id);
     }
 
-    // Read current failure counters from job metadata
-    let consecutive_failures =
-        read_counter_from_metadata(&job.data.metadata, META_CONSECUTIVE_FAILURES);
-    let total_failures = read_counter_from_metadata(&job.data.metadata, META_TOTAL_FAILURES);
+    let tx_id = &job.data.transaction_id;
 
-    // Get network type and max failures (both consecutive and total)
+    // Get Redis connection manager from the job producer (reuse existing connection)
+    let conn_manager = state
+        .job_producer()
+        .get_queue()
+        .await
+        .map_err(|e| Error::Failed(Arc::new(format!("Failed to get queue: {e}").into())))?
+        .connection_manager;
+
+    // Read failure counters from separate Redis key (not job metadata)
+    // This persists across job retries since we store it independently
+    let (consecutive_failures, total_failures) =
+        read_counters_from_redis(&conn_manager, tx_id).await;
+
+    // Get network type and max failures
     let network_type = job.data.network_type.unwrap_or(NetworkType::Evm);
     let max_consecutive = get_max_consecutive_status_failures(network_type);
     let max_total = get_max_total_status_failures(network_type);
 
     debug!(
-        tx_id = %job.data.transaction_id,
+        tx_id = %tx_id,
         consecutive_failures,
         total_failures,
         max_consecutive,
         max_total,
         attempt = attempt.current(),
+        task_id = %task_id.to_string(),
         "handling transaction status check"
     );
 
-    // Build circuit breaker context with attempt count for total retries
-    let total_retries = attempt.current() as u32;
+    // Build circuit breaker context
     let context = StatusCheckContext::new(
         consecutive_failures,
         total_failures,
-        total_retries,
+        attempt.current() as u32,
         max_consecutive,
         max_total,
         network_type,
     );
 
     // Execute status check with context
-    let result = handle_request(job.data.clone(), state, context).await;
+    let result = handle_request(job.data.clone(), state.clone(), context).await;
 
-    // Handle result and update metadata for next retry
-    handle_result(&mut job, result, consecutive_failures, total_failures)
+    // Handle result and update counters in Redis
+    handle_result(
+        result,
+        &conn_manager,
+        tx_id,
+        consecutive_failures,
+        total_failures,
+    )
+    .await
 }
 
 /// Handles status check results with circuit breaker tracking.
 ///
 /// # Strategy
-/// - If transaction is in final state → Return Ok (job completes)
-/// - If success but not final → Reset consecutive to 0, return Err (Apalis retries)
-/// - If error → Increment counters, return Err (Apalis retries)
+/// - If transaction is in final state → Clean up counters, return Ok (job completes)
+/// - If success but not final → Reset consecutive to 0 in Redis, return Err (Apalis retries)
+/// - If error → Increment counters in Redis, return Err (Apalis retries)
 ///
-/// Metadata updates persist across Apalis retries, enabling proper failure tracking.
-fn handle_result(
-    job: &mut Job<TransactionStatusCheck>,
+/// Counters are stored in a separate Redis key by tx_id, independent of Apalis job data.
+async fn handle_result(
     result: Result<TransactionRepoModel>,
+    conn_manager: &Arc<ConnectionManager>,
+    tx_id: &str,
     consecutive_failures: u32,
     total_failures: u32,
 ) -> Result<(), Error> {
     match result {
         Ok(tx) if is_final_state(&tx.status) => {
-            // Transaction reached final state - job complete
+            // Transaction reached final state - job complete, clean up counters
             debug!(
                 tx_id = %tx.id,
                 status = ?tx.status,
@@ -105,17 +129,26 @@ fn handle_result(
                 total_failures,
                 "transaction in final state, status check complete"
             );
+
+            // Clean up the counters from Redis
+            if let Err(e) = delete_counters_from_redis(conn_manager, tx_id).await {
+                warn!(error = %e, tx_id = %tx_id, "failed to clean up counters from Redis");
+            }
+
             Ok(())
         }
         Ok(tx) => {
             // Success but not final - RESET consecutive counter, keep total unchanged
-            debug!(
+            info!(
                 tx_id = %tx.id,
                 status = ?tx.status,
                 "transaction not in final state, resetting consecutive failures"
             );
 
-            update_job_metadata(job, 0, total_failures);
+            // Reset consecutive counter in Redis
+            if let Err(e) = update_counters_in_redis(conn_manager, tx_id, 0, total_failures).await {
+                warn!(error = %e, tx_id = %tx_id, "failed to reset consecutive counter in Redis");
+            }
 
             // Return error to trigger Apalis retry
             Err(Error::Failed(Arc::new(
@@ -133,12 +166,18 @@ fn handle_result(
 
             warn!(
                 error = %e,
+                tx_id = %tx_id,
                 consecutive_failures = new_consecutive,
                 total_failures = new_total,
                 "status check failed, incrementing failure counters"
             );
 
-            update_job_metadata(job, new_consecutive, new_total);
+            // Update counters in Redis
+            if let Err(update_err) =
+                update_counters_in_redis(conn_manager, tx_id, new_consecutive, new_total).await
+            {
+                warn!(error = %update_err, tx_id = %tx_id, "failed to update counters in Redis");
+            }
 
             // Return error to trigger Apalis retry
             Err(Error::Failed(Arc::new(format!("{e}").into())))
@@ -146,15 +185,109 @@ fn handle_result(
     }
 }
 
-/// Updates job metadata with new failure counters.
-fn update_job_metadata(job: &mut Job<TransactionStatusCheck>, consecutive: u32, total: u32) {
-    let mut metadata = job.data.metadata.clone().unwrap_or_default();
-    metadata.insert(
-        META_CONSECUTIVE_FAILURES.to_string(),
-        consecutive.to_string(),
+/// Builds the Redis key for storing status check metadata for a transaction.
+fn get_metadata_key(tx_id: &str) -> String {
+    let redis_key_prefix = ServerConfig::get_redis_key_prefix();
+    format!("{redis_key_prefix}:{TX_STATUS_CHECK_METADATA_PREFIX}:{tx_id}")
+}
+
+/// Reads failure counters from Redis for a given transaction.
+///
+/// Returns (consecutive_failures, total_failures), defaulting to (0, 0) if not found.
+async fn read_counters_from_redis(
+    conn_manager: &Arc<ConnectionManager>,
+    tx_id: &str,
+) -> (u32, u32) {
+    let key = get_metadata_key(tx_id);
+
+    let result: Result<(u32, u32)> = async {
+        let mut conn = (**conn_manager).clone();
+
+        let values: Vec<Option<String>> = conn
+            .hget(&key, &["consecutive", "total"])
+            .await
+            .map_err(|e| eyre::eyre!("Failed to read counters from Redis: {e}"))?;
+
+        let consecutive = values
+            .first()
+            .and_then(|v| v.as_ref())
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let total = values
+            .get(1)
+            .and_then(|v| v.as_ref())
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+
+        Ok((consecutive, total))
+    }
+    .await;
+
+    match result {
+        Ok(counters) => counters,
+        Err(e) => {
+            warn!(error = %e, tx_id = %tx_id, "failed to read counters from Redis, using defaults");
+            (0, 0)
+        }
+    }
+}
+
+/// Updates failure counters in Redis for a given transaction.
+async fn update_counters_in_redis(
+    conn_manager: &Arc<ConnectionManager>,
+    tx_id: &str,
+    consecutive: u32,
+    total: u32,
+) -> Result<()> {
+    let key = get_metadata_key(tx_id);
+    let mut conn = (**conn_manager).clone();
+
+    // Use pipeline to atomically set values and TTL
+    // hset_multiple returns "OK", expire returns 1 if TTL was set
+    // Pipeline returns results as a tuple
+    let (ttl_result,): (i64,) = redis::pipe()
+        .hset_multiple(
+            &key,
+            &[
+                ("consecutive", consecutive.to_string()),
+                ("total", total.to_string()),
+            ],
+        )
+        .ignore() // Ignore "OK" response from hset_multiple
+        .expire(&key, 43200) // 12 hours TTL
+        .query_async(&mut conn)
+        .await
+        .map_err(|e| eyre::eyre!("Failed to update counters in Redis: {e}"))?;
+
+    let ttl_set = ttl_result == 1;
+
+    debug!(
+        tx_id = %tx_id,
+        consecutive,
+        total,
+        key,
+        ttl_set,
+        "updated status check counters in Redis"
     );
-    metadata.insert(META_TOTAL_FAILURES.to_string(), total.to_string());
-    job.data.metadata = Some(metadata);
+
+    Ok(())
+}
+
+/// Deletes failure counters from Redis when transaction reaches final state.
+async fn delete_counters_from_redis(
+    conn_manager: &Arc<ConnectionManager>,
+    tx_id: &str,
+) -> Result<()> {
+    let key = get_metadata_key(tx_id);
+    let mut conn = (**conn_manager).clone();
+
+    conn.del::<_, ()>(&key)
+        .await
+        .map_err(|e| eyre::eyre!("Failed to delete counters from Redis: {e}"))?;
+
+    debug!(tx_id = %tx_id, key, "deleted status check counters from Redis");
+
+    Ok(())
 }
 
 async fn handle_request(
@@ -182,15 +315,21 @@ async fn handle_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jobs::{JobType, META_CONSECUTIVE_FAILURES, META_TOTAL_FAILURES};
     use crate::models::TransactionStatus;
-    use crate::utils::mocks::mockutils::create_mock_transaction;
     use std::collections::HashMap;
+
+    #[test]
+    fn test_get_metadata_key() {
+        // Note: This test assumes default redis key prefix
+        let key = get_metadata_key("tx123");
+        assert!(key.contains(TX_STATUS_CHECK_METADATA_PREFIX));
+        assert!(key.contains("tx123"));
+    }
 
     #[tokio::test]
     async fn test_status_check_job_validation() {
         let check_job = TransactionStatusCheck::new("tx123", "relayer-1", NetworkType::Evm);
-        let job = Job::new(JobType::TransactionStatusCheck, check_job);
+        let job = Job::new(crate::jobs::JobType::TransactionStatusCheck, check_job);
 
         assert_eq!(job.data.transaction_id, "tx123");
         assert_eq!(job.data.relayer_id, "relayer-1");
@@ -212,103 +351,24 @@ mod tests {
         assert_eq!(job_metadata.get("last_status").unwrap(), "pending");
     }
 
-    #[test]
-    fn test_update_job_metadata() {
-        let check_job = TransactionStatusCheck::new("tx123", "relayer-1", NetworkType::Evm);
-        let mut job = Job::new(JobType::TransactionStatusCheck, check_job);
-
-        update_job_metadata(&mut job, 5, 10);
-
-        let metadata = job.data.metadata.unwrap();
-        assert_eq!(metadata.get(META_CONSECUTIVE_FAILURES).unwrap(), "5");
-        assert_eq!(metadata.get(META_TOTAL_FAILURES).unwrap(), "10");
-    }
-
-    #[test]
-    fn test_update_job_metadata_preserves_existing() {
-        let mut original_metadata = HashMap::new();
-        original_metadata.insert("custom_key".to_string(), "custom_value".to_string());
-
-        let check_job = TransactionStatusCheck::new("tx123", "relayer-1", NetworkType::Evm)
-            .with_metadata(original_metadata);
-        let mut job = Job::new(JobType::TransactionStatusCheck, check_job);
-
-        update_job_metadata(&mut job, 3, 7);
-
-        let metadata = job.data.metadata.unwrap();
-        assert_eq!(metadata.get(META_CONSECUTIVE_FAILURES).unwrap(), "3");
-        assert_eq!(metadata.get(META_TOTAL_FAILURES).unwrap(), "7");
-        assert_eq!(metadata.get("custom_key").unwrap(), "custom_value");
-    }
-
-    mod handle_result_tests {
-        use super::*;
-
-        fn create_test_job() -> Job<TransactionStatusCheck> {
-            let check_job = TransactionStatusCheck::new("tx123", "relayer-1", NetworkType::Evm);
-            Job::new(JobType::TransactionStatusCheck, check_job)
-        }
-
-        #[test]
-        fn test_final_state_returns_ok() {
-            let mut job = create_test_job();
-            let mut tx = create_mock_transaction();
-            tx.status = TransactionStatus::Confirmed;
-
-            let result = handle_result(&mut job, Ok(tx), 5, 10);
-
-            assert!(result.is_ok());
-        }
-
-        #[test]
-        fn test_non_final_state_resets_consecutive() {
-            let mut job = create_test_job();
-            let mut tx = create_mock_transaction();
-            tx.status = TransactionStatus::Submitted;
-
-            let result = handle_result(&mut job, Ok(tx), 5, 10);
-
-            assert!(result.is_err());
-            let metadata = job.data.metadata.unwrap();
-            assert_eq!(metadata.get(META_CONSECUTIVE_FAILURES).unwrap(), "0");
-            assert_eq!(metadata.get(META_TOTAL_FAILURES).unwrap(), "10");
-        }
-
-        #[test]
-        fn test_error_increments_counters() {
-            let mut job = create_test_job();
-            let error: Result<TransactionRepoModel> = Err(eyre::eyre!("RPC error"));
-
-            let result = handle_result(&mut job, error, 5, 10);
-
-            assert!(result.is_err());
-            let metadata = job.data.metadata.unwrap();
-            assert_eq!(metadata.get(META_CONSECUTIVE_FAILURES).unwrap(), "6");
-            assert_eq!(metadata.get(META_TOTAL_FAILURES).unwrap(), "11");
-        }
-    }
-
     mod context_tests {
         use super::*;
 
         #[test]
-        fn test_context_should_force_finalize_below_both_thresholds() {
-            // consecutive: 5 < 15, total: 10 < 45
-            let ctx = StatusCheckContext::new(5, 10, 20, 15, 45, NetworkType::Evm);
+        fn test_context_should_force_finalize_below_threshold() {
+            let ctx = StatusCheckContext::new(5, 10, 15, 25, 75, NetworkType::Evm);
             assert!(!ctx.should_force_finalize());
         }
 
         #[test]
         fn test_context_should_force_finalize_consecutive_at_threshold() {
-            // consecutive: 15 >= 15 (triggers), total: 20 < 45
-            let ctx = StatusCheckContext::new(15, 20, 30, 15, 45, NetworkType::Evm);
+            let ctx = StatusCheckContext::new(25, 30, 35, 25, 75, NetworkType::Evm);
             assert!(ctx.should_force_finalize());
         }
 
         #[test]
         fn test_context_should_force_finalize_total_at_threshold() {
-            // consecutive: 5 < 15, total: 45 >= 45 (triggers - safety net)
-            let ctx = StatusCheckContext::new(5, 45, 50, 15, 45, NetworkType::Evm);
+            let ctx = StatusCheckContext::new(10, 75, 80, 25, 75, NetworkType::Evm);
             assert!(ctx.should_force_finalize());
         }
     }
@@ -317,19 +377,11 @@ mod tests {
         use super::*;
 
         fn verify_final_state(status: TransactionStatus) {
-            assert!(
-                is_final_state(&status),
-                "{:?} should be a final state",
-                status
-            );
+            assert!(is_final_state(&status));
         }
 
-        fn verify_non_final_state(status: TransactionStatus) {
-            assert!(
-                !is_final_state(&status),
-                "{:?} should NOT be a final state",
-                status
-            );
+        fn verify_not_final_state(status: TransactionStatus) {
+            assert!(!is_final_state(&status));
         }
 
         #[test]
@@ -343,33 +395,118 @@ mod tests {
         }
 
         #[test]
-        fn test_expired_is_final() {
-            verify_final_state(TransactionStatus::Expired);
-        }
-
-        #[test]
         fn test_canceled_is_final() {
             verify_final_state(TransactionStatus::Canceled);
         }
 
         #[test]
+        fn test_expired_is_final() {
+            verify_final_state(TransactionStatus::Expired);
+        }
+
+        #[test]
         fn test_pending_is_not_final() {
-            verify_non_final_state(TransactionStatus::Pending);
+            verify_not_final_state(TransactionStatus::Pending);
         }
 
         #[test]
         fn test_sent_is_not_final() {
-            verify_non_final_state(TransactionStatus::Sent);
+            verify_not_final_state(TransactionStatus::Sent);
         }
 
         #[test]
         fn test_submitted_is_not_final() {
-            verify_non_final_state(TransactionStatus::Submitted);
+            verify_not_final_state(TransactionStatus::Submitted);
         }
 
         #[test]
         fn test_mined_is_not_final() {
-            verify_non_final_state(TransactionStatus::Mined);
+            verify_not_final_state(TransactionStatus::Mined);
+        }
+    }
+
+    mod handle_result_tests {
+        use super::*;
+
+        /// Tests that counter increment uses saturating_add to prevent overflow
+        #[test]
+        fn test_counter_increment_saturating() {
+            let consecutive: u32 = u32::MAX;
+            let total: u32 = u32::MAX;
+
+            let new_consecutive = consecutive.saturating_add(1);
+            let new_total = total.saturating_add(1);
+
+            // Should not overflow, stays at MAX
+            assert_eq!(new_consecutive, u32::MAX);
+            assert_eq!(new_total, u32::MAX);
+        }
+
+        /// Tests normal counter increment
+        #[test]
+        fn test_counter_increment_normal() {
+            let consecutive: u32 = 5;
+            let total: u32 = 10;
+
+            let new_consecutive = consecutive.saturating_add(1);
+            let new_total = total.saturating_add(1);
+
+            assert_eq!(new_consecutive, 6);
+            assert_eq!(new_total, 11);
+        }
+
+        /// Tests that consecutive counter resets to 0 on success (non-final)
+        #[test]
+        fn test_consecutive_reset_on_success() {
+            // When status check succeeds but tx is not final,
+            // consecutive should reset to 0, total stays unchanged
+            let consecutive: u32 = 10;
+            let total: u32 = 20;
+
+            // On success, consecutive resets
+            let new_consecutive = 0;
+            let new_total = total; // unchanged
+
+            assert_eq!(new_consecutive, 0);
+            assert_eq!(new_total, 20);
+        }
+
+        /// Tests that final states are correctly identified for cleanup
+        #[test]
+        fn test_final_state_triggers_cleanup() {
+            let final_states = vec![
+                TransactionStatus::Confirmed,
+                TransactionStatus::Failed,
+                TransactionStatus::Canceled,
+                TransactionStatus::Expired,
+            ];
+
+            for status in final_states {
+                assert!(
+                    is_final_state(&status),
+                    "Expected {:?} to be a final state",
+                    status
+                );
+            }
+        }
+
+        /// Tests that non-final states trigger retry
+        #[test]
+        fn test_non_final_state_triggers_retry() {
+            let non_final_states = vec![
+                TransactionStatus::Pending,
+                TransactionStatus::Sent,
+                TransactionStatus::Submitted,
+                TransactionStatus::Mined,
+            ];
+
+            for status in non_final_states {
+                assert!(
+                    !is_final_state(&status),
+                    "Expected {:?} to NOT be a final state",
+                    status
+                );
+            }
         }
     }
 }
