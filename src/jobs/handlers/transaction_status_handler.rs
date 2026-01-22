@@ -15,7 +15,10 @@ use tracing::{debug, info, instrument, warn};
 use crate::{
     config::ServerConfig,
     constants::{get_max_consecutive_status_failures, get_max_total_status_failures},
-    domain::{get_relayer_transaction, get_transaction_by_id, is_final_state, Transaction},
+    domain::{
+        get_relayer_by_id, get_relayer_transaction, get_transaction_by_id, is_final_state,
+        Transaction,
+    },
     jobs::{Job, StatusCheckContext, TransactionStatusCheck},
     models::{DefaultAppState, NetworkType, TransactionRepoModel},
     observability::request_id::set_request_id,
@@ -64,8 +67,24 @@ pub async fn transaction_status_handler(
     let (consecutive_failures, total_failures) =
         read_counters_from_redis(&conn_manager, tx_id).await;
 
-    // Get network type and max failures
-    let network_type = job.data.network_type.unwrap_or(NetworkType::Evm);
+    // Get network type from job data, or fetch from relayer for legacy jobs without network_type
+    let network_type = match job.data.network_type {
+        Some(nt) => nt,
+        None => {
+            // Legacy job without network_type - fetch from relayer
+            match get_relayer_by_id(job.data.relayer_id.clone(), &state).await {
+                Ok(relayer) => relayer.network_type,
+                Err(e) => {
+                    warn!(
+                        error = %e,
+                        relayer_id = %job.data.relayer_id,
+                        "failed to fetch relayer for network type, defaulting to EVM"
+                    );
+                    NetworkType::Evm
+                }
+            }
+        }
+    };
     let max_consecutive = get_max_consecutive_status_failures(network_type);
     let max_total = get_max_total_status_failures(network_type);
 
@@ -233,6 +252,10 @@ async fn read_counters_from_redis(
 }
 
 /// Updates failure counters in Redis for a given transaction.
+///
+/// TTL is refreshed on every update to act as an "inactivity timeout".
+/// If no status checks happen for 12 hours, the metadata is considered stale.
+/// Active transactions keep their metadata fresh.
 async fn update_counters_in_redis(
     conn_manager: &Arc<ConnectionManager>,
     tx_id: &str,
@@ -244,7 +267,6 @@ async fn update_counters_in_redis(
 
     // Use pipeline to atomically set values and TTL
     // hset_multiple returns "OK", expire returns 1 if TTL was set
-    // Pipeline returns results as a tuple
     let (ttl_result,): (i64,) = redis::pipe()
         .hset_multiple(
             &key,
