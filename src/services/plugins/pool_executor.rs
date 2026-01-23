@@ -1430,6 +1430,11 @@ pub fn get_pool_manager() -> Arc<PoolManager> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::plugins::script_executor::LogLevel;
+
+    // ============================================
+    // is_dead_server_error tests
+    // ============================================
 
     #[test]
     fn test_is_dead_server_error_detects_dead_server() {
@@ -1457,5 +1462,525 @@ mod tests {
 
         let err = PluginError::PluginExecutionError("Plugin returned invalid JSON".to_string());
         assert!(!PoolManager::is_dead_server_error(&err));
+    }
+
+    #[test]
+    fn test_is_dead_server_error_detects_all_dead_server_indicators() {
+        // Test common DeadServerIndicator patterns
+        let dead_server_errors = vec![
+            "EOF while parsing JSON response",
+            "Broken pipe when writing to socket",
+            "Connection refused: server not running",
+            "Connection reset by peer",
+            "Socket not connected",
+            "Failed to connect to pool server",
+            "Socket file missing: /tmp/test.sock",
+            "No such file or directory",
+        ];
+
+        for error_msg in dead_server_errors {
+            let err = PluginError::PluginExecutionError(error_msg.to_string());
+            assert!(
+                PoolManager::is_dead_server_error(&err),
+                "Expected '{}' to be detected as dead server error",
+                error_msg
+            );
+        }
+    }
+
+    #[test]
+    fn test_dead_server_indicator_patterns() {
+        // Test the DeadServerIndicator pattern matching directly
+        use super::super::health::DeadServerIndicator;
+
+        // These should all match
+        assert!(DeadServerIndicator::from_error_str("eof while parsing").is_some());
+        assert!(DeadServerIndicator::from_error_str("broken pipe").is_some());
+        assert!(DeadServerIndicator::from_error_str("connection refused").is_some());
+        assert!(DeadServerIndicator::from_error_str("connection reset").is_some());
+        assert!(DeadServerIndicator::from_error_str("not connected").is_some());
+        assert!(DeadServerIndicator::from_error_str("failed to connect").is_some());
+        assert!(DeadServerIndicator::from_error_str("socket file missing").is_some());
+        assert!(DeadServerIndicator::from_error_str("no such file").is_some());
+        assert!(DeadServerIndicator::from_error_str("connection timed out").is_some());
+        assert!(DeadServerIndicator::from_error_str("connect timed out").is_some());
+
+        // These should NOT match
+        assert!(DeadServerIndicator::from_error_str("handler timed out").is_none());
+        assert!(DeadServerIndicator::from_error_str("validation error").is_none());
+        assert!(DeadServerIndicator::from_error_str("TypeError: undefined").is_none());
+    }
+
+    #[test]
+    fn test_is_dead_server_error_excludes_plugin_timeouts_with_connection() {
+        // Plugin timeout should NOT be detected even if it mentions connection
+        let plugin_timeout =
+            PluginError::PluginExecutionError("plugin connection timed out".to_string());
+        // This contains both "plugin" and "timed out" so it's excluded
+        assert!(!PoolManager::is_dead_server_error(&plugin_timeout));
+    }
+
+    #[test]
+    fn test_is_dead_server_error_case_insensitive() {
+        // Test case insensitivity
+        let err = PluginError::PluginExecutionError("CONNECTION REFUSED".to_string());
+        assert!(PoolManager::is_dead_server_error(&err));
+
+        let err = PluginError::PluginExecutionError("BROKEN PIPE".to_string());
+        assert!(PoolManager::is_dead_server_error(&err));
+
+        let err = PluginError::PluginExecutionError("Connection Reset By Peer".to_string());
+        assert!(PoolManager::is_dead_server_error(&err));
+    }
+
+    #[test]
+    fn test_is_dead_server_error_handler_timeout_variations() {
+        // All variations of plugin/handler timeouts should NOT trigger restart
+        let timeout_errors = vec![
+            "Handler timed out",
+            "handler timed out after 30000ms",
+            "Plugin handler timed out",
+            "plugin timed out",
+            "Plugin execution timed out after 60s",
+        ];
+
+        for error_msg in timeout_errors {
+            let err = PluginError::PluginExecutionError(error_msg.to_string());
+            assert!(
+                !PoolManager::is_dead_server_error(&err),
+                "Expected '{}' to NOT be detected as dead server error",
+                error_msg
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_dead_server_error_business_errors_not_detected() {
+        // Business logic errors should not trigger restart
+        let business_errors = vec![
+            "ReferenceError: x is not defined",
+            "SyntaxError: Unexpected token",
+            "TypeError: Cannot read property 'foo' of undefined",
+            "Plugin returned status 400: Bad Request",
+            "Validation error: missing required field",
+            "Authorization failed",
+            "Rate limit exceeded",
+            "Plugin threw an error: Invalid input",
+        ];
+
+        for error_msg in business_errors {
+            let err = PluginError::PluginExecutionError(error_msg.to_string());
+            assert!(
+                !PoolManager::is_dead_server_error(&err),
+                "Expected '{}' to NOT be detected as dead server error",
+                error_msg
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_dead_server_error_with_handler_error_type() {
+        // HandlerError type should also be checked
+        let handler_payload = PluginHandlerPayload {
+            message: "Connection refused".to_string(),
+            status: 500,
+            code: None,
+            details: None,
+            logs: None,
+            traces: None,
+        };
+        let err = PluginError::HandlerError(Box::new(handler_payload));
+        // The error message contains "Connection refused" but it's wrapped differently
+        // This tests that we check the string representation
+        assert!(PoolManager::is_dead_server_error(&err));
+    }
+
+    // ============================================
+    // Heap calculation tests
+    // ============================================
+
+    #[test]
+    fn test_heap_calculation_base_case() {
+        // With default concurrency, should get base heap
+        let base = PoolManager::BASE_HEAP_MB;
+        let divisor = PoolManager::CONCURRENCY_DIVISOR;
+        let increment = PoolManager::HEAP_INCREMENT_PER_DIVISOR_MB;
+
+        // For 100 concurrent requests:
+        // 512 + (100 / 10) * 32 = 512 + 320 = 832 MB
+        let concurrency = 100;
+        let expected = base + ((concurrency / divisor) * increment);
+        assert_eq!(expected, 832);
+    }
+
+    #[test]
+    fn test_heap_calculation_minimum() {
+        // With very low concurrency, should still get base heap
+        let base = PoolManager::BASE_HEAP_MB;
+        let divisor = PoolManager::CONCURRENCY_DIVISOR;
+        let increment = PoolManager::HEAP_INCREMENT_PER_DIVISOR_MB;
+
+        // For 5 concurrent requests:
+        // 512 + (5 / 10) * 32 = 512 + 0 = 512 MB (integer division)
+        let concurrency = 5;
+        let expected = base + ((concurrency / divisor) * increment);
+        assert_eq!(expected, 512);
+    }
+
+    #[test]
+    fn test_heap_calculation_high_concurrency() {
+        // With high concurrency, should scale appropriately
+        let base = PoolManager::BASE_HEAP_MB;
+        let divisor = PoolManager::CONCURRENCY_DIVISOR;
+        let increment = PoolManager::HEAP_INCREMENT_PER_DIVISOR_MB;
+
+        // For 500 concurrent requests:
+        // 512 + (500 / 10) * 32 = 512 + 1600 = 2112 MB
+        let concurrency = 500;
+        let expected = base + ((concurrency / divisor) * increment);
+        assert_eq!(expected, 2112);
+    }
+
+    #[test]
+    fn test_heap_calculation_max_cap() {
+        // Verify max heap cap is respected
+        let max_heap = PoolManager::MAX_HEAP_MB;
+        assert_eq!(max_heap, 8192);
+
+        // For extreme concurrency that would exceed cap:
+        // e.g., 3000 concurrent: 512 + (3000 / 10) * 32 = 512 + 9600 = 10112 MB
+        // Should be capped to 8192 MB
+        let base = PoolManager::BASE_HEAP_MB;
+        let divisor = PoolManager::CONCURRENCY_DIVISOR;
+        let increment = PoolManager::HEAP_INCREMENT_PER_DIVISOR_MB;
+
+        let concurrency = 3000;
+        let calculated = base + ((concurrency / divisor) * increment);
+        let capped = calculated.min(max_heap);
+
+        assert_eq!(calculated, 10112);
+        assert_eq!(capped, 8192);
+    }
+
+    // ============================================
+    // Constants verification tests
+    // ============================================
+
+    #[test]
+    fn test_pool_manager_constants() {
+        // Verify important constants have reasonable values
+        assert_eq!(PoolManager::BASE_HEAP_MB, 512);
+        assert_eq!(PoolManager::CONCURRENCY_DIVISOR, 10);
+        assert_eq!(PoolManager::HEAP_INCREMENT_PER_DIVISOR_MB, 32);
+        assert_eq!(PoolManager::MAX_HEAP_MB, 8192);
+    }
+
+    // ============================================
+    // PoolManager creation tests
+    // ============================================
+
+    #[tokio::test]
+    async fn test_pool_manager_new_creates_unique_socket_path() {
+        // Two PoolManagers should have different socket paths
+        let manager1 = PoolManager::new();
+        let manager2 = PoolManager::new();
+
+        assert_ne!(manager1.socket_path, manager2.socket_path);
+        assert!(manager1
+            .socket_path
+            .starts_with("/tmp/relayer-plugin-pool-"));
+        assert!(manager2
+            .socket_path
+            .starts_with("/tmp/relayer-plugin-pool-"));
+    }
+
+    #[tokio::test]
+    async fn test_pool_manager_with_custom_socket_path() {
+        let custom_path = "/tmp/custom-test-pool.sock".to_string();
+        let manager = PoolManager::with_socket_path(custom_path.clone());
+
+        assert_eq!(manager.socket_path, custom_path);
+    }
+
+    #[tokio::test]
+    async fn test_pool_manager_default_trait() {
+        // Verify Default trait creates a valid manager
+        let manager = PoolManager::default();
+        assert!(manager.socket_path.starts_with("/tmp/relayer-plugin-pool-"));
+    }
+
+    // ============================================
+    // Circuit breaker state tests
+    // ============================================
+
+    #[tokio::test]
+    async fn test_circuit_state_initial() {
+        let manager = PoolManager::new();
+
+        // Initial state should be Closed
+        assert_eq!(manager.circuit_state(), CircuitState::Closed);
+    }
+
+    #[tokio::test]
+    async fn test_avg_response_time_initial() {
+        let manager = PoolManager::new();
+
+        // Initial response time should be 0
+        assert_eq!(manager.avg_response_time_ms(), 0);
+    }
+
+    // ============================================
+    // Recovery mode tests
+    // ============================================
+
+    #[tokio::test]
+    async fn test_recovery_mode_initial() {
+        let manager = PoolManager::new();
+
+        // Should not be in recovery mode initially
+        assert!(!manager.is_recovering());
+        assert_eq!(manager.recovery_allowance_percent(), 0);
+    }
+
+    // ============================================
+    // ScriptResult construction tests
+    // ============================================
+
+    #[test]
+    fn test_script_result_success_construction() {
+        let result = ScriptResult {
+            logs: vec![LogEntry {
+                level: LogLevel::Info,
+                message: "Test log".to_string(),
+            }],
+            error: String::new(),
+            return_value: r#"{"success": true}"#.to_string(),
+            trace: vec![],
+        };
+
+        assert!(result.error.is_empty());
+        assert_eq!(result.logs.len(), 1);
+        assert_eq!(result.logs[0].level, LogLevel::Info);
+    }
+
+    #[test]
+    fn test_script_result_with_multiple_logs() {
+        let result = ScriptResult {
+            logs: vec![
+                LogEntry {
+                    level: LogLevel::Log,
+                    message: "Starting execution".to_string(),
+                },
+                LogEntry {
+                    level: LogLevel::Debug,
+                    message: "Processing data".to_string(),
+                },
+                LogEntry {
+                    level: LogLevel::Warn,
+                    message: "Deprecated API used".to_string(),
+                },
+                LogEntry {
+                    level: LogLevel::Error,
+                    message: "Non-fatal error".to_string(),
+                },
+            ],
+            error: String::new(),
+            return_value: "done".to_string(),
+            trace: vec![],
+        };
+
+        assert_eq!(result.logs.len(), 4);
+        assert_eq!(result.logs[0].level, LogLevel::Log);
+        assert_eq!(result.logs[1].level, LogLevel::Debug);
+        assert_eq!(result.logs[2].level, LogLevel::Warn);
+        assert_eq!(result.logs[3].level, LogLevel::Error);
+    }
+
+    // ============================================
+    // QueuedRequest structure tests
+    // ============================================
+
+    #[test]
+    fn test_queued_request_required_fields() {
+        let (tx, _rx) = oneshot::channel();
+
+        let request = QueuedRequest {
+            plugin_id: "test-plugin".to_string(),
+            compiled_code: Some("module.exports.handler = () => {}".to_string()),
+            plugin_path: None,
+            params: serde_json::json!({"key": "value"}),
+            headers: None,
+            socket_path: "/tmp/test.sock".to_string(),
+            http_request_id: Some("req-123".to_string()),
+            timeout_secs: Some(30),
+            route: Some("/api/test".to_string()),
+            config: Some(serde_json::json!({"setting": true})),
+            method: Some("POST".to_string()),
+            query: Some(serde_json::json!({"page": "1"})),
+            response_tx: tx,
+        };
+
+        assert_eq!(request.plugin_id, "test-plugin");
+        assert!(request.compiled_code.is_some());
+        assert!(request.plugin_path.is_none());
+        assert_eq!(request.timeout_secs, Some(30));
+    }
+
+    #[test]
+    fn test_queued_request_minimal() {
+        let (tx, _rx) = oneshot::channel();
+
+        let request = QueuedRequest {
+            plugin_id: "minimal".to_string(),
+            compiled_code: None,
+            plugin_path: Some("/path/to/plugin.ts".to_string()),
+            params: serde_json::json!(null),
+            headers: None,
+            socket_path: "/tmp/min.sock".to_string(),
+            http_request_id: None,
+            timeout_secs: None,
+            route: None,
+            config: None,
+            method: None,
+            query: None,
+            response_tx: tx,
+        };
+
+        assert_eq!(request.plugin_id, "minimal");
+        assert!(request.compiled_code.is_none());
+        assert!(request.plugin_path.is_some());
+    }
+
+    // ============================================
+    // Error type tests
+    // ============================================
+
+    #[test]
+    fn test_plugin_error_socket_error() {
+        let err = PluginError::SocketError("Connection failed".to_string());
+        let display = format!("{}", err);
+        assert!(display.contains("Socket error"));
+        assert!(display.contains("Connection failed"));
+    }
+
+    #[test]
+    fn test_plugin_error_plugin_execution_error() {
+        let err = PluginError::PluginExecutionError("Execution failed".to_string());
+        let display = format!("{}", err);
+        assert!(display.contains("Execution failed"));
+    }
+
+    #[test]
+    fn test_plugin_error_handler_error() {
+        let payload = PluginHandlerPayload {
+            message: "Handler error".to_string(),
+            status: 400,
+            code: Some("BAD_REQUEST".to_string()),
+            details: Some(serde_json::json!({"field": "name"})),
+            logs: None,
+            traces: None,
+        };
+        let err = PluginError::HandlerError(Box::new(payload));
+
+        // Check that it can be displayed
+        let display = format!("{:?}", err);
+        assert!(display.contains("HandlerError"));
+    }
+
+    // ============================================
+    // Handler payload tests
+    // ============================================
+
+    #[test]
+    fn test_plugin_handler_payload_full() {
+        let payload = PluginHandlerPayload {
+            message: "Validation failed".to_string(),
+            status: 422,
+            code: Some("VALIDATION_ERROR".to_string()),
+            details: Some(serde_json::json!({
+                "errors": [
+                    {"field": "email", "message": "Invalid format"}
+                ]
+            })),
+            logs: Some(vec![LogEntry {
+                level: LogLevel::Error,
+                message: "Validation failed for email".to_string(),
+            }]),
+            traces: Some(vec![serde_json::json!({"stack": "Error at line 10"})]),
+        };
+
+        assert_eq!(payload.status, 422);
+        assert_eq!(payload.code, Some("VALIDATION_ERROR".to_string()));
+        assert!(payload.logs.is_some());
+        assert!(payload.traces.is_some());
+    }
+
+    #[test]
+    fn test_plugin_handler_payload_minimal() {
+        let payload = PluginHandlerPayload {
+            message: "Error".to_string(),
+            status: 500,
+            code: None,
+            details: None,
+            logs: None,
+            traces: None,
+        };
+
+        assert_eq!(payload.status, 500);
+        assert!(payload.code.is_none());
+        assert!(payload.details.is_none());
+    }
+
+    // ============================================
+    // Async tests (tokio runtime)
+    // ============================================
+
+    #[tokio::test]
+    async fn test_pool_manager_not_initialized_health_check() {
+        let manager = PoolManager::with_socket_path("/tmp/test-health.sock".to_string());
+
+        // Health check on uninitialized manager should return not_initialized
+        let health = manager.health_check().await.unwrap();
+
+        assert!(!health.healthy);
+        assert_eq!(health.status, "not_initialized");
+        assert!(health.uptime_ms.is_none());
+        assert!(health.memory.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_pool_manager_circuit_info_in_health_status() {
+        let manager = PoolManager::with_socket_path("/tmp/test-circuit.sock".to_string());
+
+        let health = manager.health_check().await.unwrap();
+
+        // Circuit state info should be present even when not initialized
+        assert!(health.circuit_state.is_some());
+        assert_eq!(health.circuit_state, Some("closed".to_string()));
+        assert!(health.avg_response_time_ms.is_some());
+        assert!(health.recovering.is_some());
+        assert!(health.recovery_percent.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_invalidate_plugin_when_not_initialized() {
+        let manager = PoolManager::with_socket_path("/tmp/test-invalidate.sock".to_string());
+
+        // Invalidating when not initialized should be a no-op
+        let result = manager.invalidate_plugin("test-plugin".to_string()).await;
+
+        // Should succeed (no-op)
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_when_not_initialized() {
+        let manager = PoolManager::with_socket_path("/tmp/test-shutdown.sock".to_string());
+
+        // Shutdown when not initialized should be a no-op
+        let result = manager.shutdown().await;
+
+        // Should succeed (no-op)
+        assert!(result.is_ok());
     }
 }

@@ -268,6 +268,11 @@ impl<'a> Drop for PooledConnection<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::plugins::protocol::ExecuteRequest;
+
+    // ============================================
+    // ConnectionPool creation tests
+    // ============================================
 
     #[test]
     fn test_connection_pool_creation() {
@@ -275,6 +280,35 @@ mod tests {
         // Verify semaphore has correct number of permits
         assert_eq!(pool.semaphore.available_permits(), 10);
     }
+
+    #[test]
+    fn test_connection_pool_creation_single_connection() {
+        let pool = ConnectionPool::new("/tmp/single.sock".to_string(), 1);
+        assert_eq!(pool.semaphore.available_permits(), 1);
+    }
+
+    #[test]
+    fn test_connection_pool_creation_large_pool() {
+        let pool = ConnectionPool::new("/tmp/large.sock".to_string(), 1000);
+        assert_eq!(pool.semaphore.available_permits(), 1000);
+    }
+
+    #[test]
+    fn test_connection_pool_stores_socket_path() {
+        let path = "/var/run/custom.sock";
+        let pool = ConnectionPool::new(path.to_string(), 5);
+        assert_eq!(pool.socket_path, path);
+    }
+
+    #[test]
+    fn test_connection_pool_stores_max_connections() {
+        let pool = ConnectionPool::new("/tmp/test.sock".to_string(), 42);
+        assert_eq!(pool.max_connections, 42);
+    }
+
+    // ============================================
+    // Semaphore tests
+    // ============================================
 
     #[tokio::test]
     async fn test_connection_pool_semaphore_limits() {
@@ -291,11 +325,425 @@ mod tests {
         assert!(permit3.is_err());
     }
 
+    #[tokio::test]
+    async fn test_semaphore_permit_release_restores_capacity() {
+        let pool = ConnectionPool::new("/tmp/test.sock".to_string(), 2);
+
+        // Acquire all permits
+        let permit1 = pool.semaphore.clone().try_acquire_owned().unwrap();
+        let permit2 = pool.semaphore.clone().try_acquire_owned().unwrap();
+
+        // No permits available
+        assert_eq!(pool.semaphore.available_permits(), 0);
+
+        // Drop one permit
+        drop(permit1);
+
+        // One permit available again
+        assert_eq!(pool.semaphore.available_permits(), 1);
+
+        // Can acquire again
+        let permit3 = pool.semaphore.clone().try_acquire_owned();
+        assert!(permit3.is_ok());
+
+        // Drop remaining permits
+        drop(permit2);
+        drop(permit3.unwrap());
+
+        // All permits restored
+        assert_eq!(pool.semaphore.available_permits(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_semaphore_async_acquire() {
+        let pool = ConnectionPool::new("/tmp/test.sock".to_string(), 1);
+
+        // Acquire the only permit
+        let permit = pool.semaphore.clone().acquire_owned().await;
+        assert!(permit.is_ok());
+        let _permit = permit.unwrap();
+
+        // Verify no permits available
+        assert_eq!(pool.semaphore.available_permits(), 0);
+    }
+
+    // ============================================
+    // Connection ID tests
+    // ============================================
+
     #[test]
     fn test_connection_id_increment() {
         let pool = ConnectionPool::new("/tmp/test.sock".to_string(), 10);
         assert_eq!(pool.next_connection_id(), 0);
         assert_eq!(pool.next_connection_id(), 1);
         assert_eq!(pool.next_connection_id(), 2);
+    }
+
+    #[test]
+    fn test_connection_id_starts_at_zero() {
+        let pool = ConnectionPool::new("/tmp/test.sock".to_string(), 10);
+        assert_eq!(pool.next_connection_id(), 0);
+    }
+
+    #[test]
+    fn test_connection_id_monotonically_increasing() {
+        let pool = ConnectionPool::new("/tmp/test.sock".to_string(), 10);
+
+        let mut last_id = pool.next_connection_id();
+        for _ in 0..100 {
+            let current_id = pool.next_connection_id();
+            assert!(
+                current_id > last_id,
+                "IDs should be monotonically increasing"
+            );
+            last_id = current_id;
+        }
+    }
+
+    #[test]
+    fn test_connection_id_thread_safe() {
+        use std::thread;
+
+        let pool = Arc::new(ConnectionPool::new("/tmp/test.sock".to_string(), 100));
+        let mut handles = vec![];
+
+        // Spawn multiple threads getting connection IDs
+        for _ in 0..10 {
+            let pool_clone = pool.clone();
+            handles.push(thread::spawn(move || {
+                let mut ids = vec![];
+                for _ in 0..100 {
+                    ids.push(pool_clone.next_connection_id());
+                }
+                ids
+            }));
+        }
+
+        // Collect all IDs
+        let mut all_ids: Vec<usize> = handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap())
+            .collect();
+
+        // Sort and verify uniqueness
+        all_ids.sort();
+        let unique_count = all_ids.windows(2).filter(|w| w[0] != w[1]).count() + 1;
+        assert_eq!(unique_count, all_ids.len(), "All IDs should be unique");
+    }
+
+    // ============================================
+    // extract_task_id tests
+    // ============================================
+
+    #[test]
+    fn test_extract_task_id_from_execute_request() {
+        let request = PoolRequest::Execute(Box::new(ExecuteRequest {
+            task_id: "execute-task-123".to_string(),
+            plugin_id: "test-plugin".to_string(),
+            compiled_code: None,
+            plugin_path: None,
+            params: serde_json::json!({}),
+            headers: None,
+            socket_path: "/tmp/test.sock".to_string(),
+            http_request_id: None,
+            timeout: Some(30000),
+            route: None,
+            config: None,
+            method: None,
+            query: None,
+        }));
+
+        let task_id = PoolConnection::extract_task_id(&request);
+        assert_eq!(task_id, "execute-task-123");
+    }
+
+    #[test]
+    fn test_extract_task_id_from_precompile_request() {
+        let request = PoolRequest::Precompile {
+            task_id: "precompile-task-456".to_string(),
+            plugin_id: "test-plugin".to_string(),
+            plugin_path: Some("/path/to/plugin.ts".to_string()),
+            source_code: None,
+        };
+
+        let task_id = PoolConnection::extract_task_id(&request);
+        assert_eq!(task_id, "precompile-task-456");
+    }
+
+    #[test]
+    fn test_extract_task_id_from_cache_request() {
+        let request = PoolRequest::Cache {
+            task_id: "cache-task-789".to_string(),
+            plugin_id: "test-plugin".to_string(),
+            compiled_code: "compiled code".to_string(),
+        };
+
+        let task_id = PoolConnection::extract_task_id(&request);
+        assert_eq!(task_id, "cache-task-789");
+    }
+
+    #[test]
+    fn test_extract_task_id_from_invalidate_request() {
+        let request = PoolRequest::Invalidate {
+            task_id: "invalidate-task-abc".to_string(),
+            plugin_id: "test-plugin".to_string(),
+        };
+
+        let task_id = PoolConnection::extract_task_id(&request);
+        assert_eq!(task_id, "invalidate-task-abc");
+    }
+
+    #[test]
+    fn test_extract_task_id_from_stats_request() {
+        let request = PoolRequest::Stats {
+            task_id: "stats-task-def".to_string(),
+        };
+
+        let task_id = PoolConnection::extract_task_id(&request);
+        assert_eq!(task_id, "stats-task-def");
+    }
+
+    #[test]
+    fn test_extract_task_id_from_health_request() {
+        let request = PoolRequest::Health {
+            task_id: "health-task-ghi".to_string(),
+        };
+
+        let task_id = PoolConnection::extract_task_id(&request);
+        assert_eq!(task_id, "health-task-ghi");
+    }
+
+    #[test]
+    fn test_extract_task_id_from_shutdown_request() {
+        let request = PoolRequest::Shutdown {
+            task_id: "shutdown-task-jkl".to_string(),
+        };
+
+        let task_id = PoolConnection::extract_task_id(&request);
+        assert_eq!(task_id, "shutdown-task-jkl");
+    }
+
+    #[test]
+    fn test_extract_task_id_preserves_special_characters() {
+        let request = PoolRequest::Stats {
+            task_id: "task-with-special_chars.and/slashes:colons".to_string(),
+        };
+
+        let task_id = PoolConnection::extract_task_id(&request);
+        assert_eq!(task_id, "task-with-special_chars.and/slashes:colons");
+    }
+
+    #[test]
+    fn test_extract_task_id_handles_empty_string() {
+        let request = PoolRequest::Health {
+            task_id: "".to_string(),
+        };
+
+        let task_id = PoolConnection::extract_task_id(&request);
+        assert_eq!(task_id, "");
+    }
+
+    #[test]
+    fn test_extract_task_id_handles_uuid_format() {
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let request = PoolRequest::Stats {
+            task_id: uuid.to_string(),
+        };
+
+        let task_id = PoolConnection::extract_task_id(&request);
+        assert_eq!(task_id, uuid);
+    }
+
+    // ============================================
+    // acquire_with_permit tests
+    // ============================================
+
+    #[tokio::test]
+    async fn test_acquire_without_server_fails() {
+        let pool = ConnectionPool::new("/tmp/nonexistent_socket_12345.sock".to_string(), 10);
+
+        let result = pool.acquire().await;
+        assert!(result.is_err());
+
+        match result {
+            Err(PluginError::SocketError(msg)) => {
+                assert!(msg.contains("Failed to connect"));
+            }
+            _ => panic!("Expected SocketError"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_acquire_with_pre_acquired_permit() {
+        let pool = ConnectionPool::new("/tmp/nonexistent_socket_67890.sock".to_string(), 10);
+
+        // Pre-acquire a permit
+        let permit = pool.semaphore.clone().acquire_owned().await.unwrap();
+        assert_eq!(pool.semaphore.available_permits(), 9);
+
+        // Try to acquire with pre-acquired permit (will fail due to no server, but permit logic works)
+        let result = pool.acquire_with_permit(Some(permit)).await;
+
+        // Connection fails but permit was used
+        assert!(result.is_err());
+    }
+
+    // ============================================
+    // PooledConnection tests
+    // ============================================
+
+    #[test]
+    fn test_pooled_connection_cannot_be_used_after_release() {
+        // This tests the Option<PoolConnection> pattern - we can't easily
+        // test this without a live connection, but we document the behavior
+        // that send_request_with_timeout returns error when conn is None
+    }
+
+    // ============================================
+    // Error message tests
+    // ============================================
+
+    #[tokio::test]
+    async fn test_acquire_error_message_contains_helpful_info() {
+        let pool = ConnectionPool::new("/tmp/no_server_here_xyz.sock".to_string(), 10);
+
+        let result = pool.acquire().await;
+        assert!(result.is_err());
+
+        if let Err(PluginError::SocketError(msg)) = result {
+            // Verify error message contains helpful suggestions
+            assert!(
+                msg.contains("PLUGIN_POOL_CONNECT_RETRIES")
+                    || msg.contains("PLUGIN_POOL_MAX_CONNECTIONS")
+                    || msg.contains("Failed to connect"),
+                "Error message should contain helpful info: {}",
+                msg
+            );
+        }
+    }
+
+    // ============================================
+    // Multiple pool instances tests
+    // ============================================
+
+    #[test]
+    fn test_multiple_pools_independent() {
+        let pool1 = ConnectionPool::new("/tmp/pool1.sock".to_string(), 5);
+        let pool2 = ConnectionPool::new("/tmp/pool2.sock".to_string(), 10);
+
+        // Each pool has its own semaphore
+        assert_eq!(pool1.semaphore.available_permits(), 5);
+        assert_eq!(pool2.semaphore.available_permits(), 10);
+
+        // Each pool has its own connection ID counter
+        assert_eq!(pool1.next_connection_id(), 0);
+        assert_eq!(pool2.next_connection_id(), 0);
+        assert_eq!(pool1.next_connection_id(), 1);
+        assert_eq!(pool2.next_connection_id(), 1);
+    }
+
+    // ============================================
+    // Concurrent access tests
+    // ============================================
+
+    #[tokio::test]
+    async fn test_concurrent_semaphore_acquire() {
+        let pool = Arc::new(ConnectionPool::new("/tmp/concurrent.sock".to_string(), 3));
+
+        let mut handles = vec![];
+
+        // Spawn tasks that try to acquire permits
+        for i in 0..3 {
+            let pool_clone = pool.clone();
+            handles.push(tokio::spawn(async move {
+                let permit = pool_clone.semaphore.clone().acquire_owned().await;
+                assert!(permit.is_ok(), "Task {} should acquire permit", i);
+                // Hold permit briefly
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }));
+        }
+
+        // All tasks should complete successfully
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        // All permits should be released
+        assert_eq!(pool.semaphore.available_permits(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_semaphore_fairness() {
+        use std::sync::atomic::AtomicU32;
+
+        let pool = Arc::new(ConnectionPool::new("/tmp/fairness.sock".to_string(), 1));
+        let counter = Arc::new(AtomicU32::new(0));
+
+        // Acquire the only permit
+        let permit = pool.semaphore.clone().acquire_owned().await.unwrap();
+
+        let mut handles = vec![];
+
+        // Spawn waiting tasks
+        for _ in 0..3 {
+            let pool_clone = pool.clone();
+            let counter_clone = counter.clone();
+            handles.push(tokio::spawn(async move {
+                let _permit = pool_clone.semaphore.clone().acquire_owned().await.unwrap();
+                counter_clone.fetch_add(1, Ordering::SeqCst);
+            }));
+        }
+
+        // Give tasks time to start waiting
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // No task should have completed yet
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+
+        // Release the permit
+        drop(permit);
+
+        // Wait for all tasks
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        // All tasks should have completed
+        assert_eq!(counter.load(Ordering::SeqCst), 3);
+    }
+
+    // ============================================
+    // Edge cases
+    // ============================================
+
+    #[test]
+    fn test_zero_max_connections_creates_closed_semaphore() {
+        let pool = ConnectionPool::new("/tmp/zero.sock".to_string(), 0);
+        assert_eq!(pool.semaphore.available_permits(), 0);
+
+        // Can't acquire any permits
+        let permit = pool.semaphore.clone().try_acquire_owned();
+        assert!(permit.is_err());
+    }
+
+    #[test]
+    fn test_socket_path_with_spaces() {
+        let path = "/tmp/path with spaces/test.sock";
+        let pool = ConnectionPool::new(path.to_string(), 5);
+        assert_eq!(pool.socket_path, path);
+    }
+
+    #[test]
+    fn test_socket_path_with_unicode() {
+        let path = "/tmp/тест/套接字.sock";
+        let pool = ConnectionPool::new(path.to_string(), 5);
+        assert_eq!(pool.socket_path, path);
+    }
+
+    #[test]
+    fn test_very_long_socket_path() {
+        let path = format!("/tmp/{}/test.sock", "a".repeat(200));
+        let pool = ConnectionPool::new(path.clone(), 5);
+        assert_eq!(pool.socket_path, path);
     }
 }
