@@ -37,6 +37,13 @@ use tracing::debug;
 use super::rpc_selector::RpcSelector;
 use super::{retry_rpc_call, ProviderConfig, RetryConfig};
 use crate::{
+    constants::{
+        DEFAULT_HTTP_CLIENT_CONNECT_TIMEOUT_SECONDS,
+        DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_INTERVAL_SECONDS,
+        DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_TIMEOUT_SECONDS,
+        DEFAULT_HTTP_CLIENT_POOL_IDLE_TIMEOUT_SECONDS, DEFAULT_HTTP_CLIENT_POOL_MAX_IDLE_PER_HOST,
+        DEFAULT_HTTP_CLIENT_TCP_KEEPALIVE_SECONDS,
+    },
     models::{
         BlockResponse, EvmTransactionData, RpcConfig, TransactionError, TransactionReceipt, U256,
     },
@@ -44,7 +51,7 @@ use crate::{
     utils::mask_url,
 };
 
-use crate::utils::{create_secure_redirect_policy, validate_rpc_url};
+use crate::utils::{create_secure_redirect_policy, validate_safe_url};
 
 #[cfg(test)]
 use mockall::automock;
@@ -206,7 +213,7 @@ impl EvmProvider {
         // Re-validate URL security as a safety net
         let allowed_hosts = crate::config::ServerConfig::get_rpc_allowed_hosts();
         let block_private_ips = crate::config::ServerConfig::get_rpc_block_private_ips();
-        validate_rpc_url(url, &allowed_hosts, block_private_ips).map_err(|e| {
+        validate_safe_url(url, &allowed_hosts, block_private_ips).map_err(|e| {
             ProviderError::NetworkConfiguration(format!("RPC URL security validation failed: {e}"))
         })?;
 
@@ -218,6 +225,16 @@ impl EvmProvider {
         // Using use_rustls_tls() forces the use of rustls instead of native-tls to support TLS 1.3
         let client = ReqwestClientBuilder::new()
             .timeout(Duration::from_secs(self.timeout_seconds))
+            .connect_timeout(Duration::from_secs(DEFAULT_HTTP_CLIENT_CONNECT_TIMEOUT_SECONDS))
+            .pool_max_idle_per_host(DEFAULT_HTTP_CLIENT_POOL_MAX_IDLE_PER_HOST)
+            .pool_idle_timeout(Duration::from_secs(DEFAULT_HTTP_CLIENT_POOL_IDLE_TIMEOUT_SECONDS))
+            .tcp_keepalive(Duration::from_secs(DEFAULT_HTTP_CLIENT_TCP_KEEPALIVE_SECONDS))
+            .http2_keep_alive_interval(Some(Duration::from_secs(
+                DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_INTERVAL_SECONDS,
+            )))
+            .http2_keep_alive_timeout(Duration::from_secs(
+                DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_TIMEOUT_SECONDS,
+            ))
             .use_rustls_tls()
             // Allow only HTTP→HTTPS redirects on same host to handle legitimate protocol upgrades
             // while preventing SSRF via redirect chains to different hosts

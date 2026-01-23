@@ -182,14 +182,14 @@ impl From<GoogleCloudKmsSignerServiceAccountRequestConfig>
         Self {
             private_key: SecretString::new(&config.private_key),
             private_key_id: SecretString::new(&config.private_key_id),
-            project_id: config.project_id,
+            project_id: SecretString::new(&config.project_id),
             client_email: SecretString::new(&config.client_email),
-            client_id: config.client_id,
-            auth_uri: config.auth_uri,
-            token_uri: config.token_uri,
-            auth_provider_x509_cert_url: config.auth_provider_x509_cert_url,
-            client_x509_cert_url: config.client_x509_cert_url,
-            universe_domain: config.universe_domain,
+            client_id: SecretString::new(&config.client_id),
+            auth_uri: SecretString::new(&config.auth_uri),
+            token_uri: SecretString::new(&config.token_uri),
+            auth_provider_x509_cert_url: SecretString::new(&config.auth_provider_x509_cert_url),
+            client_x509_cert_url: SecretString::new(&config.client_x509_cert_url),
+            universe_domain: SecretString::new(&config.universe_domain),
         }
     }
 }
@@ -197,9 +197,9 @@ impl From<GoogleCloudKmsSignerServiceAccountRequestConfig>
 impl From<GoogleCloudKmsSignerKeyRequestConfig> for GoogleCloudKmsSignerKeyConfig {
     fn from(config: GoogleCloudKmsSignerKeyRequestConfig) -> Self {
         Self {
-            location: config.location,
-            key_ring_id: config.key_ring_id,
-            key_id: config.key_id,
+            location: SecretString::new(&config.location),
+            key_ring_id: SecretString::new(&config.key_ring_id),
+            key_id: SecretString::new(&config.key_id),
             key_version: config.key_version,
         }
     }
@@ -262,10 +262,10 @@ impl TryFrom<SignerConfigRequest> for SignerConfig {
                 account_address: cdp_config.account_address,
             }),
             SignerConfigRequest::GoogleCloudKms(gcp_kms_config) => {
-                SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
+                SignerConfig::GoogleCloudKms(Box::new(GoogleCloudKmsSignerConfig {
                     service_account: gcp_kms_config.service_account.into(),
                     key: gcp_kms_config.key.into(),
-                })
+                }))
             }
         };
 

@@ -23,7 +23,7 @@ use tracing::{error, warn};
 /// # Returns
 /// * `Ok(())` if the URL passes validation
 /// * `Err(String)` with a description of why validation failed
-pub fn validate_rpc_url(
+pub fn validate_safe_url(
     url: &str,
     allowed_hosts: &[String],
     block_private: bool,
@@ -439,26 +439,26 @@ mod tests {
 
     #[test]
     fn test_validate_public_ip() {
-        let result = validate_rpc_url("http://8.8.8.8:8545", &[], false);
+        let result = validate_safe_url("http://8.8.8.8:8545", &[], false);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_block_private_ip() {
-        let result = validate_rpc_url("http://192.168.1.1:8545", &[], true);
+        let result = validate_safe_url("http://192.168.1.1:8545", &[], true);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Private IP"));
     }
 
     #[test]
     fn test_allow_private_ip_when_disabled() {
-        let result = validate_rpc_url("http://192.168.1.1:8545", &[], false);
+        let result = validate_safe_url("http://192.168.1.1:8545", &[], false);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_block_loopback() {
-        let result = validate_rpc_url("http://127.0.0.1:8545", &[], true);
+        let result = validate_safe_url("http://127.0.0.1:8545", &[], true);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Loopback"));
     }
@@ -466,7 +466,7 @@ mod tests {
     #[test]
     fn test_block_metadata_endpoint_always() {
         // Metadata endpoints are ALWAYS blocked regardless of block_private setting
-        let result = validate_rpc_url("http://169.254.169.254/latest/meta-data", &[], false);
+        let result = validate_safe_url("http://169.254.169.254/latest/meta-data", &[], false);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("metadata"));
     }
@@ -474,7 +474,7 @@ mod tests {
     #[test]
     fn test_allow_list_enforced_when_provided() {
         // When allowed_hosts is non-empty, only those hosts are allowed
-        let result = validate_rpc_url(
+        let result = validate_safe_url(
             "https://eth-mainnet.g.alchemy.com/v2/demo",
             &["eth-mainnet.g.alchemy.com".to_string()],
             false,
@@ -486,7 +486,7 @@ mod tests {
     fn test_allow_list_case_insensitive() {
         // DNS is case-insensitive, so allow-list comparison should be too
         // URL with lowercase, allow-list with uppercase
-        let result = validate_rpc_url(
+        let result = validate_safe_url(
             "https://eth-mainnet.g.alchemy.com/v2/demo",
             &["ETH-MAINNET.G.ALCHEMY.COM".to_string()],
             false,
@@ -494,7 +494,7 @@ mod tests {
         assert!(result.is_ok());
 
         // URL with uppercase, allow-list with lowercase
-        let result = validate_rpc_url(
+        let result = validate_safe_url(
             "https://ETH-MAINNET.G.ALCHEMY.COM/v2/demo",
             &["eth-mainnet.g.alchemy.com".to_string()],
             false,
@@ -502,7 +502,7 @@ mod tests {
         assert!(result.is_ok());
 
         // Mixed case in both
-        let result = validate_rpc_url(
+        let result = validate_safe_url(
             "https://Eth-Mainnet.G.Alchemy.COM/v2/demo",
             &["ETH-mainnet.g.ALCHEMY.com".to_string()],
             false,
@@ -513,7 +513,7 @@ mod tests {
     #[test]
     fn test_allow_list_rejects_unlisted_host() {
         // Hosts not in the allow-list are rejected
-        let result = validate_rpc_url(
+        let result = validate_safe_url(
             "https://mainnet.infura.io/v3/demo",
             &["eth-mainnet.g.alchemy.com".to_string()],
             false,
@@ -527,13 +527,13 @@ mod tests {
     #[test]
     fn test_empty_allow_list_permits_all() {
         // When allowed_hosts is empty, any valid URL is permitted (subject to other checks)
-        let result = validate_rpc_url("https://mainnet.infura.io/v3/demo", &[], false);
+        let result = validate_safe_url("https://mainnet.infura.io/v3/demo", &[], false);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_invalid_url() {
-        let result = validate_rpc_url("not-a-url", &[], false);
+        let result = validate_safe_url("not-a-url", &[], false);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Invalid URL format"));
     }
@@ -541,14 +541,14 @@ mod tests {
     #[test]
     fn test_url_without_host() {
         // file:// is now caught by scheme validation first
-        let result = validate_rpc_url("file:///path/to/file", &[], false);
+        let result = validate_safe_url("file:///path/to/file", &[], false);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Invalid URL scheme"));
     }
 
     #[test]
     fn test_unspecified_always_blocked() {
-        let result = validate_rpc_url("http://0.0.0.0:8545", &[], false);
+        let result = validate_safe_url("http://0.0.0.0:8545", &[], false);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Unspecified"));
     }
@@ -621,12 +621,12 @@ mod tests {
     #[test]
     fn test_block_invalid_scheme() {
         // ftp:// should be rejected
-        let result = validate_rpc_url("ftp://example.com:8545", &[], false);
+        let result = validate_safe_url("ftp://example.com:8545", &[], false);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Invalid URL scheme"));
 
         // gopher:// should be rejected
-        let result = validate_rpc_url("gopher://example.com:8545", &[], false);
+        let result = validate_safe_url("gopher://example.com:8545", &[], false);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Invalid URL scheme"));
     }
@@ -634,18 +634,18 @@ mod tests {
     #[test]
     fn test_allow_valid_schemes() {
         // http:// should be allowed
-        let result = validate_rpc_url("http://example.com:8545", &[], false);
+        let result = validate_safe_url("http://example.com:8545", &[], false);
         assert!(result.is_ok());
 
         // https:// should be allowed
-        let result = validate_rpc_url("https://example.com:8545", &[], false);
+        let result = validate_safe_url("https://example.com:8545", &[], false);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_block_localhost_hostname() {
         // localhost should be blocked when block_private=true
-        let result = validate_rpc_url("http://localhost:8545", &[], true);
+        let result = validate_safe_url("http://localhost:8545", &[], true);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not allowed"));
     }
@@ -653,14 +653,14 @@ mod tests {
     #[test]
     fn test_allow_localhost_when_disabled() {
         // localhost should be allowed when block_private=false
-        let result = validate_rpc_url("http://localhost:8545", &[], false);
+        let result = validate_safe_url("http://localhost:8545", &[], false);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_block_localhost_subdomain() {
         // subdomain.localhost should be blocked when block_private=true
-        let result = validate_rpc_url("http://subdomain.localhost:8545", &[], true);
+        let result = validate_safe_url("http://subdomain.localhost:8545", &[], true);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not allowed"));
     }
@@ -669,7 +669,7 @@ mod tests {
     fn test_block_metadata_google_internal_always() {
         // GCP metadata endpoint hostname should be ALWAYS blocked (similar to metadata IPs)
         // Test with block_private=true
-        let result = validate_rpc_url(
+        let result = validate_safe_url(
             "http://metadata.google.internal/computeMetadata/v1",
             &[],
             true,
@@ -678,7 +678,7 @@ mod tests {
         assert!(result.unwrap_err().contains("metadata"));
 
         // Test with block_private=false - should STILL be blocked
-        let result = validate_rpc_url(
+        let result = validate_safe_url(
             "http://metadata.google.internal/computeMetadata/v1",
             &[],
             false,
@@ -690,7 +690,7 @@ mod tests {
     #[test]
     fn test_block_internal_domain() {
         // .internal domains should be blocked when block_private=true
-        let result = validate_rpc_url("http://some-service.internal:8545", &[], true);
+        let result = validate_safe_url("http://some-service.internal:8545", &[], true);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not allowed"));
     }
@@ -698,7 +698,7 @@ mod tests {
     #[test]
     fn test_allow_list_with_ip_address() {
         // IP address in allow-list should work
-        let result = validate_rpc_url("http://8.8.8.8:8545", &["8.8.8.8".to_string()], false);
+        let result = validate_safe_url("http://8.8.8.8:8545", &["8.8.8.8".to_string()], false);
         assert!(result.is_ok());
     }
 
@@ -766,7 +766,7 @@ mod tests {
     fn test_block_link_local_ipv4() {
         // IPv4 link-local (169.254.0.0/16) should be blocked when block_private=true
         // Note: 169.254.169.254 is handled by metadata endpoint check
-        let result = validate_rpc_url("http://169.254.1.1:8545", &[], true);
+        let result = validate_safe_url("http://169.254.1.1:8545", &[], true);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Link-local"));
     }
@@ -774,22 +774,22 @@ mod tests {
     #[test]
     fn test_allow_link_local_ipv4_when_disabled() {
         // Link-local IPv4 should be allowed when block_private=false (except metadata)
-        let result = validate_rpc_url("http://169.254.1.1:8545", &[], false);
+        let result = validate_safe_url("http://169.254.1.1:8545", &[], false);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_loopback_range_boundary() {
         // Full 127.0.0.0/8 range should be blocked as loopback
-        let result = validate_rpc_url("http://127.0.0.1:8545", &[], true);
+        let result = validate_safe_url("http://127.0.0.1:8545", &[], true);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Loopback"));
 
-        let result = validate_rpc_url("http://127.255.255.1:8545", &[], true);
+        let result = validate_safe_url("http://127.255.255.1:8545", &[], true);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Loopback"));
 
-        let result = validate_rpc_url("http://127.0.0.255:8545", &[], true);
+        let result = validate_safe_url("http://127.0.0.255:8545", &[], true);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Loopback"));
     }
@@ -797,37 +797,37 @@ mod tests {
     #[test]
     fn test_private_ip_range_boundaries() {
         // 10.0.0.0/8 boundaries
-        let result = validate_rpc_url("http://10.0.0.0:8545", &[], true);
+        let result = validate_safe_url("http://10.0.0.0:8545", &[], true);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Private IP"));
 
-        let result = validate_rpc_url("http://10.255.255.255:8545", &[], true);
+        let result = validate_safe_url("http://10.255.255.255:8545", &[], true);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Private IP"));
 
         // 172.16.0.0/12 boundaries
-        let result = validate_rpc_url("http://172.16.0.0:8545", &[], true);
+        let result = validate_safe_url("http://172.16.0.0:8545", &[], true);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Private IP"));
 
-        let result = validate_rpc_url("http://172.31.255.255:8545", &[], true);
+        let result = validate_safe_url("http://172.31.255.255:8545", &[], true);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Private IP"));
 
         // Just outside 172.16.0.0/12 - should be allowed (172.15.x.x is public)
-        let result = validate_rpc_url("http://172.15.255.255:8545", &[], true);
+        let result = validate_safe_url("http://172.15.255.255:8545", &[], true);
         assert!(result.is_ok());
 
         // Just outside 172.16.0.0/12 - should be allowed (172.32.x.x is public)
-        let result = validate_rpc_url("http://172.32.0.1:8545", &[], true);
+        let result = validate_safe_url("http://172.32.0.1:8545", &[], true);
         assert!(result.is_ok());
 
         // 192.168.0.0/16 boundaries
-        let result = validate_rpc_url("http://192.168.0.0:8545", &[], true);
+        let result = validate_safe_url("http://192.168.0.0:8545", &[], true);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Private IP"));
 
-        let result = validate_rpc_url("http://192.168.255.255:8545", &[], true);
+        let result = validate_safe_url("http://192.168.255.255:8545", &[], true);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Private IP"));
     }
@@ -841,17 +841,17 @@ mod tests {
             "rpc.ankr.com".to_string(),
         ];
 
-        let result = validate_rpc_url("https://eth-mainnet.g.alchemy.com/v2/key", &allowed, false);
+        let result = validate_safe_url("https://eth-mainnet.g.alchemy.com/v2/key", &allowed, false);
         assert!(result.is_ok());
 
-        let result = validate_rpc_url("https://mainnet.infura.io/v3/key", &allowed, false);
+        let result = validate_safe_url("https://mainnet.infura.io/v3/key", &allowed, false);
         assert!(result.is_ok());
 
-        let result = validate_rpc_url("https://rpc.ankr.com/eth", &allowed, false);
+        let result = validate_safe_url("https://rpc.ankr.com/eth", &allowed, false);
         assert!(result.is_ok());
 
         // Host not in list should be rejected
-        let result = validate_rpc_url("https://other-provider.com/rpc", &allowed, false);
+        let result = validate_safe_url("https://other-provider.com/rpc", &allowed, false);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -861,11 +861,11 @@ mod tests {
     #[test]
     fn test_url_with_credentials() {
         // URLs with username/password should still be validated
-        let result = validate_rpc_url("http://user:pass@8.8.8.8:8545", &[], false);
+        let result = validate_safe_url("http://user:pass@8.8.8.8:8545", &[], false);
         assert!(result.is_ok());
 
         // Private IP with credentials should be blocked when block_private=true
-        let result = validate_rpc_url("http://user:pass@192.168.1.1:8545", &[], true);
+        let result = validate_safe_url("http://user:pass@192.168.1.1:8545", &[], true);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Private IP"));
     }
@@ -873,13 +873,13 @@ mod tests {
     #[test]
     fn test_url_without_port() {
         // URL without explicit port should work
-        let result = validate_rpc_url("http://8.8.8.8", &[], false);
+        let result = validate_safe_url("http://8.8.8.8", &[], false);
         assert!(result.is_ok());
 
-        let result = validate_rpc_url("https://example.com", &[], false);
+        let result = validate_safe_url("https://example.com", &[], false);
         assert!(result.is_ok());
 
-        let result = validate_rpc_url("http://192.168.1.1", &[], true);
+        let result = validate_safe_url("http://192.168.1.1", &[], true);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Private IP"));
     }
@@ -887,10 +887,10 @@ mod tests {
     #[test]
     fn test_url_with_path_and_query() {
         // URL with path and query should be validated correctly
-        let result = validate_rpc_url("https://example.com/path/to/rpc?key=value", &[], false);
+        let result = validate_safe_url("https://example.com/path/to/rpc?key=value", &[], false);
         assert!(result.is_ok());
 
-        let result = validate_rpc_url(
+        let result = validate_safe_url(
             "https://192.168.1.1/path/to/rpc?key=value#fragment",
             &[],
             true,
@@ -987,18 +987,18 @@ mod tests {
     fn test_allow_internal_domain_when_disabled() {
         // .internal domains should be allowed when block_private=false
         // (except metadata.google.internal which is always blocked)
-        let result = validate_rpc_url("http://some-service.internal:8545", &[], false);
+        let result = validate_safe_url("http://some-service.internal:8545", &[], false);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_localhost_uppercase() {
         // Hostname detection should be case-insensitive
-        let result = validate_rpc_url("http://LOCALHOST:8545", &[], true);
+        let result = validate_safe_url("http://LOCALHOST:8545", &[], true);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not allowed"));
 
-        let result = validate_rpc_url("http://LocalHost:8545", &[], true);
+        let result = validate_safe_url("http://LocalHost:8545", &[], true);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not allowed"));
     }
@@ -1006,7 +1006,7 @@ mod tests {
     #[test]
     fn test_data_uri_scheme_rejected() {
         // data: URI scheme should be rejected
-        let result = validate_rpc_url("data:text/html,<h1>test</h1>", &[], false);
+        let result = validate_safe_url("data:text/html,<h1>test</h1>", &[], false);
         assert!(result.is_err());
         // data: URIs don't have a host, so this might fail at host extraction
     }
@@ -1014,7 +1014,7 @@ mod tests {
     #[test]
     fn test_javascript_uri_scheme_rejected() {
         // javascript: URI scheme should be rejected
-        let result = validate_rpc_url("javascript:alert(1)", &[], false);
+        let result = validate_safe_url("javascript:alert(1)", &[], false);
         assert!(result.is_err());
     }
 
@@ -1040,11 +1040,11 @@ mod tests {
     #[test]
     fn test_block_private_different_10_subnet() {
         // Various addresses in 10.0.0.0/8
-        let result = validate_rpc_url("http://10.1.2.3:8545", &[], true);
+        let result = validate_safe_url("http://10.1.2.3:8545", &[], true);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Private IP"));
 
-        let result = validate_rpc_url("http://10.100.200.50:8545", &[], true);
+        let result = validate_safe_url("http://10.100.200.50:8545", &[], true);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Private IP"));
     }
@@ -1052,12 +1052,12 @@ mod tests {
     #[test]
     fn test_non_metadata_link_local_vs_metadata() {
         // 169.254.169.254 (metadata) should be blocked as metadata, not link-local
-        let result = validate_rpc_url("http://169.254.169.254:8545", &[], false);
+        let result = validate_safe_url("http://169.254.169.254:8545", &[], false);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("metadata"));
 
         // Other 169.254.x.x should be link-local (allowed when block_private=false)
-        let result = validate_rpc_url("http://169.254.1.1:8545", &[], false);
+        let result = validate_safe_url("http://169.254.1.1:8545", &[], false);
         assert!(result.is_ok());
     }
 

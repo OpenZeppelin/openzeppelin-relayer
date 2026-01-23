@@ -1,7 +1,9 @@
 use crate::{
     api::routes::{
-        docs::{network_docs, notification_docs, plugin_docs, relayer_docs, signer_docs},
-        health, metrics,
+        docs::{
+            health_docs, network_docs, notification_docs, plugin_docs, relayer_docs, signer_docs,
+        },
+        metrics,
     },
     domain, models,
     services::plugins,
@@ -78,7 +80,8 @@ impl Modify for SecurityAddon {
         relayer_docs::doc_replace_transaction,
         relayer_docs::doc_quote_sponsored_transaction,
         relayer_docs::doc_build_sponsored_transaction,
-        health::health,
+        health_docs::doc_health,
+        health_docs::doc_readiness,
         metrics::list_metrics,
         metrics::metric_detail,
         metrics::scrape_metrics,

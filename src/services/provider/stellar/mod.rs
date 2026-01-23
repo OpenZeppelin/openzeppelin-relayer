@@ -25,6 +25,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(test)]
 use mockall::automock;
 
+use crate::constants::{
+    DEFAULT_HTTP_CLIENT_CONNECT_TIMEOUT_SECONDS,
+    DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_INTERVAL_SECONDS,
+    DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_TIMEOUT_SECONDS,
+    DEFAULT_HTTP_CLIENT_POOL_IDLE_TIMEOUT_SECONDS, DEFAULT_HTTP_CLIENT_POOL_MAX_IDLE_PER_HOST,
+    DEFAULT_HTTP_CLIENT_TCP_KEEPALIVE_SECONDS,
+};
 use crate::models::{JsonRpcId, RpcConfig};
 use crate::services::provider::is_retriable_error;
 use crate::services::provider::retry::retry_rpc_call;
@@ -34,7 +41,7 @@ use crate::services::provider::RetryConfig;
 use crate::services::provider::{ProviderConfig, ProviderError};
 // Reqwest client is used for raw JSON-RPC HTTP requests. Alias to avoid name clash with the
 // soroban `Client` type imported above.
-use crate::utils::{create_secure_redirect_policy, validate_rpc_url};
+use crate::utils::{create_secure_redirect_policy, validate_safe_url};
 use reqwest::Client as ReqwestClient;
 use std::sync::Arc;
 use std::time::Duration;
@@ -384,7 +391,7 @@ impl StellarProvider {
         // Layer 2 validation: Re-validate URL security as a safety net
         let allowed_hosts = crate::config::ServerConfig::get_rpc_allowed_hosts();
         let block_private_ips = crate::config::ServerConfig::get_rpc_block_private_ips();
-        validate_rpc_url(url, &allowed_hosts, block_private_ips).map_err(|e| {
+        validate_safe_url(url, &allowed_hosts, block_private_ips).map_err(|e| {
             ProviderError::NetworkConfiguration(format!("RPC URL security validation failed: {e}"))
         })?;
 
@@ -401,6 +408,16 @@ impl StellarProvider {
     fn initialize_raw_provider(&self, url: &str) -> Result<ReqwestClient, ProviderError> {
         ReqwestClient::builder()
             .timeout(self.timeout_seconds)
+            .connect_timeout(Duration::from_secs(DEFAULT_HTTP_CLIENT_CONNECT_TIMEOUT_SECONDS))
+            .pool_max_idle_per_host(DEFAULT_HTTP_CLIENT_POOL_MAX_IDLE_PER_HOST)
+            .pool_idle_timeout(Duration::from_secs(DEFAULT_HTTP_CLIENT_POOL_IDLE_TIMEOUT_SECONDS))
+            .tcp_keepalive(Duration::from_secs(DEFAULT_HTTP_CLIENT_TCP_KEEPALIVE_SECONDS))
+            .http2_keep_alive_interval(Some(Duration::from_secs(
+                DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_INTERVAL_SECONDS,
+            )))
+            .http2_keep_alive_timeout(Duration::from_secs(
+                DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_TIMEOUT_SECONDS,
+            ))
             .use_rustls_tls()
             // Allow only HTTP→HTTPS redirects on same host to handle legitimate protocol upgrades
             // while preventing SSRF via redirect chains to different hosts

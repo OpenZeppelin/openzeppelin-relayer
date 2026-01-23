@@ -9,8 +9,8 @@ use crate::{
     jobs::{JobProducer, JobProducerTrait, TransactionRequest},
     models::{
         produce_transaction_update_notification_payload, NetworkTransactionRequest,
-        RelayerNetworkPolicy, RelayerRepoModel, TransactionError, TransactionRepoModel,
-        TransactionStatus, TransactionUpdateRequest,
+        PaginationQuery, RelayerNetworkPolicy, RelayerRepoModel, TransactionError,
+        TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{
         RelayerRepositoryStorage, Repository, TransactionCounterRepositoryStorage,
@@ -208,17 +208,29 @@ where
     }
 
     /// Finds the oldest pending transaction for a relayer.
+    ///
+    /// Uses optimized paginated query with `oldest_first: true` and `per_page: 1`
+    /// to fetch only the single oldest pending transaction from Redis in O(log N).
     async fn find_oldest_pending_for_relayer(
         &self,
         relayer_id: &str,
     ) -> Result<Option<TransactionRepoModel>, TransactionError> {
-        let pending_txs = self
+        let result = self
             .transaction_repository()
-            .find_by_status(relayer_id, &[TransactionStatus::Pending])
+            .find_by_status_paginated(
+                relayer_id,
+                &[TransactionStatus::Pending],
+                PaginationQuery {
+                    page: 1,
+                    per_page: 1,
+                },
+                true, // oldest_first=true - query returns oldest transaction first
+            )
             .await
             .map_err(TransactionError::from)?;
 
-        Ok(pending_txs.into_iter().next())
+        // oldest_first=true so .next() yields the oldest pending transaction (FIFO order)
+        Ok(result.items.into_iter().next())
     }
 
     /// Syncs the sequence number from the blockchain for the relayer's address.
@@ -502,15 +514,23 @@ mod tests {
 
         mocks
             .tx_repo
-            .expect_find_by_status()
-            .withf(|relayer_id, statuses| {
-                relayer_id == "relayer-1" && statuses == [TransactionStatus::Pending]
+            .expect_find_by_status_paginated()
+            .withf(|_relayer_id, statuses, query, oldest_first| {
+                statuses == [TransactionStatus::Pending]
+                    && query.page == 1
+                    && query.per_page == 1
+                    && *oldest_first == true
             })
             .times(1)
-            .returning(move |_, _| {
+            .returning(move |_, _, _, _| {
                 let mut tx = create_test_transaction("relayer-1");
                 tx.id = "pending-tx-1".to_string();
-                Ok(vec![tx])
+                Ok(crate::repositories::PaginatedResult {
+                    items: vec![tx],
+                    total: 1,
+                    page: 1,
+                    per_page: 1,
+                })
             });
 
         // Mock job production for the next transaction
@@ -537,9 +557,22 @@ mod tests {
         // Mock finding no pending transactions
         mocks
             .tx_repo
-            .expect_find_by_status()
+            .expect_find_by_status_paginated()
+            .withf(|_relayer_id, statuses, query, oldest_first| {
+                statuses == [TransactionStatus::Pending]
+                    && query.page == 1
+                    && query.per_page == 1
+                    && *oldest_first == true
+            })
             .times(1)
-            .returning(|_, _| Ok(vec![]));
+            .returning(|_, _, _, _| {
+                Ok(crate::repositories::PaginatedResult {
+                    items: vec![],
+                    total: 0,
+                    page: 1,
+                    per_page: 1,
+                })
+            });
 
         let handler = make_stellar_tx_handler(relayer, mocks);
 
@@ -719,7 +752,7 @@ mod tests {
         let mut mocks = default_test_mocks();
 
         // Should NOT look for pending transactions when concurrency is enabled
-        mocks.tx_repo.expect_find_by_status().times(0); // Expect zero calls
+        mocks.tx_repo.expect_find_by_status_paginated().times(0); // Expect zero calls
 
         // Should NOT produce any job when concurrency is enabled
         mocks
@@ -787,5 +820,174 @@ mod tests {
         } else {
             panic!("Expected Stellar transaction data");
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_find_oldest_pending_for_relayer_with_redis() {
+        use crate::repositories::transaction::RedisTransactionRepository;
+        use deadpool_redis::{Config, Runtime};
+        use uuid::Uuid;
+
+        // Setup Redis repository
+        let redis_url = std::env::var("REDIS_TEST_URL")
+            .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+        let pool = Config::from_url(&redis_url)
+            .builder()
+            .expect("Failed to create Redis pool builder")
+            .max_size(16)
+            .runtime(Runtime::Tokio1)
+            .build()
+            .expect("Failed to build Redis pool");
+
+        let random_id = Uuid::new_v4().to_string();
+        let key_prefix = format!("test_stellar:{}", random_id);
+        let tx_repo = Arc::new(
+            RedisTransactionRepository::new(Arc::new(pool), key_prefix)
+                .expect("Failed to create RedisTransactionRepository"),
+        );
+
+        let relayer_id = format!("relayer-{}", Uuid::new_v4());
+
+        // Create three pending transactions with different created_at timestamps
+        // tx1: oldest (created first)
+        let mut tx1 = create_test_transaction(&relayer_id);
+        tx1.id = format!("tx-1-{}", Uuid::new_v4());
+        tx1.status = TransactionStatus::Pending;
+        tx1.created_at = "2025-01-27T10:00:00.000000+00:00".to_string();
+
+        // tx2: middle
+        let mut tx2 = create_test_transaction(&relayer_id);
+        tx2.id = format!("tx-2-{}", Uuid::new_v4());
+        tx2.status = TransactionStatus::Pending;
+        tx2.created_at = "2025-01-27T11:00:00.000000+00:00".to_string();
+
+        // tx3: newest (created last)
+        let mut tx3 = create_test_transaction(&relayer_id);
+        tx3.id = format!("tx-3-{}", Uuid::new_v4());
+        tx3.status = TransactionStatus::Pending;
+        tx3.created_at = "2025-01-27T12:00:00.000000+00:00".to_string();
+
+        // Create transactions in Redis
+        tx_repo.create(tx1.clone()).await.unwrap();
+        tx_repo.create(tx2.clone()).await.unwrap();
+        tx_repo.create(tx3.clone()).await.unwrap();
+
+        // Create a minimal StellarRelayerTransaction instance to test the method
+        // We'll use mocks for other dependencies since we only need the transaction repository
+        let relayer = create_test_relayer();
+        let mut relayer_model = relayer.clone();
+        relayer_model.id = relayer_id.clone();
+
+        let mocks = default_test_mocks();
+        let handler = StellarRelayerTransaction::new(
+            relayer_model,
+            Arc::new(mocks.relayer_repo),
+            tx_repo.clone(),
+            Arc::new(mocks.job_producer),
+            Arc::new(mocks.signer),
+            mocks.provider,
+            Arc::new(mocks.counter),
+            Arc::new(mocks.dex_service),
+        )
+        .unwrap();
+
+        // Call find_oldest_pending_for_relayer
+        let result = handler
+            .find_oldest_pending_for_relayer(&relayer_id)
+            .await
+            .unwrap();
+
+        // Verify the result
+        assert!(result.is_some(), "Should find a pending transaction");
+        let found_tx = result.unwrap();
+
+        assert_eq!(
+            found_tx.id, tx1.id,
+            "Should get oldest transaction (tx1) - oldest_first=true so .next() yields oldest"
+        );
+        assert_eq!(
+            found_tx.created_at, tx1.created_at,
+            "Should match oldest transaction's created_at"
+        );
+
+        // Cleanup: delete test transactions
+        let _ = tx_repo.delete_by_id(tx1.id.clone()).await;
+        let _ = tx_repo.delete_by_id(tx2.id.clone()).await;
+        let _ = tx_repo.delete_by_id(tx3.id.clone()).await;
+    }
+
+    #[tokio::test]
+    async fn test_find_oldest_pending_for_relayer_with_in_memory() {
+        use crate::repositories::transaction::InMemoryTransactionRepository;
+        use uuid::Uuid;
+
+        // Setup in-memory repository
+        let tx_repo = Arc::new(InMemoryTransactionRepository::new());
+
+        let relayer_id = format!("relayer-{}", Uuid::new_v4());
+
+        // Create three pending transactions with different created_at timestamps
+        // tx1: oldest (created first)
+        let mut tx1 = create_test_transaction(&relayer_id);
+        tx1.id = format!("tx-1-{}", Uuid::new_v4());
+        tx1.status = TransactionStatus::Pending;
+        tx1.created_at = "2025-01-27T10:00:00.000000+00:00".to_string();
+
+        // tx2: middle
+        let mut tx2 = create_test_transaction(&relayer_id);
+        tx2.id = format!("tx-2-{}", Uuid::new_v4());
+        tx2.status = TransactionStatus::Pending;
+        tx2.created_at = "2025-01-27T11:00:00.000000+00:00".to_string();
+
+        // tx3: newest (created last)
+        let mut tx3 = create_test_transaction(&relayer_id);
+        tx3.id = format!("tx-3-{}", Uuid::new_v4());
+        tx3.status = TransactionStatus::Pending;
+        tx3.created_at = "2025-01-27T12:00:00.000000+00:00".to_string();
+
+        // Create transactions in memory store
+        tx_repo.create(tx1.clone()).await.unwrap();
+        tx_repo.create(tx2.clone()).await.unwrap();
+        tx_repo.create(tx3.clone()).await.unwrap();
+
+        // Create a minimal StellarRelayerTransaction instance to test the method
+        // We'll use mocks for other dependencies since we only need the transaction repository
+        let relayer = create_test_relayer();
+        let mut relayer_model = relayer.clone();
+        relayer_model.id = relayer_id.clone();
+
+        let mocks = default_test_mocks();
+        let handler = StellarRelayerTransaction::new(
+            relayer_model,
+            Arc::new(mocks.relayer_repo),
+            tx_repo.clone(),
+            Arc::new(mocks.job_producer),
+            Arc::new(mocks.signer),
+            mocks.provider,
+            Arc::new(mocks.counter),
+            Arc::new(mocks.dex_service),
+        )
+        .unwrap();
+
+        // Call find_oldest_pending_for_relayer
+        let result = handler
+            .find_oldest_pending_for_relayer(&relayer_id)
+            .await
+            .unwrap();
+
+        // Verify the result
+        assert!(result.is_some(), "Should find a pending transaction");
+        let found_tx = result.unwrap();
+
+        // oldest_first=true so .next() yields the oldest pending transaction (FIFO order)
+        assert_eq!(
+            found_tx.id, tx1.id,
+            "Should get oldest transaction (tx1) - oldest_first=true so .next() yields oldest"
+        );
+        assert_eq!(
+            found_tx.created_at, tx1.created_at,
+            "Should match oldest transaction's created_at"
+        );
     }
 }

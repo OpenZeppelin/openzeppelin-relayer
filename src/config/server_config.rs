@@ -79,11 +79,21 @@ pub struct ServerConfig {
     /// The encryption key for the storage.
     pub storage_encryption_key: Option<SecretString>,
     /// Transaction expiration time in hours for transactions in final states.
-    pub transaction_expiration_hours: u64,
+    /// Supports fractional values (e.g., 0.1 = 6 minutes).
+    pub transaction_expiration_hours: f64,
     /// Comma-separated list of allowed RPC hosts (domains or IPs). If non-empty, only these hosts are permitted.
     pub rpc_allowed_hosts: Vec<String>,
     /// If true, block private IP addresses (RFC 1918, loopback, link-local). Cloud metadata endpoints are always blocked.
     pub rpc_block_private_ips: bool,
+    /// Maximum number of concurrent requests allowed for /api/v1/relayers/* endpoints.
+    pub relayer_concurrency_limit: usize,
+    /// Maximum number of concurrent TCP connections server-wide.
+    pub max_connections: usize,
+    /// TCP listen connection backlog size (pending connections queue).
+    /// Higher values allow more connections to be queued during traffic bursts.
+    pub connection_backlog: u32,
+    /// Request handler timeout in seconds for API endpoints.
+    pub request_timeout_seconds: u64,
 }
 
 impl ServerConfig {
@@ -111,6 +121,8 @@ impl ServerConfig {
     /// - `PROVIDER_FAILURE_EXPIRATION_SECS` defaults to `60` (1 minute).
     /// - `REPOSITORY_STORAGE_TYPE` defaults to `"in_memory"`.
     /// - `TRANSACTION_EXPIRATION_HOURS` defaults to `4`.
+    /// - `REQUEST_TIMEOUT_SECONDS` defaults to `30` (security measure for DoS protection).
+    /// - `CONNECTION_BACKLOG` defaults to `511` (production-ready value for traffic bursts).
     pub fn from_env() -> Self {
         Self {
             host: Self::get_host(),
@@ -140,6 +152,10 @@ impl ServerConfig {
             transaction_expiration_hours: Self::get_transaction_expiration_hours(),
             rpc_allowed_hosts: Self::get_rpc_allowed_hosts(),
             rpc_block_private_ips: Self::get_rpc_block_private_ips(),
+            relayer_concurrency_limit: Self::get_relayer_concurrency_limit(),
+            max_connections: Self::get_max_connections(),
+            connection_backlog: Self::get_connection_backlog(),
+            request_timeout_seconds: Self::get_request_timeout_seconds(),
         }
     }
 
@@ -368,11 +384,12 @@ impl ServerConfig {
     }
 
     /// Gets the transaction expiration hours from environment variable or default
-    pub fn get_transaction_expiration_hours() -> u64 {
+    /// Supports fractional values (e.g., 0.1 = 6 minutes).
+    pub fn get_transaction_expiration_hours() -> f64 {
         env::var("TRANSACTION_EXPIRATION_HOURS")
             .unwrap_or_else(|_| "4".to_string())
             .parse()
-            .unwrap_or(4)
+            .unwrap_or(4.0)
     }
 
     /// Gets the allowed RPC hosts from environment variable or default (empty list)
@@ -393,6 +410,46 @@ impl ServerConfig {
         env::var("RPC_BLOCK_PRIVATE_IPS")
             .map(|v| v.to_lowercase() == "true")
             .unwrap_or(false)
+    }
+
+    /// Gets the relayer concurrency limit from environment variable or default (100)
+    pub fn get_relayer_concurrency_limit() -> usize {
+        env::var("RELAYER_CONCURRENCY_LIMIT")
+            .unwrap_or_else(|_| "100".to_string())
+            .parse()
+            .unwrap_or(100)
+    }
+
+    /// Gets the max connections from environment variable or default (256)
+    pub fn get_max_connections() -> usize {
+        env::var("MAX_CONNECTIONS")
+            .unwrap_or_else(|_| "256".to_string())
+            .parse()
+            .unwrap_or(256)
+    }
+
+    /// Gets the connection backlog from environment variable or default (511)
+    ///
+    /// TCP listen backlog controls the size of the queue for pending connections.
+    /// Higher values allow more connections to be queued during traffic bursts,
+    /// preventing connection drops. Default of 511.
+    pub fn get_connection_backlog() -> u32 {
+        env::var("CONNECTION_BACKLOG")
+            .unwrap_or_else(|_| "511".to_string())
+            .parse()
+            .unwrap_or(511)
+    }
+
+    /// Gets the request timeout in seconds from environment variable or default (30)
+    ///
+    /// This is a security measure to prevent resource exhaustion attacks (DoS).
+    /// It limits how long a request handler can run, preventing slowloris-style
+    /// attacks and ensuring resources are freed promptly.
+    pub fn get_request_timeout_seconds() -> u64 {
+        env::var("REQUEST_TIMEOUT_SECONDS")
+            .unwrap_or_else(|_| "30".to_string())
+            .parse()
+            .unwrap_or(30)
     }
 
     /// Get worker concurrency from environment variable or use default
@@ -484,7 +541,7 @@ mod tests {
             RepositoryStorageType::InMemory
         );
         assert!(!config.reset_storage_on_start);
-        assert_eq!(config.transaction_expiration_hours, 4);
+        assert_eq!(config.transaction_expiration_hours, 4.0);
     }
 
     #[test]
@@ -527,7 +584,7 @@ mod tests {
             RepositoryStorageType::InMemory
         );
         assert!(!config.reset_storage_on_start);
-        assert_eq!(config.transaction_expiration_hours, 4);
+        assert_eq!(config.transaction_expiration_hours, 4.0);
     }
 
     #[test]
@@ -580,7 +637,7 @@ mod tests {
             RepositoryStorageType::InMemory
         );
         assert!(config.reset_storage_on_start);
-        assert_eq!(config.transaction_expiration_hours, 6);
+        assert_eq!(config.transaction_expiration_hours, 6.0);
     }
 
     #[test]
@@ -660,7 +717,7 @@ mod tests {
         );
         assert!(!ServerConfig::get_reset_storage_on_start());
         assert!(ServerConfig::get_storage_encryption_key().is_none());
-        assert_eq!(ServerConfig::get_transaction_expiration_hours(), 4);
+        assert_eq!(ServerConfig::get_transaction_expiration_hours(), 4.0);
         assert_eq!(ServerConfig::get_redis_pool_max_size(), 500);
         assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 10000);
     }
@@ -726,7 +783,7 @@ mod tests {
         );
         assert!(ServerConfig::get_reset_storage_on_start());
         assert!(ServerConfig::get_storage_encryption_key().is_some());
-        assert_eq!(ServerConfig::get_transaction_expiration_hours(), 12);
+        assert_eq!(ServerConfig::get_transaction_expiration_hours(), 12.0);
         assert_eq!(ServerConfig::get_redis_pool_max_size(), 200);
         assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 20000);
     }
@@ -737,7 +794,6 @@ mod tests {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-
         // Test default value when env var is not set
         env::remove_var("REDIS_POOL_MAX_SIZE");
         assert_eq!(ServerConfig::get_redis_pool_max_size(), 500);
@@ -791,6 +847,30 @@ mod tests {
 
         // Cleanup
         env::remove_var("REDIS_POOL_TIMEOUT_MS");
+    }
+
+    #[test]
+    fn test_fractional_transaction_expiration_hours() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        setup();
+
+        // Test fractional hours (0.1 hours = 6 minutes)
+        env::set_var("TRANSACTION_EXPIRATION_HOURS", "0.1");
+        assert_eq!(ServerConfig::get_transaction_expiration_hours(), 0.1);
+
+        // Test another fractional value
+        env::set_var("TRANSACTION_EXPIRATION_HOURS", "0.5");
+        assert_eq!(ServerConfig::get_transaction_expiration_hours(), 0.5);
+
+        // Test integer value still works
+        env::set_var("TRANSACTION_EXPIRATION_HOURS", "24");
+        assert_eq!(ServerConfig::get_transaction_expiration_hours(), 24.0);
+
+        // Cleanup
+        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
     }
 
     #[test]
@@ -1154,6 +1234,362 @@ mod tests {
 
             // Cleanup
             env::remove_var(&env_var);
+        }
+    }
+
+    mod get_relayer_concurrency_limit_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_not_set() {
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(result, 100, "Should return default value of 100");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_env_value_when_set() {
+            env::set_var("RELAYER_CONCURRENCY_LIMIT", "250");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(result, 250, "Should return env var value");
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_invalid() {
+            env::set_var("RELAYER_CONCURRENCY_LIMIT", "not_a_number");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(result, 100, "Should return default value when invalid");
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_empty() {
+            env::set_var("RELAYER_CONCURRENCY_LIMIT", "");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(result, 100, "Should return default value when empty");
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+        }
+
+        #[test]
+        #[serial]
+        fn test_zero_value() {
+            env::set_var("RELAYER_CONCURRENCY_LIMIT", "0");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(result, 0, "Should accept zero as valid value");
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+        }
+
+        #[test]
+        #[serial]
+        fn test_large_value() {
+            env::set_var("RELAYER_CONCURRENCY_LIMIT", "5000");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(result, 5000, "Should accept large values");
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+        }
+
+        #[test]
+        #[serial]
+        fn test_negative_value_returns_default() {
+            env::set_var("RELAYER_CONCURRENCY_LIMIT", "-10");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(result, 100, "Should return default for negative value");
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+        }
+
+        #[test]
+        #[serial]
+        fn test_float_value_returns_default() {
+            env::set_var("RELAYER_CONCURRENCY_LIMIT", "100.5");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(result, 100, "Should return default for float value");
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+        }
+
+        #[test]
+        #[serial]
+        fn test_whitespace_value_returns_default() {
+            env::set_var("RELAYER_CONCURRENCY_LIMIT", "  150  ");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(
+                result, 100,
+                "Should return default when value has whitespace"
+            );
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+        }
+    }
+
+    mod get_max_connections_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_not_set() {
+            env::remove_var("MAX_CONNECTIONS");
+            let result = ServerConfig::get_max_connections();
+            assert_eq!(result, 256, "Should return default value of 256");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_env_value_when_set() {
+            env::set_var("MAX_CONNECTIONS", "512");
+            let result = ServerConfig::get_max_connections();
+            assert_eq!(result, 512, "Should return env var value");
+            env::remove_var("MAX_CONNECTIONS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_invalid() {
+            env::set_var("MAX_CONNECTIONS", "invalid");
+            let result = ServerConfig::get_max_connections();
+            assert_eq!(result, 256, "Should return default value when invalid");
+            env::remove_var("MAX_CONNECTIONS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_empty() {
+            env::set_var("MAX_CONNECTIONS", "");
+            let result = ServerConfig::get_max_connections();
+            assert_eq!(result, 256, "Should return default value when empty");
+            env::remove_var("MAX_CONNECTIONS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_zero_value() {
+            env::set_var("MAX_CONNECTIONS", "0");
+            let result = ServerConfig::get_max_connections();
+            assert_eq!(result, 0, "Should accept zero as valid value");
+            env::remove_var("MAX_CONNECTIONS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_large_value() {
+            env::set_var("MAX_CONNECTIONS", "10000");
+            let result = ServerConfig::get_max_connections();
+            assert_eq!(result, 10000, "Should accept large values");
+            env::remove_var("MAX_CONNECTIONS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_negative_value_returns_default() {
+            env::set_var("MAX_CONNECTIONS", "-100");
+            let result = ServerConfig::get_max_connections();
+            assert_eq!(result, 256, "Should return default for negative value");
+            env::remove_var("MAX_CONNECTIONS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_float_value_returns_default() {
+            env::set_var("MAX_CONNECTIONS", "256.5");
+            let result = ServerConfig::get_max_connections();
+            assert_eq!(result, 256, "Should return default for float value");
+            env::remove_var("MAX_CONNECTIONS");
+        }
+    }
+
+    mod get_connection_backlog_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_not_set() {
+            env::remove_var("CONNECTION_BACKLOG");
+            let result = ServerConfig::get_connection_backlog();
+            assert_eq!(result, 511, "Should return default value of 511");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_env_value_when_set() {
+            env::set_var("CONNECTION_BACKLOG", "1024");
+            let result = ServerConfig::get_connection_backlog();
+            assert_eq!(result, 1024, "Should return env var value");
+            env::remove_var("CONNECTION_BACKLOG");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_invalid() {
+            env::set_var("CONNECTION_BACKLOG", "not_a_number");
+            let result = ServerConfig::get_connection_backlog();
+            assert_eq!(result, 511, "Should return default value when invalid");
+            env::remove_var("CONNECTION_BACKLOG");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_empty() {
+            env::set_var("CONNECTION_BACKLOG", "");
+            let result = ServerConfig::get_connection_backlog();
+            assert_eq!(result, 511, "Should return default value when empty");
+            env::remove_var("CONNECTION_BACKLOG");
+        }
+
+        #[test]
+        #[serial]
+        fn test_zero_value() {
+            env::set_var("CONNECTION_BACKLOG", "0");
+            let result = ServerConfig::get_connection_backlog();
+            assert_eq!(result, 0, "Should accept zero as valid value");
+            env::remove_var("CONNECTION_BACKLOG");
+        }
+
+        #[test]
+        #[serial]
+        fn test_large_value() {
+            env::set_var("CONNECTION_BACKLOG", "65535");
+            let result = ServerConfig::get_connection_backlog();
+            assert_eq!(result, 65535, "Should accept large values");
+            env::remove_var("CONNECTION_BACKLOG");
+        }
+
+        #[test]
+        #[serial]
+        fn test_negative_value_returns_default() {
+            env::set_var("CONNECTION_BACKLOG", "-50");
+            let result = ServerConfig::get_connection_backlog();
+            assert_eq!(result, 511, "Should return default for negative value");
+            env::remove_var("CONNECTION_BACKLOG");
+        }
+
+        #[test]
+        #[serial]
+        fn test_float_value_returns_default() {
+            env::set_var("CONNECTION_BACKLOG", "511.5");
+            let result = ServerConfig::get_connection_backlog();
+            assert_eq!(result, 511, "Should return default for float value");
+            env::remove_var("CONNECTION_BACKLOG");
+        }
+
+        #[test]
+        #[serial]
+        fn test_common_production_values() {
+            // Test common production values
+            let test_cases = vec![
+                (128, "Small server"),
+                (511, "Default"),
+                (1024, "Medium server"),
+                (2048, "Large server"),
+            ];
+
+            for (value, description) in test_cases {
+                env::set_var("CONNECTION_BACKLOG", value.to_string());
+                let result = ServerConfig::get_connection_backlog();
+                assert_eq!(result, value, "Should accept {}: {}", description, value);
+            }
+
+            env::remove_var("CONNECTION_BACKLOG");
+        }
+    }
+
+    mod get_request_timeout_seconds_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_not_set() {
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+            let result = ServerConfig::get_request_timeout_seconds();
+            assert_eq!(result, 30, "Should return default value of 30");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_env_value_when_set() {
+            env::set_var("REQUEST_TIMEOUT_SECONDS", "60");
+            let result = ServerConfig::get_request_timeout_seconds();
+            assert_eq!(result, 60, "Should return env var value");
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_invalid() {
+            env::set_var("REQUEST_TIMEOUT_SECONDS", "invalid");
+            let result = ServerConfig::get_request_timeout_seconds();
+            assert_eq!(result, 30, "Should return default value when invalid");
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_empty() {
+            env::set_var("REQUEST_TIMEOUT_SECONDS", "");
+            let result = ServerConfig::get_request_timeout_seconds();
+            assert_eq!(result, 30, "Should return default value when empty");
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_zero_value() {
+            env::set_var("REQUEST_TIMEOUT_SECONDS", "0");
+            let result = ServerConfig::get_request_timeout_seconds();
+            assert_eq!(result, 0, "Should accept zero as valid value");
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_large_value() {
+            env::set_var("REQUEST_TIMEOUT_SECONDS", "300");
+            let result = ServerConfig::get_request_timeout_seconds();
+            assert_eq!(result, 300, "Should accept large values");
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_negative_value_returns_default() {
+            env::set_var("REQUEST_TIMEOUT_SECONDS", "-10");
+            let result = ServerConfig::get_request_timeout_seconds();
+            assert_eq!(result, 30, "Should return default for negative value");
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_float_value_returns_default() {
+            env::set_var("REQUEST_TIMEOUT_SECONDS", "30.5");
+            let result = ServerConfig::get_request_timeout_seconds();
+            assert_eq!(result, 30, "Should return default for float value");
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_common_timeout_values() {
+            // Test common timeout values
+            let test_cases = vec![
+                (10, "Short timeout"),
+                (30, "Default timeout"),
+                (60, "Moderate timeout"),
+                (120, "Long timeout"),
+            ];
+
+            for (value, description) in test_cases {
+                env::set_var("REQUEST_TIMEOUT_SECONDS", value.to_string());
+                let result = ServerConfig::get_request_timeout_seconds();
+                assert_eq!(result, value, "Should accept {}: {}", description, value);
+            }
+
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
         }
     }
 }

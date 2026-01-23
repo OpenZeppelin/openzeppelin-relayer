@@ -3,6 +3,7 @@
 use crate::models::{RepositoryError, SignerRepoModel};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::*;
+use crate::utils::EncryptionContext;
 use async_trait::async_trait;
 use deadpool_redis::Pool;
 use redis::AsyncCommands;
@@ -107,7 +108,11 @@ impl RedisSignerRepository {
         for (i, value) in values.into_iter().enumerate() {
             match value {
                 Some(json) => {
-                    match self.deserialize_entity::<SignerRepoModel>(&json, &ids[i], "signer") {
+                    // Deserialize with AAD context (decryption bound to storage key)
+                    let key = keys[i].clone();
+                    match EncryptionContext::with_aad_sync(key, || {
+                        self.deserialize_entity::<SignerRepoModel>(&json, &ids[i], "signer")
+                    }) {
                         Ok(signer) => signers.push(signer),
                         Err(e) => {
                             failed_count += 1;
@@ -172,8 +177,10 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
             )));
         }
 
-        // Serialize signer (encryption happens automatically for human-readable formats)
-        let serialized = self.serialize_entity(&signer, |s| &s.id, "signer")?;
+        // Serialize signer with AAD context (encryption bound to storage key)
+        let serialized = EncryptionContext::with_aad_sync(key.clone(), || {
+            self.serialize_entity(&signer, |s| &s.id, "signer")
+        })?;
 
         // Store signer
         let _: () = conn
@@ -198,25 +205,17 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         let key = self.signer_key(&id);
         let mut conn = self.get_connection(&self.pool, "get_by_id").await?;
 
-        let data: Option<String> = conn
+        let data: String = conn
             .get(&key)
             .await
             .map_err(|e| self.map_redis_error(e, "get_by_id"))?;
 
-        match data {
-            Some(data) => {
-                // Deserialize signer (decryption happens automatically)
-                let signer = self.deserialize_entity::<SignerRepoModel>(&data, &id, "signer")?;
-                debug!(signer_id = %id, "retrieved signer");
-                Ok(signer)
-            }
-            None => {
-                debug!(signer_id = %id, "signer not found");
-                Err(RepositoryError::NotFound(format!(
-                    "Signer with ID {id} not found"
-                )))
-            }
-        }
+        // Deserialize signer with AAD context (decryption bound to storage key)
+        let signer = EncryptionContext::with_aad_sync(key, || {
+            self.deserialize_entity::<SignerRepoModel>(&data, &id, "signer")
+        })?;
+        debug!(signer_id = %id, "retrieved signer");
+        Ok(signer)
     }
 
     async fn update(
@@ -251,8 +250,10 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
             )));
         }
 
-        // Serialize signer (encryption happens automatically for human-readable formats)
-        let serialized = self.serialize_entity(&signer, |s| &s.id, "signer")?;
+        // Serialize signer with AAD context (encryption bound to storage key)
+        let serialized = EncryptionContext::with_aad_sync(key.clone(), || {
+            self.serialize_entity(&signer, |s| &s.id, "signer")
+        })?;
 
         // Update signer
         let _: () = conn

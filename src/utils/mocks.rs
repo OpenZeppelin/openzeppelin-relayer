@@ -332,9 +332,13 @@ pub mod mockutils {
             storage_encryption_key: Some(SecretString::new(
                 "test_encryption_key_1234567890_test_key_32",
             )),
-            transaction_expiration_hours: 4,
+            transaction_expiration_hours: 4.0,
             rpc_allowed_hosts: vec![],
             rpc_block_private_ips: false,
+            relayer_concurrency_limit: 100,
+            max_connections: 256,
+            connection_backlog: 511,
+            request_timeout_seconds: 30,
         }
     }
 }

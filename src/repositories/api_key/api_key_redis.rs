@@ -3,6 +3,7 @@
 use crate::models::{ApiKeyRepoModel, PaginationQuery, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{ApiKeyRepositoryTrait, BatchRetrievalResult, PaginatedResult};
+use crate::utils::EncryptionContext;
 use async_trait::async_trait;
 use deadpool_redis::Pool;
 use redis::AsyncCommands;
@@ -67,14 +68,19 @@ impl RedisApiKeyRepository {
         let mut failed_ids = Vec::new();
         for (i, value) in values.into_iter().enumerate() {
             match value {
-                Some(json) => match self.deserialize_entity(&json, &ids[i], "apikey") {
-                    Ok(apikey) => apikeys.push(apikey),
-                    Err(e) => {
-                        failed_count += 1;
-                        error!("Failed to deserialize api key {}: {}", ids[i], e);
-                        failed_ids.push(ids[i].clone());
+                Some(json) => {
+                    let key = keys[i].clone();
+                    match EncryptionContext::with_aad_sync(key, || {
+                        self.deserialize_entity::<ApiKeyRepoModel>(&json, &ids[i], "apikey")
+                    }) {
+                        Ok(apikey) => apikeys.push(apikey),
+                        Err(e) => {
+                            failed_count += 1;
+                            error!("Failed to deserialize api key {}: {}", ids[i], e);
+                            failed_ids.push(ids[i].clone());
+                        }
                     }
-                },
+                }
                 None => {
                     warn!("Plugin {} not found in batch fetch", ids[i]);
                 }
@@ -117,7 +123,10 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
 
         let key = self.api_key_key(&entity.id);
         let list_key = self.api_key_list_key();
-        let json = self.serialize_entity(&entity, |a| &a.id, "apikey")?;
+        // Serialize api key with AAD context (encryption bound to storage key)
+        let json = EncryptionContext::with_aad_sync(key.clone(), || {
+            self.serialize_entity(&entity, |a| &a.id, "apikey")
+        })?;
 
         let mut conn = self.get_connection(&self.pool, "create").await?;
 
@@ -220,7 +229,11 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
         match json {
             Some(json) => {
                 debug!("Found api key with ID: {}", id);
-                self.deserialize_entity(&json, id, "apikey")
+                // Deserialize api key with AAD context (decryption bound to storage key)
+                EncryptionContext::with_aad_sync(api_key_key, || {
+                    self.deserialize_entity::<ApiKeyRepoModel>(&json, id, "apikey")
+                })
+                .map(Some)
             }
             None => {
                 debug!("Api key with ID {} not found", id);

@@ -43,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    println!("Generating OpenAPI specification to {}", output_path);
+    println!("Generating OpenAPI specification to {output_path}");
 
     let openapi = ApiDoc::openapi();
 
