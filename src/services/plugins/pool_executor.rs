@@ -41,6 +41,20 @@ struct QueuedRequest {
     response_tx: oneshot::Sender<Result<ScriptResult, PluginError>>,
 }
 
+/// Parsed health check result fields extracted from pool server JSON response.
+///
+/// This struct replaces a complex tuple return type to satisfy Clippy's
+/// `type_complexity` lint and improve readability.
+#[derive(Debug, Default, PartialEq)]
+pub struct ParsedHealthResult {
+    pub status: String,
+    pub uptime_ms: Option<u64>,
+    pub memory: Option<u64>,
+    pub pool_completed: Option<u64>,
+    pub pool_queued: Option<u64>,
+    pub success_rate: Option<f64>,
+}
+
 /// Manages the pool server process and connections
 pub struct PoolManager {
     socket_path: String,
@@ -94,6 +108,120 @@ impl PoolManager {
     /// Prevents excessive memory allocation that could cause system instability.
     /// Set to 8GB (8192 MB) as a reasonable upper bound for Node.js processes.
     const MAX_HEAP_MB: usize = 8192;
+
+    /// Calculate heap size based on concurrency level.
+    ///
+    /// Formula: BASE_HEAP_MB + ((max_concurrency / CONCURRENCY_DIVISOR) * HEAP_INCREMENT_PER_DIVISOR_MB)
+    /// Result is capped at MAX_HEAP_MB.
+    ///
+    /// This scales memory allocation with expected load while maintaining a reasonable minimum.
+    pub fn calculate_heap_size(max_concurrency: usize) -> usize {
+        let calculated = Self::BASE_HEAP_MB
+            + ((max_concurrency / Self::CONCURRENCY_DIVISOR) * Self::HEAP_INCREMENT_PER_DIVISOR_MB);
+        calculated.min(Self::MAX_HEAP_MB)
+    }
+
+    /// Format a result value from the pool response into a string.
+    ///
+    /// If the value is already a string, returns it directly.
+    /// Otherwise, serializes it to JSON.
+    pub fn format_return_value(value: Option<serde_json::Value>) -> String {
+        value
+            .map(|v| {
+                if v.is_string() {
+                    v.as_str().unwrap_or("").to_string()
+                } else {
+                    serde_json::to_string(&v).unwrap_or_default()
+                }
+            })
+            .unwrap_or_default()
+    }
+
+    /// Parse a successful pool response into a ScriptResult.
+    ///
+    /// Converts logs from PoolLogEntry to LogEntry and extracts the return value.
+    pub fn parse_success_response(response: PoolResponse) -> ScriptResult {
+        let logs: Vec<LogEntry> = response
+            .logs
+            .map(|logs| logs.into_iter().map(|l| l.into()).collect())
+            .unwrap_or_default();
+
+        ScriptResult {
+            logs,
+            error: String::new(),
+            return_value: Self::format_return_value(response.result),
+            trace: Vec::new(),
+        }
+    }
+
+    /// Parse a failed pool response into a PluginError.
+    ///
+    /// Extracts error details and converts logs for inclusion in the error payload.
+    pub fn parse_error_response(response: PoolResponse) -> PluginError {
+        let logs: Vec<LogEntry> = response
+            .logs
+            .map(|logs| logs.into_iter().map(|l| l.into()).collect())
+            .unwrap_or_default();
+
+        let error = response.error.unwrap_or(PoolError {
+            message: "Unknown error".to_string(),
+            code: None,
+            status: None,
+            details: None,
+        });
+
+        PluginError::HandlerError(Box::new(PluginHandlerPayload {
+            message: error.message,
+            status: error.status.unwrap_or(500),
+            code: error.code,
+            details: error.details,
+            logs: Some(logs),
+            traces: None,
+        }))
+    }
+
+    /// Parse a pool response into either a success result or an error.
+    ///
+    /// This is the main entry point for response parsing, dispatching to
+    /// either parse_success_response or parse_error_response based on the success flag.
+    pub fn parse_pool_response(response: PoolResponse) -> Result<ScriptResult, PluginError> {
+        if response.success {
+            Ok(Self::parse_success_response(response))
+        } else {
+            Err(Self::parse_error_response(response))
+        }
+    }
+
+    /// Parse health check result JSON into individual fields.
+    ///
+    /// Extracts status, uptime, memory usage, pool stats, and success rate
+    /// from the nested JSON structure returned by the pool server.
+    pub fn parse_health_result(result: &serde_json::Value) -> ParsedHealthResult {
+        ParsedHealthResult {
+            status: result
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string(),
+            uptime_ms: result.get("uptime").and_then(|v| v.as_u64()),
+            memory: result
+                .get("memory")
+                .and_then(|v| v.get("heapUsed"))
+                .and_then(|v| v.as_u64()),
+            pool_completed: result
+                .get("pool")
+                .and_then(|v| v.get("completed"))
+                .and_then(|v| v.as_u64()),
+            pool_queued: result
+                .get("pool")
+                .and_then(|v| v.get("queued"))
+                .and_then(|v| v.as_u64()),
+            success_rate: result
+                .get("execution")
+                .and_then(|v| v.get("successRate"))
+                .and_then(|v| v.as_f64()),
+        }
+    }
 
     /// Create a new PoolManager with default socket path
     pub fn new() -> Self {
@@ -412,46 +540,8 @@ impl PoolManager {
         let timeout = timeout_secs.unwrap_or(get_config().pool_request_timeout_secs);
         let response = conn.send_request_with_timeout(&request, timeout).await?;
 
-        let logs: Vec<LogEntry> = response
-            .logs
-            .map(|logs| logs.into_iter().map(|l| l.into()).collect())
-            .unwrap_or_else(Vec::new);
-
-        if response.success {
-            let return_value = response
-                .result
-                .map(|v| {
-                    if v.is_string() {
-                        v.as_str().unwrap_or("").to_string()
-                    } else {
-                        serde_json::to_string(&v).unwrap_or_default()
-                    }
-                })
-                .unwrap_or_default();
-
-            Ok(ScriptResult {
-                logs,
-                error: String::new(),
-                return_value,
-                trace: Vec::new(),
-            })
-        } else {
-            let error = response.error.unwrap_or(PoolError {
-                message: "Unknown error".to_string(),
-                code: None,
-                status: None,
-                details: None,
-            });
-
-            Err(PluginError::HandlerError(Box::new(PluginHandlerPayload {
-                message: error.message,
-                status: error.status.unwrap_or(500),
-                code: error.code,
-                details: error.details,
-                logs: Some(logs),
-                traces: None,
-            })))
-        }
+        // Use extracted parsing function for cleaner code and testability
+        Self::parse_pool_response(response)
     }
 
     /// Internal execution method (wrapper for execute_with_permit)
@@ -626,16 +716,16 @@ impl PoolManager {
 
         let config = get_config();
 
-        // Calculate heap size based on concurrency: base + (concurrency / divisor) * increment
-        // This scales memory allocation with expected load while maintaining a reasonable minimum
-        let calculated_heap = Self::BASE_HEAP_MB
+        // Use extracted function for heap calculation
+        let pool_server_heap_mb = Self::calculate_heap_size(config.max_concurrency);
+
+        // Log warning if heap was capped (for observability)
+        let uncapped_heap = Self::BASE_HEAP_MB
             + ((config.max_concurrency / Self::CONCURRENCY_DIVISOR)
                 * Self::HEAP_INCREMENT_PER_DIVISOR_MB);
-        let pool_server_heap_mb = calculated_heap.min(Self::MAX_HEAP_MB);
-
-        if calculated_heap > Self::MAX_HEAP_MB {
+        if uncapped_heap > Self::MAX_HEAP_MB {
             tracing::warn!(
-                calculated_heap_mb = calculated_heap,
+                calculated_heap_mb = uncapped_heap,
                 capped_heap_mb = pool_server_heap_mb,
                 max_concurrency = config.max_concurrency,
                 "Pool server heap calculation exceeded 8GB cap"
@@ -1148,30 +1238,17 @@ impl PoolManager {
             Ok(response) => {
                 if response.success {
                     let result = response.result.unwrap_or_default();
+                    // Use extracted parsing function for testability
+                    let parsed = Self::parse_health_result(&result);
+
                     Ok(HealthStatus {
                         healthy: true,
-                        status: result
-                            .get("status")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown")
-                            .to_string(),
-                        uptime_ms: result.get("uptime").and_then(|v| v.as_u64()),
-                        memory: result
-                            .get("memory")
-                            .and_then(|v| v.get("heapUsed"))
-                            .and_then(|v| v.as_u64()),
-                        pool_completed: result
-                            .get("pool")
-                            .and_then(|v| v.get("completed"))
-                            .and_then(|v| v.as_u64()),
-                        pool_queued: result
-                            .get("pool")
-                            .and_then(|v| v.get("queued"))
-                            .and_then(|v| v.as_u64()),
-                        success_rate: result
-                            .get("execution")
-                            .and_then(|v| v.get("successRate"))
-                            .and_then(|v| v.as_f64()),
+                        status: parsed.status,
+                        uptime_ms: parsed.uptime_ms,
+                        memory: parsed.memory,
+                        pool_completed: parsed.pool_completed,
+                        pool_queued: parsed.pool_queued,
+                        success_rate: parsed.success_rate,
                         circuit_state,
                         avg_response_time_ms: avg_rt,
                         recovering,
@@ -1673,6 +1750,439 @@ mod tests {
         assert_eq!(PoolManager::CONCURRENCY_DIVISOR, 10);
         assert_eq!(PoolManager::HEAP_INCREMENT_PER_DIVISOR_MB, 32);
         assert_eq!(PoolManager::MAX_HEAP_MB, 8192);
+    }
+
+    // ============================================
+    // Extracted function tests: calculate_heap_size
+    // ============================================
+
+    #[test]
+    fn test_calculate_heap_size_low_concurrency() {
+        // Low concurrency should give base heap
+        assert_eq!(PoolManager::calculate_heap_size(5), 512);
+        assert_eq!(PoolManager::calculate_heap_size(9), 512);
+    }
+
+    #[test]
+    fn test_calculate_heap_size_medium_concurrency() {
+        // 10 concurrent: 512 + (10/10)*32 = 544
+        assert_eq!(PoolManager::calculate_heap_size(10), 544);
+        // 50 concurrent: 512 + (50/10)*32 = 672
+        assert_eq!(PoolManager::calculate_heap_size(50), 672);
+        // 100 concurrent: 512 + (100/10)*32 = 832
+        assert_eq!(PoolManager::calculate_heap_size(100), 832);
+    }
+
+    #[test]
+    fn test_calculate_heap_size_high_concurrency() {
+        // 500 concurrent: 512 + (500/10)*32 = 2112
+        assert_eq!(PoolManager::calculate_heap_size(500), 2112);
+        // 1000 concurrent: 512 + (1000/10)*32 = 3712
+        assert_eq!(PoolManager::calculate_heap_size(1000), 3712);
+    }
+
+    #[test]
+    fn test_calculate_heap_size_capped_at_max() {
+        // 3000 concurrent would be 10112, but capped at 8192
+        assert_eq!(PoolManager::calculate_heap_size(3000), 8192);
+        // Even higher should still be capped
+        assert_eq!(PoolManager::calculate_heap_size(10000), 8192);
+    }
+
+    #[test]
+    fn test_calculate_heap_size_zero_concurrency() {
+        // Zero concurrency gives base heap
+        assert_eq!(PoolManager::calculate_heap_size(0), 512);
+    }
+
+    // ============================================
+    // Extracted function tests: format_return_value
+    // ============================================
+
+    #[test]
+    fn test_format_return_value_none() {
+        assert_eq!(PoolManager::format_return_value(None), "");
+    }
+
+    #[test]
+    fn test_format_return_value_string() {
+        let value = Some(serde_json::json!("hello world"));
+        assert_eq!(PoolManager::format_return_value(value), "hello world");
+    }
+
+    #[test]
+    fn test_format_return_value_empty_string() {
+        let value = Some(serde_json::json!(""));
+        assert_eq!(PoolManager::format_return_value(value), "");
+    }
+
+    #[test]
+    fn test_format_return_value_object() {
+        let value = Some(serde_json::json!({"key": "value", "num": 42}));
+        let result = PoolManager::format_return_value(value);
+        // JSON object gets serialized
+        assert!(result.contains("key"));
+        assert!(result.contains("value"));
+        assert!(result.contains("42"));
+    }
+
+    #[test]
+    fn test_format_return_value_array() {
+        let value = Some(serde_json::json!([1, 2, 3]));
+        assert_eq!(PoolManager::format_return_value(value), "[1,2,3]");
+    }
+
+    #[test]
+    fn test_format_return_value_number() {
+        let value = Some(serde_json::json!(42));
+        assert_eq!(PoolManager::format_return_value(value), "42");
+    }
+
+    #[test]
+    fn test_format_return_value_boolean() {
+        assert_eq!(
+            PoolManager::format_return_value(Some(serde_json::json!(true))),
+            "true"
+        );
+        assert_eq!(
+            PoolManager::format_return_value(Some(serde_json::json!(false))),
+            "false"
+        );
+    }
+
+    #[test]
+    fn test_format_return_value_null() {
+        let value = Some(serde_json::json!(null));
+        assert_eq!(PoolManager::format_return_value(value), "null");
+    }
+
+    // ============================================
+    // Extracted function tests: parse_pool_response
+    // ============================================
+
+    #[test]
+    fn test_parse_pool_response_success_with_string_result() {
+        use super::super::protocol::{PoolLogEntry, PoolResponse};
+
+        let response = PoolResponse {
+            task_id: "test-123".to_string(),
+            success: true,
+            result: Some(serde_json::json!("success result")),
+            error: None,
+            logs: Some(vec![PoolLogEntry {
+                level: "info".to_string(),
+                message: "test log".to_string(),
+            }]),
+        };
+
+        let result = PoolManager::parse_pool_response(response).unwrap();
+        assert_eq!(result.return_value, "success result");
+        assert!(result.error.is_empty());
+        assert_eq!(result.logs.len(), 1);
+        assert_eq!(result.logs[0].level, LogLevel::Info);
+        assert_eq!(result.logs[0].message, "test log");
+    }
+
+    #[test]
+    fn test_parse_pool_response_success_with_object_result() {
+        use super::super::protocol::PoolResponse;
+
+        let response = PoolResponse {
+            task_id: "test-456".to_string(),
+            success: true,
+            result: Some(serde_json::json!({"data": "value"})),
+            error: None,
+            logs: None,
+        };
+
+        let result = PoolManager::parse_pool_response(response).unwrap();
+        assert!(result.return_value.contains("data"));
+        assert!(result.return_value.contains("value"));
+        assert!(result.logs.is_empty());
+    }
+
+    #[test]
+    fn test_parse_pool_response_success_no_result() {
+        use super::super::protocol::PoolResponse;
+
+        let response = PoolResponse {
+            task_id: "test-789".to_string(),
+            success: true,
+            result: None,
+            error: None,
+            logs: None,
+        };
+
+        let result = PoolManager::parse_pool_response(response).unwrap();
+        assert_eq!(result.return_value, "");
+        assert!(result.error.is_empty());
+    }
+
+    #[test]
+    fn test_parse_pool_response_failure_with_error() {
+        use super::super::protocol::{PoolError, PoolResponse};
+
+        let response = PoolResponse {
+            task_id: "test-error".to_string(),
+            success: false,
+            result: None,
+            error: Some(PoolError {
+                message: "Something went wrong".to_string(),
+                code: Some("ERR_001".to_string()),
+                status: Some(400),
+                details: Some(serde_json::json!({"field": "name"})),
+            }),
+            logs: None,
+        };
+
+        let err = PoolManager::parse_pool_response(response).unwrap_err();
+        match err {
+            PluginError::HandlerError(payload) => {
+                assert_eq!(payload.message, "Something went wrong");
+                assert_eq!(payload.status, 400);
+                assert_eq!(payload.code, Some("ERR_001".to_string()));
+            }
+            _ => panic!("Expected HandlerError"),
+        }
+    }
+
+    #[test]
+    fn test_parse_pool_response_failure_no_error_details() {
+        use super::super::protocol::PoolResponse;
+
+        let response = PoolResponse {
+            task_id: "test-unknown".to_string(),
+            success: false,
+            result: None,
+            error: None,
+            logs: None,
+        };
+
+        let err = PoolManager::parse_pool_response(response).unwrap_err();
+        match err {
+            PluginError::HandlerError(payload) => {
+                assert_eq!(payload.message, "Unknown error");
+                assert_eq!(payload.status, 500);
+            }
+            _ => panic!("Expected HandlerError"),
+        }
+    }
+
+    #[test]
+    fn test_parse_pool_response_failure_preserves_logs() {
+        use super::super::protocol::{PoolError, PoolLogEntry, PoolResponse};
+
+        let response = PoolResponse {
+            task_id: "test-logs".to_string(),
+            success: false,
+            result: None,
+            error: Some(PoolError {
+                message: "Error with logs".to_string(),
+                code: None,
+                status: None,
+                details: None,
+            }),
+            logs: Some(vec![
+                PoolLogEntry {
+                    level: "debug".to_string(),
+                    message: "debug message".to_string(),
+                },
+                PoolLogEntry {
+                    level: "error".to_string(),
+                    message: "error message".to_string(),
+                },
+            ]),
+        };
+
+        let err = PoolManager::parse_pool_response(response).unwrap_err();
+        match err {
+            PluginError::HandlerError(payload) => {
+                let logs = payload.logs.unwrap();
+                assert_eq!(logs.len(), 2);
+                assert_eq!(logs[0].level, LogLevel::Debug);
+                assert_eq!(logs[1].level, LogLevel::Error);
+            }
+            _ => panic!("Expected HandlerError"),
+        }
+    }
+
+    // ============================================
+    // Extracted function tests: parse_success_response
+    // ============================================
+
+    #[test]
+    fn test_parse_success_response_complete() {
+        use super::super::protocol::{PoolLogEntry, PoolResponse};
+
+        let response = PoolResponse {
+            task_id: "task-1".to_string(),
+            success: true,
+            result: Some(serde_json::json!("completed")),
+            error: None,
+            logs: Some(vec![
+                PoolLogEntry {
+                    level: "log".to_string(),
+                    message: "starting".to_string(),
+                },
+                PoolLogEntry {
+                    level: "result".to_string(),
+                    message: "finished".to_string(),
+                },
+            ]),
+        };
+
+        let result = PoolManager::parse_success_response(response);
+        assert_eq!(result.return_value, "completed");
+        assert!(result.error.is_empty());
+        assert_eq!(result.logs.len(), 2);
+        assert_eq!(result.logs[0].level, LogLevel::Log);
+        assert_eq!(result.logs[1].level, LogLevel::Result);
+    }
+
+    // ============================================
+    // Extracted function tests: parse_error_response
+    // ============================================
+
+    #[test]
+    fn test_parse_error_response_with_all_fields() {
+        use super::super::protocol::{PoolError, PoolLogEntry, PoolResponse};
+
+        let response = PoolResponse {
+            task_id: "err-task".to_string(),
+            success: false,
+            result: None,
+            error: Some(PoolError {
+                message: "Validation failed".to_string(),
+                code: Some("VALIDATION_ERROR".to_string()),
+                status: Some(422),
+                details: Some(serde_json::json!({"fields": ["email"]})),
+            }),
+            logs: Some(vec![PoolLogEntry {
+                level: "warn".to_string(),
+                message: "validation warning".to_string(),
+            }]),
+        };
+
+        let err = PoolManager::parse_error_response(response);
+        match err {
+            PluginError::HandlerError(payload) => {
+                assert_eq!(payload.message, "Validation failed");
+                assert_eq!(payload.status, 422);
+                assert_eq!(payload.code, Some("VALIDATION_ERROR".to_string()));
+                assert!(payload.details.is_some());
+                let logs = payload.logs.unwrap();
+                assert_eq!(logs.len(), 1);
+                assert_eq!(logs[0].level, LogLevel::Warn);
+            }
+            _ => panic!("Expected HandlerError"),
+        }
+    }
+
+    // ============================================
+    // Extracted function tests: parse_health_result
+    // ============================================
+
+    #[test]
+    fn test_parse_health_result_complete() {
+        let json = serde_json::json!({
+            "status": "healthy",
+            "uptime": 123456,
+            "memory": {
+                "heapUsed": 50000000,
+                "heapTotal": 100000000
+            },
+            "pool": {
+                "completed": 1000,
+                "queued": 5
+            },
+            "execution": {
+                "successRate": 0.99
+            }
+        });
+
+        let result = PoolManager::parse_health_result(&json);
+
+        assert_eq!(result.status, "healthy");
+        assert_eq!(result.uptime_ms, Some(123456));
+        assert_eq!(result.memory, Some(50000000));
+        assert_eq!(result.pool_completed, Some(1000));
+        assert_eq!(result.pool_queued, Some(5));
+        assert!((result.success_rate.unwrap() - 0.99).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_parse_health_result_minimal() {
+        let json = serde_json::json!({});
+
+        let result = PoolManager::parse_health_result(&json);
+
+        assert_eq!(result.status, "unknown");
+        assert_eq!(result.uptime_ms, None);
+        assert_eq!(result.memory, None);
+        assert_eq!(result.pool_completed, None);
+        assert_eq!(result.pool_queued, None);
+        assert_eq!(result.success_rate, None);
+    }
+
+    #[test]
+    fn test_parse_health_result_partial() {
+        let json = serde_json::json!({
+            "status": "degraded",
+            "uptime": 5000,
+            "memory": {
+                "heapTotal": 100000000
+                // heapUsed missing
+            }
+        });
+
+        let result = PoolManager::parse_health_result(&json);
+
+        assert_eq!(result.status, "degraded");
+        assert_eq!(result.uptime_ms, Some(5000));
+        assert_eq!(result.memory, None); // heapUsed was missing
+        assert_eq!(result.pool_completed, None);
+        assert_eq!(result.pool_queued, None);
+        assert_eq!(result.success_rate, None);
+    }
+
+    #[test]
+    fn test_parse_health_result_wrong_types() {
+        let json = serde_json::json!({
+            "status": 123,  // Should be string, will use "unknown"
+            "uptime": "not a number",  // Should be u64, will be None
+            "memory": "invalid"  // Should be object, will give None
+        });
+
+        let result = PoolManager::parse_health_result(&json);
+
+        assert_eq!(result.status, "unknown"); // Falls back when not a string
+        assert_eq!(result.uptime_ms, None);
+        assert_eq!(result.memory, None);
+        assert_eq!(result.pool_completed, None);
+        assert_eq!(result.pool_queued, None);
+        assert_eq!(result.success_rate, None);
+    }
+
+    #[test]
+    fn test_parse_health_result_nested_values() {
+        let json = serde_json::json!({
+            "pool": {
+                "completed": 0,
+                "queued": 0
+            },
+            "execution": {
+                "successRate": 1.0
+            }
+        });
+
+        let result = PoolManager::parse_health_result(&json);
+
+        assert_eq!(result.status, "unknown");
+        assert_eq!(result.uptime_ms, None);
+        assert_eq!(result.memory, None);
+        assert_eq!(result.pool_completed, Some(0));
+        assert_eq!(result.pool_queued, Some(0));
+        assert!((result.success_rate.unwrap() - 1.0).abs() < 0.001);
     }
 
     // ============================================
