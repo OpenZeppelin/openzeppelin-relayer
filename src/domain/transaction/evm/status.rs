@@ -2343,13 +2343,13 @@ mod tests {
             let mut mocks = default_test_mocks();
             let relayer = create_test_relayer();
 
-            // Create a NOOP transaction (to: self, value: 0, data: None/empty)
+            // Create a NOOP transaction (to: self, value: 0, data: "0x")
             let mut tx = make_test_transaction(TransactionStatus::Submitted);
             tx.sent_at = Some((Utc::now() - Duration::seconds(120)).to_rfc3339());
             if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
                 evm_data.to = Some(evm_data.from.clone()); // to == from (NOOP indicator)
                 evm_data.value = U256::from(0);
-                evm_data.data = None;
+                evm_data.data = Some("0x".to_string());
                 evm_data.hash = Some("0xFakeHash".to_string());
             }
 

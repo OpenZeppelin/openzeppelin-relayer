@@ -482,7 +482,6 @@ mod tests {
         fn test_consecutive_reset_on_success() {
             // When status check succeeds but tx is not final,
             // consecutive should reset to 0, total stays unchanged
-            let consecutive: u32 = 10;
             let total: u32 = 20;
 
             // On success, consecutive resets

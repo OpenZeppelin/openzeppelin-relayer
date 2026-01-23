@@ -450,10 +450,22 @@ where
             ..Default::default()
         };
 
-        self.transaction_repository()
+        let updated_tx = self
+            .transaction_repository()
             .partial_update(tx.id.clone(), update_request)
             .await
-            .map_err(|e| TransactionError::UnexpectedError(e.to_string()))
+            .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
+
+        // Send notification (best effort)
+        if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
+            error!(
+                tx_id = %updated_tx.id,
+                error = %e,
+                "failed to send notification for failed transaction"
+            );
+        }
+
+        Ok(updated_tx)
     }
 
     /// Check if valid_until has expired
@@ -694,7 +706,7 @@ where
 mod tests {
     use super::*;
     use crate::{
-        jobs::{MockJobProducerTrait, TransactionCommand},
+        jobs::{JobProducerError, MockJobProducerTrait, TransactionCommand},
         models::{NetworkTransactionData, SolanaTransactionData},
         repositories::{MockRelayerRepository, MockTransactionRepository},
         services::{
@@ -1931,7 +1943,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_mark_as_failed() -> Result<()> {
+    async fn test_mark_as_failed_without_notification() -> Result<()> {
+        // When relayer has no notification_id configured, no notification should be sent
         let provider = MockSolanaProviderTrait::new();
         let relayer_repo = Arc::new(MockRelayerRepository::new());
         let mut tx_repo = MockTransactionRepository::new();
@@ -1955,6 +1968,7 @@ mod tests {
                 Ok(failed_tx)
             });
 
+        // Relayer has no notification_id, so no notification should be produced
         let handler = SolanaRelayerTransaction::new(
             create_mock_solana_relayer("test-relayer".to_string(), false),
             relayer_repo,
@@ -1966,6 +1980,119 @@ mod tests {
 
         let result = handler.mark_as_failed(tx, reason.to_string()).await;
 
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.status, TransactionStatus::Failed);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_mark_as_failed_sends_notification() -> Result<()> {
+        // When relayer has notification_id configured, notification should be sent (best effort)
+        let provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let mut tx_repo = MockTransactionRepository::new();
+        let mut job_producer = MockJobProducerTrait::new();
+
+        // Create relayer with notification configured
+        let mut relayer = create_mock_solana_relayer("test-relayer".to_string(), false);
+        relayer.notification_id = Some("test-notification".to_string());
+
+        let tx = create_tx_with_signature(TransactionStatus::Pending, None);
+        let tx_id = tx.id.clone();
+        let reason = "Test failure";
+
+        tx_repo
+            .expect_partial_update()
+            .withf(move |tx_id_param, update_req| {
+                tx_id_param == &tx_id
+                    && update_req.status == Some(TransactionStatus::Failed)
+                    && update_req.status_reason == Some(reason.to_string())
+            })
+            .times(1)
+            .returning(move |_, _| {
+                let mut failed_tx = create_tx_with_signature(TransactionStatus::Failed, None);
+                failed_tx.status = TransactionStatus::Failed;
+                Ok(failed_tx)
+            });
+
+        // Expect notification to be produced
+        job_producer
+            .expect_produce_send_notification_job()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        let handler = SolanaRelayerTransaction::new(
+            relayer,
+            relayer_repo,
+            Arc::new(provider),
+            Arc::new(tx_repo),
+            Arc::new(job_producer),
+            Arc::new(MockSolanaSignTrait::new()),
+        )?;
+
+        let result = handler.mark_as_failed(tx, reason.to_string()).await;
+
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.status, TransactionStatus::Failed);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_mark_as_failed_notification_error_does_not_fail() -> Result<()> {
+        // Even if notification fails, mark_as_failed should still succeed (best effort)
+        let provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let mut tx_repo = MockTransactionRepository::new();
+        let mut job_producer = MockJobProducerTrait::new();
+
+        // Create relayer with notification configured
+        let mut relayer = create_mock_solana_relayer("test-relayer".to_string(), false);
+        relayer.notification_id = Some("test-notification".to_string());
+
+        let tx = create_tx_with_signature(TransactionStatus::Pending, None);
+        let tx_id = tx.id.clone();
+        let reason = "Test failure";
+
+        tx_repo
+            .expect_partial_update()
+            .withf(move |tx_id_param, update_req| {
+                tx_id_param == &tx_id
+                    && update_req.status == Some(TransactionStatus::Failed)
+                    && update_req.status_reason == Some(reason.to_string())
+            })
+            .times(1)
+            .returning(move |_, _| {
+                let mut failed_tx = create_tx_with_signature(TransactionStatus::Failed, None);
+                failed_tx.status = TransactionStatus::Failed;
+                Ok(failed_tx)
+            });
+
+        // Notification fails, but mark_as_failed should still succeed
+        job_producer
+            .expect_produce_send_notification_job()
+            .times(1)
+            .returning(|_, _| {
+                Box::pin(async {
+                    Err(JobProducerError::QueueError(
+                        "Notification service unavailable".to_string(),
+                    ))
+                })
+            });
+
+        let handler = SolanaRelayerTransaction::new(
+            relayer,
+            relayer_repo,
+            Arc::new(provider),
+            Arc::new(tx_repo),
+            Arc::new(job_producer),
+            Arc::new(MockSolanaSignTrait::new()),
+        )?;
+
+        let result = handler.mark_as_failed(tx, reason.to_string()).await;
+
+        // Should succeed despite notification failure (best effort)
         assert!(result.is_ok());
         let updated_tx = result.unwrap();
         assert_eq!(updated_tx.status, TransactionStatus::Failed);
