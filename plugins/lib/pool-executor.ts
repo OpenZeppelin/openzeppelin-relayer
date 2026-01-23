@@ -849,7 +849,6 @@ export default async function executePlugin(task: ExecutorTask): Promise<Executo
     // Extract detailed error information
     let errorCode = 'PLUGIN_ERROR';
     let errorMessage = String(error);
-    let errorStack: string | undefined;
     let errorDetails: any = undefined;
     let errorStatus = 500;
 
@@ -875,14 +874,6 @@ export default async function executePlugin(task: ExecutorTask): Promise<Executo
         errorCode = err.code;
       }
 
-      // Capture stack trace (sanitize paths)
-      if (err.stack) {
-        errorStack = err.stack
-          .split('\n')
-          .slice(0, 10)  // Limit stack trace length
-          .join('\n');
-      }
-
       // Capture any additional details
       if (err.details) {
         errorDetails = err.details;
@@ -901,10 +892,7 @@ export default async function executePlugin(task: ExecutorTask): Promise<Executo
         message: errorMessage,
         code: errorCode,
         status: errorStatus,
-        details: errorDetails ? {
-          ...errorDetails,
-          stack: errorStack,
-        } : (errorStack ? { stack: errorStack } : undefined),
+        details: errorDetails,
       },
       logs,
     };

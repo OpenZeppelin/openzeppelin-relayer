@@ -727,7 +727,6 @@ class PoolServer {
           details: {
             pluginId: message.pluginId,
             errorType: error?.name || 'Error',
-            stack: error?.stack?.split('\n').slice(0, 5).join('\n'),
           },
         },
         logs: [],
