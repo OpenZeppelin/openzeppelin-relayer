@@ -8,10 +8,12 @@
 //! When multiple instances of the relayer service start simultaneously, this module
 //! uses distributed locking to coordinate initialization and prevent duplicate work:
 //!
-//! - **Per-relayer locks**: Each relayer is locked independently to allow parallel
-//!   initialization of different relayers across instances.
-//! - **Recent sync check**: Skips initialization for relayers that were recently
-//!   synced (within the staleness threshold) to handle rolling restarts efficiently.
+//! - **Global lock**: A single lock is used for the entire initialization process,
+//!   ensuring only one instance initializes relayers at a time.
+//! - **Recent completion check**: Skips initialization if it was recently completed
+//!   (within the staleness threshold) to handle rolling restarts efficiently.
+//! - **Wait for completion**: Instances that don't acquire the lock wait for the
+//!   initializing instance to complete, then proceed without re-initializing.
 //! - **In-memory fallback**: When using in-memory storage, locking is skipped since
 //!   coordination across instances is not possible or needed.
 use crate::{
@@ -25,7 +27,7 @@ use crate::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
         Repository, TransactionCounterTrait, TransactionRepository,
     },
-    utils::{is_relayer_recently_synced, set_relayer_last_sync, DistributedLock},
+    utils::{is_global_init_recently_completed, set_global_init_completed, DistributedLock},
 };
 use color_eyre::{eyre::WrapErr, Result};
 use redis::aio::ConnectionManager;
@@ -33,29 +35,23 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-/// TTL for the per-relayer initialization lock in seconds.
+/// TTL for the global initialization lock in seconds.
 /// Set to 2 minutes (2x worst case init time) as a safety net for crashes.
-const RELAYER_INIT_LOCK_TTL_SECS: u64 = 120;
+const GLOBAL_INIT_LOCK_TTL_SECS: u64 = 120;
 
-/// Staleness threshold in seconds. Relayers synced within this time are skipped.
+/// Staleness threshold in seconds. Initialization completed within this time is skipped.
 /// Set to 5 minutes to prevent redundant initialization on rolling restarts.
-const RELAYER_SYNC_STALENESS_THRESHOLD_SECS: u64 = 300;
+const INIT_STALENESS_THRESHOLD_SECS: u64 = 300;
 
-/// Lock name prefix for relayer initialization locks.
-const RELAYER_INIT_LOCK_PREFIX: &str = "relayer_init";
+/// Lock name for global initialization lock.
+const GLOBAL_INIT_LOCK_NAME: &str = "relayer_init_global";
 
-/// Result of attempting to initialize a single relayer.
-#[derive(Debug)]
-enum RelayerInitResult {
-    /// Successfully initialized the relayer.
-    Initialized,
-    /// Skipped because another instance recently synced this relayer.
-    SkippedRecentSync,
-    /// Skipped because another instance currently holds the lock.
-    SkippedLockHeld,
-    /// Initialization failed with an error.
-    Failed(String),
-}
+/// Maximum time to wait for another instance to complete initialization.
+/// Set slightly longer than lock TTL to handle edge cases.
+const LOCK_WAIT_MAX_DURATION_SECS: u64 = 130;
+
+/// Polling interval when waiting for initialization to complete.
+const LOCK_WAIT_POLL_INTERVAL_MS: u64 = 500;
 
 /// Internal function for initializing a relayer using a provided relayer service.
 /// This allows for easier testing with mocked relayers.
@@ -117,250 +113,200 @@ where
 
     // Early return for empty list - no work to do
     if relayers.is_empty() {
-        debug!("No relayers to initialize");
+        info!("No relayers to initialize");
         return Ok(());
     }
 
-    debug!(count = relayers.len(), "Initializing relayers concurrently");
+    info!(count = relayers.len(), "Initializing relayers");
 
     // Check if using persistent storage for distributed coordination
     let connection_info = app_state.relayer_repository.connection_info();
 
-    // Initialize relayers with appropriate locking strategy
-    let results = if let Some((conn, prefix)) = connection_info {
-        // Persistent storage mode: use distributed locking
-        initialize_relayers_with_locking(&relayers, &app_state, &conn, &prefix).await
-    } else {
-        // In-memory mode: skip locking, initialize all relayers directly
-        debug!("In-memory storage detected, skipping distributed locking");
-        initialize_relayers_without_locking(&relayers, &app_state).await
-    };
+    match connection_info {
+        Some((conn, prefix)) => {
+            initialize_with_global_lock(&relayers, &app_state, &conn, &prefix).await
+        }
+        None => {
+            // In-memory mode: skip locking, initialize all relayers directly
+            info!("In-memory storage detected, initializing relayers without distributed locking");
+            initialize_all_relayers(&relayers, &app_state).await
+        }
+    }
+}
 
-    // Log summary
-    let (initialized, skipped_recent, skipped_lock, failed) = count_results(&results);
+/// Initializes relayers with a global distributed lock for coordination across instances.
+///
+/// Flow:
+/// 1. Check if initialization was recently completed (skip if yes)
+/// 2. Try to acquire global lock
+/// 3. If lock acquired: initialize all relayers and record completion time
+/// 4. If lock held: wait for completion, then check if recently completed
+async fn initialize_with_global_lock<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    relayers: &[RelayerRepoModel],
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    conn: &Arc<ConnectionManager>,
+    prefix: &str,
+) -> Result<()>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    // Step 1: Check if recently completed
+    match is_global_init_recently_completed(conn, prefix, INIT_STALENESS_THRESHOLD_SECS).await {
+        Ok(true) => {
+            info!("Initialization recently completed by another instance, skipping");
+            return Ok(());
+        }
+        Ok(false) => {}
+        Err(e) => {
+            // Log warning but proceed (graceful degradation)
+            warn!(
+                error = %e,
+                "Failed to check recent initialization status, proceeding with initialization"
+            );
+        }
+    }
+
+    // Step 2: Try to acquire global lock
+    let lock_key = format!("{prefix}:lock:{GLOBAL_INIT_LOCK_NAME}");
+    let lock = DistributedLock::new(
+        conn.clone(),
+        &lock_key,
+        Duration::from_secs(GLOBAL_INIT_LOCK_TTL_SECS),
+    );
+
+    match lock.try_acquire().await {
+        Ok(Some(guard)) => {
+            // We got the lock - initialize all relayers
+            info!(
+                count = relayers.len(),
+                "Acquired initialization lock, initializing relayers"
+            );
+
+            let result = initialize_all_relayers(relayers, app_state).await;
+
+            // Record completion time only on success
+            if result.is_ok() {
+                if let Err(e) = set_global_init_completed(conn, prefix).await {
+                    warn!(error = %e, "Failed to record initialization completion time");
+                }
+            }
+
+            drop(guard); // Release lock
+            result
+        }
+        Ok(None) => {
+            // Lock held by another instance - wait for completion
+            info!("Another instance is initializing, waiting for completion");
+            wait_for_initialization_complete(conn, prefix).await
+        }
+        Err(e) => {
+            // Lock error - graceful degradation, proceed without lock
+            warn!(
+                error = %e,
+                "Failed to acquire initialization lock, proceeding without coordination"
+            );
+            initialize_all_relayers(relayers, app_state).await
+        }
+    }
+}
+
+/// Waits for another instance to complete initialization.
+///
+/// Polls periodically until:
+/// - Initialization is completed (detected via recent completion timestamp)
+/// - Timeout is reached (proceeds anyway)
+async fn wait_for_initialization_complete(
+    conn: &Arc<ConnectionManager>,
+    prefix: &str,
+) -> Result<()> {
+    let max_wait = Duration::from_secs(LOCK_WAIT_MAX_DURATION_SECS);
+    let poll_interval = Duration::from_millis(LOCK_WAIT_POLL_INTERVAL_MS);
+    let start = std::time::Instant::now();
+
+    loop {
+        // Check if initialization was completed
+        match is_global_init_recently_completed(conn, prefix, INIT_STALENESS_THRESHOLD_SECS).await {
+            Ok(true) => {
+                info!("Initialization completed by another instance");
+                return Ok(());
+            }
+            Ok(false) => {}
+            Err(e) => {
+                warn!(error = %e, "Error checking initialization status while waiting");
+            }
+        }
+
+        // Check timeout
+        if start.elapsed() > max_wait {
+            warn!("Timed out waiting for initialization to complete, proceeding anyway");
+            return Ok(());
+        }
+
+        tokio::time::sleep(poll_interval).await;
+    }
+}
+
+/// Initializes all relayers concurrently.
+async fn initialize_all_relayers<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    relayers: &[RelayerRepoModel],
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+) -> Result<()>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    let futures = relayers.iter().map(|relayer| {
+        let app_state = app_state.clone();
+        let relayer_id = relayer.id.clone();
+
+        async move {
+            let result = initialize_relayer(relayer_id.clone(), app_state).await;
+            (relayer_id, result)
+        }
+    });
+
+    let results = futures::future::join_all(futures).await;
+
+    // Count and report results
+    let succeeded = results.iter().filter(|(_, r)| r.is_ok()).count();
+    let failed = results.iter().filter(|(_, r)| r.is_err()).count();
+
     info!(
-        initialized = initialized,
-        skipped_recent_sync = skipped_recent,
-        skipped_lock_held = skipped_lock,
+        succeeded = succeeded,
         failed = failed,
         "Relayer initialization completed"
     );
 
-    // Fail if any initialization failed
+    // Collect failures and return error if any
     if failed > 0 {
-        let failure_messages: Vec<String> = results
+        let failures: Vec<String> = results
             .into_iter()
-            .filter_map(|(id, result)| {
-                if let RelayerInitResult::Failed(msg) = result {
-                    Some(format!("{id}: {msg}"))
-                } else {
-                    None
-                }
-            })
+            .filter_map(|(id, r)| r.err().map(|e| format!("{id}: {e}")))
             .collect();
 
         return Err(eyre::eyre!(
             "Failed to initialize {} relayer(s): {}",
             failed,
-            failure_messages.join("; ")
+            failures.join("; ")
         ));
     }
 
     Ok(())
-}
-
-/// Initializes relayers with distributed locking for coordination across instances.
-///
-/// For each relayer:
-/// 1. Checks if recently synced (skip if yes)
-/// 2. Attempts to acquire a per-relayer lock
-/// 3. If lock acquired: initializes and records sync time
-/// 4. If lock held: skips (another instance is handling it)
-async fn initialize_relayers_with_locking<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
-    relayers: &[RelayerRepoModel],
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
-    conn: &Arc<ConnectionManager>,
-    prefix: &str,
-) -> Vec<(String, RelayerInitResult)>
-where
-    J: JobProducerTrait + Send + Sync + 'static,
-    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
-    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
-    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
-    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
-    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
-    TCR: TransactionCounterTrait + Send + Sync + 'static,
-    PR: PluginRepositoryTrait + Send + Sync + 'static,
-    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
-{
-    let futures = relayers.iter().map(|relayer| {
-        let app_state = app_state.clone();
-        let conn = conn.clone();
-        let prefix = prefix.to_string();
-        let relayer_id = relayer.id.clone();
-
-        async move {
-            let result =
-                initialize_single_relayer_with_lock(&relayer_id, &app_state, &conn, &prefix).await;
-            (relayer_id, result)
-        }
-    });
-
-    futures::future::join_all(futures).await
-}
-
-/// Initializes a single relayer with distributed locking.
-async fn initialize_single_relayer_with_lock<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
-    relayer_id: &str,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
-    conn: &Arc<ConnectionManager>,
-    prefix: &str,
-) -> RelayerInitResult
-where
-    J: JobProducerTrait + Send + Sync + 'static,
-    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
-    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
-    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
-    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
-    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
-    TCR: TransactionCounterTrait + Send + Sync + 'static,
-    PR: PluginRepositoryTrait + Send + Sync + 'static,
-    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
-{
-    // Step 1: Check if recently synced
-    match is_relayer_recently_synced(
-        conn,
-        prefix,
-        relayer_id,
-        RELAYER_SYNC_STALENESS_THRESHOLD_SECS,
-    )
-    .await
-    {
-        Ok(true) => {
-            debug!(relayer_id = %relayer_id, "skipping initialization - recently synced");
-            return RelayerInitResult::SkippedRecentSync;
-        }
-        Ok(false) => {}
-        Err(e) => {
-            // Log warning but proceed with initialization (graceful degradation)
-            warn!(
-                relayer_id = %relayer_id,
-                error = %e,
-                "failed to check recent sync status, proceeding with initialization"
-            );
-        }
-    }
-
-    // Step 2: Attempt to acquire per-relayer lock
-    let lock_key = format!("{prefix}:lock:{RELAYER_INIT_LOCK_PREFIX}:{relayer_id}");
-    let lock = DistributedLock::new(
-        conn.clone(),
-        &lock_key,
-        Duration::from_secs(RELAYER_INIT_LOCK_TTL_SECS),
-    );
-
-    let lock_guard = match lock.try_acquire().await {
-        Ok(Some(guard)) => {
-            debug!(relayer_id = %relayer_id, lock_key = %lock_key, "acquired initialization lock");
-            Some(guard)
-        }
-        Ok(None) => {
-            debug!(
-                relayer_id = %relayer_id,
-                lock_key = %lock_key,
-                "initialization skipped - lock held by another instance"
-            );
-            return RelayerInitResult::SkippedLockHeld;
-        }
-        Err(e) => {
-            // Log warning but proceed without lock (graceful degradation)
-            warn!(
-                relayer_id = %relayer_id,
-                error = %e,
-                lock_key = %lock_key,
-                "failed to acquire lock, proceeding with initialization anyway"
-            );
-            None
-        }
-    };
-
-    // Step 3: Initialize the relayer
-    let init_result = initialize_relayer(relayer_id.to_string(), app_state.clone()).await;
-
-    // Step 4: Record sync time on success
-    match &init_result {
-        Ok(()) => {
-            if let Err(e) = set_relayer_last_sync(conn, prefix, relayer_id).await {
-                warn!(
-                    relayer_id = %relayer_id,
-                    error = %e,
-                    "failed to record last sync time"
-                );
-            }
-        }
-        Err(e) => {
-            debug!(relayer_id = %relayer_id, error = %e, "initialization failed");
-        }
-    }
-
-    // Lock guard is automatically released when dropped
-    drop(lock_guard);
-
-    match init_result {
-        Ok(()) => RelayerInitResult::Initialized,
-        Err(e) => RelayerInitResult::Failed(e.to_string()),
-    }
-}
-
-/// Initializes relayers without distributed locking (for in-memory storage).
-async fn initialize_relayers_without_locking<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
-    relayers: &[RelayerRepoModel],
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
-) -> Vec<(String, RelayerInitResult)>
-where
-    J: JobProducerTrait + Send + Sync + 'static,
-    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
-    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
-    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
-    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
-    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
-    TCR: TransactionCounterTrait + Send + Sync + 'static,
-    PR: PluginRepositoryTrait + Send + Sync + 'static,
-    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
-{
-    let futures = relayers.iter().map(|relayer| {
-        let app_state = app_state.clone();
-        let relayer_id = relayer.id.clone();
-
-        async move {
-            let result = match initialize_relayer(relayer_id.clone(), app_state).await {
-                Ok(()) => RelayerInitResult::Initialized,
-                Err(e) => RelayerInitResult::Failed(e.to_string()),
-            };
-            (relayer_id, result)
-        }
-    });
-
-    futures::future::join_all(futures).await
-}
-
-/// Counts the results of initialization attempts.
-fn count_results(results: &[(String, RelayerInitResult)]) -> (usize, usize, usize, usize) {
-    let mut initialized = 0;
-    let mut skipped_recent = 0;
-    let mut skipped_lock = 0;
-    let mut failed = 0;
-
-    for (_, result) in results {
-        match result {
-            RelayerInitResult::Initialized => initialized += 1,
-            RelayerInitResult::SkippedRecentSync => skipped_recent += 1,
-            RelayerInitResult::SkippedLockHeld => skipped_lock += 1,
-            RelayerInitResult::Failed(_) => failed += 1,
-        }
-    }
-
-    (initialized, skipped_recent, skipped_lock, failed)
 }
 
 #[cfg(test)]
@@ -565,153 +511,17 @@ mod tests {
         );
     }
 
-    // Tests for count_results function
-    #[test]
-    fn test_count_results_empty() {
-        let results: Vec<(String, RelayerInitResult)> = vec![];
-        let (initialized, skipped_recent, skipped_lock, failed) = count_results(&results);
-
-        assert_eq!(initialized, 0);
-        assert_eq!(skipped_recent, 0);
-        assert_eq!(skipped_lock, 0);
-        assert_eq!(failed, 0);
-    }
-
-    #[test]
-    fn test_count_results_all_initialized() {
-        let results = vec![
-            ("relayer-1".to_string(), RelayerInitResult::Initialized),
-            ("relayer-2".to_string(), RelayerInitResult::Initialized),
-            ("relayer-3".to_string(), RelayerInitResult::Initialized),
-        ];
-        let (initialized, skipped_recent, skipped_lock, failed) = count_results(&results);
-
-        assert_eq!(initialized, 3);
-        assert_eq!(skipped_recent, 0);
-        assert_eq!(skipped_lock, 0);
-        assert_eq!(failed, 0);
-    }
-
-    #[test]
-    fn test_count_results_all_skipped_recent_sync() {
-        let results = vec![
-            (
-                "relayer-1".to_string(),
-                RelayerInitResult::SkippedRecentSync,
-            ),
-            (
-                "relayer-2".to_string(),
-                RelayerInitResult::SkippedRecentSync,
-            ),
-        ];
-        let (initialized, skipped_recent, skipped_lock, failed) = count_results(&results);
-
-        assert_eq!(initialized, 0);
-        assert_eq!(skipped_recent, 2);
-        assert_eq!(skipped_lock, 0);
-        assert_eq!(failed, 0);
-    }
-
-    #[test]
-    fn test_count_results_all_skipped_lock_held() {
-        let results = vec![
-            ("relayer-1".to_string(), RelayerInitResult::SkippedLockHeld),
-            ("relayer-2".to_string(), RelayerInitResult::SkippedLockHeld),
-        ];
-        let (initialized, skipped_recent, skipped_lock, failed) = count_results(&results);
-
-        assert_eq!(initialized, 0);
-        assert_eq!(skipped_recent, 0);
-        assert_eq!(skipped_lock, 2);
-        assert_eq!(failed, 0);
-    }
-
-    #[test]
-    fn test_count_results_all_failed() {
-        let results = vec![
-            (
-                "relayer-1".to_string(),
-                RelayerInitResult::Failed("error 1".to_string()),
-            ),
-            (
-                "relayer-2".to_string(),
-                RelayerInitResult::Failed("error 2".to_string()),
-            ),
-        ];
-        let (initialized, skipped_recent, skipped_lock, failed) = count_results(&results);
-
-        assert_eq!(initialized, 0);
-        assert_eq!(skipped_recent, 0);
-        assert_eq!(skipped_lock, 0);
-        assert_eq!(failed, 2);
-    }
-
-    #[test]
-    fn test_count_results_mixed() {
-        let results = vec![
-            ("relayer-1".to_string(), RelayerInitResult::Initialized),
-            (
-                "relayer-2".to_string(),
-                RelayerInitResult::SkippedRecentSync,
-            ),
-            ("relayer-3".to_string(), RelayerInitResult::SkippedLockHeld),
-            (
-                "relayer-4".to_string(),
-                RelayerInitResult::Failed("connection error".to_string()),
-            ),
-            ("relayer-5".to_string(), RelayerInitResult::Initialized),
-            (
-                "relayer-6".to_string(),
-                RelayerInitResult::SkippedRecentSync,
-            ),
-        ];
-        let (initialized, skipped_recent, skipped_lock, failed) = count_results(&results);
-
-        assert_eq!(initialized, 2);
-        assert_eq!(skipped_recent, 2);
-        assert_eq!(skipped_lock, 1);
-        assert_eq!(failed, 1);
-    }
-
-    // Tests for RelayerInitResult enum
-    #[test]
-    fn test_relayer_init_result_debug() {
-        // Test Debug trait implementation for all variants
-        let initialized = RelayerInitResult::Initialized;
-        let skipped_recent = RelayerInitResult::SkippedRecentSync;
-        let skipped_lock = RelayerInitResult::SkippedLockHeld;
-        let failed = RelayerInitResult::Failed("test error".to_string());
-
-        assert_eq!(format!("{:?}", initialized), "Initialized");
-        assert_eq!(format!("{:?}", skipped_recent), "SkippedRecentSync");
-        assert_eq!(format!("{:?}", skipped_lock), "SkippedLockHeld");
-        assert!(format!("{:?}", failed).contains("Failed"));
-        assert!(format!("{:?}", failed).contains("test error"));
-    }
-
-    #[test]
-    fn test_relayer_init_result_failed_preserves_message() {
-        let error_msg = "RPC connection timeout after 30 seconds".to_string();
-        let result = RelayerInitResult::Failed(error_msg.clone());
-
-        if let RelayerInitResult::Failed(msg) = result {
-            assert_eq!(msg, error_msg);
-        } else {
-            panic!("Expected Failed variant");
-        }
-    }
-
     // Tests for constants
     #[test]
     fn test_lock_ttl_is_reasonable() {
         // Lock TTL should be at least 60 seconds to handle slow initializations
         assert!(
-            RELAYER_INIT_LOCK_TTL_SECS >= 60,
+            GLOBAL_INIT_LOCK_TTL_SECS >= 60,
             "Lock TTL should be at least 60 seconds"
         );
         // But not too long (more than 10 minutes would be excessive)
         assert!(
-            RELAYER_INIT_LOCK_TTL_SECS <= 600,
+            GLOBAL_INIT_LOCK_TTL_SECS <= 600,
             "Lock TTL should not exceed 10 minutes"
         );
     }
@@ -720,21 +530,37 @@ mod tests {
     fn test_staleness_threshold_is_reasonable() {
         // Staleness threshold should be at least 60 seconds
         assert!(
-            RELAYER_SYNC_STALENESS_THRESHOLD_SECS >= 60,
+            INIT_STALENESS_THRESHOLD_SECS >= 60,
             "Staleness threshold should be at least 60 seconds"
         );
         // But not too long (more than 1 hour would be excessive)
         assert!(
-            RELAYER_SYNC_STALENESS_THRESHOLD_SECS <= 3600,
+            INIT_STALENESS_THRESHOLD_SECS <= 3600,
             "Staleness threshold should not exceed 1 hour"
         );
     }
 
     #[test]
-    fn test_lock_prefix_is_valid() {
-        assert!(!RELAYER_INIT_LOCK_PREFIX.is_empty());
-        assert!(!RELAYER_INIT_LOCK_PREFIX.contains(':'));
-        assert!(!RELAYER_INIT_LOCK_PREFIX.contains(' '));
+    fn test_wait_max_duration_exceeds_lock_ttl() {
+        // Wait duration should be longer than lock TTL to handle edge cases
+        assert!(
+            LOCK_WAIT_MAX_DURATION_SECS > GLOBAL_INIT_LOCK_TTL_SECS,
+            "Wait duration should exceed lock TTL"
+        );
+    }
+
+    #[test]
+    fn test_poll_interval_is_reasonable() {
+        // Poll interval should be at least 100ms to avoid excessive polling
+        assert!(
+            LOCK_WAIT_POLL_INTERVAL_MS >= 100,
+            "Poll interval should be at least 100ms"
+        );
+        // But not too long (more than 5 seconds would be slow)
+        assert!(
+            LOCK_WAIT_POLL_INTERVAL_MS <= 5000,
+            "Poll interval should not exceed 5 seconds"
+        );
     }
 
     // Tests for get_relayer_ids_to_initialize edge cases
@@ -852,15 +678,12 @@ mod tests {
     }
 
     // ============================================================================
-    // Integration tests for initialize_relayers_without_locking,
-    // initialize_relayers_with_locking, initialize_single_relayer_with_lock,
-    // and initialize_relayers
+    // Integration tests for initialize_all_relayers, initialize_with_global_lock,
+    // wait_for_initialization_complete, and initialize_relayers
     // ============================================================================
 
     use crate::utils::mocks::mockutils::create_mock_app_state;
     use actix_web::web::ThinData;
-    use std::sync::Arc;
-    use std::time::Duration;
 
     /// Helper to create a Redis connection for integration tests.
     async fn create_test_redis_connection() -> Option<Arc<redis::aio::ConnectionManager>> {
@@ -869,66 +692,38 @@ mod tests {
         Some(Arc::new(conn))
     }
 
-    // --- Tests for initialize_relayers_without_locking ---
+    // --- Tests for initialize_all_relayers ---
 
     #[tokio::test]
-    async fn test_initialize_relayers_without_locking_empty_list() {
+    async fn test_initialize_all_relayers_empty_list() {
         let app_state = create_mock_app_state(None, None, None, None, None, None).await;
         let thin_state = ThinData(app_state);
 
         let relayers: Vec<RelayerRepoModel> = vec![];
-        let results = initialize_relayers_without_locking(&relayers, &thin_state).await;
+        let result = initialize_all_relayers(&relayers, &thin_state).await;
 
         assert!(
-            results.is_empty(),
-            "Should return empty results for no relayers"
+            result.is_ok(),
+            "Should succeed with empty relayer list: {:?}",
+            result
         );
     }
 
     #[tokio::test]
-    async fn test_initialize_relayers_without_locking_returns_correct_count() {
-        let relayers = vec![
-            create_mock_relayer("relayer-1".to_string(), false),
-            create_mock_relayer("relayer-2".to_string(), false),
-            create_mock_relayer("relayer-3".to_string(), false),
-        ];
-
-        let app_state =
-            create_mock_app_state(None, Some(relayers.clone()), None, None, None, None).await;
-        let thin_state = ThinData(app_state);
-
-        let results = initialize_relayers_without_locking(&relayers, &thin_state).await;
-
-        assert_eq!(
-            results.len(),
-            3,
-            "Should process all relayers and return 3 results"
-        );
-
-        let result_ids: Vec<&str> = results.iter().map(|(id, _)| id.as_str()).collect();
-        assert!(result_ids.contains(&"relayer-1"));
-        assert!(result_ids.contains(&"relayer-2"));
-        assert!(result_ids.contains(&"relayer-3"));
-    }
-
-    #[tokio::test]
-    async fn test_initialize_relayers_without_locking_handles_failures() {
+    async fn test_initialize_all_relayers_handles_failures() {
         let relayers = vec![create_mock_relayer("failing-relayer".to_string(), false)];
 
         let app_state =
             create_mock_app_state(None, Some(relayers.clone()), None, None, None, None).await;
         let thin_state = ThinData(app_state);
 
-        let results = initialize_relayers_without_locking(&relayers, &thin_state).await;
+        let result = initialize_all_relayers(&relayers, &thin_state).await;
 
-        assert_eq!(results.len(), 1);
-        let (relayer_id, result) = &results[0];
-        assert_eq!(relayer_id, "failing-relayer");
-        assert!(matches!(result, RelayerInitResult::Failed(_)));
+        assert!(result.is_err(), "Should fail due to missing signer");
     }
 
     #[tokio::test]
-    async fn test_initialize_relayers_without_locking_concurrent_execution() {
+    async fn test_initialize_all_relayers_concurrent_execution() {
         let relayers: Vec<RelayerRepoModel> = (0..5)
             .map(|i| create_mock_relayer(format!("concurrent-relayer-{}", i), false))
             .collect();
@@ -937,111 +732,48 @@ mod tests {
             create_mock_app_state(None, Some(relayers.clone()), None, None, None, None).await;
         let thin_state = ThinData(app_state);
 
-        let results = initialize_relayers_without_locking(&relayers, &thin_state).await;
+        // This will fail because signers aren't configured, but it tests concurrent execution
+        let result = initialize_all_relayers(&relayers, &thin_state).await;
 
-        assert_eq!(results.len(), 5);
-
-        let mut ids: Vec<String> = results.iter().map(|(id, _)| id.clone()).collect();
-        ids.sort();
-        let expected: Vec<String> = (0..5)
-            .map(|i| format!("concurrent-relayer-{}", i))
-            .collect();
-        assert_eq!(ids, expected);
-    }
-
-    // --- Tests for initialize_relayers_with_locking (requires Redis) ---
-
-    #[tokio::test]
-    #[ignore] // Requires running Redis instance
-    async fn test_initialize_relayers_with_locking_empty_list() {
-        let conn = create_test_redis_connection()
-            .await
-            .expect("Redis connection required");
-
-        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
-        let thin_state = ThinData(app_state);
-
-        let relayers: Vec<RelayerRepoModel> = vec![];
-        let prefix = "test_init_empty";
-
-        let results = initialize_relayers_with_locking(&relayers, &thin_state, &conn, prefix).await;
-
+        assert!(result.is_err(), "Should fail due to missing signers");
+        // The error message should mention the failed relayers
+        let err_str = result.unwrap_err().to_string();
         assert!(
-            results.is_empty(),
-            "Should return empty results for no relayers"
+            err_str.contains("Failed to initialize"),
+            "Error should mention initialization failure"
         );
     }
 
-    #[tokio::test]
-    #[ignore] // Requires running Redis instance
-    async fn test_initialize_relayers_with_locking_acquires_locks() {
-        let conn = create_test_redis_connection()
-            .await
-            .expect("Redis connection required");
-
-        let relayers = vec![
-            create_mock_relayer("lock-test-relayer-1".to_string(), false),
-            create_mock_relayer("lock-test-relayer-2".to_string(), false),
-        ];
-
-        let app_state =
-            create_mock_app_state(None, Some(relayers.clone()), None, None, None, None).await;
-        let thin_state = ThinData(app_state);
-
-        let prefix = "test_init_locks";
-
-        let results = initialize_relayers_with_locking(&relayers, &thin_state, &conn, prefix).await;
-
-        assert_eq!(results.len(), 2);
-
-        for (id, result) in &results {
-            assert!(
-                matches!(
-                    result,
-                    RelayerInitResult::Failed(_) | RelayerInitResult::Initialized
-                ),
-                "Relayer {} should have attempted initialization, got {:?}",
-                id,
-                result
-            );
-        }
-
-        // Cleanup
-        let mut conn_clone = (*conn).clone();
-        let hash_key = format!("{}:relayer_sync_meta", prefix);
-        let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &hash_key).await;
-    }
+    // --- Tests for initialize_with_global_lock (requires Redis) ---
 
     #[tokio::test]
     #[ignore] // Requires running Redis instance
-    async fn test_initialize_relayers_with_locking_skips_recently_synced() {
+    async fn test_initialize_with_global_lock_skips_when_recently_completed() {
         let conn = create_test_redis_connection()
             .await
             .expect("Redis connection required");
 
         let relayers = vec![create_mock_relayer(
-            "recently-synced-relayer".to_string(),
+            "global-lock-relayer".to_string(),
             false,
         )];
-
         let app_state =
             create_mock_app_state(None, Some(relayers.clone()), None, None, None, None).await;
         let thin_state = ThinData(app_state);
 
-        let prefix = "test_init_recent_sync";
+        let prefix = "test_global_skip_recent";
 
-        set_relayer_last_sync(&conn, prefix, "recently-synced-relayer")
+        // Set completion time to simulate recent initialization
+        set_global_init_completed(&conn, prefix)
             .await
-            .expect("Should set sync time");
+            .expect("Should set completion time");
 
-        let results = initialize_relayers_with_locking(&relayers, &thin_state, &conn, prefix).await;
+        let result = initialize_with_global_lock(&relayers, &thin_state, &conn, prefix).await;
 
-        assert_eq!(results.len(), 1);
-        let (id, result) = &results[0];
-        assert_eq!(id, "recently-synced-relayer");
+        // Should succeed because it skips (recently completed)
         assert!(
-            matches!(result, RelayerInitResult::SkippedRecentSync),
-            "Should skip recently synced relayer, got {:?}",
+            result.is_ok(),
+            "Should skip initialization when recently completed: {:?}",
             result
         );
 
@@ -1053,288 +785,99 @@ mod tests {
 
     #[tokio::test]
     #[ignore] // Requires running Redis instance
-    async fn test_initialize_relayers_with_locking_mixed_results() {
-        let conn = create_test_redis_connection()
-            .await
-            .expect("Redis connection required");
-
-        let relayers = vec![
-            create_mock_relayer("mixed-recent-relayer".to_string(), false),
-            create_mock_relayer("mixed-init-relayer".to_string(), false),
-        ];
-
-        let app_state =
-            create_mock_app_state(None, Some(relayers.clone()), None, None, None, None).await;
-        let thin_state = ThinData(app_state);
-
-        let prefix = "test_init_mixed";
-
-        set_relayer_last_sync(&conn, prefix, "mixed-recent-relayer")
-            .await
-            .expect("Should set sync time");
-
-        let results = initialize_relayers_with_locking(&relayers, &thin_state, &conn, prefix).await;
-
-        assert_eq!(results.len(), 2);
-
-        let recent_result = results
-            .iter()
-            .find(|(id, _)| id == "mixed-recent-relayer")
-            .map(|(_, r)| r);
-        let init_result = results
-            .iter()
-            .find(|(id, _)| id == "mixed-init-relayer")
-            .map(|(_, r)| r);
-
-        assert!(
-            matches!(recent_result, Some(RelayerInitResult::SkippedRecentSync)),
-            "First relayer should be skipped as recently synced"
-        );
-        assert!(
-            matches!(
-                init_result,
-                Some(RelayerInitResult::Failed(_)) | Some(RelayerInitResult::Initialized)
-            ),
-            "Second relayer should attempt initialization"
-        );
-
-        // Cleanup
-        let mut conn_clone = (*conn).clone();
-        let hash_key = format!("{}:relayer_sync_meta", prefix);
-        let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &hash_key).await;
-    }
-
-    // --- Tests for initialize_single_relayer_with_lock (requires Redis) ---
-
-    #[tokio::test]
-    #[ignore] // Requires running Redis instance
-    async fn test_single_relayer_skips_when_recently_synced() {
+    async fn test_initialize_with_global_lock_acquires_lock() {
         let conn = create_test_redis_connection()
             .await
             .expect("Redis connection required");
 
         let relayers = vec![create_mock_relayer(
-            "single-recent-relayer".to_string(),
+            "lock-acquire-relayer".to_string(),
             false,
         )];
         let app_state =
             create_mock_app_state(None, Some(relayers.clone()), None, None, None, None).await;
         let thin_state = ThinData(app_state);
 
-        let prefix = "test_single_recent";
+        let prefix = "test_global_acquire_lock";
 
-        set_relayer_last_sync(&conn, prefix, "single-recent-relayer")
-            .await
-            .expect("Should set sync time");
-
-        let result = initialize_single_relayer_with_lock(
-            "single-recent-relayer",
-            &thin_state,
-            &conn,
-            prefix,
-        )
-        .await;
-
-        assert!(
-            matches!(result, RelayerInitResult::SkippedRecentSync),
-            "Should skip recently synced relayer, got {:?}",
-            result
-        );
-
-        // Cleanup
+        // Clear any existing state
         let mut conn_clone = (*conn).clone();
         let hash_key = format!("{}:relayer_sync_meta", prefix);
+        let lock_key = format!("{}:lock:{}", prefix, GLOBAL_INIT_LOCK_NAME);
         let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &hash_key).await;
-    }
-
-    #[tokio::test]
-    #[ignore] // Requires running Redis instance
-    async fn test_single_relayer_skips_when_lock_held() {
-        let conn = create_test_redis_connection()
-            .await
-            .expect("Redis connection required");
-
-        let relayers = vec![create_mock_relayer(
-            "locked-relayer-skip-test".to_string(),
-            false,
-        )];
-        let app_state =
-            create_mock_app_state(None, Some(relayers.clone()), None, None, None, None).await;
-        let thin_state = ThinData(app_state);
-
-        let prefix = "test_skip_lock_held_unique";
-
-        // Pre-cleanup
-        let lock_key = format!(
-            "{}:lock:{}:{}",
-            prefix, RELAYER_INIT_LOCK_PREFIX, "locked-relayer-skip-test"
-        );
-        let mut conn_clone = (*conn).clone();
         let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &lock_key).await;
 
-        // Acquire lock (simulating another instance)
-        let lock = DistributedLock::new(conn.clone(), &lock_key, Duration::from_secs(60));
+        let result = initialize_with_global_lock(&relayers, &thin_state, &conn, prefix).await;
+
+        // Will fail because signer isn't configured, but lock should have been acquired
+        assert!(
+            result.is_err(),
+            "Should fail due to missing signer configuration"
+        );
+
+        // Verify completion time was NOT set (because initialization failed)
+        let is_recent = is_global_init_recently_completed(&conn, prefix, 300)
+            .await
+            .expect("Should check completion");
+        assert!(!is_recent, "Should NOT record completion time on failure");
+
+        // Cleanup
+        let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &hash_key).await;
+        let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &lock_key).await;
+    }
+
+    #[tokio::test]
+    #[ignore] // Requires running Redis instance
+    async fn test_initialize_with_global_lock_waits_when_lock_held() {
+        let conn = create_test_redis_connection()
+            .await
+            .expect("Redis connection required");
+
+        let relayers = vec![create_mock_relayer("wait-relayer".to_string(), false)];
+        let app_state =
+            create_mock_app_state(None, Some(relayers.clone()), None, None, None, None).await;
+        let thin_state = ThinData(app_state);
+
+        let prefix = "test_global_wait_lock";
+
+        // Clear any existing state
+        let mut conn_clone = (*conn).clone();
+        let hash_key = format!("{}:relayer_sync_meta", prefix);
+        let lock_key = format!("{}:lock:{}", prefix, GLOBAL_INIT_LOCK_NAME);
+        let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &hash_key).await;
+        let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &lock_key).await;
+
+        // Acquire lock to simulate another instance initializing
+        let lock = DistributedLock::new(conn.clone(), &lock_key, Duration::from_secs(5));
         let guard = lock
             .try_acquire()
             .await
             .expect("Should acquire lock")
-            .expect("Lock should be available after cleanup");
+            .expect("Lock should be available");
 
-        let result = initialize_single_relayer_with_lock(
-            "locked-relayer-skip-test",
-            &thin_state,
-            &conn,
-            prefix,
-        )
-        .await;
+        // Spawn task to release lock and set completion after a short delay
+        let conn_for_task = conn.clone();
+        let prefix_for_task = prefix.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            set_global_init_completed(&conn_for_task, &prefix_for_task)
+                .await
+                .expect("Should set completion");
+            guard.release().await.expect("Should release lock");
+        });
+
+        // This should wait and then succeed (because completion will be set)
+        let result = initialize_with_global_lock(&relayers, &thin_state, &conn, prefix).await;
 
         assert!(
-            matches!(result, RelayerInitResult::SkippedLockHeld),
-            "Should skip when lock is held, got {:?}",
+            result.is_ok(),
+            "Should succeed after waiting for completion: {:?}",
             result
         );
 
-        guard.release().await.expect("Should release lock");
-    }
-
-    #[tokio::test]
-    #[ignore] // Requires running Redis instance
-    async fn test_single_relayer_acquires_lock_and_initializes() {
-        let conn = create_test_redis_connection()
-            .await
-            .expect("Redis connection required");
-
-        let relayers = vec![create_mock_relayer(
-            "single-init-relayer".to_string(),
-            false,
-        )];
-        let app_state =
-            create_mock_app_state(None, Some(relayers.clone()), None, None, None, None).await;
-        let thin_state = ThinData(app_state);
-
-        let prefix = "test_single_init";
-
-        // Pre-cleanup
-        let lock_key = format!(
-            "{}:lock:{}:{}",
-            prefix, RELAYER_INIT_LOCK_PREFIX, "single-init-relayer"
-        );
-        let mut conn_clone = (*conn).clone();
+        // Cleanup
+        let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &hash_key).await;
         let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &lock_key).await;
-
-        let result =
-            initialize_single_relayer_with_lock("single-init-relayer", &thin_state, &conn, prefix)
-                .await;
-
-        assert!(
-            matches!(
-                result,
-                RelayerInitResult::Failed(_) | RelayerInitResult::Initialized
-            ),
-            "Should attempt initialization, got {:?}",
-            result
-        );
-
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
-        // Verify lock was released
-        let lock = DistributedLock::new(conn.clone(), &lock_key, Duration::from_secs(60));
-        let guard = lock.try_acquire().await.expect("Should not error");
-        assert!(
-            guard.is_some(),
-            "Lock should be available after initialization"
-        );
-
-        // Cleanup
-        if let Some(g) = guard {
-            g.release().await.expect("Cleanup release");
-        }
-        let hash_key = format!("{}:relayer_sync_meta", prefix);
-        let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &hash_key).await;
-    }
-
-    #[tokio::test]
-    #[ignore] // Requires running Redis instance
-    async fn test_single_relayer_does_not_set_sync_time_on_failure() {
-        let conn = create_test_redis_connection()
-            .await
-            .expect("Redis connection required");
-
-        let relayers = vec![create_mock_relayer(
-            "no-sync-on-fail-relayer".to_string(),
-            false,
-        )];
-        let app_state =
-            create_mock_app_state(None, Some(relayers.clone()), None, None, None, None).await;
-        let thin_state = ThinData(app_state);
-
-        let prefix = "test_no_sync_on_fail";
-
-        // Clear any existing sync time
-        let mut conn_clone = (*conn).clone();
-        let hash_key = format!("{}:relayer_sync_meta", prefix);
-        let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &hash_key).await;
-
-        let result = initialize_single_relayer_with_lock(
-            "no-sync-on-fail-relayer",
-            &thin_state,
-            &conn,
-            prefix,
-        )
-        .await;
-
-        assert!(
-            matches!(result, RelayerInitResult::Failed(_)),
-            "Should fail without signer, got {:?}",
-            result
-        );
-
-        let is_recent = is_relayer_recently_synced(&conn, prefix, "no-sync-on-fail-relayer", 300)
-            .await
-            .expect("Should check sync time");
-        assert!(
-            !is_recent,
-            "Should NOT set sync time after failed initialization"
-        );
-
-        // Cleanup
-        let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &hash_key).await;
-    }
-
-    #[tokio::test]
-    #[ignore] // Requires running Redis instance
-    async fn test_single_relayer_graceful_degradation_on_sync_check_error() {
-        let conn = create_test_redis_connection()
-            .await
-            .expect("Redis connection required");
-
-        let relayers = vec![create_mock_relayer(
-            "degradation-relayer".to_string(),
-            false,
-        )];
-        let app_state =
-            create_mock_app_state(None, Some(relayers.clone()), None, None, None, None).await;
-        let thin_state = ThinData(app_state);
-
-        let prefix = "test_degradation";
-
-        let result =
-            initialize_single_relayer_with_lock("degradation-relayer", &thin_state, &conn, prefix)
-                .await;
-
-        assert!(
-            matches!(
-                result,
-                RelayerInitResult::Failed(_) | RelayerInitResult::Initialized
-            ),
-            "Should attempt initialization even if checks have issues, got {:?}",
-            result
-        );
-
-        // Cleanup
-        let mut conn_clone = (*conn).clone();
-        let hash_key = format!("{}:relayer_sync_meta", prefix);
-        let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &hash_key).await;
     }
 
     // --- Tests for initialize_relayers main function ---

@@ -271,6 +271,9 @@ fn generate_lock_value() -> String {
 /// The Redis hash key suffix for storing relayer sync metadata.
 const RELAYER_SYNC_META_KEY: &str = "relayer_sync_meta";
 
+/// The hash field for global initialization completion timestamp.
+const GLOBAL_INIT_FIELD: &str = "global:init_completed";
+
 /// Sets the last sync timestamp for a relayer to the current time.
 ///
 /// This should be called after a relayer has been successfully initialized
@@ -379,6 +382,93 @@ pub async fn is_relayer_recently_synced(
                     elapsed_secs = %elapsed.num_seconds(),
                     threshold_secs = %threshold_secs,
                     "relayer was recently synced"
+                );
+            }
+
+            Ok(is_recent)
+        }
+        None => Ok(false),
+    }
+}
+
+// ============================================================================
+// Global Initialization Tracking Functions
+// ============================================================================
+//
+// These functions track when the global relayer initialization was last completed.
+// This allows multiple instances to skip redundant initialization when
+// initialization was recently completed by another instance.
+
+/// Sets the global initialization completion timestamp to the current time.
+///
+/// This should be called after all relayers have been successfully initialized
+/// to record when the initialization occurred.
+///
+/// # Arguments
+/// * `conn` - Redis connection manager
+/// * `prefix` - Key prefix for multi-tenant support
+///
+/// # Redis Key Format
+/// Hash key: `{prefix}:relayer_sync_meta`
+/// Hash field: `global:init_completed`
+/// Value: Unix timestamp in seconds
+pub async fn set_global_init_completed(conn: &Arc<ConnectionManager>, prefix: &str) -> Result<()> {
+    use chrono::Utc;
+    use redis::AsyncCommands;
+
+    let mut conn = (**conn).clone();
+    let hash_key = format!("{prefix}:{RELAYER_SYNC_META_KEY}");
+    let timestamp = Utc::now().timestamp();
+
+    conn.hset::<_, _, _, ()>(&hash_key, GLOBAL_INIT_FIELD, timestamp)
+        .await
+        .map_err(|e| eyre::eyre!("Failed to set global init completed: {}", e))?;
+
+    debug!(timestamp = %timestamp, "recorded global initialization completion time");
+    Ok(())
+}
+
+/// Checks if global initialization was recently completed within the given threshold.
+///
+/// This is used to skip initialization when another instance recently completed
+/// initialization (e.g., during rolling restarts).
+///
+/// # Arguments
+/// * `conn` - Redis connection manager
+/// * `prefix` - Key prefix for multi-tenant support
+/// * `threshold_secs` - Number of seconds to consider as "recent"
+///
+/// # Returns
+/// * `Ok(true)` - If initialization was completed within the threshold
+/// * `Ok(false)` - If initialization was not completed or is stale
+/// * `Err(_)` - Redis communication error
+pub async fn is_global_init_recently_completed(
+    conn: &Arc<ConnectionManager>,
+    prefix: &str,
+    threshold_secs: u64,
+) -> Result<bool> {
+    use chrono::Utc;
+    use redis::AsyncCommands;
+
+    let mut conn = (**conn).clone();
+    let hash_key = format!("{prefix}:{RELAYER_SYNC_META_KEY}");
+
+    let timestamp: Option<i64> = conn
+        .hget(&hash_key, GLOBAL_INIT_FIELD)
+        .await
+        .map_err(|e| eyre::eyre!("Failed to get global init time: {}", e))?;
+
+    match timestamp {
+        Some(ts) => {
+            let now = Utc::now().timestamp();
+            let elapsed = now - ts;
+            let is_recent = elapsed < threshold_secs as i64;
+
+            if is_recent {
+                debug!(
+                    elapsed_secs = %elapsed,
+                    threshold_secs = %threshold_secs,
+                    "global initialization recently completed"
                 );
             }
 
@@ -1072,6 +1162,196 @@ mod tests {
                 .expect("Should check sync");
 
             assert!(!is_recent, "Should not be recent with zero threshold");
+
+            // Cleanup
+            let mut conn_clone = (*conn).clone();
+            let hash_key = format!("{prefix}:relayer_sync_meta");
+            let _: () = redis::AsyncCommands::del(&mut conn_clone, &hash_key)
+                .await
+                .expect("Cleanup failed");
+        }
+
+        // =====================================================================
+        // Global Initialization Tracking Tests
+        // =====================================================================
+
+        #[tokio::test]
+        #[ignore] // Requires running Redis instance
+        async fn test_set_and_check_global_init_completed() {
+            let conn = create_test_redis_connection()
+                .await
+                .expect("Redis connection required for this test");
+
+            let prefix = "test_global_init";
+
+            // Set global init completed
+            set_global_init_completed(&conn, prefix)
+                .await
+                .expect("Should set global init completed");
+
+            // Check if recently completed (within 5 minutes)
+            let is_recent = is_global_init_recently_completed(&conn, prefix, 300)
+                .await
+                .expect("Should check global init");
+
+            assert!(is_recent, "Should be recently completed");
+
+            // Cleanup
+            let mut conn_clone = (*conn).clone();
+            let hash_key = format!("{prefix}:relayer_sync_meta");
+            let _: () = redis::AsyncCommands::del(&mut conn_clone, &hash_key)
+                .await
+                .expect("Cleanup failed");
+        }
+
+        #[tokio::test]
+        #[ignore] // Requires running Redis instance
+        async fn test_is_global_init_recently_completed_returns_false_when_not_set() {
+            let conn = create_test_redis_connection()
+                .await
+                .expect("Redis connection required for this test");
+
+            let prefix = "test_global_init_not_set";
+
+            // Check without setting - should return false
+            let is_recent = is_global_init_recently_completed(&conn, prefix, 300)
+                .await
+                .expect("Should check global init");
+
+            assert!(!is_recent, "Should not be recently completed when not set");
+        }
+
+        #[tokio::test]
+        #[ignore] // Requires running Redis instance
+        async fn test_is_global_init_recently_completed_returns_false_when_stale() {
+            let conn = create_test_redis_connection()
+                .await
+                .expect("Redis connection required for this test");
+
+            let prefix = "test_global_init_stale";
+
+            // Manually set an old timestamp (10 minutes ago)
+            let mut conn_clone = (*conn).clone();
+            let hash_key = format!("{prefix}:relayer_sync_meta");
+            let old_timestamp = chrono::Utc::now().timestamp() - 600; // 10 minutes ago
+
+            redis::AsyncCommands::hset::<_, _, _, ()>(
+                &mut conn_clone,
+                &hash_key,
+                "global:init_completed",
+                old_timestamp,
+            )
+            .await
+            .expect("Should set old timestamp");
+
+            // Check with 5 minute threshold - should be stale
+            let is_recent = is_global_init_recently_completed(&conn, prefix, 300)
+                .await
+                .expect("Should check global init");
+
+            assert!(!is_recent, "Should not be recent when stale");
+
+            // Cleanup
+            let _: () = redis::AsyncCommands::del(&mut conn_clone, &hash_key)
+                .await
+                .expect("Cleanup failed");
+        }
+
+        #[tokio::test]
+        #[ignore] // Requires running Redis instance
+        async fn test_global_init_different_prefixes() {
+            let conn = create_test_redis_connection()
+                .await
+                .expect("Redis connection required for this test");
+
+            // Set global init for prefix1 only
+            set_global_init_completed(&conn, "global_prefix1")
+                .await
+                .expect("Should set global init");
+
+            let is_recent_prefix1 = is_global_init_recently_completed(&conn, "global_prefix1", 300)
+                .await
+                .expect("Should check global init");
+            let is_recent_prefix2 = is_global_init_recently_completed(&conn, "global_prefix2", 300)
+                .await
+                .expect("Should check global init");
+
+            assert!(is_recent_prefix1, "Should be recent for prefix1");
+            assert!(!is_recent_prefix2, "Should not be recent for prefix2");
+
+            // Cleanup
+            let mut conn_clone = (*conn).clone();
+            let hash_key = "global_prefix1:relayer_sync_meta";
+            let _: () = redis::AsyncCommands::del(&mut conn_clone, hash_key)
+                .await
+                .expect("Cleanup failed");
+        }
+
+        #[tokio::test]
+        #[ignore] // Requires running Redis instance
+        async fn test_global_init_update_existing() {
+            let conn = create_test_redis_connection()
+                .await
+                .expect("Redis connection required for this test");
+
+            let prefix = "test_global_init_update";
+
+            // Set initial timestamp
+            set_global_init_completed(&conn, prefix)
+                .await
+                .expect("Should set global init");
+
+            // Wait a bit
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
+            // Update timestamp
+            set_global_init_completed(&conn, prefix)
+                .await
+                .expect("Should update global init");
+
+            // Should still be recent
+            let is_recent = is_global_init_recently_completed(&conn, prefix, 300)
+                .await
+                .expect("Should check global init");
+
+            assert!(is_recent, "Should be recent after update");
+
+            // Cleanup
+            let mut conn_clone = (*conn).clone();
+            let hash_key = format!("{prefix}:relayer_sync_meta");
+            let _: () = redis::AsyncCommands::del(&mut conn_clone, &hash_key)
+                .await
+                .expect("Cleanup failed");
+        }
+
+        #[tokio::test]
+        #[ignore] // Requires running Redis instance
+        async fn test_global_init_coexists_with_relayer_sync() {
+            let conn = create_test_redis_connection()
+                .await
+                .expect("Redis connection required for this test");
+
+            let prefix = "test_coexist";
+            let relayer_id = "test-relayer";
+
+            // Set both global init and relayer sync
+            set_global_init_completed(&conn, prefix)
+                .await
+                .expect("Should set global init");
+            set_relayer_last_sync(&conn, prefix, relayer_id)
+                .await
+                .expect("Should set relayer sync");
+
+            // Both should be checkable
+            let global_recent = is_global_init_recently_completed(&conn, prefix, 300)
+                .await
+                .expect("Should check global init");
+            let relayer_recent = is_relayer_recently_synced(&conn, prefix, relayer_id, 300)
+                .await
+                .expect("Should check relayer sync");
+
+            assert!(global_recent, "Global init should be recent");
+            assert!(relayer_recent, "Relayer sync should be recent");
 
             // Cleanup
             let mut conn_clone = (*conn).clone();

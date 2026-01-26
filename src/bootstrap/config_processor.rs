@@ -1,6 +1,20 @@
 //! This module provides functionality for processing configuration files and populating
 //! repositories.
+//!
+//! ## Distributed Locking for Config Processing
+//!
+//! When multiple instances of the relayer service start simultaneously with Redis storage,
+//! this module uses distributed locking to coordinate config processing and prevent race
+//! conditions:
+//!
+//! - **Global lock**: A single lock is used for the entire config processing,
+//!   ensuring only one instance processes the config at a time.
+//! - **Post-lock population check**: After acquiring the lock, checks if Redis is already
+//!   populated (by another instance that held the lock first), and skips if so.
+//! - **In-memory fallback**: When using in-memory storage, locking is skipped since
+//!   coordination across instances is not possible or needed.
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::{
     config::{Config, RepositoryStorageType, ServerConfig},
@@ -15,10 +29,19 @@ use crate::{
         Repository, TransactionCounterTrait, TransactionRepository,
     },
     services::signer::{Signer as SignerService, SignerFactory},
+    utils::DistributedLock,
 };
 use color_eyre::{eyre::WrapErr, Report, Result};
 use futures::future::try_join_all;
-use tracing::info;
+use redis::aio::ConnectionManager;
+use tracing::{info, warn};
+
+/// TTL for the config processing lock in seconds.
+/// Set to 2 minutes as a safety net for crashes during config processing.
+const CONFIG_PROCESSING_LOCK_TTL_SECS: u64 = 120;
+
+/// Lock name for config processing lock.
+const CONFIG_PROCESSING_LOCK_NAME: &str = "config_processing";
 
 async fn process_api_key<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     server_config: &ServerConfig,
@@ -332,6 +355,10 @@ where
 /// 2. Process notifications
 /// 3. Process networks
 /// 4. Process relayers
+///
+/// When using Redis storage, this function uses distributed locking to prevent race
+/// conditions when multiple instances start simultaneously (especially with
+/// `RESET_STORAGE_ON_START=true`).
 pub async fn process_config_file<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     config_file: Config,
     server_config: Arc<ServerConfig>,
@@ -348,18 +375,193 @@ where
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
-    let should_process_config_file = match server_config.repository_storage_type {
-        RepositoryStorageType::InMemory => true,
-        RepositoryStorageType::Redis => {
-            server_config.reset_storage_on_start || !is_redis_populated(app_state).await?
+    match server_config.repository_storage_type {
+        RepositoryStorageType::InMemory => {
+            // In-memory mode: no locking needed, process directly
+            do_process_config_file(&config_file, &server_config, app_state).await
         }
-    };
+        RepositoryStorageType::Redis => {
+            // Redis mode: use distributed locking to coordinate across instances
+            let connection_info = app_state.relayer_repository.connection_info();
+            match connection_info {
+                Some((conn, prefix)) => {
+                    process_config_with_lock(
+                        &config_file,
+                        &server_config,
+                        app_state,
+                        &conn,
+                        &prefix,
+                    )
+                    .await
+                }
+                None => {
+                    // Fallback: Redis configured but no connection info available (e.g., in tests)
+                    // Use the same logic as before: only process if reset flag or not populated
+                    let should_process = server_config.reset_storage_on_start
+                        || !is_redis_populated(app_state).await?;
 
-    if !should_process_config_file {
-        info!("Skipping config file processing");
-        return Ok(());
+                    if should_process {
+                        do_process_config_file(&config_file, &server_config, app_state).await
+                    } else {
+                        info!("Skipping config file processing - Redis already populated");
+                        Ok(())
+                    }
+                }
+            }
+        }
     }
+}
 
+/// Process config file with distributed locking for Redis storage.
+///
+/// Flow:
+/// 1. Try to acquire global lock for config processing
+/// 2. If lock acquired: check if Redis is populated, process if not
+/// 3. If lock held: wait for it to be released, then check if populated
+async fn process_config_with_lock<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    config_file: &Config,
+    server_config: &ServerConfig,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    conn: &Arc<ConnectionManager>,
+    prefix: &str,
+) -> Result<()>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    let lock_key = format!("{prefix}:lock:{CONFIG_PROCESSING_LOCK_NAME}");
+    let lock = DistributedLock::new(
+        conn.clone(),
+        &lock_key,
+        Duration::from_secs(CONFIG_PROCESSING_LOCK_TTL_SECS),
+    );
+
+    match lock.try_acquire().await {
+        Ok(Some(guard)) => {
+            // We got the lock - check if we need to process
+            info!("Acquired config processing lock");
+
+            let result =
+                process_config_after_lock_acquired(config_file, server_config, app_state).await;
+
+            drop(guard); // Release lock
+            result
+        }
+        Ok(None) => {
+            // Lock held by another instance - wait for it to complete
+            info!("Another instance is processing config, waiting for completion");
+            wait_for_config_processing_complete(app_state).await
+        }
+        Err(e) => {
+            // Lock error - graceful degradation, proceed without lock
+            warn!(
+                error = %e,
+                "Failed to acquire config processing lock, proceeding without coordination"
+            );
+            do_process_config_file(config_file, server_config, app_state).await
+        }
+    }
+}
+
+/// Process config after successfully acquiring the lock.
+///
+/// Checks if Redis is already populated (by a previous run or another instance)
+/// and only processes if needed.
+async fn process_config_after_lock_acquired<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    config_file: &Config,
+    server_config: &ServerConfig,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+) -> Result<()>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    // Check population status AFTER acquiring lock
+    let is_populated = is_redis_populated(app_state).await?;
+
+    if server_config.reset_storage_on_start {
+        // With reset flag: always reset and process (we have the lock)
+        do_process_config_file(config_file, server_config, app_state).await
+    } else if is_populated {
+        // No reset flag and already populated: skip
+        info!("Redis already populated, skipping config file processing");
+        Ok(())
+    } else {
+        // No reset flag and not populated: process
+        do_process_config_file(config_file, server_config, app_state).await
+    }
+}
+
+/// Waits for another instance to complete config processing.
+///
+/// Polls periodically until Redis is populated or timeout is reached.
+async fn wait_for_config_processing_complete<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+) -> Result<()>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    const MAX_WAIT_SECS: u64 = 130; // Slightly longer than lock TTL
+    const POLL_INTERVAL_MS: u64 = 500;
+
+    let max_wait = Duration::from_secs(MAX_WAIT_SECS);
+    let poll_interval = Duration::from_millis(POLL_INTERVAL_MS);
+    let start = std::time::Instant::now();
+
+    loop {
+        if is_redis_populated(app_state).await? {
+            info!("Config processing completed by another instance");
+            return Ok(());
+        }
+
+        if start.elapsed() > max_wait {
+            warn!("Timed out waiting for config processing to complete");
+            return Ok(());
+        }
+
+        tokio::time::sleep(poll_interval).await;
+    }
+}
+
+/// Internal function that performs the actual config processing.
+async fn do_process_config_file<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    config_file: &Config,
+    server_config: &ServerConfig,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+) -> Result<()>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
     if server_config.reset_storage_on_start {
         info!("Resetting storage on start due to server config flag RESET_STORAGE_ON_START = true");
         app_state.relayer_repository.drop_all_entries().await?;
@@ -371,15 +573,14 @@ where
         app_state.api_key_repository.drop_all_entries().await?;
     }
 
-    if should_process_config_file {
-        info!("Processing config file");
-        process_plugins(&config_file, app_state).await?;
-        process_signers(&config_file, app_state).await?;
-        process_notifications(&config_file, app_state).await?;
-        process_networks(&config_file, app_state).await?;
-        process_relayers(&config_file, app_state).await?;
-        process_api_key(&server_config, app_state).await?;
-    }
+    info!("Processing config file");
+    process_plugins(config_file, app_state).await?;
+    process_signers(config_file, app_state).await?;
+    process_notifications(config_file, app_state).await?;
+    process_networks(config_file, app_state).await?;
+    process_relayers(config_file, app_state).await?;
+    process_api_key(server_config, app_state).await?;
+
     Ok(())
 }
 
