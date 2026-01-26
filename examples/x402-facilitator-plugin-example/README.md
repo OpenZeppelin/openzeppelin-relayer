@@ -242,8 +242,9 @@ app.use(
 4. **Amount & Recipient Validation**: Validates transfer amount and recipient match requirements
 5. **Auth Entry Validation**: Verifies auth entries are present and signed by the payer
 6. **Envelope Signature Check**: Ensures transaction envelope has no signatures (for relayer rebuild)
-7. **Simulation**: Simulates transaction to ensure it will succeed
-8. **Security Checks**: Validates transaction source is not the relayer
+7. **Expiration**: Validate auth entry expiration is within allowed window
+8. **Simulation**: Simulates transaction to ensure it will succeed
+9. **Security Checks**: Validates transaction source is not the relayer
 
 ### Settlement Flow
 

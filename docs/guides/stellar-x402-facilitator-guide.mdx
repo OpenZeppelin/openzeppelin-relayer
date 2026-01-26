@@ -57,7 +57,7 @@ mkdir -p plugins/x402-facilitator
 Create `plugins/x402-facilitator/index.ts`:
 
 ```typescript
-export { handler } from '@openzeppelin/relayer-plugin-x402-facilitator';
+export { handler } from "@openzeppelin/relayer-plugin-x402-facilitator";
 ```
 
 ## Configuration
@@ -177,7 +177,9 @@ For high-throughput settlement, you can configure the plugin to use the Channels
             "network": "stellar-testnet",
             "type": "stellar",
             "relayer_id": "stellar-example",
-            "assets": ["CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA"],
+            "assets": [
+              "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA"
+            ],
             "channel_service_api_url": "http://localhost:8080/api/v1/plugins/channels-plugin/call",
             "channel_service_api_key": "YOUR_CHANNELS_API_KEY"
           }
@@ -207,13 +209,14 @@ POST /api/v1/plugins/{plugin-id}/call/{route}
 ```
 
 Where `{route}` is one of:
+
 - `verify` - Payment verification
 - `settle` - Payment settlement
 - `supported` - Supported payment kinds
 
 ## Integration with x402 Ecosystem
 
-The plugin implements the API defined by the x402 v1 spec, making it compatible with any packages in the x402 ecosystem. For more information on available packages, see [https://github.com/coinbase/x402](https://github.com/coinbase/x402).
+The plugin implements the API defined by the x402 v2 spec, making it compatible with any packages in the x402 ecosystem. For more information on available packages, see [https://github.com/coinbase/x402](https://github.com/coinbase/x402).
 
 ### x402-express Example
 
@@ -222,7 +225,8 @@ To use OpenZeppelin Relayer and its x402-facilitator plugin with x402-express (a
 ```typescript
 import { paymentMiddleware } from "x402-express";
 
-const facilitatorUrl = "https://your-relayer-host/api/v1/plugins/x402-facilitator/call";
+const facilitatorUrl =
+  "https://your-relayer-host/api/v1/plugins/x402-facilitator/call";
 const network = "stellar-testnet";
 const payTo = "G..."; // Payment receiver G address
 
@@ -234,7 +238,7 @@ app.use(
         // USDC amount in dollars
         price: "$0.001",
         network,
-      }
+      },
     },
     {
       url: facilitatorUrl,
