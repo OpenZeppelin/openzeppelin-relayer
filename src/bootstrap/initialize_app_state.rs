@@ -123,10 +123,8 @@ pub async fn initialize_app_state(
     // Initialize Redis connections only when using Redis storage
     // When REDIS_READER_URL is set, read operations use the reader endpoint
     let redis_connections = match server_config.repository_storage_type {
-        crate::config::RepositoryStorageType::Redis => {
-            Some(initialize_redis_connections(&server_config).await?)
-        }
-        crate::config::RepositoryStorageType::InMemory => None,
+        RepositoryStorageType::Redis => Some(initialize_redis_connections(&server_config).await?),
+        RepositoryStorageType::InMemory => None,
     };
 
     let repositories = initialize_repositories(&server_config, redis_connections).await?;
