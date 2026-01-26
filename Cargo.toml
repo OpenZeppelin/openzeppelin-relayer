@@ -66,6 +66,8 @@ hmac = { version = "0.12" }
 sha2 = { version = "0.10" }
 sha3 = { version = "0.10" }
 dashmap = { version = "6.1" }
+crossbeam = { version = "0.8.4" }
+async-channel = "2.5"
 actix-governor = "0.8"
 solana-sdk = { version = "3" }
 solana-client = { version = "3" }

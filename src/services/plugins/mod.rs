@@ -20,6 +20,18 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+pub mod config;
+pub use config::*;
+
+pub mod health;
+pub use health::*;
+
+pub mod protocol;
+pub use protocol::*;
+
+pub mod connection;
+pub use connection::*;
+
 pub mod runner;
 pub use runner::*;
 
@@ -29,8 +41,11 @@ pub use relayer_api::*;
 pub mod script_executor;
 pub use script_executor::*;
 
-pub mod socket;
-pub use socket::*;
+pub mod pool_executor;
+pub use pool_executor::*;
+
+pub mod shared_socket;
+pub use shared_socket::*;
 
 #[cfg(test)]
 use mockall::automock;
@@ -216,7 +231,7 @@ impl<R: PluginRunnerTrait> PluginService<R> {
         Self { runner }
     }
 
-    fn resolve_plugin_path(plugin_path: &str) -> String {
+    pub fn resolve_plugin_path(plugin_path: &str) -> String {
         if plugin_path.starts_with("plugins/") {
             plugin_path.to_string()
         } else {
@@ -277,6 +292,7 @@ impl<R: PluginRunnerTrait> PluginService<R> {
                 config_json,
                 method,
                 query_json,
+                plugin.emit_traces,
                 state,
             )
             .await;
@@ -461,7 +477,7 @@ mod tests {
 
         plugin_runner
             .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
-            .returning(|_, _, _, _, _, _, _, _, _, _, _, _| {
+            .returning(|_, _, _, _, _, _, _, _, _, _, _, _, _| {
                 Ok(ScriptResult {
                     logs: vec![LogEntry {
                         level: LogLevel::Log,
@@ -767,7 +783,7 @@ mod tests {
 
         plugin_runner
             .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
-            .returning(move |_, _, _, _, _, _, _, _, _, _, _, _| {
+            .returning(move |_, _, _, _, _, _, _, _, _, _, _, _, _| {
                 Err(PluginError::HandlerError(Box::new(PluginHandlerPayload {
                     status: 400,
                     message: "Plugin handler error".to_string(),
@@ -829,7 +845,7 @@ mod tests {
 
         plugin_runner
             .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
-            .returning(|_, _, _, _, _, _, _, _, _, _, _, _| {
+            .returning(|_, _, _, _, _, _, _, _, _, _, _, _, _| {
                 Err(PluginError::PluginExecutionError("Fatal error".to_string()))
             });
 
@@ -876,7 +892,7 @@ mod tests {
 
         plugin_runner
             .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
-            .returning(|_, _, _, _, _, _, _, _, _, _, _, _| {
+            .returning(|_, _, _, _, _, _, _, _, _, _, _, _, _| {
                 Ok(ScriptResult {
                     logs: vec![LogEntry {
                         level: LogLevel::Log,
@@ -973,7 +989,7 @@ mod tests {
 
         plugin_runner
             .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
-            .returning(|_, _, _, _, _, _, _, _, _, _, _, _| {
+            .returning(|_, _, _, _, _, _, _, _, _, _, _, _, _| {
                 Ok(ScriptResult {
                     logs: vec![
                         LogEntry {
@@ -1059,7 +1075,7 @@ mod tests {
         let mut plugin_runner = MockPluginRunnerTrait::default();
         plugin_runner
             .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
-            .returning(|_, _, _, _, _, _, _, _, _, _, _, _| {
+            .returning(|_, _, _, _, _, _, _, _, _, _, _, _, _| {
                 Ok(ScriptResult {
                     logs: vec![LogEntry {
                         level: LogLevel::Warn,
@@ -1087,9 +1103,12 @@ mod tests {
             .await;
 
         let captured = logs_buffer.lock().unwrap().join("\n");
+        // When forward_logs is disabled, plugin log messages should not appear in tracing output
+        // (internal framework logs like "Calling plugin" may still appear)
         assert!(
-            captured.is_empty(),
-            "logs should not be forwarded when disabled"
+            !captured.contains("should-not-emit"),
+            "plugin logs should not be forwarded when disabled, but found: {}",
+            captured
         );
     }
 
@@ -1117,7 +1136,7 @@ mod tests {
         let mut plugin_runner = MockPluginRunnerTrait::default();
         plugin_runner
             .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
-            .returning(|_, _, _, _, _, _, _, _, _, _, _, _| {
+            .returning(|_, _, _, _, _, _, _, _, _, _, _, _, _| {
                 Err(PluginError::HandlerError(Box::new(PluginHandlerPayload {
                     status: 400,
                     message: "handler failed".to_string(),
@@ -1172,7 +1191,7 @@ mod tests {
 
         plugin_runner
             .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
-            .returning(|_, _, _, _, _, _, _, _, _, _, _, _| {
+            .returning(|_, _, _, _, _, _, _, _, _, _, _, _, _| {
                 Ok(ScriptResult {
                     logs: vec![],
                     error: "".to_string(),
@@ -1233,7 +1252,7 @@ mod tests {
 
         plugin_runner
             .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
-            .returning(move |_, _, _, _, _, _, headers_json, _, _, _, _, _| {
+            .returning(move |_, _, _, _, _, _, headers_json, _, _, _, _, _, _| {
                 // Capture the headers_json parameter
                 *captured_headers_clone.lock().unwrap() = headers_json;
                 Ok(ScriptResult {
@@ -1316,7 +1335,7 @@ mod tests {
 
         plugin_runner
             .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
-            .returning(move |_, _, _, _, _, _, headers_json, _, _, _, _, _| {
+            .returning(move |_, _, _, _, _, _, headers_json, _, _, _, _, _, _| {
                 *captured_headers_clone.lock().unwrap() = headers_json;
                 Ok(ScriptResult {
                     logs: vec![],

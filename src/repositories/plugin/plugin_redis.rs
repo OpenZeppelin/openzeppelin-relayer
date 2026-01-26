@@ -12,6 +12,8 @@ use tracing::{debug, error, warn};
 
 const PLUGIN_PREFIX: &str = "plugin";
 const PLUGIN_LIST_KEY: &str = "plugin_list";
+const COMPILED_CODE_PREFIX: &str = "compiled_code";
+const SOURCE_HASH_PREFIX: &str = "source_hash";
 
 #[derive(Clone)]
 pub struct RedisPluginRepository {
@@ -46,6 +48,16 @@ impl RedisPluginRepository {
     /// Generate key for plugin list: plugin_list (paginated list of plugin IDs)
     fn plugin_list_key(&self) -> String {
         format!("{}:{}", self.key_prefix, PLUGIN_LIST_KEY)
+    }
+
+    /// Generate key for compiled code: compiled_code:{plugin_id}
+    fn compiled_code_key(&self, plugin_id: &str) -> String {
+        format!("{}:{}:{}", self.key_prefix, COMPILED_CODE_PREFIX, plugin_id)
+    }
+
+    /// Generate key for source hash: source_hash:{plugin_id}
+    fn source_hash_key(&self, plugin_id: &str) -> String {
+        format!("{}:{}:{}", self.key_prefix, SOURCE_HASH_PREFIX, plugin_id)
     }
 
     /// Get plugin by ID using an existing connection.
@@ -210,6 +222,45 @@ impl PluginRepositoryTrait for RedisPluginRepository {
         Ok(())
     }
 
+    async fn update(&self, plugin: PluginModel) -> Result<PluginModel, RepositoryError> {
+        if plugin.id.is_empty() {
+            return Err(RepositoryError::InvalidData(
+                "Plugin ID cannot be empty".to_string(),
+            ));
+        }
+
+        let mut conn = self
+            .get_connection(self.connections.primary(), "update")
+            .await?;
+        let key = self.plugin_key(&plugin.id);
+
+        debug!(plugin_id = %plugin.id, "updating plugin");
+
+        // Check if plugin exists
+        let exists: bool = conn
+            .exists(&key)
+            .await
+            .map_err(|e| self.map_redis_error(e, &format!("check_plugin_exists_{}", plugin.id)))?;
+
+        if !exists {
+            return Err(RepositoryError::NotFound(format!(
+                "Plugin with ID {} not found",
+                plugin.id
+            )));
+        }
+
+        // Serialize plugin
+        let json = self.serialize_entity(&plugin, |p| &p.id, "plugin")?;
+
+        // Update the plugin data
+        conn.set::<_, _, ()>(&key, &json)
+            .await
+            .map_err(|e| self.map_redis_error(e, &format!("update_plugin_{}", plugin.id)))?;
+
+        debug!(plugin_id = %plugin.id, "successfully updated plugin");
+        Ok(plugin)
+    }
+
     async fn list_paginated(
         &self,
         query: PaginationQuery,
@@ -339,6 +390,130 @@ impl PluginRepositoryTrait for RedisPluginRepository {
 
         debug!(count = %plugin_ids.len(), "dropped plugin entries");
         Ok(())
+    }
+
+    // Compiled code cache methods
+
+    async fn get_compiled_code(&self, plugin_id: &str) -> Result<Option<String>, RepositoryError> {
+        let mut conn = self
+            .get_connection(self.connections.reader(), "get_compiled_code")
+            .await?;
+        let key = self.compiled_code_key(plugin_id);
+
+        debug!(plugin_id = %plugin_id, "fetching compiled code from Redis");
+
+        let code: Option<String> = conn
+            .get(&key)
+            .await
+            .map_err(|e| self.map_redis_error(e, &format!("get_compiled_code_{plugin_id}")))?;
+
+        Ok(code)
+    }
+
+    async fn store_compiled_code(
+        &self,
+        plugin_id: &str,
+        compiled_code: &str,
+        source_hash: Option<&str>,
+    ) -> Result<(), RepositoryError> {
+        let mut conn = self
+            .get_connection(self.connections.primary(), "store_compiled_code")
+            .await?;
+        let code_key = self.compiled_code_key(plugin_id);
+
+        debug!(plugin_id = %plugin_id, "storing compiled code in Redis");
+
+        // Use pipeline to store both code and hash atomically
+        let mut pipe = redis::pipe();
+        pipe.atomic();
+        pipe.set(&code_key, compiled_code);
+
+        if let Some(hash) = source_hash {
+            let hash_key = self.source_hash_key(plugin_id);
+            pipe.set(&hash_key, hash);
+        }
+
+        pipe.exec_async(&mut conn)
+            .await
+            .map_err(|e| self.map_redis_error(e, &format!("store_compiled_code_{plugin_id}")))?;
+
+        Ok(())
+    }
+
+    async fn invalidate_compiled_code(&self, plugin_id: &str) -> Result<(), RepositoryError> {
+        let mut conn = self
+            .get_connection(self.connections.primary(), "invalidate_compiled_code")
+            .await?;
+        let code_key = self.compiled_code_key(plugin_id);
+        let hash_key = self.source_hash_key(plugin_id);
+
+        debug!(plugin_id = %plugin_id, "invalidating compiled code in Redis");
+
+        // Use pipeline to delete both keys atomically
+        let mut pipe = redis::pipe();
+        pipe.atomic();
+        pipe.del(&code_key);
+        pipe.del(&hash_key);
+
+        pipe.exec_async(&mut conn).await.map_err(|e| {
+            self.map_redis_error(e, &format!("invalidate_compiled_code_{plugin_id}"))
+        })?;
+
+        Ok(())
+    }
+
+    async fn invalidate_all_compiled_code(&self) -> Result<(), RepositoryError> {
+        let mut conn = self
+            .get_connection(self.connections.primary(), "invalidate_all_compiled_code")
+            .await?;
+        let plugin_list_key = self.plugin_list_key();
+
+        debug!("invalidating all compiled code in Redis");
+
+        // Get all plugin IDs from the list
+        let plugin_ids: Vec<String> = conn
+            .smembers(&plugin_list_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "get_plugin_list_for_invalidate"))?;
+
+        // Delete all compiled code and hash keys
+        for plugin_id in &plugin_ids {
+            let code_key = self.compiled_code_key(plugin_id);
+            let hash_key = self.source_hash_key(plugin_id);
+
+            let _ = conn.del::<_, ()>(&code_key).await;
+            let _ = conn.del::<_, ()>(&hash_key).await;
+        }
+
+        Ok(())
+    }
+
+    async fn has_compiled_code(&self, plugin_id: &str) -> Result<bool, RepositoryError> {
+        let mut conn = self
+            .get_connection(self.connections.reader(), "has_compiled_code")
+            .await?;
+        let key = self.compiled_code_key(plugin_id);
+
+        let exists: bool = conn
+            .exists(&key)
+            .await
+            .map_err(|e| self.map_redis_error(e, &format!("exists_compiled_code_{plugin_id}")))?;
+
+        Ok(exists)
+    }
+
+    async fn get_source_hash(&self, plugin_id: &str) -> Result<Option<String>, RepositoryError> {
+        let mut conn = self
+            .get_connection(self.connections.reader(), "get_source_hash")
+            .await?;
+        let key = self.source_hash_key(plugin_id);
+
+        let hash: Option<String> = conn
+            .get(&key)
+            .await
+            .map_err(|e| self.map_redis_error(e, &format!("get_source_hash_{plugin_id}")))?;
+
+        Ok(hash)
     }
 }
 
