@@ -3,9 +3,8 @@
 use crate::models::{NotificationRepoModel, PaginationQuery, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{BatchRetrievalResult, PaginatedResult, Repository};
-use crate::utils::EncryptionContext;
+use crate::utils::{EncryptionContext, RedisConnections};
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
@@ -16,7 +15,7 @@ const NOTIFICATION_LIST_KEY: &str = "notification_list";
 
 #[derive(Clone)]
 pub struct RedisNotificationRepository {
-    pub client: Arc<ConnectionManager>,
+    pub connections: Arc<RedisConnections>,
     pub key_prefix: String,
 }
 
@@ -24,7 +23,7 @@ impl RedisRepository for RedisNotificationRepository {}
 
 impl RedisNotificationRepository {
     pub fn new(
-        connection_manager: Arc<ConnectionManager>,
+        connections: Arc<RedisConnections>,
         key_prefix: String,
     ) -> Result<Self, RepositoryError> {
         if key_prefix.is_empty() {
@@ -34,7 +33,7 @@ impl RedisNotificationRepository {
         }
 
         Ok(Self {
-            client: connection_manager,
+            connections,
             key_prefix,
         })
     }
@@ -65,7 +64,9 @@ impl RedisNotificationRepository {
             });
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.reader(), "get_by_ids")
+            .await?;
         let keys: Vec<String> = ids.iter().map(|id| self.notification_key(id)).collect();
 
         debug!(count = %keys.len(), "batch fetching notification data");
@@ -120,7 +121,7 @@ impl RedisNotificationRepository {
 impl fmt::Debug for RedisNotificationRepository {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RedisNotificationRepository")
-            .field("client", &"<ConnectionManager>")
+            .field("pool", &"<Pool>")
             .field("key_prefix", &self.key_prefix)
             .finish()
     }
@@ -146,7 +147,9 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
 
         let key = self.notification_key(&entity.id);
         let notification_list_key = self.notification_list_key();
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.primary(), "create")
+            .await?;
 
         debug!("creating notification");
 
@@ -189,7 +192,9 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
             ));
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.reader(), "get_by_id")
+            .await?;
         let key = self.notification_key(&id);
 
         debug!("fetching notification");
@@ -218,17 +223,23 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
     }
 
     async fn list_all(&self) -> Result<Vec<NotificationRepoModel>, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
-        let notification_list_key = self.notification_list_key();
+        let notification_ids = {
+            let mut conn = self
+                .get_connection(self.connections.reader(), "list_all")
+                .await?;
+            let notification_list_key = self.notification_list_key();
 
-        debug!("fetching all notification IDs");
+            debug!("fetching all notification IDs");
 
-        let notification_ids: Vec<String> = conn
-            .smembers(&notification_list_key)
-            .await
-            .map_err(|e| self.map_redis_error(e, "list_all_notification_ids"))?;
+            let ids: Vec<String> = conn
+                .smembers(&notification_list_key)
+                .await
+                .map_err(|e| self.map_redis_error(e, "list_all_notification_ids"))?;
 
-        debug!(count = %notification_ids.len(), "found notification IDs");
+            debug!(count = %ids.len(), "found notification IDs");
+            ids
+            // Connection dropped here before nested call to avoid connection doubling
+        };
 
         let notifications = self.get_notifications_by_ids(&notification_ids).await?;
         Ok(notifications.results)
@@ -244,32 +255,38 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
             ));
         }
 
-        let mut conn = self.client.as_ref().clone();
-        let notification_list_key = self.notification_list_key();
+        let (total, page_ids) = {
+            let mut conn = self
+                .get_connection(self.connections.reader(), "list_paginated")
+                .await?;
+            let notification_list_key = self.notification_list_key();
 
-        debug!(page = %query.page, per_page = %query.per_page, "fetching paginated notifications");
+            debug!(page = %query.page, per_page = %query.per_page, "fetching paginated notifications");
 
-        let all_notification_ids: Vec<String> = conn
-            .smembers(&notification_list_key)
-            .await
-            .map_err(|e| self.map_redis_error(e, "list_paginated_notification_ids"))?;
+            let all_notification_ids: Vec<String> = conn
+                .smembers(&notification_list_key)
+                .await
+                .map_err(|e| self.map_redis_error(e, "list_paginated_notification_ids"))?;
 
-        let total = all_notification_ids.len() as u64;
-        let start = ((query.page - 1) * query.per_page) as usize;
-        let end = (start + query.per_page as usize).min(all_notification_ids.len());
+            let total = all_notification_ids.len() as u64;
+            let start = ((query.page - 1) * query.per_page) as usize;
+            let end = (start + query.per_page as usize).min(all_notification_ids.len());
 
-        if start >= all_notification_ids.len() {
-            debug!(page = %query.page, total = %total, "page is beyond available data");
-            return Ok(PaginatedResult {
-                items: vec![],
-                total,
-                page: query.page,
-                per_page: query.per_page,
-            });
-        }
+            if start >= all_notification_ids.len() {
+                debug!(page = %query.page, total = %total, "page is beyond available data");
+                return Ok(PaginatedResult {
+                    items: vec![],
+                    total,
+                    page: query.page,
+                    per_page: query.per_page,
+                });
+            }
 
-        let page_ids = &all_notification_ids[start..end];
-        let items = self.get_notifications_by_ids(page_ids).await?;
+            (total, all_notification_ids[start..end].to_vec())
+            // Connection dropped here before nested call to avoid connection doubling
+        };
+
+        let items = self.get_notifications_by_ids(&page_ids).await?;
 
         debug!(count = %items.results.len(), page = %query.page, "successfully fetched notifications for page");
 
@@ -299,7 +316,9 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
         }
 
         let key = self.notification_key(&id);
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.primary(), "update")
+            .await?;
 
         debug!("updating notification");
 
@@ -339,7 +358,9 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
 
         let key = self.notification_key(&id);
         let notification_list_key = self.notification_list_key();
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.primary(), "delete_by_id")
+            .await?;
 
         debug!("deleting notification");
 
@@ -370,7 +391,9 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.reader(), "count")
+            .await?;
         let notification_list_key = self.notification_list_key();
 
         debug!("counting notifications");
@@ -385,7 +408,9 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
     }
 
     async fn has_entries(&self) -> Result<bool, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.reader(), "has_entries")
+            .await?;
         let notification_list_key = self.notification_list_key();
 
         debug!("checking if notification entries exist");
@@ -400,7 +425,9 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
     }
 
     async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.primary(), "drop_all_entries")
+            .await?;
         let notification_list_key = self.notification_list_key();
 
         debug!("dropping all notification entries");
@@ -442,7 +469,6 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
 mod tests {
     use super::*;
     use crate::models::NotificationType;
-    use redis::Client;
     use tokio;
     use uuid::Uuid;
 
@@ -470,12 +496,21 @@ mod tests {
         let redis_url = std::env::var("REDIS_TEST_URL")
             .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
 
-        let client = Client::open(redis_url).expect("Failed to create Redis client");
-        let connection_manager = ConnectionManager::new(client)
-            .await
-            .expect("Failed to create connection manager");
+        let cfg = deadpool_redis::Config::from_url(&redis_url);
+        let pool = Arc::new(
+            cfg.builder()
+                .expect("Failed to create pool builder")
+                .max_size(16)
+                .runtime(deadpool_redis::Runtime::Tokio1)
+                .build()
+                .expect("Failed to build Redis pool"),
+        );
+        let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
-        RedisNotificationRepository::new(Arc::new(connection_manager), "test_prefix".to_string())
+        let random_id = uuid::Uuid::new_v4().to_string();
+        let key_prefix = format!("test_prefix:{}", random_id);
+
+        RedisNotificationRepository::new(connections, key_prefix)
             .expect("Failed to create RedisNotificationRepository")
     }
 
@@ -483,7 +518,7 @@ mod tests {
     #[ignore = "Requires active Redis instance"]
     async fn test_new_repository_creation() {
         let repo = setup_test_repo().await;
-        assert_eq!(repo.key_prefix, "test_prefix");
+        assert!(repo.key_prefix.contains("test_prefix"));
     }
 
     #[tokio::test]
@@ -491,12 +526,18 @@ mod tests {
     async fn test_new_repository_empty_prefix_fails() {
         let redis_url = std::env::var("REDIS_TEST_URL")
             .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-        let client = Client::open(redis_url).expect("Failed to create Redis client");
-        let connection_manager = ConnectionManager::new(client)
-            .await
-            .expect("Failed to create connection manager");
+        let cfg = deadpool_redis::Config::from_url(&redis_url);
+        let pool = Arc::new(
+            cfg.builder()
+                .expect("Failed to create pool builder")
+                .max_size(16)
+                .runtime(deadpool_redis::Runtime::Tokio1)
+                .build()
+                .expect("Failed to build Redis pool"),
+        );
+        let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
-        let result = RedisNotificationRepository::new(Arc::new(connection_manager), "".to_string());
+        let result = RedisNotificationRepository::new(connections, "".to_string());
         assert!(matches!(result, Err(RepositoryError::InvalidData(_))));
     }
 
@@ -505,14 +546,11 @@ mod tests {
     async fn test_key_generation() {
         let repo = setup_test_repo().await;
 
-        assert_eq!(
-            repo.notification_key("test-id"),
-            "test_prefix:notification:test-id"
-        );
-        assert_eq!(
-            repo.notification_list_key(),
-            "test_prefix:notification_list"
-        );
+        let notification_key = repo.notification_key("test-id");
+        assert!(notification_key.contains(":notification:test-id"));
+
+        let list_key = repo.notification_list_key();
+        assert!(list_key.contains(":notification_list"));
     }
 
     #[tokio::test]

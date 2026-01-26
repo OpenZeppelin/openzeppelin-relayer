@@ -31,9 +31,9 @@ use crate::{
         DisabledReason, PaginationQuery, RelayerNetworkPolicy, RelayerRepoModel, RepositoryError,
     },
     repositories::{PaginatedResult, Repository},
+    utils::RedisConnections,
 };
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
 use std::sync::Arc;
 
 #[async_trait]
@@ -112,11 +112,11 @@ impl RelayerRepositoryStorage {
     }
 
     pub fn new_redis(
-        connection_manager: Arc<ConnectionManager>,
+        connections: Arc<RedisConnections>,
         key_prefix: String,
     ) -> Result<Self, RepositoryError> {
         Ok(Self::Redis(RedisRelayerRepository::new(
-            connection_manager,
+            connections,
             key_prefix,
         )?))
     }

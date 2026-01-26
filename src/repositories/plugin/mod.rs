@@ -29,8 +29,8 @@ pub mod plugin_redis;
 pub use plugin_in_memory::*;
 pub use plugin_redis::*;
 
+use crate::utils::RedisConnections;
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
 use std::{sync::Arc, time::Duration};
 
 #[cfg(test)]
@@ -93,10 +93,10 @@ impl PluginRepositoryStorage {
     }
 
     pub fn new_redis(
-        connection_manager: Arc<ConnectionManager>,
+        connections: Arc<RedisConnections>,
         key_prefix: String,
     ) -> Result<Self, RepositoryError> {
-        let redis_repo = RedisPluginRepository::new(connection_manager, key_prefix)?;
+        let redis_repo = RedisPluginRepository::new(connections, key_prefix)?;
         Ok(Self::Redis(redis_repo))
     }
 }

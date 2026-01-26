@@ -362,11 +362,15 @@ pub type DefaultStellarTransaction = StellarRelayerTransaction<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::repositories::transaction::RedisTransactionRepository;
+    use crate::utils::RedisConnections;
     use crate::{
         models::{NetworkTransactionData, RepositoryError},
         services::provider::ProviderError,
     };
+    use deadpool_redis::{Config, Runtime};
     use std::sync::Arc;
+    use uuid::Uuid;
 
     use crate::domain::transaction::stellar::test_helpers::*;
 
@@ -825,22 +829,24 @@ mod tests {
     #[tokio::test]
     #[ignore = "Requires active Redis instance"]
     async fn test_find_oldest_pending_for_relayer_with_redis() {
-        use crate::repositories::transaction::RedisTransactionRepository;
-        use redis::Client;
-        use uuid::Uuid;
-
         // Setup Redis repository
         let redis_url = std::env::var("REDIS_TEST_URL")
             .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-        let client = Client::open(redis_url).expect("Failed to create Redis client");
-        let connection_manager = redis::aio::ConnectionManager::new(client)
-            .await
-            .expect("Failed to create connection manager");
+        let pool = Arc::new(
+            Config::from_url(&redis_url)
+                .builder()
+                .expect("Failed to create Redis pool builder")
+                .max_size(16)
+                .runtime(Runtime::Tokio1)
+                .build()
+                .expect("Failed to build Redis pool"),
+        );
+        let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
         let random_id = Uuid::new_v4().to_string();
         let key_prefix = format!("test_stellar:{}", random_id);
         let tx_repo = Arc::new(
-            RedisTransactionRepository::new(Arc::new(connection_manager), key_prefix)
+            RedisTransactionRepository::new(connections, key_prefix)
                 .expect("Failed to create RedisTransactionRepository"),
         );
 
