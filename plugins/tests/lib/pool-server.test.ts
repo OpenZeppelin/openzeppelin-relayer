@@ -99,7 +99,7 @@ describe('PoolServer message handling', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    
+
     // Reset WorkerPoolManager mock
     (WorkerPoolManager as jest.Mock).mockImplementation(() => ({
       initialize: jest.fn().mockResolvedValue(undefined),
@@ -287,7 +287,7 @@ describe('PoolServer message handling', () => {
   describe('shutdown message', () => {
     it('should initiate graceful shutdown', () => {
       const pool = new WorkerPoolManager({} as any);
-      
+
       let shuttingDown = false;
       const activeRequests = 0;
 
