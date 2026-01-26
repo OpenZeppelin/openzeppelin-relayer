@@ -87,7 +87,7 @@ fn handle_status_check_result(result: Result<TransactionRepoModel>) -> Result<()
             }
         }
         Err(e) => {
-            // Error occurred, retry
+            // Error occurred, retry the job
             Err(Error::Failed(Arc::new(format!("{e}").into())))
         }
     }
@@ -290,8 +290,7 @@ mod tests {
                     let err_string = arc.to_string();
                     assert!(
                         err_string.contains(error_message),
-                        "Error message should contain original error: {}",
-                        err_string
+                        "Error message should contain original error: {err_string}"
                     );
                 }
                 _ => panic!("Expected Error::Failed"),
@@ -311,13 +310,11 @@ mod tests {
                     let err_string = arc.to_string();
                     assert!(
                         err_string.contains("not in final state"),
-                        "Error message should indicate non-final state: {}",
-                        err_string
+                        "Error message should indicate non-final state: {err_string}"
                     );
                     assert!(
                         err_string.contains("Submitted"),
-                        "Error message should mention the status: {}",
-                        err_string
+                        "Error message should mention the status: {err_string}"
                     );
                 }
                 _ => panic!("Expected Error::Failed for non-final state"),
