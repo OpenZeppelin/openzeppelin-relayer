@@ -120,12 +120,16 @@ pub async fn initialize_repositories(
 pub async fn initialize_app_state(
     server_config: Arc<ServerConfig>,
 ) -> Result<web::ThinData<DefaultAppState>> {
-    // Initialize Redis connections - shared by all repositories
+    // Initialize Redis connections only when using Redis storage
     // When REDIS_READER_URL is set, read operations use the reader endpoint
-    let redis_connections = initialize_redis_connections(&server_config).await?;
+    let redis_connections = match server_config.repository_storage_type {
+        crate::config::RepositoryStorageType::Redis => {
+            Some(initialize_redis_connections(&server_config).await?)
+        }
+        crate::config::RepositoryStorageType::InMemory => None,
+    };
 
-    let repositories =
-        initialize_repositories(&server_config, Some(redis_connections.clone())).await?;
+    let repositories = initialize_repositories(&server_config, redis_connections).await?;
 
     let queue = Queue::setup().await?;
     let job_producer = Arc::new(jobs::JobProducer::new(queue.clone()));
