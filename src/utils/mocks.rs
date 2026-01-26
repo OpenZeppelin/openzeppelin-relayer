@@ -339,6 +339,8 @@ pub mod mockutils {
             max_connections: 256,
             connection_backlog: 511,
             request_timeout_seconds: 30,
+            redis_reader_url: None,
+            redis_reader_pool_max_size: 1000,
         }
     }
 }

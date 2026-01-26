@@ -3,8 +3,8 @@
 use crate::models::{PaginationQuery, PluginModel, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{BatchRetrievalResult, PaginatedResult, PluginRepositoryTrait};
+use crate::utils::RedisConnections;
 use async_trait::async_trait;
-use deadpool_redis::Pool;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
@@ -15,21 +15,27 @@ const PLUGIN_LIST_KEY: &str = "plugin_list";
 
 #[derive(Clone)]
 pub struct RedisPluginRepository {
-    pub pool: Arc<Pool>,
+    pub connections: Arc<RedisConnections>,
     pub key_prefix: String,
 }
 
 impl RedisRepository for RedisPluginRepository {}
 
 impl RedisPluginRepository {
-    pub fn new(pool: Arc<Pool>, key_prefix: String) -> Result<Self, RepositoryError> {
+    pub fn new(
+        connections: Arc<RedisConnections>,
+        key_prefix: String,
+    ) -> Result<Self, RepositoryError> {
         if key_prefix.is_empty() {
             return Err(RepositoryError::InvalidData(
                 "Redis key prefix cannot be empty".to_string(),
             ));
         }
 
-        Ok(Self { pool, key_prefix })
+        Ok(Self {
+            connections,
+            key_prefix,
+        })
     }
 
     /// Generate key for plugin data: plugin:{plugin_id}
@@ -94,7 +100,9 @@ impl RedisPluginRepository {
             });
         }
 
-        let mut conn = self.get_connection(&self.pool, "get_by_ids").await?;
+        let mut conn = self
+            .get_connection(self.connections.reader(), "get_by_ids")
+            .await?;
         let keys: Vec<String> = ids.iter().map(|id| self.plugin_key(id)).collect();
 
         let values: Vec<Option<String>> = conn
@@ -144,7 +152,9 @@ impl fmt::Debug for RedisPluginRepository {
 #[async_trait]
 impl PluginRepositoryTrait for RedisPluginRepository {
     async fn get_by_id(&self, id: &str) -> Result<Option<PluginModel>, RepositoryError> {
-        let mut conn = self.get_connection(&self.pool, "get_by_id").await?;
+        let mut conn = self
+            .get_connection(self.connections.reader(), "get_by_id")
+            .await?;
         self.get_by_id_with_connection(id, &mut conn).await
     }
 
@@ -161,7 +171,9 @@ impl PluginRepositoryTrait for RedisPluginRepository {
             ));
         }
 
-        let mut conn = self.get_connection(&self.pool, "add").await?;
+        let mut conn = self
+            .get_connection(self.connections.primary(), "add")
+            .await?;
         let key = self.plugin_key(&plugin.id);
         let list_key = self.plugin_list_key();
 
@@ -214,35 +226,41 @@ impl PluginRepositoryTrait for RedisPluginRepository {
             ));
         }
 
-        let mut conn = self.get_connection(&self.pool, "list_paginated").await?;
-        let plugin_list_key = self.plugin_list_key();
+        let (total, ids_to_query) = {
+            let mut conn = self
+                .get_connection(self.connections.reader(), "list_paginated")
+                .await?;
+            let plugin_list_key = self.plugin_list_key();
 
-        // Get total count
-        let total: u64 = conn
-            .scard(&plugin_list_key)
-            .await
-            .map_err(|e| self.map_redis_error(e, "list_paginated_count"))?;
+            // Get total count
+            let total: u64 = conn
+                .scard(&plugin_list_key)
+                .await
+                .map_err(|e| self.map_redis_error(e, "list_paginated_count"))?;
 
-        if total == 0 {
-            return Ok(PaginatedResult {
-                items: vec![],
-                total: 0,
-                page: query.page,
-                per_page: query.per_page,
-            });
-        }
+            if total == 0 {
+                return Ok(PaginatedResult {
+                    items: vec![],
+                    total: 0,
+                    page: query.page,
+                    per_page: query.per_page,
+                });
+            }
 
-        // Get all IDs and paginate in memory
-        let all_ids: Vec<String> = conn
-            .smembers(&plugin_list_key)
-            .await
-            .map_err(|e| self.map_redis_error(e, "list_paginated_members"))?;
+            // Get all IDs and paginate in memory
+            let all_ids: Vec<String> = conn
+                .smembers(&plugin_list_key)
+                .await
+                .map_err(|e| self.map_redis_error(e, "list_paginated_members"))?;
 
-        let start = ((query.page - 1) * query.per_page) as usize;
-        let end = (start + query.per_page as usize).min(all_ids.len());
+            let start = ((query.page - 1) * query.per_page) as usize;
+            let end = (start + query.per_page as usize).min(all_ids.len());
 
-        let ids_to_query = &all_ids[start..end];
-        let items = self.get_by_ids(ids_to_query).await?;
+            (total, all_ids[start..end].to_vec())
+            // Connection dropped here before nested call to avoid connection doubling
+        };
+
+        let items = self.get_by_ids(&ids_to_query).await?;
 
         Ok(PaginatedResult {
             items: items.results.clone(),
@@ -253,7 +271,9 @@ impl PluginRepositoryTrait for RedisPluginRepository {
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
-        let mut conn = self.get_connection(&self.pool, "count").await?;
+        let mut conn = self
+            .get_connection(self.connections.reader(), "count")
+            .await?;
         let plugin_list_key = self.plugin_list_key();
 
         let count: u64 = conn
@@ -265,7 +285,9 @@ impl PluginRepositoryTrait for RedisPluginRepository {
     }
 
     async fn has_entries(&self) -> Result<bool, RepositoryError> {
-        let mut conn = self.get_connection(&self.pool, "has_entries").await?;
+        let mut conn = self
+            .get_connection(self.connections.reader(), "has_entries")
+            .await?;
         let plugin_list_key = self.plugin_list_key();
 
         debug!("checking if plugin entries exist");
@@ -280,7 +302,9 @@ impl PluginRepositoryTrait for RedisPluginRepository {
     }
 
     async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
-        let mut conn = self.get_connection(&self.pool, "drop_all_entries").await?;
+        let mut conn = self
+            .get_connection(self.connections.primary(), "drop_all_entries")
+            .await?;
         let plugin_list_key = self.plugin_list_key();
 
         debug!("dropping all plugin entries");
@@ -343,18 +367,20 @@ mod tests {
         let redis_url =
             std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string());
         let cfg = deadpool_redis::Config::from_url(&redis_url);
-        let pool = cfg
-            .builder()
-            .expect("Failed to create pool builder")
-            .max_size(16)
-            .runtime(deadpool_redis::Runtime::Tokio1)
-            .build()
-            .expect("Failed to build Redis pool");
+        let pool = Arc::new(
+            cfg.builder()
+                .expect("Failed to create pool builder")
+                .max_size(16)
+                .runtime(deadpool_redis::Runtime::Tokio1)
+                .build()
+                .expect("Failed to build Redis pool"),
+        );
+        let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
         let random_id = uuid::Uuid::new_v4().to_string();
         let key_prefix = format!("test_prefix:{}", random_id);
 
-        RedisPluginRepository::new(Arc::new(pool), key_prefix)
+        RedisPluginRepository::new(connections, key_prefix)
             .expect("Failed to create Redis plugin repository")
     }
 
@@ -370,15 +396,17 @@ mod tests {
     async fn test_new_repository_empty_prefix_fails() {
         let redis_url = "redis://127.0.0.1:6379/";
         let cfg = deadpool_redis::Config::from_url(redis_url);
-        let pool = cfg
-            .builder()
-            .expect("Failed to create pool builder")
-            .max_size(16)
-            .runtime(deadpool_redis::Runtime::Tokio1)
-            .build()
-            .expect("Failed to build Redis pool");
+        let pool = Arc::new(
+            cfg.builder()
+                .expect("Failed to create pool builder")
+                .max_size(16)
+                .runtime(deadpool_redis::Runtime::Tokio1)
+                .build()
+                .expect("Failed to build Redis pool"),
+        );
+        let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
-        let result = RedisPluginRepository::new(Arc::new(pool), "".to_string());
+        let result = RedisPluginRepository::new(connections, "".to_string());
         assert!(result.is_err());
         assert!(result
             .unwrap_err()

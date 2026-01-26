@@ -3,9 +3,8 @@
 use crate::models::{RepositoryError, SignerRepoModel};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::*;
-use crate::utils::EncryptionContext;
+use crate::utils::{EncryptionContext, RedisConnections};
 use async_trait::async_trait;
-use deadpool_redis::Pool;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
@@ -16,21 +15,27 @@ const SIGNER_LIST_KEY: &str = "signer_list";
 
 #[derive(Clone)]
 pub struct RedisSignerRepository {
-    pub pool: Arc<Pool>,
+    pub connections: Arc<RedisConnections>,
     pub key_prefix: String,
 }
 
 impl RedisRepository for RedisSignerRepository {}
 
 impl RedisSignerRepository {
-    pub fn new(pool: Arc<Pool>, key_prefix: String) -> Result<Self, RepositoryError> {
+    pub fn new(
+        connections: Arc<RedisConnections>,
+        key_prefix: String,
+    ) -> Result<Self, RepositoryError> {
         if key_prefix.is_empty() {
             return Err(RepositoryError::InvalidData(
                 "Redis key prefix cannot be empty".to_string(),
             ));
         }
 
-        Ok(Self { pool, key_prefix })
+        Ok(Self {
+            connections,
+            key_prefix,
+        })
     }
 
     fn signer_key(&self, id: &str) -> String {
@@ -43,7 +48,9 @@ impl RedisSignerRepository {
 
     async fn add_to_list(&self, id: &str) -> Result<(), RepositoryError> {
         let key = self.signer_list_key();
-        let mut conn = self.get_connection(&self.pool, "add_to_list").await?;
+        let mut conn = self
+            .get_connection(self.connections.primary(), "add_to_list")
+            .await?;
 
         let _: i64 = conn.sadd(&key, id).await.map_err(|e| {
             error!(signer_id = %id, error = %e, "failed to add signer to list");
@@ -56,7 +63,9 @@ impl RedisSignerRepository {
 
     async fn remove_from_list(&self, id: &str) -> Result<(), RepositoryError> {
         let key = self.signer_list_key();
-        let mut conn = self.get_connection(&self.pool, "remove_from_list").await?;
+        let mut conn = self
+            .get_connection(self.connections.primary(), "remove_from_list")
+            .await?;
 
         let _: i64 = conn.srem(&key, id).await.map_err(|e| {
             error!(signer_id = %id, error = %e, "failed to remove signer from list");
@@ -69,7 +78,9 @@ impl RedisSignerRepository {
 
     async fn get_all_ids(&self) -> Result<Vec<String>, RepositoryError> {
         let key = self.signer_list_key();
-        let mut conn = self.get_connection(&self.pool, "get_all_ids").await?;
+        let mut conn = self
+            .get_connection(self.connections.reader(), "get_all_ids")
+            .await?;
 
         conn.smembers(&key)
             .await
@@ -90,7 +101,7 @@ impl RedisSignerRepository {
         }
 
         let mut conn = self
-            .get_connection(&self.pool, "batch_fetch_signers")
+            .get_connection(self.connections.reader(), "batch_fetch_signers")
             .await?;
         let keys: Vec<String> = ids.iter().map(|id| self.signer_key(id)).collect();
 
@@ -162,7 +173,9 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         }
 
         let key = self.signer_key(&signer.id);
-        let mut conn = self.get_connection(&self.pool, "create").await?;
+        let mut conn = self
+            .get_connection(self.connections.primary(), "create")
+            .await?;
 
         // Check if signer already exists
         let exists: bool = conn
@@ -203,7 +216,9 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         }
 
         let key = self.signer_key(&id);
-        let mut conn = self.get_connection(&self.pool, "get_by_id").await?;
+        let mut conn = self
+            .get_connection(self.connections.reader(), "get_by_id")
+            .await?;
 
         let data: String = conn
             .get(&key)
@@ -236,7 +251,9 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         }
 
         let key = self.signer_key(&id);
-        let mut conn = self.get_connection(&self.pool, "update").await?;
+        let mut conn = self
+            .get_connection(self.connections.primary(), "update")
+            .await?;
 
         // Check if signer exists
         let exists: bool = conn
@@ -273,7 +290,9 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         }
 
         let key = self.signer_key(&id);
-        let mut conn = self.get_connection(&self.pool, "delete_by_id").await?;
+        let mut conn = self
+            .get_connection(self.connections.primary(), "delete_by_id")
+            .await?;
 
         // Check if signer exists
         let exists: bool = conn
@@ -375,7 +394,9 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
     }
 
     async fn has_entries(&self) -> Result<bool, RepositoryError> {
-        let mut conn = self.get_connection(&self.pool, "has_entries").await?;
+        let mut conn = self
+            .get_connection(self.connections.reader(), "has_entries")
+            .await?;
         let signer_list_key = self.signer_list_key();
 
         debug!("Checking if signer entries exist");
@@ -390,7 +411,9 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
     }
 
     async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
-        let mut conn = self.get_connection(&self.pool, "drop_all_entries").await?;
+        let mut conn = self
+            .get_connection(self.connections.primary(), "drop_all_entries")
+            .await?;
         let signer_list_key = self.signer_list_key();
 
         debug!("Dropping all signer entries");
@@ -450,18 +473,20 @@ mod tests {
         let redis_url =
             std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string());
         let cfg = Config::from_url(&redis_url);
-        let pool = cfg
-            .builder()
-            .expect("Failed to create pool builder")
-            .max_size(16)
-            .runtime(Runtime::Tokio1)
-            .build()
-            .expect("Failed to build Redis pool");
+        let pool = Arc::new(
+            cfg.builder()
+                .expect("Failed to create pool builder")
+                .max_size(16)
+                .runtime(Runtime::Tokio1)
+                .build()
+                .expect("Failed to build Redis pool"),
+        );
+        let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
         let random_id = Uuid::new_v4().to_string();
         let key_prefix = format!("test_prefix:{}", random_id);
 
-        RedisSignerRepository::new(Arc::new(pool), key_prefix).expect("Failed to create repository")
+        RedisSignerRepository::new(connections, key_prefix).expect("Failed to create repository")
     }
 
     #[tokio::test]
@@ -477,15 +502,17 @@ mod tests {
         let redis_url =
             std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string());
         let cfg = Config::from_url(&redis_url);
-        let pool = cfg
-            .builder()
-            .expect("Failed to create pool builder")
-            .max_size(16)
-            .runtime(Runtime::Tokio1)
-            .build()
-            .expect("Failed to build Redis pool");
+        let pool = Arc::new(
+            cfg.builder()
+                .expect("Failed to create pool builder")
+                .max_size(16)
+                .runtime(Runtime::Tokio1)
+                .build()
+                .expect("Failed to build Redis pool"),
+        );
+        let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
-        let result = RedisSignerRepository::new(Arc::new(pool), "".to_string());
+        let result = RedisSignerRepository::new(connections, "".to_string());
         assert!(result.is_err());
         assert!(result
             .unwrap_err()

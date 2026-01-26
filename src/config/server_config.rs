@@ -34,8 +34,12 @@ pub struct ServerConfig {
     pub host: String,
     /// The port number the server will listen on.
     pub port: u16,
-    /// The URL for the Redis instance.
+    /// The URL for the Redis primary instance (used for write operations).
     pub redis_url: String,
+    /// Optional URL for Redis reader endpoint (used for read operations).
+    /// When set, read operations use this endpoint while writes use `redis_url`.
+    /// Useful for AWS ElastiCache with read replicas.
+    pub redis_reader_url: Option<String>,
     /// The file path to the server's configuration file.
     pub config_file_path: String,
     /// The API key used for authentication.
@@ -54,6 +58,9 @@ pub struct ServerConfig {
     pub redis_key_prefix: String,
     /// Maximum number of connections in the Redis pool.
     pub redis_pool_max_size: usize,
+    /// Maximum pool size for reader connections. Defaults to 1000.
+    /// Useful for read-heavy workloads where more reader connections are beneficial.
+    pub redis_reader_pool_max_size: usize,
     /// Timeout in milliseconds waiting to get a connection from the pool.
     pub redis_pool_timeout_ms: u64,
     /// The number of milliseconds to wait for an RPC response.
@@ -128,6 +135,8 @@ impl ServerConfig {
             host: Self::get_host(),
             port: Self::get_port(),
             redis_url: Self::get_redis_url(), // Uses panicking version as required
+            redis_reader_url: Self::get_redis_reader_url_optional(),
+            redis_reader_pool_max_size: Self::get_redis_reader_pool_max_size(),
             config_file_path: Self::get_config_file_path(),
             api_key: Self::get_api_key(), // Uses panicking version as required
             rate_limit_requests_per_second: Self::get_rate_limit_requests_per_second(),
@@ -182,6 +191,13 @@ impl ServerConfig {
     /// Gets the Redis URL from environment variable or returns None if not set
     pub fn get_redis_url_optional() -> Option<String> {
         env::var("REDIS_URL").ok()
+    }
+
+    /// Gets the Redis reader URL from environment variable or returns None if not set.
+    /// When set, read operations will use this endpoint while writes use REDIS_URL.
+    /// Useful for AWS ElastiCache with read replicas.
+    pub fn get_redis_reader_url_optional() -> Option<String> {
+        env::var("REDIS_READER_URL").ok()
     }
 
     /// Gets the config file path from environment variables or default
@@ -276,6 +292,16 @@ impl ServerConfig {
             .ok()
             .filter(|&v| v > 0)
             .unwrap_or(500)
+    }
+
+    /// Gets the Redis reader pool max size from environment variable.
+    /// Returns 1000 if not set or invalid.
+    pub fn get_redis_reader_pool_max_size() -> usize {
+        env::var("REDIS_READER_POOL_MAX_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&v| v > 0)
+            .unwrap_or(1000)
     }
 
     /// Gets the Redis pool timeout from environment variable or default
@@ -501,6 +527,7 @@ mod tests {
         env::remove_var("REPOSITORY_STORAGE_TYPE");
         env::remove_var("RESET_STORAGE_ON_START");
         env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        env::remove_var("REDIS_READER_URL");
         // Set required variables for most tests
         env::set_var("REDIS_URL", "redis://localhost:6379");
         env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
@@ -682,6 +709,7 @@ mod tests {
         env::remove_var("ENABLE_SWAGGER");
         env::remove_var("REDIS_CONNECTION_TIMEOUT_MS");
         env::remove_var("REDIS_KEY_PREFIX");
+        env::remove_var("REDIS_READER_URL");
         env::remove_var("RPC_TIMEOUT_MS");
         env::remove_var("PROVIDER_MAX_RETRIES");
         env::remove_var("PROVIDER_RETRY_BASE_DELAY_MS");
@@ -1590,6 +1618,197 @@ mod tests {
             }
 
             env::remove_var("REQUEST_TIMEOUT_SECONDS");
+        }
+    }
+
+    mod get_redis_reader_url_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_none_when_env_not_set() {
+            env::remove_var("REDIS_READER_URL");
+            let result = ServerConfig::get_redis_reader_url_optional();
+            assert!(
+                result.is_none(),
+                "Should return None when env var is not set"
+            );
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_value_when_set() {
+            env::set_var("REDIS_READER_URL", "redis://reader:6379");
+            let result = ServerConfig::get_redis_reader_url_optional();
+            assert_eq!(
+                result,
+                Some("redis://reader:6379".to_string()),
+                "Should return the env var value"
+            );
+            env::remove_var("REDIS_READER_URL");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_empty_string_when_set_to_empty() {
+            env::set_var("REDIS_READER_URL", "");
+            let result = ServerConfig::get_redis_reader_url_optional();
+            assert_eq!(
+                result,
+                Some("".to_string()),
+                "Should return empty string when set to empty"
+            );
+            env::remove_var("REDIS_READER_URL");
+        }
+
+        #[test]
+        #[serial]
+        fn test_aws_elasticache_reader_url() {
+            // Test with typical AWS ElastiCache reader endpoint format
+            let reader_url = "redis://my-cluster-ro.xxx.cache.amazonaws.com:6379";
+            env::set_var("REDIS_READER_URL", reader_url);
+            let result = ServerConfig::get_redis_reader_url_optional();
+            assert_eq!(
+                result,
+                Some(reader_url.to_string()),
+                "Should accept AWS ElastiCache reader endpoint"
+            );
+            env::remove_var("REDIS_READER_URL");
+        }
+
+        #[test]
+        #[serial]
+        fn test_config_includes_redis_reader_url() {
+            env::set_var("REDIS_URL", "redis://primary:6379");
+            env::set_var("REDIS_READER_URL", "redis://reader:6379");
+            env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
+
+            let config = ServerConfig::from_env();
+
+            assert_eq!(config.redis_url, "redis://primary:6379");
+            assert_eq!(
+                config.redis_reader_url,
+                Some("redis://reader:6379".to_string())
+            );
+
+            env::remove_var("REDIS_URL");
+            env::remove_var("REDIS_READER_URL");
+            env::remove_var("API_KEY");
+        }
+
+        #[test]
+        #[serial]
+        fn test_config_without_redis_reader_url() {
+            env::set_var("REDIS_URL", "redis://primary:6379");
+            env::remove_var("REDIS_READER_URL");
+            env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
+
+            let config = ServerConfig::from_env();
+
+            assert_eq!(config.redis_url, "redis://primary:6379");
+            assert!(
+                config.redis_reader_url.is_none(),
+                "redis_reader_url should be None when not set"
+            );
+
+            env::remove_var("REDIS_URL");
+            env::remove_var("API_KEY");
+        }
+    }
+
+    mod get_redis_reader_pool_max_size_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_not_set() {
+            env::remove_var("REDIS_READER_POOL_MAX_SIZE");
+            let result = ServerConfig::get_redis_reader_pool_max_size();
+            assert_eq!(
+                result, 1000,
+                "Should return default 1000 when env var is not set"
+            );
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_value_when_set() {
+            env::set_var("REDIS_READER_POOL_MAX_SIZE", "2000");
+            let result = ServerConfig::get_redis_reader_pool_max_size();
+            assert_eq!(result, 2000, "Should return the parsed value");
+            env::remove_var("REDIS_READER_POOL_MAX_SIZE");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_invalid() {
+            env::set_var("REDIS_READER_POOL_MAX_SIZE", "not_a_number");
+            let result = ServerConfig::get_redis_reader_pool_max_size();
+            assert_eq!(
+                result, 1000,
+                "Should return default 1000 for invalid values"
+            );
+            env::remove_var("REDIS_READER_POOL_MAX_SIZE");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_zero() {
+            env::set_var("REDIS_READER_POOL_MAX_SIZE", "0");
+            let result = ServerConfig::get_redis_reader_pool_max_size();
+            assert_eq!(result, 1000, "Should return default 1000 when value is 0");
+            env::remove_var("REDIS_READER_POOL_MAX_SIZE");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_negative() {
+            env::set_var("REDIS_READER_POOL_MAX_SIZE", "-100");
+            let result = ServerConfig::get_redis_reader_pool_max_size();
+            assert_eq!(
+                result, 1000,
+                "Should return default 1000 for negative values"
+            );
+            env::remove_var("REDIS_READER_POOL_MAX_SIZE");
+        }
+
+        #[test]
+        #[serial]
+        fn test_config_includes_reader_pool_max_size() {
+            env::set_var("REDIS_URL", "redis://primary:6379");
+            env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
+            env::set_var("REDIS_READER_POOL_MAX_SIZE", "750");
+
+            let config = ServerConfig::from_env();
+
+            assert_eq!(
+                config.redis_reader_pool_max_size, 750,
+                "Should include reader pool max size in config"
+            );
+
+            env::remove_var("REDIS_URL");
+            env::remove_var("API_KEY");
+            env::remove_var("REDIS_READER_POOL_MAX_SIZE");
+        }
+
+        #[test]
+        #[serial]
+        fn test_config_uses_default_when_not_set() {
+            env::set_var("REDIS_URL", "redis://primary:6379");
+            env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
+            env::remove_var("REDIS_READER_POOL_MAX_SIZE");
+
+            let config = ServerConfig::from_env();
+
+            assert_eq!(
+                config.redis_reader_pool_max_size, 1000,
+                "Should use default 1000 when not set"
+            );
+
+            env::remove_var("REDIS_URL");
+            env::remove_var("API_KEY");
         }
     }
 }

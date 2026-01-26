@@ -3,9 +3,153 @@ use std::time::Duration;
 
 use color_eyre::Result;
 use deadpool_redis::{Config, Pool, Runtime};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::config::ServerConfig;
+
+/// Holds separate connection pools for read and write operations.
+///
+/// This struct enables optimization for Redis deployments with read replicas,
+/// such as AWS ElastiCache. Write operations use the primary pool, while read
+/// operations can be distributed across reader replicas.
+///
+/// When `REDIS_READER_URL` is not configured, both pools point to the same
+/// Redis instance (the primary), maintaining backward compatibility.
+#[derive(Clone, Debug)]
+pub struct RedisConnections {
+    /// Pool for write operations (connected to primary endpoint)
+    primary_pool: Arc<Pool>,
+    /// Pool for read operations (connected to reader endpoint, or primary if not configured)
+    reader_pool: Arc<Pool>,
+}
+
+impl RedisConnections {
+    /// Creates a new `RedisConnections` with a single pool used for both reads and writes.
+    ///
+    /// This is useful for:
+    /// - Testing where read/write separation is not needed
+    /// - Simple deployments without read replicas
+    /// - Backward compatibility
+    pub fn new_single_pool(pool: Arc<Pool>) -> Self {
+        Self {
+            primary_pool: pool.clone(),
+            reader_pool: pool,
+        }
+    }
+
+    /// Returns the primary pool for write operations.
+    ///
+    /// Use this for: `create`, `update`, `delete`, and any operation that
+    /// modifies data in Redis.
+    pub fn primary(&self) -> &Arc<Pool> {
+        &self.primary_pool
+    }
+
+    /// Returns the reader pool for read operations.
+    ///
+    /// Use this for: `get_by_id`, `list`, `find_by_*`, `count`, and any
+    /// operation that only reads data from Redis.
+    ///
+    /// If no reader endpoint is configured, this returns the same pool as `primary()`.
+    pub fn reader(&self) -> &Arc<Pool> {
+        &self.reader_pool
+    }
+}
+
+/// Creates a Redis connection pool with the specified URL, pool size, and configuration.
+async fn create_pool(url: &str, pool_max_size: usize, config: &ServerConfig) -> Result<Arc<Pool>> {
+    let cfg = Config::from_url(url);
+
+    let pool = cfg
+        .builder()
+        .map_err(|e| eyre::eyre!("Failed to create Redis pool builder for {}: {}", url, e))?
+        .max_size(pool_max_size)
+        .wait_timeout(Some(Duration::from_millis(config.redis_pool_timeout_ms)))
+        .create_timeout(Some(Duration::from_millis(
+            config.redis_connection_timeout_ms,
+        )))
+        .recycle_timeout(Some(Duration::from_millis(
+            config.redis_connection_timeout_ms,
+        )))
+        .runtime(Runtime::Tokio1)
+        .build()
+        .map_err(|e| eyre::eyre!("Failed to build Redis pool for {}: {}", url, e))?;
+
+    // Verify the pool is working by getting a connection
+    let conn = pool
+        .get()
+        .await
+        .map_err(|e| eyre::eyre!("Failed to get initial Redis connection from {}: {}", url, e))?;
+    drop(conn);
+
+    Ok(Arc::new(pool))
+}
+
+/// Initializes Redis connection pools for both primary and reader endpoints.
+///
+/// # Arguments
+///
+/// * `config` - The server configuration containing Redis URLs and pool settings.
+///
+/// # Returns
+///
+/// A `RedisConnections` struct containing:
+/// - `primary_pool`: Connected to `REDIS_URL` (for write operations)
+/// - `reader_pool`: Connected to `REDIS_READER_URL` if set, otherwise same as primary
+///
+/// # Features
+///
+/// - **Read/Write Separation**: When `REDIS_READER_URL` is configured, read operations
+///   can be distributed across read replicas, reducing load on the primary.
+/// - **Backward Compatible**: If `REDIS_READER_URL` is not set, both pools use
+///   the primary URL, maintaining existing behavior.
+/// - **Connection Pooling**: Both pools use deadpool-redis with configurable
+///   max size, wait timeout, and connection timeouts.
+///
+/// # Example Configuration
+///
+/// ```bash
+/// # AWS ElastiCache with read replicas
+/// REDIS_URL=redis://my-cluster.xxx.cache.amazonaws.com:6379
+/// REDIS_READER_URL=redis://my-cluster-ro.xxx.cache.amazonaws.com:6379
+/// ```
+pub async fn initialize_redis_connections(config: &ServerConfig) -> Result<Arc<RedisConnections>> {
+    let primary_pool_size = config.redis_pool_max_size;
+    let primary_pool = create_pool(&config.redis_url, primary_pool_size, config).await?;
+
+    info!(
+        primary_url = %config.redis_url,
+        primary_pool_size = %primary_pool_size,
+        "initializing primary Redis connection pool"
+    );
+    let reader_pool = match &config.redis_reader_url {
+        Some(reader_url) if !reader_url.is_empty() => {
+            let reader_pool_size = config.redis_reader_pool_max_size;
+
+            info!(
+                primary_url = %config.redis_url,
+                reader_url = %reader_url,
+                primary_pool_size = %primary_pool_size,
+                reader_pool_size = %reader_pool_size,
+                "Using separate reader endpoint for read operations"
+            );
+            create_pool(reader_url, reader_pool_size, config).await?
+        }
+        _ => {
+            debug!(
+                primary_url = %config.redis_url,
+                pool_size = %primary_pool_size,
+                "No reader URL configured, using primary for all operations"
+            );
+            primary_pool.clone()
+        }
+    };
+
+    Ok(Arc::new(RedisConnections {
+        primary_pool,
+        reader_pool,
+    }))
+}
 
 /// Initializes a Redis connection pool using deadpool-redis.
 ///
@@ -330,6 +474,76 @@ mod tests {
     }
 
     // =========================================================================
+    // RedisConnections tests
+    // =========================================================================
+
+    mod redis_connections_tests {
+        use super::*;
+
+        #[test]
+        fn test_new_single_pool_returns_same_pool_for_both() {
+            // This test verifies the backward-compatible single pool mode
+            // When no REDIS_READER_URL is set, both pools should be the same
+            let cfg = Config::from_url("redis://127.0.0.1:6379");
+            let pool = cfg
+                .builder()
+                .expect("Failed to create pool builder")
+                .max_size(16)
+                .runtime(Runtime::Tokio1)
+                .build()
+                .expect("Failed to build pool");
+            let pool = Arc::new(pool);
+
+            let connections = RedisConnections::new_single_pool(pool.clone());
+
+            // Both primary and reader should return the same pool
+            assert!(Arc::ptr_eq(connections.primary(), &pool));
+            assert!(Arc::ptr_eq(connections.reader(), &pool));
+            assert!(Arc::ptr_eq(connections.primary(), connections.reader()));
+        }
+
+        #[test]
+        fn test_redis_connections_clone() {
+            // Verify that RedisConnections can be cloned
+            let cfg = Config::from_url("redis://127.0.0.1:6379");
+            let pool = cfg
+                .builder()
+                .expect("Failed to create pool builder")
+                .max_size(16)
+                .runtime(Runtime::Tokio1)
+                .build()
+                .expect("Failed to build pool");
+            let pool = Arc::new(pool);
+
+            let connections = RedisConnections::new_single_pool(pool);
+            let cloned = connections.clone();
+
+            // Both should point to the same pools
+            assert!(Arc::ptr_eq(connections.primary(), cloned.primary()));
+            assert!(Arc::ptr_eq(connections.reader(), cloned.reader()));
+        }
+
+        #[test]
+        fn test_redis_connections_debug() {
+            // Verify Debug implementation exists
+            let cfg = Config::from_url("redis://127.0.0.1:6379");
+            let pool = cfg
+                .builder()
+                .expect("Failed to create pool builder")
+                .max_size(16)
+                .runtime(Runtime::Tokio1)
+                .build()
+                .expect("Failed to build pool");
+            let pool = Arc::new(pool);
+
+            let connections = RedisConnections::new_single_pool(pool);
+            let debug_str = format!("{:?}", connections);
+
+            assert!(debug_str.contains("RedisConnections"));
+        }
+    }
+
+    // =========================================================================
     // Integration tests - require a running Redis instance
     // Run with: cargo test --lib redis::tests::integration -- --ignored
     // =========================================================================
@@ -602,6 +816,78 @@ mod tests {
             if let Some(g) = guard2 {
                 g.release().await.expect("Redis error");
             }
+        }
+
+        // =========================================================================
+        // RedisConnections integration tests
+        // =========================================================================
+
+        #[tokio::test]
+        #[ignore] // Requires running Redis instance
+        async fn test_redis_connections_single_pool_operations() {
+            let pool = create_test_redis_connection()
+                .await
+                .expect("Redis connection required for this test");
+
+            let connections = RedisConnections::new_single_pool(pool);
+
+            // Test that we can get connections from both pools
+            let mut primary_conn = connections
+                .primary()
+                .get()
+                .await
+                .expect("Failed to get primary connection");
+            let mut reader_conn = connections
+                .reader()
+                .get()
+                .await
+                .expect("Failed to get reader connection");
+
+            // Test basic operations on both connections
+            let _: () = redis::cmd("SET")
+                .arg("test:connections:key")
+                .arg("test_value")
+                .query_async(&mut primary_conn)
+                .await
+                .expect("Failed to SET");
+
+            let value: String = redis::cmd("GET")
+                .arg("test:connections:key")
+                .query_async(&mut reader_conn)
+                .await
+                .expect("Failed to GET");
+
+            assert_eq!(value, "test_value");
+
+            // Cleanup
+            let _: () = redis::cmd("DEL")
+                .arg("test:connections:key")
+                .query_async(&mut primary_conn)
+                .await
+                .expect("Failed to DEL");
+        }
+
+        #[tokio::test]
+        #[ignore] // Requires running Redis instance
+        async fn test_redis_connections_backward_compatible() {
+            // Verify that single pool mode (no reader URL) works correctly
+            let pool = create_test_redis_connection()
+                .await
+                .expect("Redis connection required for this test");
+
+            let connections = Arc::new(RedisConnections::new_single_pool(pool));
+
+            // Multiple repositories should be able to share the connections
+            let conn1 = connections.clone();
+            let conn2 = connections.clone();
+
+            // Both should be able to get connections
+            let _primary1 = conn1.primary().get().await.expect("Failed to get primary");
+            let _reader1 = conn1.reader().get().await.expect("Failed to get reader");
+            let _primary2 = conn2.primary().get().await.expect("Failed to get primary");
+            let _reader2 = conn2.reader().get().await.expect("Failed to get reader");
+
+            // All should work without issues (backward compatible)
         }
     }
 }

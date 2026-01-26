@@ -9,8 +9,8 @@ use crate::repositories::{
     BatchDeleteResult, BatchRetrievalResult, PaginatedResult, Repository, TransactionDeleteRequest,
     TransactionRepository,
 };
+use crate::utils::RedisConnections;
 use async_trait::async_trait;
-use deadpool_redis::Pool;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
@@ -27,21 +27,27 @@ const TX_BY_CREATED_AT_PREFIX: &str = "tx_by_created_at";
 
 #[derive(Clone)]
 pub struct RedisTransactionRepository {
-    pub pool: Arc<Pool>,
+    pub connections: Arc<RedisConnections>,
     pub key_prefix: String,
 }
 
 impl RedisRepository for RedisTransactionRepository {}
 
 impl RedisTransactionRepository {
-    pub fn new(pool: Arc<Pool>, key_prefix: String) -> Result<Self, RepositoryError> {
+    pub fn new(
+        connections: Arc<RedisConnections>,
+        key_prefix: String,
+    ) -> Result<Self, RepositoryError> {
         if key_prefix.is_empty() {
             return Err(RepositoryError::InvalidData(
                 "Redis key prefix cannot be empty".to_string(),
             ));
         }
 
-        Ok(Self { pool, key_prefix })
+        Ok(Self {
+            connections,
+            key_prefix,
+        })
     }
 
     /// Generate key for transaction data: relayer:{relayer_id}:tx:{tx_id}
@@ -137,7 +143,7 @@ impl RedisTransactionRepository {
         }
 
         let mut conn = self
-            .get_connection(&self.pool, "batch_fetch_transactions")
+            .get_connection(self.connections.reader(), "batch_fetch_transactions")
             .await?;
 
         let reverse_keys: Vec<String> = ids.iter().map(|id| self.tx_to_relayer_key(id)).collect();
@@ -249,47 +255,61 @@ impl RedisTransactionRepository {
         relayer_id: &str,
         status: &TransactionStatus,
     ) -> Result<u64, RepositoryError> {
-        let mut conn = self
-            .get_connection(&self.pool, "ensure_status_sorted_set")
-            .await?;
         let sorted_key = self.relayer_status_sorted_key(relayer_id, status);
         let legacy_key = self.relayer_status_key(relayer_id, status);
 
-        // Always check if legacy set has data that needs migration
-        // Even if ZSET is non-empty (could be from partial migration failure or rolling deployment)
-        let legacy_count: u64 = conn
-            .scard(&legacy_key)
-            .await
-            .map_err(|e| self.map_redis_error(e, "ensure_status_sorted_set_scard"))?;
+        // Phase 1: Check if migration is needed
+        let legacy_ids = {
+            let mut conn = self
+                .get_connection(self.connections.primary(), "ensure_status_sorted_set_check")
+                .await?;
 
-        if legacy_count == 0 {
-            // No legacy data to migrate, return current ZSET count
-            let sorted_count: u64 = conn
-                .zcard(&sorted_key)
+            // Always check if legacy set has data that needs migration
+            let legacy_count: u64 = conn
+                .scard(&legacy_key)
                 .await
-                .map_err(|e| self.map_redis_error(e, "ensure_status_sorted_set_zcard"))?;
-            return Ok(sorted_count);
-        }
+                .map_err(|e| self.map_redis_error(e, "ensure_status_sorted_set_scard"))?;
 
-        // Migration needed: get all IDs from legacy set
-        debug!(
-            relayer_id = %relayer_id,
-            status = %status,
-            legacy_count = %legacy_count,
-            "migrating status set to sorted set"
-        );
+            if legacy_count == 0 {
+                // No legacy data to migrate, return current ZSET count
+                let sorted_count: u64 = conn
+                    .zcard(&sorted_key)
+                    .await
+                    .map_err(|e| self.map_redis_error(e, "ensure_status_sorted_set_zcard"))?;
+                return Ok(sorted_count);
+            }
 
-        let legacy_ids: Vec<String> = conn
-            .smembers(&legacy_key)
-            .await
-            .map_err(|e| self.map_redis_error(e, "ensure_status_sorted_set_smembers"))?;
+            // Migration needed: get all IDs from legacy set
+            debug!(
+                relayer_id = %relayer_id,
+                status = %status,
+                legacy_count = %legacy_count,
+                "migrating status set to sorted set"
+            );
+
+            let ids: Vec<String> = conn
+                .smembers(&legacy_key)
+                .await
+                .map_err(|e| self.map_redis_error(e, "ensure_status_sorted_set_smembers"))?;
+
+            ids
+            // Connection dropped here before nested call to avoid connection doubling
+        };
 
         if legacy_ids.is_empty() {
             return Ok(0);
         }
 
-        // Fetch transactions to get their timestamps for scoring
+        // Phase 2: Fetch transactions (uses its own connection internally)
         let transactions = self.get_transactions_by_ids(&legacy_ids).await?;
+
+        // Phase 3: Perform migration with a new connection
+        let mut conn = self
+            .get_connection(
+                self.connections.primary(),
+                "ensure_status_sorted_set_migrate",
+            )
+            .await?;
 
         if transactions.results.is_empty() {
             // All transactions were stale/deleted, clean up legacy set
@@ -334,7 +354,9 @@ impl RedisTransactionRepository {
         tx: &TransactionRepoModel,
         old_tx: Option<&TransactionRepoModel>,
     ) -> Result<(), RepositoryError> {
-        let mut conn = self.get_connection(&self.pool, "update_indexes").await?;
+        let mut conn = self
+            .get_connection(self.connections.primary(), "update_indexes")
+            .await?;
         let mut pipe = redis::pipe();
         pipe.atomic();
 
@@ -405,7 +427,7 @@ impl RedisTransactionRepository {
     /// Remove all indexes with error recovery
     async fn remove_all_indexes(&self, tx: &TransactionRepoModel) -> Result<(), RepositoryError> {
         let mut conn = self
-            .get_connection(&self.pool, "remove_all_indexes")
+            .get_connection(self.connections.primary(), "remove_all_indexes")
             .await?;
         let mut pipe = redis::pipe();
         pipe.atomic();
@@ -463,7 +485,7 @@ impl RedisTransactionRepository {
 impl fmt::Debug for RedisTransactionRepository {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RedisTransactionRepository")
-            .field("pool", &"<Pool>")
+            .field("connections", &"<RedisConnections>")
             .field("key_prefix", &self.key_prefix)
             .finish()
     }
@@ -483,7 +505,9 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
         let key = self.tx_key(&entity.relayer_id, &entity.id);
         let reverse_key = self.tx_to_relayer_key(&entity.id);
-        let mut conn = self.get_connection(&self.pool, "create").await?;
+        let mut conn = self
+            .get_connection(self.connections.primary(), "create")
+            .await?;
 
         debug!(tx_id = %entity.id, "creating transaction");
 
@@ -529,7 +553,9 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             ));
         }
 
-        let mut conn = self.get_connection(&self.pool, "get_by_id").await?;
+        let mut conn = self
+            .get_connection(self.connections.reader(), "get_by_id")
+            .await?;
 
         debug!(tx_id = %id, "fetching transaction");
 
@@ -573,7 +599,9 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
     // Unoptimized implementation of list_paginated. Rarely used. find_by_relayer_id is preferred.
     async fn list_all(&self) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
-        let mut conn = self.get_connection(&self.pool, "list_all").await?;
+        let mut conn = self
+            .get_connection(self.connections.reader(), "list_all")
+            .await?;
 
         debug!("fetching all transactions sorted by created_at (newest first)");
 
@@ -586,8 +614,8 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
         debug!(count = %relayer_ids.len(), "found relayers");
 
-        // Collect all transactions from all relayers using their sorted sets
-        let mut all_transactions = Vec::new();
+        // Collect all transaction IDs from all relayers using their sorted sets
+        let mut all_tx_ids = Vec::new();
         for relayer_id in relayer_ids {
             let relayer_sorted_key = self.relayer_tx_by_created_at_key(&relayer_id);
             let tx_ids: Vec<String> = redis::cmd("ZRANGE")
@@ -599,9 +627,15 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
                 .await
                 .map_err(|e| self.map_redis_error(e, "list_all_relayer_sorted"))?;
 
-            let batch_result = self.get_transactions_by_ids(&tx_ids).await?;
-            all_transactions.extend(batch_result.results);
+            all_tx_ids.extend(tx_ids);
         }
+
+        // Release connection before nested call to avoid connection doubling
+        drop(conn);
+
+        // Batch fetch all transactions at once
+        let batch_result = self.get_transactions_by_ids(&all_tx_ids).await?;
+        let mut all_transactions = batch_result.results;
 
         // Sort all transactions by created_at (newest first)
         all_transactions.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -621,7 +655,9 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             ));
         }
 
-        let mut conn = self.get_connection(&self.pool, "list_paginated").await?;
+        let mut conn = self
+            .get_connection(self.connections.reader(), "list_paginated")
+            .await?;
 
         debug!(page = %query.page, per_page = %query.per_page, "fetching paginated transactions sorted by created_at (newest first)");
 
@@ -632,8 +668,8 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             .await
             .map_err(|e| self.map_redis_error(e, "list_paginated_relayer_ids"))?;
 
-        // Collect all transactions from all relayers using their sorted sets
-        let mut all_transactions = Vec::new();
+        // Collect all transaction IDs from all relayers using their sorted sets
+        let mut all_tx_ids = Vec::new();
         for relayer_id in relayer_ids {
             let relayer_sorted_key = self.relayer_tx_by_created_at_key(&relayer_id);
             let tx_ids: Vec<String> = redis::cmd("ZRANGE")
@@ -645,9 +681,15 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
                 .await
                 .map_err(|e| self.map_redis_error(e, "list_paginated_relayer_sorted"))?;
 
-            let batch_result = self.get_transactions_by_ids(&tx_ids).await?;
-            all_transactions.extend(batch_result.results);
+            all_tx_ids.extend(tx_ids);
         }
+
+        // Release connection before nested call to avoid connection doubling
+        drop(conn);
+
+        // Batch fetch all transactions at once
+        let batch_result = self.get_transactions_by_ids(&all_tx_ids).await?;
+        let mut all_transactions = batch_result.results;
 
         // Sort all transactions by created_at (newest first)
         all_transactions.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -695,7 +737,9 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
         let old_tx = self.get_by_id(id.clone()).await?;
 
         let key = self.tx_key(&entity.relayer_id, &id);
-        let mut conn = self.get_connection(&self.pool, "update").await?;
+        let mut conn = self
+            .get_connection(self.connections.primary(), "update")
+            .await?;
 
         let value = self.serialize_entity(&entity, |t| &t.id, "transaction")?;
 
@@ -726,7 +770,9 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
         let key = self.tx_key(&tx.relayer_id, &id);
         let reverse_key = self.tx_to_relayer_key(&id);
-        let mut conn = self.get_connection(&self.pool, "delete_by_id").await?;
+        let mut conn = self
+            .get_connection(self.connections.primary(), "delete_by_id")
+            .await?;
 
         let mut pipe = redis::pipe();
         pipe.atomic();
@@ -748,7 +794,9 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
     // Unoptimized implementation of count. Rarely used. find_by_relayer_id is preferred.
     async fn count(&self) -> Result<usize, RepositoryError> {
-        let mut conn = self.get_connection(&self.pool, "count").await?;
+        let mut conn = self
+            .get_connection(self.connections.reader(), "count")
+            .await?;
 
         debug!("counting transactions");
 
@@ -774,7 +822,9 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
     }
 
     async fn has_entries(&self) -> Result<bool, RepositoryError> {
-        let mut conn = self.get_connection(&self.pool, "has_entries").await?;
+        let mut conn = self
+            .get_connection(self.connections.reader(), "has_entries")
+            .await?;
         let relayer_list_key = self.relayer_list_key();
 
         debug!("checking if transaction entries exist");
@@ -789,7 +839,9 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
     }
 
     async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
-        let mut conn = self.get_connection(&self.pool, "drop_all_entries").await?;
+        let mut conn = self
+            .get_connection(self.connections.primary(), "drop_all_entries")
+            .await?;
         let relayer_list_key = self.relayer_list_key();
 
         debug!("dropping all transaction entries");
@@ -894,7 +946,7 @@ impl TransactionRepository for RedisTransactionRepository {
         query: PaginationQuery,
     ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
         let mut conn = self
-            .get_connection(&self.pool, "find_by_relayer_id")
+            .get_connection(self.connections.reader(), "find_by_relayer_id")
             .await?;
 
         debug!(relayer_id = %relayer_id, page = %query.page, per_page = %query.per_page, "fetching transactions for relayer sorted by created_at (newest first)");
@@ -945,6 +997,9 @@ impl TransactionRepository for RedisTransactionRepository {
             .await
             .map_err(|e| self.map_redis_error(e, "find_by_relayer_id_sorted"))?;
 
+        // Release connection before nested call to avoid connection doubling
+        drop(conn);
+
         let items = self.get_transactions_by_ids(&page_ids).await?;
 
         debug!(relayer_id = %relayer_id, count = %items.results.len(), page = %query.page, "successfully fetched transactions for relayer");
@@ -963,13 +1018,18 @@ impl TransactionRepository for RedisTransactionRepository {
         relayer_id: &str,
         statuses: &[TransactionStatus],
     ) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
-        let mut conn = self.get_connection(&self.pool, "find_by_status").await?;
-        // Ensure all status sorted sets are migrated and collect IDs
+        // Ensure all status sorted sets are migrated first (releases connection after each)
+        for status in statuses {
+            self.ensure_status_sorted_set(relayer_id, status).await?;
+        }
+
+        // Now get a connection and collect all IDs
+        let mut conn = self
+            .get_connection(self.connections.reader(), "find_by_status")
+            .await?;
+
         let mut all_ids: Vec<String> = Vec::new();
         for status in statuses {
-            // Trigger migration if needed
-            self.ensure_status_sorted_set(relayer_id, status).await?;
-
             // Get IDs from sorted set (already ordered by created_at)
             let sorted_key = self.relayer_status_sorted_key(relayer_id, status);
             let ids: Vec<String> = redis::cmd("ZRANGE")
@@ -983,6 +1043,9 @@ impl TransactionRepository for RedisTransactionRepository {
 
             all_ids.extend(ids);
         }
+
+        // Release connection before nested call to avoid connection doubling
+        drop(conn);
 
         if all_ids.is_empty() {
             return Ok(vec![]);
@@ -1010,14 +1073,14 @@ impl TransactionRepository for RedisTransactionRepository {
         query: PaginationQuery,
         oldest_first: bool,
     ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
-        let mut conn = self
-            .get_connection(&self.pool, "find_by_status_paginated")
-            .await?;
-
-        // Ensure all status sorted sets are migrated
+        // Ensure all status sorted sets are migrated first (releases connection after each)
         for status in statuses {
             self.ensure_status_sorted_set(relayer_id, status).await?;
         }
+
+        let mut conn = self
+            .get_connection(self.connections.reader(), "find_by_status_paginated")
+            .await?;
 
         // For single status, we can paginate directly from the sorted set
         if statuses.len() == 1 {
@@ -1053,6 +1116,9 @@ impl TransactionRepository for RedisTransactionRepository {
                 .query_async(&mut conn)
                 .await
                 .map_err(|e| self.map_redis_error(e, "find_by_status_paginated"))?;
+
+            // Release connection before nested call to avoid connection doubling
+            drop(conn);
 
             let transactions = self.get_transactions_by_ids(&page_ids).await?;
 
@@ -1090,6 +1156,9 @@ impl TransactionRepository for RedisTransactionRepository {
 
             all_ids.extend(ids_with_scores);
         }
+
+        // Release connection before nested call to avoid connection doubling
+        drop(conn);
 
         // Remove duplicates (keep highest/lowest score based on sort order)
         let mut id_map: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
@@ -1161,7 +1230,9 @@ impl TransactionRepository for RedisTransactionRepository {
         relayer_id: &str,
         nonce: u64,
     ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
-        let mut conn = self.get_connection(&self.pool, "find_by_nonce").await?;
+        let mut conn = self
+            .get_connection(self.connections.reader(), "find_by_nonce")
+            .await?;
         let nonce_key = self.relayer_nonce_key(relayer_id, nonce);
 
         // Get transaction ID with this nonce for this relayer (should be single value)
@@ -1221,7 +1292,10 @@ impl TransactionRepository for RedisTransactionRepository {
         let mut last_error = None;
 
         for attempt in 0..MAX_RETRIES {
-            let mut conn = match self.get_connection(&self.pool, "partial_update").await {
+            let mut conn = match self
+                .get_connection(self.connections.primary(), "partial_update")
+                .await
+            {
                 Ok(conn) => conn,
                 Err(e) => {
                     last_error = Some(e);
@@ -1314,7 +1388,9 @@ impl TransactionRepository for RedisTransactionRepository {
         relayer_id: &str,
         statuses: &[TransactionStatus],
     ) -> Result<u64, RepositoryError> {
-        let mut conn = self.get_connection(&self.pool, "count_by_status").await?;
+        let mut conn = self
+            .get_connection(self.connections.reader(), "count_by_status")
+            .await?;
         let mut total_count: u64 = 0;
 
         for status in statuses {
@@ -1379,7 +1455,7 @@ impl TransactionRepository for RedisTransactionRepository {
 
         debug!(count = %requests.len(), "batch deleting transactions by requests (no fetch)");
         let mut conn = self
-            .get_connection(&self.pool, "batch_delete_no_fetch")
+            .get_connection(self.connections.primary(), "batch_delete_no_fetch")
             .await?;
         let mut pipe = redis::pipe();
         pipe.atomic();
@@ -1543,18 +1619,22 @@ mod tests {
             .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
 
         let cfg = Config::from_url(&redis_url);
-        let pool = cfg
-            .builder()
-            .expect("Failed to create pool builder")
-            .max_size(16)
-            .runtime(Runtime::Tokio1)
-            .build()
-            .expect("Failed to build Redis pool");
+        let pool = Arc::new(
+            cfg.builder()
+                .expect("Failed to create pool builder")
+                .max_size(16)
+                .runtime(Runtime::Tokio1)
+                .build()
+                .expect("Failed to build Redis pool"),
+        );
+
+        // Create RedisConnections with same pool for both primary and reader (for testing)
+        let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
         let random_id = Uuid::new_v4().to_string();
         let key_prefix = format!("test_prefix:{}", random_id);
 
-        RedisTransactionRepository::new(Arc::new(pool), key_prefix)
+        RedisTransactionRepository::new(connections, key_prefix)
             .expect("Failed to create RedisTransactionRepository")
     }
 
@@ -1571,15 +1651,17 @@ mod tests {
         let redis_url = std::env::var("REDIS_TEST_URL")
             .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
         let cfg = Config::from_url(&redis_url);
-        let pool = cfg
-            .builder()
-            .expect("Failed to create pool builder")
-            .max_size(16)
-            .runtime(Runtime::Tokio1)
-            .build()
-            .expect("Failed to build Redis pool");
+        let pool = Arc::new(
+            cfg.builder()
+                .expect("Failed to create pool builder")
+                .max_size(16)
+                .runtime(Runtime::Tokio1)
+                .build()
+                .expect("Failed to build Redis pool"),
+        );
+        let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
-        let result = RedisTransactionRepository::new(Arc::new(pool), "".to_string());
+        let result = RedisTransactionRepository::new(connections, "".to_string());
         assert!(matches!(result, Err(RepositoryError::InvalidData(_))));
     }
 
@@ -1905,7 +1987,7 @@ mod tests {
 
         // Create transactions directly in Redis WITHOUT adding to sorted set
         // This simulates old transactions created before the sorted set index existed
-        let mut conn = repo.pool.get().await.unwrap();
+        let mut conn = repo.connections.primary().get().await.unwrap();
         let relayer_list_key = repo.relayer_list_key();
         let _: () = conn.sadd(&relayer_list_key, &relayer_id).await.unwrap();
 

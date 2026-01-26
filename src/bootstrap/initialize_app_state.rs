@@ -11,11 +11,10 @@ use crate::{
         PluginRepositoryStorage, RelayerRepositoryStorage, SignerRepositoryStorage,
         TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
     },
-    utils::initialize_redis_connection,
+    utils::{initialize_redis_connections, RedisConnections},
 };
 use actix_web::web;
 use color_eyre::Result;
-use deadpool_redis::Pool;
 use std::sync::Arc;
 use tracing::warn;
 
@@ -35,7 +34,7 @@ pub struct RepositoryCollection {
 /// # Arguments
 ///
 /// * `config` - Server configuration
-/// * `pool` - Redis connection pool (required for Redis storage type, None for in-memory)
+/// * `connections` - Redis connections (required for Redis storage type, None for in-memory)
 ///
 /// # Returns
 ///
@@ -44,7 +43,7 @@ pub struct RepositoryCollection {
 /// # Errors
 pub async fn initialize_repositories(
     config: &ServerConfig,
-    pool: Option<Arc<Pool>>,
+    connections: Option<Arc<RedisConnections>>,
 ) -> eyre::Result<RepositoryCollection> {
     let repositories = match config.repository_storage_type {
         RepositoryStorageType::InMemory => RepositoryCollection {
@@ -63,41 +62,41 @@ pub async fn initialize_repositories(
                 return Err(eyre::eyre!("Storage encryption key is not set. Please set the STORAGE_ENCRYPTION_KEY environment variable."));
             }
 
-            let pool =
-                pool.ok_or_else(|| eyre::eyre!("Redis pool is required for Redis storage type"))?;
+            let connections = connections
+                .ok_or_else(|| eyre::eyre!("Redis connections required for Redis storage type"))?;
 
-            // Use the shared pool for all repositories
+            // Use the shared connections for all repositories
             RepositoryCollection {
                 relayer: Arc::new(RelayerRepositoryStorage::new_redis(
-                    pool.clone(),
+                    connections.clone(),
                     config.redis_key_prefix.clone(),
                 )?),
                 transaction: Arc::new(TransactionRepositoryStorage::new_redis(
-                    pool.clone(),
+                    connections.clone(),
                     config.redis_key_prefix.clone(),
                 )?),
                 signer: Arc::new(SignerRepositoryStorage::new_redis(
-                    pool.clone(),
+                    connections.clone(),
                     config.redis_key_prefix.clone(),
                 )?),
                 notification: Arc::new(NotificationRepositoryStorage::new_redis(
-                    pool.clone(),
+                    connections.clone(),
                     config.redis_key_prefix.clone(),
                 )?),
                 network: Arc::new(NetworkRepositoryStorage::new_redis(
-                    pool.clone(),
+                    connections.clone(),
                     config.redis_key_prefix.clone(),
                 )?),
                 transaction_counter: Arc::new(TransactionCounterRepositoryStorage::new_redis(
-                    pool.clone(),
+                    connections.clone(),
                     config.redis_key_prefix.clone(),
                 )?),
                 plugin: Arc::new(PluginRepositoryStorage::new_redis(
-                    pool.clone(),
+                    connections.clone(),
                     config.redis_key_prefix.clone(),
                 )?),
                 api_key: Arc::new(ApiKeyRepositoryStorage::new_redis(
-                    pool,
+                    connections,
                     config.redis_key_prefix.clone(),
                 )?),
             }
@@ -121,10 +120,12 @@ pub async fn initialize_repositories(
 pub async fn initialize_app_state(
     server_config: Arc<ServerConfig>,
 ) -> Result<web::ThinData<DefaultAppState>> {
-    // Initialize Redis pool once - shared by both repositories and job queues
-    let redis_pool = initialize_redis_connection(&server_config).await?;
+    // Initialize Redis connections - shared by all repositories
+    // When REDIS_READER_URL is set, read operations use the reader endpoint
+    let redis_connections = initialize_redis_connections(&server_config).await?;
 
-    let repositories = initialize_repositories(&server_config, Some(redis_pool.clone())).await?;
+    let repositories =
+        initialize_repositories(&server_config, Some(redis_connections.clone())).await?;
 
     let queue = Queue::setup().await?;
     let job_producer = Arc::new(jobs::JobProducer::new(queue.clone()));
@@ -273,7 +274,9 @@ mod tests {
             Ok(_) => panic!("Expected error for missing pool"),
         };
         assert!(
-            error.to_string().contains("Redis pool is required"),
+            error
+                .to_string()
+                .contains("Redis connections required for Redis storage type"),
             "Expected error about Redis pool being required, got: {}",
             error
         );

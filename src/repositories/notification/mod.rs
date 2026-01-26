@@ -22,12 +22,12 @@ mod notification_redis;
 pub use notification_in_memory::*;
 pub use notification_redis::*;
 
+use crate::utils::RedisConnections;
 use crate::{
     models::{NotificationRepoModel, RepositoryError},
     repositories::{PaginatedResult, PaginationQuery, Repository},
 };
 use async_trait::async_trait;
-use deadpool_redis::Pool;
 use std::sync::Arc;
 
 /// Enum wrapper for different notification repository implementations
@@ -41,9 +41,13 @@ impl NotificationRepositoryStorage {
     pub fn new_in_memory() -> Self {
         Self::InMemory(InMemoryNotificationRepository::new())
     }
-    pub fn new_redis(pool: Arc<Pool>, key_prefix: String) -> Result<Self, RepositoryError> {
+    pub fn new_redis(
+        connections: Arc<RedisConnections>,
+        key_prefix: String,
+    ) -> Result<Self, RepositoryError> {
         Ok(Self::Redis(RedisNotificationRepository::new(
-            pool, key_prefix,
+            connections,
+            key_prefix,
         )?))
     }
 }
