@@ -716,3 +716,208 @@ The relayer will automatically detect which pattern your plugin uses:
 - If neither → shows clear error message
 
 This ensures a smooth transition period where both patterns work simultaneously.
+
+## Performance Tuning
+
+For production deployments handling high concurrency, the plugin system offers extensive tuning options via environment variables.
+
+### Execution Modes
+
+The plugin system supports two execution modes:
+
+| Mode | Environment Variable | Description |
+|------|---------------------|-------------|
+| **Pool mode** (default) | `PLUGIN_USE_POOL=true` | Uses persistent worker pool. Best performance. |
+| **ts-node mode** | `PLUGIN_USE_POOL=false` | Spawns a new process per request. Simpler but slower. |
+
+<Callout type="info">
+Pool mode is enabled by default since v1.4. It significantly improves performance by reusing worker processes and maintaining persistent connections. Use `PLUGIN_USE_POOL=false` only for debugging or if you encounter issues.
+</Callout>
+
+### Environment Variables Reference
+
+#### Simple Scaling (Recommended)
+
+<Callout type="info">
+**Most users only need one variable!** Set `PLUGIN_MAX_CONCURRENCY` and everything else is auto-calculated.
+</Callout>
+
+```bash
+# This is all you need for 3000 concurrent users:
+export PLUGIN_MAX_CONCURRENCY=3000
+```
+
+The system automatically derives on **both Rust and Node.js sides**:
+
+**Rust side (connection pool & queue):**
+- `PLUGIN_POOL_MAX_CONNECTIONS` = 3000 (1:1 ratio)
+- `PLUGIN_SOCKET_MAX_CONCURRENT_CONNECTIONS` = 4500 (1.5x for headroom)
+- `PLUGIN_POOL_MAX_QUEUE_SIZE` = 6000 (2x for burst handling)
+- `PLUGIN_POOL_QUEUE_SEND_TIMEOUT_MS` = auto-scaled based on workload per thread (500-1000ms)
+
+**Node.js side (worker pool):**
+- `PLUGIN_POOL_MAX_THREADS` = memory-aware scaling (see below), capped at 32
+- `PLUGIN_POOL_CONCURRENT_TASKS` = (concurrency / maxThreads) × 1.2, capped at 250
+- `PLUGIN_WORKER_HEAP_MB` = 512 + (concurrent_tasks × 5), between 1024-2048MB
+
+#### Advanced Overrides (Power Users)
+
+You can override any auto-derived value when needed:
+
+```bash
+# Set the primary scaling knob
+export PLUGIN_MAX_CONCURRENCY=3000
+
+# Override just the queue size (other values still auto-derived)
+export PLUGIN_POOL_MAX_QUEUE_SIZE=10000
+```
+
+#### All Available Variables
+
+| Variable | Default | Auto-Derived From | Description |
+|----------|---------|-------------------|-------------|
+| `PLUGIN_MAX_CONCURRENCY` | 2048 | - | **Primary scaling knob** - sets expected concurrent load |
+| **Rust Side** ||||
+| `PLUGIN_POOL_MAX_CONNECTIONS` | 2048 | `MAX_CONCURRENCY` | Max connections to pool server |
+| `PLUGIN_SOCKET_MAX_CONCURRENT_CONNECTIONS` | 4096 | `MAX_CONCURRENCY × 1.5` | Max plugin connections to relayer |
+| `PLUGIN_POOL_MAX_QUEUE_SIZE` | 4096 | `MAX_CONCURRENCY × 2` | Max queued requests |
+| `PLUGIN_POOL_QUEUE_SEND_TIMEOUT_MS` | 500 | Workload-based (500-1000ms) | Wait time when queue is full |
+| `PLUGIN_POOL_CONNECT_RETRIES` | 15 | - | Retry attempts when connecting |
+| `PLUGIN_POOL_REQUEST_TIMEOUT_SECS` | 30 | - | Timeout for pool requests |
+| `PLUGIN_SOCKET_IDLE_TIMEOUT_SECS` | 60 | - | Close idle connections after |
+| `PLUGIN_SOCKET_READ_TIMEOUT_SECS` | 30 | - | Read timeout per message |
+| `PLUGIN_POOL_WORKERS` | auto | CPU cores | Queue processing workers |
+| `PLUGIN_POOL_SOCKET_BACKLOG` | 2048 | `MAX_CONCURRENCY` | Socket connection backlog |
+| **Node.js Side** ||||
+| `PLUGIN_POOL_MIN_THREADS` | auto | `max(2, cpuCount/2)` | Minimum worker threads |
+| `PLUGIN_POOL_MAX_THREADS` | auto | Memory-aware (capped at 32) | Worker threads in pool |
+| `PLUGIN_POOL_CONCURRENT_TASKS` | auto | `(concurrency/threads) × 1.2` | Tasks per worker (max 250) |
+| `PLUGIN_WORKER_HEAP_MB` | auto | `512 + (tasks × 5)` | Worker heap size (1024-2048MB) |
+| `PLUGIN_POOL_IDLE_TIMEOUT` | 60000 | - | Worker idle timeout (ms) |
+
+#### Memory-Aware Thread Scaling
+
+The plugin system automatically scales worker threads based on **both concurrency requirements AND available system memory**. This prevents out-of-memory issues on systems with limited RAM.
+
+**How it works:**
+1. **Memory budget**: Uses 50% of system RAM for worker threads
+2. **Per-worker allocation**: ~1GB heap budget per worker thread
+3. **Concurrency scaling**: `concurrency / 200` threads (each thread handles ~200 concurrent requests via async I/O)
+4. **Final calculation**: `min(memory_based, concurrency_based)`, capped at 32 threads
+
+**Examples:**
+
+| System RAM | Max Concurrency | Memory-Based | Concurrency-Based | Final Threads |
+|------------|-----------------|--------------|-------------------|---------------|
+| 16GB | 1000 | 8 | 5 | 5 |
+| 16GB | 5000 | 8 | 25 | 8 |
+| 32GB | 5000 | 16 | 25 | 16 |
+| 64GB | 10000 | 32 | 50 | 32 |
+
+<Callout type="info">
+This prevents the previous issue where high concurrency (e.g., 5000 VUs) would spawn too many threads, causing excessive memory pressure and GC pauses.
+</Callout>
+
+#### Queue Timeout Auto-Scaling
+
+The queue send timeout (`PLUGIN_POOL_QUEUE_SEND_TIMEOUT_MS`) automatically scales based on workload per thread:
+
+| Workload per Thread | Timeout |
+|---------------------|---------|
+| > 100 items/thread | 1000ms (heavy load) |
+| 50-100 items/thread | 750ms (medium load) |
+| < 50 items/thread | 500ms (light load) |
+
+This ensures requests have sufficient time to queue during traffic spikes while maintaining responsiveness under normal load.
+
+#### Timeout Alignment
+
+<Callout type="warn">
+Timeouts must be aligned! If your plugin takes up to 120s, set these accordingly.
+</Callout>
+
+```bash
+# In config.json: "timeout": 120
+
+# Environment should match:
+export PLUGIN_POOL_REQUEST_TIMEOUT_SECS=120
+export PLUGIN_SOCKET_IDLE_TIMEOUT_SECS=180  # 1.5x plugin timeout
+```
+
+#### Health & Recovery
+
+Controls automatic health monitoring and recovery.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PLUGIN_POOL_HEALTH_CHECK_INTERVAL_SECS` | 5 | Minimum seconds between health checks |
+| `PLUGIN_TRACE_TIMEOUT_MS` | 100 | Timeout for collecting execution traces |
+
+### Load Profile Examples
+
+#### Low Load (< 100 concurrent requests)
+
+```bash
+# Default settings are sufficient - pool mode is enabled automatically
+```
+
+#### Medium Load (100-1000 concurrent requests)
+
+```bash
+export PLUGIN_MAX_CONCURRENCY=1000
+```
+
+#### High Load (1000-5000 concurrent requests)
+
+```bash
+export PLUGIN_MAX_CONCURRENCY=3000
+export PLUGIN_POOL_REQUEST_TIMEOUT_SECS=60
+```
+
+#### Extreme Load (5000+ concurrent requests)
+
+```bash
+export PLUGIN_MAX_CONCURRENCY=8000
+export PLUGIN_POOL_REQUEST_TIMEOUT_SECS=120
+export PLUGIN_POOL_CONNECT_RETRIES=20
+```
+
+### Troubleshooting Common Errors
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| `Plugin execution queue is full` | More requests than queue can hold | Increase `PLUGIN_POOL_MAX_QUEUE_SIZE` and `PLUGIN_POOL_QUEUE_SEND_TIMEOUT_MS` |
+| `Connection limit reached` | Too many concurrent plugin connections | Increase `PLUGIN_SOCKET_MAX_CONCURRENT_CONNECTIONS` |
+| `Failed to connect to pool after N attempts` | Pool server overwhelmed | Increase `PLUGIN_POOL_CONNECT_RETRIES` and `PLUGIN_POOL_MAX_CONNECTIONS` |
+| `ScriptTimeout(N)` | Plugin execution exceeded timeout | Increase `timeout` in plugin config (config.json) |
+| `All connection permits exhausted` | Connection pool at capacity | Increase `PLUGIN_POOL_MAX_CONNECTIONS` |
+| `FATAL ERROR: CALL_AND_RETRY_LAST Allocation failed - JavaScript heap out of memory` | Worker heap too small | Increase `PLUGIN_WORKER_HEAP_MB` or reduce `PLUGIN_POOL_CONCURRENT_TASKS` |
+| `Pool server crashed and restarting` | Memory pressure or GC issues | Check logs for heap usage; reduce `PLUGIN_MAX_CONCURRENCY` or increase system RAM |
+
+<Callout type="warn">
+When increasing limits significantly, monitor your system's memory and CPU usage. Each connection consumes resources.
+</Callout>
+
+## Architecture & Internals
+
+For developers who want to understand or modify the plugin system internals, see the [Architecture Guide](https://github.com/OpenZeppelin/openzeppelin-relayer/blob/main/plugins/ARCHITECTURE.md).
+
+The architecture documentation covers:
+
+- **System Architecture**: High-level diagram showing Rust ↔ Node.js communication
+- **Module Overview**: Purpose of each Rust and TypeScript module
+- **Communication Protocols**: JSON-line protocol for pool and shared socket communication
+- **Request Flow**: Step-by-step execution path for plugin requests
+- **Health & Recovery**: Circuit breaker states, dead server detection, memory pressure handling
+- **Module Dependencies**: How the codebase modules relate to each other
+
+### Key Source Files
+
+| Component | Location | Description |
+|-----------|----------|-------------|
+| **Rust Plugin Runner** | `src/services/plugins/runner.rs` | Entry point for plugin execution |
+| **Pool Executor** | `src/services/plugins/pool_executor.rs` | Manages Node.js process and connections |
+| **Configuration** | `src/services/plugins/config.rs` | Auto-derivation logic for all env vars |
+| **Pool Server** | `plugins/lib/pool-server.ts` | Node.js server accepting plugin requests |
+| **Executor** | `plugins/lib/pool-executor.ts` | Plugin execution |
+| **Plugin SDK** | `plugins/lib/plugin.ts` | PluginContext and API for plugins |

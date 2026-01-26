@@ -15,8 +15,8 @@
 //! Each api key is identified by a unique ID and contains a list of permissions that
 //! restrict the api key's access to the server.
 //!
+use crate::utils::RedisConnections;
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
 use std::sync::Arc;
 
 pub mod api_key_in_memory;
@@ -63,10 +63,10 @@ impl ApiKeyRepositoryStorage {
     }
 
     pub fn new_redis(
-        connection_manager: Arc<ConnectionManager>,
+        connections: Arc<RedisConnections>,
         key_prefix: String,
     ) -> Result<Self, RepositoryError> {
-        let redis_repo = RedisApiKeyRepository::new(connection_manager, key_prefix)?;
+        let redis_repo = RedisApiKeyRepository::new(connections, key_prefix)?;
         Ok(Self::Redis(redis_repo))
     }
 }

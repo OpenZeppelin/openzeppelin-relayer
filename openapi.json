@@ -956,6 +956,269 @@
         ]
       }
     },
+    "/api/v1/plugins/{plugin_id}": {
+      "get": {
+        "tags": [
+          "Plugins"
+        ],
+        "summary": "Get plugin by ID",
+        "operationId": "getPlugin",
+        "parameters": [
+          {
+            "name": "plugin_id",
+            "in": "path",
+            "description": "The unique identifier of the plugin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plugin retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_PluginModel"
+                },
+                "example": {
+                  "data": {
+                    "allow_get_invocation": false,
+                    "config": {
+                      "featureFlag": true
+                    },
+                    "emit_logs": false,
+                    "emit_traces": false,
+                    "forward_logs": false,
+                    "id": "my-plugin",
+                    "path": "plugins/my-plugin.ts",
+                    "raw_response": false,
+                    "timeout": 30
+                  },
+                  "error": null,
+                  "success": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Unauthorized",
+                  "success": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Plugin not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Plugin with id my-plugin not found",
+                  "success": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Too Many Requests",
+                  "success": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Internal Server Error",
+                  "success": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "Plugins"
+        ],
+        "summary": "Update plugin configuration",
+        "description": "Updates mutable plugin fields such as timeout, emit_logs, emit_traces,\nraw_response, allow_get_invocation, config, and forward_logs.\nThe plugin id and path cannot be changed after creation.\n\nAll fields are optional - only the provided fields will be updated.\nTo clear the `config` field, pass `\"config\": null`.",
+        "operationId": "updatePlugin",
+        "parameters": [
+          {
+            "name": "plugin_id",
+            "in": "path",
+            "description": "The unique identifier of the plugin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Plugin configuration update. All fields are optional.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePluginRequest"
+              },
+              "example": {
+                "config": {
+                  "apiKey": "xyz123",
+                  "featureFlag": true
+                },
+                "emit_logs": true,
+                "forward_logs": true,
+                "timeout": 60
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Plugin updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_PluginModel"
+                },
+                "example": {
+                  "data": {
+                    "allow_get_invocation": false,
+                    "config": {
+                      "apiKey": "xyz123",
+                      "featureFlag": true
+                    },
+                    "emit_logs": true,
+                    "emit_traces": false,
+                    "forward_logs": true,
+                    "id": "my-plugin",
+                    "path": "plugins/my-plugin.ts",
+                    "raw_response": false,
+                    "timeout": 60
+                  },
+                  "error": null,
+                  "success": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request (invalid timeout or other validation error)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Timeout must be greater than 0",
+                  "success": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Unauthorized",
+                  "success": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Plugin not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Plugin with id my-plugin not found",
+                  "success": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Too Many Requests",
+                  "success": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Internal Server Error",
+                  "success": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/api/v1/plugins/{plugin_id}/call": {
       "get": {
         "tags": [
@@ -4615,6 +4878,81 @@
                 ]
               },
               "details": {}
+            }
+          },
+          "error": {
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMeta"
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_PluginModel": {
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "id",
+              "path",
+              "timeout"
+            ],
+            "properties": {
+              "allow_get_invocation": {
+                "type": "boolean",
+                "description": "Whether to allow GET requests to invoke plugin logic"
+              },
+              "config": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "User-defined configuration accessible to the plugin (must be a JSON object)",
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "emit_logs": {
+                "type": "boolean",
+                "description": "Whether to include logs in the HTTP response"
+              },
+              "emit_traces": {
+                "type": "boolean",
+                "description": "Whether to include traces in the HTTP response"
+              },
+              "forward_logs": {
+                "type": "boolean",
+                "description": "Whether to forward plugin logs into the relayer's tracing output"
+              },
+              "id": {
+                "type": "string",
+                "description": "Plugin ID"
+              },
+              "path": {
+                "type": "string",
+                "description": "Plugin path"
+              },
+              "raw_response": {
+                "type": "boolean",
+                "description": "Whether to return raw plugin response without ApiResponse wrapper"
+              },
+              "timeout": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Plugin timeout",
+                "minimum": 0
+              }
             }
           },
           "error": {
@@ -9403,6 +9741,68 @@
                 "weight": 100
               }
             ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpdatePluginRequest": {
+        "type": "object",
+        "description": "Request model for updating an existing plugin.\nAll fields are optional to allow partial updates.\nNote: `id` and `path` are not updateable after creation.",
+        "properties": {
+          "allow_get_invocation": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether to allow GET requests to invoke plugin logic"
+          },
+          "config": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "User-defined configuration accessible to the plugin (must be a JSON object)\nUse `null` to clear the config",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "emit_logs": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether to include logs in the HTTP response"
+          },
+          "emit_traces": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether to include traces in the HTTP response"
+          },
+          "forward_logs": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether to forward plugin logs into the relayer's tracing output"
+          },
+          "raw_response": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether to return raw plugin response without ApiResponse wrapper"
+          },
+          "timeout": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Plugin timeout in seconds",
+            "minimum": 0
           }
         },
         "additionalProperties": false

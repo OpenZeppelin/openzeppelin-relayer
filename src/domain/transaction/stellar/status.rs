@@ -660,7 +660,7 @@ mod tests {
                         && statuses == [TransactionStatus::Pending]
                         && query.page == 1
                         && query.per_page == 1
-                        && *oldest_first == true
+                        && *oldest_first
                 })
                 .times(1)
                 .returning(move |_, _, _, _| {
@@ -818,7 +818,7 @@ mod tests {
                         && statuses == [TransactionStatus::Pending]
                         && query.page == 1
                         && query.per_page == 1
-                        && *oldest_first == true
+                        && *oldest_first
                 })
                 .times(1)
                 .returning(move |_, _, _, _| {
@@ -965,7 +965,7 @@ mod tests {
                         && statuses == [TransactionStatus::Pending]
                         && query.page == 1
                         && query.per_page == 1
-                        && *oldest_first == true
+                        && *oldest_first
                 })
                 .times(1)
                 .returning(move |_, _, _, _| {
@@ -1245,7 +1245,7 @@ mod tests {
                     id == "tx-with-result"
                         && update.status == Some(TransactionStatus::Confirmed)
                         && update.confirmed_at.is_some()
-                        && update.network_data.as_ref().map_or(false, |and| {
+                        && update.network_data.as_ref().is_some_and(|and| {
                             if let NetworkTransactionData::Stellar(stellar_data) = and {
                                 // Verify transaction_result_xdr is present
                                 stellar_data.transaction_result_xdr.is_some()
@@ -1518,7 +1518,7 @@ mod tests {
             mocks
                 .tx_repo
                 .expect_find_by_status_paginated()
-                .returning(|_, _, _, _| {
+                .returning(move |_, _, _, _| {
                     Ok(PaginatedResult {
                         items: vec![],
                         total: 0,
@@ -1604,6 +1604,7 @@ mod tests {
             assert!(result.is_ok());
             let failed_tx = result.unwrap();
             assert_eq!(failed_tx.status, TransactionStatus::Failed);
+            // assert_eq!(failed_tx.status_reason.as_ref().unwrap(), "Transaction stuck in Sent status for too long");
             assert!(failed_tx
                 .status_reason
                 .as_ref()
@@ -1655,7 +1656,7 @@ mod tests {
             mocks
                 .tx_repo
                 .expect_find_by_status_paginated()
-                .returning(|_, _, _, _| {
+                .returning(move |_, _, _, _| {
                     Ok(PaginatedResult {
                         items: vec![],
                         total: 0,
@@ -1802,7 +1803,7 @@ mod tests {
             mocks
                 .tx_repo
                 .expect_find_by_status_paginated()
-                .returning(|_, _, _, _| {
+                .returning(move |_, _, _, _| {
                     Ok(PaginatedResult {
                         items: vec![],
                         total: 0,
@@ -1879,7 +1880,7 @@ mod tests {
             mocks
                 .tx_repo
                 .expect_find_by_status_paginated()
-                .returning(|_, _, _, _| {
+                .returning(move |_, _, _, _| {
                     Ok(PaginatedResult {
                         items: vec![],
                         total: 0,
@@ -1955,7 +1956,7 @@ mod tests {
             mocks
                 .tx_repo
                 .expect_find_by_status_paginated()
-                .returning(|_, _, _, _| {
+                .returning(move |_, _, _, _| {
                     Ok(PaginatedResult {
                         items: vec![],
                         total: 0,

@@ -1,5 +1,5 @@
 use crate::{
-    models::{ApiResponse, PluginCallRequest, PluginModel},
+    models::{ApiResponse, PluginCallRequest, PluginModel, UpdatePluginRequest},
     repositories::PaginatedResult,
     services::plugins::PluginHandlerError,
 };
@@ -277,3 +277,196 @@ fn doc_call_plugin_get() {}
 )]
 #[allow(dead_code)]
 fn doc_list_plugins() {}
+
+/// Get plugin by ID.
+#[utoipa::path(
+    get,
+    path = "/api/v1/plugins/{plugin_id}",
+    tag = "Plugins",
+    operation_id = "getPlugin",
+    summary = "Get plugin by ID",
+    security(
+        ("bearer_auth" = [])
+    ),
+    params(
+        ("plugin_id" = String, Path, description = "The unique identifier of the plugin")
+    ),
+    responses(
+        (
+            status = 200,
+            description = "Plugin retrieved successfully",
+            body = ApiResponse<PluginModel>,
+            example = json!({
+                "success": true,
+                "data": {
+                    "id": "my-plugin",
+                    "path": "plugins/my-plugin.ts",
+                    "timeout": 30,
+                    "emit_logs": false,
+                    "emit_traces": false,
+                    "raw_response": false,
+                    "allow_get_invocation": false,
+                    "config": {
+                        "featureFlag": true
+                    },
+                    "forward_logs": false
+                },
+                "error": null
+            })
+        ),
+        (
+            status = 401,
+            description = "Unauthorized",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "error": "Unauthorized",
+                "data": null
+            })
+        ),
+        (
+            status = 404,
+            description = "Plugin not found",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "error": "Plugin with id my-plugin not found",
+                "data": null
+            })
+        ),
+        (
+            status = 429,
+            description = "Too Many Requests",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "error": "Too Many Requests",
+                "data": null
+            })
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "error": "Internal Server Error",
+                "data": null
+            })
+        )
+    )
+)]
+#[allow(dead_code)]
+fn doc_get_plugin() {}
+
+/// Update plugin configuration.
+///
+/// Updates mutable plugin fields such as timeout, emit_logs, emit_traces,
+/// raw_response, allow_get_invocation, config, and forward_logs.
+/// The plugin id and path cannot be changed after creation.
+///
+/// All fields are optional - only the provided fields will be updated.
+/// To clear the `config` field, pass `"config": null`.
+#[utoipa::path(
+    patch,
+    path = "/api/v1/plugins/{plugin_id}",
+    tag = "Plugins",
+    operation_id = "updatePlugin",
+    summary = "Update plugin configuration",
+    security(
+        ("bearer_auth" = [])
+    ),
+    params(
+        ("plugin_id" = String, Path, description = "The unique identifier of the plugin")
+    ),
+    request_body(
+        content = UpdatePluginRequest,
+        description = "Plugin configuration update. All fields are optional.",
+        example = json!({
+            "timeout": 60,
+            "emit_logs": true,
+            "forward_logs": true,
+            "config": {
+                "featureFlag": true,
+                "apiKey": "xyz123"
+            }
+        })
+    ),
+    responses(
+        (
+            status = 200,
+            description = "Plugin updated successfully",
+            body = ApiResponse<PluginModel>,
+            example = json!({
+                "success": true,
+                "data": {
+                    "id": "my-plugin",
+                    "path": "plugins/my-plugin.ts",
+                    "timeout": 60,
+                    "emit_logs": true,
+                    "emit_traces": false,
+                    "raw_response": false,
+                    "allow_get_invocation": false,
+                    "config": {
+                        "featureFlag": true,
+                        "apiKey": "xyz123"
+                    },
+                    "forward_logs": true
+                },
+                "error": null
+            })
+        ),
+        (
+            status = 400,
+            description = "Bad Request (invalid timeout or other validation error)",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "error": "Timeout must be greater than 0",
+                "data": null
+            })
+        ),
+        (
+            status = 401,
+            description = "Unauthorized",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "error": "Unauthorized",
+                "data": null
+            })
+        ),
+        (
+            status = 404,
+            description = "Plugin not found",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "error": "Plugin with id my-plugin not found",
+                "data": null
+            })
+        ),
+        (
+            status = 429,
+            description = "Too Many Requests",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "error": "Too Many Requests",
+                "data": null
+            })
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "error": "Internal Server Error",
+                "data": null
+            })
+        )
+    )
+)]
+#[allow(dead_code)]
+fn doc_update_plugin() {}

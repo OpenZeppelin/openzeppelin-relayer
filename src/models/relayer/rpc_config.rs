@@ -139,7 +139,7 @@ impl RpcConfig {
     ///
     /// # Examples
     /// ```rust, ignore
-    /// use crate::models::RpcConfig;
+    /// use openzeppelin_relayer::models::RpcConfig;
     ///
     /// let configs = vec![
     ///     RpcConfig::new("https://api.example.com".to_string()),
@@ -204,11 +204,11 @@ impl From<RpcConfig> for MaskedRpcConfig {
 ///
 /// ```rust,ignore
 /// use serde::Deserialize;
-/// use crate::models::RpcConfig;
+/// use openzeppelin_relayer::models::relayer::{RpcConfig, deserialize_rpc_urls};
 ///
 /// #[derive(Deserialize)]
 /// struct MyConfig {
-///     #[serde(default, deserialize_with = "crate::models::deserialize_rpc_urls")]
+///     #[serde(default, deserialize_with = "deserialize_rpc_urls")]
 ///     rpc_urls: Option<Vec<RpcConfig>>,
 /// }
 /// ```

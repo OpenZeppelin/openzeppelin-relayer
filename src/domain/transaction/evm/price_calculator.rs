@@ -13,18 +13,17 @@
 //!
 //! # Example
 //! ```rust, ignore
-//! # use your_crate::{PriceCalculator, EvmTransactionData, RelayerRepoModel, EvmGasPriceService};
-//! # async fn example<P: EvmProviderTrait>(
+//! # use openzeppelin_relayer::domain::transaction::evm::PriceCalculator;
+//! # use openzeppelin_relayer::models::{EvmTransactionData, RelayerRepoModel, TransactionError};
+//! # use openzeppelin_relayer::services::gas::evm_gas_price::EvmGasPriceServiceTrait;
+//! # async fn example<G: EvmGasPriceServiceTrait>(
+//! #     calculator: &PriceCalculator<G>,
 //! #     tx_data: &EvmTransactionData,
 //! #     relayer: &RelayerRepoModel,
-//! #     gas_price_service: &EvmGasPriceService<P>,
-//! #     provider: &P
 //! # ) -> Result<(), TransactionError> {
-//! let price_params = PriceCalculator::get_transaction_price_params(
+//! let price_params = calculator.get_transaction_price_params(
 //!     tx_data,
-//!     relayer,
-//!     gas_price_service,
-//!     provider
+//!     relayer
 //! ).await?;
 //! # Ok(())
 //! # }

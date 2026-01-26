@@ -21,8 +21,8 @@
 
 use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Data, *};
+use deadpool_redis::{Config, Pool, Runtime};
 use eyre::Result;
-use redis::aio::ConnectionManager;
 use std::env;
 use std::sync::Arc;
 use std::time::Duration;
@@ -128,13 +128,22 @@ async fn handle_cleanup_request(
     let redis_url = ServerConfig::get_redis_url();
     let timeout_ms = ServerConfig::get_redis_connection_timeout_ms();
 
-    let conn = match tokio::time::timeout(
-        Duration::from_millis(timeout_ms),
-        redis::Client::open(redis_url.as_str())?.get_connection_manager(),
-    )
-    .await
-    {
-        Ok(Ok(conn)) => Arc::new(conn),
+    let pool = Config::from_url(redis_url.as_str())
+        .builder()
+        .map_err(|e| eyre::eyre!("Failed to create Redis pool builder: {}", e))?
+        .max_size(ServerConfig::get_redis_pool_max_size())
+        .wait_timeout(Some(Duration::from_millis(
+            ServerConfig::get_redis_pool_timeout_ms(),
+        )))
+        .create_timeout(Some(Duration::from_millis(timeout_ms)))
+        .recycle_timeout(Some(Duration::from_millis(timeout_ms)))
+        .runtime(Runtime::Tokio1)
+        .build()
+        .map_err(|e| eyre::eyre!("Failed to build Redis pool: {}", e))?;
+    let pool = Arc::new(pool);
+
+    match tokio::time::timeout(Duration::from_millis(timeout_ms), pool.get()).await {
+        Ok(Ok(conn)) => drop(conn),
         Ok(Err(e)) => {
             warn!(error = %e, "failed to connect to Redis for system cleanup");
             return Ok(());
@@ -151,7 +160,7 @@ async fn handle_cleanup_request(
     let lock_key = format!("{lock_prefix}:lock:{SYSTEM_CLEANUP_LOCK_NAME}");
 
     let lock = DistributedLock::new(
-        conn.clone(),
+        pool.clone(),
         &lock_key,
         Duration::from_secs(SYSTEM_CLEANUP_LOCK_TTL_SECS),
     );
@@ -197,7 +206,7 @@ async fn handle_cleanup_request(
     for queue_name in QUEUE_NAMES {
         let namespace = format!("{redis_key_prefix}{queue_name}");
 
-        match cleanup_queue(&conn, &namespace, cutoff_timestamp).await {
+        match cleanup_queue(&pool, &namespace, cutoff_timestamp).await {
             Ok(cleaned) => {
                 if cleaned > 0 {
                     debug!(
@@ -239,17 +248,13 @@ async fn handle_cleanup_request(
 /// Cleans up stale job metadata for a single queue namespace.
 ///
 /// # Arguments
-/// * `conn` - Redis connection manager
+/// * `pool` - Redis connection pool
 /// * `namespace` - The queue namespace (e.g., "oz-relayer:queue:transaction_request_queue")
 /// * `cutoff_timestamp` - Unix timestamp; jobs older than this will be cleaned up
 ///
 /// # Returns
 /// * `Result<usize>` - Number of jobs cleaned up
-async fn cleanup_queue(
-    conn: &Arc<ConnectionManager>,
-    namespace: &str,
-    cutoff_timestamp: i64,
-) -> Result<usize> {
+async fn cleanup_queue(pool: &Arc<Pool>, namespace: &str, cutoff_timestamp: i64) -> Result<usize> {
     let mut total_cleaned = 0usize;
     let data_key = format!("{namespace}:data");
     let result_key = format!("{data_key}::result");
@@ -258,7 +263,7 @@ async fn cleanup_queue(
     for suffix in SORTED_SET_SUFFIXES {
         let sorted_set_key = format!("{namespace}{suffix}");
         let cleaned = cleanup_sorted_set_and_hashes(
-            conn,
+            pool,
             &sorted_set_key,
             &data_key,
             &result_key,
@@ -277,7 +282,7 @@ async fn cleanup_queue(
 /// sorted set and both the data and result hashes in a pipeline for efficiency.
 ///
 /// # Arguments
-/// * `conn` - Redis connection manager
+/// * `pool` - Redis connection pool
 /// * `sorted_set_key` - Key of the sorted set (e.g., "queue:transaction_request_queue:done")
 /// * `data_key` - Key of the data hash (e.g., "queue:transaction_request_queue:data")
 /// * `result_key` - Key of the result hash (e.g., "queue:transaction_request_queue:result")
@@ -286,14 +291,14 @@ async fn cleanup_queue(
 /// # Returns
 /// * `Result<usize>` - Number of jobs cleaned up
 async fn cleanup_sorted_set_and_hashes(
-    conn: &Arc<ConnectionManager>,
+    pool: &Arc<Pool>,
     sorted_set_key: &str,
     data_key: &str,
     result_key: &str,
     cutoff_timestamp: i64,
 ) -> Result<usize> {
     let mut total_cleaned = 0usize;
-    let mut conn = (**conn).clone();
+    let mut conn = pool.get().await?;
 
     loop {
         // Get batch of old job IDs from sorted set
