@@ -198,6 +198,7 @@ curl "https://friendbot.stellar.org?addr=YOUR_RELAYER_ADDRESS"
 
 The plugin implements the API defined by the x402 v1 spec, so it works with any packages in that ecosystem. For more information on available packages, see `https://github.com/coinbase/x402`.
 
+
 ### x402-express example
 
 To use OpenZeppelin Relayer and its x402-facilitator plugin with x402-express (and similar packages), point the facilitator to your Relayer plugin URL and pass the Relayer API key via `createAuthHeaders`.
@@ -231,6 +232,14 @@ app.use(
   ),
 );
 ```
+
+### Server Setup (Express)
+
+Set up an Express server with x402 payment middleware. For detailed instructions, see the [x402 Express server guide](https://github.com/coinbase/x402/blob/main/examples/typescript/servers/express/README.md).
+
+### Client Setup (Fetch)
+
+Make requests to x402-protected endpoints using the fetch client. For detailed instructions, see the [x402 Fetch client guide](https://github.com/coinbase/x402/blob/main/examples/typescript/clients/fetch/README.md).
 
 ## How It Works
 
