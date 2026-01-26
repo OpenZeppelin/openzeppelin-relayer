@@ -9,6 +9,7 @@ fn main() {
     }
 
     let node_modules = plugins_dir.join("node_modules");
+    let esbuild_bin = node_modules.join(".bin/esbuild");
     let pool_executor_ts = plugins_dir.join("lib/pool-executor.ts");
     let pool_executor_js = plugins_dir.join("lib/pool-executor.js");
 
@@ -24,9 +25,18 @@ fn main() {
         return;
     }
 
-    // Only run pnpm install if node_modules is missing
-    if !node_modules.exists() {
-        println!("Installing plugin dependencies...");
+    // Check if node_modules or esbuild is missing - need to install dependencies
+    let needs_install = !node_modules.exists() || !esbuild_bin.exists();
+
+    if needs_install {
+        if node_modules.exists() && !esbuild_bin.exists() {
+            println!(
+                "cargo:warning=esbuild not found in node_modules, reinstalling dependencies..."
+            );
+        } else {
+            println!("Installing plugin dependencies...");
+        }
+
         let output = Command::new("pnpm")
             .arg("install")
             .arg("--ignore-scripts") // Skip postinstall, we'll build explicitly below
@@ -46,6 +56,13 @@ fn main() {
                 println!("cargo:warning=Failed to execute pnpm install: {e}");
                 return;
             }
+        }
+
+        // Verify esbuild is now available after install
+        if !esbuild_bin.exists() {
+            println!("cargo:warning=esbuild still not found after pnpm install");
+            println!("cargo:warning=Try running 'pnpm install' manually in plugins/ directory");
+            return;
         }
     }
 
