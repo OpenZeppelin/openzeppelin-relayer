@@ -127,9 +127,9 @@ pub async fn initialize_app_state(
         RepositoryStorageType::InMemory => None,
     };
 
-    let repositories = initialize_repositories(&server_config, redis_connections).await?;
+    let repositories = initialize_repositories(&server_config, redis_connections.clone()).await?;
 
-    let queue = Queue::setup().await?;
+    let queue = Queue::setup(redis_connections).await?;
     let job_producer = Arc::new(jobs::JobProducer::new(queue.clone()));
 
     let app_state = web::ThinData(AppState {
