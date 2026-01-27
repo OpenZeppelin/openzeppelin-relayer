@@ -21,7 +21,7 @@
 
 use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Data, *};
-use deadpool_redis::{Config, Pool, Runtime};
+use deadpool_redis::Pool;
 use eyre::Result;
 use std::env;
 use std::sync::Arc;
@@ -29,8 +29,8 @@ use std::time::Duration;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
-    config::ServerConfig, constants::WORKER_SYSTEM_CLEANUP_RETRIES, jobs::handle_result,
-    models::DefaultAppState, utils::DistributedLock,
+    constants::WORKER_SYSTEM_CLEANUP_RETRIES, jobs::handle_result, models::DefaultAppState,
+    utils::DistributedLock,
 };
 
 /// Distributed lock name for queue cleanup.
@@ -117,47 +117,24 @@ pub async fn system_cleanup_handler(
 /// one instance processes cleanup at a time. If the lock is already held by
 /// another instance, this returns early without doing any work.
 ///
-/// Note: Queue metadata cleanup runs regardless of repository storage type
-/// (in-memory or Redis) because queues always use Redis persistence.
+/// Note: Queue metadata cleanup only runs when using Redis storage.
+/// In-memory mode skips cleanup since distributed locking is not needed.
 async fn handle_cleanup_request(
     _job: SystemCleanupCronReminder,
-    _data: Data<ThinData<DefaultAppState>>,
+    data: Data<ThinData<DefaultAppState>>,
     _attempt: Attempt,
 ) -> Result<()> {
-    // Connect to Redis directly - queues always use Redis regardless of repository storage type
-    let redis_url = ServerConfig::get_redis_url();
-    let timeout_ms = ServerConfig::get_redis_connection_timeout_ms();
-
-    let pool = Config::from_url(redis_url.as_str())
-        .builder()
-        .map_err(|e| eyre::eyre!("Failed to create Redis pool builder: {}", e))?
-        .max_size(ServerConfig::get_redis_pool_max_size())
-        .wait_timeout(Some(Duration::from_millis(
-            ServerConfig::get_redis_pool_timeout_ms(),
-        )))
-        .create_timeout(Some(Duration::from_millis(timeout_ms)))
-        .recycle_timeout(Some(Duration::from_millis(timeout_ms)))
-        .runtime(Runtime::Tokio1)
-        .build()
-        .map_err(|e| eyre::eyre!("Failed to build Redis pool: {}", e))?;
-    let pool = Arc::new(pool);
-
-    match tokio::time::timeout(Duration::from_millis(timeout_ms), pool.get()).await {
-        Ok(Ok(conn)) => drop(conn),
-        Ok(Err(e)) => {
-            warn!(error = %e, "failed to connect to Redis for system cleanup");
-            return Ok(());
-        }
-        Err(_) => {
-            warn!(timeout_ms = %timeout_ms, "timeout connecting to Redis for system cleanup");
+    // Get pool from repository. Skip cleanup for in-memory storage mode
+    // since distributed locking is not needed in that case.
+    let (pool, key_prefix) = match data.transaction_repository().connection_info() {
+        Some((pool, prefix)) => (pool, prefix.to_string()),
+        None => {
+            debug!("in-memory repository detected, skipping system cleanup");
             return Ok(());
         }
     };
 
-    // Get the key prefix used for the distributed lock
-    // This uses the same REDIS_KEY_PREFIX as the repositories
-    let lock_prefix = ServerConfig::get_redis_key_prefix();
-    let lock_key = format!("{lock_prefix}:lock:{SYSTEM_CLEANUP_LOCK_NAME}");
+    let lock_key = format!("{key_prefix}:lock:{SYSTEM_CLEANUP_LOCK_NAME}");
 
     let lock = DistributedLock::new(
         pool.clone(),
