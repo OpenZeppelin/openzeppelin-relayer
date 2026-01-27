@@ -15,14 +15,14 @@ use serde::{Deserialize, Serialize};
 use tokio::time::{timeout, Duration};
 use tracing::error;
 
-use crate::config::ServerConfig;
+use crate::{config::ServerConfig, utils::RedisConnections};
 
 use super::{
     Job, NotificationSend, RelayerHealthCheck, TokenSwapRequest, TransactionRequest,
     TransactionSend, TransactionStatusCheck,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Queue {
     pub transaction_request_queue: RedisStorage<Job<TransactionRequest>>,
     pub transaction_submission_queue: RedisStorage<Job<TransactionSend>>,
@@ -35,6 +35,32 @@ pub struct Queue {
     pub notification_queue: RedisStorage<Job<NotificationSend>>,
     pub token_swap_request_queue: RedisStorage<Job<TokenSwapRequest>>,
     pub relayer_health_check_queue: RedisStorage<Job<RelayerHealthCheck>>,
+    /// Shared Redis connection manager for direct Redis operations
+    pub connection_manager: Arc<ConnectionManager>,
+    /// Optional Redis connection pools for handlers that need pool-based access.
+    /// Available when Redis storage is used, None for in-memory mode.
+    /// In the future queues will use the same connection pools as the repositories.
+    redis_connections: Option<Arc<RedisConnections>>,
+}
+
+impl std::fmt::Debug for Queue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Queue")
+            .field("transaction_request_queue", &"RedisStorage<...>")
+            .field("transaction_submission_queue", &"RedisStorage<...>")
+            .field("transaction_status_queue", &"RedisStorage<...>")
+            .field("transaction_status_queue_evm", &"RedisStorage<...>")
+            .field("transaction_status_queue_stellar", &"RedisStorage<...>")
+            .field("notification_queue", &"RedisStorage<...>")
+            .field("token_swap_request_queue", &"RedisStorage<...>")
+            .field("relayer_health_check_queue", &"RedisStorage<...>")
+            .field("connection_manager", &"ConnectionManager")
+            .field(
+                "redis_connections",
+                &self.redis_connections.as_ref().map(|_| "RedisConnections"),
+            )
+            .finish()
+    }
 }
 
 impl Queue {
@@ -59,12 +85,17 @@ impl Queue {
     /// ConnectionManager provides automatic reconnection on Redis connection failures,
     /// ensuring resilient queue processing.
     ///
-    /// Benefits of this approach:
+    /// # Arguments
+    /// * `redis_connections` - Optional Redis connection pools for handlers that need
+    ///   pool-based access (e.g., for distributed locking). Pass `Some` when using
+    ///   Redis storage, `None` for in-memory mode.
+    ///
+    /// # Benefits
     /// - Automatic reconnection: ConnectionManager handles connection recovery
     /// - Simple and direct: No intermediate connection pooling layer
     /// - Resilient: Queues continue processing even if connections temporarily drop
     /// - Proper timeout handling: Connection attempts have configurable timeouts
-    pub async fn setup() -> Result<Self> {
+    pub async fn setup(redis_connections: Option<Arc<RedisConnections>>) -> Result<Self> {
         let config = ServerConfig::from_env();
         let redis_url = config.redis_url.clone();
         let redis_connection_timeout_ms = config.redis_connection_timeout_ms;
@@ -127,7 +158,19 @@ impl Queue {
                 shared.clone(),
             )
             .await?,
+            connection_manager: shared,
+            redis_connections,
         })
+    }
+
+    /// Returns the Redis connection pools if available.
+    ///
+    /// This provides access to both primary and reader pools for handlers
+    /// that need Redis pool-based access (e.g., for metadata storage, distributed locking).
+    ///
+    /// Returns `None` when using in-memory storage mode.
+    pub fn redis_connections(&self) -> Option<Arc<RedisConnections>> {
+        self.redis_connections.clone()
     }
 }
 
