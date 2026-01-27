@@ -18,7 +18,7 @@ use crate::{
     constants::{get_max_consecutive_status_failures, get_max_total_status_failures},
     domain::{get_relayer_transaction, get_transaction_by_id, is_final_state, Transaction},
     jobs::{Job, StatusCheckContext, TransactionStatusCheck},
-    models::{DefaultAppState, TransactionRepoModel},
+    models::{ApiError, DefaultAppState, TransactionRepoModel},
     observability::request_id::set_request_id,
 };
 
@@ -71,18 +71,19 @@ pub async fn transaction_status_handler(
     };
 
     // Execute status check - all logic moved here so errors go through handle_result
-    let (result, consecutive_failures, total_failures) =
+    let req_result =
         handle_request(&job.data, &state, &redis_conn, attempt.current(), &task_id).await;
 
     let tx_id = &job.data.transaction_id;
 
     // Handle result and update counters in Redis
     handle_result(
-        result,
+        req_result.result,
         &redis_conn,
         tx_id,
-        consecutive_failures,
-        total_failures,
+        req_result.consecutive_failures,
+        req_result.total_failures,
+        req_result.should_retry_on_error,
     )
     .await
 }
@@ -92,8 +93,9 @@ pub async fn transaction_status_handler(
 /// # Strategy
 /// - If transaction is in final state → Clean up counters, return Ok (job completes)
 /// - If success but not final → Reset consecutive to 0 in Redis, return Err (Apalis retries)
-/// - If error → Increment counters in Redis, return Err (Apalis retries)
-/// - If counters are None (early failure) → Skip counter updates, just return error
+/// - If error with should_retry=true → Increment counters in Redis, return Err (Apalis retries)
+/// - If error with should_retry=false → Return Ok (job completes, e.g., transaction not found)
+/// - If counters are None (early failure) → Skip counter updates
 ///
 /// Counters are stored in a separate Redis key by tx_id, independent of Apalis job data.
 async fn handle_result(
@@ -102,6 +104,7 @@ async fn handle_result(
     tx_id: &str,
     consecutive_failures: Option<u32>,
     total_failures: Option<u32>,
+    should_retry_on_error: bool,
 ) -> Result<(), Error> {
     match result {
         Ok(tx) if is_final_state(&tx.status) => {
@@ -123,16 +126,22 @@ async fn handle_result(
         }
         Ok(tx) => {
             // Success but not final - RESET consecutive counter, keep total unchanged
-            info!(
+            debug!(
                 tx_id = %tx.id,
                 status = ?tx.status,
-                "transaction not in final state, resetting consecutive failures"
+                "transaction not in final state"
             );
 
-            // Reset consecutive counter in Redis (only if we have counter values)
-            if let Some(total) = total_failures {
-                if let Err(e) = update_counters_in_redis(redis_conn, tx_id, 0, total).await {
-                    warn!(error = %e, tx_id = %tx_id, "failed to reset consecutive counter in Redis");
+            // Reset consecutive counter in Redis only if there were previous failures
+            // This avoids creating Redis entries for transactions that never failed
+            match (consecutive_failures, total_failures) {
+                (Some(consecutive), Some(total)) if consecutive > 0 || total > 0 => {
+                    if let Err(e) = update_counters_in_redis(redis_conn, tx_id, 0, total).await {
+                        warn!(error = %e, tx_id = %tx_id, "failed to reset consecutive counter in Redis");
+                    }
+                }
+                _ => {
+                    // No previous failures or counters not available - nothing to reset
                 }
             }
 
@@ -146,7 +155,17 @@ async fn handle_result(
             )))
         }
         Err(e) => {
-            // Error occurred - INCREMENT both counters (only if we have values)
+            // Check if this is a permanent failure that shouldn't retry
+            if !should_retry_on_error {
+                info!(
+                    error = %e,
+                    tx_id = %tx_id,
+                    "status check failed with permanent error, completing job without retry"
+                );
+                return Ok(());
+            }
+
+            // Transient error - INCREMENT both counters (only if we have values)
             match (consecutive_failures, total_failures) {
                 (Some(consecutive), Some(total)) => {
                     let new_consecutive = consecutive.saturating_add(1);
@@ -359,23 +378,48 @@ async fn delete_counters_from_redis(redis_conn: &RedisConn, tx_id: &str) -> Resu
     Ok(())
 }
 
-/// Executes the status check logic and returns (result, consecutive_failures, total_failures).
+/// Result of handle_request including whether to retry on error.
+struct HandleRequestResult {
+    result: Result<TransactionRepoModel>,
+    consecutive_failures: Option<u32>,
+    total_failures: Option<u32>,
+    /// If false, errors should not trigger retry (e.g., transaction not found)
+    should_retry_on_error: bool,
+}
+
+/// Executes the status check logic and returns the result with counter values.
 /// Returns None for counters if they couldn't be read (e.g., transaction fetch failed early).
-/// All errors from this function go through handle_result for proper counter tracking.
+/// Sets should_retry_on_error=false for permanent failures like transaction not found.
 async fn handle_request(
     status_request: &TransactionStatusCheck,
     state: &Data<ThinData<DefaultAppState>>,
     redis_conn: &RedisConn,
     attempt: usize,
     task_id: &TaskId,
-) -> (Result<TransactionRepoModel>, Option<u32>, Option<u32>) {
+) -> HandleRequestResult {
     let tx_id = &status_request.transaction_id;
 
     // Fetch transaction - if this fails, we can't read counters yet
     let transaction = match get_transaction_by_id(tx_id.clone(), state).await {
         Ok(tx) => tx,
+        Err(ApiError::NotFound(msg)) => {
+            // Transaction not found - permanent failure, don't retry
+            warn!(tx_id = %tx_id, "transaction not found, completing job without retry: {}", msg);
+            return HandleRequestResult {
+                result: Err(eyre::eyre!("Transaction not found: {}", msg)),
+                consecutive_failures: None,
+                total_failures: None,
+                should_retry_on_error: false,
+            };
+        }
         Err(e) => {
-            return (Err(e.into()), None, None);
+            // Other errors - should retry
+            return HandleRequestResult {
+                result: Err(e.into()),
+                consecutive_failures: None,
+                total_failures: None,
+                should_retry_on_error: true,
+            };
         }
     };
 
@@ -413,12 +457,28 @@ async fn handle_request(
     let relayer_transaction =
         match get_relayer_transaction(status_request.relayer_id.clone(), state).await {
             Ok(rt) => rt,
-            Err(e) => {
-                return (
-                    Err(e.into()),
-                    Some(consecutive_failures),
-                    Some(total_failures),
+            Err(ApiError::NotFound(msg)) => {
+                // Relayer or signer not found - permanent failure, don't retry
+                warn!(
+                    tx_id = %tx_id,
+                    relayer_id = %status_request.relayer_id,
+                    "relayer or signer not found, completing job without retry: {}", msg
                 );
+                return HandleRequestResult {
+                    result: Err(eyre::eyre!("Relayer or signer not found: {}", msg)),
+                    consecutive_failures: Some(consecutive_failures),
+                    total_failures: Some(total_failures),
+                    should_retry_on_error: false,
+                };
+            }
+            Err(e) => {
+                // Other errors - should retry
+                return HandleRequestResult {
+                    result: Err(e.into()),
+                    consecutive_failures: Some(consecutive_failures),
+                    total_failures: Some(total_failures),
+                    should_retry_on_error: true,
+                };
             }
         };
 
@@ -435,7 +495,12 @@ async fn handle_request(
         );
     }
 
-    (result, Some(consecutive_failures), Some(total_failures))
+    HandleRequestResult {
+        result,
+        consecutive_failures: Some(consecutive_failures),
+        total_failures: Some(total_failures),
+        should_retry_on_error: true,
+    }
 }
 
 #[cfg(test)]
@@ -646,6 +711,69 @@ mod tests {
                     status
                 );
             }
+        }
+    }
+
+    mod handle_request_result_tests {
+        use super::*;
+
+        #[test]
+        fn test_handle_request_result_with_counters() {
+            let result = HandleRequestResult {
+                result: Ok(TransactionRepoModel::default()),
+                consecutive_failures: Some(5),
+                total_failures: Some(10),
+                should_retry_on_error: true,
+            };
+
+            assert!(result.result.is_ok());
+            assert_eq!(result.consecutive_failures, Some(5));
+            assert_eq!(result.total_failures, Some(10));
+            assert!(result.should_retry_on_error);
+        }
+
+        #[test]
+        fn test_handle_request_result_without_counters() {
+            // Early failure before counters could be read
+            let result = HandleRequestResult {
+                result: Err(eyre::eyre!("Transaction not found")),
+                consecutive_failures: None,
+                total_failures: None,
+                should_retry_on_error: false,
+            };
+
+            assert!(result.result.is_err());
+            assert_eq!(result.consecutive_failures, None);
+            assert_eq!(result.total_failures, None);
+            assert!(!result.should_retry_on_error);
+        }
+
+        #[test]
+        fn test_permanent_error_should_not_retry() {
+            // NotFound errors are permanent - should not retry
+            let result = HandleRequestResult {
+                result: Err(eyre::eyre!("Transaction not found")),
+                consecutive_failures: None,
+                total_failures: None,
+                should_retry_on_error: false,
+            };
+
+            // Permanent errors have should_retry_on_error = false
+            assert!(!result.should_retry_on_error);
+        }
+
+        #[test]
+        fn test_transient_error_should_retry() {
+            // Network/connection errors are transient - should retry
+            let result = HandleRequestResult {
+                result: Err(eyre::eyre!("Connection timeout")),
+                consecutive_failures: Some(3),
+                total_failures: Some(7),
+                should_retry_on_error: true,
+            };
+
+            // Transient errors have should_retry_on_error = true
+            assert!(result.should_retry_on_error);
         }
     }
 }
