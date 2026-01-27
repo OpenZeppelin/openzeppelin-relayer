@@ -124,8 +124,6 @@ async fn handle_cleanup_request(
     data: Data<ThinData<DefaultAppState>>,
     _attempt: Attempt,
 ) -> Result<()> {
-    // Get pool from repository. Skip cleanup for in-memory storage mode
-    // since distributed locking is not needed in that case.
     let (pool, key_prefix) = match data.transaction_repository().connection_info() {
         Some((pool, prefix)) => (pool, prefix.to_string()),
         None => {
