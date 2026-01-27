@@ -194,7 +194,7 @@ When `channel_service_api_url` and `channel_service_api_key` are configured, the
 
 ## API Usage
 
-The x402 Facilitator plugin implements the X402 v1 specification API, providing three main endpoints:
+The x402 Facilitator plugin implements the X402 v2 specification API, providing three main endpoints:
 
 - **`/verify`**: Verifies a payment payload against payment requirements
 - **`/settle`**: Settles a verified payment by submitting the transaction on-chain
@@ -252,6 +252,14 @@ app.use(
   ),
 );
 ```
+
+### Server Setup (Express)
+
+Set up an Express server with x402 payment middleware. For detailed instructions, see the [x402 Express server guide](https://github.com/coinbase/x402/blob/main/examples/typescript/servers/express/README.md).
+
+### Client Setup (Fetch)
+
+Make requests to x402-protected endpoints using the fetch client. For detailed instructions, see the [x402 Fetch client guide](https://github.com/coinbase/x402/blob/main/examples/typescript/clients/fetch/README.md).
 
 ## How It Works
 
