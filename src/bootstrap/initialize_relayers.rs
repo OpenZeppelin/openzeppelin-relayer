@@ -30,7 +30,7 @@ use crate::{
     utils::{is_global_init_recently_completed, set_global_init_completed, DistributedLock},
 };
 use color_eyre::{eyre::WrapErr, Result};
-use redis::aio::ConnectionManager;
+use deadpool_redis::Pool;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -144,7 +144,7 @@ where
 async fn initialize_with_global_lock<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     relayers: &[RelayerRepoModel],
     app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
-    conn: &Arc<ConnectionManager>,
+    conn: &Arc<Pool>,
     prefix: &str,
 ) -> Result<()>
 where
@@ -223,10 +223,7 @@ where
 /// Polls periodically until:
 /// - Initialization is completed (detected via recent completion timestamp)
 /// - Timeout is reached (proceeds anyway)
-async fn wait_for_initialization_complete(
-    conn: &Arc<ConnectionManager>,
-    prefix: &str,
-) -> Result<()> {
+async fn wait_for_initialization_complete(conn: &Arc<Pool>, prefix: &str) -> Result<()> {
     let max_wait = Duration::from_secs(LOCK_WAIT_MAX_DURATION_SECS);
     let poll_interval = Duration::from_millis(LOCK_WAIT_POLL_INTERVAL_MS);
     let start = std::time::Instant::now();
@@ -685,11 +682,17 @@ mod tests {
     use crate::utils::mocks::mockutils::create_mock_app_state;
     use actix_web::web::ThinData;
 
-    /// Helper to create a Redis connection for integration tests.
-    async fn create_test_redis_connection() -> Option<Arc<redis::aio::ConnectionManager>> {
-        let client = redis::Client::open("redis://127.0.0.1:6379").ok()?;
-        let conn = redis::aio::ConnectionManager::new(client).await.ok()?;
-        Some(Arc::new(conn))
+    /// Helper to create a Redis connection pool for integration tests.
+    async fn create_test_redis_pool() -> Option<Arc<Pool>> {
+        let cfg = deadpool_redis::Config::from_url("redis://127.0.0.1:6379");
+        let pool = cfg
+            .builder()
+            .ok()?
+            .max_size(16)
+            .runtime(deadpool_redis::Runtime::Tokio1)
+            .build()
+            .ok()?;
+        Some(Arc::new(pool))
     }
 
     // --- Tests for initialize_all_relayers ---
@@ -749,7 +752,7 @@ mod tests {
     #[tokio::test]
     #[ignore] // Requires running Redis instance
     async fn test_initialize_with_global_lock_skips_when_recently_completed() {
-        let conn = create_test_redis_connection()
+        let conn = create_test_redis_pool()
             .await
             .expect("Redis connection required");
 
@@ -778,7 +781,7 @@ mod tests {
         );
 
         // Cleanup
-        let mut conn_clone = (*conn).clone();
+        let mut conn_clone = conn.get().await.expect("Failed to get connection");
         let hash_key = format!("{}:relayer_sync_meta", prefix);
         let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &hash_key).await;
     }
@@ -786,7 +789,7 @@ mod tests {
     #[tokio::test]
     #[ignore] // Requires running Redis instance
     async fn test_initialize_with_global_lock_acquires_lock() {
-        let conn = create_test_redis_connection()
+        let conn = create_test_redis_pool()
             .await
             .expect("Redis connection required");
 
@@ -801,11 +804,13 @@ mod tests {
         let prefix = "test_global_acquire_lock";
 
         // Clear any existing state
-        let mut conn_clone = (*conn).clone();
-        let hash_key = format!("{}:relayer_sync_meta", prefix);
-        let lock_key = format!("{}:lock:{}", prefix, GLOBAL_INIT_LOCK_NAME);
-        let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &hash_key).await;
-        let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &lock_key).await;
+        {
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
+            let hash_key = format!("{}:relayer_sync_meta", prefix);
+            let lock_key = format!("{}:lock:{}", prefix, GLOBAL_INIT_LOCK_NAME);
+            let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &hash_key).await;
+            let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &lock_key).await;
+        }
 
         let result = initialize_with_global_lock(&relayers, &thin_state, &conn, prefix).await;
 
@@ -822,14 +827,19 @@ mod tests {
         assert!(!is_recent, "Should NOT record completion time on failure");
 
         // Cleanup
-        let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &hash_key).await;
-        let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &lock_key).await;
+        {
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
+            let hash_key = format!("{}:relayer_sync_meta", prefix);
+            let lock_key = format!("{}:lock:{}", prefix, GLOBAL_INIT_LOCK_NAME);
+            let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &hash_key).await;
+            let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &lock_key).await;
+        }
     }
 
     #[tokio::test]
     #[ignore] // Requires running Redis instance
     async fn test_initialize_with_global_lock_waits_when_lock_held() {
-        let conn = create_test_redis_connection()
+        let conn = create_test_redis_pool()
             .await
             .expect("Redis connection required");
 
@@ -839,13 +849,15 @@ mod tests {
         let thin_state = ThinData(app_state);
 
         let prefix = "test_global_wait_lock";
-
-        // Clear any existing state
-        let mut conn_clone = (*conn).clone();
         let hash_key = format!("{}:relayer_sync_meta", prefix);
         let lock_key = format!("{}:lock:{}", prefix, GLOBAL_INIT_LOCK_NAME);
-        let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &hash_key).await;
-        let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &lock_key).await;
+
+        // Clear any existing state
+        {
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
+            let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &hash_key).await;
+            let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &lock_key).await;
+        }
 
         // Acquire lock to simulate another instance initializing
         let lock = DistributedLock::new(conn.clone(), &lock_key, Duration::from_secs(5));
@@ -876,8 +888,11 @@ mod tests {
         );
 
         // Cleanup
-        let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &hash_key).await;
-        let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &lock_key).await;
+        {
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
+            let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &hash_key).await;
+            let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &lock_key).await;
+        }
     }
 
     // --- Tests for initialize_relayers main function ---

@@ -18,8 +18,8 @@
 //! - [`RedisNetworkRepository`]: Redis-backed storage for production environments
 //!
 
+use crate::utils::RedisConnections;
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
 use std::sync::Arc;
 
 mod network_in_memory;
@@ -60,10 +60,10 @@ impl NetworkRepositoryStorage {
     }
 
     pub fn new_redis(
-        connection_manager: Arc<ConnectionManager>,
+        connections: Arc<RedisConnections>,
         key_prefix: String,
     ) -> Result<Self, RepositoryError> {
-        let redis_repo = RedisNetworkRepository::new(connection_manager, key_prefix)?;
+        let redis_repo = RedisNetworkRepository::new(connections, key_prefix)?;
         Ok(Self::Redis(redis_repo))
     }
 }

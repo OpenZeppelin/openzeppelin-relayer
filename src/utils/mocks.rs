@@ -316,6 +316,8 @@ pub mod mockutils {
             metrics_port: 8081,
             enable_swagger: false,
             redis_connection_timeout_ms: 5000,
+            redis_pool_max_size: 10,
+            redis_pool_timeout_ms: 5000,
             redis_key_prefix: "test-oz-relayer".to_string(),
             rpc_timeout_ms: 10000,
             provider_max_retries: 3,
@@ -337,6 +339,8 @@ pub mod mockutils {
             max_connections: 256,
             connection_backlog: 511,
             request_timeout_seconds: 30,
+            redis_reader_url: None,
+            redis_reader_pool_max_size: 1000,
         }
     }
 }

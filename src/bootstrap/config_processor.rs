@@ -32,8 +32,8 @@ use crate::{
     utils::DistributedLock,
 };
 use color_eyre::{eyre::WrapErr, Report, Result};
+use deadpool_redis::Pool;
 use futures::future::try_join_all;
-use redis::aio::ConnectionManager;
 use tracing::{info, warn};
 
 /// TTL for the config processing lock in seconds.
@@ -422,7 +422,7 @@ async fn process_config_with_lock<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     config_file: &Config,
     server_config: &ServerConfig,
     app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
-    conn: &Arc<ConnectionManager>,
+    conn: &Arc<Pool>,
     prefix: &str,
 ) -> Result<()>
 where

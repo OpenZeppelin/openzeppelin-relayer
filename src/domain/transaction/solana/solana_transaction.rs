@@ -22,7 +22,7 @@ use crate::{
         },
         Transaction,
     },
-    jobs::{JobProducer, JobProducerTrait, TransactionSend},
+    jobs::{JobProducer, JobProducerTrait, StatusCheckContext, TransactionSend},
     models::{
         produce_transaction_update_notification_payload, EncodedSerializedTransaction,
         NetworkTransactionData, NetworkTransactionRequest, RelayerRepoModel, SolanaTransactionData,
@@ -573,7 +573,7 @@ where
     }
 
     /// Marks a transaction as failed and updates the database.
-    async fn mark_transaction_as_failed(
+    pub(super) async fn mark_transaction_as_failed(
         &self,
         tx: &TransactionRepoModel,
         error: &TransactionError,
@@ -698,8 +698,9 @@ where
     async fn handle_transaction_status(
         &self,
         tx: TransactionRepoModel,
+        context: Option<StatusCheckContext>,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        self.handle_transaction_status_impl(tx).await
+        self.handle_transaction_status_impl(tx, context).await
     }
 
     async fn cancel_transaction(
@@ -1699,7 +1700,7 @@ mod tests {
         // Call handle_transaction_status - with new implementation,
         // Pending transactions just return Ok without querying provider
         let result = transaction_handler
-            .handle_transaction_status(test_tx.clone())
+            .handle_transaction_status(test_tx.clone(), None)
             .await;
 
         // Verify the result is Ok and transaction is unchanged

@@ -6,8 +6,8 @@ use crate::models::{
 };
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{BatchRetrievalResult, PaginatedResult, RelayerRepository, Repository};
+use crate::utils::RedisConnections;
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
@@ -18,7 +18,7 @@ const RELAYER_LIST_KEY: &str = "relayer_list";
 
 #[derive(Clone)]
 pub struct RedisRelayerRepository {
-    pub client: Arc<ConnectionManager>,
+    pub connections: Arc<RedisConnections>,
     pub key_prefix: String,
 }
 
@@ -26,7 +26,7 @@ impl RedisRepository for RedisRelayerRepository {}
 
 impl RedisRelayerRepository {
     pub fn new(
-        connection_manager: Arc<ConnectionManager>,
+        connections: Arc<RedisConnections>,
         key_prefix: String,
     ) -> Result<Self, RepositoryError> {
         if key_prefix.is_empty() {
@@ -36,7 +36,7 @@ impl RedisRelayerRepository {
         }
 
         Ok(Self {
-            client: connection_manager,
+            connections,
             key_prefix,
         })
     }
@@ -64,7 +64,9 @@ impl RedisRelayerRepository {
             });
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.reader(), "batch_fetch_relayers")
+            .await?;
         let keys: Vec<String> = ids.iter().map(|id| self.relayer_key(id)).collect();
 
         debug!(count = %keys.len(), "batch fetching relayer data");
@@ -111,7 +113,7 @@ impl RedisRelayerRepository {
 impl fmt::Debug for RedisRelayerRepository {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RedisRelayerRepository")
-            .field("client", &"<ConnectionManager>")
+            .field("connections", &"<RedisConnections>")
             .field("key_prefix", &self.key_prefix)
             .finish()
     }
@@ -132,7 +134,9 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
             ));
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.primary(), "create")
+            .await?;
         let relayer_key = self.relayer_key(&entity.id);
 
         // Check if relayer already exists
@@ -171,7 +175,9 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
             ));
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.reader(), "get_by_id")
+            .await?;
         let relayer_key = self.relayer_key(&id);
 
         debug!(relayer_id = %id, "fetching relayer");
@@ -196,17 +202,23 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
     }
 
     async fn list_all(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
-        let relayer_list_key = self.relayer_list_key();
+        let relayer_ids = {
+            let mut conn = self
+                .get_connection(self.connections.reader(), "list_all")
+                .await?;
+            let relayer_list_key = self.relayer_list_key();
 
-        debug!("listing all relayers");
+            debug!("listing all relayers");
 
-        let relayer_ids: Vec<String> = conn
-            .smembers(&relayer_list_key)
-            .await
-            .map_err(|e| self.map_redis_error(e, "list_all_relayers"))?;
+            let ids: Vec<String> = conn
+                .smembers(&relayer_list_key)
+                .await
+                .map_err(|e| self.map_redis_error(e, "list_all_relayers"))?;
 
-        debug!(count = %relayer_ids.len(), "found relayers in index");
+            debug!(count = %ids.len(), "found relayers in index");
+            ids
+            // Connection dropped here before nested call to avoid connection doubling
+        };
 
         let relayers = self.get_relayers_by_ids(&relayer_ids).await?;
         Ok(relayers.results)
@@ -228,35 +240,41 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
             ));
         }
 
-        let mut conn = self.client.as_ref().clone();
-        let relayer_list_key = self.relayer_list_key();
+        let (total, page_ids) = {
+            let mut conn = self
+                .get_connection(self.connections.reader(), "list_paginated")
+                .await?;
+            let relayer_list_key = self.relayer_list_key();
 
-        // Get total count
-        let total: u64 = conn
-            .scard(&relayer_list_key)
-            .await
-            .map_err(|e| self.map_redis_error(e, "list_paginated_count"))?;
+            // Get total count
+            let total: u64 = conn
+                .scard(&relayer_list_key)
+                .await
+                .map_err(|e| self.map_redis_error(e, "list_paginated_count"))?;
 
-        if total == 0 {
-            return Ok(PaginatedResult {
-                items: vec![],
-                total: 0,
-                page: query.page,
-                per_page: query.per_page,
-            });
-        }
+            if total == 0 {
+                return Ok(PaginatedResult {
+                    items: vec![],
+                    total: 0,
+                    page: query.page,
+                    per_page: query.per_page,
+                });
+            }
 
-        // Get all IDs and paginate in memory
-        let all_ids: Vec<String> = conn
-            .smembers(&relayer_list_key)
-            .await
-            .map_err(|e| self.map_redis_error(e, "list_paginated_members"))?;
+            // Get all IDs and paginate in memory
+            let all_ids: Vec<String> = conn
+                .smembers(&relayer_list_key)
+                .await
+                .map_err(|e| self.map_redis_error(e, "list_paginated_members"))?;
 
-        let start = ((query.page - 1) * query.per_page) as usize;
-        let end = (start + query.per_page as usize).min(all_ids.len());
+            let start = ((query.page - 1) * query.per_page) as usize;
+            let end = (start + query.per_page as usize).min(all_ids.len());
 
-        let page_ids = &all_ids[start..end];
-        let items = self.get_relayers_by_ids(page_ids).await?;
+            (total, all_ids[start..end].to_vec())
+            // Connection dropped here before nested call to avoid connection doubling
+        };
+
+        let items = self.get_relayers_by_ids(&page_ids).await?;
 
         Ok(PaginatedResult {
             items: items.results.clone(),
@@ -283,7 +301,9 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
             ));
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.primary(), "update")
+            .await?;
         let relayer_key = self.relayer_key(&id);
 
         // Check if relayer exists
@@ -325,7 +345,9 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
             ));
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.primary(), "delete_by_id")
+            .await?;
         let relayer_key = self.relayer_key(&id);
 
         // Check if relayer exists
@@ -355,7 +377,9 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.reader(), "count")
+            .await?;
         let relayer_list_key = self.relayer_list_key();
 
         let count: u64 = conn
@@ -367,7 +391,9 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
     }
 
     async fn has_entries(&self) -> Result<bool, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.reader(), "has_entries")
+            .await?;
         let relayer_list_key = self.relayer_list_key();
 
         debug!("checking if relayer entries exist");
@@ -382,7 +408,9 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
     }
 
     async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.primary(), "drop_all_entries")
+            .await?;
         let relayer_list_key = self.relayer_list_key();
 
         debug!("dropping all relayer entries");
@@ -533,8 +561,8 @@ impl RelayerRepository for RedisRelayerRepository {
         true
     }
 
-    fn connection_info(&self) -> Option<(Arc<ConnectionManager>, String)> {
-        Some((self.client.clone(), self.key_prefix.clone()))
+    fn connection_info(&self) -> Option<(Arc<deadpool_redis::Pool>, String)> {
+        Some((self.connections.primary().clone(), self.key_prefix.clone()))
     }
 }
 
@@ -542,7 +570,7 @@ impl RelayerRepository for RedisRelayerRepository {
 mod tests {
     use super::*;
     use crate::models::{NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy};
-    use redis::aio::ConnectionManager;
+    use deadpool_redis::{Config, Runtime};
     use std::sync::Arc;
 
     fn create_test_relayer(id: &str) -> RelayerRepoModel {
@@ -571,12 +599,21 @@ mod tests {
     async fn setup_test_repo() -> RedisRelayerRepository {
         let redis_url =
             std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string());
-        let client = redis::Client::open(redis_url).expect("Failed to create Redis client");
-        let connection_manager = ConnectionManager::new(client)
-            .await
-            .expect("Failed to create Redis connection manager");
+        let cfg = Config::from_url(&redis_url);
+        let pool = Arc::new(
+            cfg.builder()
+                .expect("Failed to create pool builder")
+                .max_size(16)
+                .runtime(Runtime::Tokio1)
+                .build()
+                .expect("Failed to build Redis pool"),
+        );
+        let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
-        RedisRelayerRepository::new(Arc::new(connection_manager), "test".to_string())
+        let random_id = uuid::Uuid::new_v4().to_string();
+        let key_prefix = format!("test_prefix:{}", random_id);
+
+        RedisRelayerRepository::new(connections, key_prefix)
             .expect("Failed to create Redis relayer repository")
     }
 
@@ -584,7 +621,7 @@ mod tests {
     #[tokio::test]
     async fn test_new_repository_creation() {
         let repo = setup_test_repo().await;
-        assert_eq!(repo.key_prefix, "test");
+        assert!(repo.key_prefix.contains("test_prefix"));
     }
 
     #[ignore = "Requires active Redis instance"]
@@ -592,12 +629,18 @@ mod tests {
     async fn test_new_repository_empty_prefix_fails() {
         let redis_url =
             std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string());
-        let client = redis::Client::open(redis_url).expect("Failed to create Redis client");
-        let connection_manager = ConnectionManager::new(client)
-            .await
-            .expect("Failed to create Redis connection manager");
+        let cfg = Config::from_url(&redis_url);
+        let pool = Arc::new(
+            cfg.builder()
+                .expect("Failed to create pool builder")
+                .max_size(16)
+                .runtime(Runtime::Tokio1)
+                .build()
+                .expect("Failed to build Redis pool"),
+        );
+        let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
-        let result = RedisRelayerRepository::new(Arc::new(connection_manager), "".to_string());
+        let result = RedisRelayerRepository::new(connections, "".to_string());
         assert!(matches!(result, Err(RepositoryError::InvalidData(_))));
     }
 
@@ -607,10 +650,10 @@ mod tests {
         let repo = setup_test_repo().await;
 
         let relayer_key = repo.relayer_key("test-relayer");
-        assert_eq!(relayer_key, "test:relayer:test-relayer");
+        assert!(relayer_key.contains(":relayer:test-relayer"));
 
         let list_key = repo.relayer_list_key();
-        assert_eq!(list_key, "test:relayer_list");
+        assert!(list_key.contains(":relayer_list"));
     }
 
     #[ignore = "Requires active Redis instance"]

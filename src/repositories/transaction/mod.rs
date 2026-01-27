@@ -21,7 +21,7 @@
 mod transaction_in_memory;
 mod transaction_redis;
 
-use redis::aio::ConnectionManager;
+use deadpool_redis::Pool;
 pub use transaction_in_memory::*;
 pub use transaction_redis::*;
 
@@ -30,6 +30,7 @@ use crate::{
         NetworkTransactionData, TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{BatchDeleteResult, TransactionDeleteRequest, *},
+    utils::RedisConnections,
 };
 use async_trait::async_trait;
 use eyre::Result;
@@ -203,29 +204,29 @@ impl TransactionRepositoryStorage {
         Self::InMemory(InMemoryTransactionRepository::new())
     }
     pub fn new_redis(
-        connection_manager: Arc<ConnectionManager>,
+        connections: Arc<RedisConnections>,
         key_prefix: String,
     ) -> Result<Self, RepositoryError> {
         Ok(Self::Redis(RedisTransactionRepository::new(
-            connection_manager,
+            connections,
             key_prefix,
         )?))
     }
 
-    /// Returns the underlying connection manager and key prefix if this is a persistent storage backend.
+    /// Returns the underlying primary connection pool and key prefix if this is a persistent storage backend.
     ///
     /// This is useful for operations that need direct storage access, such as
     /// distributed locking. The key prefix is used to namespace keys for multi-tenant
     /// deployments. Currently supports Redis, but the design allows for future backends.
     ///
     /// # Returns
-    /// * `Some((connection, prefix))` - If using persistent storage (e.g., Redis)
+    /// * `Some((pool, prefix))` - If using persistent storage (e.g., Redis) - returns primary pool
     /// * `None` - If using in-memory storage
-    pub fn connection_info(&self) -> Option<(Arc<ConnectionManager>, &str)> {
+    pub fn connection_info(&self) -> Option<(Arc<Pool>, &str)> {
         match self {
             TransactionRepositoryStorage::InMemory(_) => None,
             TransactionRepositoryStorage::Redis(repo) => {
-                Some((repo.client.clone(), &repo.key_prefix))
+                Some((repo.connections.primary().clone(), &repo.key_prefix))
             }
         }
     }
@@ -475,7 +476,7 @@ impl Repository<TransactionRepoModel, String> for TransactionRepositoryStorage {
 mod tests {
     use chrono::Utc;
     use color_eyre::Result;
-    use redis::Client;
+    use deadpool_redis::{Config, Runtime};
 
     use super::*;
     use crate::models::{
@@ -555,21 +556,25 @@ mod tests {
     async fn test_connection_info_returns_some_for_redis() -> Result<()> {
         let redis_url = std::env::var("REDIS_TEST_URL")
             .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-        let client = Client::open(redis_url)?;
-        let connection_manager = ConnectionManager::new(client).await?;
-        let connection_manager = Arc::new(connection_manager);
+        let cfg = Config::from_url(&redis_url);
+        let pool = Arc::new(
+            cfg.builder()
+                .map_err(|e| eyre::eyre!("Failed to create Redis pool builder: {}", e))?
+                .max_size(16)
+                .runtime(Runtime::Tokio1)
+                .build()
+                .map_err(|e| eyre::eyre!("Failed to build Redis pool: {}", e))?,
+        );
+        let connections = Arc::new(RedisConnections::new_single_pool(pool.clone()));
         let key_prefix = "test_prefix".to_string();
 
-        let storage = TransactionRepositoryStorage::new_redis(
-            connection_manager.clone(),
-            key_prefix.clone(),
-        )?;
+        let storage = TransactionRepositoryStorage::new_redis(connections, key_prefix.clone())?;
 
         let (returned_connection, returned_prefix) = storage
             .connection_info()
             .expect("Expected Redis connection info");
 
-        assert!(Arc::ptr_eq(&connection_manager, &returned_connection));
+        assert!(Arc::ptr_eq(&pool, &returned_connection));
         assert_eq!(returned_prefix, key_prefix);
 
         Ok(())

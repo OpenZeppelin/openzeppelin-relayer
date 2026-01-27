@@ -22,7 +22,7 @@ export async function handler(context: PluginContext): Promise<JsonRpcResponseNe
       method: 'eth_blockNumber',
       id: 1,
       jsonrpc: '2.0',
-      params: [],
+      params: ['latest'],
     });
 
     return result;

@@ -2,13 +2,156 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use color_eyre::Result;
-use redis::aio::ConnectionManager;
-use tokio::time::timeout;
-use tracing::{debug, warn};
+use deadpool_redis::{Config, Pool, Runtime};
+use tracing::{debug, info, warn};
 
 use crate::config::ServerConfig;
 
-/// Initializes a Redis connection manager.
+/// Holds separate connection pools for read and write operations.
+///
+/// This struct enables optimization for Redis deployments with read replicas,
+/// such as AWS ElastiCache. Write operations use the primary pool, while read
+/// operations can be distributed across reader replicas.
+///
+/// When `REDIS_READER_URL` is not configured, both pools point to the same
+/// Redis instance (the primary), maintaining backward compatibility.
+#[derive(Clone, Debug)]
+pub struct RedisConnections {
+    /// Pool for write operations (connected to primary endpoint)
+    primary_pool: Arc<Pool>,
+    /// Pool for read operations (connected to reader endpoint, or primary if not configured)
+    reader_pool: Arc<Pool>,
+}
+
+impl RedisConnections {
+    /// Creates a new `RedisConnections` with a single pool used for both reads and writes.
+    ///
+    /// This is useful for:
+    /// - Testing where read/write separation is not needed
+    /// - Simple deployments without read replicas
+    /// - Backward compatibility
+    pub fn new_single_pool(pool: Arc<Pool>) -> Self {
+        Self {
+            primary_pool: pool.clone(),
+            reader_pool: pool,
+        }
+    }
+
+    /// Returns the primary pool for write operations.
+    ///
+    /// Use this for: `create`, `update`, `delete`, and any operation that
+    /// modifies data in Redis.
+    pub fn primary(&self) -> &Arc<Pool> {
+        &self.primary_pool
+    }
+
+    /// Returns the reader pool for read operations.
+    ///
+    /// Use this for: `get_by_id`, `list`, `find_by_*`, `count`, and any
+    /// operation that only reads data from Redis.
+    ///
+    /// If no reader endpoint is configured, this returns the same pool as `primary()`.
+    pub fn reader(&self) -> &Arc<Pool> {
+        &self.reader_pool
+    }
+}
+
+/// Creates a Redis connection pool with the specified URL, pool size, and configuration.
+async fn create_pool(url: &str, pool_max_size: usize, config: &ServerConfig) -> Result<Arc<Pool>> {
+    let cfg = Config::from_url(url);
+
+    let pool = cfg
+        .builder()
+        .map_err(|e| eyre::eyre!("Failed to create Redis pool builder for {}: {}", url, e))?
+        .max_size(pool_max_size)
+        .wait_timeout(Some(Duration::from_millis(config.redis_pool_timeout_ms)))
+        .create_timeout(Some(Duration::from_millis(
+            config.redis_connection_timeout_ms,
+        )))
+        .recycle_timeout(Some(Duration::from_millis(
+            config.redis_connection_timeout_ms,
+        )))
+        .runtime(Runtime::Tokio1)
+        .build()
+        .map_err(|e| eyre::eyre!("Failed to build Redis pool for {}: {}", url, e))?;
+
+    // Verify the pool is working by getting a connection
+    let conn = pool
+        .get()
+        .await
+        .map_err(|e| eyre::eyre!("Failed to get initial Redis connection from {}: {}", url, e))?;
+    drop(conn);
+
+    Ok(Arc::new(pool))
+}
+
+/// Initializes Redis connection pools for both primary and reader endpoints.
+///
+/// # Arguments
+///
+/// * `config` - The server configuration containing Redis URLs and pool settings.
+///
+/// # Returns
+///
+/// A `RedisConnections` struct containing:
+/// - `primary_pool`: Connected to `REDIS_URL` (for write operations)
+/// - `reader_pool`: Connected to `REDIS_READER_URL` if set, otherwise same as primary
+///
+/// # Features
+///
+/// - **Read/Write Separation**: When `REDIS_READER_URL` is configured, read operations
+///   can be distributed across read replicas, reducing load on the primary.
+/// - **Backward Compatible**: If `REDIS_READER_URL` is not set, both pools use
+///   the primary URL, maintaining existing behavior.
+/// - **Connection Pooling**: Both pools use deadpool-redis with configurable
+///   max size, wait timeout, and connection timeouts.
+///
+/// # Example Configuration
+///
+/// ```bash
+/// # AWS ElastiCache with read replicas
+/// REDIS_URL=redis://my-cluster.xxx.cache.amazonaws.com:6379
+/// REDIS_READER_URL=redis://my-cluster-ro.xxx.cache.amazonaws.com:6379
+/// ```
+pub async fn initialize_redis_connections(config: &ServerConfig) -> Result<Arc<RedisConnections>> {
+    let primary_pool_size = config.redis_pool_max_size;
+    let primary_pool = create_pool(&config.redis_url, primary_pool_size, config).await?;
+
+    info!(
+        primary_url = %config.redis_url,
+        primary_pool_size = %primary_pool_size,
+        "initializing primary Redis connection pool"
+    );
+    let reader_pool = match &config.redis_reader_url {
+        Some(reader_url) if !reader_url.is_empty() => {
+            let reader_pool_size = config.redis_reader_pool_max_size;
+
+            info!(
+                primary_url = %config.redis_url,
+                reader_url = %reader_url,
+                primary_pool_size = %primary_pool_size,
+                reader_pool_size = %reader_pool_size,
+                "Using separate reader endpoint for read operations"
+            );
+            create_pool(reader_url, reader_pool_size, config).await?
+        }
+        _ => {
+            debug!(
+                primary_url = %config.redis_url,
+                pool_size = %primary_pool_size,
+                "No reader URL configured, using primary for all operations"
+            );
+            primary_pool.clone()
+        }
+    };
+
+    Ok(Arc::new(RedisConnections {
+        primary_pool,
+        reader_pool,
+    }))
+}
+
+/// Initializes a Redis connection pool using deadpool-redis.
 ///
 /// # Arguments
 ///
@@ -16,23 +159,39 @@ use crate::config::ServerConfig;
 ///
 /// # Returns
 ///
-/// A connection manager for the Redis connection.
-pub async fn initialize_redis_connection(config: &ServerConfig) -> Result<Arc<ConnectionManager>> {
-    let redis_client = redis::Client::open(config.redis_url.as_str())?;
-    let connection_manager = timeout(
-        Duration::from_millis(config.redis_connection_timeout_ms),
-        redis::aio::ConnectionManager::new(redis_client),
-    )
-    .await
-    .map_err(|_| {
-        eyre::eyre!(
-            "Redis connection timeout after {}ms",
-            config.redis_connection_timeout_ms
-        )
-    })??;
-    let connection_manager = Arc::new(connection_manager);
+/// A connection pool for Redis connections with health checks and timeouts.
+///
+/// # Features
+///
+/// - Connection pooling with configurable max size
+/// - Automatic health checks and connection recycling
+/// - Timeout for acquiring connections from the pool
+pub async fn initialize_redis_connection(config: &ServerConfig) -> Result<Arc<Pool>> {
+    let cfg = Config::from_url(&config.redis_url);
 
-    Ok(connection_manager)
+    let pool = cfg
+        .builder()
+        .map_err(|e| eyre::eyre!("Failed to create Redis pool builder: {}", e))?
+        .max_size(config.redis_pool_max_size)
+        .wait_timeout(Some(Duration::from_millis(config.redis_pool_timeout_ms)))
+        .create_timeout(Some(Duration::from_millis(
+            config.redis_connection_timeout_ms,
+        )))
+        .recycle_timeout(Some(Duration::from_millis(
+            config.redis_connection_timeout_ms,
+        )))
+        .runtime(Runtime::Tokio1)
+        .build()
+        .map_err(|e| eyre::eyre!("Failed to build Redis pool: {}", e))?;
+
+    // Verify the pool is working by getting a connection
+    let conn = pool
+        .get()
+        .await
+        .map_err(|e| eyre::eyre!("Failed to get initial Redis connection: {}", e))?;
+    drop(conn);
+
+    Ok(Arc::new(pool))
 }
 
 /// A distributed lock implementation using Redis SET NX EX pattern.
@@ -68,7 +227,7 @@ pub async fn initialize_redis_connection(config: &ServerConfig) -> Result<Arc<Co
 /// ```
 #[derive(Clone)]
 pub struct DistributedLock {
-    client: Arc<ConnectionManager>,
+    pool: Arc<Pool>,
     lock_key: String,
     ttl: Duration,
 }
@@ -77,13 +236,13 @@ impl DistributedLock {
     /// Creates a new distributed lock instance.
     ///
     /// # Arguments
-    /// * `client` - Redis connection manager
+    /// * `pool` - Redis connection pool
     /// * `lock_key` - Full Redis key for this lock (e.g., "myprefix:lock:cleanup")
     /// * `ttl` - Time-to-live for the lock. Lock will automatically expire after this duration
     ///   to prevent deadlocks if the holder crashes.
-    pub fn new(client: Arc<ConnectionManager>, lock_key: &str, ttl: Duration) -> Self {
+    pub fn new(pool: Arc<Pool>, lock_key: &str, ttl: Duration) -> Self {
         Self {
-            client,
+            pool,
             lock_key: lock_key.to_string(),
             ttl,
         }
@@ -105,7 +264,7 @@ impl DistributedLock {
     /// - `EX`: Set expiry time in seconds
     pub async fn try_acquire(&self) -> Result<Option<LockGuard>> {
         let lock_value = generate_lock_value();
-        let mut conn = (*self.client).clone();
+        let mut conn = self.pool.get().await?;
 
         // Use SET NX EX for atomic lock acquisition with expiry
         let result: Option<String> = redis::cmd("SET")
@@ -126,7 +285,7 @@ impl DistributedLock {
                 );
                 Ok(Some(LockGuard {
                     release_info: Some(LockReleaseInfo {
-                        client: self.client.clone(),
+                        pool: self.pool.clone(),
                         lock_key: self.lock_key.clone(),
                         lock_value,
                     }),
@@ -165,7 +324,7 @@ pub struct LockGuard {
 
 /// Internal struct holding the information needed to release a lock.
 struct LockReleaseInfo {
-    client: Arc<ConnectionManager>,
+    pool: Arc<Pool>,
     lock_key: String,
     lock_value: String,
 }
@@ -195,7 +354,7 @@ impl LockGuard {
 
     /// Internal async release implementation.
     async fn do_release(info: LockReleaseInfo) -> Result<bool> {
-        let mut conn = (*info.client).clone();
+        let mut conn = info.pool.get().await?;
 
         // Lua script to atomically check and delete
         // Only delete if the value matches (we still own the lock)
@@ -288,15 +447,11 @@ const GLOBAL_INIT_FIELD: &str = "global:init_completed";
 /// Hash key: `{prefix}:relayer_sync_meta`
 /// Hash field: `{relayer_id}:last_sync`
 /// Value: Unix timestamp in seconds
-pub async fn set_relayer_last_sync(
-    conn: &Arc<ConnectionManager>,
-    prefix: &str,
-    relayer_id: &str,
-) -> Result<()> {
+pub async fn set_relayer_last_sync(pool: &Arc<Pool>, prefix: &str, relayer_id: &str) -> Result<()> {
     use chrono::Utc;
     use redis::AsyncCommands;
 
-    let mut conn = (**conn).clone();
+    let mut conn = pool.get().await?;
     let hash_key = format!("{prefix}:{RELAYER_SYNC_META_KEY}");
     let field = format!("{relayer_id}:last_sync");
     let timestamp = Utc::now().timestamp();
@@ -326,14 +481,14 @@ pub async fn set_relayer_last_sync(
 /// * `Ok(None)` - If the relayer has never been synced
 /// * `Err(_)` - Redis communication error
 pub async fn get_relayer_last_sync(
-    conn: &Arc<ConnectionManager>,
+    pool: &Arc<Pool>,
     prefix: &str,
     relayer_id: &str,
 ) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
     use chrono::{TimeZone, Utc};
     use redis::AsyncCommands;
 
-    let mut conn = (**conn).clone();
+    let mut conn = pool.get().await?;
     let hash_key = format!("{prefix}:{RELAYER_SYNC_META_KEY}");
     let field = format!("{relayer_id}:last_sync");
 
@@ -361,14 +516,14 @@ pub async fn get_relayer_last_sync(
 /// * `Ok(false)` - If the relayer was not synced or sync is stale
 /// * `Err(_)` - Redis communication error
 pub async fn is_relayer_recently_synced(
-    conn: &Arc<ConnectionManager>,
+    pool: &Arc<Pool>,
     prefix: &str,
     relayer_id: &str,
     threshold_secs: u64,
 ) -> Result<bool> {
     use chrono::Utc;
 
-    let last_sync = get_relayer_last_sync(conn, prefix, relayer_id).await?;
+    let last_sync = get_relayer_last_sync(pool, prefix, relayer_id).await?;
 
     match last_sync {
         Some(sync_time) => {
@@ -412,11 +567,11 @@ pub async fn is_relayer_recently_synced(
 /// Hash key: `{prefix}:relayer_sync_meta`
 /// Hash field: `global:init_completed`
 /// Value: Unix timestamp in seconds
-pub async fn set_global_init_completed(conn: &Arc<ConnectionManager>, prefix: &str) -> Result<()> {
+pub async fn set_global_init_completed(pool: &Arc<Pool>, prefix: &str) -> Result<()> {
     use chrono::Utc;
     use redis::AsyncCommands;
 
-    let mut conn = (**conn).clone();
+    let mut conn = pool.get().await?;
     let hash_key = format!("{prefix}:{RELAYER_SYNC_META_KEY}");
     let timestamp = Utc::now().timestamp();
 
@@ -443,14 +598,14 @@ pub async fn set_global_init_completed(conn: &Arc<ConnectionManager>, prefix: &s
 /// * `Ok(false)` - If initialization was not completed or is stale
 /// * `Err(_)` - Redis communication error
 pub async fn is_global_init_recently_completed(
-    conn: &Arc<ConnectionManager>,
+    pool: &Arc<Pool>,
     prefix: &str,
     threshold_secs: u64,
 ) -> Result<bool> {
     use chrono::Utc;
     use redis::AsyncCommands;
 
-    let mut conn = (**conn).clone();
+    let mut conn = pool.get().await?;
     let hash_key = format!("{prefix}:{RELAYER_SYNC_META_KEY}");
 
     let timestamp: Option<i64> = conn
@@ -533,16 +688,92 @@ mod tests {
     }
 
     // =========================================================================
+    // RedisConnections tests
+    // =========================================================================
+
+    mod redis_connections_tests {
+        use super::*;
+
+        #[test]
+        fn test_new_single_pool_returns_same_pool_for_both() {
+            // This test verifies the backward-compatible single pool mode
+            // When no REDIS_READER_URL is set, both pools should be the same
+            let cfg = Config::from_url("redis://127.0.0.1:6379");
+            let pool = cfg
+                .builder()
+                .expect("Failed to create pool builder")
+                .max_size(16)
+                .runtime(Runtime::Tokio1)
+                .build()
+                .expect("Failed to build pool");
+            let pool = Arc::new(pool);
+
+            let connections = RedisConnections::new_single_pool(pool.clone());
+
+            // Both primary and reader should return the same pool
+            assert!(Arc::ptr_eq(connections.primary(), &pool));
+            assert!(Arc::ptr_eq(connections.reader(), &pool));
+            assert!(Arc::ptr_eq(connections.primary(), connections.reader()));
+        }
+
+        #[test]
+        fn test_redis_connections_clone() {
+            // Verify that RedisConnections can be cloned
+            let cfg = Config::from_url("redis://127.0.0.1:6379");
+            let pool = cfg
+                .builder()
+                .expect("Failed to create pool builder")
+                .max_size(16)
+                .runtime(Runtime::Tokio1)
+                .build()
+                .expect("Failed to build pool");
+            let pool = Arc::new(pool);
+
+            let connections = RedisConnections::new_single_pool(pool);
+            let cloned = connections.clone();
+
+            // Both should point to the same pools
+            assert!(Arc::ptr_eq(connections.primary(), cloned.primary()));
+            assert!(Arc::ptr_eq(connections.reader(), cloned.reader()));
+        }
+
+        #[test]
+        fn test_redis_connections_debug() {
+            // Verify Debug implementation exists
+            let cfg = Config::from_url("redis://127.0.0.1:6379");
+            let pool = cfg
+                .builder()
+                .expect("Failed to create pool builder")
+                .max_size(16)
+                .runtime(Runtime::Tokio1)
+                .build()
+                .expect("Failed to build pool");
+            let pool = Arc::new(pool);
+
+            let connections = RedisConnections::new_single_pool(pool);
+            let debug_str = format!("{:?}", connections);
+
+            assert!(debug_str.contains("RedisConnections"));
+        }
+    }
+
+    // =========================================================================
     // Integration tests - require a running Redis instance
     // Run with: cargo test --lib redis::tests::integration -- --ignored
     // =========================================================================
 
     /// Helper to create a Redis connection for integration tests.
     /// Expects Redis to be running on localhost:6379.
-    async fn create_test_redis_connection() -> Option<Arc<ConnectionManager>> {
-        let client = redis::Client::open("redis://127.0.0.1:6379").ok()?;
-        let conn = redis::aio::ConnectionManager::new(client).await.ok()?;
-        Some(Arc::new(conn))
+    async fn create_test_redis_connection() -> Option<Arc<Pool>> {
+        let cfg = Config::from_url("redis://127.0.0.1:6379");
+        let pool = cfg
+            .builder()
+            .ok()?
+            .max_size(16)
+            .runtime(Runtime::Tokio1)
+            .build()
+            .ok()?;
+        Some(Arc::new(pool))
     }
 
     mod integration {
@@ -764,7 +995,7 @@ mod tests {
 
             // Simulate a function that returns early (like ? operator)
             async fn simulated_work_with_early_return(
-                conn: Arc<ConnectionManager>,
+                conn: Arc<Pool>,
                 lock_key: &str,
             ) -> Result<(), &'static str> {
                 let lock = DistributedLock::new(conn, lock_key, Duration::from_secs(60));
@@ -801,6 +1032,77 @@ mod tests {
             }
         }
 
+        // =========================================================================
+        // RedisConnections integration tests
+        // =========================================================================
+
+        #[tokio::test]
+        #[ignore] // Requires running Redis instance
+        async fn test_redis_connections_single_pool_operations() {
+            let pool = create_test_redis_connection()
+                .await
+                .expect("Redis connection required for this test");
+
+            let connections = RedisConnections::new_single_pool(pool);
+
+            // Test that we can get connections from both pools
+            let mut primary_conn = connections
+                .primary()
+                .get()
+                .await
+                .expect("Failed to get primary connection");
+            let mut reader_conn = connections
+                .reader()
+                .get()
+                .await
+                .expect("Failed to get reader connection");
+
+            // Test basic operations on both connections
+            let _: () = redis::cmd("SET")
+                .arg("test:connections:key")
+                .arg("test_value")
+                .query_async(&mut primary_conn)
+                .await
+                .expect("Failed to SET");
+
+            let value: String = redis::cmd("GET")
+                .arg("test:connections:key")
+                .query_async(&mut reader_conn)
+                .await
+                .expect("Failed to GET");
+
+            assert_eq!(value, "test_value");
+
+            // Cleanup
+            let _: () = redis::cmd("DEL")
+                .arg("test:connections:key")
+                .query_async(&mut primary_conn)
+                .await
+                .expect("Failed to DEL");
+        }
+
+        #[tokio::test]
+        #[ignore] // Requires running Redis instance
+        async fn test_redis_connections_backward_compatible() {
+            // Verify that single pool mode (no reader URL) works correctly
+            let pool = create_test_redis_connection()
+                .await
+                .expect("Redis connection required for this test");
+
+            let connections = Arc::new(RedisConnections::new_single_pool(pool));
+
+            // Multiple repositories should be able to share the connections
+            let conn1 = connections.clone();
+            let conn2 = connections.clone();
+
+            // Both should be able to get connections
+            let _primary1 = conn1.primary().get().await.expect("Failed to get primary");
+            let _reader1 = conn1.reader().get().await.expect("Failed to get reader");
+            let _primary2 = conn2.primary().get().await.expect("Failed to get primary");
+            let _reader2 = conn2.reader().get().await.expect("Failed to get reader");
+
+            // All should work without issues (backward compatible)
+        }
         // =====================================================================
         // Relayer Sync Metadata Tests
         // =====================================================================
@@ -834,7 +1136,7 @@ mod tests {
             assert!(elapsed < 60, "Last sync should be within last minute");
 
             // Cleanup: delete the hash
-            let mut conn_clone = (*conn).clone();
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
             let hash_key = format!("{prefix}:relayer_sync_meta");
             let _: () = redis::AsyncCommands::del(&mut conn_clone, &hash_key)
                 .await
@@ -885,7 +1187,7 @@ mod tests {
             assert!(is_recent, "Should be recently synced");
 
             // Cleanup
-            let mut conn_clone = (*conn).clone();
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
             let hash_key = format!("{prefix}:relayer_sync_meta");
             let _: () = redis::AsyncCommands::del(&mut conn_clone, &hash_key)
                 .await
@@ -921,7 +1223,7 @@ mod tests {
             let relayer_id = "stale-relayer";
 
             // Manually set an old timestamp (10 minutes ago)
-            let mut conn_clone = (*conn).clone();
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
             let hash_key = format!("{prefix}:relayer_sync_meta");
             let field = format!("{relayer_id}:last_sync");
             let old_timestamp = chrono::Utc::now().timestamp() - 600; // 10 minutes ago
@@ -981,7 +1283,7 @@ mod tests {
             );
 
             // Cleanup
-            let mut conn_clone = (*conn).clone();
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
             let hash_key = format!("{prefix}:relayer_sync_meta");
             let _: () = redis::AsyncCommands::del(&mut conn_clone, &hash_key)
                 .await
@@ -1026,7 +1328,7 @@ mod tests {
             );
 
             // Cleanup
-            let mut conn_clone = (*conn).clone();
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
             let hash_key = format!("{prefix}:relayer_sync_meta");
             let _: () = redis::AsyncCommands::del(&mut conn_clone, &hash_key)
                 .await
@@ -1044,7 +1346,7 @@ mod tests {
             let relayer_id = "boundary-relayer";
 
             // Set timestamp exactly at threshold (should be considered NOT recent)
-            let mut conn_clone = (*conn).clone();
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
             let hash_key = format!("{prefix}:relayer_sync_meta");
             let field = format!("{relayer_id}:last_sync");
             let threshold_secs: u64 = 60;
@@ -1082,7 +1384,7 @@ mod tests {
             let relayer_id = "just-before-relayer";
 
             // Set timestamp just before threshold (should be considered recent)
-            let mut conn_clone = (*conn).clone();
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
             let hash_key = format!("{prefix}:relayer_sync_meta");
             let field = format!("{relayer_id}:last_sync");
             let threshold_secs: u64 = 60;
@@ -1135,7 +1437,7 @@ mod tests {
             assert!(!is_recent_prefix2, "Should not be recent for prefix2");
 
             // Cleanup
-            let mut conn_clone = (*conn).clone();
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
             let hash_key = "prefix1:relayer_sync_meta";
             let _: () = redis::AsyncCommands::del(&mut conn_clone, hash_key)
                 .await
@@ -1164,7 +1466,7 @@ mod tests {
             assert!(!is_recent, "Should not be recent with zero threshold");
 
             // Cleanup
-            let mut conn_clone = (*conn).clone();
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
             let hash_key = format!("{prefix}:relayer_sync_meta");
             let _: () = redis::AsyncCommands::del(&mut conn_clone, &hash_key)
                 .await
@@ -1197,7 +1499,7 @@ mod tests {
             assert!(is_recent, "Should be recently completed");
 
             // Cleanup
-            let mut conn_clone = (*conn).clone();
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
             let hash_key = format!("{prefix}:relayer_sync_meta");
             let _: () = redis::AsyncCommands::del(&mut conn_clone, &hash_key)
                 .await
@@ -1231,7 +1533,7 @@ mod tests {
             let prefix = "test_global_init_stale";
 
             // Manually set an old timestamp (10 minutes ago)
-            let mut conn_clone = (*conn).clone();
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
             let hash_key = format!("{prefix}:relayer_sync_meta");
             let old_timestamp = chrono::Utc::now().timestamp() - 600; // 10 minutes ago
 
@@ -1280,7 +1582,7 @@ mod tests {
             assert!(!is_recent_prefix2, "Should not be recent for prefix2");
 
             // Cleanup
-            let mut conn_clone = (*conn).clone();
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
             let hash_key = "global_prefix1:relayer_sync_meta";
             let _: () = redis::AsyncCommands::del(&mut conn_clone, hash_key)
                 .await
@@ -1317,7 +1619,7 @@ mod tests {
             assert!(is_recent, "Should be recent after update");
 
             // Cleanup
-            let mut conn_clone = (*conn).clone();
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
             let hash_key = format!("{prefix}:relayer_sync_meta");
             let _: () = redis::AsyncCommands::del(&mut conn_clone, &hash_key)
                 .await
@@ -1354,7 +1656,7 @@ mod tests {
             assert!(relayer_recent, "Relayer sync should be recent");
 
             // Cleanup
-            let mut conn_clone = (*conn).clone();
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
             let hash_key = format!("{prefix}:relayer_sync_meta");
             let _: () = redis::AsyncCommands::del(&mut conn_clone, &hash_key)
                 .await

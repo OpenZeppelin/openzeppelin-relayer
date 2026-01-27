@@ -1278,9 +1278,17 @@ mod tests {
         let attempt_count = Arc::new(AtomicU8::new(0));
         let attempt_count_clone = attempt_count.clone();
 
+        // Track which URLs were attempted for verification
+        let attempted_urls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let attempted_urls_clone = attempted_urls.clone();
+
+        // Fail the FIRST initialization attempt regardless of which URL is selected.
+        // This makes the test deterministic - it doesn't depend on URL selection order.
         let provider_initializer = move |url: &str| -> Result<String, TestError> {
             let count = attempt_count_clone.fetch_add(1, AtomicOrdering::SeqCst);
+            attempted_urls_clone.lock().unwrap().push(url.to_string());
             if count == 0 {
+                // First attempt always fails, forcing failover to second provider
                 Err(TestError("First provider init failed".to_string()))
             } else {
                 Ok(url.to_string())
@@ -1304,7 +1312,23 @@ mod tests {
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 42);
-        assert!(attempt_count.load(AtomicOrdering::SeqCst) >= 2); // Should have tried multiple providers
+
+        // Verify: exactly 2 provider initialization attempts were made
+        let final_count = attempt_count.load(AtomicOrdering::SeqCst);
+        assert_eq!(
+            final_count, 2,
+            "Expected exactly 2 provider init attempts, got {}",
+            final_count
+        );
+
+        // Verify: two different URLs were attempted (failover occurred)
+        let urls = attempted_urls.lock().unwrap();
+        assert_eq!(urls.len(), 2, "Expected 2 URLs attempted, got {:?}", urls);
+        assert_ne!(
+            urls[0], urls[1],
+            "Expected different URLs to be tried, got {:?}",
+            urls
+        );
     }
 
     #[test]

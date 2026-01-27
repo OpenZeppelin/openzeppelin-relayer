@@ -31,9 +31,10 @@ use crate::{
         DisabledReason, PaginationQuery, RelayerNetworkPolicy, RelayerRepoModel, RepositoryError,
     },
     repositories::{PaginatedResult, Repository},
+    utils::RedisConnections,
 };
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
+use deadpool_redis::Pool;
 use std::sync::Arc;
 
 #[async_trait]
@@ -75,9 +76,9 @@ pub trait RelayerRepository: Repository<RelayerRepoModel, String> + Send + Sync 
     /// other coordination operations that need direct storage access.
     ///
     /// # Returns
-    /// * `Some((connection, prefix))` - If using persistent storage (e.g., Redis)
+    /// * `Some((pool, prefix))` - If using persistent storage (e.g., Redis)
     /// * `None` - If using in-memory storage (default)
-    fn connection_info(&self) -> Option<(Arc<ConnectionManager>, String)> {
+    fn connection_info(&self) -> Option<(Arc<Pool>, String)> {
         None
     }
 }
@@ -109,7 +110,7 @@ mockall::mock! {
         async fn disable_relayer(&self, relayer_id: String, reason: DisabledReason) -> Result<RelayerRepoModel, RepositoryError>;
         async fn update_policy(&self, id: String, policy: RelayerNetworkPolicy) -> Result<RelayerRepoModel, RepositoryError>;
         fn is_persistent_storage(&self) -> bool;
-        fn connection_info(&self) -> Option<(Arc<ConnectionManager>, String)>;
+        fn connection_info(&self) -> Option<(Arc<Pool>, String)>;
     }
 }
 
@@ -126,11 +127,11 @@ impl RelayerRepositoryStorage {
     }
 
     pub fn new_redis(
-        connection_manager: Arc<ConnectionManager>,
+        connections: Arc<RedisConnections>,
         key_prefix: String,
     ) -> Result<Self, RepositoryError> {
         Ok(Self::Redis(RedisRelayerRepository::new(
-            connection_manager,
+            connections,
             key_prefix,
         )?))
     }
@@ -142,12 +143,14 @@ impl RelayerRepositoryStorage {
     /// other coordination operations that need direct Redis access.
     ///
     /// # Returns
-    /// * `Some((connection, prefix))` - If using persistent storage (e.g., Redis)
+    /// * `Some((pool, prefix))` - If using persistent storage (e.g., Redis)
     /// * `None` - If using in-memory storage
-    pub fn connection_info(&self) -> Option<(Arc<ConnectionManager>, &str)> {
+    pub fn connection_info(&self) -> Option<(Arc<Pool>, String)> {
         match self {
             RelayerRepositoryStorage::InMemory(_) => None,
-            RelayerRepositoryStorage::Redis(repo) => Some((repo.client.clone(), &repo.key_prefix)),
+            RelayerRepositoryStorage::Redis(repo) => {
+                Some((repo.connections.primary().clone(), repo.key_prefix.clone()))
+            }
         }
     }
 }
@@ -316,11 +319,11 @@ impl RelayerRepository for RelayerRepositoryStorage {
         }
     }
 
-    fn connection_info(&self) -> Option<(Arc<ConnectionManager>, String)> {
+    fn connection_info(&self) -> Option<(Arc<Pool>, String)> {
         match self {
             RelayerRepositoryStorage::InMemory(_) => None,
             RelayerRepositoryStorage::Redis(repo) => {
-                Some((repo.client.clone(), repo.key_prefix.clone()))
+                Some((repo.connections.primary().clone(), repo.key_prefix.clone()))
             }
         }
     }
@@ -568,8 +571,8 @@ mod tests {
     async fn test_struct_connection_info_returns_none_for_in_memory() {
         let storage = RelayerRepositoryStorage::new_in_memory();
 
-        // Test the struct's own connection_info method (different return type)
-        let result: Option<(Arc<ConnectionManager>, &str)> = storage.connection_info();
+        // Test the struct's own connection_info method
+        let result: Option<(Arc<Pool>, String)> = storage.connection_info();
         assert!(result.is_none());
     }
 }
