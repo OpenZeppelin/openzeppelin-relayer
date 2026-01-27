@@ -16,12 +16,9 @@ use tracing::{debug, info, instrument, warn};
 use crate::{
     config::ServerConfig,
     constants::{get_max_consecutive_status_failures, get_max_total_status_failures},
-    domain::{
-        get_relayer_by_id, get_relayer_transaction, get_transaction_by_id, is_final_state,
-        Transaction,
-    },
+    domain::{get_relayer_transaction, get_transaction_by_id, is_final_state, Transaction},
     jobs::{Job, StatusCheckContext, TransactionStatusCheck},
-    models::{DefaultAppState, NetworkType, TransactionRepoModel},
+    models::{DefaultAppState, TransactionRepoModel},
     observability::request_id::set_request_id,
 };
 
@@ -61,8 +58,6 @@ pub async fn transaction_status_handler(
         set_request_id(request_id);
     }
 
-    let tx_id = &job.data.transaction_id;
-
     // Get Redis connection - prefer pool when available, fall back to connection_manager
     let queue = state
         .job_producer()
@@ -75,54 +70,11 @@ pub async fn transaction_status_handler(
         None => RedisConn::ConnectionManager(queue.connection_manager.clone()),
     };
 
-    // Read failure counters from separate Redis key (not job metadata)
-    // This persists across job retries since we store it independently
-    let (consecutive_failures, total_failures) = read_counters_from_redis(&redis_conn, tx_id).await;
+    // Execute status check - all logic moved here so errors go through handle_result
+    let (result, consecutive_failures, total_failures) =
+        handle_request(&job.data, &state, &redis_conn, attempt.current(), &task_id).await;
 
-    // Get network type from job data, or fetch from relayer for legacy jobs without network_type
-    let network_type = match job.data.network_type {
-        Some(nt) => nt,
-        None => {
-            // Legacy job without network_type - fetch from relayer
-            match get_relayer_by_id(job.data.relayer_id.clone(), &state).await {
-                Ok(relayer) => relayer.network_type,
-                Err(e) => {
-                    warn!(
-                        error = %e,
-                        relayer_id = %job.data.relayer_id,
-                        "failed to fetch relayer for network type, defaulting to EVM"
-                    );
-                    NetworkType::Evm
-                }
-            }
-        }
-    };
-    let max_consecutive = get_max_consecutive_status_failures(network_type);
-    let max_total = get_max_total_status_failures(network_type);
-
-    debug!(
-        tx_id = %tx_id,
-        consecutive_failures,
-        total_failures,
-        max_consecutive,
-        max_total,
-        attempt = attempt.current(),
-        task_id = %task_id.to_string(),
-        "handling transaction status check"
-    );
-
-    // Build circuit breaker context
-    let context = StatusCheckContext::new(
-        consecutive_failures,
-        total_failures,
-        attempt.current() as u32,
-        max_consecutive,
-        max_total,
-        network_type,
-    );
-
-    // Execute status check with context
-    let result = handle_request(job.data.clone(), state.clone(), context).await;
+    let tx_id = &job.data.transaction_id;
 
     // Handle result and update counters in Redis
     handle_result(
@@ -141,14 +93,15 @@ pub async fn transaction_status_handler(
 /// - If transaction is in final state → Clean up counters, return Ok (job completes)
 /// - If success but not final → Reset consecutive to 0 in Redis, return Err (Apalis retries)
 /// - If error → Increment counters in Redis, return Err (Apalis retries)
+/// - If counters are None (early failure) → Skip counter updates, just return error
 ///
 /// Counters are stored in a separate Redis key by tx_id, independent of Apalis job data.
 async fn handle_result(
     result: Result<TransactionRepoModel>,
     redis_conn: &RedisConn,
     tx_id: &str,
-    consecutive_failures: u32,
-    total_failures: u32,
+    consecutive_failures: Option<u32>,
+    total_failures: Option<u32>,
 ) -> Result<(), Error> {
     match result {
         Ok(tx) if is_final_state(&tx.status) => {
@@ -156,8 +109,8 @@ async fn handle_result(
             debug!(
                 tx_id = %tx.id,
                 status = ?tx.status,
-                consecutive_failures,
-                total_failures,
+                consecutive_failures = ?consecutive_failures,
+                total_failures = ?total_failures,
                 "transaction in final state, status check complete"
             );
 
@@ -176,9 +129,11 @@ async fn handle_result(
                 "transaction not in final state, resetting consecutive failures"
             );
 
-            // Reset consecutive counter in Redis
-            if let Err(e) = update_counters_in_redis(redis_conn, tx_id, 0, total_failures).await {
-                warn!(error = %e, tx_id = %tx_id, "failed to reset consecutive counter in Redis");
+            // Reset consecutive counter in Redis (only if we have counter values)
+            if let Some(total) = total_failures {
+                if let Err(e) = update_counters_in_redis(redis_conn, tx_id, 0, total).await {
+                    warn!(error = %e, tx_id = %tx_id, "failed to reset consecutive counter in Redis");
+                }
             }
 
             // Return error to trigger Apalis retry
@@ -191,23 +146,36 @@ async fn handle_result(
             )))
         }
         Err(e) => {
-            // Error occurred - INCREMENT both counters
-            let new_consecutive = consecutive_failures.saturating_add(1);
-            let new_total = total_failures.saturating_add(1);
+            // Error occurred - INCREMENT both counters (only if we have values)
+            match (consecutive_failures, total_failures) {
+                (Some(consecutive), Some(total)) => {
+                    let new_consecutive = consecutive.saturating_add(1);
+                    let new_total = total.saturating_add(1);
 
-            warn!(
-                error = %e,
-                tx_id = %tx_id,
-                consecutive_failures = new_consecutive,
-                total_failures = new_total,
-                "status check failed, incrementing failure counters"
-            );
+                    warn!(
+                        error = %e,
+                        tx_id = %tx_id,
+                        consecutive_failures = new_consecutive,
+                        total_failures = new_total,
+                        "status check failed, incrementing failure counters"
+                    );
 
-            // Update counters in Redis
-            if let Err(update_err) =
-                update_counters_in_redis(redis_conn, tx_id, new_consecutive, new_total).await
-            {
-                warn!(error = %update_err, tx_id = %tx_id, "failed to update counters in Redis");
+                    // Update counters in Redis
+                    if let Err(update_err) =
+                        update_counters_in_redis(redis_conn, tx_id, new_consecutive, new_total)
+                            .await
+                    {
+                        warn!(error = %update_err, tx_id = %tx_id, "failed to update counters in Redis");
+                    }
+                }
+                _ => {
+                    // Early failure before counters were read - skip counter update
+                    warn!(
+                        error = %e,
+                        tx_id = %tx_id,
+                        "status check failed early, counters not available"
+                    );
+                }
             }
 
             // Return error to trigger Apalis retry
@@ -391,32 +359,89 @@ async fn delete_counters_from_redis(redis_conn: &RedisConn, tx_id: &str) -> Resu
     Ok(())
 }
 
+/// Executes the status check logic and returns (result, consecutive_failures, total_failures).
+/// Returns None for counters if they couldn't be read (e.g., transaction fetch failed early).
+/// All errors from this function go through handle_result for proper counter tracking.
 async fn handle_request(
-    status_request: TransactionStatusCheck,
-    state: Data<ThinData<DefaultAppState>>,
-    context: StatusCheckContext,
-) -> Result<TransactionRepoModel> {
-    let relayer_transaction =
-        get_relayer_transaction(status_request.relayer_id.clone(), &state).await?;
+    status_request: &TransactionStatusCheck,
+    state: &Data<ThinData<DefaultAppState>>,
+    redis_conn: &RedisConn,
+    attempt: usize,
+    task_id: &TaskId,
+) -> (Result<TransactionRepoModel>, Option<u32>, Option<u32>) {
+    let tx_id = &status_request.transaction_id;
 
-    let transaction = get_transaction_by_id(status_request.transaction_id.clone(), &state).await?;
+    // Fetch transaction - if this fails, we can't read counters yet
+    let transaction = match get_transaction_by_id(tx_id.clone(), state).await {
+        Ok(tx) => tx,
+        Err(e) => {
+            return (Err(e.into()), None, None);
+        }
+    };
 
-    let updated_transaction = relayer_transaction
-        .handle_transaction_status(transaction, Some(context))
-        .await?;
+    // Read failure counters from separate Redis key (not job metadata)
+    // This persists across job retries since we store it independently
+    let (consecutive_failures, total_failures) = read_counters_from_redis(redis_conn, tx_id).await;
+
+    // Get network type from transaction (authoritative source)
+    let network_type = transaction.network_type;
+    let max_consecutive = get_max_consecutive_status_failures(network_type);
+    let max_total = get_max_total_status_failures(network_type);
 
     debug!(
-        "status check handled successfully for tx_id {}",
-        status_request.transaction_id
+        tx_id = %tx_id,
+        consecutive_failures,
+        total_failures,
+        max_consecutive,
+        max_total,
+        attempt,
+        task_id = %task_id.to_string(),
+        "handling transaction status check"
     );
 
-    Ok(updated_transaction)
+    // Build circuit breaker context
+    let context = StatusCheckContext::new(
+        consecutive_failures,
+        total_failures,
+        attempt as u32,
+        max_consecutive,
+        max_total,
+        network_type,
+    );
+
+    // Get relayer transaction handler
+    let relayer_transaction =
+        match get_relayer_transaction(status_request.relayer_id.clone(), state).await {
+            Ok(rt) => rt,
+            Err(e) => {
+                return (
+                    Err(e.into()),
+                    Some(consecutive_failures),
+                    Some(total_failures),
+                );
+            }
+        };
+
+    // Execute status check
+    let result = relayer_transaction
+        .handle_transaction_status(transaction, Some(context))
+        .await
+        .map_err(|e| e.into());
+
+    if result.is_ok() {
+        debug!(
+            "status check handled successfully for tx_id {}",
+            status_request.transaction_id
+        );
+    }
+
+    (result, Some(consecutive_failures), Some(total_failures))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::TransactionStatus;
+    use crate::models::{NetworkType, TransactionStatus};
     use std::collections::HashMap;
 
     #[test]
@@ -450,6 +475,20 @@ mod tests {
         let job_metadata = check_job.metadata.unwrap();
         assert_eq!(job_metadata.get("retry_count").unwrap(), "2");
         assert_eq!(job_metadata.get("last_status").unwrap(), "pending");
+    }
+
+    #[test]
+    fn test_status_check_network_type_required() {
+        // Jobs should always have network_type set
+        let check_job = TransactionStatusCheck::new("tx123", "relayer-1", NetworkType::Evm);
+        assert!(check_job.network_type.is_some());
+
+        // Verify different network types are preserved
+        let solana_job = TransactionStatusCheck::new("tx456", "relayer-2", NetworkType::Solana);
+        assert_eq!(solana_job.network_type, Some(NetworkType::Solana));
+
+        let stellar_job = TransactionStatusCheck::new("tx789", "relayer-3", NetworkType::Stellar);
+        assert_eq!(stellar_job.network_type, Some(NetworkType::Stellar));
     }
 
     mod context_tests {
