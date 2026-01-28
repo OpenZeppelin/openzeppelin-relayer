@@ -344,6 +344,10 @@ where
         return Ok(true);
     }
 
+    if app_state.api_key_repository.has_entries().await? {
+        return Ok(true);
+    }
+
     Ok(false)
 }
 
