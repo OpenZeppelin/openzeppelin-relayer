@@ -7,6 +7,21 @@ use tracing::{debug, info, warn};
 
 use crate::config::ServerConfig;
 
+// ============================================================================
+// Shared Timing Constants for Bootstrap Operations
+// ============================================================================
+
+/// Default lock TTL for bootstrap operations (2 minutes).
+/// Used as a safety net for crashes during initialization or config processing.
+pub const BOOTSTRAP_LOCK_TTL_SECS: u64 = 120;
+
+/// Max wait time when another instance holds the lock.
+/// Set slightly longer than lock TTL to handle edge cases.
+pub const LOCK_WAIT_MAX_SECS: u64 = 130;
+
+/// Polling interval when waiting for completion.
+pub const LOCK_POLL_INTERVAL_MS: u64 = 500;
+
 /// Holds separate connection pools for read and write operations.
 ///
 /// This struct enables optimization for Redis deployments with read replicas,

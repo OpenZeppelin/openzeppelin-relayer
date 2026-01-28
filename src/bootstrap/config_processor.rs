@@ -29,16 +29,15 @@ use crate::{
         Repository, TransactionCounterTrait, TransactionRepository,
     },
     services::signer::{Signer as SignerService, SignerFactory},
-    utils::DistributedLock,
+    utils::{
+        poll_until, DistributedLock, BOOTSTRAP_LOCK_TTL_SECS, LOCK_POLL_INTERVAL_MS,
+        LOCK_WAIT_MAX_SECS,
+    },
 };
 use color_eyre::{eyre::WrapErr, Report, Result};
 use deadpool_redis::Pool;
 use futures::future::try_join_all;
 use tracing::{info, warn};
-
-/// TTL for the config processing lock in seconds.
-/// Set to 2 minutes as a safety net for crashes during config processing.
-const CONFIG_PROCESSING_LOCK_TTL_SECS: u64 = 120;
 
 /// Lock name for config processing lock.
 const CONFIG_PROCESSING_LOCK_NAME: &str = "config_processing";
@@ -378,14 +377,14 @@ where
     match server_config.repository_storage_type {
         RepositoryStorageType::InMemory => {
             // In-memory mode: no locking needed, process directly
-            do_process_config_file(&config_file, &server_config, app_state).await
+            execute_config_processing(&config_file, &server_config, app_state).await
         }
         RepositoryStorageType::Redis => {
             // Redis mode: use distributed locking to coordinate across instances
             let connection_info = app_state.relayer_repository.connection_info();
             match connection_info {
                 Some((conn, prefix)) => {
-                    process_config_with_lock(
+                    coordinate_config_with_lock(
                         &config_file,
                         &server_config,
                         app_state,
@@ -401,7 +400,7 @@ where
                         || !is_redis_populated(app_state).await?;
 
                     if should_process {
-                        do_process_config_file(&config_file, &server_config, app_state).await
+                        execute_config_processing(&config_file, &server_config, app_state).await
                     } else {
                         info!("Skipping config file processing - Redis already populated");
                         Ok(())
@@ -418,7 +417,7 @@ where
 /// 1. Try to acquire global lock for config processing
 /// 2. If lock acquired: check if Redis is populated, process if not
 /// 3. If lock held: wait for it to be released, then check if populated
-async fn process_config_with_lock<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+async fn coordinate_config_with_lock<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     config_file: &Config,
     server_config: &ServerConfig,
     app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
@@ -440,7 +439,7 @@ where
     let lock = DistributedLock::new(
         conn.clone(),
         &lock_key,
-        Duration::from_secs(CONFIG_PROCESSING_LOCK_TTL_SECS),
+        Duration::from_secs(BOOTSTRAP_LOCK_TTL_SECS),
     );
 
     match lock.try_acquire().await {
@@ -448,8 +447,7 @@ where
             // We got the lock - check if we need to process
             info!("Acquired config processing lock");
 
-            let result =
-                process_config_after_lock_acquired(config_file, server_config, app_state).await;
+            let result = process_if_needed_after_lock(config_file, server_config, app_state).await;
 
             drop(guard); // Release lock
             result
@@ -465,7 +463,7 @@ where
                 error = %e,
                 "Failed to acquire config processing lock, proceeding without coordination"
             );
-            do_process_config_file(config_file, server_config, app_state).await
+            execute_config_processing(config_file, server_config, app_state).await
         }
     }
 }
@@ -474,7 +472,7 @@ where
 ///
 /// Checks if Redis is already populated (by a previous run or another instance)
 /// and only processes if needed.
-async fn process_config_after_lock_acquired<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+async fn process_if_needed_after_lock<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     config_file: &Config,
     server_config: &ServerConfig,
     app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
@@ -495,14 +493,14 @@ where
 
     if server_config.reset_storage_on_start {
         // With reset flag: always reset and process (we have the lock)
-        do_process_config_file(config_file, server_config, app_state).await
+        execute_config_processing(config_file, server_config, app_state).await
     } else if is_populated {
         // No reset flag and already populated: skip
         info!("Redis already populated, skipping config file processing");
         Ok(())
     } else {
         // No reset flag and not populated: process
-        do_process_config_file(config_file, server_config, app_state).await
+        execute_config_processing(config_file, server_config, app_state).await
     }
 }
 
@@ -523,30 +521,24 @@ where
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
-    const MAX_WAIT_SECS: u64 = 130; // Slightly longer than lock TTL
-    const POLL_INTERVAL_MS: u64 = 500;
+    let max_wait = Duration::from_secs(LOCK_WAIT_MAX_SECS);
+    let poll_interval = Duration::from_millis(LOCK_POLL_INTERVAL_MS);
 
-    let max_wait = Duration::from_secs(MAX_WAIT_SECS);
-    let poll_interval = Duration::from_millis(POLL_INTERVAL_MS);
-    let start = std::time::Instant::now();
+    let app_state = app_state.clone();
 
-    loop {
-        if is_redis_populated(app_state).await? {
-            info!("Config processing completed by another instance");
-            return Ok(());
-        }
+    poll_until(
+        || is_redis_populated(&app_state),
+        max_wait,
+        poll_interval,
+        "config processing",
+    )
+    .await?;
 
-        if start.elapsed() > max_wait {
-            warn!("Timed out waiting for config processing to complete");
-            return Ok(());
-        }
-
-        tokio::time::sleep(poll_interval).await;
-    }
+    Ok(())
 }
 
 /// Internal function that performs the actual config processing.
-async fn do_process_config_file<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+async fn execute_config_processing<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     config_file: &Config,
     server_config: &ServerConfig,
     app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,

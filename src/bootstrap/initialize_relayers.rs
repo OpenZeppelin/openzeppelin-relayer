@@ -27,7 +27,10 @@ use crate::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
         Repository, TransactionCounterTrait, TransactionRepository,
     },
-    utils::{is_global_init_recently_completed, set_global_init_completed, DistributedLock},
+    utils::{
+        is_global_init_recently_completed, poll_until, set_global_init_completed, DistributedLock,
+        BOOTSTRAP_LOCK_TTL_SECS, LOCK_POLL_INTERVAL_MS, LOCK_WAIT_MAX_SECS,
+    },
 };
 use color_eyre::{eyre::WrapErr, Result};
 use deadpool_redis::Pool;
@@ -35,23 +38,12 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-/// TTL for the global initialization lock in seconds.
-/// Set to 2 minutes (2x worst case init time) as a safety net for crashes.
-const GLOBAL_INIT_LOCK_TTL_SECS: u64 = 120;
-
 /// Staleness threshold in seconds. Initialization completed within this time is skipped.
 /// Set to 5 minutes to prevent redundant initialization on rolling restarts.
 const INIT_STALENESS_THRESHOLD_SECS: u64 = 300;
 
 /// Lock name for global initialization lock.
 const GLOBAL_INIT_LOCK_NAME: &str = "relayer_init_global";
-
-/// Maximum time to wait for another instance to complete initialization.
-/// Set slightly longer than lock TTL to handle edge cases.
-const LOCK_WAIT_MAX_DURATION_SECS: u64 = 130;
-
-/// Polling interval when waiting for initialization to complete.
-const LOCK_WAIT_POLL_INTERVAL_MS: u64 = 500;
 
 /// Internal function for initializing a relayer using a provided relayer service.
 /// This allows for easier testing with mocked relayers.
@@ -124,24 +116,25 @@ where
 
     match connection_info {
         Some((conn, prefix)) => {
-            initialize_with_global_lock(&relayers, &app_state, &conn, &prefix).await
+            coordinate_with_distributed_lock(&relayers, &app_state, &conn, &prefix).await
         }
         None => {
             // In-memory mode: skip locking, initialize all relayers directly
             info!("In-memory storage detected, initializing relayers without distributed locking");
-            initialize_all_relayers(&relayers, &app_state).await
+            run_initialization_batch(&relayers, &app_state).await
         }
     }
 }
 
-/// Initializes relayers with a global distributed lock for coordination across instances.
+/// Coordinates relayer initialization with a distributed lock for multi-instance deployments.
 ///
-/// Flow:
+/// This function handles the coordination logic for distributed initialization:
 /// 1. Check if initialization was recently completed (skip if yes)
 /// 2. Try to acquire global lock
 /// 3. If lock acquired: initialize all relayers and record completion time
-/// 4. If lock held: wait for completion, then check if recently completed
-async fn initialize_with_global_lock<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+/// 4. If lock held by another instance: wait for completion
+/// 5. If lock error: proceed without coordination (graceful degradation)
+async fn coordinate_with_distributed_lock<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     relayers: &[RelayerRepoModel],
     app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
     conn: &Arc<Pool>,
@@ -166,7 +159,6 @@ where
         }
         Ok(false) => {}
         Err(e) => {
-            // Log warning but proceed (graceful degradation)
             warn!(
                 error = %e,
                 "Failed to check recent initialization status, proceeding with initialization"
@@ -179,43 +171,47 @@ where
     let lock = DistributedLock::new(
         conn.clone(),
         &lock_key,
-        Duration::from_secs(GLOBAL_INIT_LOCK_TTL_SECS),
+        Duration::from_secs(BOOTSTRAP_LOCK_TTL_SECS),
     );
 
-    match lock.try_acquire().await {
-        Ok(Some(guard)) => {
-            // We got the lock - initialize all relayers
-            info!(
-                count = relayers.len(),
-                "Acquired initialization lock, initializing relayers"
-            );
+    let lock_result = lock.try_acquire().await;
 
-            let result = initialize_all_relayers(relayers, app_state).await;
+    // Handle lock held by another instance (early return)
+    if matches!(&lock_result, Ok(None)) {
+        info!("Another instance is initializing relayers, waiting for completion");
+        return wait_for_initialization_complete(conn, prefix).await;
+    }
 
-            // Record completion time only on success
-            if result.is_ok() {
-                if let Err(e) = set_global_init_completed(conn, prefix).await {
-                    warn!(error = %e, "Failed to record initialization completion time");
-                }
-            }
-
-            drop(guard); // Release lock
-            result
-        }
-        Ok(None) => {
-            // Lock held by another instance - wait for completion
-            info!("Another instance is initializing, waiting for completion");
-            wait_for_initialization_complete(conn, prefix).await
-        }
+    // Handle lock error - graceful degradation (early return)
+    let guard = match lock_result {
+        Ok(Some(g)) => g,
         Err(e) => {
-            // Lock error - graceful degradation, proceed without lock
             warn!(
                 error = %e,
-                "Failed to acquire initialization lock, proceeding without coordination"
+                "Failed to acquire distributed lock, proceeding without coordination"
             );
-            initialize_all_relayers(relayers, app_state).await
+            return run_initialization_batch(relayers, app_state).await;
+        }
+        Ok(None) => unreachable!(), // Already handled above
+    };
+
+    // Lock acquired - proceed with initialization
+    info!(
+        count = relayers.len(),
+        "Acquired initialization lock, initializing relayers"
+    );
+
+    let result = run_initialization_batch(relayers, app_state).await;
+
+    // Record completion time only on success
+    if result.is_ok() {
+        if let Err(e) = set_global_init_completed(conn, prefix).await {
+            warn!(error = %e, "Failed to record initialization completion time");
         }
     }
+
+    drop(guard);
+    result
 }
 
 /// Waits for another instance to complete initialization.
@@ -224,35 +220,26 @@ where
 /// - Initialization is completed (detected via recent completion timestamp)
 /// - Timeout is reached (proceeds anyway)
 async fn wait_for_initialization_complete(conn: &Arc<Pool>, prefix: &str) -> Result<()> {
-    let max_wait = Duration::from_secs(LOCK_WAIT_MAX_DURATION_SECS);
-    let poll_interval = Duration::from_millis(LOCK_WAIT_POLL_INTERVAL_MS);
-    let start = std::time::Instant::now();
+    let max_wait = Duration::from_secs(LOCK_WAIT_MAX_SECS);
+    let poll_interval = Duration::from_millis(LOCK_POLL_INTERVAL_MS);
 
-    loop {
-        // Check if initialization was completed
-        match is_global_init_recently_completed(conn, prefix, INIT_STALENESS_THRESHOLD_SECS).await {
-            Ok(true) => {
-                info!("Initialization completed by another instance");
-                return Ok(());
-            }
-            Ok(false) => {}
-            Err(e) => {
-                warn!(error = %e, "Error checking initialization status while waiting");
-            }
-        }
+    // Clone values for the closure
+    let conn = conn.clone();
+    let prefix = prefix.to_string();
 
-        // Check timeout
-        if start.elapsed() > max_wait {
-            warn!("Timed out waiting for initialization to complete, proceeding anyway");
-            return Ok(());
-        }
+    poll_until(
+        || is_global_init_recently_completed(&conn, &prefix, INIT_STALENESS_THRESHOLD_SECS),
+        max_wait,
+        poll_interval,
+        "initialization",
+    )
+    .await?;
 
-        tokio::time::sleep(poll_interval).await;
-    }
+    Ok(())
 }
 
-/// Initializes all relayers concurrently.
-async fn initialize_all_relayers<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+/// Runs the batch initialization of all relayers concurrently.
+async fn run_initialization_batch<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     relayers: &[RelayerRepoModel],
     app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
 ) -> Result<()>
@@ -513,12 +500,12 @@ mod tests {
     fn test_lock_ttl_is_reasonable() {
         // Lock TTL should be at least 60 seconds to handle slow initializations
         assert!(
-            GLOBAL_INIT_LOCK_TTL_SECS >= 60,
+            BOOTSTRAP_LOCK_TTL_SECS >= 60,
             "Lock TTL should be at least 60 seconds"
         );
         // But not too long (more than 10 minutes would be excessive)
         assert!(
-            GLOBAL_INIT_LOCK_TTL_SECS <= 600,
+            BOOTSTRAP_LOCK_TTL_SECS <= 600,
             "Lock TTL should not exceed 10 minutes"
         );
     }
@@ -541,7 +528,7 @@ mod tests {
     fn test_wait_max_duration_exceeds_lock_ttl() {
         // Wait duration should be longer than lock TTL to handle edge cases
         assert!(
-            LOCK_WAIT_MAX_DURATION_SECS > GLOBAL_INIT_LOCK_TTL_SECS,
+            LOCK_WAIT_MAX_SECS > BOOTSTRAP_LOCK_TTL_SECS,
             "Wait duration should exceed lock TTL"
         );
     }
@@ -550,12 +537,12 @@ mod tests {
     fn test_poll_interval_is_reasonable() {
         // Poll interval should be at least 100ms to avoid excessive polling
         assert!(
-            LOCK_WAIT_POLL_INTERVAL_MS >= 100,
+            LOCK_POLL_INTERVAL_MS >= 100,
             "Poll interval should be at least 100ms"
         );
         // But not too long (more than 5 seconds would be slow)
         assert!(
-            LOCK_WAIT_POLL_INTERVAL_MS <= 5000,
+            LOCK_POLL_INTERVAL_MS <= 5000,
             "Poll interval should not exceed 5 seconds"
         );
     }
@@ -675,7 +662,7 @@ mod tests {
     }
 
     // ============================================================================
-    // Integration tests for initialize_all_relayers, initialize_with_global_lock,
+    // Integration tests for run_initialization_batch, coordinate_with_distributed_lock,
     // wait_for_initialization_complete, and initialize_relayers
     // ============================================================================
 
@@ -695,15 +682,15 @@ mod tests {
         Some(Arc::new(pool))
     }
 
-    // --- Tests for initialize_all_relayers ---
+    // --- Tests for run_initialization_batch ---
 
     #[tokio::test]
-    async fn test_initialize_all_relayers_empty_list() {
+    async fn test_run_initialization_batch_empty_list() {
         let app_state = create_mock_app_state(None, None, None, None, None, None).await;
         let thin_state = ThinData(app_state);
 
         let relayers: Vec<RelayerRepoModel> = vec![];
-        let result = initialize_all_relayers(&relayers, &thin_state).await;
+        let result = run_initialization_batch(&relayers, &thin_state).await;
 
         assert!(
             result.is_ok(),
@@ -713,20 +700,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_initialize_all_relayers_handles_failures() {
+    async fn test_run_initialization_batch_handles_failures() {
         let relayers = vec![create_mock_relayer("failing-relayer".to_string(), false)];
 
         let app_state =
             create_mock_app_state(None, Some(relayers.clone()), None, None, None, None).await;
         let thin_state = ThinData(app_state);
 
-        let result = initialize_all_relayers(&relayers, &thin_state).await;
+        let result = run_initialization_batch(&relayers, &thin_state).await;
 
         assert!(result.is_err(), "Should fail due to missing signer");
     }
 
     #[tokio::test]
-    async fn test_initialize_all_relayers_concurrent_execution() {
+    async fn test_run_initialization_batch_concurrent_execution() {
         let relayers: Vec<RelayerRepoModel> = (0..5)
             .map(|i| create_mock_relayer(format!("concurrent-relayer-{}", i), false))
             .collect();
@@ -736,7 +723,7 @@ mod tests {
         let thin_state = ThinData(app_state);
 
         // This will fail because signers aren't configured, but it tests concurrent execution
-        let result = initialize_all_relayers(&relayers, &thin_state).await;
+        let result = run_initialization_batch(&relayers, &thin_state).await;
 
         assert!(result.is_err(), "Should fail due to missing signers");
         // The error message should mention the failed relayers
@@ -747,11 +734,11 @@ mod tests {
         );
     }
 
-    // --- Tests for initialize_with_global_lock (requires Redis) ---
+    // --- Tests for coordinate_with_distributed_lock (requires Redis) ---
 
     #[tokio::test]
     #[ignore] // Requires running Redis instance
-    async fn test_initialize_with_global_lock_skips_when_recently_completed() {
+    async fn test_coordinate_with_distributed_lock_skips_when_recently_completed() {
         let conn = create_test_redis_pool()
             .await
             .expect("Redis connection required");
@@ -771,7 +758,7 @@ mod tests {
             .await
             .expect("Should set completion time");
 
-        let result = initialize_with_global_lock(&relayers, &thin_state, &conn, prefix).await;
+        let result = coordinate_with_distributed_lock(&relayers, &thin_state, &conn, prefix).await;
 
         // Should succeed because it skips (recently completed)
         assert!(
@@ -788,7 +775,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore] // Requires running Redis instance
-    async fn test_initialize_with_global_lock_acquires_lock() {
+    async fn test_coordinate_with_distributed_lock_acquires_lock() {
         let conn = create_test_redis_pool()
             .await
             .expect("Redis connection required");
@@ -812,7 +799,7 @@ mod tests {
             let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &lock_key).await;
         }
 
-        let result = initialize_with_global_lock(&relayers, &thin_state, &conn, prefix).await;
+        let result = coordinate_with_distributed_lock(&relayers, &thin_state, &conn, prefix).await;
 
         // Will fail because signer isn't configured, but lock should have been acquired
         assert!(
@@ -838,7 +825,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore] // Requires running Redis instance
-    async fn test_initialize_with_global_lock_waits_when_lock_held() {
+    async fn test_coordinate_with_distributed_lock_waits_when_lock_held() {
         let conn = create_test_redis_pool()
             .await
             .expect("Redis connection required");
@@ -879,7 +866,7 @@ mod tests {
         });
 
         // This should wait and then succeed (because completion will be set)
-        let result = initialize_with_global_lock(&relayers, &thin_state, &conn, prefix).await;
+        let result = coordinate_with_distributed_lock(&relayers, &thin_state, &conn, prefix).await;
 
         assert!(
             result.is_ok(),
