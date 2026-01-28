@@ -11,8 +11,13 @@ use tracing::debug;
 use crate::constants::{
     get_stellar_sponsored_transaction_validity_duration, STELLAR_DEFAULT_TRANSACTION_FEE,
 };
+
+/// Default slippage tolerance for max_fee_amount in basis points (500 = 5%)
+/// This allows fee fluctuation between quote and execution time
+const DEFAULT_MAX_FEE_SLIPPAGE_BPS: u64 = 500;
 use crate::domain::relayer::{
-    stellar::xdr_utils::parse_transaction_xdr, GasAbstractionTrait, RelayerError, StellarRelayer,
+    stellar::xdr_utils::{extract_source_account, parse_transaction_xdr},
+    GasAbstractionTrait, RelayerError, StellarRelayer,
 };
 use crate::domain::transaction::stellar::{
     utils::{
@@ -36,7 +41,105 @@ use crate::repositories::{
 use crate::services::provider::StellarProviderTrait;
 use crate::services::signer::StellarSignTrait;
 use crate::services::stellar_dex::StellarDexServiceTrait;
+use crate::services::stellar_fee_forwarder::{
+    FeeForwarderParams, FeeForwarderService, LEDGER_TIME_SECONDS,
+};
 use crate::services::TransactionCounterServiceTrait;
+use soroban_rs::xdr::{HostFunction, OperationBody, ReadXdr, ScVal};
+
+/// Information extracted from a Soroban InvokeHostFunction operation
+#[derive(Debug, Clone)]
+pub struct SorobanInvokeInfo {
+    /// Target contract address (C... format)
+    pub target_contract: String,
+    /// Target function name
+    pub target_fn: String,
+    /// Target function arguments
+    pub target_args: Vec<ScVal>,
+}
+
+/// Detect if a transaction XDR contains a Soroban InvokeHostFunction operation
+/// and extract the contract call details.
+///
+/// Returns:
+/// - `Ok(Some(info))` if XDR contains an InvokeHostFunction operation
+/// - `Ok(None)` if XDR is a classic transaction (no InvokeHostFunction)
+/// - `Err(...)` if XDR is invalid
+fn detect_soroban_invoke_from_xdr(xdr: &str) -> Result<Option<SorobanInvokeInfo>, RelayerError> {
+    use soroban_rs::xdr::TransactionEnvelope;
+
+    let envelope = TransactionEnvelope::from_xdr_base64(xdr, Limits::none())
+        .map_err(|e| RelayerError::ValidationError(format!("Invalid XDR: {e}")))?;
+
+    // Extract operations from envelope
+    let operations = match &envelope {
+        TransactionEnvelope::TxV0(env) => env.tx.operations.to_vec(),
+        TransactionEnvelope::Tx(env) => env.tx.operations.to_vec(),
+        TransactionEnvelope::TxFeeBump(env) => match &env.tx.inner_tx {
+            soroban_rs::xdr::FeeBumpTransactionInnerTx::Tx(inner) => inner.tx.operations.to_vec(),
+        },
+    };
+
+    let mut invoke_index = None;
+    let mut invoke_op = None;
+
+    for (idx, op) in operations.iter().enumerate() {
+        if let OperationBody::InvokeHostFunction(invoke) = &op.body {
+            invoke_index = Some(idx);
+            invoke_op = Some(invoke);
+            break;
+        }
+    }
+
+    if let Some(idx) = invoke_index {
+        // Soroban transactions must contain exactly one operation
+        if operations.len() != 1 {
+            return Err(RelayerError::ValidationError(
+                "Soroban transactions must contain exactly one operation".to_string(),
+            ));
+        }
+
+        // Single-operation Soroban must be InvokeHostFunction
+        let invoke_op = invoke_op.ok_or_else(|| {
+            RelayerError::ValidationError("InvokeHostFunction operation missing".to_string())
+        })?;
+
+        if idx != 0 {
+            return Err(RelayerError::ValidationError(
+                "InvokeHostFunction must be the first operation".to_string(),
+            ));
+        }
+
+        if let HostFunction::InvokeContract(invoke_args) = &invoke_op.host_function {
+            // Extract contract address
+            let target_contract = match &invoke_args.contract_address {
+                soroban_rs::xdr::ScAddress::Contract(contract_id) => {
+                    stellar_strkey::Contract(contract_id.0 .0).to_string()
+                }
+                _ => {
+                    return Err(RelayerError::ValidationError(
+                        "InvokeHostFunction must target a contract address".to_string(),
+                    ));
+                }
+            };
+
+            // Extract function name
+            let target_fn = invoke_args.function_name.to_utf8_string_lossy();
+
+            // Extract arguments
+            let target_args: Vec<ScVal> = invoke_args.args.to_vec();
+
+            return Ok(Some(SorobanInvokeInfo {
+                target_contract,
+                target_fn,
+                target_args,
+            }));
+        }
+    }
+
+    // Not a Soroban InvokeHostFunction transaction
+    Ok(None)
+}
 
 #[async_trait]
 impl<P, RR, NR, TR, J, TCS, S, D> GasAbstractionTrait
@@ -63,13 +166,88 @@ where
                 ));
             }
         };
+
+        // Check if this is a Soroban gas abstraction request by detecting InvokeHostFunction in XDR
+        // Soroban mode is detected when transaction_xdr contains an InvokeHostFunction operation
+        if let Some(xdr) = &params.transaction_xdr {
+            if let Some(soroban_info) = detect_soroban_invoke_from_xdr(xdr)? {
+                return self.quote_soroban_from_xdr(&params, &soroban_info).await;
+            }
+        }
+
+        // Classic sponsored transaction flow
+        self.quote_classic_sponsored(&params).await
+    }
+
+    async fn build_sponsored_transaction(
+        &self,
+        params: SponsoredTransactionBuildRequest,
+    ) -> Result<SponsoredTransactionBuildResponse, RelayerError> {
+        let params = match params {
+            SponsoredTransactionBuildRequest::Stellar(p) => p,
+            _ => {
+                return Err(RelayerError::ValidationError(
+                    "Expected Stellar prepare transaction request parameters".to_string(),
+                ));
+            }
+        };
+
+        let policy = self.relayer.policies.get_stellar_policy();
+
+        // Validate allowed token
+        StellarTransactionValidator::validate_allowed_token(&params.fee_token, &policy)
+            .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
+
+        // Validate fee_payment_strategy is User
+        if !policy.is_user_fee_payment() {
+            return Err(RelayerError::ValidationError(
+                "Gas abstraction requires fee_payment_strategy: User".to_string(),
+            ));
+        }
+
+        // Check if this is a Soroban gas abstraction request by detecting InvokeHostFunction in XDR
+        if let Some(xdr) = &params.transaction_xdr {
+            if let Some(soroban_info) = detect_soroban_invoke_from_xdr(xdr)? {
+                return self.build_soroban_sponsored(&params, &soroban_info).await;
+            }
+        }
+
+        // Classic sponsored transaction flow
+        self.build_classic_sponsored(&params).await
+    }
+}
+
+// ============================================================================
+// Classic Sponsored Transaction Handlers (Fee-bump Flow)
+// ============================================================================
+
+impl<P, RR, NR, TR, J, TCS, S, D> StellarRelayer<P, RR, NR, TR, J, TCS, S, D>
+where
+    P: StellarProviderTrait + Send + Sync,
+    D: StellarDexServiceTrait + Send + Sync + 'static,
+    RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
+    S: StellarSignTrait + Send + Sync + 'static,
+{
+    /// Quote a classic sponsored transaction (fee-bump flow)
+    ///
+    /// Estimates the fee for a standard Stellar transaction where the relayer
+    /// pays the network fee and user pays in a token.
+    async fn quote_classic_sponsored(
+        &self,
+        params: &crate::models::StellarFeeEstimateRequestParams,
+    ) -> Result<SponsoredTransactionQuoteResponse, RelayerError> {
         debug!(
-            "Processing quote sponsored transaction request for token: {}",
+            "Processing classic quote sponsored transaction for token: {}",
             params.fee_token
         );
 
-        // Validate allowed token
         let policy = self.relayer.policies.get_stellar_policy();
+
+        // Validate allowed token
         StellarTransactionValidator::validate_allowed_token(&params.fee_token, &policy)
             .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
 
@@ -80,7 +258,7 @@ where
             ));
         }
 
-        // Build envelope from XDR or operations (reusing logic from build method)
+        // Build envelope from XDR or operations
         let envelope = build_envelope_from_request(
             params.transaction_xdr.as_ref(),
             params.operations.as_ref(),
@@ -90,7 +268,7 @@ where
         )
         .await?;
 
-        // Run comprehensive security validation (similar to build method)
+        // Run comprehensive security validation
         StellarTransactionValidator::gasless_transaction_validation(
             &envelope,
             &self.relayer.address,
@@ -109,13 +287,12 @@ where
             .map_err(crate::models::RelayerError::from)?;
 
         // Add fees for fee payment operation (100 stroops) and fee-bump transaction (100 stroops)
-        // For Soroban transactions, the simulation already accounts for resource fees,
-        // we just need to add the inclusion fees for the additional operations
         let is_soroban = xdr_needs_simulation(&envelope).unwrap_or(false);
-        let mut additional_fees = 0;
-        if !is_soroban {
-            additional_fees = 2 * STELLAR_DEFAULT_TRANSACTION_FEE as u64; // 200 stroops total
-        }
+        let additional_fees = if is_soroban {
+            0 // Soroban simulation already accounts for resource fees
+        } else {
+            2 * STELLAR_DEFAULT_TRANSACTION_FEE as u64 // 200 stroops total
+        };
         let xlm_fee = inner_tx_fee + additional_fees;
 
         // Convert to token amount via DEX service
@@ -150,35 +327,33 @@ where
         .await
         .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
 
-        debug!("Fee estimate result: {:?}", fee_quote);
+        debug!("Classic fee estimate result: {:?}", fee_quote);
 
-        let result = StellarFeeEstimateResult {
-            fee_in_token_ui: fee_quote.fee_in_token_ui,
-            fee_in_token: fee_quote.fee_in_token.to_string(),
-            conversion_rate: fee_quote.conversion_rate.to_string(),
-        };
-        Ok(SponsoredTransactionQuoteResponse::Stellar(result))
+        Ok(SponsoredTransactionQuoteResponse::Stellar(
+            StellarFeeEstimateResult {
+                fee_in_token_ui: fee_quote.fee_in_token_ui,
+                fee_in_token: fee_quote.fee_in_token.to_string(),
+                conversion_rate: fee_quote.conversion_rate.to_string(),
+            },
+        ))
     }
 
-    async fn build_sponsored_transaction(
+    /// Build a classic sponsored transaction (fee-bump flow)
+    ///
+    /// Builds a complete transaction envelope with fee payment operation,
+    /// ready for user signature. The relayer will later wrap this in a fee-bump.
+    async fn build_classic_sponsored(
         &self,
-        params: SponsoredTransactionBuildRequest,
+        params: &crate::models::StellarPrepareTransactionRequestParams,
     ) -> Result<SponsoredTransactionBuildResponse, RelayerError> {
-        let params = match params {
-            SponsoredTransactionBuildRequest::Stellar(p) => p,
-            _ => {
-                return Err(RelayerError::ValidationError(
-                    "Expected Stellar prepare transaction request parameters".to_string(),
-                ));
-            }
-        };
         debug!(
-            "Processing prepare transaction request for token: {}",
+            "Processing classic build sponsored transaction for token: {}",
             params.fee_token
         );
 
-        // Validate allowed token
         let policy = self.relayer.policies.get_stellar_policy();
+
+        // Validate allowed token
         StellarTransactionValidator::validate_allowed_token(&params.fee_token, &policy)
             .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
 
@@ -189,7 +364,7 @@ where
             ));
         }
 
-        // Build envelope from XDR or operations (reusing shared helper)
+        // Build envelope from XDR or operations
         let envelope = build_envelope_from_request(
             params.transaction_xdr.as_ref(),
             params.operations.as_ref(),
@@ -199,6 +374,7 @@ where
         )
         .await?;
 
+        // Run comprehensive security validation
         StellarTransactionValidator::gasless_transaction_validation(
             &envelope,
             &self.relayer.address,
@@ -211,31 +387,29 @@ where
             RelayerError::ValidationError(format!("Failed to validate gasless transaction: {e}"))
         })?;
 
-        // Get fee estimate using estimate_fee utility which handles simulation if needed
-        // For non-Soroban transactions, we'll add 200 stroops (100 for fee payment op + 100 for fee-bump)
+        // Estimate fee using estimate_fee utility which handles simulation if needed
         let inner_tx_fee = estimate_fee(&envelope, &self.provider, None)
             .await
             .map_err(crate::models::RelayerError::from)?;
 
-        // Add fees for fee payment operation (100 stroops) and fee-bump transaction (100 stroops)
-        // For Soroban transactions, the simulation already accounts for resource fees,
-        // we just need to add the inclusion fees for the additional operations
+        // Add fees for fee payment operation and fee-bump transaction
         let is_soroban = xdr_needs_simulation(&envelope).unwrap_or(false);
-        let mut additional_fees = 0;
-        if !is_soroban {
-            additional_fees = 2 * STELLAR_DEFAULT_TRANSACTION_FEE as u64; // 200 stroops total
-        }
+        let additional_fees = if is_soroban {
+            0
+        } else {
+            2 * STELLAR_DEFAULT_TRANSACTION_FEE as u64 // 200 stroops total
+        };
         let xlm_fee = inner_tx_fee + additional_fees;
 
         debug!(
             inner_tx_fee = inner_tx_fee,
             additional_fees = additional_fees,
             total_fee = xlm_fee,
-            "Fee estimated: inner transaction + fee payment op + fee-bump transaction fee"
+            "Fee estimated: inner transaction + fee payment op + fee-bump"
         );
 
-        // Calculate fee quote first to check user balance before modifying envelope
-        let preliminary_fee_quote = convert_xlm_fee_to_token(
+        // Calculate fee quote to check user balance before modifying envelope
+        let fee_quote = convert_xlm_fee_to_token(
             self.dex_service.as_ref(),
             &policy,
             xlm_fee,
@@ -245,16 +419,13 @@ where
         .map_err(crate::models::RelayerError::from)?;
 
         // Validate max fee
-        StellarTransactionValidator::validate_max_fee(
-            preliminary_fee_quote.fee_in_stroops,
-            &policy,
-        )
-        .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
+        StellarTransactionValidator::validate_max_fee(fee_quote.fee_in_stroops, &policy)
+            .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
 
         // Validate token-specific max fee
         StellarTransactionValidator::validate_token_max_fee(
             &params.fee_token,
-            preliminary_fee_quote.fee_in_token,
+            fee_quote.fee_in_token,
             &policy,
         )
         .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
@@ -263,7 +434,7 @@ where
         StellarTransactionValidator::validate_user_token_balance(
             &envelope,
             &params.fee_token,
-            preliminary_fee_quote.fee_in_token,
+            fee_quote.fee_in_token,
             &self.provider,
         )
         .await
@@ -272,21 +443,18 @@ where
         // Add payment operation using the validated fee quote
         let mut final_envelope = add_payment_operation_to_envelope(
             envelope,
-            &preliminary_fee_quote,
+            &fee_quote,
             &params.fee_token,
             &self.relayer.address,
         )?;
 
-        // Use the validated fee quote (no duplicate DEX call)
-        let fee_quote = preliminary_fee_quote;
-
         debug!(
             estimated_fee = xlm_fee,
             final_fee_in_token = fee_quote.fee_in_token_ui,
-            "Transaction prepared successfully"
+            "Classic transaction prepared successfully"
         );
 
-        // Set final time bounds just before returning to give user maximum time to review and submit
+        // Set final time bounds just before returning to give user maximum time to sign
         let valid_until = Utc::now() + get_stellar_sponsored_transaction_validity_duration();
         set_time_bounds(&mut final_envelope, valid_until)
             .map_err(crate::models::RelayerError::from)?;
@@ -302,11 +470,520 @@ where
                 fee_in_token: fee_quote.fee_in_token.to_string(),
                 fee_in_token_ui: fee_quote.fee_in_token_ui,
                 fee_in_stroops: fee_quote.fee_in_stroops.to_string(),
-                fee_token: params.fee_token,
+                fee_token: params.fee_token.clone(),
                 valid_until: valid_until.to_rfc3339(),
+                // Classic mode: no Soroban-specific fields
+                user_auth_entry: None,
             },
         ))
     }
+}
+
+// ============================================================================
+// Soroban Gas Abstraction Handlers (FeeForwarder Flow with XDR-based detection)
+// ============================================================================
+
+impl<P, RR, NR, TR, J, TCS, S, D> StellarRelayer<P, RR, NR, TR, J, TCS, S, D>
+where
+    P: StellarProviderTrait + Send + Sync,
+    D: StellarDexServiceTrait + Send + Sync + 'static,
+    RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
+    S: StellarSignTrait + Send + Sync + 'static,
+{
+    /// Quote a Soroban sponsored transaction using FeeForwarder (XDR-based detection)
+    ///
+    /// Called when transaction_xdr contains an InvokeHostFunction operation.
+    /// Extracts contract call details from the XDR and estimates fee.
+    async fn quote_soroban_from_xdr(
+        &self,
+        params: &crate::models::StellarFeeEstimateRequestParams,
+        soroban_info: &SorobanInvokeInfo,
+    ) -> Result<SponsoredTransactionQuoteResponse, RelayerError> {
+        debug!(
+            "Processing Soroban quote request for token: {}, target: {}::{}",
+            params.fee_token, soroban_info.target_contract, soroban_info.target_fn
+        );
+
+        let policy = self.relayer.policies.get_stellar_policy();
+
+        // Validate fee_payment_strategy is User
+        if !policy.is_user_fee_payment() {
+            return Err(RelayerError::ValidationError(
+                "Gas abstraction requires fee_payment_strategy: User".to_string(),
+            ));
+        }
+
+        // Validate allowed token (same as classic flow)
+        StellarTransactionValidator::validate_allowed_token(&params.fee_token, &policy)
+            .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
+
+        // Validate fee_forwarder is configured in server config
+        let fee_forwarder = crate::config::ServerConfig::get_stellar_fee_forwarder_address()
+            .ok_or_else(|| {
+                RelayerError::ValidationError(
+                    "STELLAR_FEE_FORWARDER_ADDRESS env var is required for gas abstraction"
+                        .to_string(),
+                )
+            })?;
+
+        // Validate fee_token is a valid Soroban contract address (C...)
+        if stellar_strkey::Contract::from_string(&params.fee_token).is_err() {
+            return Err(RelayerError::ValidationError(format!(
+                "fee_token must be a valid Soroban contract address (C...), got '{}'",
+                params.fee_token
+            )));
+        }
+
+        // Extract user_address from transaction_xdr source account (or use source_account if provided)
+        // For quote, we don't need the actual user_address, just validation that XDR is valid
+        // The user_address will be extracted in build phase when we have the XDR
+
+        let xdr = params.transaction_xdr.as_ref().ok_or_else(|| {
+            RelayerError::ValidationError(
+                "Soroban gas abstraction requires transaction_xdr".to_string(),
+            )
+        })?;
+
+        let source_envelope = TransactionEnvelope::from_xdr_base64(xdr, Limits::none())
+            .map_err(|e| RelayerError::ValidationError(format!("Invalid XDR: {e}")))?;
+        let user_address = extract_source_account(&source_envelope).map_err(|e| {
+            RelayerError::ValidationError(format!("Failed to extract source account: {e}"))
+        })?;
+
+        // Build FeeForwarder params with a placeholder fee (will simulate to get accurate fee)
+        let base_fee_stroops: u64 = STELLAR_DEFAULT_TRANSACTION_FEE as u64;
+        let base_fee_quote = convert_xlm_fee_to_token(
+            self.dex_service.as_ref(),
+            &policy,
+            base_fee_stroops,
+            &params.fee_token,
+        )
+        .await
+        .map_err(crate::models::RelayerError::from)?;
+
+        let validity_duration = get_stellar_sponsored_transaction_validity_duration();
+        let validity_seconds = validity_duration.num_seconds() as u64;
+        let expiration_ledger = get_expiration_ledger(&self.provider, validity_seconds)
+            .await
+            .map_err(|e| RelayerError::Internal(format!("Failed to get expiration ledger: {e}")))?;
+
+        let fee_params = FeeForwarderParams {
+            fee_token: params.fee_token.clone(),
+            fee_amount: base_fee_quote.fee_in_token as i128,
+            max_fee_amount: apply_max_fee_slippage(base_fee_quote.fee_in_token),
+            expiration_ledger,
+            target_contract: soroban_info.target_contract.clone(),
+            target_fn: soroban_info.target_fn.clone(),
+            target_args: soroban_info.target_args.clone(),
+            user: user_address,
+            relayer: self.relayer.address.clone(),
+        };
+
+        let auth_entry = FeeForwarderService::<P>::build_user_auth_entry_standalone(
+            &fee_forwarder,
+            &fee_params,
+            true,
+        )
+        .map_err(|e| RelayerError::Internal(format!("Failed to build user auth entry: {e}")))?;
+
+        let invoke_op = FeeForwarderService::<P>::build_invoke_operation_standalone(
+            &fee_forwarder,
+            &fee_params,
+            vec![auth_entry],
+        )
+        .map_err(|e| RelayerError::Internal(format!("Failed to build invoke operation: {e}")))?;
+
+        let envelope = build_soroban_transaction_envelope(
+            &self.relayer.address,
+            invoke_op,
+            base_fee_stroops as u32,
+        )?;
+
+        let sim_response = self
+            .provider
+            .simulate_transaction_envelope(&envelope)
+            .await
+            .map_err(|e| RelayerError::Internal(format!("Failed to simulate transaction: {e}")))?;
+
+        let total_fee = calculate_total_soroban_fee(&sim_response, 1)?;
+
+        let fee_quote = convert_xlm_fee_to_token(
+            self.dex_service.as_ref(),
+            &policy,
+            total_fee as u64,
+            &params.fee_token,
+        )
+        .await
+        .map_err(crate::models::RelayerError::from)?;
+
+        debug!(
+            "Soroban fee estimate: {} stroops, {} token",
+            fee_quote.fee_in_stroops, fee_quote.fee_in_token
+        );
+
+        // Validate max fee
+        StellarTransactionValidator::validate_max_fee(fee_quote.fee_in_stroops, &policy)
+            .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
+
+        // Validate token-specific max fee
+        StellarTransactionValidator::validate_token_max_fee(
+            &params.fee_token,
+            fee_quote.fee_in_token,
+            &policy,
+        )
+        .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
+
+        // Check user token balance using the original source envelope (user as source)
+        StellarTransactionValidator::validate_user_token_balance(
+            &source_envelope,
+            &params.fee_token,
+            fee_quote.fee_in_token,
+            &self.provider,
+        )
+        .await
+        .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
+
+        // Return using consolidated result struct
+        let result = StellarFeeEstimateResult {
+            fee_in_token_ui: fee_quote.fee_in_token_ui,
+            fee_in_token: fee_quote.fee_in_token.to_string(),
+            conversion_rate: fee_quote.conversion_rate.to_string(),
+        };
+
+        Ok(SponsoredTransactionQuoteResponse::Stellar(result))
+    }
+
+    /// Build a Soroban sponsored transaction using FeeForwarder (XDR-based detection)
+    ///
+    /// Called when transaction_xdr contains an InvokeHostFunction operation.
+    /// Builds the FeeForwarder transaction wrapping the original contract call.
+    async fn build_soroban_sponsored(
+        &self,
+        params: &crate::models::StellarPrepareTransactionRequestParams,
+        soroban_info: &SorobanInvokeInfo,
+    ) -> Result<SponsoredTransactionBuildResponse, RelayerError> {
+        debug!(
+            "Processing Soroban build request for token: {}, target: {}::{}",
+            params.fee_token, soroban_info.target_contract, soroban_info.target_fn
+        );
+
+        let policy = self.relayer.policies.get_stellar_policy();
+
+        // Note: validate_allowed_token is already called in build_sponsored_transaction
+
+        // Get fee_forwarder address from server config
+        let fee_forwarder = crate::config::ServerConfig::get_stellar_fee_forwarder_address()
+            .ok_or_else(|| {
+                RelayerError::ValidationError(
+                    "STELLAR_FEE_FORWARDER_ADDRESS env var is required for gas abstraction"
+                        .to_string(),
+                )
+            })?;
+
+        // Extract user_address from transaction_xdr source account
+        // Soroban gas abstraction requires transaction_xdr, so we can unwrap here
+        let xdr = params.transaction_xdr.as_ref().ok_or_else(|| {
+            RelayerError::ValidationError(
+                "Soroban gas abstraction requires transaction_xdr".to_string(),
+            )
+        })?;
+
+        let source_envelope = TransactionEnvelope::from_xdr_base64(xdr, Limits::none())
+            .map_err(|e| RelayerError::ValidationError(format!("Invalid XDR: {e}")))?;
+        let user_address = extract_source_account(&source_envelope).map_err(|e| {
+            RelayerError::ValidationError(format!("Failed to extract source account: {e}"))
+        })?;
+
+        // Use default validity duration (same as classic sponsored transactions)
+        let validity_duration = get_stellar_sponsored_transaction_validity_duration();
+        let validity_seconds = validity_duration.num_seconds() as u64;
+        let expiration_ledger = get_expiration_ledger(&self.provider, validity_seconds)
+            .await
+            .map_err(|e| RelayerError::Internal(format!("Failed to get expiration ledger: {e}")))?;
+
+        // Build initial fee quote based on base fee, then simulate to get accurate Soroban fee
+        let base_fee_stroops: u64 = STELLAR_DEFAULT_TRANSACTION_FEE as u64;
+        let base_fee_quote = convert_xlm_fee_to_token(
+            self.dex_service.as_ref(),
+            &policy,
+            base_fee_stroops,
+            &params.fee_token,
+        )
+        .await
+        .map_err(crate::models::RelayerError::from)?;
+
+        // Build the FeeForwarder parameters using extracted Soroban info
+        let mut fee_params = FeeForwarderParams {
+            fee_token: params.fee_token.clone(),
+            fee_amount: base_fee_quote.fee_in_token as i128,
+            max_fee_amount: apply_max_fee_slippage(base_fee_quote.fee_in_token),
+            expiration_ledger,
+            target_contract: soroban_info.target_contract.clone(),
+            target_fn: soroban_info.target_fn.clone(),
+            target_args: soroban_info.target_args.clone(),
+            user: user_address.clone(),
+            relayer: self.relayer.address.clone(),
+        };
+
+        // Build the user authorization entry using the standalone method
+        // requires_target_auth defaults to true (safer default)
+        let auth_entry = FeeForwarderService::<P>::build_user_auth_entry_standalone(
+            &fee_forwarder,
+            &fee_params,
+            true,
+        )
+        .map_err(|e| RelayerError::Internal(format!("Failed to build user auth entry: {e}")))?;
+
+        let invoke_op = FeeForwarderService::<P>::build_invoke_operation_standalone(
+            &fee_forwarder,
+            &fee_params,
+            vec![auth_entry],
+        )
+        .map_err(|e| RelayerError::Internal(format!("Failed to build invoke operation: {e}")))?;
+
+        let envelope = build_soroban_transaction_envelope(
+            &self.relayer.address,
+            invoke_op,
+            base_fee_stroops as u32,
+        )?;
+
+        let sim_response = self
+            .provider
+            .simulate_transaction_envelope(&envelope)
+            .await
+            .map_err(|e| RelayerError::Internal(format!("Failed to simulate transaction: {e}")))?;
+
+        let total_fee = calculate_total_soroban_fee(&sim_response, 1)?;
+
+        let fee_quote = convert_xlm_fee_to_token(
+            self.dex_service.as_ref(),
+            &policy,
+            total_fee as u64,
+            &params.fee_token,
+        )
+        .await
+        .map_err(crate::models::RelayerError::from)?;
+
+        // Validate max fee
+        StellarTransactionValidator::validate_max_fee(fee_quote.fee_in_stroops, &policy)
+            .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
+
+        // Validate token-specific max fee
+        StellarTransactionValidator::validate_token_max_fee(
+            &params.fee_token,
+            fee_quote.fee_in_token,
+            &policy,
+        )
+        .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
+
+        // Check user token balance using the original source envelope (user as source)
+        StellarTransactionValidator::validate_user_token_balance(
+            &source_envelope,
+            &params.fee_token,
+            fee_quote.fee_in_token,
+            &self.provider,
+        )
+        .await
+        .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
+
+        // Rebuild params with the final fee amounts
+        // Apply slippage buffer to max_fee_amount to allow for fee fluctuation
+        fee_params.fee_amount = fee_quote.fee_in_token as i128;
+        fee_params.max_fee_amount = apply_max_fee_slippage(fee_quote.fee_in_token);
+
+        let auth_entry = FeeForwarderService::<P>::build_user_auth_entry_standalone(
+            &fee_forwarder,
+            &fee_params,
+            true,
+        )
+        .map_err(|e| RelayerError::Internal(format!("Failed to build user auth entry: {e}")))?;
+
+        let user_auth_xdr = FeeForwarderService::<P>::serialize_auth_entry(&auth_entry)
+            .map_err(|e| RelayerError::Internal(format!("Failed to serialize auth entry: {e}")))?;
+
+        let invoke_op = FeeForwarderService::<P>::build_invoke_operation_standalone(
+            &fee_forwarder,
+            &fee_params,
+            vec![auth_entry],
+        )
+        .map_err(|e| RelayerError::Internal(format!("Failed to build invoke operation: {e}")))?;
+
+        let mut envelope = build_soroban_transaction_envelope(
+            &self.relayer.address,
+            invoke_op,
+            base_fee_stroops as u32,
+        )?;
+
+        let sim_response = self
+            .provider
+            .simulate_transaction_envelope(&envelope)
+            .await
+            .map_err(|e| RelayerError::Internal(format!("Failed to simulate transaction: {e}")))?;
+
+        apply_simulation_to_soroban_envelope(&mut envelope, &sim_response, 1)?;
+
+        let transaction_xdr = envelope
+            .to_xdr_base64(Limits::none())
+            .map_err(|e| RelayerError::Internal(format!("Failed to serialize transaction: {e}")))?;
+
+        // Derive valid_until from expiration_ledger to ensure consistency
+        // Get current ledger to calculate time until expiration
+        let current_ledger =
+            self.provider.get_latest_ledger().await.map_err(|e| {
+                RelayerError::Internal(format!("Failed to get current ledger: {e}"))
+            })?;
+        let ledgers_until_expiration = expiration_ledger.saturating_sub(current_ledger.sequence);
+        let seconds_until_expiration = ledgers_until_expiration as u64 * LEDGER_TIME_SECONDS;
+        let valid_until = Utc::now() + chrono::Duration::seconds(seconds_until_expiration as i64);
+
+        debug!(
+            "Soroban build complete: transaction_xdr length={}, auth_xdr length={}, expiration_ledger={}, valid_until={}",
+            transaction_xdr.len(),
+            user_auth_xdr.len(),
+            expiration_ledger,
+            valid_until.to_rfc3339()
+        );
+
+        // Return using consolidated result struct with Soroban-specific fields populated
+        let result = StellarPrepareTransactionResult {
+            transaction: transaction_xdr,
+            fee_in_token: fee_quote.fee_in_token.to_string(),
+            fee_in_token_ui: fee_quote.fee_in_token_ui,
+            fee_in_stroops: fee_quote.fee_in_stroops.to_string(),
+            fee_token: params.fee_token.clone(),
+            valid_until: valid_until.to_rfc3339(),
+            // Soroban-specific fields
+            user_auth_entry: Some(user_auth_xdr),
+        };
+
+        Ok(SponsoredTransactionBuildResponse::Stellar(result))
+    }
+}
+
+/// Build a Soroban transaction envelope with the given operation
+fn build_soroban_transaction_envelope(
+    source_address: &str,
+    operation: Operation,
+    fee: u32,
+) -> Result<TransactionEnvelope, RelayerError> {
+    use soroban_rs::xdr::{
+        Memo, MuxedAccount, Preconditions, SequenceNumber, Transaction, TransactionExt,
+        TransactionV1Envelope, Uint256, VecM,
+    };
+
+    // Parse source address
+    let pk = stellar_strkey::ed25519::PublicKey::from_string(source_address)
+        .map_err(|e| RelayerError::ValidationError(format!("Invalid source address: {e}")))?;
+    let source = MuxedAccount::Ed25519(Uint256(pk.0));
+
+    // Build transaction with placeholder sequence (0) - will be updated at submit time
+    let tx = Transaction {
+        source_account: source,
+        fee,
+        seq_num: SequenceNumber(0),
+        cond: Preconditions::None,
+        memo: Memo::None,
+        operations: vec![operation].try_into().map_err(|_| {
+            RelayerError::Internal("Failed to create operations vector".to_string())
+        })?,
+        ext: TransactionExt::V0,
+    };
+
+    Ok(TransactionEnvelope::Tx(TransactionV1Envelope {
+        tx,
+        signatures: VecM::default(),
+    }))
+}
+
+/// Calculate total fee for a Soroban transaction from simulation response.
+fn calculate_total_soroban_fee(
+    sim_response: &soroban_rs::stellar_rpc_client::SimulateTransactionResponse,
+    operations_count: u64,
+) -> Result<u32, RelayerError> {
+    if let Some(err) = sim_response.error.clone() {
+        return Err(RelayerError::ValidationError(format!(
+            "Simulation failed: {err}"
+        )));
+    }
+
+    let inclusion_fee = operations_count * STELLAR_DEFAULT_TRANSACTION_FEE as u64;
+    let resource_fee = sim_response.min_resource_fee;
+    let total_fee = inclusion_fee + resource_fee;
+    let total_fee_u32 = u32::try_from(total_fee)
+        .map_err(|_| RelayerError::Internal("Soroban fee exceeds u32::MAX".to_string()))?;
+
+    Ok(total_fee_u32.max(STELLAR_DEFAULT_TRANSACTION_FEE))
+}
+
+/// Apply Soroban simulation data to a transaction envelope (fee + extension data).
+fn apply_simulation_to_soroban_envelope(
+    envelope: &mut TransactionEnvelope,
+    sim_response: &soroban_rs::stellar_rpc_client::SimulateTransactionResponse,
+    operations_count: u64,
+) -> Result<(), RelayerError> {
+    use soroban_rs::xdr::SorobanTransactionData;
+
+    let total_fee = calculate_total_soroban_fee(sim_response, operations_count)?;
+
+    let tx_data = SorobanTransactionData::from_xdr_base64(
+        sim_response.transaction_data.as_str(),
+        Limits::none(),
+    )
+    .map_err(|e| RelayerError::Internal(format!("Invalid transaction_data XDR: {e}")))?;
+
+    match envelope {
+        TransactionEnvelope::Tx(ref mut env) => {
+            env.tx.fee = total_fee;
+            env.tx.ext = soroban_rs::xdr::TransactionExt::V1(tx_data);
+        }
+        TransactionEnvelope::TxV0(_) | TransactionEnvelope::TxFeeBump(_) => {
+            return Err(RelayerError::Internal(
+                "Soroban transaction must be a V1 envelope".to_string(),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Apply slippage tolerance to max_fee_amount for FeeForwarder
+///
+/// The FeeForwarder contract has separate `fee_amount` (what relayer charges at execution)
+/// and `max_fee_amount` (user's authorized ceiling). Setting them equal means no room for
+/// fee fluctuation between quote and execution. This function applies a slippage buffer
+/// to allow for price movement.
+///
+/// # Arguments
+/// * `fee_in_token` - The calculated fee amount in token units
+///
+/// # Returns
+/// The max_fee_amount with slippage buffer applied as i128
+fn apply_max_fee_slippage(fee_in_token: u64) -> i128 {
+    // Apply slippage: max_fee = fee * (10000 + slippage_bps) / 10000
+    let fee_with_slippage =
+        (fee_in_token as u128) * (10000 + DEFAULT_MAX_FEE_SLIPPAGE_BPS as u128) / 10000;
+    fee_with_slippage as i128
+}
+
+/// Calculate the expiration ledger for authorization
+///
+/// Uses the provider to get the current ledger sequence and adds the
+/// specified validity duration (in seconds) converted to ledger count.
+async fn get_expiration_ledger<P>(provider: &P, validity_seconds: u64) -> Result<u32, RelayerError>
+where
+    P: StellarProviderTrait + Send + Sync,
+{
+    let current_ledger = provider
+        .get_latest_ledger()
+        .await
+        .map_err(|e| RelayerError::Internal(format!("Failed to get latest ledger: {e}")))?;
+
+    let ledgers_to_add = validity_seconds / LEDGER_TIME_SECONDS;
+    Ok(current_ledger.sequence + ledgers_to_add as u32)
 }
 
 /// Add payment operation to envelope using a pre-computed fee quote

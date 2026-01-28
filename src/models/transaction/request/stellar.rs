@@ -15,7 +15,9 @@ pub struct StellarTransactionRequest {
     #[schema(nullable = true)]
     pub valid_until: Option<String>,
     /// Pre-built transaction XDR (base64 encoded, signed or unsigned)
-    /// Mutually exclusive with operations field
+    /// Mutually exclusive with operations field.
+    /// For Soroban gas abstraction: submit the transaction XDR from sponsored/build response
+    /// with the user's signed auth entry updated inside.
     #[schema(nullable = true)]
     pub transaction_xdr: Option<String>,
     /// Explicitly request fee-bump wrapper

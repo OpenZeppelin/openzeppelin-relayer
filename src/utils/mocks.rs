@@ -337,6 +337,9 @@ pub mod mockutils {
             max_connections: 256,
             connection_backlog: 511,
             request_timeout_seconds: 30,
+            stellar_fee_forwarder_address: None,
+            stellar_soroswap_router_address: None,
+            stellar_soroswap_native_wrapper_address: None,
         }
     }
 }

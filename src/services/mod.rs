@@ -20,6 +20,9 @@ pub use jupiter::*;
 pub mod stellar_dex;
 pub use stellar_dex::*;
 
+pub mod stellar_fee_forwarder;
+pub use stellar_fee_forwarder::*;
+
 mod vault;
 pub use vault::*;
 

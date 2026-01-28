@@ -33,15 +33,14 @@ use alloy::{
 
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
+use soroban_rs::xdr::{TransactionEnvelope, TransactionV1Envelope, VecM};
 use std::{convert::TryFrom, str::FromStr};
 use strum::Display;
 
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use soroban_rs::xdr::{
-    Transaction as SorobanTransaction, TransactionEnvelope, TransactionV1Envelope, VecM,
-};
+use soroban_rs::xdr::Transaction as SorobanTransaction;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema, Display)]
 #[serde(rename_all = "lowercase")]
@@ -917,6 +916,9 @@ impl
 
                 let valid_until = extract_stellar_valid_until(stellar_request, Utc::now());
 
+                let transaction_input = TransactionInput::from_stellar_request(stellar_request)
+                    .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
+
                 let stellar_data = StellarTransactionData {
                     source_account: source_account.unwrap_or_else(|| relayer_model.address.clone()),
                     memo: stellar_request.memo.clone(),
@@ -927,8 +929,7 @@ impl
                     fee: None,
                     sequence_number: None,
                     simulation_transaction_data: None,
-                    transaction_input: TransactionInput::from_stellar_request(stellar_request)
-                        .map_err(|e| RelayerError::ValidationError(e.to_string()))?,
+                    transaction_input,
                     signed_envelope_xdr: None,
                     transaction_result_xdr: None,
                 };

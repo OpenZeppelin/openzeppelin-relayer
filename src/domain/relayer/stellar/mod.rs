@@ -25,7 +25,7 @@ use crate::{
     services::{
         provider::get_network_provider,
         signer::StellarSignerFactory,
-        stellar_dex::{DexServiceWrapper, OrderBookService, StellarDexService},
+        stellar_dex::{DexServiceWrapper, OrderBookService, SoroswapService, StellarDexService},
         TransactionCounterService,
     },
 };
@@ -114,9 +114,24 @@ pub async fn create_stellar_relayer<
                 dex_services.push(DexServiceWrapper::OrderBook(order_book_service));
             }
             StellarSwapStrategy::Soroswap => {
-                // TODO: Implement Soroswap service when available
-                // For now, skip if not available
-                tracing::warn!("Soroswap strategy is not yet implemented, skipping");
+                // Get Soroswap router address from server config, falling back to default
+                let router_address =
+                    crate::config::ServerConfig::get_stellar_soroswap_router_address()
+                        .unwrap_or_else(|| get_default_soroswap_router(network.is_testnet()));
+
+                // Get native wrapper address from server config if configured
+                let native_wrapper_address =
+                    crate::config::ServerConfig::get_stellar_soroswap_native_wrapper_address();
+
+                let soroswap_service = Arc::new(SoroswapService::new(
+                    router_address,
+                    native_wrapper_address,
+                    provider_arc.clone(),
+                    network.passphrase.clone(),
+                    network.is_testnet(),
+                ));
+                dex_services.push(DexServiceWrapper::Soroswap(soroswap_service));
+                tracing::info!("Soroswap DEX service initialized");
             }
         }
     }
@@ -140,4 +155,18 @@ pub async fn create_stellar_relayer<
     .await?;
 
     Ok(relayer)
+}
+
+/// Get the default Soroswap router contract address for the given network
+///
+/// These addresses are the official Soroswap router deployments.
+/// Users can override these via configuration.
+fn get_default_soroswap_router(is_testnet: bool) -> String {
+    if is_testnet {
+        // Soroswap testnet router
+        "CDVQVKOY2YSXS2IC7KN6MNASSHPAO7UN2UR2ON4OI2SKMFJNVAMDX6DP".to_string()
+    } else {
+        // Soroswap mainnet router
+        "CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK".to_string()
+    }
 }

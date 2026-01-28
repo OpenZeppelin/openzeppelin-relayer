@@ -130,7 +130,7 @@ where
     D: StellarDexServiceTrait + Send + Sync + 'static,
 {
     pub(crate) relayer: RelayerRepoModel,
-    signer: Arc<S>,
+    pub(crate) signer: Arc<S>,
     pub(crate) network: StellarNetwork,
     pub(crate) provider: P,
     pub(crate) relayer_repository: Arc<RR>,

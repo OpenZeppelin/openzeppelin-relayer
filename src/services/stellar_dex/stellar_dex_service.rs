@@ -5,7 +5,7 @@
 //! and internally routes calls to the first strategy that can handle the requested asset.
 
 use super::{
-    AssetType, OrderBookService, StellarDexServiceError, StellarDexServiceTrait,
+    AssetType, OrderBookService, SoroswapService, StellarDexServiceError, StellarDexServiceTrait,
     StellarQuoteResponse, SwapExecutionResult, SwapTransactionParams,
 };
 use crate::services::{provider::StellarProviderTrait, signer::Signer, signer::StellarSignTrait};
@@ -24,10 +24,10 @@ where
     P: StellarProviderTrait + Send + Sync + 'static,
     S: StellarSignTrait + Signer + Send + Sync + 'static,
 {
-    /// Order Book DEX service
+    /// Order Book DEX service (for classic Stellar assets)
     OrderBook(Arc<OrderBookService<P, S>>),
-    // TODO: Add Soroswap variant when implemented
-    // Soroswap(Arc<SoroswapService<P, S>>),
+    /// Soroswap DEX service (for Soroban contract tokens)
+    Soroswap(Arc<SoroswapService<P>>),
 }
 
 impl<P, S> DexServiceWrapper<P, S>
@@ -38,14 +38,14 @@ where
     fn can_handle_asset(&self, asset_id: &str) -> bool {
         match self {
             DexServiceWrapper::OrderBook(service) => service.can_handle_asset(asset_id),
-            // DexServiceWrapper::Soroswap(service) => service.can_handle_asset(asset_id),
+            DexServiceWrapper::Soroswap(service) => service.can_handle_asset(asset_id),
         }
     }
 
     fn supported_asset_types(&self) -> HashSet<AssetType> {
         match self {
             DexServiceWrapper::OrderBook(service) => service.supported_asset_types(),
-            // DexServiceWrapper::Soroswap(service) => service.supported_asset_types(),
+            DexServiceWrapper::Soroswap(service) => service.supported_asset_types(),
         }
     }
 }
@@ -137,10 +137,11 @@ where
             DexServiceWrapper::OrderBook(svc) => {
                 svc.get_token_to_xlm_quote(asset_id, amount, slippage, asset_decimals)
                     .await
-            } // DexServiceWrapper::Soroswap(svc) => {
-              //     svc.get_token_to_xlm_quote(asset_id, amount, slippage, asset_decimals)
-              //         .await
-              // }
+            }
+            DexServiceWrapper::Soroswap(svc) => {
+                svc.get_token_to_xlm_quote(asset_id, amount, slippage, asset_decimals)
+                    .await
+            }
         }
     }
 
@@ -161,10 +162,11 @@ where
             DexServiceWrapper::OrderBook(svc) => {
                 svc.get_xlm_to_token_quote(asset_id, amount, slippage, asset_decimals)
                     .await
-            } // DexServiceWrapper::Soroswap(svc) => {
-              //     svc.get_xlm_to_token_quote(asset_id, amount, slippage, asset_decimals)
-              //         .await
-              // }
+            }
+            DexServiceWrapper::Soroswap(svc) => {
+                svc.get_xlm_to_token_quote(asset_id, amount, slippage, asset_decimals)
+                    .await
+            }
         }
     }
 
@@ -183,7 +185,7 @@ where
 
         match strategy {
             DexServiceWrapper::OrderBook(svc) => svc.prepare_swap_transaction(params).await,
-            // DexServiceWrapper::Soroswap(svc) => svc.prepare_swap_transaction(params).await,
+            DexServiceWrapper::Soroswap(svc) => svc.prepare_swap_transaction(params).await,
         }
     }
 
@@ -202,7 +204,7 @@ where
 
         match strategy {
             DexServiceWrapper::OrderBook(svc) => svc.execute_swap(params).await,
-            // DexServiceWrapper::Soroswap(svc) => svc.execute_swap(params).await,
+            DexServiceWrapper::Soroswap(svc) => svc.execute_swap(params).await,
         }
     }
 }

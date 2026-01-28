@@ -654,6 +654,11 @@ impl RelayerStellarPolicy {
     pub fn get_swap_config(&self) -> Option<RelayerStellarSwapConfig> {
         self.swap_config.clone()
     }
+
+    /// Check if user fee payment strategy is enabled (gas abstraction requires this + STELLAR_FEE_FORWARDER_ADDRESS env var)
+    pub fn is_user_fee_payment(&self) -> bool {
+        self.fee_payment_strategy == Some(StellarFeePaymentStrategy::User)
+    }
 }
 
 /// Network-specific policy for relayers

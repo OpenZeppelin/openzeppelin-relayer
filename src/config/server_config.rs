@@ -90,6 +90,12 @@ pub struct ServerConfig {
     pub connection_backlog: u32,
     /// Request handler timeout in seconds for API endpoints.
     pub request_timeout_seconds: u64,
+    /// Stellar FeeForwarder contract address for gas abstraction (C... format).
+    pub stellar_fee_forwarder_address: Option<String>,
+    /// Stellar Soroswap router contract address for token-to-XLM quotes.
+    pub stellar_soroswap_router_address: Option<String>,
+    /// Stellar native XLM wrapper token address for Soroswap.
+    pub stellar_soroswap_native_wrapper_address: Option<String>,
 }
 
 impl ServerConfig {
@@ -150,6 +156,10 @@ impl ServerConfig {
             max_connections: Self::get_max_connections(),
             connection_backlog: Self::get_connection_backlog(),
             request_timeout_seconds: Self::get_request_timeout_seconds(),
+            stellar_fee_forwarder_address: Self::get_stellar_fee_forwarder_address(),
+            stellar_soroswap_router_address: Self::get_stellar_soroswap_router_address(),
+            stellar_soroswap_native_wrapper_address:
+                Self::get_stellar_soroswap_native_wrapper_address(),
         }
     }
 
@@ -422,6 +432,21 @@ impl ServerConfig {
             .unwrap_or_else(|_| "30".to_string())
             .parse()
             .unwrap_or(30)
+    }
+
+    /// Gets the Stellar FeeForwarder contract address from environment variable
+    pub fn get_stellar_fee_forwarder_address() -> Option<String> {
+        env::var("STELLAR_FEE_FORWARDER_ADDRESS").ok()
+    }
+
+    /// Gets the Stellar Soroswap router contract address from environment variable
+    pub fn get_stellar_soroswap_router_address() -> Option<String> {
+        env::var("STELLAR_SOROSWAP_ROUTER_ADDRESS").ok()
+    }
+
+    /// Gets the Stellar Soroswap native wrapper token address from environment variable
+    pub fn get_stellar_soroswap_native_wrapper_address() -> Option<String> {
+        env::var("STELLAR_SOROSWAP_NATIVE_WRAPPER_ADDRESS").ok()
     }
 
     /// Get worker concurrency from environment variable or use default
