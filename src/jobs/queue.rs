@@ -9,20 +9,20 @@
 //! - Relayer health checks
 use std::{env, sync::Arc};
 
-use apalis_redis::{Config, ConnectionManager, RedisStorage};
+use apalis_redis::{connect, Config, ConnectionManager, RedisStorage};
 use color_eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
 use tokio::time::{timeout, Duration};
 use tracing::error;
 
-use crate::config::ServerConfig;
+use crate::{config::ServerConfig, utils::RedisConnections};
 
 use super::{
     Job, NotificationSend, RelayerHealthCheck, TokenSwapRequest, TransactionRequest,
     TransactionSend, TransactionStatusCheck,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Queue {
     pub transaction_request_queue: RedisStorage<Job<TransactionRequest>>,
     pub transaction_submission_queue: RedisStorage<Job<TransactionSend>>,
@@ -35,9 +35,39 @@ pub struct Queue {
     pub notification_queue: RedisStorage<Job<NotificationSend>>,
     pub token_swap_request_queue: RedisStorage<Job<TokenSwapRequest>>,
     pub relayer_health_check_queue: RedisStorage<Job<RelayerHealthCheck>>,
+    /// Shared Redis connection manager for direct Redis operations
+    pub connection_manager: Arc<ConnectionManager>,
+    /// Optional Redis connection pools for handlers that need pool-based access.
+    /// Available when Redis storage is used, None for in-memory mode.
+    /// In the future queues will use the same connection pools as the repositories.
+    redis_connections: Option<Arc<RedisConnections>>,
+}
+
+impl std::fmt::Debug for Queue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Queue")
+            .field("transaction_request_queue", &"RedisStorage<...>")
+            .field("transaction_submission_queue", &"RedisStorage<...>")
+            .field("transaction_status_queue", &"RedisStorage<...>")
+            .field("transaction_status_queue_evm", &"RedisStorage<...>")
+            .field("transaction_status_queue_stellar", &"RedisStorage<...>")
+            .field("notification_queue", &"RedisStorage<...>")
+            .field("token_swap_request_queue", &"RedisStorage<...>")
+            .field("relayer_health_check_queue", &"RedisStorage<...>")
+            .field("connection_manager", &"ConnectionManager")
+            .field(
+                "redis_connections",
+                &self.redis_connections.as_ref().map(|_| "RedisConnections"),
+            )
+            .finish()
+    }
 }
 
 impl Queue {
+    /// Creates a RedisStorage for a specific job type using a ConnectionManager.
+    ///
+    /// ConnectionManager provides automatic reconnection on connection failures,
+    /// ensuring queue processing continues even if the Redis connection drops temporarily.
     async fn storage<T: Serialize + for<'de> Deserialize<'de>>(
         namespace: &str,
         shared: Arc<ConnectionManager>,
@@ -49,11 +79,27 @@ impl Queue {
         Ok(RedisStorage::new_with_config((*shared).clone(), config))
     }
 
-    pub async fn setup() -> Result<Self> {
+    /// Sets up all job queues using a ConnectionManager from direct Redis connection.
+    ///
+    /// Connects directly to Redis via apalis_redis::connect and wraps it in a ConnectionManager.
+    /// ConnectionManager provides automatic reconnection on Redis connection failures,
+    /// ensuring resilient queue processing.
+    ///
+    /// # Arguments
+    /// * `redis_connections` - Optional Redis connection pools for handlers that need
+    ///   pool-based access (e.g., for distributed locking). Pass `Some` when using
+    ///   Redis storage, `None` for in-memory mode.
+    ///
+    /// # Benefits
+    /// - Automatic reconnection: ConnectionManager handles connection recovery
+    /// - Simple and direct: No intermediate connection pooling layer
+    /// - Resilient: Queues continue processing even if connections temporarily drop
+    /// - Proper timeout handling: Connection attempts have configurable timeouts
+    pub async fn setup(redis_connections: Option<Arc<RedisConnections>>) -> Result<Self> {
         let config = ServerConfig::from_env();
         let redis_url = config.redis_url.clone();
         let redis_connection_timeout_ms = config.redis_connection_timeout_ms;
-        let conn = match timeout(Duration::from_millis(redis_connection_timeout_ms), apalis_redis::connect(redis_url.clone())).await {
+        let conn = match timeout(Duration::from_millis(redis_connection_timeout_ms), connect(redis_url.clone())).await {
             Ok(result) => result.map_err(|e| {
                 error!(redis_url = %redis_url, error = %e, "failed to connect to redis");
                 eyre::eyre!("Failed to connect to Redis. Please ensure Redis is running and accessible at {}. Error: {}", redis_url, e)
@@ -112,7 +158,19 @@ impl Queue {
                 shared.clone(),
             )
             .await?,
+            connection_manager: shared,
+            redis_connections,
         })
+    }
+
+    /// Returns the Redis connection pools if available.
+    ///
+    /// This provides access to both primary and reader pools for handlers
+    /// that need Redis pool-based access (e.g., for metadata storage, distributed locking).
+    ///
+    /// Returns `None` when using in-memory storage mode.
+    pub fn redis_connections(&self) -> Option<Arc<RedisConnections>> {
+        self.redis_connections.clone()
     }
 }
 

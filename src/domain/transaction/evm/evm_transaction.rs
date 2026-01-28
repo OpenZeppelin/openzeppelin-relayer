@@ -20,7 +20,9 @@ use crate::{
         },
         EvmTransactionValidationError, EvmTransactionValidator,
     },
-    jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
+    jobs::{
+        JobProducer, JobProducerTrait, StatusCheckContext, TransactionSend, TransactionStatusCheck,
+    },
     models::{
         produce_transaction_update_notification_payload, EvmNetwork, EvmTransactionData,
         NetworkRepoModel, NetworkTransactionData, NetworkTransactionRequest, NetworkType,
@@ -730,8 +732,9 @@ where
     async fn handle_transaction_status(
         &self,
         tx: TransactionRepoModel,
+        context: Option<StatusCheckContext>,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        self.handle_status_impl(tx).await
+        self.handle_status_impl(tx, context).await
     }
     /// Resubmits a transaction with updated parameters.
     ///

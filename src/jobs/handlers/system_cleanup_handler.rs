@@ -21,16 +21,16 @@
 
 use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Data, *};
+use deadpool_redis::Pool;
 use eyre::Result;
-use redis::aio::ConnectionManager;
 use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
-    config::ServerConfig, constants::WORKER_SYSTEM_CLEANUP_RETRIES, jobs::handle_result,
-    models::DefaultAppState, utils::DistributedLock,
+    constants::WORKER_SYSTEM_CLEANUP_RETRIES, jobs::handle_result, models::DefaultAppState,
+    utils::DistributedLock,
 };
 
 /// Distributed lock name for queue cleanup.
@@ -117,41 +117,25 @@ pub async fn system_cleanup_handler(
 /// one instance processes cleanup at a time. If the lock is already held by
 /// another instance, this returns early without doing any work.
 ///
-/// Note: Queue metadata cleanup runs regardless of repository storage type
-/// (in-memory or Redis) because queues always use Redis persistence.
+/// Note: Queue metadata cleanup only runs when using Redis storage.
+/// In-memory mode skips cleanup since distributed locking is not needed.
 async fn handle_cleanup_request(
     _job: SystemCleanupCronReminder,
-    _data: Data<ThinData<DefaultAppState>>,
+    data: Data<ThinData<DefaultAppState>>,
     _attempt: Attempt,
 ) -> Result<()> {
-    // Connect to Redis directly - queues always use Redis regardless of repository storage type
-    let redis_url = ServerConfig::get_redis_url();
-    let timeout_ms = ServerConfig::get_redis_connection_timeout_ms();
-
-    let conn = match tokio::time::timeout(
-        Duration::from_millis(timeout_ms),
-        redis::Client::open(redis_url.as_str())?.get_connection_manager(),
-    )
-    .await
-    {
-        Ok(Ok(conn)) => Arc::new(conn),
-        Ok(Err(e)) => {
-            warn!(error = %e, "failed to connect to Redis for system cleanup");
-            return Ok(());
-        }
-        Err(_) => {
-            warn!(timeout_ms = %timeout_ms, "timeout connecting to Redis for system cleanup");
+    let (pool, key_prefix) = match data.transaction_repository().connection_info() {
+        Some((pool, prefix)) => (pool, prefix.to_string()),
+        None => {
+            debug!("in-memory repository detected, skipping system cleanup");
             return Ok(());
         }
     };
 
-    // Get the key prefix used for the distributed lock
-    // This uses the same REDIS_KEY_PREFIX as the repositories
-    let lock_prefix = ServerConfig::get_redis_key_prefix();
-    let lock_key = format!("{lock_prefix}:lock:{SYSTEM_CLEANUP_LOCK_NAME}");
+    let lock_key = format!("{key_prefix}:lock:{SYSTEM_CLEANUP_LOCK_NAME}");
 
     let lock = DistributedLock::new(
-        conn.clone(),
+        pool.clone(),
         &lock_key,
         Duration::from_secs(SYSTEM_CLEANUP_LOCK_TTL_SECS),
     );
@@ -197,7 +181,7 @@ async fn handle_cleanup_request(
     for queue_name in QUEUE_NAMES {
         let namespace = format!("{redis_key_prefix}{queue_name}");
 
-        match cleanup_queue(&conn, &namespace, cutoff_timestamp).await {
+        match cleanup_queue(&pool, &namespace, cutoff_timestamp).await {
             Ok(cleaned) => {
                 if cleaned > 0 {
                     debug!(
@@ -239,17 +223,13 @@ async fn handle_cleanup_request(
 /// Cleans up stale job metadata for a single queue namespace.
 ///
 /// # Arguments
-/// * `conn` - Redis connection manager
+/// * `pool` - Redis connection pool
 /// * `namespace` - The queue namespace (e.g., "oz-relayer:queue:transaction_request_queue")
 /// * `cutoff_timestamp` - Unix timestamp; jobs older than this will be cleaned up
 ///
 /// # Returns
 /// * `Result<usize>` - Number of jobs cleaned up
-async fn cleanup_queue(
-    conn: &Arc<ConnectionManager>,
-    namespace: &str,
-    cutoff_timestamp: i64,
-) -> Result<usize> {
+async fn cleanup_queue(pool: &Arc<Pool>, namespace: &str, cutoff_timestamp: i64) -> Result<usize> {
     let mut total_cleaned = 0usize;
     let data_key = format!("{namespace}:data");
     let result_key = format!("{data_key}::result");
@@ -258,7 +238,7 @@ async fn cleanup_queue(
     for suffix in SORTED_SET_SUFFIXES {
         let sorted_set_key = format!("{namespace}{suffix}");
         let cleaned = cleanup_sorted_set_and_hashes(
-            conn,
+            pool,
             &sorted_set_key,
             &data_key,
             &result_key,
@@ -277,7 +257,7 @@ async fn cleanup_queue(
 /// sorted set and both the data and result hashes in a pipeline for efficiency.
 ///
 /// # Arguments
-/// * `conn` - Redis connection manager
+/// * `pool` - Redis connection pool
 /// * `sorted_set_key` - Key of the sorted set (e.g., "queue:transaction_request_queue:done")
 /// * `data_key` - Key of the data hash (e.g., "queue:transaction_request_queue:data")
 /// * `result_key` - Key of the result hash (e.g., "queue:transaction_request_queue:result")
@@ -286,14 +266,14 @@ async fn cleanup_queue(
 /// # Returns
 /// * `Result<usize>` - Number of jobs cleaned up
 async fn cleanup_sorted_set_and_hashes(
-    conn: &Arc<ConnectionManager>,
+    pool: &Arc<Pool>,
     sorted_set_key: &str,
     data_key: &str,
     result_key: &str,
     cutoff_timestamp: i64,
 ) -> Result<usize> {
     let mut total_cleaned = 0usize;
-    let mut conn = (**conn).clone();
+    let mut conn = pool.get().await?;
 
     loop {
         // Get batch of old job IDs from sorted set

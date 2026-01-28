@@ -5,7 +5,7 @@ use soroban_rs::{
     stellar_rpc_client::SimulateTransactionResponse,
     xdr::{Limits, TransactionEnvelope, WriteXdr},
 };
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     constants::STELLAR_DEFAULT_TRANSACTION_FEE,
@@ -57,7 +57,7 @@ where
 {
     // Check if the envelope needs simulation
     if xdr_needs_simulation(envelope).unwrap_or(false) {
-        info!("Transaction contains Soroban operations, simulating...");
+        debug!("Transaction contains Soroban operations, simulating...");
 
         let resp = provider
             .simulate_transaction_envelope(envelope)
@@ -215,7 +215,7 @@ where
 {
     // Check if the inner transaction needs simulation (Soroban operations)
     if xdr_needs_simulation(inner_envelope).unwrap_or(false) {
-        info!("Inner transaction contains Soroban operations, simulating to determine resource fee...");
+        debug!("Inner transaction contains Soroban operations, simulating to determine resource fee...");
 
         match simulate_if_needed(inner_envelope, provider).await? {
             Some(sim_resp) => {
@@ -224,7 +224,7 @@ where
                 let resource_fee = sim_resp.min_resource_fee;
                 let required_fee = inclusion_fee + resource_fee;
 
-                info!(
+                debug!(
                     "Simulation complete. Inclusion fee: {}, Resource fee: {}, Total: {}",
                     inclusion_fee, resource_fee, required_fee
                 );
