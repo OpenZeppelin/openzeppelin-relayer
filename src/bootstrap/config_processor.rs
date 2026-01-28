@@ -526,13 +526,20 @@ where
 
     let app_state = app_state.clone();
 
-    poll_until(
+    let completed = poll_until(
         || is_redis_populated(&app_state),
         max_wait,
         poll_interval,
         "config processing",
     )
     .await?;
+
+    if !completed {
+        return Err(eyre::eyre!(
+            "Timed out waiting for config processing to complete after {} seconds",
+            LOCK_WAIT_MAX_SECS
+        ));
+    }
 
     Ok(())
 }

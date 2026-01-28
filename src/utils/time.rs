@@ -23,8 +23,7 @@ pub const fn minutes_ms(minutes: i64) -> i64 {
 ///
 /// # Returns
 /// * `Ok(true)` - Condition was met within timeout
-/// * `Ok(false)` - Timeout reached without condition being met
-/// * `Err(_)` - Error from the check closure (errors during polling are logged but don't stop polling)
+/// * `Ok(false)` - Timeout reached without condition being met (errors are logged and polling continues)
 pub async fn poll_until<F, Fut>(
     check: F,
     max_wait: Duration,
