@@ -62,12 +62,11 @@ impl std::fmt::Debug for Queue {
 
 impl Queue {
     /// Creates a RedisStorage for a specific job type using a ConnectionManager.
-    /// Creates a RedisStorage for a specific job type.
     ///
     /// # Arguments
     /// * `namespace` - Redis key namespace for this queue
     /// * `conn` - ConnectionManager with auto-reconnect
-    /// * `poll_interval` - How often to poll for scheduled jobs (None = default 1s for high-frequency queues)
+    /// * `poll_interval` - How often to poll for scheduled jobs (None = default 2s for high-frequency queues)
     ///
     /// ConnectionManager provides automatic reconnection on connection failures,
     /// ensuring queue processing continues even if the Redis connection drops temporarily.
@@ -139,9 +138,9 @@ impl Queue {
             .unwrap_or_default();
 
         // Poll intervals for scheduled jobs:
-        // - High-frequency queues (transactions): 1s (default) for responsive processing
-        // - Lower-frequency queues: 15s to reduce Redis polling load
-        let poll_fast = Some(Duration::from_secs(2)); // Uses default 1s
+        // - High-frequency queues (transactions): 2s (default) for responsive processing
+        // - Lower-frequency queues: 20s to reduce Redis polling load
+        let poll_fast = Some(Duration::from_secs(2)); // Uses default 2s
         let poll_slow = Some(Duration::from_secs(20));
 
         Ok(Self {
