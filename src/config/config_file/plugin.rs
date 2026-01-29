@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use crate::config::ConfigFileError;
 use serde::{Deserialize, Serialize};
+use serde_json::Map;
 
 // TODO: in case we want to support other languages and add
 // more flexibility to the plugins folder, we should
@@ -18,6 +19,16 @@ pub struct PluginFileConfig {
     pub emit_logs: bool,
     #[serde(default)]
     pub emit_traces: bool,
+    /// Whether to return raw plugin response without ApiResponse wrapper
+    #[serde(default)]
+    pub raw_response: bool,
+    /// Whether to allow GET requests to invoke plugin logic
+    #[serde(default)]
+    pub allow_get_invocation: bool,
+    /// User-defined configuration accessible to the plugin (must be a JSON object)
+    pub config: Option<Map<String, serde_json::Value>>,
+    #[serde(default)]
+    pub forward_logs: bool,
 }
 
 pub struct PluginsFileConfig {

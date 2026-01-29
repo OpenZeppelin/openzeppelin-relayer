@@ -8,8 +8,8 @@
 use super::TransactionCounterTrait;
 use crate::models::RepositoryError;
 use crate::repositories::redis_base::RedisRepository;
+use crate::utils::RedisConnections;
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
@@ -19,7 +19,7 @@ const COUNTER_PREFIX: &str = "transaction_counter";
 
 #[derive(Clone)]
 pub struct RedisTransactionCounter {
-    pub client: Arc<ConnectionManager>,
+    pub connections: Arc<RedisConnections>,
     pub key_prefix: String,
 }
 
@@ -35,7 +35,7 @@ impl fmt::Debug for RedisTransactionCounter {
 
 impl RedisTransactionCounter {
     pub fn new(
-        connection_manager: Arc<ConnectionManager>,
+        connections: Arc<RedisConnections>,
         key_prefix: String,
     ) -> Result<Self, RepositoryError> {
         if key_prefix.is_empty() {
@@ -45,7 +45,7 @@ impl RedisTransactionCounter {
         }
 
         Ok(Self {
-            client: connection_manager,
+            connections,
             key_prefix,
         })
     }
@@ -77,7 +77,9 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         let key = self.counter_key(relayer_id, address);
         debug!(relayer_id = %relayer_id, address = %address, "getting counter for relayer and address");
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.reader(), "get")
+            .await?;
 
         let value: Option<u64> = conn
             .get(&key)
@@ -108,7 +110,9 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         let key = self.counter_key(relayer_id, address);
         debug!(relayer_id = %relayer_id, address = %address, "getting and incrementing counter for relayer and address");
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.primary(), "get_and_increment")
+            .await?;
 
         // Use Redis INCR for atomic increment
         let new_value: u64 = conn
@@ -138,7 +142,9 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         let key = self.counter_key(relayer_id, address);
         debug!(relayer_id = %relayer_id, address = %address, "decrementing counter for relayer and address");
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.primary(), "decrement")
+            .await?;
 
         // Check if counter exists first
         let exists: bool = conn
@@ -194,7 +200,9 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         let key = self.counter_key(relayer_id, address);
         debug!(relayer_id = %relayer_id, address = %address, value = %value, "setting counter for relayer and address");
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.primary(), "set")
+            .await?;
 
         let _: () = conn
             .set(&key, value)
@@ -209,7 +217,6 @@ impl TransactionCounterTrait for RedisTransactionCounter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use redis::aio::ConnectionManager;
     use std::sync::Arc;
     use tokio;
     use uuid::Uuid;
@@ -217,12 +224,18 @@ mod tests {
     async fn setup_test_repo() -> RedisTransactionCounter {
         let redis_url =
             std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-        let client = redis::Client::open(redis_url).expect("Failed to create Redis client");
-        let connection_manager = ConnectionManager::new(client)
-            .await
-            .expect("Failed to create Redis connection manager");
+        let cfg = deadpool_redis::Config::from_url(&redis_url);
+        let pool = Arc::new(
+            cfg.builder()
+                .expect("Failed to create pool builder")
+                .max_size(16)
+                .runtime(deadpool_redis::Runtime::Tokio1)
+                .build()
+                .expect("Failed to build Redis pool"),
+        );
+        let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
-        RedisTransactionCounter::new(Arc::new(connection_manager), "test_counter".to_string())
+        RedisTransactionCounter::new(connections, "test_counter".to_string())
             .expect("Failed to create Redis transaction counter")
     }
 

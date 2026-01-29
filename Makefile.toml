@@ -16,3 +16,46 @@ script = [
   "chmod +x ./scripts/docker_compose.sh",
   "./scripts/docker_compose.sh down"
 ]
+
+[tasks.integration-test-local]
+description = "Run integration tests against local standalone Anvil"
+env = { "TEST_REGISTRY_PATH" = "tests/integration/config/local-standalone/registry.json" }
+command = "cargo"
+args = ["test", "--features", "integration-tests", "--test", "integration"]
+
+[tasks.integration-test-standalone]
+description = "Start Anvil if needed, check relayer, then run integration tests"
+script = '''
+#!/bin/bash
+set -e
+
+# Check if Anvil is running, start if not
+if ! docker ps --format '{{.Names}}' | grep -q "^standalone-anvil$"; then
+    echo "🔧 Anvil not running, starting it..."
+    ./scripts/anvil-local.sh start
+    echo ""
+fi
+
+# Load API_KEY from .env if it exists
+if [ -f .env ]; then
+    export $(grep -v '^#' .env | grep API_KEY | xargs)
+fi
+
+# Check if relayer is running (health endpoint)
+if ! curl -s -f -H "Authorization: Bearer ${API_KEY}" http://localhost:8080/api/v1/health > /dev/null 2>&1; then
+    echo "❌ Relayer not running!"
+    echo ""
+    echo "Please start the relayer in another terminal:"
+    echo "    cargo run"
+    echo ""
+    echo "Then re-run: cargo make integration-test-standalone"
+    exit 1
+fi
+
+echo "✅ Anvil running, relayer healthy. Running tests..."
+echo ""
+
+# Run tests
+TEST_REGISTRY_PATH=tests/integration/config/local-standalone/registry.json \
+    cargo test --features integration-tests --test integration
+'''

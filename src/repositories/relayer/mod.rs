@@ -31,9 +31,9 @@ use crate::{
         DisabledReason, PaginationQuery, RelayerNetworkPolicy, RelayerRepoModel, RepositoryError,
     },
     repositories::{PaginatedResult, Repository},
+    utils::RedisConnections,
 };
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
 use std::sync::Arc;
 
 #[async_trait]
@@ -69,6 +69,36 @@ pub trait RelayerRepository: Repository<RelayerRepoModel, String> + Send + Sync 
     fn is_persistent_storage(&self) -> bool;
 }
 
+#[cfg(test)]
+mockall::mock! {
+    pub RelayerRepository {}
+
+    #[async_trait]
+    impl Repository<RelayerRepoModel, String> for RelayerRepository {
+        async fn create(&self, entity: RelayerRepoModel) -> Result<RelayerRepoModel, RepositoryError>;
+        async fn get_by_id(&self, id: String) -> Result<RelayerRepoModel, RepositoryError>;
+        async fn list_all(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
+        async fn list_paginated(&self, query: PaginationQuery) -> Result<PaginatedResult<RelayerRepoModel>, RepositoryError>;
+        async fn update(&self, id: String, entity: RelayerRepoModel) -> Result<RelayerRepoModel, RepositoryError>;
+        async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError>;
+        async fn count(&self) -> Result<usize, RepositoryError>;
+        async fn has_entries(&self) -> Result<bool, RepositoryError>;
+        async fn drop_all_entries(&self) -> Result<(), RepositoryError>;
+    }
+
+    #[async_trait]
+    impl RelayerRepository for RelayerRepository {
+        async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
+        async fn list_by_signer_id(&self, signer_id: &str) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
+        async fn list_by_notification_id(&self, notification_id: &str) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
+        async fn partial_update(&self, id: String, update: UpdateRelayerRequest) -> Result<RelayerRepoModel, RepositoryError>;
+        async fn enable_relayer(&self, relayer_id: String) -> Result<RelayerRepoModel, RepositoryError>;
+        async fn disable_relayer(&self, relayer_id: String, reason: DisabledReason) -> Result<RelayerRepoModel, RepositoryError>;
+        async fn update_policy(&self, id: String, policy: RelayerNetworkPolicy) -> Result<RelayerRepoModel, RepositoryError>;
+        fn is_persistent_storage(&self) -> bool;
+    }
+}
+
 /// Enum wrapper for different relayer repository implementations
 #[derive(Debug, Clone)]
 pub enum RelayerRepositoryStorage {
@@ -82,11 +112,11 @@ impl RelayerRepositoryStorage {
     }
 
     pub fn new_redis(
-        connection_manager: Arc<ConnectionManager>,
+        connections: Arc<RedisConnections>,
         key_prefix: String,
     ) -> Result<Self, RepositoryError> {
         Ok(Self::Redis(RedisRelayerRepository::new(
-            connection_manager,
+            connections,
             key_prefix,
         )?))
     }
@@ -468,35 +498,5 @@ mod tests {
 
         repo.drop_all_entries().await.unwrap();
         assert!(!repo.has_entries().await.unwrap());
-    }
-}
-
-#[cfg(test)]
-mockall::mock! {
-    pub RelayerRepository {}
-
-    #[async_trait]
-    impl Repository<RelayerRepoModel, String> for RelayerRepository {
-        async fn create(&self, entity: RelayerRepoModel) -> Result<RelayerRepoModel, RepositoryError>;
-        async fn get_by_id(&self, id: String) -> Result<RelayerRepoModel, RepositoryError>;
-        async fn list_all(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
-        async fn list_paginated(&self, query: PaginationQuery) -> Result<PaginatedResult<RelayerRepoModel>, RepositoryError>;
-        async fn update(&self, id: String, entity: RelayerRepoModel) -> Result<RelayerRepoModel, RepositoryError>;
-        async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError>;
-        async fn count(&self) -> Result<usize, RepositoryError>;
-        async fn has_entries(&self) -> Result<bool, RepositoryError>;
-        async fn drop_all_entries(&self) -> Result<(), RepositoryError>;
-    }
-
-    #[async_trait]
-    impl RelayerRepository for RelayerRepository {
-        async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
-        async fn list_by_signer_id(&self, signer_id: &str) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
-        async fn list_by_notification_id(&self, notification_id: &str) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
-        async fn partial_update(&self, id: String, update: UpdateRelayerRequest) -> Result<RelayerRepoModel, RepositoryError>;
-        async fn enable_relayer(&self, relayer_id: String) -> Result<RelayerRepoModel, RepositoryError>;
-        async fn disable_relayer(&self, relayer_id: String, reason: DisabledReason) -> Result<RelayerRepoModel, RepositoryError>;
-        async fn update_policy(&self, id: String, policy: RelayerNetworkPolicy) -> Result<RelayerRepoModel, RepositoryError>;
-        fn is_persistent_storage(&self) -> bool;
     }
 }

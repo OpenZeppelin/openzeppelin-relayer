@@ -133,16 +133,16 @@ impl GoogleCloudKmsService {
     pub fn new(config: &GoogleCloudKmsSignerConfig) -> GoogleCloudKmsResult<Self> {
         let credentials_json = serde_json::json!({
             "type": "service_account",
-            "project_id": config.service_account.project_id,
+            "project_id": config.service_account.project_id.to_str().to_string(),
             "private_key_id": config.service_account.private_key_id.to_str().to_string(),
             "private_key": config.service_account.private_key.to_str().to_string(),
             "client_email": config.service_account.client_email.to_str().to_string(),
-            "client_id": config.service_account.client_id,
-            "auth_uri": config.service_account.auth_uri,
-            "token_uri": config.service_account.token_uri,
-            "auth_provider_x509_cert_url": config.service_account.auth_provider_x509_cert_url,
-            "client_x509_cert_url": config.service_account.client_x509_cert_url,
-            "universe_domain": config.service_account.universe_domain,
+            "client_id": config.service_account.client_id.to_str().to_string(),
+            "auth_uri": config.service_account.auth_uri.to_str().to_string(),
+            "token_uri": config.service_account.token_uri.to_str().to_string(),
+            "auth_provider_x509_cert_url": config.service_account.auth_provider_x509_cert_url.to_str().to_string(),
+            "client_x509_cert_url": config.service_account.client_x509_cert_url.to_str().to_string(),
+            "universe_domain": config.service_account.universe_domain.to_str().to_string(),
         });
         let credentials = GcpCredBuilder::new(credentials_json)
             .build()
@@ -194,23 +194,33 @@ impl GoogleCloudKmsService {
     }
 
     fn get_base_url(&self) -> String {
-        if self
-            .config
-            .service_account
-            .universe_domain
-            .starts_with("http")
-        {
-            self.config.service_account.universe_domain.clone()
+        let universe_domain = self.config.service_account.universe_domain.to_str();
+
+        if universe_domain.starts_with("https://") {
+            // Already a full HTTPS URL
+            (*universe_domain).clone()
+        } else if universe_domain.starts_with("http://") {
+            // In production, always upgrade http:// to https:// to ensure encryption
+            #[cfg(not(test))]
+            {
+                format!("https://{}", universe_domain.trim_start_matches("http://"))
+            }
+            // Allow HTTP only in test mode for mock servers
+            // This is intentional for testing and does not pose a security risk
+            #[cfg(test)]
+            {
+                (*universe_domain).clone()
+            }
         } else {
-            format!(
-                "https://cloudkms.{}",
-                self.config.service_account.universe_domain
-            )
+            // Just a domain name, construct the full HTTPS URL
+            format!("https://cloudkms.{}", *universe_domain)
         }
     }
 
     async fn kms_get(&self, url: &str) -> GoogleCloudKmsResult<Value> {
         let headers = self.get_auth_headers().await?;
+        // In production, all requests use HTTPS. HTTP is only allowed in test mode for mock servers.
+        // lgtm[rust/cleartext-transmission]
         let resp = self
             .client
             .get(url)
@@ -234,6 +244,8 @@ impl GoogleCloudKmsService {
 
     async fn kms_post(&self, url: &str, body: &Value) -> GoogleCloudKmsResult<Value> {
         let headers = self.get_auth_headers().await?;
+        // In production, all requests use HTTPS. HTTP is only allowed in test mode for mock servers.
+        // lgtm[rust/cleartext-transmission]
         let resp = self
             .client
             .post(url)
@@ -259,10 +271,10 @@ impl GoogleCloudKmsService {
     fn get_key_path(&self) -> String {
         format!(
             "projects/{}/locations/{}/keyRings/{}/cryptoKeys/{}/cryptoKeyVersions/{}",
-            self.config.service_account.project_id,
-            self.config.key.location,
-            self.config.key.key_ring_id,
-            self.config.key.key_id,
+            *self.config.service_account.project_id.to_str(),
+            *self.config.key.location.to_str(),
+            *self.config.key.key_ring_id.to_str(),
+            *self.config.key.key_id.to_str(),
             self.config.key.key_version
         )
     }
@@ -542,21 +554,21 @@ mod tests {
     fn create_test_config(uri: &str) -> GoogleCloudKmsSignerConfig {
         GoogleCloudKmsSignerConfig {
             service_account: GoogleCloudKmsSignerServiceAccountConfig {
-                project_id: "test-project".to_string(),
+                project_id: SecretString::new("test-project"),
                 private_key_id: SecretString::new("test-private-key-id"),
                 private_key: SecretString::new("-----BEGIN EXAMPLE PRIVATE KEY-----\nFAKEKEYDATA\n-----END EXAMPLE PRIVATE KEY-----\n"),
                 client_email: SecretString::new("test-service-account@example.com"),
-                client_id: "test-client-id".to_string(),
-                auth_uri: "https://accounts.google.com/o/oauth2/auth".to_string(),
-                token_uri: "https://oauth2.googleapis.com/token".to_string(),
-                client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/test-service-account%40example.com".to_string(),
-                auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs".to_string(),
-                universe_domain: uri.to_string(),
+                client_id: SecretString::new("test-client-id"),
+                auth_uri: SecretString::new("https://accounts.google.com/o/oauth2/auth"),
+                token_uri: SecretString::new("https://oauth2.googleapis.com/token"),
+                client_x509_cert_url: SecretString::new("https://www.googleapis.com/robot/v1/metadata/x509/test-service-account%40example.com"),
+                auth_provider_x509_cert_url: SecretString::new("https://www.googleapis.com/oauth2/v1/certs"),
+                universe_domain: SecretString::new(uri),
             },
             key: GoogleCloudKmsSignerKeyConfig {
-                location: "global".to_string(),
-                key_id: "test-key-id".to_string(),
-                key_ring_id: "test-key-ring-id".to_string(),
+                location: SecretString::new("global"),
+                key_id: SecretString::new("test-key-id"),
+                key_ring_id: SecretString::new("test-key-ring-id"),
                 key_version: 1,
             },
         }

@@ -92,8 +92,12 @@ STORAGE_ENCRYPTION_KEY=your-encryption-key-here
 
 | Environment Variable | Default Value | Accepted Values | Description |
 | --- | --- | --- | --- |
-| `REDIS_URL` | `redis://localhost:6379` | Redis connection string | Full connection URL for the Redis instance. Supports Redis, Redis Sentinel, and Redis Cluster configurations. |
+| `REDIS_URL` | `redis://localhost:6379` | Redis connection string | Full connection URL for the Redis primary instance. Used for all write operations and read operations when `REDIS_READER_URL` is not set. |
+| `REDIS_READER_URL` | (none) | Redis connection string | Optional separate endpoint for read operations. When set, read operations (GET, MGET, etc.) use this endpoint while writes use `REDIS_URL`. Useful for AWS ElastiCache with read replicas to distribute read load. |
+| `REDIS_READER_POOL_MAX_SIZE` | `1000` | `number` | Optional separate pool size for reader connections. Useful for read-heavy workloads where more reader connections are beneficial. |
 | `REDIS_CONNECTION_TIMEOUT_MS` | `10000` | `number` (milliseconds) | Maximum time to wait when connecting to Redis before timing out. |
+| `REDIS_POOL_MAX_SIZE` | `500` | `number` | Maximum number of connections in the Redis connection pool. Adjust based on your Redis instance capacity, workload, and deployment scale. |
+| `REDIS_POOL_TIMEOUT_MS` | `10000` | `number` (milliseconds) | Maximum time to wait for a connection from the pool before timing out. Higher values help handle traffic spikes. |
 | `REDIS_KEY_PREFIX` | `oz-relayer` | `string` | Prefix added to all Redis keys. Useful for namespacing when sharing Redis with other applications. |
 | `STORAGE_ENCRYPTION_KEY` | `` | `string` (base64) | Encryption key used to encrypt sensitive data at rest in Redis. Generate using `cargo run --example generate_encryption_key`. |
 
@@ -113,6 +117,47 @@ When using Redis storage in production:
 * ***Monitor access***: Log and monitor Redis access patterns
 
 </Callout>
+
+### AWS ElastiCache with Read Replicas
+
+When using AWS ElastiCache with read replicas, you can distribute read load across multiple nodes by configuring separate endpoints:
+
+```bash
+# AWS ElastiCache configuration with read replicas
+REDIS_URL=redis://my-cluster.xxx.cache.amazonaws.com:6379            # Primary endpoint (writes)
+REDIS_READER_URL=redis://my-cluster-ro.xxx.cache.amazonaws.com:6379  # Reader endpoint (reads)
+REDIS_POOL_MAX_SIZE=200                                              # Connections to primary
+REDIS_READER_POOL_MAX_SIZE=500                                       # More connections for reads (optional)
+```
+
+***Benefits:***
+- **Reduced primary load**: Read operations are distributed to replica nodes
+- **Improved read performance**: Multiple replicas can handle concurrent reads
+- **Better fault tolerance**: Read availability continues even during primary failover
+- **Cost efficiency**: Smaller primary instance with multiple read replicas
+
+***When `REDIS_READER_URL` is not set:***
+- All operations (reads and writes) use `REDIS_URL`
+- This maintains backward compatibility with single-endpoint configurations
+- Suitable for standalone Redis or when read scaling is not needed
+
+### Connection Pool Tuning
+
+Redis connection pooling improves performance and prevents connection exhaustion. Configure pool size based on your Redis instance capacity, workload, and deployment scale.
+
+***Factors to consider:***
+
+* **Redis instance capacity**: Check your Redis instance's maximum connection limit (e.g., ElastiCache small instances support 65,000+ connections)
+* **Transaction volume**: Higher TPS requires more connections
+* **Number of relayers**: More active relayers increase concurrent operations
+* **Instance count**: Divide total connection budget across multiple relayer instances
+* **Traffic patterns**: Account for traffic spikes and peak loads
+
+***Configuration:***
+```bash
+REDIS_POOL_MAX_SIZE=500          # Adjust based on instance capacity and workload
+REDIS_POOL_TIMEOUT_MS=15000         # Time to wait for available connection
+```
 
 ### Encryption at Rest
 

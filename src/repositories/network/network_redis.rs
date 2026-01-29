@@ -9,8 +9,8 @@ use super::NetworkRepository;
 use crate::models::{NetworkRepoModel, NetworkType, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{BatchRetrievalResult, PaginatedResult, PaginationQuery, Repository};
+use crate::utils::RedisConnections;
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
@@ -23,7 +23,7 @@ const NETWORK_CHAIN_ID_INDEX_PREFIX: &str = "network_chain_id";
 
 #[derive(Clone)]
 pub struct RedisNetworkRepository {
-    pub client: Arc<ConnectionManager>,
+    pub connections: Arc<RedisConnections>,
     pub key_prefix: String,
 }
 
@@ -31,7 +31,7 @@ impl RedisRepository for RedisNetworkRepository {}
 
 impl RedisNetworkRepository {
     pub fn new(
-        connection_manager: Arc<ConnectionManager>,
+        connections: Arc<RedisConnections>,
         key_prefix: String,
     ) -> Result<Self, RepositoryError> {
         if key_prefix.is_empty() {
@@ -41,7 +41,7 @@ impl RedisNetworkRepository {
         }
 
         Ok(Self {
-            client: connection_manager,
+            connections,
             key_prefix,
         })
     }
@@ -86,7 +86,9 @@ impl RedisNetworkRepository {
         network: &NetworkRepoModel,
         old_network: Option<&NetworkRepoModel>,
     ) -> Result<(), RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.primary(), "update_indexes")
+            .await?;
         let mut pipe = redis::pipe();
         pipe.atomic();
 
@@ -138,7 +140,9 @@ impl RedisNetworkRepository {
 
     /// Remove all indexes for a network
     async fn remove_all_indexes(&self, network: &NetworkRepoModel) -> Result<(), RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.primary(), "remove_all_indexes")
+            .await?;
         let mut pipe = redis::pipe();
         pipe.atomic();
 
@@ -177,7 +181,9 @@ impl RedisNetworkRepository {
             });
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.reader(), "get_by_ids")
+            .await?;
         let keys: Vec<String> = ids.iter().map(|id| self.network_key(id)).collect();
 
         debug!(count = %ids.len(), "batch fetching networks");
@@ -225,7 +231,7 @@ impl RedisNetworkRepository {
 impl fmt::Debug for RedisNetworkRepository {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RedisNetworkRepository")
-            .field("client", &"<ConnectionManager>")
+            .field("pool", &"<Pool>")
             .field("key_prefix", &self.key_prefix)
             .finish()
     }
@@ -246,7 +252,9 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         }
         let key = self.network_key(&entity.id);
         let network_list_key = self.network_list_key();
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.primary(), "create")
+            .await?;
 
         debug!(network_id = %entity.id, "creating network");
 
@@ -290,7 +298,9 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         }
 
         let key = self.network_key(&id);
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.reader(), "get_by_id")
+            .await?;
 
         debug!(network_id = %id, "retrieving network");
 
@@ -315,20 +325,26 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
     }
 
     async fn list_all(&self) -> Result<Vec<NetworkRepoModel>, RepositoryError> {
-        let network_list_key = self.network_list_key();
-        let mut conn = self.client.as_ref().clone();
+        let ids = {
+            let network_list_key = self.network_list_key();
+            let mut conn = self
+                .get_connection(self.connections.reader(), "list_all")
+                .await?;
 
-        debug!("listing all networks");
+            debug!("listing all networks");
 
-        let ids: Vec<String> = conn
-            .smembers(&network_list_key)
-            .await
-            .map_err(|e| self.map_redis_error(e, "list_all_networks"))?;
+            let ids: Vec<String> = conn
+                .smembers(&network_list_key)
+                .await
+                .map_err(|e| self.map_redis_error(e, "list_all_networks"))?;
 
-        if ids.is_empty() {
-            debug!("no networks found");
-            return Ok(Vec::new());
-        }
+            if ids.is_empty() {
+                debug!("no networks found");
+                return Ok(Vec::new());
+            }
+            ids
+            // Connection dropped here before nested call to avoid connection doubling
+        };
 
         let networks = self.get_networks_by_ids(&ids).await?;
         debug!(count = %networks.results.len(), "successfully retrieved networks");
@@ -345,35 +361,41 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
             ));
         }
 
-        let network_list_key = self.network_list_key();
-        let mut conn = self.client.as_ref().clone();
+        let (total, page_ids) = {
+            let network_list_key = self.network_list_key();
+            let mut conn = self
+                .get_connection(self.connections.reader(), "list_paginated")
+                .await?;
 
-        debug!(page = %query.page, per_page = %query.per_page, "listing paginated networks");
+            debug!(page = %query.page, per_page = %query.per_page, "listing paginated networks");
 
-        let all_ids: Vec<String> = conn
-            .smembers(&network_list_key)
-            .await
-            .map_err(|e| self.map_redis_error(e, "list_paginated_networks"))?;
+            let all_ids: Vec<String> = conn
+                .smembers(&network_list_key)
+                .await
+                .map_err(|e| self.map_redis_error(e, "list_paginated_networks"))?;
 
-        let total = all_ids.len() as u64;
-        let per_page = query.per_page as usize;
-        let page = query.page as usize;
-        let total_pages = all_ids.len().div_ceil(per_page);
+            let total = all_ids.len() as u64;
+            let per_page = query.per_page as usize;
+            let page = query.page as usize;
+            let total_pages = all_ids.len().div_ceil(per_page);
 
-        if page > total_pages && !all_ids.is_empty() {
-            debug!(requested_page = %page, total_pages = %total_pages, "requested page exceeds total pages");
-            return Ok(PaginatedResult {
-                items: Vec::new(),
-                total,
-                page: query.page,
-                per_page: query.per_page,
-            });
-        }
+            if page > total_pages && !all_ids.is_empty() {
+                debug!(requested_page = %page, total_pages = %total_pages, "requested page exceeds total pages");
+                return Ok(PaginatedResult {
+                    items: Vec::new(),
+                    total,
+                    page: query.page,
+                    per_page: query.per_page,
+                });
+            }
 
-        let start_idx = (page - 1) * per_page;
-        let end_idx = std::cmp::min(start_idx + per_page, all_ids.len());
+            let start_idx = (page - 1) * per_page;
+            let end_idx = std::cmp::min(start_idx + per_page, all_ids.len());
 
-        let page_ids = all_ids[start_idx..end_idx].to_vec();
+            (total, all_ids[start_idx..end_idx].to_vec())
+            // Connection dropped here before nested call to avoid connection doubling
+        };
+
         let networks = self.get_networks_by_ids(&page_ids).await?;
 
         debug!(count = %networks.results.len(), page = %query.page, "successfully retrieved networks for page");
@@ -404,7 +426,9 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         }
 
         let key = self.network_key(&id);
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.primary(), "update")
+            .await?;
 
         debug!(network_id = %id, "updating network");
 
@@ -434,7 +458,9 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
 
         let key = self.network_key(&id);
         let network_list_key = self.network_list_key();
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.primary(), "delete_by_id")
+            .await?;
 
         debug!(network_id = %id, "deleting network");
 
@@ -461,7 +487,9 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
 
     async fn count(&self) -> Result<usize, RepositoryError> {
         let network_list_key = self.network_list_key();
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.reader(), "count")
+            .await?;
 
         debug!("counting networks");
 
@@ -478,7 +506,9 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
     /// This is used to determine if Redis storage is being used for networks.
     async fn has_entries(&self) -> Result<bool, RepositoryError> {
         let network_list_key = self.network_list_key();
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.reader(), "has_entries")
+            .await?;
 
         debug!("checking if network storage has entries");
 
@@ -495,7 +525,9 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
     /// This includes all network data, indexes, and the network list.
     /// Use with caution as this will permanently delete all network data.
     async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.primary(), "drop_all_entries")
+            .await?;
 
         debug!("starting to drop all network entries from Redis storage");
 
@@ -567,16 +599,22 @@ impl NetworkRepository for RedisNetworkRepository {
             ));
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let network_id = {
+            let mut conn = self
+                .get_connection(self.connections.reader(), "get_by_name")
+                .await?;
 
-        debug!(name = %name, network_type = ?network_type, "getting network by name");
+            debug!(name = %name, network_type = ?network_type, "getting network by name");
 
-        // Use name index for O(1) lookup
-        let name_index_key = self.network_name_index_key(&network_type, name);
-        let network_id: Option<String> = conn
-            .get(&name_index_key)
-            .await
-            .map_err(|e| self.map_redis_error(e, "get_network_by_name_index"))?;
+            // Use name index for O(1) lookup
+            let name_index_key = self.network_name_index_key(&network_type, name);
+            let id: Option<String> = conn
+                .get(&name_index_key)
+                .await
+                .map_err(|e| self.map_redis_error(e, "get_network_by_name_index"))?;
+            id
+            // Connection dropped here before nested call to avoid connection doubling
+        };
 
         match network_id {
             Some(id) => {
@@ -610,16 +648,22 @@ impl NetworkRepository for RedisNetworkRepository {
             return Ok(None);
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let network_id = {
+            let mut conn = self
+                .get_connection(self.connections.reader(), "get_by_chain_id")
+                .await?;
 
-        debug!(chain_id = %chain_id, network_type = ?network_type, "getting network by chain ID");
+            debug!(chain_id = %chain_id, network_type = ?network_type, "getting network by chain ID");
 
-        // Use chain ID index for O(1) lookup
-        let chain_id_index_key = self.network_chain_id_index_key(&network_type, chain_id);
-        let network_id: Option<String> = conn
-            .get(&chain_id_index_key)
-            .await
-            .map_err(|e| self.map_redis_error(e, "get_network_by_chain_id_index"))?;
+            // Use chain ID index for O(1) lookup
+            let chain_id_index_key = self.network_chain_id_index_key(&network_type, chain_id);
+            let id: Option<String> = conn
+                .get(&chain_id_index_key)
+                .await
+                .map_err(|e| self.map_redis_error(e, "get_network_by_chain_id_index"))?;
+            id
+            // Connection dropped here before nested call to avoid connection doubling
+        };
 
         match network_id {
             Some(id) => {
@@ -651,14 +695,15 @@ mod tests {
         EvmNetworkConfig, NetworkConfigCommon, SolanaNetworkConfig, StellarNetworkConfig,
     };
     use crate::models::NetworkConfigData;
-    use redis::aio::ConnectionManager;
     use uuid::Uuid;
 
     fn create_test_network(name: &str, network_type: NetworkType) -> NetworkRepoModel {
         let common = NetworkConfigCommon {
             network: name.to_string(),
             from: None,
-            rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+            rpc_urls: Some(vec![crate::models::RpcConfig::new(
+                "https://rpc.example.com".to_string(),
+            )]),
             explorer_urls: None,
             average_blocktime_ms: Some(12000),
             is_testnet: Some(true),
@@ -697,12 +742,18 @@ mod tests {
         let random_id = Uuid::new_v4().to_string();
         let key_prefix = format!("test_prefix_{}", random_id);
 
-        let client = redis::Client::open(redis_url).expect("Failed to create Redis client");
-        let connection_manager = ConnectionManager::new(client)
-            .await
-            .expect("Failed to create connection manager");
+        let cfg = deadpool_redis::Config::from_url(redis_url);
+        let pool = Arc::new(
+            cfg.builder()
+                .expect("Failed to create pool builder")
+                .max_size(16)
+                .runtime(deadpool_redis::Runtime::Tokio1)
+                .build()
+                .expect("Failed to build Redis pool"),
+        );
+        let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
-        RedisNetworkRepository::new(Arc::new(connection_manager), key_prefix.to_string())
+        RedisNetworkRepository::new(connections, key_prefix.to_string())
             .expect("Failed to create repository")
     }
 
@@ -947,7 +998,9 @@ mod tests {
                     common: NetworkConfigCommon {
                         network: "test".to_string(),
                         from: None,
-                        rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+                        rpc_urls: Some(vec![crate::models::RpcConfig::new(
+                            "https://rpc.example.com".to_string(),
+                        )]),
                         explorer_urls: None,
                         average_blocktime_ms: Some(12000),
                         is_testnet: Some(true),

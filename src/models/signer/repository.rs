@@ -42,7 +42,7 @@ pub enum SignerConfigStorage {
     AwsKms(AwsKmsSignerConfigStorage),
     Turnkey(TurnkeySignerConfigStorage),
     Cdp(CdpSignerConfigStorage),
-    GoogleCloudKms(GoogleCloudKmsSignerConfigStorage),
+    GoogleCloudKms(Box<GoogleCloudKmsSignerConfigStorage>),
 }
 
 /// Local signer configuration for storage (with base64 encoding)
@@ -144,6 +144,7 @@ pub struct CdpSignerConfigStorage {
     pub account_address: String,
 }
 
+/// Storage model for Google Cloud KMS service account configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GoogleCloudKmsSignerServiceAccountConfigStorage {
     #[serde(
@@ -156,25 +157,69 @@ pub struct GoogleCloudKmsSignerServiceAccountConfigStorage {
         deserialize_with = "deserialize_secret_string"
     )]
     pub private_key_id: SecretString,
-    pub project_id: String,
+    #[serde(
+        serialize_with = "serialize_secret_string",
+        deserialize_with = "deserialize_secret_string"
+    )]
+    pub project_id: SecretString,
     #[serde(
         serialize_with = "serialize_secret_string",
         deserialize_with = "deserialize_secret_string"
     )]
     pub client_email: SecretString,
-    pub client_id: String,
-    pub auth_uri: String,
-    pub token_uri: String,
-    pub auth_provider_x509_cert_url: String,
-    pub client_x509_cert_url: String,
-    pub universe_domain: String,
+    #[serde(
+        serialize_with = "serialize_secret_string",
+        deserialize_with = "deserialize_secret_string"
+    )]
+    pub client_id: SecretString,
+    #[serde(
+        serialize_with = "serialize_secret_string",
+        deserialize_with = "deserialize_secret_string"
+    )]
+    pub auth_uri: SecretString,
+    #[serde(
+        serialize_with = "serialize_secret_string",
+        deserialize_with = "deserialize_secret_string"
+    )]
+    pub token_uri: SecretString,
+    #[serde(
+        serialize_with = "serialize_secret_string",
+        deserialize_with = "deserialize_secret_string"
+    )]
+    pub auth_provider_x509_cert_url: SecretString,
+    #[serde(
+        serialize_with = "serialize_secret_string",
+        deserialize_with = "deserialize_secret_string"
+    )]
+    pub client_x509_cert_url: SecretString,
+    #[serde(
+        serialize_with = "serialize_secret_string",
+        deserialize_with = "deserialize_secret_string"
+    )]
+    pub universe_domain: SecretString,
 }
 
+/// Storage model for Google Cloud KMS key configuration.
+///
+/// All string fields are encrypted at rest to prevent attackers from
+/// modifying key identifiers to point to different keys.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GoogleCloudKmsSignerKeyConfigStorage {
-    pub location: String,
-    pub key_ring_id: String,
-    pub key_id: String,
+    #[serde(
+        serialize_with = "serialize_secret_string",
+        deserialize_with = "deserialize_secret_string"
+    )]
+    pub location: SecretString,
+    #[serde(
+        serialize_with = "serialize_secret_string",
+        deserialize_with = "deserialize_secret_string"
+    )]
+    pub key_ring_id: SecretString,
+    #[serde(
+        serialize_with = "serialize_secret_string",
+        deserialize_with = "deserialize_secret_string"
+    )]
+    pub key_id: SecretString,
     pub key_version: u32,
 }
 
@@ -419,7 +464,9 @@ impl From<SignerConfig> for SignerConfigStorage {
             SignerConfig::AwsKms(aws_kms) => SignerConfigStorage::AwsKms(aws_kms.into()),
             SignerConfig::Turnkey(turnkey) => SignerConfigStorage::Turnkey(turnkey.into()),
             SignerConfig::Cdp(cdp) => SignerConfigStorage::Cdp(cdp.into()),
-            SignerConfig::GoogleCloudKms(gcp) => SignerConfigStorage::GoogleCloudKms(gcp.into()),
+            SignerConfig::GoogleCloudKms(gcp) => {
+                SignerConfigStorage::GoogleCloudKms(Box::new((*gcp).into()))
+            }
         }
     }
 }
@@ -435,7 +482,9 @@ impl From<SignerConfigStorage> for SignerConfig {
             SignerConfigStorage::AwsKms(aws_kms) => SignerConfig::AwsKms(aws_kms.into()),
             SignerConfigStorage::Turnkey(turnkey) => SignerConfig::Turnkey(turnkey.into()),
             SignerConfigStorage::Cdp(cdp) => SignerConfig::Cdp(cdp.into()),
-            SignerConfigStorage::GoogleCloudKms(gcp) => SignerConfig::GoogleCloudKms(gcp.into()),
+            SignerConfigStorage::GoogleCloudKms(gcp) => {
+                SignerConfig::GoogleCloudKms(Box::new((*gcp).into()))
+            }
         }
     }
 }

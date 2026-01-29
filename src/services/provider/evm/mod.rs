@@ -32,15 +32,26 @@ use async_trait::async_trait;
 use eyre::Result;
 use reqwest::ClientBuilder as ReqwestClientBuilder;
 use serde_json;
+use tracing::debug;
 
 use super::rpc_selector::RpcSelector;
-use super::{retry_rpc_call, RetryConfig};
+use super::{retry_rpc_call, ProviderConfig, RetryConfig};
 use crate::{
+    constants::{
+        DEFAULT_HTTP_CLIENT_CONNECT_TIMEOUT_SECONDS,
+        DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_INTERVAL_SECONDS,
+        DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_TIMEOUT_SECONDS,
+        DEFAULT_HTTP_CLIENT_POOL_IDLE_TIMEOUT_SECONDS, DEFAULT_HTTP_CLIENT_POOL_MAX_IDLE_PER_HOST,
+        DEFAULT_HTTP_CLIENT_TCP_KEEPALIVE_SECONDS,
+    },
     models::{
         BlockResponse, EvmTransactionData, RpcConfig, TransactionError, TransactionReceipt, U256,
     },
     services::provider::{is_retriable_error, should_mark_provider_failed},
+    utils::mask_url,
 };
+
+use crate::utils::{create_secure_redirect_policy, validate_safe_url};
 
 #[cfg(test)]
 use mockall::automock;
@@ -68,6 +79,7 @@ pub struct EvmProvider {
 #[cfg_attr(test, automock)]
 #[allow(dead_code)]
 pub trait EvmProviderTrait: Send + Sync {
+    fn get_configs(&self) -> Vec<RpcConfig>;
     /// Gets the balance of an address in the native currency.
     ///
     /// # Arguments
@@ -154,23 +166,28 @@ impl EvmProvider {
     /// Creates a new EVM provider instance.
     ///
     /// # Arguments
-    /// * `configs` - A vector of RPC configurations (URL and weight)
-    /// * `timeout_seconds` - The timeout duration in seconds (defaults to 30 if None)
+    /// * `config` - Provider configuration containing RPC configs, timeout, and failure handling settings
     ///
     /// # Returns
     /// * `Result<Self>` - A new provider instance or an error
-    pub fn new(configs: Vec<RpcConfig>, timeout_seconds: u64) -> Result<Self, ProviderError> {
-        if configs.is_empty() {
+    pub fn new(config: ProviderConfig) -> Result<Self, ProviderError> {
+        if config.rpc_configs.is_empty() {
             return Err(ProviderError::NetworkConfiguration(
                 "At least one RPC configuration must be provided".to_string(),
             ));
         }
 
-        RpcConfig::validate_list(&configs)
+        RpcConfig::validate_list(&config.rpc_configs)
             .map_err(|e| ProviderError::NetworkConfiguration(format!("Invalid URL: {e}")))?;
 
         // Create the RPC selector
-        let selector = RpcSelector::new(configs).map_err(|e| {
+        let selector = RpcSelector::new(
+            config.rpc_configs,
+            config.failure_threshold,
+            config.pause_duration_secs,
+            config.failure_expiration_secs,
+        )
+        .map_err(|e| {
             ProviderError::NetworkConfiguration(format!("Failed to create RPC selector: {e}"))
         })?;
 
@@ -178,13 +195,29 @@ impl EvmProvider {
 
         Ok(Self {
             selector,
-            timeout_seconds,
+            timeout_seconds: config.timeout_seconds,
             retry_config,
         })
     }
 
+    /// Gets the current RPC configurations.
+    ///
+    /// # Returns
+    /// * `Vec<RpcConfig>` - The current configurations
+    pub fn get_configs(&self) -> Vec<RpcConfig> {
+        self.selector.get_configs()
+    }
+
     /// Initialize a provider for a given URL
     fn initialize_provider(&self, url: &str) -> Result<EvmProviderType, ProviderError> {
+        // Re-validate URL security as a safety net
+        let allowed_hosts = crate::config::ServerConfig::get_rpc_allowed_hosts();
+        let block_private_ips = crate::config::ServerConfig::get_rpc_block_private_ips();
+        validate_safe_url(url, &allowed_hosts, block_private_ips).map_err(|e| {
+            ProviderError::NetworkConfiguration(format!("RPC URL security validation failed: {e}"))
+        })?;
+
+        debug!("Initializing provider for URL: {}", mask_url(url));
         let rpc_url = url
             .parse()
             .map_err(|e| ProviderError::NetworkConfiguration(format!("Invalid URL format: {e}")))?;
@@ -192,7 +225,20 @@ impl EvmProvider {
         // Using use_rustls_tls() forces the use of rustls instead of native-tls to support TLS 1.3
         let client = ReqwestClientBuilder::new()
             .timeout(Duration::from_secs(self.timeout_seconds))
+            .connect_timeout(Duration::from_secs(DEFAULT_HTTP_CLIENT_CONNECT_TIMEOUT_SECONDS))
+            .pool_max_idle_per_host(DEFAULT_HTTP_CLIENT_POOL_MAX_IDLE_PER_HOST)
+            .pool_idle_timeout(Duration::from_secs(DEFAULT_HTTP_CLIENT_POOL_IDLE_TIMEOUT_SECONDS))
+            .tcp_keepalive(Duration::from_secs(DEFAULT_HTTP_CLIENT_TCP_KEEPALIVE_SECONDS))
+            .http2_keep_alive_interval(Some(Duration::from_secs(
+                DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_INTERVAL_SECONDS,
+            )))
+            .http2_keep_alive_timeout(Duration::from_secs(
+                DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_TIMEOUT_SECONDS,
+            ))
             .use_rustls_tls()
+            // Allow only HTTP→HTTPS redirects on same host to handle legitimate protocol upgrades
+            // while preventing SSRF via redirect chains to different hosts
+            .redirect(create_secure_redirect_policy())
             .build()
             .map_err(|e| ProviderError::Other(format!("Failed to build HTTP client: {e}")))?;
 
@@ -253,6 +299,10 @@ impl AsRef<EvmProvider> for EvmProvider {
 
 #[async_trait]
 impl EvmProviderTrait for EvmProvider {
+    fn get_configs(&self) -> Vec<RpcConfig> {
+        self.get_configs()
+    }
+
     async fn get_balance(&self, address: &str) -> Result<U256, ProviderError> {
         let parsed_address = address
             .parse::<alloy::primitives::Address>()
@@ -591,14 +641,25 @@ mod tests {
     fn test_new_provider() {
         let _env_guard = setup_test_env();
 
-        let provider = EvmProvider::new(
+        let config = ProviderConfig::new(
             vec![RpcConfig::new("http://localhost:8545".to_string())],
             30,
+            3,
+            60,
+            60,
         );
+        let provider = EvmProvider::new(config);
         assert!(provider.is_ok());
 
         // Test with invalid URL
-        let provider = EvmProvider::new(vec![RpcConfig::new("invalid-url".to_string())], 30);
+        let config = ProviderConfig::new(
+            vec![RpcConfig::new("invalid-url".to_string())],
+            30,
+            3,
+            60,
+            60,
+        );
+        let provider = EvmProvider::new(config);
         assert!(provider.is_err());
     }
 
@@ -607,26 +668,47 @@ mod tests {
         let _env_guard = setup_test_env();
 
         // Test with valid URL and timeout
-        let provider = EvmProvider::new(
+        let config = ProviderConfig::new(
             vec![RpcConfig::new("http://localhost:8545".to_string())],
             30,
+            3,
+            60,
+            60,
         );
+        let provider = EvmProvider::new(config);
         assert!(provider.is_ok());
 
         // Test with invalid URL
-        let provider = EvmProvider::new(vec![RpcConfig::new("invalid-url".to_string())], 30);
+        let config = ProviderConfig::new(
+            vec![RpcConfig::new("invalid-url".to_string())],
+            30,
+            3,
+            60,
+            60,
+        );
+        let provider = EvmProvider::new(config);
         assert!(provider.is_err());
 
         // Test with zero timeout
-        let provider =
-            EvmProvider::new(vec![RpcConfig::new("http://localhost:8545".to_string())], 0);
+        let config = ProviderConfig::new(
+            vec![RpcConfig::new("http://localhost:8545".to_string())],
+            0,
+            3,
+            60,
+            60,
+        );
+        let provider = EvmProvider::new(config);
         assert!(provider.is_ok());
 
         // Test with large timeout
-        let provider = EvmProvider::new(
+        let config = ProviderConfig::new(
             vec![RpcConfig::new("http://localhost:8545".to_string())],
             3600,
+            3,
+            60,
+            60,
         );
+        let provider = EvmProvider::new(config);
         assert!(provider.is_ok());
     }
 

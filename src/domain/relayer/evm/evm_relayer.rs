@@ -27,7 +27,10 @@
 use std::sync::Arc;
 
 use crate::{
-    constants::{EVM_SMALLEST_UNIT_NAME, EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS},
+    constants::{
+        transactions::PENDING_TRANSACTION_STATUSES, EVM_SMALLEST_UNIT_NAME,
+        EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+    },
     domain::{
         relayer::{Relayer, RelayerError},
         BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
@@ -41,8 +44,8 @@ use crate::{
         produce_relayer_disabled_payload, DeletePendingTransactionsResponse, DisabledReason,
         EvmNetwork, HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel,
         NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest, NetworkType,
-        RelayerRepoModel, RelayerStatus, RepositoryError, RpcErrorCodes, TransactionRepoModel,
-        TransactionStatus,
+        PaginationQuery, RelayerRepoModel, RelayerStatus, RepositoryError, RpcErrorCodes,
+        TransactionRepoModel, TransactionStatus,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
@@ -56,9 +59,8 @@ use async_trait::async_trait;
 use eyre::Result;
 use tracing::{debug, info, warn};
 
-use super::{
-    create_error_response, create_success_response, map_provider_error, EvmTransactionValidator,
-};
+use super::{create_error_response, create_success_response, EvmTransactionValidator};
+use crate::utils::{map_provider_error, sanitize_error_description};
 
 #[allow(dead_code)]
 pub struct EvmRelayer<P, RR, NR, TR, J, S, TCS>
@@ -148,7 +150,8 @@ where
             .transaction_counter_service
             .get()
             .await
-            .unwrap_or(Some(0))
+            .ok()
+            .flatten()
             .unwrap_or(0);
 
         let nonce = std::cmp::max(on_chain_nonce, transaction_counter_nonce);
@@ -308,35 +311,43 @@ where
     async fn get_status(&self) -> Result<RelayerStatus, RelayerError> {
         let relayer_model = &self.relayer;
 
-        let nonce_u256 = self
-            .provider
-            .get_transaction_count(&relayer_model.address)
+        // Get nonce from transaction counter store instead of network
+        let nonce = self
+            .transaction_counter_service
+            .get()
             .await
-            .map_err(|e| RelayerError::ProviderError(format!("Failed to get nonce: {e}")))?;
-        let nonce_str = nonce_u256.to_string();
+            .ok()
+            .flatten()
+            .unwrap_or(0);
+        let nonce_str = nonce.to_string();
 
         let balance_response = self.get_balance().await?;
 
-        let pending_statuses = [TransactionStatus::Pending, TransactionStatus::Submitted];
-        let pending_transactions = self
+        // Use optimized count_by_status
+        let pending_transactions_count = self
             .transaction_repository
-            .find_by_status(&relayer_model.id, &pending_statuses[..])
-            .await
-            .map_err(RelayerError::from)?;
-        let pending_transactions_count = pending_transactions.len() as u64;
-
-        let confirmed_statuses = [TransactionStatus::Confirmed];
-        let confirmed_transactions = self
-            .transaction_repository
-            .find_by_status(&relayer_model.id, &confirmed_statuses[..])
+            .count_by_status(&relayer_model.id, PENDING_TRANSACTION_STATUSES)
             .await
             .map_err(RelayerError::from)?;
 
-        let last_confirmed_transaction_timestamp = confirmed_transactions
-            .iter()
-            .filter_map(|tx| tx.confirmed_at.as_ref())
-            .max()
-            .cloned();
+        // Use find_by_status_paginated to get the latest confirmed transaction (newest first)
+        let last_confirmed_transaction_timestamp = self
+            .transaction_repository
+            .find_by_status_paginated(
+                &relayer_model.id,
+                &[TransactionStatus::Confirmed],
+                PaginationQuery {
+                    page: 1,
+                    per_page: 1,
+                },
+                false, // oldest_first = false means newest first
+            )
+            .await
+            .map_err(RelayerError::from)?
+            .items
+            .into_iter()
+            .next()
+            .and_then(|tx| tx.confirmed_at);
 
         Ok(RelayerStatus::Evm {
             balance: balance_response.balance.to_string(),
@@ -494,12 +505,18 @@ where
         match self.provider.raw_request_dyn(&method, params_json).await {
             Ok(result_value) => Ok(create_success_response(request.id, result_value)),
             Err(provider_error) => {
+                // Log the full error internally for debugging
+                tracing::error!(
+                    error = %provider_error,
+                    "RPC provider error occurred"
+                );
                 let (error_code, error_message) = map_provider_error(&provider_error);
+                let sanitized_description = sanitize_error_description(&provider_error);
                 Ok(create_error_response(
                     request.id,
                     error_code,
                     error_message,
-                    &provider_error.to_string(),
+                    &sanitized_description,
                 ))
             }
         }
@@ -626,6 +643,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::RpcConfig;
     use crate::{
         config::{EvmNetworkConfig, NetworkConfigCommon},
         jobs::MockJobProducerTrait,
@@ -656,7 +674,9 @@ mod tests {
     fn create_test_evm_network() -> EvmNetwork {
         EvmNetwork {
             network: "mainnet".to_string(),
-            rpc_urls: vec!["https://mainnet.infura.io/v3/YOUR_INFURA_API_KEY".to_string()],
+            rpc_urls: vec![RpcConfig::new(
+                "https://mainnet.infura.io/v3/YOUR_INFURA_API_KEY".to_string(),
+            )],
             explorer_urls: None,
             average_blocktime_ms: 12000,
             is_testnet: false,
@@ -674,9 +694,9 @@ mod tests {
             common: NetworkConfigCommon {
                 network: "mainnet".to_string(),
                 from: None,
-                rpc_urls: Some(vec![
-                    "https://mainnet.infura.io/v3/YOUR_INFURA_API_KEY".to_string()
-                ]),
+                rpc_urls: Some(vec![crate::models::RpcConfig::new(
+                    "https://mainnet.infura.io/v3/YOUR_INFURA_API_KEY".to_string(),
+                )]),
                 explorer_urls: None,
                 average_blocktime_ms: Some(12000),
                 is_testnet: Some(false),
@@ -1013,55 +1033,67 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_status_success() {
-        let (mut provider, relayer_repo, network_repo, mut tx_repo, job_producer, signer, counter) =
-            setup_mocks();
+        let (
+            mut provider,
+            relayer_repo,
+            network_repo,
+            mut tx_repo,
+            job_producer,
+            signer,
+            mut counter,
+        ) = setup_mocks();
         let relayer_model = create_test_relayer();
 
-        provider
-            .expect_get_transaction_count()
-            .returning(|_| Box::pin(ready(Ok(10u64))))
+        // Mock transaction counter service to return nonce
+        counter
+            .expect_get()
+            .returning(|| Box::pin(ready(Ok(Some(10u64)))))
             .once();
         provider
             .expect_get_balance()
             .returning(|_| Box::pin(ready(Ok(U256::from(1000000000000000000u64)))))
             .once();
 
-        let pending_txs_clone = vec![];
+        // Mock count_by_status for pending transactions count
         tx_repo
-            .expect_find_by_status()
+            .expect_count_by_status()
             .withf(|relayer_id, statuses| {
                 relayer_id == "test-relayer-id"
-                    && statuses == [TransactionStatus::Pending, TransactionStatus::Submitted]
+                    && statuses
+                        == [
+                            TransactionStatus::Pending,
+                            TransactionStatus::Sent,
+                            TransactionStatus::Submitted,
+                        ]
             })
-            .returning(move |_, _| {
-                Ok(pending_txs_clone.clone()) as Result<Vec<TransactionRepoModel>, RepositoryError>
-            })
+            .returning(|_, _| Ok(0u64))
             .once();
 
-        let confirmed_txs_clone = vec![
-            TransactionRepoModel {
-                id: "tx1".to_string(),
-                relayer_id: relayer_model.id.clone(),
-                status: TransactionStatus::Confirmed,
-                confirmed_at: Some("2023-01-01T12:00:00Z".to_string()),
-                ..TransactionRepoModel::default()
-            },
-            TransactionRepoModel {
-                id: "tx2".to_string(),
-                relayer_id: relayer_model.id.clone(),
-                status: TransactionStatus::Confirmed,
-                confirmed_at: Some("2023-01-01T10:00:00Z".to_string()),
-                ..TransactionRepoModel::default()
-            },
-        ];
+        // Mock find_by_status_paginated for latest confirmed transaction
+        let latest_confirmed_tx = TransactionRepoModel {
+            id: "tx1".to_string(),
+            relayer_id: relayer_model.id.clone(),
+            status: TransactionStatus::Confirmed,
+            confirmed_at: Some("2023-01-01T12:00:00Z".to_string()),
+            ..TransactionRepoModel::default()
+        };
+        let relayer_id_clone = relayer_model.id.clone();
         tx_repo
-            .expect_find_by_status()
-            .withf(|relayer_id, statuses| {
-                relayer_id == "test-relayer-id" && statuses == [TransactionStatus::Confirmed]
+            .expect_find_by_status_paginated()
+            .withf(move |relayer_id, statuses, query, oldest_first| {
+                *relayer_id == relayer_id_clone
+                    && statuses == [TransactionStatus::Confirmed]
+                    && query.page == 1
+                    && query.per_page == 1
+                    && *oldest_first == false
             })
-            .returning(move |_, _| {
-                Ok(confirmed_txs_clone.clone())
-                    as Result<Vec<TransactionRepoModel>, RepositoryError>
+            .returning(move |_, _, _, _| {
+                Ok(crate::repositories::PaginatedResult {
+                    items: vec![latest_confirmed_tx.clone()],
+                    total: 1,
+                    page: 1,
+                    per_page: 1,
+                })
             })
             .once();
 
@@ -1105,15 +1137,51 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_status_provider_nonce_error() {
-        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
-            setup_mocks();
+        let (
+            mut provider,
+            relayer_repo,
+            network_repo,
+            mut tx_repo,
+            job_producer,
+            signer,
+            mut counter,
+        ) = setup_mocks();
         let relayer_model = create_test_relayer();
 
-        provider.expect_get_transaction_count().returning(|_| {
-            Box::pin(ready(Err(ProviderError::Other(
-                "Nonce fetch failed".to_string(),
-            ))))
-        });
+        // Mock transaction counter service to return None (defaults to 0)
+        counter
+            .expect_get()
+            .returning(|| Box::pin(ready(Ok(None))))
+            .once();
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(ready(Ok(U256::from(1000000000000000000u64)))))
+            .once();
+
+        // Mock count_by_status
+        tx_repo
+            .expect_count_by_status()
+            .returning(|_, _| Ok(0u64))
+            .once();
+
+        // Mock find_by_status_paginated for latest confirmed transaction (none)
+        tx_repo
+            .expect_find_by_status_paginated()
+            .withf(|_relayer_id, statuses, query, oldest_first| {
+                statuses == [TransactionStatus::Confirmed]
+                    && query.page == 1
+                    && query.per_page == 1
+                    && *oldest_first == false
+            })
+            .returning(|_, _, _, _| {
+                Ok(crate::repositories::PaginatedResult {
+                    items: vec![],
+                    total: 0,
+                    page: 1,
+                    per_page: 1,
+                })
+            })
+            .once();
 
         let relayer = EvmRelayer::new(
             relayer_model.clone(),
@@ -1128,37 +1196,50 @@ mod tests {
         )
         .unwrap();
 
-        let result = relayer.get_status().await;
-        assert!(result.is_err());
-        match result.err().unwrap() {
-            RelayerError::ProviderError(msg) => assert!(msg.contains("Failed to get nonce")),
-            _ => panic!("Expected ProviderError for nonce failure"),
+        // Should succeed with nonce defaulting to 0 when counter returns None
+        let status = relayer.get_status().await.unwrap();
+        match status {
+            RelayerStatus::Evm { nonce, .. } => {
+                assert_eq!(nonce, "0");
+            }
+            _ => panic!("Expected Evm status"),
         }
     }
 
     #[tokio::test]
     async fn test_get_status_repository_pending_error() {
-        let (mut provider, relayer_repo, network_repo, mut tx_repo, job_producer, signer, counter) =
-            setup_mocks();
+        let (
+            mut provider,
+            relayer_repo,
+            network_repo,
+            mut tx_repo,
+            job_producer,
+            signer,
+            mut counter,
+        ) = setup_mocks();
         let relayer_model = create_test_relayer();
 
-        provider
-            .expect_get_transaction_count()
-            .returning(|_| Box::pin(ready(Ok(10u64))));
+        // Mock transaction counter service to return nonce
+        counter
+            .expect_get()
+            .returning(|| Box::pin(ready(Ok(Some(10u64)))))
+            .once();
         provider
             .expect_get_balance()
             .returning(|_| Box::pin(ready(Ok(U256::from(1000000000000000000u64)))));
 
         tx_repo
-            .expect_find_by_status()
+            .expect_count_by_status()
             .withf(|relayer_id, statuses| {
                 relayer_id == "test-relayer-id"
-                    && statuses == [TransactionStatus::Pending, TransactionStatus::Submitted]
+                    && statuses
+                        == [
+                            TransactionStatus::Pending,
+                            TransactionStatus::Sent,
+                            TransactionStatus::Submitted,
+                        ]
             })
-            .returning(|_, _| {
-                Err(RepositoryError::Unknown("DB down".to_string()))
-                    as Result<Vec<TransactionRepoModel>, RepositoryError>
-            })
+            .returning(|_, _| Err(RepositoryError::Unknown("DB down".to_string())))
             .once();
 
         let relayer = EvmRelayer::new(
@@ -1185,13 +1266,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_status_no_confirmed_transactions() {
-        let (mut provider, relayer_repo, network_repo, mut tx_repo, job_producer, signer, counter) =
-            setup_mocks();
+        let (
+            mut provider,
+            relayer_repo,
+            network_repo,
+            mut tx_repo,
+            job_producer,
+            signer,
+            mut counter,
+        ) = setup_mocks();
         let relayer_model = create_test_relayer();
 
-        provider
-            .expect_get_transaction_count()
-            .returning(|_| Box::pin(ready(Ok(10u64))));
+        // Mock transaction counter service to return nonce
+        counter
+            .expect_get()
+            .returning(|| Box::pin(ready(Ok(Some(10u64)))));
         provider
             .expect_get_balance()
             .returning(|_| Box::pin(ready(Ok(U256::from(1000000000000000000u64)))));
@@ -1199,28 +1288,39 @@ mod tests {
             .expect_health_check()
             .returning(|| Box::pin(ready(Ok(true))));
 
-        let pending_txs_empty_clone = vec![];
+        // Mock count_by_status for pending transactions count
         tx_repo
-            .expect_find_by_status()
+            .expect_count_by_status()
             .withf(|relayer_id, statuses| {
                 relayer_id == "test-relayer-id"
-                    && statuses == [TransactionStatus::Pending, TransactionStatus::Submitted]
+                    && statuses
+                        == [
+                            TransactionStatus::Pending,
+                            TransactionStatus::Sent,
+                            TransactionStatus::Submitted,
+                        ]
             })
-            .returning(move |_, _| {
-                Ok(pending_txs_empty_clone.clone())
-                    as Result<Vec<TransactionRepoModel>, RepositoryError>
-            })
+            .returning(|_, _| Ok(0u64))
             .once();
 
-        let confirmed_txs_empty_clone = vec![];
+        // Mock find_by_status_paginated for latest confirmed transaction (none)
+        let relayer_id_clone = relayer_model.id.clone();
         tx_repo
-            .expect_find_by_status()
-            .withf(|relayer_id, statuses| {
-                relayer_id == "test-relayer-id" && statuses == [TransactionStatus::Confirmed]
+            .expect_find_by_status_paginated()
+            .withf(move |relayer_id, statuses, query, oldest_first| {
+                *relayer_id == relayer_id_clone
+                    && statuses == [TransactionStatus::Confirmed]
+                    && query.page == 1
+                    && query.per_page == 1
+                    && *oldest_first == false
             })
-            .returning(move |_, _| {
-                Ok(confirmed_txs_empty_clone.clone())
-                    as Result<Vec<TransactionRepoModel>, RepositoryError>
+            .returning(|_, _, _, _| {
+                Ok(crate::repositories::PaginatedResult {
+                    items: vec![],
+                    total: 0,
+                    page: 1,
+                    per_page: 1,
+                })
             })
             .once();
 

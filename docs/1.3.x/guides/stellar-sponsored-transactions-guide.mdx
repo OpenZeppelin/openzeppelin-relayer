@@ -1,0 +1,351 @@
+---
+title: Stellar Sponsored Transactions Guide
+---
+
+## Overview
+
+Stellar Sponsored Transactions (also known as gasless transactions) allow users to pay transaction fees using tokens instead of the native XLM currency. This enables a better user experience where users can pay fees in stablecoins like USDC or other tokens they already hold, without needing to maintain XLM balances.
+
+**How it works:**
+
+1. **Quote**: Estimate the fee cost in your preferred token
+2. **Build**: Prepare a transaction that includes fee payment in the token
+3. **Sign**: User signs the transaction including fee payment
+4. **Send**: Submit the transaction (relayer pays XLM fees, user pays token fees)
+
+The relayer handles the complexity of fee conversion, token swaps, and XLM fee payment, while users simply pay in their preferred token.
+
+## Prerequisites
+
+- A running OpenZeppelin Relayer instance
+- A Stellar relayer configured with sponsored transaction support ("fee_payment_strategy" = "user")
+- Trustlines enabled for the fee tokens you want to accept
+- Sufficient XLM balance in the relayer account for network fees
+
+## Configuration
+
+### 1. Basic Relayer Setup
+
+First, configure a Stellar relayer in your `config.json`:
+
+```json
+{
+  "relayers": [
+    {
+      "id": "stellar-sponsored",
+      "name": "Stellar Sponsored Transactions",
+      "network": "testnet",
+      "paused": false,
+      "signer_id": "local-signer",
+      "network_type": "stellar",
+      "policies": {
+        "fee_payment_strategy": "user",
+        "min_balance": 100000000,
+        "max_fee": 100000,
+        "allowed_tokens": [
+          {
+            "asset": "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+            "max_allowed_fee": 1000000000,
+            "swap_config": {
+              "slippage_percentage": 1.0,
+              "min_amount": 1000000,
+              "max_amount": 10000000000,
+              "retain_min_amount": 5000000
+            }
+          }
+        ],
+        "slippage_percentage": 1.0,
+        "fee_margin_percentage": 10.0,
+        "swap_config": {
+          "strategies": ["order-book"],
+          "cron_schedule": "0 */6 * * *",
+          "min_balance_threshold": 50000000
+        }
+      }
+    }
+  ]
+}
+```
+
+### 2. Policy Configuration Explained
+
+#### `fee_payment_strategy`
+- **`relayer`**: Relayer pays all network fees. Users pay fees in tokens.
+- **`user`**: User must include fee payment in the transaction.
+
+#### `allowed_tokens`
+List of tokens that can be used for fee payment. Each token can have:
+
+- **`asset`**: Asset identifier in format `"native"` or `"CODE:ISSUER"` (e.g., `"USDC:GA5Z..."`)
+- **`max_allowed_fee`**: Maximum fee amount in token's smallest unit (stroops for native, token decimals for others)
+- **`swap_config`**: Token-specific swap configuration:
+  - `slippage_percentage`: Maximum acceptable slippage (default: 1.0%)
+  - `min_amount`: Minimum swap amount
+  - `max_amount`: Maximum swap amount
+  - `retain_min_amount`: Minimum amount to retain after swap
+
+#### `swap_config` (Global)
+Configuration for converting collected tokens back to XLM:
+
+- **`strategies`**: DEX strategies to use (currently supports `order-book`)
+- **`cron_schedule`**: Schedule for automatic token swaps (e.g., `"0 */6 * * *"` = every 6 hours)
+- **`min_balance_threshold`**: Minimum XLM balance (in stroops) before triggering swaps
+
+#### `slippage_percentage`
+Default slippage tolerance for token conversions (default: 1.0%)
+
+#### `fee_margin_percentage`
+Additional fee margin added to estimated fees to account for price fluctuations (default: 10.0%)
+
+### 3. Enabling Trustlines
+
+Before users can pay fees in tokens, the relayer account must establish trustlines to those tokens. This is a one-time setup per token.
+
+For a complete example of how to create trustlines, see the [Relayer SDK example](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayer/stellar/sponsored/create-trustline.ts).
+
+
+## Using the API
+
+The sponsored transaction flow consists of four steps: **Quote**, **Build**, **Sign**, and **Send**.
+
+### Step 1: Get Fee Quote
+
+Estimate the transaction fee in your preferred token.
+
+**Endpoint:** `POST /api/v1/relayers/{relayer_id}/transactions/sponsored/quote`
+
+**Request Body:**
+
+```json
+{
+  "transaction_xdr": "AAAAAgAAAAD...",
+  "fee_token": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+}
+```
+
+Or with operations:
+
+```json
+{
+  "operations": [
+    {
+      "type": "payment",
+      "destination": "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "amount": 1000000,
+      "asset": "native"
+    }
+  ],
+  "source_account": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+  "fee_token": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4K4KZVN"
+}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "fee_in_token_ui": "1.5",
+    "fee_in_token": "15000000",
+    "conversion_rate": "0.15"
+  }
+}
+```
+
+For complete code examples, see the [Relayer SDK examples](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/stellar/sponsored).
+
+### Step 2: Build Sponsored Transaction
+
+Prepare a transaction that includes fee payment in the specified token.
+
+**Endpoint:** `POST /api/v1/relayers/{relayer_id}/transactions/sponsored/build`
+
+**Request Body:**
+
+```json
+{
+  "transaction_xdr": "AAAAAgAAAAD...",
+  "fee_token": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+}
+```
+
+Or with operations:
+
+```json
+{
+  "operations": [
+    {
+      "type": "payment",
+      "destination": "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "amount": 1000000,
+      "asset": "native"
+    }
+  ],
+  "source_account": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+  "fee_token": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "transaction": "AAAAAgAAAAD...",
+    "fee_in_token_ui": "1.5",
+    "fee_in_token": "15000000",
+    "fee_in_stroops": "100000",
+    "fee_token": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+    "valid_until": "2024-01-01T00:01:00Z"
+  }
+}
+```
+
+For complete code examples, see the [Relayer SDK examples](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/stellar/sponsored).
+
+### Step 3: Sign Transaction
+
+The user must sign the transaction XDR returned from the Build endpoint. The transaction includes fee payment operations and is ready for signing. The signing method depends on your wallet setup and relayer configuration:
+
+#### Option 1: Manual Signing with xBull Wallet
+
+If using the xBull wallet, the transaction can be manually signed:
+
+1. Open xBull wallet
+2. Navigate to **Drawer menu → Lab → Import XDR**
+3. Paste the transaction XDR from the Build response
+4. Review and sign the transaction
+
+> **Note:** Other Stellar wallets may support similar XDR import and signing flows. Consult your wallet's documentation for specific instructions.
+
+#### Option 2: Programmatic Signing via Relayer
+
+If the user's address is connected with another relayer configured in **relayer fee payment mode**, you can use the Sign Transaction endpoint:
+
+```bash
+# See the API reference for request/response payloads:
+# POST /api/v1/relayers/{relayer_id}/sign-transaction
+```
+
+#### Option 3: Custom Signing Solution
+
+You can also use any Stellar SDK or signing library to sign the transaction programmatically with the user's private key.
+
+For complete code examples, see the [Relayer SDK examples](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/stellar/sponsored).
+
+### Step 4: Submit to Relayer
+
+Submit the signed transaction to the relayer. The relayer will:
+1. Process it as a fee-bump transaction (wrap it in a fee-bump envelope)
+2. Sign the fee-bump transaction with the relayer's key
+3. Submit it to the Stellar network
+
+**Endpoint:** `POST /api/v1/relayers/{relayer_id}/transactions`
+
+**Request Body:**
+
+```json
+{
+  "transaction_xdr": "AAAAAgAAAAD...",
+  "network": "testnet",
+  "fee_bump": true
+}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "tx-123456",
+    "status": "pending",
+    "network_data": {
+      "signature": "abc123...",
+      "transaction": "AAAAAgAAAAD..."
+    }
+  }
+}
+```
+
+For complete code examples, see the [Relayer SDK examples](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/stellar/sponsored).
+
+## Request/Response Formats
+
+### Fee Token Format
+
+Fee tokens are specified using Stellar asset identifiers:
+
+- **Native XLM**: `"native"`
+- **Token**: `"CODE:ISSUER"` (e.g., `"USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"`)
+
+### Operations Format
+
+When building transactions from operations, use the following format:
+
+```json
+{
+  "operations": [
+    {
+      "type": "payment",
+      "destination": "G...",
+      "amount": 1000000,
+      "asset": "native"
+    },
+    {
+      "type": "payment",
+      "destination": "G...",
+      "amount": 5000000,
+      "asset": "USDC:GA5Z..."
+    }
+  ]
+}
+```
+
+Supported operation types:
+- `payment`: Standard payment operation
+- `createAccount`: Account creation
+- `changeTrust`: Trustline management
+- `manageData`: Data entry management
+- `bumpSequence`: Sequence number bump
+- `setOptions`: Account options
+- `allowTrust`: Trustline authorization
+- `accountMerge`: Account merge
+- `manageBuyOffer`: Create buy offer
+- `manageSellOffer`: Create sell offer
+- `createPassiveSellOffer`: Create passive offer
+- `pathPaymentStrictSend`: Path payment strict send
+- `pathPaymentStrictReceive`: Path payment strict receive
+- `createClaimableBalance`: Create claimable balance
+- `claimClaimableBalance`: Claim claimable balance
+- `beginSponsoringFutureReserves`: Begin sponsoring reserves
+- `endSponsoringFutureReserves`: End sponsoring reserves
+- `revokeSponsorship`: Revoke sponsorship
+- `clawback`: Clawback operation
+- `clawbackClaimableBalance`: Clawback claimable balance
+- `setTrustLineFlags`: Set trustline flags
+- `liquidityPoolDeposit`: Deposit to liquidity pool
+- `liquidityPoolWithdraw`: Withdraw from liquidity pool
+- `invokeHostFunction`: Soroban contract invocation
+- `extendFootprintTtl`: Extend footprint TTL
+- `restoreFootprint`: Restore footprint
+
+
+## Best Practices
+
+1. **Always Quote First**: Get a fee quote before building to show users the expected cost
+2. **Handle Expiration**: Transactions expire after 1 minute. Rebuild if needed
+3. **Monitor Relayer Balance**: Ensure the relayer has sufficient XLM for network fees
+4. **Configure Swap Schedule**: Set up automatic token swaps to maintain XLM balance
+5. **Set Appropriate Limits**: Configure `max_allowed_fee` to prevent excessive fees
+6. **Use Fee Margins**: The `fee_margin_percentage` helps account for price fluctuations
+7. **Monitor Trustlines**: Ensure trustlines are established before users attempt transactions
+
+## Additional Resources
+
+- [Stellar Documentation](https://developers.stellar.org/)
+- [Stellar SDK for JavaScript](https://stellar.github.io/js-stellar-sdk/)
+- [OpenZeppelin Relayer API Reference](/relayer/1.3.x/api)
+- [Network Configuration Guide](/relayer/network_configuration)

@@ -85,6 +85,12 @@ export interface PluginKVStore {
     fn: () => Promise<T>,
     opts?: { ttlSec?: number; onBusy?: 'throw' | 'skip' }
   ): Promise<T | null>;
+
+  /**
+   * Disconnect from the backing store.
+   * Call this when the store is no longer needed to prevent connection leaks.
+   */
+  disconnect(): Promise<void>;
 }
 
 /**
@@ -273,5 +279,21 @@ export class DefaultPluginKVStore implements PluginKVStore {
     } finally {
       await this.client.eval(this.UNLOCK_SCRIPT, 1, lockKey, token);
     }
+  }
+
+  /**
+   * Explicitly connect to Redis.
+   * Normally not needed since lazyConnect will connect on first command.
+   */
+  async connect(): Promise<void> {
+    await this.client.connect();
+  }
+
+  /**
+   * Disconnect from Redis.
+   * Call this when the store is no longer needed.
+   */
+  async disconnect(): Promise<void> {
+    await this.client.disconnect();
   }
 }

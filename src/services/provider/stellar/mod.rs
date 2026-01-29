@@ -10,12 +10,13 @@ use soroban_rs::stellar_rpc_client::Client;
 use soroban_rs::stellar_rpc_client::{
     Error as StellarClientError, EventStart, EventType, GetEventsResponse, GetLatestLedgerResponse,
     GetLedgerEntriesResponse, GetNetworkResponse, GetTransactionResponse, GetTransactionsRequest,
-    GetTransactionsResponse, SimulateTransactionResponse,
+    GetTransactionsResponse, SendTransactionResponse, SimulateTransactionResponse,
 };
 use soroban_rs::xdr::{
     AccountEntry, ContractId, Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp,
     LedgerKey, Limits, MuxedAccount, Operation, OperationBody, ReadXdr, ScAddress, ScSymbol, ScVal,
     SequenceNumber, Transaction, TransactionEnvelope, TransactionV1Envelope, Uint256, VecM,
+    WriteXdr,
 };
 #[cfg(test)]
 use soroban_rs::xdr::{AccountId, LedgerKeyAccount, PublicKey};
@@ -25,15 +26,23 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(test)]
 use mockall::automock;
 
+use crate::constants::{
+    DEFAULT_HTTP_CLIENT_CONNECT_TIMEOUT_SECONDS,
+    DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_INTERVAL_SECONDS,
+    DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_TIMEOUT_SECONDS,
+    DEFAULT_HTTP_CLIENT_POOL_IDLE_TIMEOUT_SECONDS, DEFAULT_HTTP_CLIENT_POOL_MAX_IDLE_PER_HOST,
+    DEFAULT_HTTP_CLIENT_TCP_KEEPALIVE_SECONDS,
+};
 use crate::models::{JsonRpcId, RpcConfig};
 use crate::services::provider::is_retriable_error;
 use crate::services::provider::retry::retry_rpc_call;
 use crate::services::provider::rpc_selector::RpcSelector;
 use crate::services::provider::should_mark_provider_failed;
-use crate::services::provider::ProviderError;
 use crate::services::provider::RetryConfig;
+use crate::services::provider::{ProviderConfig, ProviderError};
 // Reqwest client is used for raw JSON-RPC HTTP requests. Alias to avoid name clash with the
 // soroban `Client` type imported above.
+use crate::utils::{create_secure_redirect_policy, validate_safe_url};
 use reqwest::Client as ReqwestClient;
 use std::sync::Arc;
 use std::time::Duration;
@@ -275,6 +284,7 @@ pub struct StellarProvider {
 #[cfg_attr(test, automock)]
 #[allow(dead_code)]
 pub trait StellarProviderTrait: Send + Sync {
+    fn get_configs(&self) -> Vec<RpcConfig>;
     async fn get_account(&self, account_id: &str) -> Result<AccountEntry, ProviderError>;
     async fn simulate_transaction_envelope(
         &self,
@@ -290,6 +300,26 @@ pub trait StellarProviderTrait: Send + Sync {
         &self,
         tx_envelope: &TransactionEnvelope,
     ) -> Result<Hash, ProviderError>;
+    /// Sends a transaction and returns the full response including the status field.
+    ///
+    /// # Why this method exists
+    ///
+    /// The `stellar-rpc-client` crate's `send_transaction` method only returns
+    /// `Result<Hash, Error>` and discards the status field for non-ERROR responses.
+    /// This means TRY_AGAIN_LATER is silently treated as success, which is problematic
+    /// for relayers that need to track transaction states precisely.
+    ///
+    /// This method calls the `sendTransaction` RPC directly to get the full
+    /// `SendTransactionResponse` including the status field:
+    /// - "PENDING": Transaction accepted for processing
+    /// - "DUPLICATE": Transaction already submitted
+    /// - "TRY_AGAIN_LATER": Transaction NOT queued (e.g., another tx from same account
+    ///   in mempool, fee too low and resubmitted too soon, or resource limits exceeded)
+    /// - "ERROR": Transaction validation failed
+    async fn send_transaction_with_status(
+        &self,
+        tx_envelope: &TransactionEnvelope,
+    ) -> Result<SendTransactionResponse, ProviderError>;
     async fn get_transaction(&self, tx_id: &Hash) -> Result<GetTransactionResponse, ProviderError>;
     async fn get_transactions(
         &self,
@@ -331,19 +361,17 @@ pub trait StellarProviderTrait: Send + Sync {
 
 impl StellarProvider {
     // Create new StellarProvider instance
-    pub fn new(
-        mut rpc_configs: Vec<RpcConfig>,
-        timeout_seconds: u64,
-    ) -> Result<Self, ProviderError> {
-        if rpc_configs.is_empty() {
+    pub fn new(config: ProviderConfig) -> Result<Self, ProviderError> {
+        if config.rpc_configs.is_empty() {
             return Err(ProviderError::NetworkConfiguration(
                 "No RPC configurations provided for StellarProvider".to_string(),
             ));
         }
 
-        RpcConfig::validate_list(&rpc_configs)
+        RpcConfig::validate_list(&config.rpc_configs)
             .map_err(|e| ProviderError::NetworkConfiguration(e.to_string()))?;
 
+        let mut rpc_configs = config.rpc_configs;
         rpc_configs.retain(|config| config.get_weight() > 0);
 
         if rpc_configs.is_empty() {
@@ -352,7 +380,13 @@ impl StellarProvider {
             ));
         }
 
-        let selector = RpcSelector::new(rpc_configs).map_err(|e| {
+        let selector = RpcSelector::new(
+            rpc_configs,
+            config.failure_threshold,
+            config.pause_duration_secs,
+            config.failure_expiration_secs,
+        )
+        .map_err(|e| {
             ProviderError::NetworkConfiguration(format!("Failed to create RPC selector: {e}"))
         })?;
 
@@ -360,13 +394,28 @@ impl StellarProvider {
 
         Ok(Self {
             selector,
-            timeout_seconds: Duration::from_secs(timeout_seconds),
+            timeout_seconds: Duration::from_secs(config.timeout_seconds),
             retry_config,
         })
     }
 
+    /// Gets the current RPC configurations.
+    ///
+    /// # Returns
+    /// * `Vec<RpcConfig>` - The current configurations
+    pub fn get_configs(&self) -> Vec<RpcConfig> {
+        self.selector.get_configs()
+    }
+
     /// Initialize a Stellar client for a given URL
     fn initialize_provider(&self, url: &str) -> Result<Client, ProviderError> {
+        // Layer 2 validation: Re-validate URL security as a safety net
+        let allowed_hosts = crate::config::ServerConfig::get_rpc_allowed_hosts();
+        let block_private_ips = crate::config::ServerConfig::get_rpc_block_private_ips();
+        validate_safe_url(url, &allowed_hosts, block_private_ips).map_err(|e| {
+            ProviderError::NetworkConfiguration(format!("RPC URL security validation failed: {e}"))
+        })?;
+
         Client::new(url).map_err(|e| {
             ProviderError::NetworkConfiguration(format!(
                 "Failed to create Stellar RPC client: {e} - URL: '{url}'"
@@ -380,6 +429,20 @@ impl StellarProvider {
     fn initialize_raw_provider(&self, url: &str) -> Result<ReqwestClient, ProviderError> {
         ReqwestClient::builder()
             .timeout(self.timeout_seconds)
+            .connect_timeout(Duration::from_secs(DEFAULT_HTTP_CLIENT_CONNECT_TIMEOUT_SECONDS))
+            .pool_max_idle_per_host(DEFAULT_HTTP_CLIENT_POOL_MAX_IDLE_PER_HOST)
+            .pool_idle_timeout(Duration::from_secs(DEFAULT_HTTP_CLIENT_POOL_IDLE_TIMEOUT_SECONDS))
+            .tcp_keepalive(Duration::from_secs(DEFAULT_HTTP_CLIENT_TCP_KEEPALIVE_SECONDS))
+            .http2_keep_alive_interval(Some(Duration::from_secs(
+                DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_INTERVAL_SECONDS,
+            )))
+            .http2_keep_alive_timeout(Duration::from_secs(
+                DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_TIMEOUT_SECONDS,
+            ))
+            .use_rustls_tls()
+            // Allow only HTTP→HTTPS redirects on same host to handle legitimate protocol upgrades
+            // while preventing SSRF via redirect chains to different hosts
+            .redirect(create_secure_redirect_policy())
             .build()
             .map_err(|e| {
                 ProviderError::NetworkConfiguration(format!(
@@ -487,6 +550,10 @@ impl StellarProvider {
 
 #[async_trait]
 impl StellarProviderTrait for StellarProvider {
+    fn get_configs(&self) -> Vec<RpcConfig> {
+        self.get_configs()
+    }
+
     async fn get_account(&self, account_id: &str) -> Result<AccountEntry, ProviderError> {
         let account_id = Arc::new(account_id.to_string());
 
@@ -581,6 +648,32 @@ impl StellarProviderTrait for StellarProvider {
             }
         })
         .await
+    }
+
+    async fn send_transaction_with_status(
+        &self,
+        tx_envelope: &TransactionEnvelope,
+    ) -> Result<SendTransactionResponse, ProviderError> {
+        // Encode the transaction envelope to XDR base64
+        let tx_xdr = tx_envelope
+            .to_xdr_base64(Limits::none())
+            .map_err(|e| ProviderError::Other(format!("Failed to encode transaction XDR: {e}")))?;
+
+        // Call sendTransaction RPC method directly to get the full response
+        let params = serde_json::json!({
+            "transaction": tx_xdr
+        });
+
+        let result = self
+            .raw_request_dyn("sendTransaction", params, None)
+            .await?;
+
+        // Deserialize the response
+        serde_json::from_value(result).map_err(|e| {
+            ProviderError::Other(format!(
+                "Failed to deserialize SendTransactionResponse: {e}"
+            ))
+        })
     }
 
     async fn get_transaction(&self, tx_id: &Hash) -> Result<GetTransactionResponse, ProviderError> {
@@ -984,15 +1077,21 @@ mod stellar_rpc_tests {
     // Tests
     // ---------------------------------------------------------------------
 
+    fn create_test_provider_config(configs: Vec<RpcConfig>, timeout: u64) -> ProviderConfig {
+        ProviderConfig::new(configs, timeout, 3, 60, 60)
+    }
+
     #[test]
     fn test_new_provider() {
         let _env_guard = setup_test_env();
 
-        let provider =
-            StellarProvider::new(vec![RpcConfig::new("http://localhost:8000".to_string())], 0);
+        let provider = StellarProvider::new(create_test_provider_config(
+            vec![RpcConfig::new("http://localhost:8000".to_string())],
+            0,
+        ));
         assert!(provider.is_ok());
 
-        let provider_err = StellarProvider::new(vec![], 0);
+        let provider_err = StellarProvider::new(create_test_provider_config(vec![], 0));
         assert!(provider_err.is_err());
         match provider_err.unwrap_err() {
             ProviderError::NetworkConfiguration(msg) => {
@@ -1011,7 +1110,7 @@ mod stellar_rpc_tests {
             RpcConfig::with_weight("http://rpc2.example.com".to_string(), 100).unwrap(), // Highest weight
             RpcConfig::with_weight("http://rpc3.example.com".to_string(), 50).unwrap(),
         ];
-        let provider = StellarProvider::new(configs, 0);
+        let provider = StellarProvider::new(create_test_provider_config(configs, 0));
         assert!(provider.is_ok());
         // We can't directly inspect the client's URL easily without more complex mocking or changes.
         // For now, we trust the sorting logic and that Client::new would fail for a truly bad URL if selection was wrong.
@@ -1026,12 +1125,12 @@ mod stellar_rpc_tests {
             RpcConfig::with_weight("http://rpc1.example.com".to_string(), 0).unwrap(), // Weight 0
             RpcConfig::with_weight("http://rpc2.example.com".to_string(), 100).unwrap(), // Should be selected
         ];
-        let provider = StellarProvider::new(configs, 0);
+        let provider = StellarProvider::new(create_test_provider_config(configs, 0));
         assert!(provider.is_ok());
 
         let configs_only_zero =
             vec![RpcConfig::with_weight("http://rpc1.example.com".to_string(), 0).unwrap()];
-        let provider_err = StellarProvider::new(configs_only_zero, 0);
+        let provider_err = StellarProvider::new(create_test_provider_config(configs_only_zero, 0));
         assert!(provider_err.is_err());
         match provider_err.unwrap_err() {
             ProviderError::NetworkConfiguration(msg) => {
@@ -1044,7 +1143,7 @@ mod stellar_rpc_tests {
     #[test]
     fn test_new_provider_invalid_url_scheme() {
         let configs = vec![RpcConfig::new("ftp://invalid.example.com".to_string())];
-        let provider_err = StellarProvider::new(configs, 0);
+        let provider_err = StellarProvider::new(create_test_provider_config(configs, 0));
         assert!(provider_err.is_err());
         match provider_err.unwrap_err() {
             ProviderError::NetworkConfiguration(msg) => {
@@ -1062,7 +1161,7 @@ mod stellar_rpc_tests {
             RpcConfig::with_weight("http://rpc1.example.com".to_string(), 0).unwrap(),
             RpcConfig::with_weight("http://rpc2.example.com".to_string(), 0).unwrap(),
         ];
-        let provider_err = StellarProvider::new(configs, 0);
+        let provider_err = StellarProvider::new(create_test_provider_config(configs, 0));
         assert!(provider_err.is_err());
         match provider_err.unwrap_err() {
             ProviderError::NetworkConfiguration(msg) => {
@@ -1267,9 +1366,16 @@ mod stellar_rpc_tests {
 
         const NON_EXISTENT_URL: &str = "http://127.0.0.1:9998";
 
+        fn create_test_provider_config(configs: Vec<RpcConfig>, timeout: u64) -> ProviderConfig {
+            ProviderConfig::new(configs, timeout, 3, 60, 60)
+        }
+
         fn setup_provider() -> StellarProvider {
-            StellarProvider::new(vec![RpcConfig::new(NON_EXISTENT_URL.to_string())], 0)
-                .expect("Provider creation should succeed even with bad URL")
+            StellarProvider::new(create_test_provider_config(
+                vec![RpcConfig::new(NON_EXISTENT_URL.to_string())],
+                0,
+            ))
+            .expect("Provider creation should succeed even with bad URL")
         }
 
         #[tokio::test]
@@ -1709,10 +1815,10 @@ mod stellar_rpc_tests {
     #[test]
     fn test_initialize_provider_invalid_url() {
         let _env_guard = setup_test_env();
-        let provider = StellarProvider::new(
+        let provider = StellarProvider::new(create_test_provider_config(
             vec![RpcConfig::new("http://localhost:8000".to_string())],
             30,
-        )
+        ))
         .unwrap();
 
         // Test with invalid URL that should fail client creation
@@ -1720,7 +1826,11 @@ mod stellar_rpc_tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             ProviderError::NetworkConfiguration(msg) => {
-                assert!(msg.contains("Failed to create Stellar RPC client"));
+                // Error message can be either from URL validation or client creation
+                assert!(
+                    msg.contains("Failed to create Stellar RPC client")
+                        || msg.contains("RPC URL security validation failed")
+                );
             }
             _ => panic!("Expected NetworkConfiguration error"),
         }
@@ -1729,10 +1839,10 @@ mod stellar_rpc_tests {
     #[test]
     fn test_initialize_raw_provider_timeout_config() {
         let _env_guard = setup_test_env();
-        let provider = StellarProvider::new(
+        let provider = StellarProvider::new(create_test_provider_config(
             vec![RpcConfig::new("http://localhost:8000".to_string())],
             30,
-        )
+        ))
         .unwrap();
 
         // Test with valid URL - should succeed
@@ -1752,9 +1862,11 @@ mod stellar_rpc_tests {
         let _env_guard = setup_test_env();
 
         // Create a provider with a mock server URL that won't actually connect
-        let provider =
-            StellarProvider::new(vec![RpcConfig::new("http://127.0.0.1:9999".to_string())], 1)
-                .unwrap();
+        let provider = StellarProvider::new(create_test_provider_config(
+            vec![RpcConfig::new("http://127.0.0.1:9999".to_string())],
+            1,
+        ))
+        .unwrap();
 
         let params = serde_json::json!({"test": "value"});
         let result = provider
@@ -1777,9 +1889,11 @@ mod stellar_rpc_tests {
     async fn test_raw_request_dyn_with_auto_generated_id() {
         let _env_guard = setup_test_env();
 
-        let provider =
-            StellarProvider::new(vec![RpcConfig::new("http://127.0.0.1:9999".to_string())], 1)
-                .unwrap();
+        let provider = StellarProvider::new(create_test_provider_config(
+            vec![RpcConfig::new("http://127.0.0.1:9999".to_string())],
+            1,
+        ))
+        .unwrap();
 
         let params = serde_json::json!({"test": "value"});
         let result = provider.raw_request_dyn("test_method", params, None).await;
@@ -1792,9 +1906,11 @@ mod stellar_rpc_tests {
     async fn test_retry_raw_request_connection_failure() {
         let _env_guard = setup_test_env();
 
-        let provider =
-            StellarProvider::new(vec![RpcConfig::new("http://127.0.0.1:9999".to_string())], 1)
-                .unwrap();
+        let provider = StellarProvider::new(create_test_provider_config(
+            vec![RpcConfig::new("http://127.0.0.1:9999".to_string())],
+            1,
+        ))
+        .unwrap();
 
         let request = serde_json::json!({
             "jsonrpc": "2.0",
@@ -1821,9 +1937,11 @@ mod stellar_rpc_tests {
 
         // This test would require mocking the HTTP response, which is complex
         // For now, we test that the function exists and can be called
-        let provider =
-            StellarProvider::new(vec![RpcConfig::new("http://127.0.0.1:9999".to_string())], 1)
-                .unwrap();
+        let provider = StellarProvider::new(create_test_provider_config(
+            vec![RpcConfig::new("http://127.0.0.1:9999".to_string())],
+            1,
+        ))
+        .unwrap();
 
         let params = serde_json::json!({"test": "value"});
         let result = provider
@@ -1843,7 +1961,7 @@ mod stellar_rpc_tests {
         let _env_guard = setup_test_env();
 
         // Test with empty configs
-        let result = StellarProvider::new(vec![], 30);
+        let result = StellarProvider::new(create_test_provider_config(vec![], 30));
         assert!(result.is_err());
         match result.unwrap_err() {
             ProviderError::NetworkConfiguration(msg) => {
@@ -1858,7 +1976,7 @@ mod stellar_rpc_tests {
         let mut config2 = RpcConfig::new("http://localhost:8001".to_string());
         config2.weight = 0;
         let configs = vec![config1, config2];
-        let result = StellarProvider::new(configs, 30);
+        let result = StellarProvider::new(create_test_provider_config(configs, 30));
         assert!(result.is_err());
         match result.unwrap_err() {
             ProviderError::NetworkConfiguration(msg) => {

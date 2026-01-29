@@ -1138,9 +1138,10 @@ mod tests {
                                     .to_string(),
                                 in_amount: "1000000".to_string(),
                                 out_amount: "999984".to_string(),
-                                fee_amount: "10".to_string(),
-                                fee_mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
-                                    .to_string(),
+                                fee_amount: Some("10".to_string()),
+                                fee_mint: Some(
+                                    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB".to_string(),
+                                ),
                             },
                             percent: 1,
                         }],
@@ -1817,9 +1818,10 @@ mod tests {
                                     .to_string(),
                                 in_amount: "1000000".to_string(),
                                 out_amount: "999984".to_string(),
-                                fee_amount: "10".to_string(),
-                                fee_mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
-                                    .to_string(),
+                                fee_amount: Some("10".to_string()),
+                                fee_mint: Some(
+                                    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB".to_string(),
+                                ),
                             },
                             percent: 1,
                         }],
@@ -2567,9 +2569,10 @@ mod tests {
                                     .to_string(),
                                 in_amount: "1000000".to_string(),
                                 out_amount: "999984".to_string(),
-                                fee_amount: "10".to_string(),
-                                fee_mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
-                                    .to_string(),
+                                fee_amount: Some("10".to_string()),
+                                fee_mint: Some(
+                                    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB".to_string(),
+                                ),
                             },
                             percent: 1,
                         }],
@@ -2911,8 +2914,8 @@ mod tests {
                                     .to_string(),
                                 in_amount: "5000".to_string(),
                                 out_amount: "5000".to_string(),
-                                fee_amount: "25".to_string(),
-                                fee_mint: WRAPPED_SOL_MINT.to_string(),
+                                fee_amount: Some("25".to_string()),
+                                fee_mint: Some(WRAPPED_SOL_MINT.to_string()),
                             },
                             percent: 100,
                         }],

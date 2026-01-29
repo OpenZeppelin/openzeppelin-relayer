@@ -164,7 +164,7 @@ mod tests {
     use super::*;
     use crate::{
         models::{ApiKeyRepoModel, PaginationQuery, SecretString},
-        utils::mocks::mockutils::create_mock_app_state,
+        utils::{mocks::mockutils::create_mock_app_state, EncryptionContext},
     };
     use actix_web::web::ThinData;
 
@@ -194,7 +194,10 @@ mod tests {
         let app_state = create_mock_app_state(None, None, None, None, None, None).await;
         let api_key_request = create_test_api_key_create_request("Test API Key");
 
-        let result = create_api_key(api_key_request, ThinData(app_state)).await;
+        let result = EncryptionContext::with_aad("test-api-key".to_string(), || async {
+            create_api_key(api_key_request, ThinData(app_state)).await
+        })
+        .await;
 
         assert!(result.is_ok());
         let response = result.unwrap();

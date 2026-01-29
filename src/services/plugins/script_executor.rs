@@ -38,6 +38,7 @@ pub struct ScriptResult {
 pub struct ScriptExecutor;
 
 impl ScriptExecutor {
+    #[allow(clippy::too_many_arguments)]
     pub async fn execute_typescript(
         plugin_id: String,
         script_path: String,
@@ -45,6 +46,10 @@ impl ScriptExecutor {
         script_params: String,
         http_request_id: Option<String>,
         headers_json: Option<String>,
+        route: Option<String>,
+        config_json: Option<String>,
+        method: Option<String>,
+        query_json: Option<String>,
     ) -> Result<ScriptResult, PluginError> {
         if Command::new("ts-node")
             .arg("--version")
@@ -71,6 +76,10 @@ impl ScriptExecutor {
             .arg(script_path)         // User script path (argv[5])
             .arg(http_request_id.unwrap_or_default()) // HTTP x-request-id (argv[6], optional)
             .arg(headers_json.unwrap_or_default()) // HTTP headers as JSON (argv[7], optional)
+            .arg(route.unwrap_or_default()) // Wildcard route (argv[8], optional)
+            .arg(config_json.unwrap_or_default()) // Plugin config as JSON (argv[9], optional)
+            .arg(method.unwrap_or_default()) // HTTP method (argv[10], optional)
+            .arg(query_json.unwrap_or_default()) // Query parameters as JSON (argv[11], optional)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -203,6 +212,10 @@ mod tests {
             "{}".to_string(),
             None,
             None,
+            None,
+            None,
+            None,
+            None,
         )
         .await;
 
@@ -246,6 +259,10 @@ mod tests {
             "{}".to_string(),
             None,
             None,
+            None,
+            None,
+            None,
+            None,
         )
         .await;
 
@@ -277,6 +294,10 @@ mod tests {
             script_path.display().to_string(),
             socket_path.display().to_string(),
             "{}".to_string(),
+            None,
+            None,
+            None,
+            None,
             None,
             None,
         )
@@ -328,6 +349,10 @@ mod tests {
             "{}".to_string(),
             None,
             None,
+            None,
+            None,
+            None,
+            None,
         )
         .await;
 
@@ -366,6 +391,10 @@ mod tests {
             script_path.display().to_string(),
             socket_path.display().to_string(),
             "{}".to_string(),
+            None,
+            None,
+            None,
+            None,
             None,
             None,
         )
@@ -417,6 +446,10 @@ mod tests {
             r#"{"foo":"bar"}"#.to_string(),
             None,
             Some(headers_json.to_string()),
+            None,
+            None,
+            None,
+            None,
         )
         .await;
 
@@ -438,6 +471,563 @@ mod tests {
             return_obj["multiValueHeader"],
             serde_json::json!(["value1", "value2"])
         );
+        assert_eq!(return_obj["params"], serde_json::json!({"foo": "bar"}));
+    }
+
+    #[tokio::test]
+    async fn test_execute_typescript_all_log_levels() {
+        let temp_dir = tempdir().unwrap();
+        let ts_config = temp_dir.path().join("tsconfig.json");
+        let script_path = temp_dir
+            .path()
+            .join("test_execute_typescript_all_log_levels.ts");
+        let socket_path = temp_dir
+            .path()
+            .join("test_execute_typescript_all_log_levels.sock");
+
+        let content = r#"
+            export async function handler(api: any, params: any) {
+                console.log('log message');
+                console.info('info message');
+                console.warn('warn message');
+                console.error('error message');
+                console.debug('debug message');
+                return 'success';
+            }
+        "#;
+        fs::write(script_path.clone(), content).unwrap();
+        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
+
+        let result = ScriptExecutor::execute_typescript(
+            "test-plugin-log-levels".to_string(),
+            script_path.display().to_string(),
+            socket_path.display().to_string(),
+            "{}".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.logs.len(), 5);
+        assert_eq!(result.logs[0].level, LogLevel::Log);
+        assert_eq!(result.logs[0].message, "log message");
+        assert_eq!(result.logs[1].level, LogLevel::Info);
+        assert_eq!(result.logs[1].message, "info message");
+        assert_eq!(result.logs[2].level, LogLevel::Warn);
+        assert_eq!(result.logs[2].message, "warn message");
+        assert_eq!(result.logs[3].level, LogLevel::Error);
+        assert_eq!(result.logs[3].message, "error message");
+        assert_eq!(result.logs[4].level, LogLevel::Debug);
+        assert_eq!(result.logs[4].message, "debug message");
+        assert_eq!(result.return_value, "success");
+    }
+
+    #[tokio::test]
+    async fn test_execute_typescript_with_request_id() {
+        let temp_dir = tempdir().unwrap();
+        let ts_config = temp_dir.path().join("tsconfig.json");
+        let script_path = temp_dir
+            .path()
+            .join("test_execute_typescript_with_request_id.ts");
+        let socket_path = temp_dir
+            .path()
+            .join("test_execute_typescript_with_request_id.sock");
+
+        // Note: The request ID is passed to the executor but not directly accessible
+        // in the plugin handler. It's used for internal tracing/logging.
+        // This test verifies the parameter is accepted without errors.
+        let content = r#"
+            export async function handler(api: any, params: any) {
+                console.log('handler executed');
+                return { status: 'ok' };
+            }
+        "#;
+        fs::write(script_path.clone(), content).unwrap();
+        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
+
+        let result = ScriptExecutor::execute_typescript(
+            "test-plugin-request-id".to_string(),
+            script_path.display().to_string(),
+            socket_path.display().to_string(),
+            "{}".to_string(),
+            Some("req-12345-abcde".to_string()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.logs[0].level, LogLevel::Log);
+        assert_eq!(result.logs[0].message, "handler executed");
+        assert_eq!(result.return_value, "{\"status\":\"ok\"}");
+    }
+
+    #[tokio::test]
+    async fn test_execute_typescript_empty_return() {
+        let temp_dir = tempdir().unwrap();
+        let ts_config = temp_dir.path().join("tsconfig.json");
+        let script_path = temp_dir
+            .path()
+            .join("test_execute_typescript_empty_return.ts");
+        let socket_path = temp_dir
+            .path()
+            .join("test_execute_typescript_empty_return.sock");
+
+        let content = r#"
+            export async function handler(api: any, params: any) {
+                console.log('handler called');
+                // Return undefined (no explicit return)
+            }
+        "#;
+        fs::write(script_path.clone(), content).unwrap();
+        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
+
+        let result = ScriptExecutor::execute_typescript(
+            "test-plugin-empty-return".to_string(),
+            script_path.display().to_string(),
+            socket_path.display().to_string(),
+            "{}".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.logs[0].level, LogLevel::Log);
+        assert_eq!(result.logs[0].message, "handler called");
+        // undefined becomes empty string or "undefined" depending on serialization
+        assert!(result.return_value.is_empty() || result.return_value == "undefined");
+    }
+
+    #[tokio::test]
+    async fn test_execute_typescript_null_return() {
+        let temp_dir = tempdir().unwrap();
+        let ts_config = temp_dir.path().join("tsconfig.json");
+        let script_path = temp_dir
+            .path()
+            .join("test_execute_typescript_null_return.ts");
+        let socket_path = temp_dir
+            .path()
+            .join("test_execute_typescript_null_return.sock");
+
+        let content = r#"
+            export async function handler(api: any, params: any) {
+                console.log('returning null');
+                return null;
+            }
+        "#;
+        fs::write(script_path.clone(), content).unwrap();
+        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
+
+        let result = ScriptExecutor::execute_typescript(
+            "test-plugin-null-return".to_string(),
+            script_path.display().to_string(),
+            socket_path.display().to_string(),
+            "{}".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.return_value, "null");
+    }
+
+    #[tokio::test]
+    async fn test_execute_typescript_legacy_two_param_handler() {
+        let temp_dir = tempdir().unwrap();
+        let ts_config = temp_dir.path().join("tsconfig.json");
+        let script_path = temp_dir
+            .path()
+            .join("test_execute_typescript_legacy_handler.ts");
+        let socket_path = temp_dir
+            .path()
+            .join("test_execute_typescript_legacy_handler.sock");
+
+        // Explicitly test the legacy 2-parameter handler pattern
+        let content = r#"
+            export async function handler(api: any, params: any) {
+                console.log('legacy handler');
+                return {
+                    paramsReceived: params,
+                    handlerType: 'legacy-2-param'
+                };
+            }
+        "#;
+        fs::write(script_path.clone(), content).unwrap();
+        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
+
+        let result = ScriptExecutor::execute_typescript(
+            "test-plugin-legacy".to_string(),
+            script_path.display().to_string(),
+            socket_path.display().to_string(),
+            r#"{"key":"value"}"#.to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.logs[0].level, LogLevel::Log);
+        assert_eq!(result.logs[0].message, "legacy handler");
+
+        let return_obj: serde_json::Value =
+            serde_json::from_str(&result.return_value).expect("Failed to parse return value");
+        assert_eq!(return_obj["handlerType"], "legacy-2-param");
+        assert_eq!(
+            return_obj["paramsReceived"],
+            serde_json::json!({"key": "value"})
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_typescript_context_single_param_handler() {
+        let temp_dir = tempdir().unwrap();
+        let ts_config = temp_dir.path().join("tsconfig.json");
+        let script_path = temp_dir
+            .path()
+            .join("test_execute_typescript_context_handler.ts");
+        let socket_path = temp_dir
+            .path()
+            .join("test_execute_typescript_context_handler.sock");
+
+        // Test the modern context-based single parameter handler
+        let content = r#"
+            export async function handler(context: any) {
+                const { api, params, kv, headers } = context;
+                console.log('modern context handler');
+                return {
+                    paramsReceived: params,
+                    hasApi: !!api,
+                    hasKv: !!kv,
+                    hasHeaders: !!headers,
+                    handlerType: 'modern-context'
+                };
+            }
+        "#;
+        fs::write(script_path.clone(), content).unwrap();
+        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
+
+        let result = ScriptExecutor::execute_typescript(
+            "test-plugin-context".to_string(),
+            script_path.display().to_string(),
+            socket_path.display().to_string(),
+            r#"{"foo":"bar"}"#.to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+
+        let return_obj: serde_json::Value =
+            serde_json::from_str(&result.return_value).expect("Failed to parse return value");
+        assert_eq!(return_obj["handlerType"], "modern-context");
+        assert_eq!(return_obj["hasApi"], true);
+        assert_eq!(return_obj["hasKv"], true);
+        assert_eq!(return_obj["hasHeaders"], true);
+        assert_eq!(
+            return_obj["paramsReceived"],
+            serde_json::json!({"foo": "bar"})
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_typescript_complex_params() {
+        let temp_dir = tempdir().unwrap();
+        let ts_config = temp_dir.path().join("tsconfig.json");
+        let script_path = temp_dir
+            .path()
+            .join("test_execute_typescript_complex_params.ts");
+        let socket_path = temp_dir
+            .path()
+            .join("test_execute_typescript_complex_params.sock");
+
+        let content = r#"
+            export async function handler(api: any, params: any) {
+                console.log(`Received ${params.items.length} items`);
+                return {
+                    processedItems: params.items.map((item: any) => ({
+                        ...item,
+                        processed: true
+                    })),
+                    metadata: params.metadata,
+                    totalCount: params.items.length
+                };
+            }
+        "#;
+        fs::write(script_path.clone(), content).unwrap();
+        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
+
+        let complex_params = r#"{
+            "items": [
+                {"id": 1, "name": "item1", "tags": ["a", "b"]},
+                {"id": 2, "name": "item2", "tags": ["c", "d"]}
+            ],
+            "metadata": {
+                "source": "test",
+                "timestamp": 1234567890,
+                "nested": {
+                    "deep": {
+                        "value": true
+                    }
+                }
+            }
+        }"#;
+
+        let result = ScriptExecutor::execute_typescript(
+            "test-plugin-complex-params".to_string(),
+            script_path.display().to_string(),
+            socket_path.display().to_string(),
+            complex_params.to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.logs[0].level, LogLevel::Log);
+        assert!(result.logs[0].message.contains("Received 2 items"));
+
+        let return_obj: serde_json::Value =
+            serde_json::from_str(&result.return_value).expect("Failed to parse return value");
+        assert_eq!(return_obj["totalCount"], 2);
+        assert_eq!(return_obj["processedItems"][0]["processed"], true);
+        assert_eq!(return_obj["processedItems"][1]["processed"], true);
+        assert_eq!(return_obj["processedItems"][0]["name"], "item1");
+        assert_eq!(return_obj["metadata"]["source"], "test");
+        assert_eq!(return_obj["metadata"]["nested"]["deep"]["value"], true);
+    }
+
+    #[tokio::test]
+    async fn test_execute_typescript_empty_params() {
+        let temp_dir = tempdir().unwrap();
+        let ts_config = temp_dir.path().join("tsconfig.json");
+        let script_path = temp_dir
+            .path()
+            .join("test_execute_typescript_empty_params.ts");
+        let socket_path = temp_dir
+            .path()
+            .join("test_execute_typescript_empty_params.sock");
+
+        let content = r#"
+            export async function handler(api: any, params: any) {
+                console.log(`Params is empty: ${Object.keys(params).length === 0}`);
+                return { receivedEmptyParams: Object.keys(params).length === 0 };
+            }
+        "#;
+        fs::write(script_path.clone(), content).unwrap();
+        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
+
+        let result = ScriptExecutor::execute_typescript(
+            "test-plugin-empty-params".to_string(),
+            script_path.display().to_string(),
+            socket_path.display().to_string(),
+            "{}".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert!(result.logs[0].message.contains("Params is empty: true"));
+
+        let return_obj: serde_json::Value =
+            serde_json::from_str(&result.return_value).expect("Failed to parse return value");
+        assert_eq!(return_obj["receivedEmptyParams"], true);
+    }
+
+    #[tokio::test]
+    async fn test_execute_typescript_array_return() {
+        let temp_dir = tempdir().unwrap();
+        let ts_config = temp_dir.path().join("tsconfig.json");
+        let script_path = temp_dir
+            .path()
+            .join("test_execute_typescript_array_return.ts");
+        let socket_path = temp_dir
+            .path()
+            .join("test_execute_typescript_array_return.sock");
+
+        let content = r#"
+            export async function handler(api: any, params: any) {
+                console.log('returning array');
+                return [1, 2, 3, { nested: 'value' }, 'string'];
+            }
+        "#;
+        fs::write(script_path.clone(), content).unwrap();
+        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
+
+        let result = ScriptExecutor::execute_typescript(
+            "test-plugin-array-return".to_string(),
+            script_path.display().to_string(),
+            socket_path.display().to_string(),
+            "{}".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+
+        let return_array: serde_json::Value =
+            serde_json::from_str(&result.return_value).expect("Failed to parse return value");
+        assert!(return_array.is_array());
+        assert_eq!(return_array[0], 1);
+        assert_eq!(return_array[1], 2);
+        assert_eq!(return_array[2], 3);
+        assert_eq!(return_array[3]["nested"], "value");
+        assert_eq!(return_array[4], "string");
+    }
+
+    #[tokio::test]
+    async fn test_execute_typescript_multiple_errors() {
+        let temp_dir = tempdir().unwrap();
+        let ts_config = temp_dir.path().join("tsconfig.json");
+        let script_path = temp_dir
+            .path()
+            .join("test_execute_typescript_multiple_errors.ts");
+        let socket_path = temp_dir
+            .path()
+            .join("test_execute_typescript_multiple_errors.sock");
+
+        let content = r#"
+            export async function handler(api: any, params: any) {
+                console.error('Error message 1');
+                console.error('Error message 2');
+                console.warn('Warning message');
+                throw new Error('Handler failed');
+            }
+        "#;
+        fs::write(script_path.clone(), content).unwrap();
+        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
+
+        let result = ScriptExecutor::execute_typescript(
+            "test-plugin-multiple-errors".to_string(),
+            script_path.display().to_string(),
+            socket_path.display().to_string(),
+            "{}".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        assert!(result.is_err());
+        if let Err(PluginError::HandlerError(ctx)) = result {
+            // Should capture logs even when handler fails
+            let logs = ctx.logs.expect("logs should be present");
+            assert_eq!(logs.len(), 3);
+            assert_eq!(logs[0].level, LogLevel::Error);
+            assert_eq!(logs[0].message, "Error message 1");
+            assert_eq!(logs[1].level, LogLevel::Error);
+            assert_eq!(logs[1].message, "Error message 2");
+            assert_eq!(logs[2].level, LogLevel::Warn);
+            assert_eq!(logs[2].message, "Warning message");
+            assert!(ctx.message.contains("Handler failed"));
+        } else {
+            panic!("Expected HandlerError");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_typescript_with_route() {
+        let temp_dir = tempdir().unwrap();
+        let ts_config = temp_dir.path().join("tsconfig.json");
+        let script_path = temp_dir
+            .path()
+            .join("test_execute_typescript_with_route.ts");
+        let socket_path = temp_dir
+            .path()
+            .join("test_execute_typescript_with_route.sock");
+
+        // Plugin using modern context pattern to access route
+        let content = r#"
+            export async function handler(context: any) {
+                const { route, params } = context;
+                console.log(`Received route: ${route}`);
+                return {
+                    route: route,
+                    params: params
+                };
+            }
+        "#;
+        fs::write(script_path.clone(), content).unwrap();
+        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
+
+        let result = ScriptExecutor::execute_typescript(
+            "test-plugin-route".to_string(),
+            script_path.display().to_string(),
+            socket_path.display().to_string(),
+            r#"{"foo":"bar"}"#.to_string(),
+            None,
+            None,
+            Some("/verify".to_string()),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+
+        // Verify log output
+        assert_eq!(result.logs[0].level, LogLevel::Log);
+        assert!(result.logs[0].message.contains("Received route: /verify"));
+
+        // Parse return value and verify route was accessible
+        let return_obj: serde_json::Value =
+            serde_json::from_str(&result.return_value).expect("Failed to parse return value");
+
+        assert_eq!(return_obj["route"], "/verify");
         assert_eq!(return_obj["params"], serde_json::json!({"foo": "bar"}));
     }
 }

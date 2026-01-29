@@ -3,8 +3,8 @@
 use crate::models::{ApiKeyRepoModel, PaginationQuery, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{ApiKeyRepositoryTrait, BatchRetrievalResult, PaginatedResult};
+use crate::utils::{EncryptionContext, RedisConnections};
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
@@ -15,7 +15,7 @@ const API_KEY_LIST_KEY: &str = "apikey_list";
 
 #[derive(Clone)]
 pub struct RedisApiKeyRepository {
-    pub client: Arc<ConnectionManager>,
+    pub connections: Arc<RedisConnections>,
     pub key_prefix: String,
 }
 
@@ -23,7 +23,7 @@ impl RedisRepository for RedisApiKeyRepository {}
 
 impl RedisApiKeyRepository {
     pub fn new(
-        connection_manager: Arc<ConnectionManager>,
+        connections: Arc<RedisConnections>,
         key_prefix: String,
     ) -> Result<Self, RepositoryError> {
         if key_prefix.is_empty() {
@@ -33,7 +33,7 @@ impl RedisApiKeyRepository {
         }
 
         Ok(Self {
-            client: connection_manager,
+            connections,
             key_prefix,
         })
     }
@@ -60,7 +60,9 @@ impl RedisApiKeyRepository {
             });
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.reader(), "get_by_ids")
+            .await?;
         let keys: Vec<String> = ids.iter().map(|id| self.api_key_key(id)).collect();
 
         let values: Vec<Option<String>> = conn
@@ -73,14 +75,19 @@ impl RedisApiKeyRepository {
         let mut failed_ids = Vec::new();
         for (i, value) in values.into_iter().enumerate() {
             match value {
-                Some(json) => match self.deserialize_entity(&json, &ids[i], "apikey") {
-                    Ok(apikey) => apikeys.push(apikey),
-                    Err(e) => {
-                        failed_count += 1;
-                        error!("Failed to deserialize api key {}: {}", ids[i], e);
-                        failed_ids.push(ids[i].clone());
+                Some(json) => {
+                    let key = keys[i].clone();
+                    match EncryptionContext::with_aad_sync(key, || {
+                        self.deserialize_entity::<ApiKeyRepoModel>(&json, &ids[i], "apikey")
+                    }) {
+                        Ok(apikey) => apikeys.push(apikey),
+                        Err(e) => {
+                            failed_count += 1;
+                            error!("Failed to deserialize api key {}: {}", ids[i], e);
+                            failed_ids.push(ids[i].clone());
+                        }
                     }
-                },
+                }
                 None => {
                     warn!("Plugin {} not found in batch fetch", ids[i]);
                 }
@@ -123,9 +130,14 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
 
         let key = self.api_key_key(&entity.id);
         let list_key = self.api_key_list_key();
-        let json = self.serialize_entity(&entity, |a| &a.id, "apikey")?;
+        // Serialize api key with AAD context (encryption bound to storage key)
+        let json = EncryptionContext::with_aad_sync(key.clone(), || {
+            self.serialize_entity(&entity, |a| &a.id, "apikey")
+        })?;
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.primary(), "create")
+            .await?;
 
         let existing: Option<String> = conn
             .get(&key)
@@ -168,35 +180,41 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
                 "Per page count must be greater than 0".to_string(),
             ));
         }
-        let mut conn = self.client.as_ref().clone();
-        let api_key_list_key = self.api_key_list_key();
+        let (total, ids_to_query) = {
+            let mut conn = self
+                .get_connection(self.connections.reader(), "list_paginated")
+                .await?;
+            let api_key_list_key = self.api_key_list_key();
 
-        // Get total count
-        let total: u64 = conn
-            .scard(&api_key_list_key)
-            .await
-            .map_err(|e| self.map_redis_error(e, "list_paginated_count"))?;
+            // Get total count
+            let total: u64 = conn
+                .scard(&api_key_list_key)
+                .await
+                .map_err(|e| self.map_redis_error(e, "list_paginated_count"))?;
 
-        if total == 0 {
-            return Ok(PaginatedResult {
-                items: vec![],
-                total: 0,
-                page: query.page,
-                per_page: query.per_page,
-            });
-        }
+            if total == 0 {
+                return Ok(PaginatedResult {
+                    items: vec![],
+                    total: 0,
+                    page: query.page,
+                    per_page: query.per_page,
+                });
+            }
 
-        // Get all IDs and paginate in memory
-        let all_ids: Vec<String> = conn
-            .smembers(&api_key_list_key)
-            .await
-            .map_err(|e| self.map_redis_error(e, "list_paginated_members"))?;
+            // Get all IDs and paginate in memory
+            let all_ids: Vec<String> = conn
+                .smembers(&api_key_list_key)
+                .await
+                .map_err(|e| self.map_redis_error(e, "list_paginated_members"))?;
 
-        let start = ((query.page - 1) * query.per_page) as usize;
-        let end = (start + query.per_page as usize).min(all_ids.len());
+            let start = ((query.page - 1) * query.per_page) as usize;
+            let end = (start + query.per_page as usize).min(all_ids.len());
 
-        let ids_to_query = &all_ids[start..end];
-        let items = self.get_by_ids(ids_to_query).await?;
+            (total, all_ids[start..end].to_vec())
+            // Connection dropped here before nested call to avoid connection doubling
+        };
+
+        let items = self.get_by_ids(&ids_to_query).await?;
 
         Ok(PaginatedResult {
             items: items.results.clone(),
@@ -213,7 +231,9 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
             ));
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.reader(), "get_by_id")
+            .await?;
         let api_key_key = self.api_key_key(id);
 
         debug!("Fetching api key with ID: {}", id);
@@ -226,7 +246,11 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
         match json {
             Some(json) => {
                 debug!("Found api key with ID: {}", id);
-                self.deserialize_entity(&json, id, "apikey")
+                // Deserialize api key with AAD context (decryption bound to storage key)
+                EncryptionContext::with_aad_sync(api_key_key, || {
+                    self.deserialize_entity::<ApiKeyRepoModel>(&json, id, "apikey")
+                })
+                .map(Some)
             }
             None => {
                 debug!("Api key with ID {} not found", id);
@@ -254,7 +278,9 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
 
         let key = self.api_key_key(id);
         let api_key_list_key = self.api_key_list_key();
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.primary(), "delete_by_id")
+            .await?;
 
         debug!("Deleting api key with ID: {}", id);
 
@@ -285,7 +311,9 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.reader(), "count")
+            .await?;
         let api_key_list_key = self.api_key_list_key();
 
         let count: u64 = conn
@@ -297,7 +325,9 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
     }
 
     async fn has_entries(&self) -> Result<bool, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.reader(), "has_entries")
+            .await?;
         let plugin_list_key = self.api_key_list_key();
 
         debug!("Checking if plugin entries exist");
@@ -312,7 +342,9 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
     }
 
     async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.primary(), "drop_all_entries")
+            .await?;
         let plugin_list_key = self.api_key_list_key();
 
         debug!("Dropping all plugin entries");
@@ -371,18 +403,21 @@ mod tests {
     async fn setup_test_repo() -> RedisApiKeyRepository {
         let redis_url =
             std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string());
-        let client = redis::Client::open(redis_url).expect("Failed to create Redis client");
-        let mut connection_manager = ConnectionManager::new(client)
-            .await
-            .expect("Failed to create Redis connection manager");
+        let cfg = deadpool_redis::Config::from_url(&redis_url);
+        let pool = Arc::new(
+            cfg.builder()
+                .expect("Failed to create pool builder")
+                .max_size(16)
+                .runtime(deadpool_redis::Runtime::Tokio1)
+                .build()
+                .expect("Failed to build Redis pool"),
+        );
+        let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
-        // Clear the api key list
-        connection_manager
-            .del::<&str, ()>("test_api_key:apikey_list")
-            .await
-            .unwrap();
+        let random_id = uuid::Uuid::new_v4().to_string();
+        let key_prefix = format!("test_prefix:{}", random_id);
 
-        RedisApiKeyRepository::new(Arc::new(connection_manager), "test_api_key".to_string())
+        RedisApiKeyRepository::new(connections, key_prefix)
             .expect("Failed to create Redis api key repository")
     }
 
@@ -390,19 +425,25 @@ mod tests {
     #[ignore = "Requires active Redis instance"]
     async fn test_new_repository_creation() {
         let repo = setup_test_repo().await;
-        assert_eq!(repo.key_prefix, "test_api_key");
+        assert!(repo.key_prefix.contains("test_prefix"));
     }
 
     #[tokio::test]
     #[ignore = "Requires active Redis instance"]
     async fn test_new_repository_empty_prefix_fails() {
-        let client =
-            redis::Client::open("redis://127.0.0.1:6379/").expect("Failed to create Redis client");
-        let connection_manager = redis::aio::ConnectionManager::new(client)
-            .await
-            .expect("Failed to create Redis connection manager");
+        let redis_url = "redis://127.0.0.1:6379/";
+        let cfg = deadpool_redis::Config::from_url(redis_url);
+        let pool = Arc::new(
+            cfg.builder()
+                .expect("Failed to create pool builder")
+                .max_size(16)
+                .runtime(deadpool_redis::Runtime::Tokio1)
+                .build()
+                .expect("Failed to build Redis pool"),
+        );
+        let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
-        let result = RedisApiKeyRepository::new(Arc::new(connection_manager), "".to_string());
+        let result = RedisApiKeyRepository::new(connections, "".to_string());
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -416,10 +457,10 @@ mod tests {
         let repo = setup_test_repo().await;
 
         let api_key_key = repo.api_key_key("test-api-key");
-        assert_eq!(api_key_key, "test_api_key:apikey:test-api-key");
+        assert!(api_key_key.contains(":apikey:test-api-key"));
 
         let list_key = repo.api_key_list_key();
-        assert_eq!(list_key, "test_api_key:apikey_list");
+        assert!(list_key.contains(":apikey_list"));
     }
 
     #[tokio::test]

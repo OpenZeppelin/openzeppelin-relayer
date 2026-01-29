@@ -24,6 +24,13 @@ use reqwest_middleware::ClientBuilder;
 use std::{str, time::Duration};
 use thiserror::Error;
 
+use crate::constants::{
+    DEFAULT_HTTP_CLIENT_CONNECT_TIMEOUT_SECONDS,
+    DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_INTERVAL_SECONDS,
+    DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_TIMEOUT_SECONDS,
+    DEFAULT_HTTP_CLIENT_POOL_IDLE_TIMEOUT_SECONDS, DEFAULT_HTTP_CLIENT_POOL_MAX_IDLE_PER_HOST,
+    DEFAULT_HTTP_CLIENT_TCP_KEEPALIVE_SECONDS, DEFAULT_HTTP_CLIENT_TIMEOUT_SECONDS,
+};
 use crate::models::{Address, CdpSignerConfig};
 
 use cdp_sdk::{auth::WalletAuth, types, Client, CDP_BASE_URL};
@@ -96,8 +103,23 @@ impl CdpService {
             .map_err(|e| CdpError::ConfigError(format!("Invalid CDP configuration: {e}")))?;
 
         let inner = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(5))
-            .timeout(Duration::from_secs(10))
+            .connect_timeout(Duration::from_secs(
+                DEFAULT_HTTP_CLIENT_CONNECT_TIMEOUT_SECONDS,
+            ))
+            .timeout(Duration::from_secs(DEFAULT_HTTP_CLIENT_TIMEOUT_SECONDS))
+            .pool_max_idle_per_host(DEFAULT_HTTP_CLIENT_POOL_MAX_IDLE_PER_HOST)
+            .pool_idle_timeout(Duration::from_secs(
+                DEFAULT_HTTP_CLIENT_POOL_IDLE_TIMEOUT_SECONDS,
+            ))
+            .tcp_keepalive(Duration::from_secs(
+                DEFAULT_HTTP_CLIENT_TCP_KEEPALIVE_SECONDS,
+            ))
+            .http2_keep_alive_interval(Some(Duration::from_secs(
+                DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_INTERVAL_SECONDS,
+            )))
+            .http2_keep_alive_timeout(Duration::from_secs(
+                DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_TIMEOUT_SECONDS,
+            ))
             .build()
             .map_err(|e| CdpError::ConfigError(format!("Failed to build HTTP client: {e}")))?;
         let wallet_client = ClientBuilder::new(inner).with(wallet_auth).build();

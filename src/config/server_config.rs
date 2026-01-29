@@ -2,7 +2,13 @@
 use std::{env, str::FromStr};
 use strum::Display;
 
-use crate::{constants::MINIMUM_SECRET_VALUE_LENGTH, models::SecretString};
+use crate::{
+    constants::{
+        DEFAULT_PROVIDER_FAILURE_EXPIRATION_SECS, DEFAULT_PROVIDER_FAILURE_THRESHOLD,
+        DEFAULT_PROVIDER_PAUSE_DURATION_SECS, MINIMUM_SECRET_VALUE_LENGTH,
+    },
+    models::SecretString,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Display)]
 pub enum RepositoryStorageType {
@@ -28,8 +34,12 @@ pub struct ServerConfig {
     pub host: String,
     /// The port number the server will listen on.
     pub port: u16,
-    /// The URL for the Redis instance.
+    /// The URL for the Redis primary instance (used for write operations).
     pub redis_url: String,
+    /// Optional URL for Redis reader endpoint (used for read operations).
+    /// When set, read operations use this endpoint while writes use `redis_url`.
+    /// Useful for AWS ElastiCache with read replicas.
+    pub redis_reader_url: Option<String>,
     /// The file path to the server's configuration file.
     pub config_file_path: String,
     /// The API key used for authentication.
@@ -46,6 +56,13 @@ pub struct ServerConfig {
     pub redis_connection_timeout_ms: u64,
     /// The prefix for the Redis key.
     pub redis_key_prefix: String,
+    /// Maximum number of connections in the Redis pool.
+    pub redis_pool_max_size: usize,
+    /// Maximum pool size for reader connections. Defaults to 1000.
+    /// Useful for read-heavy workloads where more reader connections are beneficial.
+    pub redis_reader_pool_max_size: usize,
+    /// Timeout in milliseconds waiting to get a connection from the pool.
+    pub redis_pool_timeout_ms: u64,
     /// The number of milliseconds to wait for an RPC response.
     pub rpc_timeout_ms: u64,
     /// Maximum number of retry attempts for provider operations.
@@ -56,6 +73,12 @@ pub struct ServerConfig {
     pub provider_retry_max_delay_ms: u64,
     /// Maximum number of failovers (switching to different providers).
     pub provider_max_failovers: u8,
+    /// Number of consecutive failures before pausing a provider.
+    pub provider_failure_threshold: u32,
+    /// Duration in seconds to pause a provider after reaching failure threshold.
+    pub provider_pause_duration_secs: u64,
+    /// Duration in seconds after which failures are considered stale and reset.
+    pub provider_failure_expiration_secs: u64,
     /// The type of repository storage to use.
     pub repository_storage_type: RepositoryStorageType,
     /// Flag to force config file processing.
@@ -63,7 +86,21 @@ pub struct ServerConfig {
     /// The encryption key for the storage.
     pub storage_encryption_key: Option<SecretString>,
     /// Transaction expiration time in hours for transactions in final states.
-    pub transaction_expiration_hours: u64,
+    /// Supports fractional values (e.g., 0.1 = 6 minutes).
+    pub transaction_expiration_hours: f64,
+    /// Comma-separated list of allowed RPC hosts (domains or IPs). If non-empty, only these hosts are permitted.
+    pub rpc_allowed_hosts: Vec<String>,
+    /// If true, block private IP addresses (RFC 1918, loopback, link-local). Cloud metadata endpoints are always blocked.
+    pub rpc_block_private_ips: bool,
+    /// Maximum number of concurrent requests allowed for /api/v1/relayers/* endpoints.
+    pub relayer_concurrency_limit: usize,
+    /// Maximum number of concurrent TCP connections server-wide.
+    pub max_connections: usize,
+    /// TCP listen connection backlog size (pending connections queue).
+    /// Higher values allow more connections to be queued during traffic bursts.
+    pub connection_backlog: u32,
+    /// Request handler timeout in seconds for API endpoints.
+    pub request_timeout_seconds: u64,
 }
 
 impl ServerConfig {
@@ -86,13 +123,20 @@ impl ServerConfig {
     /// - `PROVIDER_RETRY_BASE_DELAY_MS` defaults to `100`.
     /// - `PROVIDER_RETRY_MAX_DELAY_MS` defaults to `2000`.
     /// - `PROVIDER_MAX_FAILOVERS` defaults to `3`.
+    /// - `PROVIDER_FAILURE_THRESHOLD` defaults to `3`.
+    /// - `PROVIDER_PAUSE_DURATION_SECS` defaults to `60` (1 minute).
+    /// - `PROVIDER_FAILURE_EXPIRATION_SECS` defaults to `60` (1 minute).
     /// - `REPOSITORY_STORAGE_TYPE` defaults to `"in_memory"`.
     /// - `TRANSACTION_EXPIRATION_HOURS` defaults to `4`.
+    /// - `REQUEST_TIMEOUT_SECONDS` defaults to `30` (security measure for DoS protection).
+    /// - `CONNECTION_BACKLOG` defaults to `511` (production-ready value for traffic bursts).
     pub fn from_env() -> Self {
         Self {
             host: Self::get_host(),
             port: Self::get_port(),
             redis_url: Self::get_redis_url(), // Uses panicking version as required
+            redis_reader_url: Self::get_redis_reader_url_optional(),
+            redis_reader_pool_max_size: Self::get_redis_reader_pool_max_size(),
             config_file_path: Self::get_config_file_path(),
             api_key: Self::get_api_key(), // Uses panicking version as required
             rate_limit_requests_per_second: Self::get_rate_limit_requests_per_second(),
@@ -101,15 +145,26 @@ impl ServerConfig {
             enable_swagger: Self::get_enable_swagger(),
             redis_connection_timeout_ms: Self::get_redis_connection_timeout_ms(),
             redis_key_prefix: Self::get_redis_key_prefix(),
+            redis_pool_max_size: Self::get_redis_pool_max_size(),
+            redis_pool_timeout_ms: Self::get_redis_pool_timeout_ms(),
             rpc_timeout_ms: Self::get_rpc_timeout_ms(),
             provider_max_retries: Self::get_provider_max_retries(),
             provider_retry_base_delay_ms: Self::get_provider_retry_base_delay_ms(),
             provider_retry_max_delay_ms: Self::get_provider_retry_max_delay_ms(),
             provider_max_failovers: Self::get_provider_max_failovers(),
+            provider_failure_threshold: Self::get_provider_failure_threshold(),
+            provider_pause_duration_secs: Self::get_provider_pause_duration_secs(),
+            provider_failure_expiration_secs: Self::get_provider_failure_expiration_secs(),
             repository_storage_type: Self::get_repository_storage_type(),
             reset_storage_on_start: Self::get_reset_storage_on_start(),
             storage_encryption_key: Self::get_storage_encryption_key(),
             transaction_expiration_hours: Self::get_transaction_expiration_hours(),
+            rpc_allowed_hosts: Self::get_rpc_allowed_hosts(),
+            rpc_block_private_ips: Self::get_rpc_block_private_ips(),
+            relayer_concurrency_limit: Self::get_relayer_concurrency_limit(),
+            max_connections: Self::get_max_connections(),
+            connection_backlog: Self::get_connection_backlog(),
+            request_timeout_seconds: Self::get_request_timeout_seconds(),
         }
     }
 
@@ -136,6 +191,13 @@ impl ServerConfig {
     /// Gets the Redis URL from environment variable or returns None if not set
     pub fn get_redis_url_optional() -> Option<String> {
         env::var("REDIS_URL").ok()
+    }
+
+    /// Gets the Redis reader URL from environment variable or returns None if not set.
+    /// When set, read operations will use this endpoint while writes use REDIS_URL.
+    /// Useful for AWS ElastiCache with read replicas.
+    pub fn get_redis_reader_url_optional() -> Option<String> {
+        env::var("REDIS_READER_URL").ok()
     }
 
     /// Gets the config file path from environment variables or default
@@ -221,6 +283,38 @@ impl ServerConfig {
         env::var("REDIS_KEY_PREFIX").unwrap_or_else(|_| "oz-relayer".to_string())
     }
 
+    /// Gets the Redis pool max size from environment variable or default
+    /// Returns default (500) if value is 0 or invalid
+    pub fn get_redis_pool_max_size() -> usize {
+        env::var("REDIS_POOL_MAX_SIZE")
+            .unwrap_or_else(|_| "500".to_string())
+            .parse()
+            .ok()
+            .filter(|&v| v > 0)
+            .unwrap_or(500)
+    }
+
+    /// Gets the Redis reader pool max size from environment variable.
+    /// Returns 1000 if not set or invalid.
+    pub fn get_redis_reader_pool_max_size() -> usize {
+        env::var("REDIS_READER_POOL_MAX_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&v| v > 0)
+            .unwrap_or(1000)
+    }
+
+    /// Gets the Redis pool timeout from environment variable or default
+    /// Returns default (10000) if value is 0 or invalid
+    pub fn get_redis_pool_timeout_ms() -> u64 {
+        env::var("REDIS_POOL_TIMEOUT_MS")
+            .unwrap_or_else(|_| "10000".to_string())
+            .parse()
+            .ok()
+            .filter(|&v| v > 0)
+            .unwrap_or(10000)
+    }
+
     /// Gets the RPC timeout from environment variable or default
     pub fn get_rpc_timeout_ms() -> u64 {
         env::var("RPC_TIMEOUT_MS")
@@ -261,6 +355,38 @@ impl ServerConfig {
             .unwrap_or(3)
     }
 
+    /// Gets the provider failure threshold from environment variable or default
+    pub fn get_provider_failure_threshold() -> u32 {
+        env::var("PROVIDER_FAILURE_THRESHOLD")
+            .or_else(|_| env::var("RPC_FAILURE_THRESHOLD")) // Support legacy env var
+            .unwrap_or_else(|_| DEFAULT_PROVIDER_FAILURE_THRESHOLD.to_string())
+            .parse()
+            .unwrap_or(DEFAULT_PROVIDER_FAILURE_THRESHOLD)
+    }
+
+    /// Gets the provider pause duration in seconds from environment variable or default
+    ///
+    /// Defaults to 60 seconds (1 minute) for faster recovery while still providing
+    /// a reasonable cooldown period for failed providers.
+    pub fn get_provider_pause_duration_secs() -> u64 {
+        env::var("PROVIDER_PAUSE_DURATION_SECS")
+            .or_else(|_| env::var("RPC_PAUSE_DURATION_SECS")) // Support legacy env var
+            .unwrap_or_else(|_| DEFAULT_PROVIDER_PAUSE_DURATION_SECS.to_string())
+            .parse()
+            .unwrap_or(DEFAULT_PROVIDER_PAUSE_DURATION_SECS)
+    }
+
+    /// Gets the provider failure expiration duration in seconds from environment variable or default
+    ///
+    /// Defaults to 60 seconds (1 minute). Failures older than this are considered stale
+    /// and reset, allowing providers to naturally recover over time.
+    pub fn get_provider_failure_expiration_secs() -> u64 {
+        env::var("PROVIDER_FAILURE_EXPIRATION_SECS")
+            .unwrap_or_else(|_| DEFAULT_PROVIDER_FAILURE_EXPIRATION_SECS.to_string())
+            .parse()
+            .unwrap_or(DEFAULT_PROVIDER_FAILURE_EXPIRATION_SECS)
+    }
+
     /// Gets the repository storage type from environment variable or default
     pub fn get_repository_storage_type() -> RepositoryStorageType {
         env::var("REPOSITORY_STORAGE_TYPE")
@@ -284,11 +410,72 @@ impl ServerConfig {
     }
 
     /// Gets the transaction expiration hours from environment variable or default
-    pub fn get_transaction_expiration_hours() -> u64 {
+    /// Supports fractional values (e.g., 0.1 = 6 minutes).
+    pub fn get_transaction_expiration_hours() -> f64 {
         env::var("TRANSACTION_EXPIRATION_HOURS")
             .unwrap_or_else(|_| "4".to_string())
             .parse()
-            .unwrap_or(4)
+            .unwrap_or(4.0)
+    }
+
+    /// Gets the allowed RPC hosts from environment variable or default (empty list)
+    pub fn get_rpc_allowed_hosts() -> Vec<String> {
+        env::var("RPC_ALLOWED_HOSTS")
+            .ok()
+            .map(|s| {
+                s.split(',')
+                    .map(|host| host.trim().to_string())
+                    .filter(|host| !host.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Gets the block private IPs setting from environment variable or default (false)
+    pub fn get_rpc_block_private_ips() -> bool {
+        env::var("RPC_BLOCK_PRIVATE_IPS")
+            .map(|v| v.to_lowercase() == "true")
+            .unwrap_or(false)
+    }
+
+    /// Gets the relayer concurrency limit from environment variable or default (100)
+    pub fn get_relayer_concurrency_limit() -> usize {
+        env::var("RELAYER_CONCURRENCY_LIMIT")
+            .unwrap_or_else(|_| "100".to_string())
+            .parse()
+            .unwrap_or(100)
+    }
+
+    /// Gets the max connections from environment variable or default (256)
+    pub fn get_max_connections() -> usize {
+        env::var("MAX_CONNECTIONS")
+            .unwrap_or_else(|_| "256".to_string())
+            .parse()
+            .unwrap_or(256)
+    }
+
+    /// Gets the connection backlog from environment variable or default (511)
+    ///
+    /// TCP listen backlog controls the size of the queue for pending connections.
+    /// Higher values allow more connections to be queued during traffic bursts,
+    /// preventing connection drops. Default of 511.
+    pub fn get_connection_backlog() -> u32 {
+        env::var("CONNECTION_BACKLOG")
+            .unwrap_or_else(|_| "511".to_string())
+            .parse()
+            .unwrap_or(511)
+    }
+
+    /// Gets the request timeout in seconds from environment variable or default (30)
+    ///
+    /// This is a security measure to prevent resource exhaustion attacks (DoS).
+    /// It limits how long a request handler can run, preventing slowloris-style
+    /// attacks and ensuring resources are freed promptly.
+    pub fn get_request_timeout_seconds() -> u64 {
+        env::var("REQUEST_TIMEOUT_SECONDS")
+            .unwrap_or_else(|_| "30".to_string())
+            .parse()
+            .unwrap_or(30)
     }
 
     /// Get worker concurrency from environment variable or use default
@@ -340,6 +527,7 @@ mod tests {
         env::remove_var("REPOSITORY_STORAGE_TYPE");
         env::remove_var("RESET_STORAGE_ON_START");
         env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        env::remove_var("REDIS_READER_URL");
         // Set required variables for most tests
         env::set_var("REDIS_URL", "redis://localhost:6379");
         env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
@@ -373,12 +561,14 @@ mod tests {
         assert_eq!(config.provider_retry_base_delay_ms, 100);
         assert_eq!(config.provider_retry_max_delay_ms, 2000);
         assert_eq!(config.provider_max_failovers, 3);
+        assert_eq!(config.provider_failure_threshold, 3);
+        assert_eq!(config.provider_pause_duration_secs, 60);
         assert_eq!(
             config.repository_storage_type,
             RepositoryStorageType::InMemory
         );
         assert!(!config.reset_storage_on_start);
-        assert_eq!(config.transaction_expiration_hours, 4);
+        assert_eq!(config.transaction_expiration_hours, 4.0);
     }
 
     #[test]
@@ -421,7 +611,7 @@ mod tests {
             RepositoryStorageType::InMemory
         );
         assert!(!config.reset_storage_on_start);
-        assert_eq!(config.transaction_expiration_hours, 4);
+        assert_eq!(config.transaction_expiration_hours, 4.0);
     }
 
     #[test]
@@ -474,7 +664,7 @@ mod tests {
             RepositoryStorageType::InMemory
         );
         assert!(config.reset_storage_on_start);
-        assert_eq!(config.transaction_expiration_hours, 6);
+        assert_eq!(config.transaction_expiration_hours, 6.0);
     }
 
     #[test]
@@ -519,6 +709,7 @@ mod tests {
         env::remove_var("ENABLE_SWAGGER");
         env::remove_var("REDIS_CONNECTION_TIMEOUT_MS");
         env::remove_var("REDIS_KEY_PREFIX");
+        env::remove_var("REDIS_READER_URL");
         env::remove_var("RPC_TIMEOUT_MS");
         env::remove_var("PROVIDER_MAX_RETRIES");
         env::remove_var("PROVIDER_RETRY_BASE_DELAY_MS");
@@ -528,6 +719,8 @@ mod tests {
         env::remove_var("RESET_STORAGE_ON_START");
         env::remove_var("STORAGE_ENCRYPTION_KEY");
         env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        env::remove_var("REDIS_POOL_MAX_SIZE");
+        env::remove_var("REDIS_POOL_TIMEOUT_MS");
 
         // Test individual getters with defaults
         assert_eq!(ServerConfig::get_host(), "0.0.0.0");
@@ -552,7 +745,9 @@ mod tests {
         );
         assert!(!ServerConfig::get_reset_storage_on_start());
         assert!(ServerConfig::get_storage_encryption_key().is_none());
-        assert_eq!(ServerConfig::get_transaction_expiration_hours(), 4);
+        assert_eq!(ServerConfig::get_transaction_expiration_hours(), 4.0);
+        assert_eq!(ServerConfig::get_redis_pool_max_size(), 500);
+        assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 10000);
     }
 
     #[test]
@@ -584,6 +779,8 @@ mod tests {
         env::set_var("RESET_STORAGE_ON_START", "true");
         env::set_var("STORAGE_ENCRYPTION_KEY", "my-encryption-key");
         env::set_var("TRANSACTION_EXPIRATION_HOURS", "12");
+        env::set_var("REDIS_POOL_MAX_SIZE", "200");
+        env::set_var("REDIS_POOL_TIMEOUT_MS", "20000");
 
         // Test individual getters with custom values
         assert_eq!(ServerConfig::get_host(), "192.168.1.1");
@@ -614,7 +811,94 @@ mod tests {
         );
         assert!(ServerConfig::get_reset_storage_on_start());
         assert!(ServerConfig::get_storage_encryption_key().is_some());
-        assert_eq!(ServerConfig::get_transaction_expiration_hours(), 12);
+        assert_eq!(ServerConfig::get_transaction_expiration_hours(), 12.0);
+        assert_eq!(ServerConfig::get_redis_pool_max_size(), 200);
+        assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 20000);
+    }
+
+    #[test]
+    fn test_get_redis_pool_max_size() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        // Test default value when env var is not set
+        env::remove_var("REDIS_POOL_MAX_SIZE");
+        assert_eq!(ServerConfig::get_redis_pool_max_size(), 500);
+
+        // Test custom value
+        env::set_var("REDIS_POOL_MAX_SIZE", "100");
+        assert_eq!(ServerConfig::get_redis_pool_max_size(), 100);
+
+        // Test invalid value returns default
+        env::set_var("REDIS_POOL_MAX_SIZE", "not_a_number");
+        assert_eq!(ServerConfig::get_redis_pool_max_size(), 500);
+
+        // Test zero value returns default (invalid)
+        env::set_var("REDIS_POOL_MAX_SIZE", "0");
+        assert_eq!(ServerConfig::get_redis_pool_max_size(), 500);
+
+        // Test large value
+        env::set_var("REDIS_POOL_MAX_SIZE", "10000");
+        assert_eq!(ServerConfig::get_redis_pool_max_size(), 10000);
+
+        // Cleanup
+        env::remove_var("REDIS_POOL_MAX_SIZE");
+    }
+
+    #[test]
+    fn test_get_redis_pool_timeout_ms() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        // Test default value when env var is not set
+        env::remove_var("REDIS_POOL_TIMEOUT_MS");
+        assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 10000);
+
+        // Test custom value
+        env::set_var("REDIS_POOL_TIMEOUT_MS", "15000");
+        assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 15000);
+
+        // Test invalid value returns default
+        env::set_var("REDIS_POOL_TIMEOUT_MS", "not_a_number");
+        assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 10000);
+
+        // Test zero value returns default (invalid)
+        env::set_var("REDIS_POOL_TIMEOUT_MS", "0");
+        assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 10000);
+
+        // Test large value
+        env::set_var("REDIS_POOL_TIMEOUT_MS", "60000");
+        assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 60000);
+
+        // Cleanup
+        env::remove_var("REDIS_POOL_TIMEOUT_MS");
+    }
+
+    #[test]
+    fn test_fractional_transaction_expiration_hours() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        setup();
+
+        // Test fractional hours (0.1 hours = 6 minutes)
+        env::set_var("TRANSACTION_EXPIRATION_HOURS", "0.1");
+        assert_eq!(ServerConfig::get_transaction_expiration_hours(), 0.1);
+
+        // Test another fractional value
+        env::set_var("TRANSACTION_EXPIRATION_HOURS", "0.5");
+        assert_eq!(ServerConfig::get_transaction_expiration_hours(), 0.5);
+
+        // Test integer value still works
+        env::set_var("TRANSACTION_EXPIRATION_HOURS", "24");
+        assert_eq!(ServerConfig::get_transaction_expiration_hours(), 24.0);
+
+        // Cleanup
+        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
     }
 
     #[test]
@@ -978,6 +1262,553 @@ mod tests {
 
             // Cleanup
             env::remove_var(&env_var);
+        }
+    }
+
+    mod get_relayer_concurrency_limit_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_not_set() {
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(result, 100, "Should return default value of 100");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_env_value_when_set() {
+            env::set_var("RELAYER_CONCURRENCY_LIMIT", "250");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(result, 250, "Should return env var value");
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_invalid() {
+            env::set_var("RELAYER_CONCURRENCY_LIMIT", "not_a_number");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(result, 100, "Should return default value when invalid");
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_empty() {
+            env::set_var("RELAYER_CONCURRENCY_LIMIT", "");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(result, 100, "Should return default value when empty");
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+        }
+
+        #[test]
+        #[serial]
+        fn test_zero_value() {
+            env::set_var("RELAYER_CONCURRENCY_LIMIT", "0");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(result, 0, "Should accept zero as valid value");
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+        }
+
+        #[test]
+        #[serial]
+        fn test_large_value() {
+            env::set_var("RELAYER_CONCURRENCY_LIMIT", "5000");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(result, 5000, "Should accept large values");
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+        }
+
+        #[test]
+        #[serial]
+        fn test_negative_value_returns_default() {
+            env::set_var("RELAYER_CONCURRENCY_LIMIT", "-10");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(result, 100, "Should return default for negative value");
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+        }
+
+        #[test]
+        #[serial]
+        fn test_float_value_returns_default() {
+            env::set_var("RELAYER_CONCURRENCY_LIMIT", "100.5");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(result, 100, "Should return default for float value");
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+        }
+
+        #[test]
+        #[serial]
+        fn test_whitespace_value_returns_default() {
+            env::set_var("RELAYER_CONCURRENCY_LIMIT", "  150  ");
+            let result = ServerConfig::get_relayer_concurrency_limit();
+            assert_eq!(
+                result, 100,
+                "Should return default when value has whitespace"
+            );
+            env::remove_var("RELAYER_CONCURRENCY_LIMIT");
+        }
+    }
+
+    mod get_max_connections_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_not_set() {
+            env::remove_var("MAX_CONNECTIONS");
+            let result = ServerConfig::get_max_connections();
+            assert_eq!(result, 256, "Should return default value of 256");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_env_value_when_set() {
+            env::set_var("MAX_CONNECTIONS", "512");
+            let result = ServerConfig::get_max_connections();
+            assert_eq!(result, 512, "Should return env var value");
+            env::remove_var("MAX_CONNECTIONS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_invalid() {
+            env::set_var("MAX_CONNECTIONS", "invalid");
+            let result = ServerConfig::get_max_connections();
+            assert_eq!(result, 256, "Should return default value when invalid");
+            env::remove_var("MAX_CONNECTIONS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_empty() {
+            env::set_var("MAX_CONNECTIONS", "");
+            let result = ServerConfig::get_max_connections();
+            assert_eq!(result, 256, "Should return default value when empty");
+            env::remove_var("MAX_CONNECTIONS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_zero_value() {
+            env::set_var("MAX_CONNECTIONS", "0");
+            let result = ServerConfig::get_max_connections();
+            assert_eq!(result, 0, "Should accept zero as valid value");
+            env::remove_var("MAX_CONNECTIONS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_large_value() {
+            env::set_var("MAX_CONNECTIONS", "10000");
+            let result = ServerConfig::get_max_connections();
+            assert_eq!(result, 10000, "Should accept large values");
+            env::remove_var("MAX_CONNECTIONS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_negative_value_returns_default() {
+            env::set_var("MAX_CONNECTIONS", "-100");
+            let result = ServerConfig::get_max_connections();
+            assert_eq!(result, 256, "Should return default for negative value");
+            env::remove_var("MAX_CONNECTIONS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_float_value_returns_default() {
+            env::set_var("MAX_CONNECTIONS", "256.5");
+            let result = ServerConfig::get_max_connections();
+            assert_eq!(result, 256, "Should return default for float value");
+            env::remove_var("MAX_CONNECTIONS");
+        }
+    }
+
+    mod get_connection_backlog_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_not_set() {
+            env::remove_var("CONNECTION_BACKLOG");
+            let result = ServerConfig::get_connection_backlog();
+            assert_eq!(result, 511, "Should return default value of 511");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_env_value_when_set() {
+            env::set_var("CONNECTION_BACKLOG", "1024");
+            let result = ServerConfig::get_connection_backlog();
+            assert_eq!(result, 1024, "Should return env var value");
+            env::remove_var("CONNECTION_BACKLOG");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_invalid() {
+            env::set_var("CONNECTION_BACKLOG", "not_a_number");
+            let result = ServerConfig::get_connection_backlog();
+            assert_eq!(result, 511, "Should return default value when invalid");
+            env::remove_var("CONNECTION_BACKLOG");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_empty() {
+            env::set_var("CONNECTION_BACKLOG", "");
+            let result = ServerConfig::get_connection_backlog();
+            assert_eq!(result, 511, "Should return default value when empty");
+            env::remove_var("CONNECTION_BACKLOG");
+        }
+
+        #[test]
+        #[serial]
+        fn test_zero_value() {
+            env::set_var("CONNECTION_BACKLOG", "0");
+            let result = ServerConfig::get_connection_backlog();
+            assert_eq!(result, 0, "Should accept zero as valid value");
+            env::remove_var("CONNECTION_BACKLOG");
+        }
+
+        #[test]
+        #[serial]
+        fn test_large_value() {
+            env::set_var("CONNECTION_BACKLOG", "65535");
+            let result = ServerConfig::get_connection_backlog();
+            assert_eq!(result, 65535, "Should accept large values");
+            env::remove_var("CONNECTION_BACKLOG");
+        }
+
+        #[test]
+        #[serial]
+        fn test_negative_value_returns_default() {
+            env::set_var("CONNECTION_BACKLOG", "-50");
+            let result = ServerConfig::get_connection_backlog();
+            assert_eq!(result, 511, "Should return default for negative value");
+            env::remove_var("CONNECTION_BACKLOG");
+        }
+
+        #[test]
+        #[serial]
+        fn test_float_value_returns_default() {
+            env::set_var("CONNECTION_BACKLOG", "511.5");
+            let result = ServerConfig::get_connection_backlog();
+            assert_eq!(result, 511, "Should return default for float value");
+            env::remove_var("CONNECTION_BACKLOG");
+        }
+
+        #[test]
+        #[serial]
+        fn test_common_production_values() {
+            // Test common production values
+            let test_cases = vec![
+                (128, "Small server"),
+                (511, "Default"),
+                (1024, "Medium server"),
+                (2048, "Large server"),
+            ];
+
+            for (value, description) in test_cases {
+                env::set_var("CONNECTION_BACKLOG", value.to_string());
+                let result = ServerConfig::get_connection_backlog();
+                assert_eq!(result, value, "Should accept {}: {}", description, value);
+            }
+
+            env::remove_var("CONNECTION_BACKLOG");
+        }
+    }
+
+    mod get_request_timeout_seconds_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_not_set() {
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+            let result = ServerConfig::get_request_timeout_seconds();
+            assert_eq!(result, 30, "Should return default value of 30");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_env_value_when_set() {
+            env::set_var("REQUEST_TIMEOUT_SECONDS", "60");
+            let result = ServerConfig::get_request_timeout_seconds();
+            assert_eq!(result, 60, "Should return env var value");
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_invalid() {
+            env::set_var("REQUEST_TIMEOUT_SECONDS", "invalid");
+            let result = ServerConfig::get_request_timeout_seconds();
+            assert_eq!(result, 30, "Should return default value when invalid");
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_empty() {
+            env::set_var("REQUEST_TIMEOUT_SECONDS", "");
+            let result = ServerConfig::get_request_timeout_seconds();
+            assert_eq!(result, 30, "Should return default value when empty");
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_zero_value() {
+            env::set_var("REQUEST_TIMEOUT_SECONDS", "0");
+            let result = ServerConfig::get_request_timeout_seconds();
+            assert_eq!(result, 0, "Should accept zero as valid value");
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_large_value() {
+            env::set_var("REQUEST_TIMEOUT_SECONDS", "300");
+            let result = ServerConfig::get_request_timeout_seconds();
+            assert_eq!(result, 300, "Should accept large values");
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_negative_value_returns_default() {
+            env::set_var("REQUEST_TIMEOUT_SECONDS", "-10");
+            let result = ServerConfig::get_request_timeout_seconds();
+            assert_eq!(result, 30, "Should return default for negative value");
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_float_value_returns_default() {
+            env::set_var("REQUEST_TIMEOUT_SECONDS", "30.5");
+            let result = ServerConfig::get_request_timeout_seconds();
+            assert_eq!(result, 30, "Should return default for float value");
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_common_timeout_values() {
+            // Test common timeout values
+            let test_cases = vec![
+                (10, "Short timeout"),
+                (30, "Default timeout"),
+                (60, "Moderate timeout"),
+                (120, "Long timeout"),
+            ];
+
+            for (value, description) in test_cases {
+                env::set_var("REQUEST_TIMEOUT_SECONDS", value.to_string());
+                let result = ServerConfig::get_request_timeout_seconds();
+                assert_eq!(result, value, "Should accept {}: {}", description, value);
+            }
+
+            env::remove_var("REQUEST_TIMEOUT_SECONDS");
+        }
+    }
+
+    mod get_redis_reader_url_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_none_when_env_not_set() {
+            env::remove_var("REDIS_READER_URL");
+            let result = ServerConfig::get_redis_reader_url_optional();
+            assert!(
+                result.is_none(),
+                "Should return None when env var is not set"
+            );
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_value_when_set() {
+            env::set_var("REDIS_READER_URL", "redis://reader:6379");
+            let result = ServerConfig::get_redis_reader_url_optional();
+            assert_eq!(
+                result,
+                Some("redis://reader:6379".to_string()),
+                "Should return the env var value"
+            );
+            env::remove_var("REDIS_READER_URL");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_empty_string_when_set_to_empty() {
+            env::set_var("REDIS_READER_URL", "");
+            let result = ServerConfig::get_redis_reader_url_optional();
+            assert_eq!(
+                result,
+                Some("".to_string()),
+                "Should return empty string when set to empty"
+            );
+            env::remove_var("REDIS_READER_URL");
+        }
+
+        #[test]
+        #[serial]
+        fn test_aws_elasticache_reader_url() {
+            // Test with typical AWS ElastiCache reader endpoint format
+            let reader_url = "redis://my-cluster-ro.xxx.cache.amazonaws.com:6379";
+            env::set_var("REDIS_READER_URL", reader_url);
+            let result = ServerConfig::get_redis_reader_url_optional();
+            assert_eq!(
+                result,
+                Some(reader_url.to_string()),
+                "Should accept AWS ElastiCache reader endpoint"
+            );
+            env::remove_var("REDIS_READER_URL");
+        }
+
+        #[test]
+        #[serial]
+        fn test_config_includes_redis_reader_url() {
+            env::set_var("REDIS_URL", "redis://primary:6379");
+            env::set_var("REDIS_READER_URL", "redis://reader:6379");
+            env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
+
+            let config = ServerConfig::from_env();
+
+            assert_eq!(config.redis_url, "redis://primary:6379");
+            assert_eq!(
+                config.redis_reader_url,
+                Some("redis://reader:6379".to_string())
+            );
+
+            env::remove_var("REDIS_URL");
+            env::remove_var("REDIS_READER_URL");
+            env::remove_var("API_KEY");
+        }
+
+        #[test]
+        #[serial]
+        fn test_config_without_redis_reader_url() {
+            env::set_var("REDIS_URL", "redis://primary:6379");
+            env::remove_var("REDIS_READER_URL");
+            env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
+
+            let config = ServerConfig::from_env();
+
+            assert_eq!(config.redis_url, "redis://primary:6379");
+            assert!(
+                config.redis_reader_url.is_none(),
+                "redis_reader_url should be None when not set"
+            );
+
+            env::remove_var("REDIS_URL");
+            env::remove_var("API_KEY");
+        }
+    }
+
+    mod get_redis_reader_pool_max_size_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_not_set() {
+            env::remove_var("REDIS_READER_POOL_MAX_SIZE");
+            let result = ServerConfig::get_redis_reader_pool_max_size();
+            assert_eq!(
+                result, 1000,
+                "Should return default 1000 when env var is not set"
+            );
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_value_when_set() {
+            env::set_var("REDIS_READER_POOL_MAX_SIZE", "2000");
+            let result = ServerConfig::get_redis_reader_pool_max_size();
+            assert_eq!(result, 2000, "Should return the parsed value");
+            env::remove_var("REDIS_READER_POOL_MAX_SIZE");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_invalid() {
+            env::set_var("REDIS_READER_POOL_MAX_SIZE", "not_a_number");
+            let result = ServerConfig::get_redis_reader_pool_max_size();
+            assert_eq!(
+                result, 1000,
+                "Should return default 1000 for invalid values"
+            );
+            env::remove_var("REDIS_READER_POOL_MAX_SIZE");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_zero() {
+            env::set_var("REDIS_READER_POOL_MAX_SIZE", "0");
+            let result = ServerConfig::get_redis_reader_pool_max_size();
+            assert_eq!(result, 1000, "Should return default 1000 when value is 0");
+            env::remove_var("REDIS_READER_POOL_MAX_SIZE");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_negative() {
+            env::set_var("REDIS_READER_POOL_MAX_SIZE", "-100");
+            let result = ServerConfig::get_redis_reader_pool_max_size();
+            assert_eq!(
+                result, 1000,
+                "Should return default 1000 for negative values"
+            );
+            env::remove_var("REDIS_READER_POOL_MAX_SIZE");
+        }
+
+        #[test]
+        #[serial]
+        fn test_config_includes_reader_pool_max_size() {
+            env::set_var("REDIS_URL", "redis://primary:6379");
+            env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
+            env::set_var("REDIS_READER_POOL_MAX_SIZE", "750");
+
+            let config = ServerConfig::from_env();
+
+            assert_eq!(
+                config.redis_reader_pool_max_size, 750,
+                "Should include reader pool max size in config"
+            );
+
+            env::remove_var("REDIS_URL");
+            env::remove_var("API_KEY");
+            env::remove_var("REDIS_READER_POOL_MAX_SIZE");
+        }
+
+        #[test]
+        #[serial]
+        fn test_config_uses_default_when_not_set() {
+            env::set_var("REDIS_URL", "redis://primary:6379");
+            env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
+            env::remove_var("REDIS_READER_POOL_MAX_SIZE");
+
+            let config = ServerConfig::from_env();
+
+            assert_eq!(
+                config.redis_reader_pool_max_size, 1000,
+                "Should use default 1000 when not set"
+            );
+
+            env::remove_var("REDIS_URL");
+            env::remove_var("API_KEY");
         }
     }
 }

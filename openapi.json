@@ -12,9 +12,337 @@
       "name": "AGPL-3.0 license",
       "url": "https://github.com/OpenZeppelin/openzeppelin-relayer/blob/main/LICENSE"
     },
-    "version": "1.2.0"
+    "version": "1.3.0"
   },
   "paths": {
+    "/api/v1/health": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Health routes implementation",
+        "description": "Note: OpenAPI documentation for these endpoints can be found in the `openapi.rs` file\n\nHandles the `/health` endpoint.\n\nReturns an `HttpResponse` with a status of `200 OK` and a body of `\"OK\"`.",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "Service is healthy",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/networks": {
+      "get": {
+        "tags": [
+          "Networks"
+        ],
+        "summary": "Network routes implementation",
+        "description": "Note: OpenAPI documentation for these endpoints can be found in the `openapi.rs` file\n\nLists all networks with pagination support.",
+        "operationId": "listNetworks",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "description": "Page number for pagination (starts at 1)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Number of items per page (default: 10)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Network list retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_Vec_NetworkResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Bad Request",
+                  "success": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Unauthorized",
+                  "success": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Internal Server Error",
+                  "success": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/networks/{network_id}": {
+      "get": {
+        "tags": [
+          "Networks"
+        ],
+        "summary": "Retrieves details of a specific network by ID.",
+        "operationId": "getNetwork",
+        "parameters": [
+          {
+            "name": "network_id",
+            "in": "path",
+            "description": "Network ID (e.g., evm:sepolia, solana:mainnet)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Network retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_NetworkResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request - invalid network type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Bad Request",
+                  "success": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Unauthorized",
+                  "success": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Network with ID 'evm:sepolia' not found",
+                  "success": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Internal Server Error",
+                  "success": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "Networks"
+        ],
+        "summary": "Updates a network's configuration.\nCurrently supports updating RPC URLs only. Can be extended to support other fields.",
+        "operationId": "updateNetwork",
+        "parameters": [
+          {
+            "name": "network_id",
+            "in": "path",
+            "description": "Network ID (e.g., evm:sepolia, solana:mainnet)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateNetworkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Network updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_NetworkResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request - invalid network type or request data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Bad Request",
+                  "success": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Unauthorized",
+                  "success": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Network with ID 'evm:sepolia' not found",
+                  "success": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Internal Server Error",
+                  "success": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/api/v1/notifications": {
       "get": {
         "tags": [
@@ -505,13 +833,519 @@
         ]
       }
     },
+    "/api/v1/plugins": {
+      "get": {
+        "tags": [
+          "Plugins"
+        ],
+        "summary": "List plugins.",
+        "operationId": "listPlugins",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "description": "Page number for pagination (starts at 1)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Number of items per page (default: 10)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plugins listed successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_PaginatedResult_PluginModel"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "BadRequest",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Bad Request",
+                  "success": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Unauthorized",
+                  "success": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Plugin with ID plugin_id not found",
+                  "success": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Too Many Requests",
+                  "success": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Internal Server Error",
+                  "success": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/plugins/{plugin_id}": {
+      "get": {
+        "tags": [
+          "Plugins"
+        ],
+        "summary": "Get plugin by ID",
+        "operationId": "getPlugin",
+        "parameters": [
+          {
+            "name": "plugin_id",
+            "in": "path",
+            "description": "The unique identifier of the plugin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plugin retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_PluginModel"
+                },
+                "example": {
+                  "data": {
+                    "allow_get_invocation": false,
+                    "config": {
+                      "featureFlag": true
+                    },
+                    "emit_logs": false,
+                    "emit_traces": false,
+                    "forward_logs": false,
+                    "id": "my-plugin",
+                    "path": "plugins/my-plugin.ts",
+                    "raw_response": false,
+                    "timeout": 30
+                  },
+                  "error": null,
+                  "success": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Unauthorized",
+                  "success": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Plugin not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Plugin with id my-plugin not found",
+                  "success": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Too Many Requests",
+                  "success": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Internal Server Error",
+                  "success": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "Plugins"
+        ],
+        "summary": "Update plugin configuration",
+        "description": "Updates mutable plugin fields such as timeout, emit_logs, emit_traces,\nraw_response, allow_get_invocation, config, and forward_logs.\nThe plugin id and path cannot be changed after creation.\n\nAll fields are optional - only the provided fields will be updated.\nTo clear the `config` field, pass `\"config\": null`.",
+        "operationId": "updatePlugin",
+        "parameters": [
+          {
+            "name": "plugin_id",
+            "in": "path",
+            "description": "The unique identifier of the plugin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Plugin configuration update. All fields are optional.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePluginRequest"
+              },
+              "example": {
+                "config": {
+                  "apiKey": "xyz123",
+                  "featureFlag": true
+                },
+                "emit_logs": true,
+                "forward_logs": true,
+                "timeout": 60
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Plugin updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_PluginModel"
+                },
+                "example": {
+                  "data": {
+                    "allow_get_invocation": false,
+                    "config": {
+                      "apiKey": "xyz123",
+                      "featureFlag": true
+                    },
+                    "emit_logs": true,
+                    "emit_traces": false,
+                    "forward_logs": true,
+                    "id": "my-plugin",
+                    "path": "plugins/my-plugin.ts",
+                    "raw_response": false,
+                    "timeout": 60
+                  },
+                  "error": null,
+                  "success": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request (invalid timeout or other validation error)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Timeout must be greater than 0",
+                  "success": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Unauthorized",
+                  "success": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Plugin not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Plugin with id my-plugin not found",
+                  "success": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Too Many Requests",
+                  "success": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Internal Server Error",
+                  "success": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/api/v1/plugins/{plugin_id}/call": {
+      "get": {
+        "tags": [
+          "Plugins"
+        ],
+        "summary": "Execute a plugin via GET (must be enabled per plugin)",
+        "description": "This endpoint is disabled by default. To enable it for a given plugin, set\n`allow_get_invocation: true` in the plugin configuration.\n\nWhen invoked via GET:\n- `params` is an empty object (`{}`)\n- query parameters are passed to the plugin handler via `context.query`\n- wildcard route routing is supported the same way as POST (see `doc_call_plugin`)\n- Use the `route` query parameter or append the route to the URL path",
+        "operationId": "callPluginGet",
+        "parameters": [
+          {
+            "name": "plugin_id",
+            "in": "path",
+            "description": "The unique identifier of the plugin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "route",
+            "in": "query",
+            "description": "Optional route suffix for custom routing (e.g., '/verify'). Alternative to appending the route to the URL path.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plugin call successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_Value"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Unauthorized",
+                  "success": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Plugin with ID plugin_id not found",
+                  "success": false
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Method Not Allowed (GET invocation disabled for this plugin)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "GET requests are not enabled for this plugin. Set 'allow_get_invocation: true' in plugin configuration to enable.",
+                  "success": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Too Many Requests",
+                  "success": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Internal Server Error",
+                  "success": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
       "post": {
         "tags": [
           "Plugins"
         ],
-        "summary": "Execute a plugin and receive the sanitized result",
-        "description": "Logs and traces are only returned when the plugin is configured with `emit_logs` / `emit_traces`.\nPlugin-provided errors are normalized into a consistent payload (`code`, `details`) and a derived\nmessage so downstream clients receive a stable shape regardless of how the handler threw.",
+        "summary": "Execute a plugin with optional wildcard route routing",
+        "description": "Logs and traces are only returned when the plugin is configured with `emit_logs` / `emit_traces`.\nPlugin-provided errors are normalized into a consistent payload (`code`, `details`) and a derived\nmessage so downstream clients receive a stable shape regardless of how the handler threw.\n\nThe endpoint supports wildcard route routing, allowing plugins to implement custom routing logic:\n- `/api/v1/plugins/{plugin_id}/call` - Default endpoint (route = \"\")\n- `/api/v1/plugins/{plugin_id}/call?route=/verify` - Custom route via query parameter\n- `/api/v1/plugins/{plugin_id}/call/verify` - Custom route via URL path (route = \"/verify\")\n\nThe route is passed to the plugin handler via the `context.route` field.\nYou can specify a custom route either by appending it to the URL path or by using the `route` query parameter.",
         "operationId": "callPlugin",
         "parameters": [
           {
@@ -519,6 +1353,15 @@
             "in": "path",
             "description": "The unique identifier of the plugin",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "route",
+            "in": "query",
+            "description": "Optional route suffix for custom routing (e.g., '/verify'). Alternative to appending the route to the URL path.",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -659,6 +1502,52 @@
             "bearer_auth": []
           }
         ]
+      }
+    },
+    "/api/v1/ready": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Readiness endpoint that checks system resources",
+        "description": "Returns 200 OK if the service is ready to accept traffic, or 503 Service Unavailable if not.\nChecks file descriptor usage and CLOSE_WAIT socket count to determine readiness.",
+        "operationId": "readiness",
+        "responses": {
+          "200": {
+            "description": "Service is ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "close_wait_count": 0,
+                  "fd_count": 42,
+                  "fd_limit": 1024,
+                  "fd_usage_percent": 4,
+                  "ready": true
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service is not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "close_wait_count": 0,
+                  "fd_count": 900,
+                  "fd_limit": 1024,
+                  "ready": false,
+                  "reason": "File descriptor limit exceeded: 900/1024 (87.9% > 80.0%)"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/relayers": {
@@ -3630,38 +4519,6 @@
           }
         ]
       }
-    },
-    "/v1/health": {
-      "get": {
-        "tags": [
-          "Health"
-        ],
-        "summary": "Health routes implementation",
-        "description": "Note: OpenAPI documentation for these endpoints can be found in the `openapi.rs` file\nHandles the `/health` endpoint.\n\nReturns an `HttpResponse` with a status of `200 OK` and a body of `\"OK\"`.",
-        "operationId": "health",
-        "responses": {
-          "200": {
-            "description": "Service is healthy",
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          }
-        }
-      }
     }
   },
   "components": {
@@ -3751,6 +4608,111 @@
           }
         }
       },
+      "ApiResponse_NetworkResponse": {
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Network response model for API endpoints.\n\nThis flattens the internal NetworkRepoModel structure for API responses,\nmaking network-type-specific fields available at the top level.",
+            "required": [
+              "id",
+              "name",
+              "network_type"
+            ],
+            "properties": {
+              "average_blocktime_ms": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Estimated average time between blocks in milliseconds",
+                "minimum": 0
+              },
+              "chain_id": {
+                "type": "integer",
+                "format": "int64",
+                "description": "EVM-specific: Chain ID",
+                "minimum": 0
+              },
+              "explorer_urls": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "List of Explorer endpoint URLs"
+              },
+              "features": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "EVM-specific: Network features (e.g., \"eip1559\")"
+              },
+              "horizon_url": {
+                "type": "string",
+                "description": "Stellar-specific: Horizon URL"
+              },
+              "id": {
+                "type": "string",
+                "description": "Unique identifier composed of network_type and name, e.g., \"evm:mainnet\""
+              },
+              "is_testnet": {
+                "type": "boolean",
+                "description": "Flag indicating if the network is a testnet"
+              },
+              "name": {
+                "type": "string",
+                "description": "Name of the network (e.g., \"mainnet\", \"sepolia\")"
+              },
+              "network_type": {
+                "$ref": "#/components/schemas/RelayerNetworkType",
+                "description": "Type of the network (EVM, Solana, Stellar)"
+              },
+              "passphrase": {
+                "type": "string",
+                "description": "Stellar-specific: Network passphrase"
+              },
+              "required_confirmations": {
+                "type": "integer",
+                "format": "int64",
+                "description": "EVM-specific: Required confirmations",
+                "minimum": 0
+              },
+              "rpc_urls": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/RpcConfig"
+                },
+                "description": "List of RPC endpoint configurations"
+              },
+              "symbol": {
+                "type": "string",
+                "description": "EVM-specific: Native token symbol"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "List of arbitrary tags for categorizing or filtering networks"
+              }
+            }
+          },
+          "error": {
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMeta"
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
       "ApiResponse_NotificationResponse": {
         "type": "object",
         "required": [
@@ -3779,6 +4741,110 @@
               },
               "url": {
                 "type": "string"
+              }
+            }
+          },
+          "error": {
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMeta"
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_PaginatedResult_PluginModel": {
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "items",
+              "total",
+              "page",
+              "per_page"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "path",
+                    "timeout"
+                  ],
+                  "properties": {
+                    "allow_get_invocation": {
+                      "type": "boolean",
+                      "description": "Whether to allow GET requests to invoke plugin logic"
+                    },
+                    "config": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "description": "User-defined configuration accessible to the plugin (must be a JSON object)",
+                      "additionalProperties": {},
+                      "propertyNames": {
+                        "type": "string"
+                      }
+                    },
+                    "emit_logs": {
+                      "type": "boolean",
+                      "description": "Whether to include logs in the HTTP response"
+                    },
+                    "emit_traces": {
+                      "type": "boolean",
+                      "description": "Whether to include traces in the HTTP response"
+                    },
+                    "forward_logs": {
+                      "type": "boolean",
+                      "description": "Whether to forward plugin logs into the relayer's tracing output"
+                    },
+                    "id": {
+                      "type": "string",
+                      "description": "Plugin ID"
+                    },
+                    "path": {
+                      "type": "string",
+                      "description": "Plugin path"
+                    },
+                    "raw_response": {
+                      "type": "boolean",
+                      "description": "Whether to return raw plugin response without ApiResponse wrapper"
+                    },
+                    "timeout": {
+                      "type": "integer",
+                      "format": "int64",
+                      "description": "Plugin timeout",
+                      "minimum": 0
+                    }
+                  }
+                }
+              },
+              "page": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "per_page": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "total": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
               }
             }
           },
@@ -3828,6 +4894,81 @@
           }
         }
       },
+      "ApiResponse_PluginModel": {
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "id",
+              "path",
+              "timeout"
+            ],
+            "properties": {
+              "allow_get_invocation": {
+                "type": "boolean",
+                "description": "Whether to allow GET requests to invoke plugin logic"
+              },
+              "config": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "User-defined configuration accessible to the plugin (must be a JSON object)",
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "emit_logs": {
+                "type": "boolean",
+                "description": "Whether to include logs in the HTTP response"
+              },
+              "emit_traces": {
+                "type": "boolean",
+                "description": "Whether to include traces in the HTTP response"
+              },
+              "forward_logs": {
+                "type": "boolean",
+                "description": "Whether to forward plugin logs into the relayer's tracing output"
+              },
+              "id": {
+                "type": "string",
+                "description": "Plugin ID"
+              },
+              "path": {
+                "type": "string",
+                "description": "Plugin path"
+              },
+              "raw_response": {
+                "type": "boolean",
+                "description": "Whether to return raw plugin response without ApiResponse wrapper"
+              },
+              "timeout": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Plugin timeout",
+                "minimum": 0
+              }
+            }
+          },
+          "error": {
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMeta"
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
       "ApiResponse_RelayerResponse": {
         "type": "object",
         "required": [
@@ -3852,8 +4993,9 @@
               "custom_rpc_urls": {
                 "type": "array",
                 "items": {
-                  "$ref": "#/components/schemas/RpcConfig"
-                }
+                  "$ref": "#/components/schemas/MaskedRpcConfig"
+                },
+                "description": "Custom RPC URLs with sensitive path/query parameters masked for security.\nThe domain is visible to identify providers (e.g., Alchemy, Infura) but\nAPI keys embedded in paths are hidden."
               },
               "disabled_reason": {
                 "$ref": "#/components/schemas/DisabledReason"
@@ -4302,6 +5444,114 @@
           }
         }
       },
+      "ApiResponse_Vec_NetworkResponse": {
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "Network response model for API endpoints.\n\nThis flattens the internal NetworkRepoModel structure for API responses,\nmaking network-type-specific fields available at the top level.",
+              "required": [
+                "id",
+                "name",
+                "network_type"
+              ],
+              "properties": {
+                "average_blocktime_ms": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Estimated average time between blocks in milliseconds",
+                  "minimum": 0
+                },
+                "chain_id": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "EVM-specific: Chain ID",
+                  "minimum": 0
+                },
+                "explorer_urls": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "List of Explorer endpoint URLs"
+                },
+                "features": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "EVM-specific: Network features (e.g., \"eip1559\")"
+                },
+                "horizon_url": {
+                  "type": "string",
+                  "description": "Stellar-specific: Horizon URL"
+                },
+                "id": {
+                  "type": "string",
+                  "description": "Unique identifier composed of network_type and name, e.g., \"evm:mainnet\""
+                },
+                "is_testnet": {
+                  "type": "boolean",
+                  "description": "Flag indicating if the network is a testnet"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Name of the network (e.g., \"mainnet\", \"sepolia\")"
+                },
+                "network_type": {
+                  "$ref": "#/components/schemas/RelayerNetworkType",
+                  "description": "Type of the network (EVM, Solana, Stellar)"
+                },
+                "passphrase": {
+                  "type": "string",
+                  "description": "Stellar-specific: Network passphrase"
+                },
+                "required_confirmations": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "EVM-specific: Required confirmations",
+                  "minimum": 0
+                },
+                "rpc_urls": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RpcConfig"
+                  },
+                  "description": "List of RPC endpoint configurations"
+                },
+                "symbol": {
+                  "type": "string",
+                  "description": "EVM-specific: Native token symbol"
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "List of arbitrary tags for categorizing or filtering networks"
+                }
+              }
+            }
+          },
+          "error": {
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/PluginMetadata"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMeta"
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
       "ApiResponse_Vec_NotificationResponse": {
         "type": "object",
         "required": [
@@ -4376,8 +5626,9 @@
                 "custom_rpc_urls": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/RpcConfig"
-                  }
+                    "$ref": "#/components/schemas/MaskedRpcConfig"
+                  },
+                  "description": "Custom RPC URLs with sensitive path/query parameters masked for security.\nThe domain is visible to identify providers (e.g., Alchemy, Infura) but\nAPI keys embedded in paths are hidden."
                 },
                 "disabled_reason": {
                   "$ref": "#/components/schemas/DisabledReason"
@@ -5549,6 +6800,31 @@
           "result"
         ]
       },
+      "MaskedRpcConfig": {
+        "type": "object",
+        "description": "RPC configuration with masked URL for API responses.\n\nThis type is used in API responses to prevent exposing sensitive API keys\nthat are often embedded in RPC endpoint URLs (e.g., Alchemy, Infura, QuickNode).\nThe URL path and query parameters are masked while keeping the host visible,\nallowing users to identify which provider is configured.",
+        "required": [
+          "url",
+          "weight"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "The RPC endpoint URL with path/query masked."
+          },
+          "weight": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The weight of this endpoint in the weighted round-robin selection.",
+            "maximum": 100,
+            "minimum": 0
+          }
+        },
+        "example": {
+          "url": "https://eth-mainnet.g.alchemy.com/***",
+          "weight": 100
+        }
+      },
       "MemoSpec": {
         "oneOf": [
           {
@@ -5658,6 +6934,91 @@
           }
         ],
         "description": "Network policy response models for OpenAPI documentation"
+      },
+      "NetworkResponse": {
+        "type": "object",
+        "description": "Network response model for API endpoints.\n\nThis flattens the internal NetworkRepoModel structure for API responses,\nmaking network-type-specific fields available at the top level.",
+        "required": [
+          "id",
+          "name",
+          "network_type"
+        ],
+        "properties": {
+          "average_blocktime_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Estimated average time between blocks in milliseconds",
+            "minimum": 0
+          },
+          "chain_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "EVM-specific: Chain ID",
+            "minimum": 0
+          },
+          "explorer_urls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of Explorer endpoint URLs"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "EVM-specific: Network features (e.g., \"eip1559\")"
+          },
+          "horizon_url": {
+            "type": "string",
+            "description": "Stellar-specific: Horizon URL"
+          },
+          "id": {
+            "type": "string",
+            "description": "Unique identifier composed of network_type and name, e.g., \"evm:mainnet\""
+          },
+          "is_testnet": {
+            "type": "boolean",
+            "description": "Flag indicating if the network is a testnet"
+          },
+          "name": {
+            "type": "string",
+            "description": "Name of the network (e.g., \"mainnet\", \"sepolia\")"
+          },
+          "network_type": {
+            "$ref": "#/components/schemas/RelayerNetworkType",
+            "description": "Type of the network (EVM, Solana, Stellar)"
+          },
+          "passphrase": {
+            "type": "string",
+            "description": "Stellar-specific: Network passphrase"
+          },
+          "required_confirmations": {
+            "type": "integer",
+            "format": "int64",
+            "description": "EVM-specific: Required confirmations",
+            "minimum": 0
+          },
+          "rpc_urls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RpcConfig"
+            },
+            "description": "List of RPC endpoint configurations"
+          },
+          "symbol": {
+            "type": "string",
+            "description": "EVM-specific: Native token symbol"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of arbitrary tags for categorizing or filtering networks"
+          }
+        }
       },
       "NetworkRpcRequest": {
         "oneOf": [
@@ -5941,12 +7302,9 @@
       },
       "PluginCallRequest": {
         "type": "object",
-        "required": [
-          "params"
-        ],
         "properties": {
           "params": {
-            "description": "Plugin parameters"
+            "description": "Plugin parameters. If not provided, the entire request body will be used as params."
           }
         }
       },
@@ -5980,6 +7338,61 @@
               "null"
             ],
             "items": {}
+          }
+        }
+      },
+      "PluginModel": {
+        "type": "object",
+        "required": [
+          "id",
+          "path",
+          "timeout"
+        ],
+        "properties": {
+          "allow_get_invocation": {
+            "type": "boolean",
+            "description": "Whether to allow GET requests to invoke plugin logic"
+          },
+          "config": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "User-defined configuration accessible to the plugin (must be a JSON object)",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "emit_logs": {
+            "type": "boolean",
+            "description": "Whether to include logs in the HTTP response"
+          },
+          "emit_traces": {
+            "type": "boolean",
+            "description": "Whether to include traces in the HTTP response"
+          },
+          "forward_logs": {
+            "type": "boolean",
+            "description": "Whether to forward plugin logs into the relayer's tracing output"
+          },
+          "id": {
+            "type": "string",
+            "description": "Plugin ID"
+          },
+          "path": {
+            "type": "string",
+            "description": "Plugin path"
+          },
+          "raw_response": {
+            "type": "boolean",
+            "description": "Whether to return raw plugin response without ApiResponse wrapper"
+          },
+          "timeout": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Plugin timeout",
+            "minimum": 0
           }
         }
       },
@@ -6140,8 +7553,9 @@
           "custom_rpc_urls": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/RpcConfig"
-            }
+              "$ref": "#/components/schemas/MaskedRpcConfig"
+            },
+            "description": "Custom RPC URLs with sensitive path/query parameters masked for security.\nThe domain is visible to identify providers (e.g., Alchemy, Infura) but\nAPI keys embedded in paths are hidden."
           },
           "disabled_reason": {
             "$ref": "#/components/schemas/DisabledReason"
@@ -6509,9 +7923,10 @@
       },
       "RpcConfig": {
         "type": "object",
-        "description": "Configuration for an RPC endpoint.",
+        "description": "Configuration for an RPC endpoint.\n\nThis struct contains only persistent configuration (URL and weight).\nHealth metadata (failures, pause state) is managed separately via `RpcHealthStore`.",
         "required": [
-          "url"
+          "url",
+          "weight"
         ],
         "properties": {
           "url": {
@@ -6521,10 +7936,29 @@
           "weight": {
             "type": "integer",
             "format": "int32",
-            "description": "The weight of this endpoint in the weighted round-robin selection.\nDefaults to DEFAULT_RPC_WEIGHT (100). Should be between 0 and 100.",
+            "description": "The weight of this endpoint in the weighted round-robin selection.\nDefaults to [`DEFAULT_RPC_WEIGHT`]. Should be between 0 and 100.",
+            "default": 100,
+            "maximum": 100,
             "minimum": 0
           }
+        },
+        "example": {
+          "url": "https://rpc.example.com",
+          "weight": 100
         }
+      },
+      "RpcUrlEntry": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "Simple string format (e.g., \"https://rpc.example.com\")\nDefaults to weight 100."
+          },
+          {
+            "$ref": "#/components/schemas/RpcConfig",
+            "description": "Extended object format with explicit weight"
+          }
+        ],
+        "description": "Schema-only type representing a flexible RPC URL entry.\nUsed for OpenAPI documentation to show that rpc_urls can accept\neither strings or RpcConfig objects.\n\nThis is NOT used for actual deserialization - the custom deserializer\nhandles the conversion. This type exists solely for schema generation."
       },
       "SignAndSendTransactionRequestParams": {
         "type": "object",
@@ -8175,6 +9609,9 @@
               "string",
               "null"
             ]
+          },
+          "transaction_result_xdr": {
+            "type": "string"
           }
         }
       },
@@ -8284,6 +9721,88 @@
           },
           "public_key": {
             "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpdateNetworkRequest": {
+        "type": "object",
+        "description": "Request structure for updating a network configuration.\nCurrently supports updating RPC URLs only. Can be extended to support other fields.",
+        "properties": {
+          "rpc_urls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RpcUrlEntry"
+            },
+            "description": "List of RPC endpoint configurations for connecting to the network.\nSupports multiple formats:\n- Array of strings: `[\"https://rpc.example.com\"]` (defaults to weight 100)\n- Array of RpcConfig objects: `[{\"url\": \"https://rpc.example.com\", \"weight\": 100}]`\n- Mixed array: `[\"https://rpc1.com\", {\"url\": \"https://rpc2.com\", \"weight\": 100}]`\n  Must be non-empty and contain valid HTTP/HTTPS URLs if provided.",
+            "example": [
+              {
+                "url": "https://rpc.example.com",
+                "weight": 100
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpdatePluginRequest": {
+        "type": "object",
+        "description": "Request model for updating an existing plugin.\nAll fields are optional to allow partial updates.\nNote: `id` and `path` are not updateable after creation.",
+        "properties": {
+          "allow_get_invocation": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether to allow GET requests to invoke plugin logic"
+          },
+          "config": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "User-defined configuration accessible to the plugin (must be a JSON object)\nUse `null` to clear the config",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "emit_logs": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether to include logs in the HTTP response"
+          },
+          "emit_traces": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether to include traces in the HTTP response"
+          },
+          "forward_logs": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether to forward plugin logs into the relayer's tracing output"
+          },
+          "raw_response": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether to return raw plugin response without ApiResponse wrapper"
+          },
+          "timeout": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Plugin timeout in seconds",
+            "minimum": 0
           }
         },
         "additionalProperties": false
@@ -8436,6 +9955,10 @@
     {
       "name": "Signers",
       "description": "Signers are responsible for signing the transactions related to the relayers."
+    },
+    {
+      "name": "Networks",
+      "description": "Networks represent blockchain network configurations including RPC endpoints and network-specific settings."
     },
     {
       "name": "Metrics",

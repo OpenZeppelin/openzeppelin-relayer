@@ -13,18 +13,17 @@
 //!
 //! # Example
 //! ```rust, ignore
-//! # use your_crate::{PriceCalculator, EvmTransactionData, RelayerRepoModel, EvmGasPriceService};
-//! # async fn example<P: EvmProviderTrait>(
+//! # use openzeppelin_relayer::domain::transaction::evm::PriceCalculator;
+//! # use openzeppelin_relayer::models::{EvmTransactionData, RelayerRepoModel, TransactionError};
+//! # use openzeppelin_relayer::services::gas::evm_gas_price::EvmGasPriceServiceTrait;
+//! # async fn example<G: EvmGasPriceServiceTrait>(
+//! #     calculator: &PriceCalculator<G>,
 //! #     tx_data: &EvmTransactionData,
 //! #     relayer: &RelayerRepoModel,
-//! #     gas_price_service: &EvmGasPriceService<P>,
-//! #     provider: &P
 //! # ) -> Result<(), TransactionError> {
-//! let price_params = PriceCalculator::get_transaction_price_params(
+//! let price_params = calculator.get_transaction_price_params(
 //!     tx_data,
-//!     relayer,
-//!     gas_price_service,
-//!     provider
+//!     relayer
 //! ).await?;
 //! # Ok(())
 //! # }
@@ -62,6 +61,7 @@ pub trait PriceCalculatorTrait: Send + Sync {
         &self,
         tx_data: &EvmTransactionData,
         relayer: &RelayerRepoModel,
+        force_bump: bool,
     ) -> Result<PriceParams, TransactionError>;
 }
 
@@ -144,8 +144,9 @@ where
         &self,
         tx_data: &EvmTransactionData,
         relayer: &RelayerRepoModel,
+        force_bump: bool,
     ) -> Result<PriceParams, TransactionError> {
-        PriceCalculator::<G>::calculate_bumped_gas_price(self, tx_data, relayer).await
+        PriceCalculator::<G>::calculate_bumped_gas_price(self, tx_data, relayer, force_bump).await
     }
 }
 
@@ -200,15 +201,22 @@ where
     /// 1. Determine if the transaction is EIP1559 or Legacy.
     /// 2. Calculate minimum bump requirements (e.g., +10%).
     /// 3. Compare with current network prices to decide how much to bump.
-    /// 4. Apply any relayer gas price caps.
+    /// 4. Apply any relayer gas price caps (unless force_bump is true).
     /// 5. Return the final bumped gas parameters.
     ///
     /// The returned PriceParams includes an is_min_bumped flag that indicates whether
     /// the calculated gas parameters meet the minimum bump requirements.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx_data` - The transaction data to calculate bumped price for
+    /// * `relayer` - The relayer configuration
+    /// * `force_bump` - If true, skips gas price cap to ensure bump succeeds (used for noop transactions)
     pub async fn calculate_bumped_gas_price(
         &self,
         tx_data: &EvmTransactionData,
         relayer: &RelayerRepoModel,
+        force_bump: bool,
     ) -> Result<PriceParams, TransactionError> {
         // Check if network lacks mempool (e.g., Arbitrum) - skip bump and use current prices
         if self.gas_price_service.network().lacks_mempool()
@@ -222,11 +230,17 @@ where
         }
 
         let network_gas_prices = self.gas_price_service.get_prices_from_json_rpc().await?;
-        let relayer_gas_price_cap = relayer
-            .policies
-            .get_evm_policy()
-            .gas_price_cap
-            .unwrap_or(u128::MAX);
+
+        // For force_bump (noop transactions), skip the gas price cap to ensure bump succeeds
+        let relayer_gas_price_cap = if force_bump {
+            u128::MAX
+        } else {
+            relayer
+                .policies
+                .get_evm_policy()
+                .gas_price_cap
+                .unwrap_or(u128::MAX)
+        };
 
         // Decide EIP1559 vs Legacy based on presence of maxFeePerGas / maxPriorityFeePerGas vs gasPrice
         let bumped_price_params = match (
@@ -686,9 +700,10 @@ mod tests {
             _ => 12000,         // 12 seconds for mainnet and others
         };
 
+        use crate::models::RpcConfig;
         EvmNetwork {
             network: name.to_string(),
-            rpc_urls: vec!["https://rpc.example.com".to_string()],
+            rpc_urls: vec![RpcConfig::new("https://rpc.example.com".to_string())],
             explorer_urls: None,
             average_blocktime_ms,
             is_testnet: true,
@@ -702,6 +717,7 @@ mod tests {
     }
 
     fn create_mock_no_mempool_network(name: &str) -> EvmNetwork {
+        use crate::models::RpcConfig;
         let average_blocktime_ms = match name {
             "arbitrum" => 1000, // 1 second for arbitrum
             _ => 12000,         // 12 seconds for others
@@ -709,7 +725,7 @@ mod tests {
 
         EvmNetwork {
             network: name.to_string(),
-            rpc_urls: vec!["https://rpc.example.com".to_string()],
+            rpc_urls: vec![RpcConfig::new("https://rpc.example.com".to_string())],
             explorer_urls: None,
             average_blocktime_ms,
             is_testnet: true,
@@ -1080,7 +1096,7 @@ mod tests {
         };
 
         let bumped = pc
-            .calculate_bumped_gas_price(&tx_data, &relayer)
+            .calculate_bumped_gas_price(&tx_data, &relayer, false)
             .await
             .unwrap();
         assert!(bumped.max_fee_per_gas.unwrap() >= 110_000_000_000); // >= 10% bump
@@ -1123,7 +1139,7 @@ mod tests {
         };
 
         let bumped = pc
-            .calculate_bumped_gas_price(&tx_data, &relayer)
+            .calculate_bumped_gas_price(&tx_data, &relayer, false)
             .await
             .unwrap();
         assert!(bumped.max_priority_fee_per_gas.unwrap() >= 2_200_000_000);
@@ -1162,7 +1178,7 @@ mod tests {
         };
 
         let bumped = pc
-            .calculate_bumped_gas_price(&tx_data, &relayer)
+            .calculate_bumped_gas_price(&tx_data, &relayer, false)
             .await
             .unwrap();
         assert!(bumped.gas_price.unwrap() >= 11_000_000_000); // at least 10% bump
@@ -1193,7 +1209,9 @@ mod tests {
             ..Default::default()
         };
 
-        let result = pc.calculate_bumped_gas_price(&tx_data, &relayer).await;
+        let result = pc
+            .calculate_bumped_gas_price(&tx_data, &relayer, false)
+            .await;
         assert!(result.is_err());
         if let Err(TransactionError::InvalidType(msg)) = result {
             assert!(msg.contains("missing required gas price parameters"));
@@ -1241,7 +1259,7 @@ mod tests {
 
         // Normally, we'd expect ~ (100 Gwei * 2.4) + 8 Gwei > 248 Gwei. We'll cap it at 105 Gwei.
         let bumped = pc
-            .calculate_bumped_gas_price(&tx_data, &relayer)
+            .calculate_bumped_gas_price(&tx_data, &relayer, false)
             .await
             .unwrap();
         assert!(bumped.max_fee_per_gas.unwrap() <= 105_000_000_000);
@@ -1288,7 +1306,7 @@ mod tests {
         };
 
         let bumped = pc
-            .calculate_bumped_gas_price(&tx_data, &relayer)
+            .calculate_bumped_gas_price(&tx_data, &relayer, false)
             .await
             .unwrap();
         assert_eq!(
@@ -1311,7 +1329,7 @@ mod tests {
         };
 
         let bumped = pc
-            .calculate_bumped_gas_price(&tx_data, &relayer)
+            .calculate_bumped_gas_price(&tx_data, &relayer, false)
             .await
             .unwrap();
         // Since min bump is 10%, original was 50 Gwei, min is 55 Gwei, but cap is 50 Gwei
@@ -1361,7 +1379,7 @@ mod tests {
         };
 
         let bumped = pc
-            .calculate_bumped_gas_price(&tx_data, &relayer)
+            .calculate_bumped_gas_price(&tx_data, &relayer, false)
             .await
             .unwrap();
         assert_eq!(
@@ -1377,7 +1395,7 @@ mod tests {
         });
 
         let bumped = pc
-            .calculate_bumped_gas_price(&tx_data, &relayer)
+            .calculate_bumped_gas_price(&tx_data, &relayer, false)
             .await
             .unwrap();
         assert_eq!(
@@ -1424,7 +1442,9 @@ mod tests {
         };
 
         // Call the method under test
-        let result = pc.calculate_bumped_gas_price(&tx_data, &relayer).await;
+        let result = pc
+            .calculate_bumped_gas_price(&tx_data, &relayer, false)
+            .await;
 
         // Verify no extra fee when no overrider is used
         assert!(result.is_ok());
@@ -1467,7 +1487,7 @@ mod tests {
         };
 
         let params = pc
-            .calculate_bumped_gas_price(&tx_data, &relayer)
+            .calculate_bumped_gas_price(&tx_data, &relayer, false)
             .await
             .unwrap();
 
@@ -1511,7 +1531,7 @@ mod tests {
         };
 
         let params = pc
-            .calculate_bumped_gas_price(&tx_data, &relayer)
+            .calculate_bumped_gas_price(&tx_data, &relayer, false)
             .await
             .unwrap();
 
@@ -1880,7 +1900,9 @@ mod tests {
             ..Default::default()
         };
 
-        let result = pc.calculate_bumped_gas_price(&tx_data, &relayer).await;
+        let result = pc
+            .calculate_bumped_gas_price(&tx_data, &relayer, false)
+            .await;
 
         assert!(result.is_ok());
         let price_params = result.unwrap();
@@ -1942,7 +1964,9 @@ mod tests {
             ..Default::default()
         };
 
-        let result = pc.calculate_bumped_gas_price(&tx_data, &relayer).await;
+        let result = pc
+            .calculate_bumped_gas_price(&tx_data, &relayer, false)
+            .await;
 
         assert!(result.is_ok());
         let price_params = result.unwrap();
@@ -1996,7 +2020,7 @@ mod tests {
         };
 
         let result_regular = pc_regular
-            .calculate_bumped_gas_price(&tx_data, &relayer)
+            .calculate_bumped_gas_price(&tx_data, &relayer, false)
             .await
             .unwrap();
 
@@ -2022,7 +2046,7 @@ mod tests {
         let pc_no_mempool = PriceCalculator::new(mock_service_no_mempool, None);
 
         let result_no_mempool = pc_no_mempool
-            .calculate_bumped_gas_price(&tx_data, &relayer)
+            .calculate_bumped_gas_price(&tx_data, &relayer, false)
             .await
             .unwrap();
 
@@ -2045,9 +2069,10 @@ mod tests {
         let mut mock_service = MockEvmGasPriceServiceTrait::new();
 
         // Create a network that returns true for is_arbitrum() but not lacks_mempool()
+        use crate::models::RpcConfig;
         let arbitrum_network = EvmNetwork {
             network: "arbitrum-one".to_string(),
-            rpc_urls: vec!["https://arb1.arbitrum.io/rpc".to_string()],
+            rpc_urls: vec![RpcConfig::new("https://arb1.arbitrum.io/rpc".to_string())],
             explorer_urls: None,
             average_blocktime_ms: 1000, // 1 second for arbitrum
             is_testnet: false,
@@ -2097,7 +2122,9 @@ mod tests {
             ..Default::default()
         };
 
-        let result = pc.calculate_bumped_gas_price(&tx_data, &relayer).await;
+        let result = pc
+            .calculate_bumped_gas_price(&tx_data, &relayer, false)
+            .await;
 
         assert!(result.is_ok());
         let price_params = result.unwrap();
@@ -2131,5 +2158,95 @@ mod tests {
                 priority_fee
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_calculate_bumped_gas_price_force_bump_bypasses_cap() {
+        // Test that force_bump=true bypasses the gas price cap
+        let mut mock_gas_service = MockEvmGasPriceServiceTrait::new();
+
+        let mock_prices = GasPrices {
+            legacy_prices: SpeedPrices {
+                safe_low: 100_000_000_000,
+                average: 120_000_000_000,
+                fast: 150_000_000_000, // 150 Gwei - very high
+                fastest: 200_000_000_000,
+            },
+            max_priority_fee_per_gas: SpeedPrices {
+                safe_low: 1_000_000_000,
+                average: 2_000_000_000,
+                fast: 3_000_000_000,
+                fastest: 5_000_000_000,
+            },
+            base_fee_per_gas: 50_000_000_000,
+        };
+
+        mock_gas_service
+            .expect_get_prices_from_json_rpc()
+            .returning(move || {
+                let prices = mock_prices.clone();
+                Box::pin(async move { Ok(prices) })
+            });
+        mock_gas_service
+            .expect_network()
+            .return_const(create_mock_evm_network("mainnet"));
+
+        let pc = PriceCalculator::new(mock_gas_service, None);
+
+        let tx_data = EvmTransactionData {
+            gas_price: Some(100_000_000_000), // 100 Gwei
+            gas_limit: Some(21000),
+            nonce: Some(1),
+            speed: Some(Speed::Fast),
+            ..Default::default()
+        };
+
+        let mut relayer = create_mock_relayer();
+        relayer.policies = RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+            gas_price_cap: Some(120_000_000_000), // Cap at 120 Gwei
+            ..Default::default()
+        });
+
+        // Test with force_bump=false (should be capped)
+        let result_capped = pc
+            .calculate_bumped_gas_price(&tx_data, &relayer, false)
+            .await
+            .unwrap();
+
+        // Should be capped at 120 Gwei
+        assert_eq!(
+            result_capped.gas_price.unwrap(),
+            120_000_000_000,
+            "With force_bump=false, gas price should be capped at 120 Gwei"
+        );
+        assert_eq!(
+            result_capped.is_min_bumped.unwrap(),
+            true,
+            "Should still meet minimum bump requirement"
+        );
+
+        // Test with force_bump=true (should NOT be capped)
+        let result_uncapped = pc
+            .calculate_bumped_gas_price(&tx_data, &relayer, true)
+            .await
+            .unwrap();
+
+        // Should use the market price (150 Gwei), not capped
+        assert_eq!(
+            result_uncapped.gas_price.unwrap(),
+            150_000_000_000,
+            "With force_bump=true, gas price should NOT be capped and use market price of 150 Gwei"
+        );
+        assert_eq!(
+            result_uncapped.is_min_bumped.unwrap(),
+            true,
+            "Should meet minimum bump requirement"
+        );
+
+        // Verify force_bump actually bypassed the cap
+        assert!(
+            result_uncapped.gas_price.unwrap() > result_capped.gas_price.unwrap(),
+            "force_bump=true should result in higher gas price than capped version"
+        );
     }
 }

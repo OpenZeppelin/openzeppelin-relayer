@@ -7,7 +7,7 @@ use crate::{
         RelayerNetworkPolicy, RelayerRepoModel, RelayerStellarPolicy, StellarTransactionData,
         TransactionRepoModel, TransactionStatus,
     },
-    repositories::{MockRepository, MockTransactionCounterTrait, MockTransactionRepository},
+    repositories::{MockRelayerRepository, MockTransactionCounterTrait, MockTransactionRepository},
     services::{
         provider::MockStellarProviderTrait, signer::MockSigner,
         stellar_dex::MockStellarDexServiceTrait,
@@ -248,6 +248,7 @@ pub fn create_test_transaction(relayer_id: &str) -> TransactionRepoModel {
         simulation_transaction_data: None,
         transaction_input: crate::models::TransactionInput::Operations(vec![payment_op(TEST_PK)]),
         signed_envelope_xdr: None,
+        transaction_result_xdr: None,
     };
     TransactionRepoModel {
         id: "tx-1".to_string(),
@@ -270,7 +271,7 @@ pub fn create_test_transaction(relayer_id: &str) -> TransactionRepoModel {
 
 pub struct TestMocks {
     pub provider: MockStellarProviderTrait,
-    pub relayer_repo: MockRepository<RelayerRepoModel, String>,
+    pub relayer_repo: MockRelayerRepository,
     pub tx_repo: MockTransactionRepository,
     pub job_producer: MockJobProducerTrait,
     pub signer: MockSigner,
@@ -281,7 +282,7 @@ pub struct TestMocks {
 pub fn default_test_mocks() -> TestMocks {
     TestMocks {
         provider: MockStellarProviderTrait::new(),
-        relayer_repo: MockRepository::new(),
+        relayer_repo: MockRelayerRepository::new(),
         tx_repo: MockTransactionRepository::new(),
         job_producer: MockJobProducerTrait::new(),
         signer: MockSigner::new(),
@@ -295,7 +296,7 @@ pub fn make_stellar_tx_handler(
     relayer: RelayerRepoModel,
     mocks: TestMocks,
 ) -> StellarRelayerTransaction<
-    MockRepository<RelayerRepoModel, String>,
+    MockRelayerRepository,
     MockTransactionRepository,
     MockJobProducerTrait,
     MockSigner,

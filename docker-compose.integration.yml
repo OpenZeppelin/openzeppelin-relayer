@@ -1,0 +1,116 @@
+---
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: integration-redis
+    command:
+      - redis-server
+    networks:
+      - integration
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 3s
+      timeout: 2s
+      retries: 5
+      start_period: 5s
+  anvil:
+    profiles:
+      - local
+    image: ghcr.io/foundry-rs/foundry:stable
+    container_name: integration-anvil
+    entrypoint: ''
+    command:
+      - sh
+      - -c
+      - anvil --host 0.0.0.0 --chain-id 31337 --block-time 1
+    ports:
+      - 0.0.0.0:8545:8545
+    networks:
+      - integration
+    volumes:
+      - ./tests/integration/contracts:/contracts:ro
+    healthcheck:
+      test:
+        - CMD
+        - cast
+        - client
+        - --rpc-url
+        - http://localhost:8545
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 3s
+  relayer:
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+    container_name: integration-relayer
+    depends_on:
+      redis:
+        condition: service_healthy
+      anvil:
+        condition: service_healthy
+        required: false  # Only when local profile is active, but we handle startup order in script
+    ports:
+      - 8080:8080
+    networks:
+      - integration
+    env_file:
+      - .env.integration
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - IN_DOCKER=true
+      # Reduce log verbosity during tests - only show WARN and ERROR
+      # This filters out verbose OpenTelemetry traces
+      - RUST_LOG=warn,openzeppelin_relayer=warn,actix_web=warn,tracing_actix_web=error
+    volumes:
+      - ${CONFIG_SOURCE:-./tests/integration/config/local}:/app/config:ro
+      - ./config/networks:/app/networks:ro
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get({hostname:'localhost',port:8080,path:'/api/v1/health',headers:{'Authorization':'Bearer '+process.env.API_KEY}}, r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 15
+      start_period: 10s
+  integration-tests:
+    image: openzeppelin-relayer-integration:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.integration
+      target: runtime  # Use runtime stage that executes pre-built binary with coverage
+    container_name: integration-tests
+    user: ${HOST_UID:-1000}:${HOST_GID:-1000}  # Run as host user for proper file permissions
+    depends_on:
+      relayer:
+        condition: service_healthy
+    networks:
+      - integration
+    env_file:
+      - .env.integration
+    environment:
+      - RELAYER_BASE_URL=http://relayer:8080
+      # Test logging configuration
+      # Default to INFO level for clean output, can be overridden with RUST_LOG
+      - RUST_LOG=${RUST_LOG:-info}
+      # Test registry path (tests discover relayers via API)
+      - TEST_REGISTRY_PATH=${TEST_REGISTRY_PATH:-tests/integration/config/registry.json}
+    volumes:
+      - ./tests/integration/config:/app/config:ro
+      - ./config/networks:/app/networks:ro
+      # Mount coverage output directory
+      - ./coverage:/app/coverage
+      # Mount profraw directory for debugging raw coverage data
+      - ./profraw:/app/profraw
+networks:
+  integration:
+    driver: bridge
+    name: openzeppelin-integration
+volumes:
+  test-results:

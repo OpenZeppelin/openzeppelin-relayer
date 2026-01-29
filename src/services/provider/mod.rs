@@ -19,7 +19,84 @@ pub use stellar::*;
 mod retry;
 pub use retry::*;
 
+pub mod rpc_health_store;
 pub mod rpc_selector;
+
+pub use rpc_health_store::{RpcConfigMetadata, RpcHealthStore};
+
+/// Configuration for creating a provider instance.
+///
+/// This struct encapsulates all the parameters needed to create a provider,
+/// making the API cleaner and easier to maintain.
+#[derive(Debug, Clone)]
+pub struct ProviderConfig {
+    /// RPC endpoint configurations (URLs and weights)
+    pub rpc_configs: Vec<RpcConfig>,
+    /// Timeout duration in seconds for RPC requests
+    pub timeout_seconds: u64,
+    /// Number of consecutive failures before pausing a provider
+    pub failure_threshold: u32,
+    /// Duration in seconds to pause a provider after reaching failure threshold
+    pub pause_duration_secs: u64,
+    /// Duration in seconds after which failures are considered stale and reset
+    pub failure_expiration_secs: u64,
+}
+
+impl ProviderConfig {
+    /// Creates a new `ProviderConfig` from individual parameters.
+    ///
+    /// # Arguments
+    /// * `rpc_configs` - RPC endpoint configurations
+    /// * `timeout_seconds` - Timeout duration in seconds
+    /// * `failure_threshold` - Number of consecutive failures before pausing
+    /// * `pause_duration_secs` - Duration in seconds to pause after threshold
+    /// * `failure_expiration_secs` - Duration in seconds after which failures are considered stale
+    pub fn new(
+        rpc_configs: Vec<RpcConfig>,
+        timeout_seconds: u64,
+        failure_threshold: u32,
+        pause_duration_secs: u64,
+        failure_expiration_secs: u64,
+    ) -> Self {
+        Self {
+            rpc_configs,
+            timeout_seconds,
+            failure_threshold,
+            pause_duration_secs,
+            failure_expiration_secs,
+        }
+    }
+
+    /// Creates a `ProviderConfig` from `ServerConfig` with the given RPC configs.
+    ///
+    /// This is a convenience method that extracts provider-related configuration
+    /// from the server configuration.
+    ///
+    /// # Arguments
+    /// * `server_config` - The server configuration
+    /// * `rpc_configs` - RPC endpoint configurations
+    pub fn from_server_config(server_config: &ServerConfig, rpc_configs: Vec<RpcConfig>) -> Self {
+        let timeout_seconds = server_config.rpc_timeout_ms / 1000; // Convert ms to s
+        Self {
+            rpc_configs,
+            timeout_seconds,
+            failure_threshold: server_config.provider_failure_threshold,
+            pause_duration_secs: server_config.provider_pause_duration_secs,
+            failure_expiration_secs: server_config.provider_failure_expiration_secs,
+        }
+    }
+
+    /// Creates a `ProviderConfig` from environment variables with the given RPC configs.
+    ///
+    /// This loads configuration from `ServerConfig::from_env()`.
+    ///
+    /// # Arguments
+    /// * `rpc_configs` - RPC endpoint configurations
+    pub fn from_env(rpc_configs: Vec<RpcConfig>) -> Self {
+        let server_config = ServerConfig::from_env();
+        Self::from_server_config(&server_config, rpc_configs)
+    }
+}
 
 #[derive(Error, Debug, Serialize)]
 pub enum ProviderError {
@@ -174,65 +251,48 @@ impl From<rpc_selector::RpcSelectorError> for ProviderError {
 pub trait NetworkConfiguration: Sized {
     type Provider;
 
-    fn public_rpc_urls(&self) -> Vec<String>;
+    fn public_rpc_urls(&self) -> Vec<RpcConfig>;
 
-    fn new_provider(
-        rpc_urls: Vec<RpcConfig>,
-        timeout_seconds: u64,
-    ) -> Result<Self::Provider, ProviderError>;
+    /// Creates a new provider instance using the provided configuration.
+    ///
+    /// # Arguments
+    /// * `config` - Provider configuration containing RPC configs and settings
+    fn new_provider(config: ProviderConfig) -> Result<Self::Provider, ProviderError>;
 }
 
 impl NetworkConfiguration for EvmNetwork {
     type Provider = EvmProvider;
 
-    fn public_rpc_urls(&self) -> Vec<String> {
-        (*self)
-            .public_rpc_urls()
-            .map(|urls| urls.iter().map(|url| url.to_string()).collect())
-            .unwrap_or_default()
+    fn public_rpc_urls(&self) -> Vec<RpcConfig> {
+        self.rpc_urls.clone()
     }
 
-    fn new_provider(
-        rpc_urls: Vec<RpcConfig>,
-        timeout_seconds: u64,
-    ) -> Result<Self::Provider, ProviderError> {
-        EvmProvider::new(rpc_urls, timeout_seconds)
+    fn new_provider(config: ProviderConfig) -> Result<Self::Provider, ProviderError> {
+        EvmProvider::new(config)
     }
 }
 
 impl NetworkConfiguration for SolanaNetwork {
     type Provider = SolanaProvider;
 
-    fn public_rpc_urls(&self) -> Vec<String> {
-        (*self)
-            .public_rpc_urls()
-            .map(|urls| urls.to_vec())
-            .unwrap_or_default()
+    fn public_rpc_urls(&self) -> Vec<RpcConfig> {
+        self.rpc_urls.clone()
     }
 
-    fn new_provider(
-        rpc_urls: Vec<RpcConfig>,
-        timeout_seconds: u64,
-    ) -> Result<Self::Provider, ProviderError> {
-        SolanaProvider::new(rpc_urls, timeout_seconds)
+    fn new_provider(config: ProviderConfig) -> Result<Self::Provider, ProviderError> {
+        SolanaProvider::new(config)
     }
 }
 
 impl NetworkConfiguration for StellarNetwork {
     type Provider = StellarProvider;
 
-    fn public_rpc_urls(&self) -> Vec<String> {
-        (*self)
-            .public_rpc_urls()
-            .map(|urls| urls.to_vec())
-            .unwrap_or_default()
+    fn public_rpc_urls(&self) -> Vec<RpcConfig> {
+        self.rpc_urls.clone()
     }
 
-    fn new_provider(
-        rpc_urls: Vec<RpcConfig>,
-        timeout_seconds: u64,
-    ) -> Result<Self::Provider, ProviderError> {
-        StellarProvider::new(rpc_urls, timeout_seconds)
+    fn new_provider(config: ProviderConfig) -> Result<Self::Provider, ProviderError> {
+        StellarProvider::new(config)
     }
 }
 
@@ -262,23 +322,21 @@ pub fn get_network_provider<N: NetworkConfiguration>(
     network: &N,
     custom_rpc_urls: Option<Vec<RpcConfig>>,
 ) -> Result<N::Provider, ProviderError> {
-    let rpc_timeout_ms = ServerConfig::from_env().rpc_timeout_ms;
-    let timeout_seconds = rpc_timeout_ms / 1000; // Convert ms to s
-
     let rpc_urls = match custom_rpc_urls {
         Some(configs) if !configs.is_empty() => configs,
         _ => {
-            let urls = network.public_rpc_urls();
-            if urls.is_empty() {
+            let configs = network.public_rpc_urls();
+            if configs.is_empty() {
                 return Err(ProviderError::NetworkConfiguration(
                     "No public RPC URLs available for this network".to_string(),
                 ));
             }
-            urls.into_iter().map(RpcConfig::new).collect()
+            configs
         }
     };
 
-    N::new_provider(rpc_urls, timeout_seconds)
+    let provider_config = ProviderConfig::from_env(rpc_urls);
+    N::new_provider(provider_config)
 }
 
 /// Determines if an HTTP status code indicates the provider should be marked as failed.
@@ -415,7 +473,7 @@ mod tests {
     fn create_test_evm_network() -> EvmNetwork {
         EvmNetwork {
             network: "test-evm".to_string(),
-            rpc_urls: vec!["https://rpc.example.com".to_string()],
+            rpc_urls: vec![RpcConfig::new("https://rpc.example.com".to_string())],
             explorer_urls: None,
             average_blocktime_ms: 12000,
             is_testnet: true,
@@ -431,7 +489,7 @@ mod tests {
     fn create_test_solana_network(network_str: &str) -> SolanaNetwork {
         SolanaNetwork {
             network: network_str.to_string(),
-            rpc_urls: vec!["https://api.testnet.solana.com".to_string()],
+            rpc_urls: vec![RpcConfig::new("https://api.testnet.solana.com".to_string())],
             explorer_urls: None,
             average_blocktime_ms: 400,
             is_testnet: true,
@@ -442,7 +500,9 @@ mod tests {
     fn create_test_stellar_network() -> StellarNetwork {
         StellarNetwork {
             network: "testnet".to_string(),
-            rpc_urls: vec!["https://soroban-testnet.stellar.org".to_string()],
+            rpc_urls: vec![RpcConfig::new(
+                "https://soroban-testnet.stellar.org".to_string(),
+            )],
             explorer_urls: None,
             average_blocktime_ms: 5000,
             is_testnet: true,
@@ -595,10 +655,12 @@ mod tests {
             RpcConfig {
                 url: "https://custom-rpc1.example.com".to_string(),
                 weight: 1,
+                ..Default::default()
             },
             RpcConfig {
                 url: "https://custom-rpc2.example.com".to_string(),
                 weight: 1,
+                ..Default::default()
             },
         ];
         let result = get_network_provider(&network, Some(custom_urls));
@@ -654,10 +716,12 @@ mod tests {
             RpcConfig {
                 url: "https://custom-rpc1.example.com".to_string(),
                 weight: 1,
+                ..Default::default()
             },
             RpcConfig {
                 url: "https://custom-rpc2.example.com".to_string(),
                 weight: 1,
+                ..Default::default()
             },
         ];
         let result = get_network_provider(&network, Some(custom_urls));

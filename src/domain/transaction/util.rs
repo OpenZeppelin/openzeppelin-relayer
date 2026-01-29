@@ -5,6 +5,7 @@
 //! repositories and factories to perform these operations.
 use actix_web::web::ThinData;
 use chrono::{DateTime, Duration, Utc};
+use tracing::warn;
 
 use crate::{
     domain::get_relayer_by_id,
@@ -147,6 +148,42 @@ pub fn get_age_since_created(tx: &TransactionRepoModel) -> Result<Duration, Tran
         })?
         .with_timezone(&Utc);
     Ok(Utc::now().signed_duration_since(created))
+}
+
+/// Gets the age of a transaction since it was sent, falling back to created_at.
+///
+/// If sent_at is present but invalid, this falls back to created_at and emits a warning.
+/// Gets the age of a transaction since it was sent.
+pub fn get_age_since_sent(tx: &TransactionRepoModel) -> Result<Duration, TransactionError> {
+    let sent_at = tx.sent_at.as_deref().ok_or_else(|| {
+        TransactionError::UnexpectedError("Missing sent_at timestamp".to_string())
+    })?;
+    let sent = DateTime::parse_from_rfc3339(sent_at).map_err(|e| {
+        TransactionError::UnexpectedError(format!("Invalid sent_at timestamp: {e}"))
+    })?;
+    Ok(Utc::now().signed_duration_since(sent.with_timezone(&Utc)))
+}
+
+/// Gets the age of a transaction since it was sent, falling back to created_at.
+///
+/// If sent_at is present but invalid, this falls back to created_at and emits a warning.
+pub fn get_age_since_sent_or_created(
+    tx: &TransactionRepoModel,
+) -> Result<Duration, TransactionError> {
+    match get_age_since_sent(tx) {
+        Ok(age) => Ok(age),
+        Err(e) => {
+            if let Some(sent_at) = tx.sent_at.as_deref() {
+                warn!(
+                    tx_id = %tx.id,
+                    ts = %sent_at,
+                    error = %e,
+                    "failed to parse sent_at timestamp, falling back to created_at"
+                );
+            }
+            get_age_since_created(tx)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -311,6 +348,49 @@ mod tests {
                 let result = get_age_since_created(&tx);
                 assert!(result.is_err(), "Expected error for: {}", invalid_ts);
             }
+        }
+    }
+
+    mod get_age_since_sent_or_created_tests {
+        use super::*;
+
+        /// Helper to create a test transaction with a specific timestamp.
+        fn create_test_tx_with_timestamps(
+            created_at: String,
+            sent_at: Option<String>,
+        ) -> TransactionRepoModel {
+            let mut tx = create_mock_transaction();
+            tx.created_at = created_at;
+            tx.sent_at = sent_at;
+            tx
+        }
+
+        #[test]
+        fn test_uses_sent_at_when_present() {
+            let sent_at = (Utc::now() - Duration::minutes(5)).to_rfc3339();
+            let created_at = (Utc::now() - Duration::minutes(30)).to_rfc3339();
+            let tx = create_test_tx_with_timestamps(created_at, Some(sent_at));
+
+            let age = get_age_since_sent_or_created(&tx).unwrap();
+            assert!(age.num_minutes() >= 5);
+        }
+
+        #[test]
+        fn test_falls_back_to_created_at_when_sent_at_missing() {
+            let created_at = (Utc::now() - Duration::minutes(10)).to_rfc3339();
+            let tx = create_test_tx_with_timestamps(created_at, None);
+
+            let age = get_age_since_sent_or_created(&tx).unwrap();
+            assert!(age.num_minutes() >= 10);
+        }
+
+        #[test]
+        fn test_falls_back_to_created_at_when_sent_at_invalid() {
+            let created_at = (Utc::now() - Duration::minutes(2)).to_rfc3339();
+            let tx = create_test_tx_with_timestamps(created_at, Some("not-a-date".to_string()));
+
+            let age = get_age_since_sent_or_created(&tx).unwrap();
+            assert!(age.num_minutes() >= 2);
         }
     }
 

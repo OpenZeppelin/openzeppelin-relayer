@@ -1,0 +1,35 @@
+{
+  "_comment": "COPY this file to registry.json and configure for your environment",
+  "networks": {
+    "sepolia": {
+      "network_name": "sepolia",
+      "network_type": "evm",
+      "contracts": {
+        "simple_storage": "0x5379E27d181a94550318d4A44124eCd056678879",
+        "test_erc20": "0x0000000000000000000000000000000000000000"
+      },
+      "min_balance": "0.1",
+      "enabled": false
+    },
+    "bsc-testnet": {
+      "network_name": "binance-smart-chain-testnet",
+      "network_type": "evm",
+      "contracts": {
+        "simple_storage": "0x652496dd1344a0bdC4D43b3b7d661486A4e94a68",
+        "test_erc20": "0x0000000000000000000000000000000000000000"
+      },
+      "min_balance": "0.1",
+      "enabled": false
+    },
+    "base-sepolia": {
+      "network_name": "base-sepolia",
+      "network_type": "evm",
+      "contracts": {
+        "simple_storage": "0xFa36681305B4b47A7398faFcF449FeAA80af97F7",
+        "test_erc20": "0x0000000000000000000000000000000000000000"
+      },
+      "min_balance": "0.1",
+      "enabled": true
+    }
+  }
+}

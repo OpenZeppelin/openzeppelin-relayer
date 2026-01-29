@@ -1,14 +1,23 @@
 //! This module is the orchestrator of the plugin execution.
 //!
-//! 1. Initiates a socket connection to the relayer server - socket.rs
-//! 2. Executes the plugin script - script_executor.rs
-//! 3. Sends the shutdown signal to the relayer server - socket.rs
-//! 4. Waits for the relayer server to finish the execution - socket.rs
-//! 5. Returns the output of the script - script_executor.rs
+//! 1. Initiates connection to shared socket service - shared_socket.rs
+//! 2. Executes the plugin script - script_executor.rs OR pool_executor.rs
+//! 3. Collects traces via ExecutionGuard - shared_socket.rs
+//! 4. Returns the output of the script - script_executor.rs
 //!
-use std::{sync::Arc, time::Duration};
+//! ## Execution Modes
+//!
+//! - **Pool mode** (default): Uses persistent Piscina worker pool.
+//!   Faster execution with precompilation and worker reuse.
+//! - **ts-node mode** (`PLUGIN_USE_POOL=false`): Spawns ts-node per request.
+//!   Simple but slower. Uses the shared socket for bidirectional communication.
+//!
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use crate::services::plugins::{RelayerApi, ScriptExecutor, ScriptResult, SocketService};
+use crate::services::plugins::{
+    ensure_shared_socket_started, get_pool_manager, get_shared_socket_service, ScriptExecutor,
+    ScriptResult,
+};
 use crate::{
     jobs::JobProducerTrait,
     models::{
@@ -21,12 +30,27 @@ use crate::{
     },
 };
 
-use super::PluginError;
+use super::{config::get_config, PluginError};
 use async_trait::async_trait;
-use tokio::{sync::oneshot, time::timeout};
+use tokio::time::timeout;
+use tracing::debug;
+use uuid::Uuid;
 
 #[cfg(test)]
 use mockall::automock;
+
+/// Check if pool-based execution is enabled via environment variable
+/// Pool mode is enabled by default for better performance
+fn use_pool_executor() -> bool {
+    std::env::var("PLUGIN_USE_POOL")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(true) // Pool mode is now the default
+}
+
+/// Get trace timeout duration from centralized config
+fn get_trace_timeout() -> Duration {
+    Duration::from_millis(get_config().trace_timeout_ms)
+}
 
 #[cfg_attr(test, automock)]
 #[async_trait]
@@ -41,6 +65,11 @@ pub trait PluginRunnerTrait {
         script_params: String,
         http_request_id: Option<String>,
         headers_json: Option<String>,
+        route: Option<String>,
+        config_json: Option<String>,
+        method: Option<String>,
+        query_json: Option<String>,
+        emit_traces: bool,
         state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
     ) -> Result<ScriptResult, PluginError>
     where
@@ -73,6 +102,11 @@ impl PluginRunnerTrait for PluginRunner {
         script_params: String,
         http_request_id: Option<String>,
         headers_json: Option<String>,
+        route: Option<String>,
+        config_json: Option<String>,
+        method: Option<String>,
+        query_json: Option<String>,
+        emit_traces: bool,
         state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
     ) -> Result<ScriptResult, PluginError>
     where
@@ -90,46 +124,128 @@ impl PluginRunnerTrait for PluginRunner {
         PR: PluginRepositoryTrait + Send + Sync + 'static,
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {
-        let socket_service = SocketService::new(socket_path)?;
-        let socket_path_clone = socket_service.socket_path().to_string();
+        // Choose execution mode based on environment variable
+        if use_pool_executor() {
+            return self
+                .run_with_pool(
+                    plugin_id,
+                    socket_path,
+                    script_path,
+                    timeout_duration,
+                    script_params,
+                    http_request_id,
+                    headers_json,
+                    route,
+                    config_json,
+                    method,
+                    query_json,
+                    emit_traces,
+                    state,
+                )
+                .await;
+        }
 
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        // Default: ts-node execution
+        self.run_with_tsnode(
+            plugin_id,
+            socket_path,
+            script_path,
+            timeout_duration,
+            script_params,
+            http_request_id,
+            headers_json,
+            route,
+            config_json,
+            method,
+            query_json,
+            emit_traces,
+            state,
+        )
+        .await
+    }
+}
 
-        let server_handle = tokio::spawn(async move {
-            let relayer_api = Arc::new(RelayerApi);
-            socket_service.listen(shutdown_rx, state, relayer_api).await
-        });
+impl PluginRunner {
+    /// Execute plugin using ts-node with shared socket
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    async fn run_with_tsnode<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+        &self,
+        plugin_id: String,
+        _socket_path: &str, // Unused - kept for signature compatibility
+        script_path: String,
+        timeout_duration: Duration,
+        script_params: String,
+        http_request_id: Option<String>,
+        headers_json: Option<String>,
+        route: Option<String>,
+        config_json: Option<String>,
+        method: Option<String>,
+        query_json: Option<String>,
+        _emit_traces: bool,
+        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
+    ) -> Result<ScriptResult, PluginError>
+    where
+        J: JobProducerTrait + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        TR: TransactionRepository
+            + Repository<TransactionRepoModel, String>
+            + Send
+            + Sync
+            + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
+        AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+    {
+        // Ensure shared socket is started
+        ensure_shared_socket_started(Arc::clone(&state)).await?;
+
+        // Get the shared socket service
+        let shared_socket = get_shared_socket_service()?;
+        let shared_socket_path = shared_socket.socket_path().to_string();
+
+        // Generate execution_id from http_request_id or plugin_id
+        let execution_id = http_request_id
+            .clone()
+            .unwrap_or_else(|| format!("{}-{}", plugin_id, uuid::Uuid::new_v4()));
+
+        // Register execution (RAII guard auto-unregisters on drop)
+        let guard = shared_socket.register_execution(execution_id.clone()).await;
 
         let exec_outcome = match timeout(
             timeout_duration,
             ScriptExecutor::execute_typescript(
                 plugin_id,
                 script_path,
-                socket_path_clone,
+                shared_socket_path, // Use shared socket path
                 script_params,
-                http_request_id,
+                Some(execution_id),
                 headers_json,
+                route,
+                config_json,
+                method,
+                query_json,
             ),
         )
         .await
         {
             Ok(result) => result,
             Err(_) => {
-                // ensures the socket gets closed.
-                let _ = shutdown_tx.send(());
                 return Err(PluginError::ScriptTimeout(timeout_duration.as_secs()));
             }
         };
 
-        let _ = shutdown_tx.send(());
-
-        let server_handle = server_handle
-            .await
-            .map_err(|e| PluginError::SocketError(e.to_string()))?;
-
-        let traces = match server_handle {
-            Ok(traces) => traces,
-            Err(e) => return Err(PluginError::SocketError(e.to_string())),
+        // Collect traces from the guard
+        let mut traces_rx = guard.into_receiver();
+        let traces = match tokio::time::timeout(get_trace_timeout(), traces_rx.recv()).await {
+            Ok(Some(traces)) => traces,
+            Ok(None) => Vec::new(),
+            Err(_) => {
+                debug!("Timeout waiting for traces");
+                Vec::new()
+            }
         };
 
         match exec_outcome {
@@ -139,6 +255,131 @@ impl PluginRunnerTrait for PluginRunner {
                 Ok(script_result)
             }
             Err(err) => Err(err.with_traces(traces)),
+        }
+    }
+
+    /// Execute plugin using worker pool (new high-performance mode)
+    /// Uses shared socket service for better scalability
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    async fn run_with_pool<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+        &self,
+        plugin_id: String,
+        _socket_path: &str, // Unused - we use shared socket instead
+        script_path: String,
+        timeout_duration: Duration,
+        script_params: String,
+        http_request_id: Option<String>,
+        headers_json: Option<String>,
+        route: Option<String>,
+        config_json: Option<String>,
+        method: Option<String>,
+        query_json: Option<String>,
+        emit_traces: bool,
+        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
+    ) -> Result<ScriptResult, PluginError>
+    where
+        J: JobProducerTrait + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        TR: TransactionRepository
+            + Repository<TransactionRepoModel, String>
+            + Send
+            + Sync
+            + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
+        AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+    {
+        // Ensure shared socket service is started
+        ensure_shared_socket_started(Arc::clone(&state)).await?;
+
+        // Get shared socket service
+        let shared_socket = get_shared_socket_service()?;
+        let shared_socket_path = shared_socket.socket_path().to_string();
+
+        // Generate execution ID (use http_request_id if available, otherwise generate one)
+        let execution_id = http_request_id
+            .clone()
+            .unwrap_or_else(|| format!("exec-{}", Uuid::new_v4()));
+
+        // Always register execution so API calls from plugin can be validated
+        // ExecutionGuard will auto-unregister on drop (RAII pattern)
+        let execution_guard = shared_socket.register_execution(execution_id.clone()).await;
+
+        // Execute via pool manager (using shared socket path)
+        let pool_manager = get_pool_manager();
+
+        // Parse params as JSON Value
+        let params: serde_json::Value = serde_json::from_str(&script_params)
+            .unwrap_or(serde_json::Value::String(script_params.clone()));
+
+        // Parse headers if present
+        let headers: Option<HashMap<String, Vec<String>>> = headers_json
+            .as_ref()
+            .and_then(|h| serde_json::from_str(h).ok());
+
+        // Parse config if present
+        let config: Option<serde_json::Value> = config_json
+            .as_ref()
+            .and_then(|c| serde_json::from_str(c).ok());
+
+        // Parse query if present
+        let query: Option<serde_json::Value> = query_json
+            .as_ref()
+            .and_then(|q| serde_json::from_str(q).ok());
+
+        let exec_outcome = match timeout(
+            timeout_duration,
+            pool_manager.execute_plugin(
+                plugin_id.clone(),
+                None,              // compiled_code - will be fetched from cache
+                Some(script_path), // plugin_path
+                params,
+                headers,
+                shared_socket_path, // Use shared socket path instead of unique one
+                Some(execution_id.clone()), // Pass the registered execution_id
+                Some(timeout_duration.as_secs()),
+                route,
+                config,
+                method,
+                query,
+            ),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => {
+                // No need to manually unregister - ExecutionGuard handles it
+                return Err(PluginError::ScriptTimeout(timeout_duration.as_secs()));
+            }
+        };
+
+        // Collect traces only if emit_traces is enabled
+        let traces = if emit_traces {
+            // Convert guard to receiver only now, keeping guard alive during execution
+            let mut rx = execution_guard.into_receiver();
+            // Wait for traces with short timeout - they arrive immediately if the plugin used the API
+            let trace_timeout = get_trace_timeout().min(timeout_duration);
+            match timeout(trace_timeout, rx.recv()).await {
+                Ok(Some(traces)) => traces,
+                Ok(None) | Err(_) => Vec::new(),
+            }
+        } else {
+            // Drop the guard without waiting for traces
+            drop(execution_guard);
+            Vec::new()
+        };
+
+        // ExecutionGuard auto-unregisters when guard is dropped (after trace collection)
+
+        match exec_outcome {
+            Ok(mut script_result) => {
+                script_result.trace = traces;
+                Ok(script_result)
+            }
+            Err(e) => Err(e.with_traces(traces)),
         }
     }
 }
@@ -177,6 +418,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_run() {
+        // Use ts-node mode for this test since temp files are outside plugins directory
+        std::env::set_var("PLUGIN_USE_POOL", "false");
+
         let temp_dir = tempdir().unwrap();
         let ts_config = temp_dir.path().join("tsconfig.json");
         let script_path = temp_dir.path().join("test_run.ts");
@@ -207,9 +451,18 @@ mod tests {
                 "{ \"test\": \"test\" }".to_string(),
                 None,
                 None,
+                None,
+                None,
+                None,
+                None,
+                false, // emit_traces
                 Arc::new(web::ThinData(state)),
             )
             .await;
+
+        // Cleanup env var
+        std::env::remove_var("PLUGIN_USE_POOL");
+
         if matches!(
             result,
             Err(PluginError::SocketError(ref msg)) if msg.contains("Operation not permitted")
@@ -228,6 +481,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_timeout() {
+        // Use ts-node mode for this test since temp files are outside plugins directory
+        std::env::set_var("PLUGIN_USE_POOL", "false");
+
         let temp_dir = tempdir().unwrap();
         let ts_config = temp_dir.path().join("tsconfig.json");
         let script_path = temp_dir.path().join("test_simple_timeout.ts");
@@ -266,9 +522,17 @@ mod tests {
                 "{}".to_string(),
                 None,
                 None,
+                None,
+                None,
+                None,
+                None,
+                false, // emit_traces
                 Arc::new(web::ThinData(state)),
             )
             .await;
+
+        // Cleanup env var
+        std::env::remove_var("PLUGIN_USE_POOL");
 
         // Should timeout
         if matches!(

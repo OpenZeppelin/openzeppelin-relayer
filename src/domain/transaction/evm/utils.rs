@@ -1,5 +1,5 @@
 use crate::constants::{
-    ARBITRUM_GAS_LIMIT, DEFAULT_GAS_LIMIT, DEFAULT_TX_VALID_TIMESPAN,
+    ARBITRUM_GAS_LIMIT, DEFAULT_GAS_LIMIT, DEFAULT_TRANSACTION_SPEED, DEFAULT_TX_VALID_TIMESPAN,
     EVM_MIN_AGE_FOR_RESUBMIT_SECONDS, MAXIMUM_NOOP_RETRY_ATTEMPTS, MAXIMUM_TX_ATTEMPTS,
 };
 use crate::domain::get_age_since_created;
@@ -23,6 +23,7 @@ pub async fn make_noop<P: EvmProviderTrait>(
     evm_data.value = U256::from(0u64);
     evm_data.data = Some("0x".to_string());
     evm_data.to = Some(evm_data.from.clone());
+    evm_data.speed = Some(DEFAULT_TRANSACTION_SPEED);
 
     // Set gas limit based on network type
     if network.is_arbitrum() {
@@ -225,7 +226,9 @@ mod tests {
     fn create_standard_network() -> EvmNetwork {
         EvmNetwork {
             network: "ethereum".to_string(),
-            rpc_urls: vec!["https://mainnet.infura.io".to_string()],
+            rpc_urls: vec![crate::models::RpcConfig::new(
+                "https://mainnet.infura.io".to_string(),
+            )],
             explorer_urls: None,
             average_blocktime_ms: 12000,
             is_testnet: false,
@@ -239,9 +242,10 @@ mod tests {
     }
 
     fn create_arbitrum_network() -> EvmNetwork {
+        use crate::models::RpcConfig;
         EvmNetwork {
             network: "arbitrum".to_string(),
-            rpc_urls: vec!["https://arb1.arbitrum.io/rpc".to_string()],
+            rpc_urls: vec![RpcConfig::new("https://arb1.arbitrum.io/rpc".to_string())],
             explorer_urls: None,
             average_blocktime_ms: 1000,
             is_testnet: false,
@@ -255,9 +259,10 @@ mod tests {
     }
 
     fn create_arbitrum_nova_network() -> EvmNetwork {
+        use crate::models::RpcConfig;
         EvmNetwork {
             network: "arbitrum-nova".to_string(),
-            rpc_urls: vec!["https://nova.arbitrum.io/rpc".to_string()],
+            rpc_urls: vec![RpcConfig::new("https://nova.arbitrum.io/rpc".to_string())],
             explorer_urls: None,
             average_blocktime_ms: 1000,
             is_testnet: false,
@@ -299,6 +304,7 @@ mod tests {
         assert_eq!(evm_data.value, U256::from(0u64)); // Zero value
         assert_eq!(evm_data.data.unwrap(), "0x"); // Empty data
         assert_eq!(evm_data.nonce, Some(42)); // Original nonce preserved
+        assert_eq!(evm_data.speed, Some(DEFAULT_TRANSACTION_SPEED));
     }
 
     #[tokio::test]

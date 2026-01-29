@@ -8,41 +8,40 @@ OpenZeppelin Relayer provides comprehensive support for EVM (Ethereum Virtual Ma
 
 ## Features
 
-* Advanced gas price management with EIP-1559 support
-* Dynamic gas limit estimation with fallback mechanisms
-* Transaction replacement and acceleration
-* Multi-network support (Ethereum, Arbitrum, Optimism, BSC, Polygon, etc.)
-* Custom RPC endpoints with load balancing and failover
-* Secure transaction signing with multiple signer backends
-* Transaction status monitoring and confirmation tracking
-* Whitelist-based security policies
-* Metrics and observability
+- Advanced gas price management with EIP-1559 support
+- Dynamic gas limit estimation with fallback mechanisms
+- Transaction replacement and acceleration
+- Multi-network support (Ethereum, Arbitrum, Optimism, BSC, Polygon, etc.)
+- Custom RPC endpoints with load balancing and failover
+- Secure transaction signing with multiple signer backends
+- Transaction status monitoring and confirmation tracking
+- Whitelist-based security policies
+- Metrics and observability
 
 ## Supported Networks
 
 EVM networks are defined via JSON configuration files, providing flexibility to:
 
-* Configure any EVM-compatible network (Ethereum, Polygon, BSC, Arbitrum, Optimism, etc.)
-* Set up custom EVM-compatible networks with specific RPC endpoints
-* Create network variants using inheritance from base configurations
-* Support both Layer 1 and Layer 2 networks
+- Configure any EVM-compatible network (Ethereum, Polygon, BSC, Arbitrum, Optimism, etc.)
+- Set up custom EVM-compatible networks with specific RPC endpoints
+- Create network variants using inheritance from base configurations
+- Support both Layer 1 and Layer 2 networks
 
 For detailed network configuration options, see the [Network Configuration](/relayer/network_configuration) guide.
 
 ## Supported Signers
 
-* `local` (local keystore files)
-* `vault` (HashiCorp Vault secret storage)
-* `vault_cloud` (hosted HashiCorp Vault)
-* `turnkey` (hosted Turnkey signer)
-* `google_cloud_kms` (Google Cloud KMS)
-* `aws_kms` (Amazon AWS KMS)
-* `cdp` (hosted Coinbase Developer Platform signer)
+- `local` (local keystore files)
+- `vault` (HashiCorp Vault secret storage)
+- `vault_cloud` (hosted HashiCorp Vault)
+- `turnkey` (hosted Turnkey signer)
+- `google_cloud_kms` (Google Cloud KMS)
+- `aws_kms` (Amazon AWS KMS)
+- `cdp` (hosted Coinbase Developer Platform signer)
 
 For detailed signer configuration options, see the [Signers](/relayer/configuration/signers) guide.
 
 <Callout>
-
 
 In production systems, hosted signers (AWS KMS, Google Cloud KMS, Turnkey, CDP) are recommended for the best security model.
 
@@ -53,11 +52,12 @@ In production systems, hosted signers (AWS KMS, Google Cloud KMS, Turnkey, CDP) 
 For a step-by-step setup, see [Quick Start Guide](/relayer/quickstart).
 Key prerequisites:
 
-* Rust 2021, version `1.86` or later
-* Redis
-* Docker (optional)
+- Rust 2021, version `1.88` or later
+- Redis
+- Docker (optional)
 
 Example configuration for an EVM relayer:
+
 ```json
 {
   "id": "sepolia-example",
@@ -90,7 +90,7 @@ Example configuration for an EVM relayer:
 },
 ```
 
-For more configuration examples, visit the [OpenZeppelin Relayer examples repository, window=_blank](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples).
+For more configuration examples, visit the [OpenZeppelin Relayer examples repository, window=\_blank](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples).
 
 ## Configuration
 
@@ -98,34 +98,36 @@ For more configuration examples, visit the [OpenZeppelin Relayer examples reposi
 
 In addition to standard relayer configuration and policies, EVM relayers support additional options:
 
-* `gas_price_cap`: Maximum gas price limit (in wei) for transactions
-* `gas_limit_estimation`: Enable/disable automatic gas limit estimation
-* `whitelist_receivers`: List of authorized contract addresses for transactions
-* `min_balance`: Minimum balance required for the relayer to operate (in wei)
-* `eip1559_pricing`: Enable/disable EIP-1559 pricing methodology for transaction fees
+- `gas_price_cap`: Maximum gas price limit (in wei) for transactions
+- `gas_limit_estimation`: Enable/disable automatic gas limit estimation
+- `whitelist_receivers`: List of authorized contract addresses for transactions
+- `min_balance`: Minimum balance required for the relayer to operate (in wei)
+- `eip1559_pricing`: Enable/disable EIP-1559 pricing methodology for transaction fees
 
 You can check all options in [User Documentation - Relayers](/relayer#3_relayers).
 
 ### Gas Management Configuration
 
 #### Gas Price Cap
+
 Set a maximum gas price to protect against extreme network congestion:
 
 ```json
 {
   "policies": {
-    "gas_price_cap": 100000000000  // 100 Gwei maximum
+    "gas_price_cap": 100000000000 // 100 Gwei maximum
   }
 }
 ```
 
 #### Gas Limit Estimation
+
 Enable or disable automatic gas limit estimation:
 
 ```json
 {
   "policies": {
-    "gas_limit_estimation": true  // Enable automatic estimation
+    "gas_limit_estimation": true // Enable automatic estimation
   }
 }
 ```
@@ -134,23 +136,23 @@ When disabled, gas limits must be provided explicitly in transaction requests.
 
 The relayer uses a two-tier approach for gas limit estimation:
 
-1. ***Primary Method***: Uses the RPC `estimate_gas` method to calculate gas requirements
-   * The estimated value is increased by 10% as a safety buffer
-   * Provides accurate estimates for most transaction types
-2. ***Fallback Method***: When RPC estimation fails, default gas limits are applied based on transaction type:
-   * ***Simple ETH transfer*** (no data): 21,000 gas
-   * ***ERC20 transfer*** (`0xa9059cbb`): 65,000 gas
-   * ***ERC721/ERC20 transferFrom*** (`0x23b872dd`): 80,000 gas
-   * ***Complex contracts*** (all other function calls): 200,000 gas
+1. **_Primary Method_**: Uses the RPC `estimate_gas` method to calculate gas requirements
+   - The estimated value is increased by 10% as a safety buffer
+   - Provides accurate estimates for most transaction types
+2. **_Fallback Method_**: When RPC estimation fails, default gas limits are applied based on transaction type:
+   - **_Simple ETH transfer_** (no data): 21,000 gas
+   - **_ERC20 transfer_** (`0xa9059cbb`): 65,000 gas
+   - **_ERC721/ERC20 transferFrom_** (`0x23b872dd`): 80,000 gas
+   - **_Complex contracts_** (all other function calls): 200,000 gas
 
 <Callout>
-
 
 For advanced users working with complex transactions or custom contracts, it is recommended to include an explicit `gas_limit` parameter in the transaction request to ensure optimal gas usage and avoid estimation errors.
 
 </Callout>
 
 #### Whitelist Receivers
+
 Restrict transactions to specific contract addresses:
 
 ```json
@@ -170,9 +172,9 @@ The EVM API provides comprehensive transaction management capabilities.
 
 Common endpoints:
 
-* `POST /api/v1/relayers/<relayer_id>/transactions` send transaction
-* `GET /api/v1/relayers/<relayer_id>/transactions` list transactions
-* `GET /api/v1/relayers/<relayer_id>/transactions/<transaction_id>` get transaction by id
+- `POST /api/v1/relayers/<relayer_id>/transactions` send transaction
+- `GET /api/v1/relayers/<relayer_id>/transactions` list transactions
+- `GET /api/v1/relayers/<relayer_id>/transactions/<transaction_id>` get transaction by id
 
 ### Send Transaction - Speed params
 
@@ -239,72 +241,81 @@ curl --location --request GET 'http://localhost:8080/api/v1/relayers/sepolia-exa
 --header 'Authorization: Bearer <api_key>'
 ```
 
-See [API Reference](https://release-v1-0-0%2D%2Dopenzeppelin-relayer.netlify.app/api_docs.html) for full details and examples.
+See [API Reference](./api) for full details and examples.
 
 ## Transaction Lifecycle
 
 ### 1. Transaction Submission
-* Validate transaction parameters
-* Check whitelist policies (if enabled)
-* Estimate gas limit (if not provided)
-* Calculate gas price based on network conditions
+
+- Validate transaction parameters
+- Check whitelist policies (if enabled)
+- Estimate gas limit (if not provided)
+- Calculate gas price based on network conditions
 
 ### 2. Transaction Signing
-* Sign transaction using configured signer
-* Generate appropriate signature format
+
+- Sign transaction using configured signer
+- Generate appropriate signature format
 
 ### 3. Transaction Broadcasting
-* Submit to network via RPC endpoints
-* Handle RPC failures with automatic retries
-* Switch to backup RPC endpoints if needed
+
+- Submit to network via RPC endpoints
+- Handle RPC failures with automatic retries
+- Switch to backup RPC endpoints if needed
 
 ### 4. Transaction Monitoring
-* Track transaction status and confirmations
-* Handle transaction replacements if needed
-* Send notifications on status changes
+
+- Track transaction status and confirmations
+- Handle transaction replacements if needed
+- Send notifications on status changes
 
 ### 5. Transaction Confirmation
-* Wait for required number of confirmations
-* Mark transaction as confirmed or failed
-* Clean up resources
+
+- Wait for required number of confirmations
+- Mark transaction as confirmed or failed
+- Clean up resources
 
 ## Security Best Practices
 
 ### Network Security
-* Use private RPC endpoints in production
-* Configure appropriate `gas_price_cap` to prevent excessive fees
-* Enable `whitelist_receivers` for controlled environments
-* Monitor relayer balance and set appropriate `min_balance`
+
+- Use private RPC endpoints in production
+- Configure `RPC_ALLOWED_HOSTS` and `RPC_BLOCK_PRIVATE_IPS` for SSRF protection. See [Configuration → RPC URL Security](/relayer/configuration#rpc-url-security)
+- Configure appropriate `gas_price_cap` to prevent excessive fees
+- Enable `whitelist_receivers` for controlled environments
+- Monitor relayer balance and set appropriate `min_balance`
 
 ### Signer Security
-* Use hosted signers (AWS KMS, Google Cloud KMS, Turnkey) in production
-* Rotate signer keys regularly
-* Implement proper access controls and audit logging
-* Never store private keys in plain text
+
+- Use hosted signers (AWS KMS, Google Cloud KMS, Turnkey) in production
+- Rotate signer keys regularly
+- Implement proper access controls and audit logging
+- Never store private keys in plain text
 
 ### Operational Security
-* Deploy behind a secure reverse proxy
-* Use HTTPS for all communications
-* Implement proper rate limiting
-* Monitor for unusual transaction patterns
+
+- Deploy behind a secure reverse proxy
+- Use HTTPS for all communications
+- Implement proper rate limiting
+- Monitor for unusual transaction patterns
 
 ### Monitoring and Observability
 
 Enable metrics and monitor:
 
-* Transaction success rates
-* Gas price trends
-* RPC endpoint performance
-* Relayer balance levels
-* Failed transaction patterns
+- Transaction success rates
+- Gas price trends
+- RPC endpoint performance
+- Relayer balance levels
+- Failed transaction patterns
 
 ## Support
 
 For help with EVM integration:
 
-* Join our [Telegram](https://t.me/openzeppelin_tg/2) community
-* Open an issue on our [GitHub repository](https://github.com/OpenZeppelin/openzeppelin-relayer)
-* Check our [comprehensive documentation](https://docs.openzeppelin.com/relayer)
+- Join our [Telegram](https://t.me/openzeppelin_tg/2) community
+- Open an issue on our [GitHub repository](https://github.com/OpenZeppelin/openzeppelin-relayer)
+- Check our [comprehensive documentation](https://docs.openzeppelin.com/relayer)
 
 ## License
 

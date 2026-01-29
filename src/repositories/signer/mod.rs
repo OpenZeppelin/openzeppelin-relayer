@@ -34,9 +34,9 @@ pub use signer_redis::*;
 use crate::{
     models::{RepositoryError, SignerRepoModel},
     repositories::{PaginatedResult, PaginationQuery, Repository},
+    utils::RedisConnections,
 };
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
 use std::sync::Arc;
 
 /// Enum wrapper for different signer repository implementations
@@ -52,10 +52,10 @@ impl SignerRepositoryStorage {
     }
 
     pub fn new_redis(
-        connection_manager: Arc<ConnectionManager>,
+        connections: Arc<RedisConnections>,
         key_prefix: String,
     ) -> Result<Self, RepositoryError> {
-        let redis_repo = RedisSignerRepository::new(connection_manager, key_prefix)?;
+        let redis_repo = RedisSignerRepository::new(connections, key_prefix)?;
         Ok(Self::Redis(redis_repo))
     }
 }

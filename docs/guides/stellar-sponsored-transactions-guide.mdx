@@ -10,7 +10,8 @@ Stellar Sponsored Transactions (also known as gasless transactions) allow users 
 
 1. **Quote**: Estimate the fee cost in your preferred token
 2. **Build**: Prepare a transaction that includes fee payment in the token
-3. **Send**: Sign and submit the transaction (relayer pays XLM fees, user pays token fees)
+3. **Sign**: User signs the transaction including fee payment
+4. **Send**: Submit the transaction (relayer pays XLM fees, user pays token fees)
 
 The relayer handles the complexity of fee conversion, token swaps, and XLM fee payment, while users simply pay in their preferred token.
 
@@ -105,7 +106,7 @@ For a complete example of how to create trustlines, see the [Relayer SDK example
 
 ## Using the API
 
-The sponsored transaction flow consists of three steps: **Quote**, **Build**, and **Send**.
+The sponsored transaction flow consists of four steps: **Quote**, **Build**, **Sign**, and **Send**.
 
 ### Step 1: Get Fee Quote
 
@@ -345,5 +346,5 @@ Supported operation types:
 
 - [Stellar Documentation](https://developers.stellar.org/)
 - [Stellar SDK for JavaScript](https://stellar.github.io/js-stellar-sdk/)
-- [OpenZeppelin Relayer API Reference](/relayer/api_reference)
+- [OpenZeppelin Relayer API Reference](/relayer/api)
 - [Network Configuration Guide](/relayer/network_configuration)

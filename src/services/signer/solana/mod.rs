@@ -70,7 +70,7 @@ pub enum SolanaSigner {
     VaultTransit(VaultTransitSigner),
     Turnkey(TurnkeySigner),
     Cdp(CdpSigner),
-    GoogleCloudKms(GoogleCloudKmsSigner),
+    GoogleCloudKms(Box<GoogleCloudKmsSigner>),
     AwsKms(AwsKmsSigner),
 }
 
@@ -314,8 +314,8 @@ impl SolanaSignerFactory {
                             "Failed to create Google Cloud KMS service: {e}"
                         ))
                     })?;
-                return Ok(SolanaSigner::GoogleCloudKms(GoogleCloudKmsSigner::new(
-                    google_cloud_kms_service,
+                return Ok(SolanaSigner::GoogleCloudKms(Box::new(
+                    GoogleCloudKmsSigner::new(google_cloud_kms_service),
                 )));
             }
         };
@@ -457,26 +457,26 @@ mod solana_signer_factory_tests {
     async fn test_create_solana_signer_google_cloud_kms() {
         let signer_model = SignerDomainModel {
             id: "test".to_string(),
-            config: SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
+            config: SignerConfig::GoogleCloudKms(Box::new(GoogleCloudKmsSignerConfig {
                 service_account: GoogleCloudKmsSignerServiceAccountConfig {
-                    project_id: "project_id".to_string(),
+                    project_id: SecretString::new("project_id"),
                     private_key_id: SecretString::new("private_key_id"),
                     private_key: SecretString::new("private_key"),
                     client_email: SecretString::new("client_email"),
-                    client_id: "client_id".to_string(),
-                    auth_uri: "auth_uri".to_string(),
-                    token_uri: "token_uri".to_string(),
-                    auth_provider_x509_cert_url: "auth_provider_x509_cert_url".to_string(),
-                    client_x509_cert_url: "client_x509_cert_url".to_string(),
-                    universe_domain: "universe_domain".to_string(),
+                    client_id: SecretString::new("client_id"),
+                    auth_uri: SecretString::new("auth_uri"),
+                    token_uri: SecretString::new("token_uri"),
+                    auth_provider_x509_cert_url: SecretString::new("auth_provider_x509_cert_url"),
+                    client_x509_cert_url: SecretString::new("client_x509_cert_url"),
+                    universe_domain: SecretString::new("universe_domain"),
                 },
                 key: GoogleCloudKmsSignerKeyConfig {
-                    location: "global".to_string(),
-                    key_id: "id".to_string(),
-                    key_ring_id: "key_ring".to_string(),
+                    location: SecretString::new("global"),
+                    key_id: SecretString::new("id"),
+                    key_ring_id: SecretString::new("key_ring"),
                     key_version: 1,
                 },
-            }),
+            })),
         };
 
         let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
@@ -579,26 +579,26 @@ mod solana_signer_factory_tests {
     async fn test_address_solana_signer_google_cloud_kms() {
         let signer_model = SignerDomainModel {
             id: "test".to_string(),
-            config: SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
+            config: SignerConfig::GoogleCloudKms(Box::new(GoogleCloudKmsSignerConfig {
                 service_account: GoogleCloudKmsSignerServiceAccountConfig {
-                    project_id: "project_id".to_string(),
+                    project_id: SecretString::new("project_id"),
                     private_key_id: SecretString::new("private_key_id"),
                     private_key: SecretString::new("private_key"),
                     client_email: SecretString::new("client_email"),
-                    client_id: "client_id".to_string(),
-                    auth_uri: "auth_uri".to_string(),
-                    token_uri: "token_uri".to_string(),
-                    auth_provider_x509_cert_url: "auth_provider_x509_cert_url".to_string(),
-                    client_x509_cert_url: "client_x509_cert_url".to_string(),
-                    universe_domain: "universe_domain".to_string(),
+                    client_id: SecretString::new("client_id"),
+                    auth_uri: SecretString::new("auth_uri"),
+                    token_uri: SecretString::new("token_uri"),
+                    auth_provider_x509_cert_url: SecretString::new("auth_provider_x509_cert_url"),
+                    client_x509_cert_url: SecretString::new("client_x509_cert_url"),
+                    universe_domain: SecretString::new("universe_domain"),
                 },
                 key: GoogleCloudKmsSignerKeyConfig {
-                    location: "global".to_string(),
-                    key_id: "id".to_string(),
-                    key_ring_id: "key_ring".to_string(),
+                    location: SecretString::new("global"),
+                    key_id: SecretString::new("id"),
+                    key_ring_id: SecretString::new("key_ring"),
                     key_version: 1,
                 },
-            }),
+            })),
         };
 
         let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
