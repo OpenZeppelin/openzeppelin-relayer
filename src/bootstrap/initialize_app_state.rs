@@ -120,15 +120,20 @@ pub async fn initialize_repositories(
 pub async fn initialize_app_state(
     server_config: Arc<ServerConfig>,
 ) -> Result<web::ThinData<DefaultAppState>> {
-    // Initialize Redis connections only when using Redis storage
-    // When REDIS_READER_URL is set, read operations use the reader endpoint
-    let redis_connections = match server_config.repository_storage_type {
-        RepositoryStorageType::Redis => Some(initialize_redis_connections(&server_config).await?),
+    // Always initialize Redis connections - required for the job queue.
+    // When REDIS_READER_URL is set, read operations use the reader endpoint.
+    // The queue uses deadpool for better connection lifecycle management.
+    let redis_connections = initialize_redis_connections(&server_config).await?;
+
+    // For repositories, pass connections based on storage type
+    let repo_connections = match server_config.repository_storage_type {
+        RepositoryStorageType::Redis => Some(redis_connections.clone()),
         RepositoryStorageType::InMemory => None,
     };
 
-    let repositories = initialize_repositories(&server_config, redis_connections.clone()).await?;
+    let repositories = initialize_repositories(&server_config, repo_connections).await?;
 
+    // Queue always uses Redis with deadpool connections
     let queue = Queue::setup(redis_connections).await?;
     let job_producer = Arc::new(jobs::JobProducer::new(queue.clone()));
 
