@@ -67,6 +67,13 @@ where
     }
 
     /// Core submission logic - pure business logic without error handling concerns.
+    ///
+    /// Uses `send_transaction_with_status` to get full status information from the RPC.
+    /// Handles status codes:
+    /// - PENDING: Transaction accepted for processing
+    /// - DUPLICATE: Transaction already submitted (treat as success)
+    /// - TRY_AGAIN_LATER: Transaction not queued, mark as failed
+    /// - ERROR: Transaction validation failed, mark as failed
     async fn submit_core(
         &self,
         tx: TransactionRepoModel,
@@ -76,35 +83,78 @@ where
             .get_envelope_for_submission()
             .map_err(TransactionError::from)?;
 
-        let hash = self
+        // Use send_transaction_with_status to get full status information
+        let response = self
             .provider()
-            .send_transaction(&tx_envelope)
+            .send_transaction_with_status(&tx_envelope)
             .await
             .map_err(TransactionError::from)?;
 
-        let tx_hash_hex = hex::encode(hash.as_slice());
-        let updated_stellar_data = stellar_data.with_hash(tx_hash_hex.clone());
+        // Handle status codes from the RPC response
+        match response.status.as_str() {
+            "PENDING" | "DUPLICATE" => {
+                // Success - transaction is accepted or already exists
+                if response.status == "DUPLICATE" {
+                    info!(
+                        tx_id = %tx.id,
+                        hash = %response.hash,
+                        "transaction already submitted (DUPLICATE status)"
+                    );
+                }
 
-        let mut hashes = tx.hashes.clone();
-        hashes.push(tx_hash_hex);
+                let tx_hash_hex = response.hash.clone();
+                let updated_stellar_data = stellar_data.with_hash(tx_hash_hex.clone());
 
-        let update_req = TransactionUpdateRequest {
-            status: Some(TransactionStatus::Submitted),
-            sent_at: Some(Utc::now().to_rfc3339()),
-            network_data: Some(NetworkTransactionData::Stellar(updated_stellar_data)),
-            hashes: Some(hashes),
-            ..Default::default()
-        };
+                let mut hashes = tx.hashes.clone();
+                if !hashes.contains(&tx_hash_hex) {
+                    hashes.push(tx_hash_hex);
+                }
 
-        let updated_tx = self
-            .transaction_repository()
-            .partial_update(tx.id.clone(), update_req)
-            .await?;
+                let update_req = TransactionUpdateRequest {
+                    status: Some(TransactionStatus::Submitted),
+                    sent_at: Some(Utc::now().to_rfc3339()),
+                    network_data: Some(NetworkTransactionData::Stellar(updated_stellar_data)),
+                    hashes: Some(hashes),
+                    ..Default::default()
+                };
 
-        // Send notification
-        self.send_transaction_update_notification(&updated_tx).await;
+                let updated_tx = self
+                    .transaction_repository()
+                    .partial_update(tx.id.clone(), update_req)
+                    .await?;
 
-        Ok(updated_tx)
+                // Send notification
+                self.send_transaction_update_notification(&updated_tx).await;
+
+                Ok(updated_tx)
+            }
+            "TRY_AGAIN_LATER" => {
+                // Transaction not queued - per acceptance criteria, mark as failed
+                Err(TransactionError::UnexpectedError(
+                    "Transaction not queued: TRY_AGAIN_LATER".to_string(),
+                ))
+            }
+            "ERROR" => {
+                // Transaction validation failed
+                let error_detail = response
+                    .error_result_xdr
+                    .unwrap_or_else(|| "No error details provided".to_string());
+                Err(TransactionError::UnexpectedError(format!(
+                    "Transaction submission error: {error_detail}"
+                )))
+            }
+            unknown => {
+                // Unknown status - treat as error
+                warn!(
+                    tx_id = %tx.id,
+                    status = %unknown,
+                    "received unknown transaction status from RPC"
+                );
+                Err(TransactionError::UnexpectedError(format!(
+                    "Unknown transaction status: {unknown}"
+                )))
+            }
+        }
     }
 
     /// Handles submission failures with comprehensive cleanup and error reporting.
@@ -193,9 +243,21 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_rs::xdr::{Hash, WriteXdr};
+    use soroban_rs::stellar_rpc_client::SendTransactionResponse;
+    use soroban_rs::xdr::WriteXdr;
 
     use crate::domain::transaction::stellar::test_helpers::*;
+
+    /// Helper to create a SendTransactionResponse with given status
+    fn create_send_tx_response(status: &str, hash: &str) -> SendTransactionResponse {
+        SendTransactionResponse {
+            status: status.to_string(),
+            hash: hash.to_string(),
+            error_result_xdr: None,
+            latest_ledger: 100,
+            latest_ledger_close_time: 1700000000,
+        }
+    }
 
     mod submit_transaction_tests {
         use crate::{
@@ -210,11 +272,18 @@ mod tests {
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();
 
-            // provider gives a hash
+            // provider returns PENDING status
+            let response = create_send_tx_response(
+                "PENDING",
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            );
             mocks
                 .provider
-                .expect_send_transaction()
-                .returning(|_| Box::pin(async { Ok(Hash([1u8; 32])) }));
+                .expect_send_transaction_with_status()
+                .returning(move |_| {
+                    let r = response.clone();
+                    Box::pin(async move { Ok(r) })
+                });
 
             // expect partial update to Submitted
             mocks
@@ -255,9 +324,12 @@ mod tests {
             let mut mocks = default_test_mocks();
 
             // Provider fails with non-bad-sequence error
-            mocks.provider.expect_send_transaction().returning(|_| {
-                Box::pin(async { Err(ProviderError::Other("Network error".to_string())) })
-            });
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(|_| {
+                    Box::pin(async { Err(ProviderError::Other("Network error".to_string())) })
+                });
 
             // Mock finalize_transaction_state for failure handling
             mocks
@@ -312,11 +384,18 @@ mod tests {
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();
 
-            // Provider succeeds
+            // Provider returns PENDING status
+            let response = create_send_tx_response(
+                "PENDING",
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            );
             mocks
                 .provider
-                .expect_send_transaction()
-                .returning(|_| Box::pin(async { Ok(Hash([1u8; 32])) }));
+                .expect_send_transaction_with_status()
+                .returning(move |_| {
+                    let r = response.clone();
+                    Box::pin(async move { Ok(r) })
+                });
 
             // Repository fails on first update (submission)
             mocks
@@ -391,10 +470,17 @@ mod tests {
             }
 
             // Provider should receive the envelope decoded from signed_envelope_xdr
+            let response = create_send_tx_response(
+                "PENDING",
+                "0202020202020202020202020202020202020202020202020202020202020202",
+            );
             mocks
                 .provider
-                .expect_send_transaction()
-                .returning(|_| Box::pin(async { Ok(Hash([2u8; 32])) }));
+                .expect_send_transaction_with_status()
+                .returning(move |_| {
+                    let r = response.clone();
+                    Box::pin(async move { Ok(r) })
+                });
 
             // Update to Submitted
             mocks
@@ -426,11 +512,18 @@ mod tests {
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();
 
-            // provider gives a hash
+            // provider returns PENDING status
+            let response = create_send_tx_response(
+                "PENDING",
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            );
             mocks
                 .provider
-                .expect_send_transaction()
-                .returning(|_| Box::pin(async { Ok(Hash([1u8; 32])) }));
+                .expect_send_transaction_with_status()
+                .returning(move |_| {
+                    let r = response.clone();
+                    Box::pin(async move { Ok(r) })
+                });
 
             // expect partial update to Submitted
             mocks
@@ -471,9 +564,12 @@ mod tests {
             let mut mocks = default_test_mocks();
 
             // Provider fails with non-bad-sequence error
-            mocks.provider.expect_send_transaction().returning(|_| {
-                Box::pin(async { Err(ProviderError::Other("Network error".to_string())) })
-            });
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(|_| {
+                    Box::pin(async { Err(ProviderError::Other("Network error".to_string())) })
+                });
 
             // No sync expected for non-bad-sequence errors
 
@@ -552,13 +648,16 @@ mod tests {
             let mut mocks = default_test_mocks();
 
             // Mock provider to return bad sequence error
-            mocks.provider.expect_send_transaction().returning(|_| {
-                Box::pin(async {
-                    Err(ProviderError::Other(
-                        "transaction submission failed: TxBadSeq".to_string(),
-                    ))
-                })
-            });
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(|_| {
+                    Box::pin(async {
+                        Err(ProviderError::Other(
+                            "transaction submission failed: TxBadSeq".to_string(),
+                        ))
+                    })
+                });
 
             // Mock get_account for sync_sequence_from_chain
             mocks.provider.expect_get_account().times(1).returning(|_| {
@@ -639,6 +738,197 @@ mod tests {
             } else {
                 panic!("Expected Stellar transaction data");
             }
+        }
+
+        #[tokio::test]
+        async fn submit_transaction_duplicate_status_succeeds() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Provider returns DUPLICATE status
+            let response = create_send_tx_response(
+                "DUPLICATE",
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            );
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(move |_| {
+                    let r = response.clone();
+                    Box::pin(async move { Ok(r) })
+                });
+
+            // expect partial update to Submitted
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, upd| upd.status == Some(TransactionStatus::Submitted))
+                .returning(|id, upd| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = upd.status.unwrap();
+                    Ok::<_, RepositoryError>(tx)
+                });
+
+            // Expect notification
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent;
+            if let NetworkTransactionData::Stellar(ref mut d) = tx.network_data {
+                d.signatures.push(dummy_signature());
+                d.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+            }
+
+            let res = handler.submit_transaction_impl(tx).await.unwrap();
+            assert_eq!(res.status, TransactionStatus::Submitted);
+        }
+
+        #[tokio::test]
+        async fn submit_transaction_try_again_later_fails() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Provider returns TRY_AGAIN_LATER status
+            let response = create_send_tx_response(
+                "TRY_AGAIN_LATER",
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            );
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(move |_| {
+                    let r = response.clone();
+                    Box::pin(async move { Ok(r) })
+                });
+
+            // Mock finalize_transaction_state for failure handling
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, upd| {
+                    upd.status == Some(TransactionStatus::Failed)
+                        && upd
+                            .status_reason
+                            .as_ref()
+                            .is_some_and(|r| r.contains("TRY_AGAIN_LATER"))
+                })
+                .returning(|id, upd| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = upd.status.unwrap();
+                    Ok::<_, RepositoryError>(tx)
+                });
+
+            // Mock notification for failed transaction
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            // Mock find_by_status_paginated for enqueue_next_pending_transaction
+            mocks
+                .tx_repo
+                .expect_find_by_status_paginated()
+                .returning(move |_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent;
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+            }
+
+            let res = handler.submit_transaction_impl(tx).await;
+            assert!(res.is_err());
+            let err = res.unwrap_err();
+            assert!(
+                matches!(err, TransactionError::UnexpectedError(ref msg) if msg.contains("TRY_AGAIN_LATER"))
+            );
+        }
+
+        #[tokio::test]
+        async fn submit_transaction_error_status_fails() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Provider returns ERROR status with error XDR
+            let mut response = create_send_tx_response(
+                "ERROR",
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            );
+            response.error_result_xdr = Some("AAAAAAAAAGT////7AAAAAA==".to_string());
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(move |_| {
+                    let r = response.clone();
+                    Box::pin(async move { Ok(r) })
+                });
+
+            // Mock finalize_transaction_state for failure handling
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, upd| upd.status == Some(TransactionStatus::Failed))
+                .returning(|id, upd| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = upd.status.unwrap();
+                    Ok::<_, RepositoryError>(tx)
+                });
+
+            // Mock notification for failed transaction
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            // Mock find_by_status_paginated for enqueue_next_pending_transaction
+            mocks
+                .tx_repo
+                .expect_find_by_status_paginated()
+                .returning(move |_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent;
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+            }
+
+            let res = handler.submit_transaction_impl(tx).await;
+            assert!(res.is_err());
+            let err = res.unwrap_err();
+            // The error should contain the error XDR
+            assert!(matches!(
+                err,
+                TransactionError::UnexpectedError(ref msg) if msg.contains("AAAAAAAAAGT")
+            ));
         }
     }
 }
