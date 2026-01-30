@@ -203,18 +203,30 @@ async fn check_queue_health(queue: &Queue) -> QueueHealthStatus {
     })
     .await;
 
-    let healthy = result.is_ok();
-    let error = if !healthy {
-        let error_msg = match result {
-            Err(_) => "Stats check timed out".to_string(),
-            _ => "Failed to get queue stats".to_string(),
-        };
-        Some(format!("Queue connection: {error_msg}"))
-    } else {
-        None
-    };
-
-    QueueHealthStatus { healthy, error }
+    // result is Result<Result<Stats, Error>, Elapsed>
+    // Must check both: timeout didn't expire AND stats() succeeded
+    match result {
+        Ok(Ok(_)) => QueueHealthStatus {
+            healthy: true,
+            error: None,
+        },
+        Ok(Err(e)) => {
+            // Stats call failed (but didn't timeout)
+            tracing::warn!(error = %e, "Queue stats check failed");
+            QueueHealthStatus {
+                healthy: false,
+                error: Some(format!("Queue connection: {e}")),
+            }
+        }
+        Err(_) => {
+            // Timeout expired
+            tracing::warn!("Queue stats check timed out");
+            QueueHealthStatus {
+                healthy: false,
+                error: Some("Queue connection: Stats check timed out".to_string()),
+            }
+        }
+    }
 }
 
 /// Convert QueueHealthStatus to QueueHealth.
@@ -1186,6 +1198,80 @@ mod tests {
             health.status,
             ComponentStatus::Healthy | ComponentStatus::Degraded | ComponentStatus::Unhealthy
         ));
+    }
+
+    // -------------------------------------------------------------------------
+    // Nested Result Pattern Tests (documents check_queue_health behavior)
+    // -------------------------------------------------------------------------
+
+    /// Represents a timeout error for testing (mirrors tokio::time::error::Elapsed)
+    #[derive(Debug)]
+    struct TimeoutError;
+
+    /// Helper that mimics the nested Result pattern from timeout + async operation.
+    /// This documents the correct handling to prevent regression of the bug where
+    /// `result.is_ok()` incorrectly marked failed operations as healthy.
+    fn evaluate_nested_result<T, E: std::fmt::Display>(
+        result: Result<Result<T, E>, TimeoutError>,
+    ) -> (bool, Option<String>) {
+        match result {
+            Ok(Ok(_)) => (true, None),
+            Ok(Err(e)) => (false, Some(format!("Operation failed: {e}"))),
+            Err(_) => (false, Some("Operation timed out".to_string())),
+        }
+    }
+
+    #[test]
+    fn test_nested_result_success() {
+        // Simulates: timeout didn't expire AND inner operation succeeded
+        let result: Result<Result<(), &str>, TimeoutError> = Ok(Ok(()));
+        let (healthy, error) = evaluate_nested_result(result);
+
+        assert!(healthy);
+        assert!(error.is_none());
+    }
+
+    #[test]
+    fn test_nested_result_inner_error() {
+        // Simulates: timeout didn't expire BUT inner operation failed
+        // This is the bug case - previously `result.is_ok()` returned true here!
+        let result: Result<Result<(), &str>, TimeoutError> = Ok(Err("connection refused"));
+        let (healthy, error) = evaluate_nested_result(result);
+
+        assert!(!healthy, "Inner error should mark as unhealthy");
+        assert!(error.is_some());
+        assert!(error.unwrap().contains("connection refused"));
+    }
+
+    #[test]
+    fn test_nested_result_timeout() {
+        // Simulates: timeout expired
+        let result: Result<Result<(), &str>, TimeoutError> = Err(TimeoutError);
+        let (healthy, error) = evaluate_nested_result(result);
+
+        assert!(!healthy);
+        assert!(error.is_some());
+        assert!(error.unwrap().contains("timed out"));
+    }
+
+    #[test]
+    fn test_nested_result_is_ok_pitfall() {
+        // Documents the pitfall: is_ok() only checks outer Result
+        let inner_error: Result<Result<(), &str>, TimeoutError> = Ok(Err("inner error"));
+
+        // This is the WRONG way (the bug)
+        let wrong_healthy = inner_error.is_ok();
+        assert!(
+            wrong_healthy,
+            "is_ok() returns true even with inner error - this is the bug!"
+        );
+
+        // This is the CORRECT way (the fix)
+        let correct_healthy = matches!(inner_error, Ok(Ok(_)));
+        assert!(
+            !correct_healthy,
+            "matches! correctly identifies inner error"
+        );
     }
 
     // -------------------------------------------------------------------------
