@@ -158,15 +158,17 @@ where
             });
         }
 
-        // Build the forward() function arguments
-        let forward_args = Self::build_forward_args_standalone(fee_forwarder_address, params)?;
+        // Build the forward() function arguments for USER (6 parameters)
+        // User signs: fee_token, max_fee_amount, expiration_ledger, target_contract, target_fn, target_args
+        // User does NOT sign: fee_amount, user, relayer
+        let user_auth_args = Self::build_user_auth_args_standalone(params)?;
 
         // Build the root invocation for fee_forwarder.forward()
         let root_invocation = SorobanAuthorizedInvocation {
             function: SorobanAuthorizedFunction::ContractFn(InvokeContractArgs {
                 contract_address: fee_forwarder_addr,
                 function_name: Self::create_symbol("forward")?,
-                args: forward_args.into(),
+                args: user_auth_args.into(),
             }),
             sub_invocations: sub_invocations.try_into().map_err(|_| {
                 FeeForwarderError::AuthorizationBuildError(
@@ -184,18 +186,114 @@ where
                 .unwrap_or(0)
         };
 
+        // For simulation, signature must be an empty vector (not Void)
+        // Void causes Error(Value, UnexpectedType) during auth verification
+        let empty_signature = ScVal::Vec(Some(ScVec::default()));
+
         Ok(SorobanAuthorizationEntry {
             credentials: SorobanCredentials::Address(SorobanAddressCredentials {
                 address: user_addr,
                 nonce,
                 signature_expiration_ledger: params.expiration_ledger,
-                signature: ScVal::Void,
+                signature: empty_signature,
             }),
             root_invocation,
         })
     }
 
-    /// Build forward args without requiring a service instance
+    /// Build a relayer authorization entry without requiring a FeeForwarderService instance
+    ///
+    /// The FeeForwarder contract requires the relayer to authorize receiving the fee payment.
+    /// This creates an auth entry for the relayer's authorization of the `forward` call.
+    ///
+    /// # Arguments
+    ///
+    /// * `fee_forwarder_address` - The FeeForwarder contract address
+    /// * `params` - FeeForwarder transaction parameters
+    ///
+    /// # Returns
+    ///
+    /// A SorobanAuthorizationEntry for the relayer (with empty signature for simulation)
+    pub fn build_relayer_auth_entry_standalone(
+        fee_forwarder_address: &str,
+        params: &FeeForwarderParams,
+    ) -> Result<SorobanAuthorizationEntry, FeeForwarderError> {
+        let fee_forwarder_addr = Self::parse_contract_address(fee_forwarder_address)?;
+        let relayer_addr = Self::parse_account_address(&params.relayer)?;
+
+        // Build the forward() function arguments
+        let forward_args = Self::build_forward_args_standalone(fee_forwarder_address, params)?;
+
+        // Build the root invocation for fee_forwarder.forward()
+        // Relayer only needs to authorize the forward call itself (no sub-invocations)
+        let root_invocation = SorobanAuthorizedInvocation {
+            function: SorobanAuthorizedFunction::ContractFn(InvokeContractArgs {
+                contract_address: fee_forwarder_addr,
+                function_name: Self::create_symbol("forward")?,
+                args: forward_args.into(),
+            }),
+            sub_invocations: VecM::default(),
+        };
+
+        // Generate nonce using timestamp (different from user nonce)
+        let nonce = {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| (d.as_nanos() + 1) as i64) // +1 to ensure different from user nonce
+                .unwrap_or(1)
+        };
+
+        // For simulation, signature must be an empty vector (not Void)
+        // Void causes Error(Value, UnexpectedType) during auth verification
+        let empty_signature = ScVal::Vec(Some(ScVec::default()));
+
+        Ok(SorobanAuthorizationEntry {
+            credentials: SorobanCredentials::Address(SorobanAddressCredentials {
+                address: relayer_addr,
+                nonce,
+                signature_expiration_ledger: params.expiration_ledger,
+                signature: empty_signature,
+            }),
+            root_invocation,
+        })
+    }
+
+    /// Build forward args for USER authorization (6 parameters)
+    ///
+    /// User signs: fee_token, max_fee_amount, expiration_ledger, target_contract, target_fn, target_args
+    /// User does NOT sign: fee_amount, user, relayer
+    fn build_user_auth_args_standalone(
+        params: &FeeForwarderParams,
+    ) -> Result<ScVec, FeeForwarderError> {
+        let fee_token_addr = Self::parse_contract_address(&params.fee_token)?;
+        let target_contract_addr = Self::parse_contract_address(&params.target_contract)?;
+
+        let target_args_vec: ScVec = params.target_args.clone().try_into().map_err(|_| {
+            FeeForwarderError::AuthorizationBuildError("Failed to create target args".to_string())
+        })?;
+
+        // User signs 6 parameters (excludes fee_amount, user, relayer)
+        let args: Vec<ScVal> = vec![
+            ScVal::Address(fee_token_addr),
+            Self::i128_to_scval(params.max_fee_amount),
+            ScVal::U32(params.expiration_ledger),
+            ScVal::Address(target_contract_addr),
+            ScVal::Symbol(Self::create_symbol(&params.target_fn)?),
+            ScVal::Vec(Some(target_args_vec)),
+        ];
+
+        args.try_into().map_err(|_| {
+            FeeForwarderError::AuthorizationBuildError(
+                "Failed to create user auth args".to_string(),
+            )
+        })
+    }
+
+    /// Build forward args for RELAYER authorization and invoke operation (9 parameters)
+    ///
+    /// Relayer signs ALL parameters in the exact order they appear in the function signature:
+    /// fee_token, fee_amount, max_fee_amount, expiration_ledger, target_contract, target_fn, target_args, user, relayer
     fn build_forward_args_standalone(
         _fee_forwarder_address: &str,
         params: &FeeForwarderParams,
@@ -209,6 +307,7 @@ where
             FeeForwarderError::AuthorizationBuildError("Failed to create target args".to_string())
         })?;
 
+        // Relayer signs all 9 parameters
         let args: Vec<ScVal> = vec![
             ScVal::Address(fee_token_addr),
             Self::i128_to_scval(params.fee_amount),
@@ -368,15 +467,17 @@ where
             });
         }
 
-        // Build the forward() function arguments
-        let forward_args = self.build_forward_args(params)?;
+        // Build the forward() function arguments for USER (6 parameters)
+        // User signs: fee_token, max_fee_amount, expiration_ledger, target_contract, target_fn, target_args
+        // User does NOT sign: fee_amount, user, relayer
+        let user_auth_args = Self::build_user_auth_args_standalone(params)?;
 
         // Build the root invocation for fee_forwarder.forward()
         let root_invocation = SorobanAuthorizedInvocation {
             function: SorobanAuthorizedFunction::ContractFn(InvokeContractArgs {
                 contract_address: fee_forwarder_addr,
                 function_name: Self::create_symbol("forward")?,
-                args: forward_args.into(),
+                args: user_auth_args.into(),
             }),
             sub_invocations: sub_invocations.try_into().map_err(|_| {
                 FeeForwarderError::AuthorizationBuildError(
@@ -386,47 +487,19 @@ where
         };
 
         // Build the authorization entry
-        // Note: The signature field is left empty (Void) - user will sign this
+        // For simulation, signature must be an empty vector (not Void)
+        // Void causes Error(Value, UnexpectedType) during auth verification
+        // User will replace this with their actual signature after signing
+        let empty_signature = ScVal::Vec(Some(ScVec::default()));
+
         Ok(SorobanAuthorizationEntry {
             credentials: SorobanCredentials::Address(SorobanAddressCredentials {
                 address: user_addr,
                 nonce: self.generate_nonce(),
                 signature_expiration_ledger: params.expiration_ledger,
-                signature: ScVal::Void, // User will fill this with their signature
+                signature: empty_signature,
             }),
             root_invocation,
-        })
-    }
-
-    /// Build the arguments for FeeForwarder.forward() call
-    fn build_forward_args(&self, params: &FeeForwarderParams) -> Result<ScVec, FeeForwarderError> {
-        let fee_token_addr = Self::parse_contract_address(&params.fee_token)?;
-        let target_contract_addr = Self::parse_contract_address(&params.target_contract)?;
-        let user_addr = Self::parse_account_address(&params.user)?;
-        let relayer_addr = Self::parse_account_address(&params.relayer)?;
-
-        // Convert target_args to ScVec for the target_args parameter
-        let target_args_vec: ScVec = params.target_args.clone().try_into().map_err(|_| {
-            FeeForwarderError::AuthorizationBuildError("Failed to create target args".to_string())
-        })?;
-
-        // forward() parameters:
-        // fee_token, fee_amount, max_fee_amount, expiration_ledger,
-        // target_contract, target_fn, target_args, user, relayer
-        let args: Vec<ScVal> = vec![
-            ScVal::Address(fee_token_addr),
-            Self::i128_to_scval(params.fee_amount),
-            Self::i128_to_scval(params.max_fee_amount),
-            ScVal::U32(params.expiration_ledger),
-            ScVal::Address(target_contract_addr),
-            ScVal::Symbol(Self::create_symbol(&params.target_fn)?),
-            ScVal::Vec(Some(target_args_vec)),
-            ScVal::Address(user_addr),
-            ScVal::Address(relayer_addr),
-        ];
-
-        args.try_into().map_err(|_| {
-            FeeForwarderError::AuthorizationBuildError("Failed to create forward args".to_string())
         })
     }
 

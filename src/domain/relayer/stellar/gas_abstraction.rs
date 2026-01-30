@@ -583,17 +583,15 @@ where
             relayer: self.relayer.address.clone(),
         };
 
-        let auth_entry = FeeForwarderService::<P>::build_user_auth_entry_standalone(
-            &fee_forwarder,
-            &fee_params,
-            true,
-        )
-        .map_err(|e| RelayerError::Internal(format!("Failed to build user auth entry: {e}")))?;
-
+        // For quote/simulation, we don't include auth entries because the FeeForwarder
+        // contract has custom auth verification that fails on empty signatures.
+        // Unlike standard Soroban "recording mode", this contract explicitly checks
+        // for valid signatures and returns Error when none are found.
+        // The build flow will include proper auth entries for accurate resource estimation.
         let invoke_op = FeeForwarderService::<P>::build_invoke_operation_standalone(
             &fee_forwarder,
             &fee_params,
-            vec![auth_entry],
+            vec![],
         )
         .map_err(|e| RelayerError::Internal(format!("Failed to build invoke operation: {e}")))?;
 
@@ -731,17 +729,24 @@ where
 
         // Build the user authorization entry using the standalone method
         // requires_target_auth defaults to true (safer default)
-        let auth_entry = FeeForwarderService::<P>::build_user_auth_entry_standalone(
+        let user_auth_entry = FeeForwarderService::<P>::build_user_auth_entry_standalone(
             &fee_forwarder,
             &fee_params,
             true,
         )
         .map_err(|e| RelayerError::Internal(format!("Failed to build user auth entry: {e}")))?;
 
+        // Build relayer auth entry - required by FeeForwarder contract
+        let relayer_auth_entry = FeeForwarderService::<P>::build_relayer_auth_entry_standalone(
+            &fee_forwarder,
+            &fee_params,
+        )
+        .map_err(|e| RelayerError::Internal(format!("Failed to build relayer auth entry: {e}")))?;
+
         let invoke_op = FeeForwarderService::<P>::build_invoke_operation_standalone(
             &fee_forwarder,
             &fee_params,
-            vec![auth_entry],
+            vec![user_auth_entry, relayer_auth_entry],
         )
         .map_err(|e| RelayerError::Internal(format!("Failed to build invoke operation: {e}")))?;
 
@@ -795,20 +800,27 @@ where
         fee_params.fee_amount = fee_quote.fee_in_token as i128;
         fee_params.max_fee_amount = apply_max_fee_slippage(fee_quote.fee_in_token);
 
-        let auth_entry = FeeForwarderService::<P>::build_user_auth_entry_standalone(
+        let user_auth_entry = FeeForwarderService::<P>::build_user_auth_entry_standalone(
             &fee_forwarder,
             &fee_params,
             true,
         )
         .map_err(|e| RelayerError::Internal(format!("Failed to build user auth entry: {e}")))?;
 
-        let user_auth_xdr = FeeForwarderService::<P>::serialize_auth_entry(&auth_entry)
+        let user_auth_xdr = FeeForwarderService::<P>::serialize_auth_entry(&user_auth_entry)
             .map_err(|e| RelayerError::Internal(format!("Failed to serialize auth entry: {e}")))?;
+
+        // Build relayer auth entry - required by FeeForwarder contract
+        let relayer_auth_entry = FeeForwarderService::<P>::build_relayer_auth_entry_standalone(
+            &fee_forwarder,
+            &fee_params,
+        )
+        .map_err(|e| RelayerError::Internal(format!("Failed to build relayer auth entry: {e}")))?;
 
         let invoke_op = FeeForwarderService::<P>::build_invoke_operation_standalone(
             &fee_forwarder,
             &fee_params,
-            vec![auth_entry],
+            vec![user_auth_entry, relayer_auth_entry],
         )
         .map_err(|e| RelayerError::Internal(format!("Failed to build invoke operation: {e}")))?;
 
@@ -822,7 +834,7 @@ where
             .provider
             .simulate_transaction_envelope(&envelope)
             .await
-            .map_err(|e| RelayerError::Internal(format!("Failed to simulate transaction: {e}")))?;
+            .map_err(|e| RelayerError::Internal(format!("Simulation failed: {e}")))?;
 
         apply_simulation_to_soroban_envelope(&mut envelope, &sim_response, 1)?;
 

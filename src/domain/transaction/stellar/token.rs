@@ -7,9 +7,9 @@ use crate::domain::transaction::stellar::utils::{
 use crate::models::{StellarTokenKind, StellarTokenMetadata};
 use crate::services::provider::StellarProviderTrait;
 use soroban_rs::xdr::{
-    AccountId, AlphaNum12, AlphaNum4, Asset, AssetCode12, AssetCode4, ContractDataEntry,
-    ContractId, Hash, LedgerEntryData, LedgerKey, ScAddress, ScSymbol, ScVal, TrustLineEntry,
-    TrustLineEntryExt, TrustLineEntryV1,
+    AccountId, AlphaNum12, AlphaNum4, Asset, AssetCode12, AssetCode4, ContractId, Hash,
+    LedgerEntryData, LedgerKey, ScAddress, ScSymbol, ScVal, TrustLineEntry, TrustLineEntryExt,
+    TrustLineEntryV1,
 };
 use std::str::FromStr;
 use tracing::{debug, trace, warn};
@@ -246,7 +246,16 @@ where
     }
 }
 
-/// Fetch balance for a Soroban contract token via ContractData
+/// Fetch balance for a Soroban contract token by invoking the balance() function
+///
+/// This function works for all SEP-41 compliant tokens:
+/// - SAC (Stellar Asset Contract) tokens
+/// - Native Soroban tokens
+///
+/// Uses simulation to invoke the contract's balance(id: Address) -> i128 function.
+/// This approach is simpler and more reliable than direct storage queries because
+/// it lets the contract handle the balance lookup internally (SAC tokens delegate
+/// to classic trustlines, native tokens read from contract storage).
 async fn get_contract_token_balance<P>(
     provider: &P,
     account_id: &str,
@@ -255,64 +264,53 @@ async fn get_contract_token_balance<P>(
 where
     P: StellarProviderTrait + Send + Sync,
 {
-    // Parse contract address and account ID
-    let contract_hash = parse_contract_address(contract_address)?;
+    // Build the account address as ScVal::Address
     let account_xdr_id = parse_account_id(account_id)?;
     let account_sc_address = ScAddress::Account(account_xdr_id);
 
-    // Create balance key (Soroban token standard uses "Balance" as the key)
-    let balance_key = create_contract_data_key("Balance", Some(account_sc_address))?;
+    // Create the "balance" function name symbol
+    let function_name = ScSymbol::try_from("balance".as_bytes().to_vec()).map_err(|e| {
+        StellarTransactionUtilsError::SymbolCreationFailed("balance".into(), format!("{e:?}"))
+    })?;
 
-    // Query contract data with durability fallback
-    let error_context = format!("contract {contract_address} balance for account {account_id}");
-    let ledger_entries =
-        query_contract_data_with_fallback(provider, contract_hash, balance_key, &error_context)
-            .await?;
+    // Call balance(id: Address) -> i128 via simulation
+    debug!(
+        "Querying balance for account {} on contract {} via simulation",
+        account_id, contract_address
+    );
 
-    // Extract balance from contract data entry
-    let entries = match ledger_entries.entries {
-        Some(entries) if !entries.is_empty() => entries,
-        _ => {
-            // No balance entry means balance is 0
-            warn!(
-                "No balance entry found for contract {} on account {}, assuming zero balance",
-                contract_address, account_id
+    let result = provider
+        .call_contract(
+            contract_address,
+            &function_name,
+            vec![ScVal::Address(account_sc_address)],
+        )
+        .await
+        .map_err(|e| StellarTransactionUtilsError::SimulationFailed(e.to_string()))?;
+
+    // Parse i128 result to u64
+    match result {
+        ScVal::I128(parts) => {
+            // Check for overflow (hi should be 0 for values that fit in u64)
+            if parts.hi != 0 {
+                return Err(StellarTransactionUtilsError::BalanceTooLarge(
+                    parts.hi, parts.lo,
+                ));
+            }
+            // Check for negative balance
+            let lo_as_i64 = parts.lo as i64;
+            if lo_as_i64 < 0 {
+                return Err(StellarTransactionUtilsError::NegativeBalanceI128(parts.lo));
+            }
+            debug!(
+                "Balance for account {} on contract {}: {}",
+                account_id, contract_address, lo_as_i64
             );
-            return Ok(0);
+            Ok(lo_as_i64 as u64)
         }
-    };
-
-    let entry_result = &entries[0];
-    let entry = parse_ledger_entry_from_xdr(&entry_result.xdr, &error_context)?;
-
-    match entry {
-        LedgerEntryData::ContractData(ContractDataEntry { val, .. }) => match val {
-            ScVal::I128(parts) => {
-                if parts.hi != 0 {
-                    return Err(StellarTransactionUtilsError::BalanceTooLarge(
-                        parts.hi, parts.lo,
-                    ));
-                }
-                // Check if parts.lo represents a negative value when interpreted as i64
-                // Similar to the I64 branch, we check for negative before casting to u64
-                let lo_as_i64 = parts.lo as i64;
-                if lo_as_i64 < 0 {
-                    return Err(StellarTransactionUtilsError::NegativeBalanceI128(parts.lo));
-                }
-                Ok(lo_as_i64 as u64)
-            }
-            ScVal::U64(n) => Ok(n),
-            ScVal::I64(n) => {
-                if n < 0 {
-                    return Err(StellarTransactionUtilsError::NegativeBalanceI64(n));
-                }
-                Ok(n as u64)
-            }
-            other => Err(StellarTransactionUtilsError::UnexpectedBalanceType(
-                format!("{other:?}"),
-            )),
-        },
-        _ => Err(StellarTransactionUtilsError::UnexpectedContractDataEntryType),
+        other => Err(StellarTransactionUtilsError::UnexpectedBalanceType(
+            format!("{other:?}"),
+        )),
     }
 }
 
