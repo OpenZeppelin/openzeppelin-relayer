@@ -119,12 +119,18 @@ pub async fn create_stellar_relayer<
                     crate::config::ServerConfig::get_stellar_soroswap_router_address()
                         .unwrap_or_else(|| get_default_soroswap_router(network.is_testnet()));
 
+                // Get Soroswap factory address from server config, falling back to default
+                let factory_address =
+                    crate::config::ServerConfig::get_stellar_soroswap_factory_address()
+                        .unwrap_or_else(|| get_default_soroswap_factory(network.is_testnet()));
+
                 // Get native wrapper address from server config if configured
                 let native_wrapper_address =
                     crate::config::ServerConfig::get_stellar_soroswap_native_wrapper_address();
 
                 let soroswap_service = Arc::new(SoroswapService::new(
                     router_address,
+                    factory_address,
                     native_wrapper_address,
                     provider_arc.clone(),
                     network.passphrase.clone(),
@@ -164,9 +170,23 @@ pub async fn create_stellar_relayer<
 fn get_default_soroswap_router(is_testnet: bool) -> String {
     if is_testnet {
         // Soroswap testnet router
-        "CDVQVKOY2YSXS2IC7KN6MNASSHPAO7UN2UR2ON4OI2SKMFJNVAMDX6DP".to_string()
+        "CCJUD55AG6W5HAI5LRVNKAE5WDP5XGZBUDS5WNTIVDU7O264UZZE7BRD".to_string()
     } else {
         // Soroswap mainnet router
-        "CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK".to_string()
+        "CAG5LRYQ5JVEUI5TEID72EYOVX44TTUJT5BQR2J6J77FH65PCCFAJDDH".to_string()
+    }
+}
+
+/// Get the default Soroswap factory contract address for the given network
+///
+/// These addresses are the official Soroswap factory deployments.
+/// Users can override these via configuration.
+fn get_default_soroswap_factory(is_testnet: bool) -> String {
+    if is_testnet {
+        // Soroswap testnet factory
+        "CDP3HMUH6SMS3S7NPGNDJLULCOXXEPSHY4JKUKMBNQMATHDHWXRRJTBY".to_string()
+    } else {
+        // Soroswap mainnet factory
+        "CA4HEQTL2WPEUYKYKCDOHCDNIV4QHNJ7EL4J4NQ6VADP7SYHVRYZ7AW2".to_string()
     }
 }

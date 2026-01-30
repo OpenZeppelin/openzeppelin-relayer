@@ -105,6 +105,8 @@ pub struct ServerConfig {
     pub stellar_fee_forwarder_address: Option<String>,
     /// Stellar Soroswap router contract address for token-to-XLM quotes.
     pub stellar_soroswap_router_address: Option<String>,
+    /// Stellar Soroswap factory contract address (required for get_amounts_out).
+    pub stellar_soroswap_factory_address: Option<String>,
     /// Stellar native XLM wrapper token address for Soroswap.
     pub stellar_soroswap_native_wrapper_address: Option<String>,
 }
@@ -173,6 +175,7 @@ impl ServerConfig {
             request_timeout_seconds: Self::get_request_timeout_seconds(),
             stellar_fee_forwarder_address: Self::get_stellar_fee_forwarder_address(),
             stellar_soroswap_router_address: Self::get_stellar_soroswap_router_address(),
+            stellar_soroswap_factory_address: Self::get_stellar_soroswap_factory_address(),
             stellar_soroswap_native_wrapper_address:
                 Self::get_stellar_soroswap_native_wrapper_address(),
         }
@@ -496,6 +499,11 @@ impl ServerConfig {
     /// Gets the Stellar Soroswap router contract address from environment variable
     pub fn get_stellar_soroswap_router_address() -> Option<String> {
         env::var("STELLAR_SOROSWAP_ROUTER_ADDRESS").ok()
+    }
+
+    /// Gets the Stellar Soroswap factory contract address from environment variable
+    pub fn get_stellar_soroswap_factory_address() -> Option<String> {
+        env::var("STELLAR_SOROSWAP_FACTORY_ADDRESS").ok()
     }
 
     /// Gets the Stellar Soroswap native wrapper token address from environment variable

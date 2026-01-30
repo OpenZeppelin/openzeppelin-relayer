@@ -33,6 +33,8 @@ where
 {
     /// Soroswap router contract address
     router_address: String,
+    /// Soroswap factory contract address (required for get_amounts_out)
+    factory_address: String,
     /// Native XLM wrapper token address
     native_wrapper_address: String,
     /// Stellar provider for contract calls
@@ -51,12 +53,14 @@ where
     /// # Arguments
     ///
     /// * `router_address` - Soroswap router contract address
+    /// * `factory_address` - Soroswap factory contract address (required for get_amounts_out)
     /// * `native_wrapper_address` - Optional native XLM wrapper token address (uses default if None)
     /// * `provider` - Stellar provider for contract calls
     /// * `network_passphrase` - Network passphrase
     /// * `is_testnet` - Whether this is testnet (affects default addresses)
     pub fn new(
         router_address: String,
+        factory_address: String,
         native_wrapper_address: Option<String>,
         provider: Arc<P>,
         network_passphrase: String,
@@ -72,6 +76,7 @@ where
 
         Self {
             router_address,
+            factory_address,
             native_wrapper_address: native_wrapper,
             provider,
             network_passphrase,
@@ -147,6 +152,7 @@ where
     /// Call router.get_amounts_out to get quote
     ///
     /// Returns the expected output amounts for each step in the path
+    /// Soroswap's get_amounts_out requires: (factory_address, amount_in, path)
     async fn call_get_amounts_out(
         &self,
         amount_in: i128,
@@ -156,10 +162,17 @@ where
             StellarDexServiceError::UnknownError("Failed to create function symbol".to_string())
         })?;
 
-        let args = vec![Self::i128_to_scval(amount_in), path];
+        // Soroswap's get_amounts_out requires factory address as first argument
+        let factory_addr = Self::parse_contract_address(&self.factory_address)?;
+        let args = vec![
+            ScVal::Address(factory_addr),
+            Self::i128_to_scval(amount_in),
+            path,
+        ];
 
         debug!(
             router = %self.router_address,
+            factory = %self.factory_address,
             amount_in = amount_in,
             "Calling Soroswap router get_amounts_out"
         );
