@@ -187,8 +187,8 @@ export MAX_FEE=1000000                              # Maximum fee in stroops (de
 - `FEE_LIMIT`: Fair use limit for fee consumption per API key in stroops. When exceeded, requests are rejected with `FEE_LIMIT_EXCEEDED` error (when not set, fee tracking is disabled)
 - `FEE_RESET_PERIOD_SECONDS`: Reset fee consumption every N seconds (e.g., 86400 = 24 hours). When configured, each API key's fee consumption resets automatically after the period expires
 - `API_KEY_HEADER`: HTTP header name used to extract the client API key for fee tracking (default: x-api-key)
-- `LIMITED_CONTRACTS`: Comma-separated list of contract addresses with restricted pool access
-- `CONTRACT_CAPACITY_RATIO`: Ratio (0-1) determining what portion of the channel pool limited contracts can access (default: 0.8)
+- `LIMITED_CONTRACTS`: Comma-separated list of contract addresses with restricted pool access. Comma separation will be trimmed and can handle spaces.
+- `CONTRACT_CAPACITY_RATIO`: Ratio (0-1) determining what portion of the channel pool limited contracts can access (default: 0.8). The ratio is converted using Math.floor() which always rounds DOWN to the nearest integer, with a minimum guarantee of 1 channel.
 
 ### Contract Capacity Limits
 
