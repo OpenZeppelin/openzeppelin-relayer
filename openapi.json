@@ -21,16 +21,17 @@
           "Health"
         ],
         "summary": "Health routes implementation",
-        "description": "Note: OpenAPI documentation for these endpoints can be found in the `openapi.rs` file\n\nHandles the `/health` endpoint.\n\nReturns an `HttpResponse` with a status of `200 OK` and a body of `\"OK\"`.",
+        "description": "Note: OpenAPI documentation for these endpoints can be found in the `openapi.rs` file\n\nHandles the `/health` endpoint.\n\nReturns an `HttpResponse` with a status of `200 OK` and a body of `\"OK\"`.\nThis endpoint is used for liveness probes in container orchestration platforms.",
         "operationId": "health",
         "responses": {
           "200": {
-            "description": "Service is healthy",
+            "description": "Service is alive",
             "content": {
               "text/plain": {
                 "schema": {
                   "type": "string"
-                }
+                },
+                "example": "OK"
               }
             }
           },
@@ -1509,40 +1510,127 @@
         "tags": [
           "Health"
         ],
-        "summary": "Readiness endpoint that checks system resources",
-        "description": "Returns 200 OK if the service is ready to accept traffic, or 503 Service Unavailable if not.\nChecks file descriptor usage and CLOSE_WAIT socket count to determine readiness.",
+        "summary": "Readiness endpoint that checks system resources, Redis, Queue, and plugins.",
+        "description": "Returns 200 OK if the service is ready to accept traffic, or 503 Service Unavailable if not.\nThis endpoint is used for readiness probes in container orchestration platforms like\nAWS ECS or Kubernetes.\n\n## Health Check Components\n\n- **System**: File descriptor usage, CLOSE_WAIT socket count\n- **Redis**: Primary and reader pool connectivity\n- **Queue**: Queue's Redis connections (separate from app's Redis)\n- **Plugins**: Plugin pool health, circuit breaker state, and connection metrics (if enabled)\n\n## Status Levels\n\n- `healthy`: All components operational\n- `degraded`: Some components degraded but service can function (e.g., reader pool down)\n- `unhealthy`: Critical components failed, service unavailable\n\n## Plugin Connection Metrics\n\nWhen plugins are enabled, the following connection metrics are exposed:\n\n- `shared_socket_available_slots`: Number of additional concurrent plugin executions that can start\n- `shared_socket_active_connections`: Current number of active plugin execution connections\n- `shared_socket_registered_executions`: Number of plugin executions currently registered (awaiting response)\n- `connection_pool_available_slots`: Available connections to the pool server\n- `connection_pool_active_connections`: Active connections to the pool server\n\nThese metrics help diagnose connection pool exhaustion and plugin capacity issues.\n\n## Caching\n\nHealth check results are cached for 10 seconds to prevent excessive load from frequent\nhealth checks. Multiple requests within the TTL return the same cached response.",
         "operationId": "readiness",
         "responses": {
           "200": {
-            "description": "Service is ready",
+            "description": "Service is ready (healthy or degraded)",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/ReadinessResponse"
                 },
                 "example": {
-                  "close_wait_count": 0,
-                  "fd_count": 42,
-                  "fd_limit": 1024,
-                  "fd_usage_percent": 4,
-                  "ready": true
+                  "components": {
+                    "plugins": {
+                      "avg_response_time_ms": 120,
+                      "circuit_state": "closed",
+                      "connection_pool_active_connections": 2,
+                      "connection_pool_available_slots": 8,
+                      "enabled": true,
+                      "memory": 52428800,
+                      "pool_completed": 1000,
+                      "pool_queued": 2,
+                      "recovering": false,
+                      "shared_socket_active_connections": 2,
+                      "shared_socket_available_slots": 48,
+                      "shared_socket_registered_executions": 2,
+                      "status": "healthy",
+                      "success_rate": 99.5,
+                      "uptime_ms": 3600000
+                    },
+                    "queue": {
+                      "status": "healthy"
+                    },
+                    "redis": {
+                      "primary_pool": {
+                        "available": 8,
+                        "connected": true,
+                        "max_size": 16
+                      },
+                      "reader_pool": {
+                        "available": 8,
+                        "connected": true,
+                        "max_size": 16
+                      },
+                      "status": "healthy"
+                    },
+                    "system": {
+                      "close_wait_count": 0,
+                      "fd_count": 42,
+                      "fd_limit": 1024,
+                      "fd_usage_percent": 4,
+                      "status": "healthy"
+                    }
+                  },
+                  "ready": true,
+                  "status": "healthy",
+                  "timestamp": "2026-01-30T12:00:00Z"
                 }
               }
             }
           },
           "503": {
-            "description": "Service is not ready",
+            "description": "Service is not ready (unhealthy)",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/ReadinessResponse"
                 },
                 "example": {
-                  "close_wait_count": 0,
-                  "fd_count": 900,
-                  "fd_limit": 1024,
+                  "components": {
+                    "plugins": {
+                      "avg_response_time_ms": 150,
+                      "circuit_state": "open",
+                      "connection_pool_active_connections": 4,
+                      "connection_pool_available_slots": 6,
+                      "enabled": true,
+                      "error": "Plugin pool health check failed",
+                      "memory": 52428800,
+                      "pool_completed": 1000,
+                      "pool_queued": 5,
+                      "recovering": true,
+                      "recovery_percent": 10,
+                      "shared_socket_active_connections": 5,
+                      "shared_socket_available_slots": 45,
+                      "shared_socket_registered_executions": 5,
+                      "status": "degraded",
+                      "success_rate": 95.5,
+                      "uptime_ms": 3600000
+                    },
+                    "queue": {
+                      "error": "Queue connection: Stats check timed out",
+                      "status": "unhealthy"
+                    },
+                    "redis": {
+                      "error": "Redis primary pool: PING timed out",
+                      "primary_pool": {
+                        "available": 0,
+                        "connected": false,
+                        "error": "PING timed out",
+                        "max_size": 16
+                      },
+                      "reader_pool": {
+                        "available": 0,
+                        "connected": false,
+                        "error": "PING timed out",
+                        "max_size": 16
+                      },
+                      "status": "unhealthy"
+                    },
+                    "system": {
+                      "close_wait_count": 0,
+                      "fd_count": 42,
+                      "fd_limit": 1024,
+                      "fd_usage_percent": 4,
+                      "status": "healthy"
+                    }
+                  },
                   "ready": false,
-                  "reason": "File descriptor limit exceeded: 900/1024 (87.9% > 80.0%)"
+                  "reason": "Redis primary pool: PING timed out",
+                  "status": "unhealthy",
+                  "timestamp": "2026-01-30T12:00:00Z"
                 }
               }
             }
@@ -5959,6 +6047,38 @@
         },
         "additionalProperties": false
       },
+      "ComponentStatus": {
+        "type": "string",
+        "description": "Component health status levels.",
+        "enum": [
+          "healthy",
+          "degraded",
+          "unhealthy"
+        ]
+      },
+      "Components": {
+        "type": "object",
+        "description": "All health check components.",
+        "required": [
+          "system",
+          "redis",
+          "queue"
+        ],
+        "properties": {
+          "plugins": {
+            "$ref": "#/components/schemas/PluginHealth"
+          },
+          "queue": {
+            "$ref": "#/components/schemas/QueueHealth"
+          },
+          "redis": {
+            "$ref": "#/components/schemas/RedisHealth"
+          },
+          "system": {
+            "$ref": "#/components/schemas/SystemHealth"
+          }
+        }
+      },
       "ContractSource": {
         "oneOf": [
           {
@@ -7320,6 +7440,98 @@
           "details": {}
         }
       },
+      "PluginHealth": {
+        "type": "object",
+        "description": "Plugin health information.",
+        "required": [
+          "status",
+          "enabled"
+        ],
+        "properties": {
+          "avg_response_time_ms": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Average response time in milliseconds",
+            "minimum": 0
+          },
+          "circuit_state": {
+            "type": "string"
+          },
+          "connection_pool_active_connections": {
+            "type": "integer",
+            "description": "Connection pool active connections (for pool server connections)",
+            "minimum": 0
+          },
+          "connection_pool_available_slots": {
+            "type": "integer",
+            "description": "Connection pool available slots (for pool server connections)",
+            "minimum": 0
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          },
+          "memory": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Memory usage in bytes",
+            "minimum": 0
+          },
+          "pool_completed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of completed tasks in the pool",
+            "minimum": 0
+          },
+          "pool_queued": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of queued tasks in the pool",
+            "minimum": 0
+          },
+          "recovering": {
+            "type": "boolean",
+            "description": "Whether recovery mode is active"
+          },
+          "recovery_percent": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Current recovery allowance percentage",
+            "minimum": 0
+          },
+          "shared_socket_active_connections": {
+            "type": "integer",
+            "description": "Shared socket active connection count",
+            "minimum": 0
+          },
+          "shared_socket_available_slots": {
+            "type": "integer",
+            "description": "Shared socket available connection slots",
+            "minimum": 0
+          },
+          "shared_socket_registered_executions": {
+            "type": "integer",
+            "description": "Shared socket registered execution count",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/ComponentStatus"
+          },
+          "success_rate": {
+            "type": "number",
+            "format": "double",
+            "description": "Success rate as a percentage (0.0-100.0)"
+          },
+          "uptime_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Plugin uptime in milliseconds",
+            "minimum": 0
+          }
+        }
+      },
       "PluginMetadata": {
         "type": "object",
         "properties": {
@@ -7393,6 +7605,100 @@
             "format": "int64",
             "description": "Plugin timeout",
             "minimum": 0
+          }
+        }
+      },
+      "PoolStatus": {
+        "type": "object",
+        "description": "Status of an individual Redis connection pool.",
+        "required": [
+          "connected",
+          "available",
+          "max_size"
+        ],
+        "properties": {
+          "available": {
+            "type": "integer",
+            "description": "Number of available connections in the pool.",
+            "minimum": 0
+          },
+          "connected": {
+            "type": "boolean",
+            "description": "Whether the pool is connected and responding to PING."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error message if the pool is not healthy."
+          },
+          "max_size": {
+            "type": "integer",
+            "description": "Maximum configured pool size.",
+            "minimum": 0
+          }
+        }
+      },
+      "QueueHealth": {
+        "type": "object",
+        "description": "Queue health information.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ComponentStatus"
+          }
+        }
+      },
+      "ReadinessResponse": {
+        "type": "object",
+        "description": "Complete readiness response.",
+        "required": [
+          "ready",
+          "status",
+          "components",
+          "timestamp"
+        ],
+        "properties": {
+          "components": {
+            "$ref": "#/components/schemas/Components"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ComponentStatus"
+          },
+          "timestamp": {
+            "type": "string"
+          }
+        }
+      },
+      "RedisHealth": {
+        "type": "object",
+        "description": "Redis health information.",
+        "required": [
+          "status",
+          "primary_pool",
+          "reader_pool"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "primary_pool": {
+            "$ref": "#/components/schemas/PoolStatus"
+          },
+          "reader_pool": {
+            "$ref": "#/components/schemas/PoolStatus"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ComponentStatus"
           }
         }
       },
@@ -9612,6 +9918,42 @@
           },
           "transaction_result_xdr": {
             "type": "string"
+          }
+        }
+      },
+      "SystemHealth": {
+        "type": "object",
+        "description": "System health information (file descriptors, sockets).",
+        "required": [
+          "status",
+          "fd_count",
+          "fd_limit",
+          "fd_usage_percent",
+          "close_wait_count"
+        ],
+        "properties": {
+          "close_wait_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "error": {
+            "type": "string"
+          },
+          "fd_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "fd_limit": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "fd_usage_percent": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/ComponentStatus"
           }
         }
       },

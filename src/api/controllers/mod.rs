@@ -5,12 +5,14 @@
 //! ## Controllers
 //!
 //! * `api_key` - API key management endpoints
+//! * `health` - Health check endpoints
 //! * `relayer` - Transaction and relayer management endpoints
 //! * `plugin` - Plugin endpoints
 //! * `notifications` - Notification management endpoints
 //! * `signers` - Signer management endpoints
 
 pub mod api_key;
+pub mod health;
 pub mod network;
 pub mod notification;
 pub mod plugin;
