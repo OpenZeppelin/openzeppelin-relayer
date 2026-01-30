@@ -1,5 +1,7 @@
 //! Redis-backed implementation of the TransactionRepository.
 
+use crate::domain::transaction::common::is_final_state;
+use crate::metrics::{TRANSACTIONS_FAILED, TRANSACTIONS_SUCCESS};
 use crate::models::{
     NetworkTransactionData, PaginationQuery, RepositoryError, TransactionRepoModel,
     TransactionStatus, TransactionUpdateRequest,
@@ -1327,6 +1329,45 @@ impl TransactionRepository for RedisTransactionRepository {
             match self.update_indexes(&updated_tx, Some(&original_tx)).await {
                 Ok(_) => {
                     debug!(tx_id = %tx_id, attempt = %attempt, "successfully updated transaction");
+                    
+                    // Track metrics for final transaction states
+                    // Only track when status changes from non-final to final state
+                    if let Some(new_status) = &update.status {
+                        let was_final = is_final_state(&original_tx.status);
+                        let is_final = is_final_state(new_status);
+                        
+                        if !was_final && is_final {
+                            let network_type = format!("{:?}", updated_tx.network_type).to_lowercase();
+                            let relayer_id = updated_tx.relayer_id.as_str();
+                            
+                            match new_status {
+                                TransactionStatus::Confirmed => {
+                                    TRANSACTIONS_SUCCESS
+                                        .with_label_values(&[relayer_id, &network_type])
+                                        .inc();
+                                }
+                                TransactionStatus::Failed => {
+                                    TRANSACTIONS_FAILED
+                                        .with_label_values(&[relayer_id, &network_type, "failed"])
+                                        .inc();
+                                }
+                                TransactionStatus::Expired => {
+                                    TRANSACTIONS_FAILED
+                                        .with_label_values(&[relayer_id, &network_type, "expired"])
+                                        .inc();
+                                }
+                                TransactionStatus::Canceled => {
+                                    TRANSACTIONS_FAILED
+                                        .with_label_values(&[relayer_id, &network_type, "canceled"])
+                                        .inc();
+                                }
+                                _ => {
+                                    // Other final states (shouldn't happen, but handle gracefully)
+                                }
+                            }
+                        }
+                    }
+                    
                     return Ok(updated_tx);
                 }
                 Err(e) if attempt < MAX_RETRIES - 1 => {

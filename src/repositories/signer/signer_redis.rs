@@ -220,17 +220,27 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
             .get_connection(self.connections.reader(), "get_by_id")
             .await?;
 
-        let data: String = conn
+        let data: Option<String> = conn
             .get(&key)
             .await
             .map_err(|e| self.map_redis_error(e, "get_by_id"))?;
 
-        // Deserialize signer with AAD context (decryption bound to storage key)
-        let signer = EncryptionContext::with_aad_sync(key, || {
-            self.deserialize_entity::<SignerRepoModel>(&data, &id, "signer")
-        })?;
-        debug!(signer_id = %id, "retrieved signer");
-        Ok(signer)
+        match data {
+            Some(json) => {
+                // Deserialize signer with AAD context (decryption bound to storage key)
+                let signer = EncryptionContext::with_aad_sync(key, || {
+                    self.deserialize_entity::<SignerRepoModel>(&json, &id, "signer")
+                })?;
+                debug!(signer_id = %id, "retrieved signer");
+                Ok(signer)
+            }
+            None => {
+                debug!(signer_id = %id, "signer not found");
+                Err(RepositoryError::NotFound(format!(
+                    "Signer with ID {id} not found"
+                )))
+            }
+        }
     }
 
     async fn update(

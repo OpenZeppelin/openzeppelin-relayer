@@ -128,6 +128,22 @@ lazy_static! {
         REGISTRY.register(Box::new(gauge.clone())).unwrap();
         gauge
     };
+
+    // Counter for successful transactions (Confirmed status).
+    pub static ref TRANSACTIONS_SUCCESS: CounterVec = {
+        let opts = Opts::new("transactions_success_total", "Total number of successful transactions");
+        let counter_vec = CounterVec::new(opts, &["relayer_id", "network_type"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
+
+    // Counter for failed transactions (Failed, Expired, Canceled statuses).
+    pub static ref TRANSACTIONS_FAILED: CounterVec = {
+        let opts = Opts::new("transactions_failed_total", "Total number of failed transactions");
+        let counter_vec = CounterVec::new(opts, &["relayer_id", "network_type", "failure_reason"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
 }
 
 /// Gather all metrics and encode into the provided format.
