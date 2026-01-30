@@ -30,6 +30,8 @@ services:
       FEE_LIMIT: ${FEE_LIMIT}
       API_KEY_HEADER: ${API_KEY_HEADER}
       FEE_RESET_PERIOD_SECONDS: ${FEE_RESET_PERIOD_SECONDS}
+      LIMITED_CONTRACTS: ${LIMITED_CONTRACTS}
+      CONTRACT_CAPACITY_RATIO: ${CONTRACT_CAPACITY_RATIO}
     security_opt:
       - no-new-privileges
     networks:
