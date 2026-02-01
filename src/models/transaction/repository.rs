@@ -133,8 +133,27 @@ impl TransactionRepoModel {
     /// * `update` - The partial update request containing the fields to update
     pub fn apply_partial_update(&mut self, update: TransactionUpdateRequest) {
         // Apply partial updates
-        if let Some(status) = update.status {
-            self.status = status;
+        if let Some(new_status) = update.status {
+            if new_status != self.status {
+                // Update metrics when status changes
+                let old_status_str = self.status.to_string().to_lowercase();
+                let new_status_str = new_status.to_string().to_lowercase();
+
+                // Extract network name from network_data
+                let network = self.network_data.network_name();
+                let network_type = self.network_type.to_string().to_lowercase();
+
+                crate::metrics::update_transaction_metrics(
+                    &self.relayer_id,
+                    &network,
+                    &network_type,
+                    Some(&old_status_str),
+                    &new_status_str,
+                    update.status_reason.as_deref(),
+                );
+            }
+
+            self.status = new_status;
             self.update_delete_at_if_final_status();
         }
         if let Some(status_reason) = update.status_reason {
@@ -236,6 +255,27 @@ impl NetworkTransactionData {
             _ => Err(TransactionError::InvalidType(
                 "Expected Stellar transaction".to_string(),
             )),
+        }
+    }
+
+    /// Returns a network identifier for metrics.
+    /// For Stellar, returns the network passphrase.
+    /// For EVM, returns the chain_id as a string.
+    /// For Solana, returns "solana".
+    pub fn network_name(&self) -> String {
+        match self {
+            NetworkTransactionData::Evm(data) => data.chain_id.to_string(),
+            NetworkTransactionData::Solana(_) => "solana".to_string(),
+            NetworkTransactionData::Stellar(data) => {
+                // Extract network name from passphrase (e.g., "Test SDF Network ; September 2015" -> "testnet")
+                if data.network_passphrase.contains("Test") {
+                    "testnet".to_string()
+                } else if data.network_passphrase.contains("Public") {
+                    "mainnet".to_string()
+                } else {
+                    "unknown".to_string()
+                }
+            }
         }
     }
 }

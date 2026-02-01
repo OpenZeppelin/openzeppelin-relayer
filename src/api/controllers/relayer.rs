@@ -424,6 +424,16 @@ pub async fn send_transaction(
     let relayer_repo_model = get_relayer_by_id(relayer_id, &state).await?;
     relayer_repo_model.validate_active_state()?;
 
+    // Count all incoming transaction requests, including invalid/failed ones.
+    let network_type = relayer_repo_model.network_type.to_string().to_lowercase();
+    crate::metrics::TRANSACTIONS_REQUESTED
+        .with_label_values(&[
+            &relayer_repo_model.id,
+            &relayer_repo_model.network,
+            &network_type,
+        ])
+        .inc();
+
     let relayer = get_network_relayer(relayer_repo_model.id.clone(), &state).await?;
 
     let tx_request: NetworkTransactionRequest =
@@ -432,6 +442,19 @@ pub async fn send_transaction(
     tx_request.validate(&relayer_repo_model)?;
 
     let transaction = relayer.process_transaction_request(tx_request).await?;
+
+    // Update metrics for transaction creation/status.
+    let network = transaction.network_data.network_name();
+    let network_type = transaction.network_type.to_string().to_lowercase();
+    let status = transaction.status.to_string().to_lowercase();
+    crate::metrics::update_transaction_metrics(
+        &transaction.relayer_id,
+        &network,
+        &network_type,
+        None,
+        &status,
+        transaction.status_reason.as_deref(),
+    );
 
     let transaction_response: TransactionResponse = transaction.into();
 
