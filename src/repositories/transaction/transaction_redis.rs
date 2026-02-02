@@ -1329,17 +1329,18 @@ impl TransactionRepository for RedisTransactionRepository {
             match self.update_indexes(&updated_tx, Some(&original_tx)).await {
                 Ok(_) => {
                     debug!(tx_id = %tx_id, attempt = %attempt, "successfully updated transaction");
-                    
+
                     // Track metrics for final transaction states
                     // Only track when status changes from non-final to final state
                     if let Some(new_status) = &update.status {
                         let was_final = is_final_state(&original_tx.status);
                         let is_final = is_final_state(new_status);
-                        
+
                         if !was_final && is_final {
-                            let network_type = format!("{:?}", updated_tx.network_type).to_lowercase();
+                            let network_type =
+                                format!("{:?}", updated_tx.network_type).to_lowercase();
                             let relayer_id = updated_tx.relayer_id.as_str();
-                            
+
                             match new_status {
                                 TransactionStatus::Confirmed => {
                                     TRANSACTIONS_SUCCESS
@@ -1367,7 +1368,7 @@ impl TransactionRepository for RedisTransactionRepository {
                             }
                         }
                     }
-                    
+
                     return Ok(updated_tx);
                 }
                 Err(e) if attempt < MAX_RETRIES - 1 => {
