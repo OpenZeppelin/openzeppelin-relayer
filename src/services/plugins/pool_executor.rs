@@ -1693,10 +1693,6 @@ mod tests {
     use super::*;
     use crate::services::plugins::script_executor::LogLevel;
 
-    // ============================================
-    // is_dead_server_error tests
-    // ============================================
-
     #[test]
     fn test_is_dead_server_error_detects_dead_server() {
         let err = PluginError::PluginExecutionError("Connection refused".to_string());
@@ -3244,5 +3240,836 @@ mod tests {
         let details = payload.details.unwrap();
         assert!(details.get("errors").is_some());
         assert!(details.get("metadata").is_some());
+    }
+
+    #[test]
+    fn test_health_status_construction_healthy() {
+        use super::super::health::HealthStatus;
+
+        let status = HealthStatus {
+            healthy: true,
+            status: "ok".to_string(),
+            uptime_ms: Some(1000000),
+            memory: Some(500000000),
+            pool_completed: Some(1000),
+            pool_queued: Some(5),
+            success_rate: Some(0.99),
+            circuit_state: Some("closed".to_string()),
+            avg_response_time_ms: Some(50),
+            recovering: Some(false),
+            recovery_percent: Some(100),
+            shared_socket_available_slots: Some(100),
+            shared_socket_active_connections: Some(10),
+            shared_socket_registered_executions: Some(5),
+            connection_pool_available_slots: Some(50),
+            connection_pool_active_connections: Some(5),
+        };
+
+        assert!(status.healthy);
+        assert_eq!(status.status, "ok");
+        assert_eq!(status.uptime_ms, Some(1000000));
+        assert_eq!(status.circuit_state, Some("closed".to_string()));
+    }
+
+    #[test]
+    fn test_health_status_construction_unhealthy() {
+        use super::super::health::HealthStatus;
+
+        let status = HealthStatus {
+            healthy: false,
+            status: "connection_failed".to_string(),
+            uptime_ms: None,
+            memory: None,
+            pool_completed: None,
+            pool_queued: None,
+            success_rate: None,
+            circuit_state: Some("open".to_string()),
+            avg_response_time_ms: Some(0),
+            recovering: Some(true),
+            recovery_percent: Some(10),
+            shared_socket_available_slots: None,
+            shared_socket_active_connections: None,
+            shared_socket_registered_executions: None,
+            connection_pool_available_slots: None,
+            connection_pool_active_connections: None,
+        };
+
+        assert!(!status.healthy);
+        assert_eq!(status.status, "connection_failed");
+        assert!(status.uptime_ms.is_none());
+    }
+
+    #[test]
+    fn test_health_status_debug_format() {
+        use super::super::health::HealthStatus;
+
+        let status = HealthStatus {
+            healthy: true,
+            status: "test".to_string(),
+            uptime_ms: Some(100),
+            memory: None,
+            pool_completed: None,
+            pool_queued: None,
+            success_rate: None,
+            circuit_state: None,
+            avg_response_time_ms: None,
+            recovering: None,
+            recovery_percent: None,
+            shared_socket_available_slots: None,
+            shared_socket_active_connections: None,
+            shared_socket_registered_executions: None,
+            connection_pool_available_slots: None,
+            connection_pool_active_connections: None,
+        };
+
+        let debug_str = format!("{:?}", status);
+        assert!(debug_str.contains("healthy: true"));
+        assert!(debug_str.contains("test"));
+    }
+
+    #[test]
+    fn test_health_status_clone() {
+        use super::super::health::HealthStatus;
+
+        let status = HealthStatus {
+            healthy: true,
+            status: "original".to_string(),
+            uptime_ms: Some(500),
+            memory: Some(100),
+            pool_completed: Some(10),
+            pool_queued: Some(1),
+            success_rate: Some(0.95),
+            circuit_state: Some("closed".to_string()),
+            avg_response_time_ms: Some(25),
+            recovering: Some(false),
+            recovery_percent: Some(100),
+            shared_socket_available_slots: Some(50),
+            shared_socket_active_connections: Some(2),
+            shared_socket_registered_executions: Some(1),
+            connection_pool_available_slots: Some(25),
+            connection_pool_active_connections: Some(1),
+        };
+
+        let cloned = status.clone();
+        assert_eq!(cloned.healthy, status.healthy);
+        assert_eq!(cloned.status, status.status);
+        assert_eq!(cloned.uptime_ms, status.uptime_ms);
+    }
+
+    #[test]
+    fn test_execute_request_debug() {
+        use super::super::protocol::ExecuteRequest;
+
+        let request = ExecuteRequest {
+            task_id: "debug-test".to_string(),
+            plugin_id: "test-plugin".to_string(),
+            compiled_code: None,
+            plugin_path: Some("/path/to/plugin.ts".to_string()),
+            params: serde_json::json!({"test": true}),
+            headers: None,
+            socket_path: "/tmp/test.sock".to_string(),
+            http_request_id: None,
+            timeout: None,
+            route: None,
+            config: None,
+            method: None,
+            query: None,
+        };
+
+        let debug_str = format!("{:?}", request);
+        assert!(debug_str.contains("debug-test"));
+        assert!(debug_str.contains("test-plugin"));
+    }
+
+    #[test]
+    fn test_pool_error_debug() {
+        use super::super::protocol::PoolError;
+
+        let error = PoolError {
+            message: "Test error".to_string(),
+            code: Some("TEST_ERR".to_string()),
+            status: Some(400),
+            details: Some(serde_json::json!({"info": "test"})),
+        };
+
+        let debug_str = format!("{:?}", error);
+        assert!(debug_str.contains("Test error"));
+        assert!(debug_str.contains("TEST_ERR"));
+    }
+
+    #[test]
+    fn test_pool_response_debug() {
+        use super::super::protocol::PoolResponse;
+
+        let response = PoolResponse {
+            task_id: "resp-123".to_string(),
+            success: true,
+            result: Some(serde_json::json!("result")),
+            error: None,
+            logs: None,
+        };
+
+        let debug_str = format!("{:?}", response);
+        assert!(debug_str.contains("resp-123"));
+        assert!(debug_str.contains("true"));
+    }
+
+    #[test]
+    fn test_pool_log_entry_debug() {
+        use super::super::protocol::PoolLogEntry;
+
+        let entry = PoolLogEntry {
+            level: "info".to_string(),
+            message: "Test message".to_string(),
+        };
+
+        let debug_str = format!("{:?}", entry);
+        assert!(debug_str.contains("info"));
+        assert!(debug_str.contains("Test message"));
+    }
+
+    #[test]
+    fn test_circuit_breaker_default_trait() {
+        use super::super::health::CircuitBreaker;
+
+        let cb = CircuitBreaker::default();
+        assert_eq!(cb.state(), CircuitState::Closed);
+    }
+
+    #[test]
+    fn test_circuit_breaker_set_state_all_variants() {
+        use super::super::health::CircuitBreaker;
+
+        let cb = CircuitBreaker::new();
+
+        // Test setting all states
+        cb.set_state(CircuitState::HalfOpen);
+        assert_eq!(cb.state(), CircuitState::HalfOpen);
+
+        cb.set_state(CircuitState::Open);
+        assert_eq!(cb.state(), CircuitState::Open);
+
+        cb.set_state(CircuitState::Closed);
+        assert_eq!(cb.state(), CircuitState::Closed);
+    }
+
+    #[test]
+    fn test_circuit_breaker_failure_rate_triggers_open() {
+        use super::super::health::CircuitBreaker;
+
+        let cb = CircuitBreaker::new();
+
+        // Record enough failures to trigger circuit opening
+        for _ in 0..100 {
+            cb.record_failure();
+        }
+
+        assert_eq!(cb.state(), CircuitState::Open);
+    }
+
+    #[test]
+    fn test_circuit_breaker_low_failure_rate_stays_closed() {
+        use super::super::health::CircuitBreaker;
+
+        let cb = CircuitBreaker::new();
+
+        // Record mostly successes with few failures
+        for _ in 0..90 {
+            cb.record_success(50);
+        }
+        for _ in 0..10 {
+            cb.record_failure();
+        }
+
+        // Should still be closed (10% failure rate)
+        assert_eq!(cb.state(), CircuitState::Closed);
+    }
+
+    #[test]
+    fn test_circuit_breaker_ema_response_time() {
+        use super::super::health::CircuitBreaker;
+
+        let cb = CircuitBreaker::new();
+
+        // Record several response times
+        cb.record_success(100);
+        let avg1 = cb.avg_response_time();
+
+        cb.record_success(100);
+        cb.record_success(100);
+        cb.record_success(100);
+        let avg2 = cb.avg_response_time();
+
+        // Average should stabilize around 100
+        assert!(avg1 > 0);
+        assert!(avg2 > 0);
+        assert!(avg2 <= 100);
+    }
+
+    #[test]
+    fn test_circuit_breaker_force_close_resets_counters() {
+        use super::super::health::CircuitBreaker;
+
+        let cb = CircuitBreaker::new();
+        cb.set_state(CircuitState::Open);
+
+        cb.force_close();
+
+        assert_eq!(cb.state(), CircuitState::Closed);
+    }
+
+    #[test]
+    fn test_process_status_debug() {
+        use super::super::health::ProcessStatus;
+
+        assert_eq!(format!("{:?}", ProcessStatus::Running), "Running");
+        assert_eq!(format!("{:?}", ProcessStatus::Exited), "Exited");
+        assert_eq!(format!("{:?}", ProcessStatus::Unknown), "Unknown");
+        assert_eq!(format!("{:?}", ProcessStatus::NoProcess), "NoProcess");
+    }
+
+    #[test]
+    fn test_process_status_clone() {
+        use super::super::health::ProcessStatus;
+
+        let status = ProcessStatus::Running;
+        let cloned = status;
+        assert_eq!(status, cloned);
+    }
+
+    // ============================================
+    // Additional coverage tests - DeadServerIndicator
+    // ============================================
+
+    #[test]
+    fn test_dead_server_indicator_all_variants() {
+        use super::super::health::DeadServerIndicator;
+
+        // Test all enum variants exist and are properly matched
+        let variants = [
+            ("eof while parsing", DeadServerIndicator::EofWhileParsing),
+            ("broken pipe", DeadServerIndicator::BrokenPipe),
+            ("connection refused", DeadServerIndicator::ConnectionRefused),
+            ("connection reset", DeadServerIndicator::ConnectionReset),
+            ("not connected", DeadServerIndicator::NotConnected),
+            ("failed to connect", DeadServerIndicator::FailedToConnect),
+            (
+                "socket file missing",
+                DeadServerIndicator::SocketFileMissing,
+            ),
+            ("no such file", DeadServerIndicator::NoSuchFile),
+            (
+                "connection timed out",
+                DeadServerIndicator::ConnectionTimedOut,
+            ),
+            ("connect timed out", DeadServerIndicator::ConnectionTimedOut),
+        ];
+
+        for (pattern, expected) in variants {
+            let result = DeadServerIndicator::from_error_str(pattern);
+            assert_eq!(result, Some(expected), "Pattern '{}' should match", pattern);
+        }
+    }
+
+    #[test]
+    fn test_dead_server_indicator_debug_format() {
+        use super::super::health::DeadServerIndicator;
+
+        let indicator = DeadServerIndicator::BrokenPipe;
+        let debug_str = format!("{:?}", indicator);
+        assert_eq!(debug_str, "BrokenPipe");
+    }
+
+    #[test]
+    fn test_dead_server_indicator_clone_copy() {
+        use super::super::health::DeadServerIndicator;
+
+        let indicator = DeadServerIndicator::ConnectionRefused;
+        let cloned = indicator;
+        assert_eq!(indicator, cloned);
+    }
+
+    #[test]
+    fn test_result_ring_buffer_not_enough_data() {
+        use super::super::health::ResultRingBuffer;
+
+        let buffer = ResultRingBuffer::new(100);
+
+        // Record less than 10 results
+        for _ in 0..9 {
+            buffer.record(false);
+        }
+
+        // Should return 0.0 because not enough data
+        assert_eq!(buffer.failure_rate(), 0.0);
+    }
+
+    #[test]
+    fn test_result_ring_buffer_exactly_10_samples() {
+        use super::super::health::ResultRingBuffer;
+
+        let buffer = ResultRingBuffer::new(100);
+
+        // Record exactly 10 failures
+        for _ in 0..10 {
+            buffer.record(false);
+        }
+
+        // Should return 1.0 (100% failure)
+        assert_eq!(buffer.failure_rate(), 1.0);
+    }
+
+    #[test]
+    fn test_result_ring_buffer_wraps_correctly() {
+        use super::super::health::ResultRingBuffer;
+
+        let buffer = ResultRingBuffer::new(10);
+
+        // Fill buffer with successes
+        for _ in 0..10 {
+            buffer.record(true);
+        }
+        assert_eq!(buffer.failure_rate(), 0.0);
+
+        // Overwrite with failures
+        for _ in 0..10 {
+            buffer.record(false);
+        }
+        assert_eq!(buffer.failure_rate(), 1.0);
+    }
+
+    #[test]
+    fn test_circuit_state_equality_all_pairs() {
+        assert_eq!(CircuitState::Closed, CircuitState::Closed);
+        assert_eq!(CircuitState::HalfOpen, CircuitState::HalfOpen);
+        assert_eq!(CircuitState::Open, CircuitState::Open);
+
+        assert_ne!(CircuitState::Closed, CircuitState::HalfOpen);
+        assert_ne!(CircuitState::Closed, CircuitState::Open);
+        assert_ne!(CircuitState::HalfOpen, CircuitState::Open);
+    }
+
+    #[test]
+    fn test_circuit_state_clone_copy() {
+        let state = CircuitState::HalfOpen;
+        let copied = state;
+        assert_eq!(state, copied);
+    }
+
+    #[test]
+    fn test_parse_pool_response_with_null_values() {
+        use super::super::protocol::PoolResponse;
+
+        let response = PoolResponse {
+            task_id: "null-test".to_string(),
+            success: true,
+            result: Some(serde_json::json!(null)),
+            error: None,
+            logs: None,
+        };
+
+        let result = PoolManager::parse_pool_response(response).unwrap();
+        assert_eq!(result.return_value, "null");
+    }
+
+    #[test]
+    fn test_parse_pool_response_with_nested_result() {
+        use super::super::protocol::PoolResponse;
+
+        let response = PoolResponse {
+            task_id: "nested-test".to_string(),
+            success: true,
+            result: Some(serde_json::json!({
+                "level1": {
+                    "level2": {
+                        "level3": "deep value"
+                    }
+                }
+            })),
+            error: None,
+            logs: None,
+        };
+
+        let result = PoolManager::parse_pool_response(response).unwrap();
+        assert!(result.return_value.contains("level1"));
+        assert!(result.return_value.contains("level2"));
+        assert!(result.return_value.contains("level3"));
+        assert!(result.return_value.contains("deep value"));
+    }
+
+    #[test]
+    fn test_parse_pool_response_error_with_details() {
+        use super::super::protocol::{PoolError, PoolResponse};
+
+        let response = PoolResponse {
+            task_id: "error-details".to_string(),
+            success: false,
+            result: None,
+            error: Some(PoolError {
+                message: "Error with details".to_string(),
+                code: Some("DETAILED_ERROR".to_string()),
+                status: Some(422),
+                details: Some(serde_json::json!({
+                    "field": "email",
+                    "expected": "string",
+                    "received": "number"
+                })),
+            }),
+            logs: None,
+        };
+
+        let err = PoolManager::parse_pool_response(response).unwrap_err();
+        match err {
+            PluginError::HandlerError(payload) => {
+                assert_eq!(payload.message, "Error with details");
+                assert_eq!(payload.code, Some("DETAILED_ERROR".to_string()));
+                assert!(payload.details.is_some());
+                let details = payload.details.unwrap();
+                assert_eq!(details.get("field").unwrap(), "email");
+            }
+            _ => panic!("Expected HandlerError"),
+        }
+    }
+
+    #[test]
+    fn test_parse_health_result_with_all_optional_fields() {
+        let json = serde_json::json!({
+            "status": "healthy",
+            "uptime": 999999,
+            "memory": {
+                "heapUsed": 123456789,
+                "heapTotal": 987654321,
+                "external": 111111,
+                "arrayBuffers": 222222
+            },
+            "pool": {
+                "completed": 50000,
+                "queued": 100,
+                "active": 50,
+                "waiting": 25
+            },
+            "execution": {
+                "successRate": 0.9999,
+                "avgDuration": 45.5,
+                "totalExecutions": 100000
+            }
+        });
+
+        let result = PoolManager::parse_health_result(&json);
+        assert_eq!(result.status, "healthy");
+        assert_eq!(result.uptime_ms, Some(999999));
+        assert_eq!(result.memory, Some(123456789));
+        assert_eq!(result.pool_completed, Some(50000));
+        assert_eq!(result.pool_queued, Some(100));
+        assert!((result.success_rate.unwrap() - 0.9999).abs() < 0.0001);
+    }
+
+    #[tokio::test]
+    async fn test_pool_manager_max_queue_size() {
+        let manager = PoolManager::new();
+        // max_queue_size should be set from config
+        assert!(manager.max_queue_size > 0);
+    }
+
+    #[tokio::test]
+    async fn test_pool_manager_last_restart_time_initial() {
+        let manager = PoolManager::new();
+        assert_eq!(manager.last_restart_time_ms.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn test_pool_manager_connection_pool_exists() {
+        let manager = PoolManager::new();
+        // Connection pool should be initialized
+        let available = manager.connection_pool.semaphore.available_permits();
+        assert!(available > 0);
+    }
+
+    #[test]
+    fn test_is_dead_server_error_with_whitespace() {
+        // Patterns with extra whitespace
+        let err = PluginError::SocketError("  connection refused  ".to_string());
+        assert!(PoolManager::is_dead_server_error(&err));
+
+        let err = PluginError::SocketError("error: broken pipe occurred".to_string());
+        assert!(PoolManager::is_dead_server_error(&err));
+    }
+
+    #[test]
+    fn test_is_dead_server_error_multiline() {
+        // Multiline error messages
+        let err = PluginError::SocketError(
+            "Error occurred\nConnection refused\nPlease retry".to_string(),
+        );
+        assert!(PoolManager::is_dead_server_error(&err));
+    }
+
+    #[test]
+    fn test_is_dead_server_error_json_in_message() {
+        // Error with JSON content
+        let err = PluginError::PluginExecutionError(
+            r#"{"error": "connection refused", "code": 61}"#.to_string(),
+        );
+        assert!(PoolManager::is_dead_server_error(&err));
+    }
+
+    #[test]
+    fn test_format_return_value_special_json() {
+        // Test with special JSON values
+        let value = Some(serde_json::json!(f64::MAX));
+        let result = PoolManager::format_return_value(value);
+        assert!(!result.is_empty());
+
+        let value = Some(serde_json::json!(i64::MIN));
+        let result = PoolManager::format_return_value(value);
+        assert!(result.contains("-"));
+    }
+
+    #[test]
+    fn test_format_return_value_with_escaped_chars() {
+        let value = Some(serde_json::json!("line1\nline2\ttab\"quote"));
+        let result = PoolManager::format_return_value(value);
+        assert!(result.contains("line1"));
+        assert!(result.contains("line2"));
+    }
+
+    #[test]
+    fn test_format_return_value_array_of_objects() {
+        let value = Some(serde_json::json!([
+            {"id": 1, "name": "first"},
+            {"id": 2, "name": "second"}
+        ]));
+        let result = PoolManager::format_return_value(value);
+        assert!(result.contains("first"));
+        assert!(result.contains("second"));
+    }
+
+    #[test]
+    fn test_all_log_levels_conversion() {
+        use super::super::protocol::PoolLogEntry;
+
+        let levels = [
+            ("log", LogLevel::Log),
+            ("debug", LogLevel::Debug),
+            ("info", LogLevel::Info),
+            ("warn", LogLevel::Warn),
+            ("error", LogLevel::Error),
+            ("result", LogLevel::Result),
+            ("unknown_level", LogLevel::Log), // Unknown defaults to Log
+            ("LOG", LogLevel::Log),           // Case matters - uppercase goes to default
+            ("", LogLevel::Log),              // Empty string goes to default
+        ];
+
+        for (input, expected) in levels {
+            let entry = PoolLogEntry {
+                level: input.to_string(),
+                message: "test".to_string(),
+            };
+            let log_entry: LogEntry = entry.into();
+            assert_eq!(
+                log_entry.level, expected,
+                "Level '{}' should convert to {:?}",
+                input, expected
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pool_manager_health_check_flag_manipulation() {
+        let manager = PoolManager::new();
+
+        manager.health_check_needed.store(true, Ordering::Relaxed);
+        assert!(manager.health_check_needed.load(Ordering::Relaxed));
+
+        manager.health_check_needed.store(false, Ordering::Relaxed);
+        assert!(!manager.health_check_needed.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn test_pool_manager_consecutive_failures_manipulation() {
+        let manager = PoolManager::new();
+
+        manager.consecutive_failures.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(manager.consecutive_failures.load(Ordering::Relaxed), 1);
+
+        manager.consecutive_failures.fetch_add(5, Ordering::Relaxed);
+        assert_eq!(manager.consecutive_failures.load(Ordering::Relaxed), 6);
+
+        manager.consecutive_failures.store(0, Ordering::Relaxed);
+        assert_eq!(manager.consecutive_failures.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_parsed_health_result_with_all_none() {
+        let result = ParsedHealthResult {
+            status: "minimal".to_string(),
+            uptime_ms: None,
+            memory: None,
+            pool_completed: None,
+            pool_queued: None,
+            success_rate: None,
+        };
+
+        assert_eq!(result.status, "minimal");
+        assert!(result.uptime_ms.is_none());
+        assert!(result.memory.is_none());
+    }
+
+    #[test]
+    fn test_parsed_health_result_with_all_some() {
+        let result = ParsedHealthResult {
+            status: "complete".to_string(),
+            uptime_ms: Some(u64::MAX),
+            memory: Some(u64::MAX),
+            pool_completed: Some(u64::MAX),
+            pool_queued: Some(u64::MAX),
+            success_rate: Some(1.0),
+        };
+
+        assert_eq!(result.status, "complete");
+        assert_eq!(result.uptime_ms, Some(u64::MAX));
+        assert_eq!(result.success_rate, Some(1.0));
+    }
+
+    #[test]
+    fn test_calculate_heap_size_extensive_values() {
+        // Test many different concurrency values
+        let test_cases = [
+            (0, 512),
+            (1, 512),
+            (5, 512),
+            (9, 512),
+            (10, 544),
+            (11, 544),
+            (19, 544),
+            (20, 576),
+            (50, 672),
+            (100, 832),
+            (150, 992),
+            (200, 1152),
+            (250, 1312),
+            (300, 1472),
+            (400, 1792),
+            (500, 2112),
+            (1000, 3712),
+            (2000, 6912),
+            (2400, 8192),  // At cap
+            (3000, 8192),  // Capped
+            (5000, 8192),  // Capped
+            (10000, 8192), // Capped
+        ];
+
+        for (concurrency, expected_heap) in test_cases {
+            let heap = PoolManager::calculate_heap_size(concurrency);
+            assert_eq!(
+                heap, expected_heap,
+                "Concurrency {} should give heap {}",
+                concurrency, expected_heap
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pool_manager_drop_cleans_socket() {
+        let socket_path = format!("/tmp/test-drop-{}.sock", uuid::Uuid::new_v4());
+
+        // Create a file at the socket path
+        std::fs::write(&socket_path, "test").unwrap();
+        assert!(std::path::Path::new(&socket_path).exists());
+
+        // Create manager with this socket path
+        {
+            let _manager = PoolManager::with_socket_path(socket_path.clone());
+            // Manager exists here
+        }
+        // Manager dropped here - should clean up socket
+
+        // Socket should be removed
+        assert!(!std::path::Path::new(&socket_path).exists());
+    }
+
+    #[test]
+    fn test_script_result_with_traces() {
+        let result = ScriptResult {
+            logs: vec![],
+            error: String::new(),
+            return_value: "with traces".to_string(),
+            trace: vec![
+                serde_json::json!({"action": "GET", "url": "/api/test"}),
+                serde_json::json!({"action": "POST", "url": "/api/submit"}),
+            ],
+        };
+
+        assert_eq!(result.trace.len(), 2);
+        assert!(result.trace[0].get("action").is_some());
+    }
+
+    #[test]
+    fn test_script_result_with_error() {
+        let result = ScriptResult {
+            logs: vec![LogEntry {
+                level: LogLevel::Error,
+                message: "Something went wrong".to_string(),
+            }],
+            error: "RuntimeError: undefined is not a function".to_string(),
+            return_value: String::new(),
+            trace: vec![],
+        };
+
+        assert!(!result.error.is_empty());
+        assert!(result.error.contains("RuntimeError"));
+        assert_eq!(result.logs.len(), 1);
+    }
+
+    #[test]
+    fn test_plugin_handler_payload_with_traces() {
+        let payload = PluginHandlerPayload {
+            message: "Error with traces".to_string(),
+            status: 500,
+            code: None,
+            details: None,
+            logs: None,
+            traces: Some(vec![
+                serde_json::json!({"method": "GET", "path": "/health"}),
+                serde_json::json!({"method": "POST", "path": "/execute"}),
+            ]),
+        };
+
+        assert!(payload.traces.is_some());
+        assert_eq!(payload.traces.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_queued_request_all_optional_fields() {
+        let (tx, _rx) = oneshot::channel();
+
+        let mut headers = HashMap::new();
+        headers.insert(
+            "X-Custom".to_string(),
+            vec!["value1".to_string(), "value2".to_string()],
+        );
+
+        let request = QueuedRequest {
+            plugin_id: "full-request".to_string(),
+            compiled_code: Some("compiled code here".to_string()),
+            plugin_path: Some("/path/to/plugin.ts".to_string()),
+            params: serde_json::json!({"key": "value", "number": 42}),
+            headers: Some(headers),
+            socket_path: "/tmp/full.sock".to_string(),
+            http_request_id: Some("http-123".to_string()),
+            timeout_secs: Some(60),
+            route: Some("/api/v1/execute".to_string()),
+            config: Some(serde_json::json!({"setting": true})),
+            method: Some("PUT".to_string()),
+            query: Some(serde_json::json!({"page": 1, "limit": 10})),
+            response_tx: tx,
+        };
+
+        assert_eq!(request.plugin_id, "full-request");
+        assert!(request.compiled_code.is_some());
+        assert!(request.plugin_path.is_some());
+        assert!(request.headers.is_some());
+        assert_eq!(request.timeout_secs, Some(60));
+        assert_eq!(request.method, Some("PUT".to_string()));
     }
 }
