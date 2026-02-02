@@ -1363,6 +1363,7 @@ impl TransactionRepository for RedisTransactionRepository {
                                         .inc();
                                 }
                                 _ => {
+                                    // Other final states (shouldn't happen, but handle gracefully)
                                 }
                             }
                         }
