@@ -31,7 +31,9 @@ use crate::utils::RedisConnections;
 // ============================================================================
 
 /// Timeout for Redis PING operations during health checks.
-const PING_TIMEOUT: Duration = Duration::from_millis(500);
+/// Health check timeout - increased from 500ms to handle high-load scenarios
+/// where Redis pool acquisition may take longer due to connection contention.
+const PING_TIMEOUT: Duration = Duration::from_millis(2000);
 
 /// Warning file descriptor ratio (70%) - triggers Degraded status.
 const WARNING_FD_RATIO: f64 = 0.7;
@@ -40,10 +42,12 @@ const WARNING_FD_RATIO: f64 = 0.7;
 const MAX_FD_RATIO: f64 = 0.8;
 
 /// Warning CLOSE_WAIT socket count - triggers Degraded status.
-const WARNING_CLOSE_WAIT: usize = 50;
+/// Increased from 50 to tolerate Docker/Redis networking artifacts under load.
+const WARNING_CLOSE_WAIT: usize = 200;
 
 /// Maximum CLOSE_WAIT socket count - triggers Unhealthy status.
-const MAX_CLOSE_WAIT: usize = 100;
+/// Increased from 100 to tolerate Docker/Redis networking artifacts under load.
+const MAX_CLOSE_WAIT: usize = 500;
 
 /// Cache TTL - health checks are cached for this duration.
 const HEALTH_CACHE_TTL: Duration = Duration::from_secs(10);
@@ -673,11 +677,11 @@ mod tests {
 
     #[test]
     fn test_constants() {
-        assert_eq!(PING_TIMEOUT, Duration::from_millis(500));
+        assert_eq!(PING_TIMEOUT, Duration::from_millis(2000));
         assert_eq!(WARNING_FD_RATIO, 0.7);
         assert_eq!(MAX_FD_RATIO, 0.8);
-        assert_eq!(WARNING_CLOSE_WAIT, 50);
-        assert_eq!(MAX_CLOSE_WAIT, 100);
+        assert_eq!(WARNING_CLOSE_WAIT, 200);
+        assert_eq!(MAX_CLOSE_WAIT, 500);
         assert_eq!(HEALTH_CACHE_TTL, Duration::from_secs(10));
     }
 
