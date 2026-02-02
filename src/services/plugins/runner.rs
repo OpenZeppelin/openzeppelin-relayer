@@ -181,7 +181,7 @@ impl PluginRunner {
         config_json: Option<String>,
         method: Option<String>,
         query_json: Option<String>,
-        _emit_traces: bool,
+        emit_traces: bool,
         state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
     ) -> Result<ScriptResult, PluginError>
     where
@@ -212,7 +212,9 @@ impl PluginRunner {
             .unwrap_or_else(|| format!("{}-{}", plugin_id, uuid::Uuid::new_v4()));
 
         // Register execution (RAII guard auto-unregisters on drop)
-        let guard = shared_socket.register_execution(execution_id.clone()).await;
+        let guard = shared_socket
+            .register_execution(execution_id.clone(), emit_traces)
+            .await;
 
         let exec_outcome = match timeout(
             timeout_duration,
@@ -238,14 +240,22 @@ impl PluginRunner {
         };
 
         // Collect traces from the guard
-        let mut traces_rx = guard.into_receiver();
-        let traces = match tokio::time::timeout(get_trace_timeout(), traces_rx.recv()).await {
-            Ok(Some(traces)) => traces,
-            Ok(None) => Vec::new(),
-            Err(_) => {
-                debug!("Timeout waiting for traces");
-                Vec::new()
+        let traces = if emit_traces {
+            match guard.into_receiver() {
+                Some(mut traces_rx) => {
+                    match tokio::time::timeout(get_trace_timeout(), traces_rx.recv()).await {
+                        Ok(Some(traces)) => traces,
+                        Ok(None) => Vec::new(),
+                        Err(_) => {
+                            debug!("Timeout waiting for traces");
+                            Vec::new()
+                        }
+                    }
+                }
+                None => Vec::new(),
             }
+        } else {
+            Vec::new()
         };
 
         match exec_outcome {
@@ -306,7 +316,9 @@ impl PluginRunner {
 
         // Always register execution so API calls from plugin can be validated
         // ExecutionGuard will auto-unregister on drop (RAII pattern)
-        let execution_guard = shared_socket.register_execution(execution_id.clone()).await;
+        let execution_guard = shared_socket
+            .register_execution(execution_id.clone(), emit_traces)
+            .await;
 
         // Execute via pool manager (using shared socket path)
         let pool_manager = get_pool_manager();
@@ -359,12 +371,16 @@ impl PluginRunner {
         // Collect traces only if emit_traces is enabled
         let traces = if emit_traces {
             // Convert guard to receiver only now, keeping guard alive during execution
-            let mut rx = execution_guard.into_receiver();
-            // Wait for traces with short timeout - they arrive immediately if the plugin used the API
-            let trace_timeout = get_trace_timeout().min(timeout_duration);
-            match timeout(trace_timeout, rx.recv()).await {
-                Ok(Some(traces)) => traces,
-                Ok(None) | Err(_) => Vec::new(),
+            match execution_guard.into_receiver() {
+                Some(mut rx) => {
+                    // Wait for traces with short timeout - they arrive immediately if the plugin used the API
+                    let trace_timeout = get_trace_timeout().min(timeout_duration);
+                    match timeout(trace_timeout, rx.recv()).await {
+                        Ok(Some(traces)) => traces,
+                        Ok(None) | Err(_) => Vec::new(),
+                    }
+                }
+                None => Vec::new(),
             }
         } else {
             // Drop the guard without waiting for traces

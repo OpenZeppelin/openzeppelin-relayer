@@ -5,9 +5,13 @@ use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{BatchRetrievalResult, PaginatedResult, PluginRepositoryTrait};
 use crate::utils::RedisConnections;
 use async_trait::async_trait;
+use lru::LruCache;
+use parking_lot::RwLock;
 use redis::AsyncCommands;
 use std::fmt;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{debug, error, warn};
 
 const PLUGIN_PREFIX: &str = "plugin";
@@ -16,9 +20,17 @@ const COMPILED_CODE_PREFIX: &str = "compiled_code";
 const SOURCE_HASH_PREFIX: &str = "source_hash";
 
 #[derive(Clone)]
+struct CachedCompiledCode {
+    code: String,
+    source_hash: String,
+    cached_at: Instant,
+}
+
+#[derive(Clone)]
 pub struct RedisPluginRepository {
     pub connections: Arc<RedisConnections>,
     pub key_prefix: String,
+    compiled_code_cache: Arc<RwLock<LruCache<String, CachedCompiledCode>>>,
 }
 
 impl RedisRepository for RedisPluginRepository {}
@@ -37,6 +49,10 @@ impl RedisPluginRepository {
         Ok(Self {
             connections,
             key_prefix,
+            // Cache up to 100 compiled plugins (typical: 50-500KB each = 5-50MB total)
+            compiled_code_cache: Arc::new(RwLock::new(LruCache::new(
+                NonZeroUsize::new(100).unwrap(),
+            ))),
         })
     }
 
@@ -395,17 +411,65 @@ impl PluginRepositoryTrait for RedisPluginRepository {
     // Compiled code cache methods
 
     async fn get_compiled_code(&self, plugin_id: &str) -> Result<Option<String>, RepositoryError> {
+        const CACHE_TTL_SECS: u64 = 300; // 5 minutes
+
+        // Check memory cache first - extract data without holding lock across await
+        let cached_entry = {
+            let cache = self.compiled_code_cache.read();
+            cache.peek(plugin_id).map(|cached| {
+                (
+                    cached.code.clone(),
+                    cached.source_hash.clone(),
+                    cached.cached_at,
+                )
+            })
+        };
+
+        if let Some((code, source_hash, cached_at)) = cached_entry {
+            // Validate TTL
+            if cached_at.elapsed().as_secs() < CACHE_TTL_SECS {
+                // Verify source hash matches (ensures cache coherence)
+                if let Ok(Some(current_hash)) = self.get_source_hash(plugin_id).await {
+                    if current_hash == source_hash {
+                        return Ok(Some(code));
+                    }
+                } else {
+                    // No hash available, return cached code
+                    return Ok(Some(code));
+                }
+            }
+        }
+
+        // Cache miss - fetch from Redis
         let mut conn = self
             .get_connection(self.connections.reader(), "get_compiled_code")
             .await?;
         let key = self.compiled_code_key(plugin_id);
 
-        debug!(plugin_id = %plugin_id, "fetching compiled code from Redis");
-
         let code: Option<String> = conn
             .get(&key)
             .await
             .map_err(|e| self.map_redis_error(e, &format!("get_compiled_code_{plugin_id}")))?;
+
+        // Update cache if found
+        if let Some(ref code_str) = code {
+            let source_hash = self
+                .get_source_hash(plugin_id)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+
+            let mut cache = self.compiled_code_cache.write();
+            cache.put(
+                plugin_id.to_string(),
+                CachedCompiledCode {
+                    code: code_str.clone(),
+                    source_hash,
+                    cached_at: Instant::now(),
+                },
+            );
+        }
 
         Ok(code)
     }
@@ -437,6 +501,9 @@ impl PluginRepositoryTrait for RedisPluginRepository {
             .await
             .map_err(|e| self.map_redis_error(e, &format!("store_compiled_code_{plugin_id}")))?;
 
+        // Invalidate memory cache
+        self.compiled_code_cache.write().pop(plugin_id);
+
         Ok(())
     }
 
@@ -458,6 +525,9 @@ impl PluginRepositoryTrait for RedisPluginRepository {
         pipe.exec_async(&mut conn).await.map_err(|e| {
             self.map_redis_error(e, &format!("invalidate_compiled_code_{plugin_id}"))
         })?;
+
+        // Invalidate memory cache
+        self.compiled_code_cache.write().pop(plugin_id);
 
         Ok(())
     }
@@ -484,6 +554,9 @@ impl PluginRepositoryTrait for RedisPluginRepository {
             let _ = conn.del::<_, ()>(&code_key).await;
             let _ = conn.del::<_, ()>(&hash_key).await;
         }
+
+        // Clear all cached compiled code
+        self.compiled_code_cache.write().clear();
 
         Ok(())
     }

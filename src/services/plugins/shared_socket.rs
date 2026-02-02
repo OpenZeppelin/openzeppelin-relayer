@@ -109,13 +109,15 @@
 //! let service = get_shared_socket_service()?;
 //!
 //! // Register an execution (returns RAII guard)
-//! let guard = service.register_execution("exec-123".to_string()).await;
+//! let guard = service
+//!     .register_execution("exec-123".to_string(), true)
+//!     .await;
 //!
 //! // Plugin connects and sends messages over the shared socket...
 //! // (handled automatically by the background listener)
 //!
 //! // Collect traces when done
-//! let mut traces_rx = guard.into_receiver();
+//! let mut traces_rx = guard.into_receiver().unwrap();
 //! let traces = traces_rx.recv().await;
 //! # Ok(())
 //! # }
@@ -132,14 +134,15 @@ use crate::repositories::{
     TransactionCounterTrait, TransactionRepository,
 };
 use crate::services::plugins::relayer_api::{RelayerApi, Request};
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use socket2::{Domain, Socket, Type};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{mpsc, watch, RwLock, Semaphore};
+use tokio::sync::{mpsc, watch, Semaphore};
 use tracing::{debug, info, warn};
 
 use super::PluginError;
@@ -172,7 +175,7 @@ pub enum PluginMessage {
 /// Execution context for trace collection
 struct ExecutionContext {
     /// Channel to send traces back to the execution
-    traces_tx: mpsc::Sender<Vec<serde_json::Value>>,
+    traces_tx: Option<mpsc::Sender<Vec<serde_json::Value>>>,
     /// Creation timestamp for TTL cleanup
     created_at: Instant,
     /// The execution_id bound to this connection (for security)
@@ -184,26 +187,28 @@ struct ExecutionContext {
 /// RAII guard for execution registration that auto-unregisters on drop
 pub struct ExecutionGuard {
     execution_id: String,
-    executions: Arc<RwLock<HashMap<String, ExecutionContext>>>,
+    executions: Arc<DashMap<String, ExecutionContext>>,
     rx: Option<mpsc::Receiver<Vec<serde_json::Value>>>,
+    active_executions: Arc<AtomicUsize>,
 }
 
 impl ExecutionGuard {
     /// Get the trace receiver
-    pub fn into_receiver(mut self) -> mpsc::Receiver<Vec<serde_json::Value>> {
-        self.rx.take().expect("Receiver already taken")
+    pub fn into_receiver(mut self) -> Option<mpsc::Receiver<Vec<serde_json::Value>>> {
+        self.rx.take()
     }
 }
 
 impl Drop for ExecutionGuard {
     fn drop(&mut self) {
-        // Auto-unregister on drop (prevents memory leaks)
-        let executions = self.executions.clone();
-        let execution_id = self.execution_id.clone();
-        tokio::spawn(async move {
-            let mut map = executions.write().await;
-            map.remove(&execution_id);
-        });
+        // Auto-unregister on drop (lock-free with DashMap)
+        if self.executions.remove(&self.execution_id).is_some() {
+            let _ =
+                self.active_executions
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                        value.checked_sub(1)
+                    });
+        }
     }
 }
 
@@ -212,8 +217,10 @@ pub struct SharedSocketService {
     /// Socket path
     socket_path: String,
     /// Active execution contexts (execution_id -> ExecutionContext)
-    /// RwLock is sufficient for write-once, read-once pattern
-    executions: Arc<RwLock<HashMap<String, ExecutionContext>>>,
+    /// DashMap provides lock-free concurrent reads with sharded write locks
+    executions: Arc<DashMap<String, ExecutionContext>>,
+    /// Lock-free counter for active executions (tracked via ExecutionGuard lifecycle)
+    active_executions: Arc<AtomicUsize>,
     /// Whether the listener has been started (instance-level flag)
     started: AtomicBool,
     /// Shutdown signal sender
@@ -240,11 +247,12 @@ impl SharedSocketService {
         let read_timeout = Duration::from_secs(config.socket_read_timeout_secs);
         let max_connections = config.socket_max_connections;
 
-        let executions: Arc<RwLock<HashMap<String, ExecutionContext>>> =
-            Arc::new(RwLock::new(HashMap::new()));
+        let executions: Arc<DashMap<String, ExecutionContext>> = Arc::new(DashMap::new());
+        let active_executions = Arc::new(AtomicUsize::new(0));
 
         // Spawn background cleanup task for stale executions (prevents memory leaks)
         let executions_clone = executions.clone();
+        let active_executions_clone = active_executions.clone();
         let mut cleanup_shutdown_rx = shutdown_tx.subscribe();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
@@ -258,15 +266,31 @@ impl SharedSocketService {
                     }
                 }
                 let now = Instant::now();
-                let mut map = executions_clone.write().await;
-                // Remove entries older than 5 minutes
-                map.retain(|_, ctx| now.duration_since(ctx.created_at) < Duration::from_secs(300));
+                // DashMap retain is lock-free per shard - iterate and remove stale entries
+                let stale_keys: Vec<_> = executions_clone
+                    .iter()
+                    .filter(|entry| {
+                        now.duration_since(entry.value().created_at) >= Duration::from_secs(300)
+                    })
+                    .map(|entry| entry.key().clone())
+                    .collect();
+
+                for key in stale_keys {
+                    if executions_clone.remove(&key).is_some() {
+                        let _ = active_executions_clone.fetch_update(
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                            |value| value.checked_sub(1),
+                        );
+                    }
+                }
             }
         });
 
         Ok(Self {
             socket_path: socket_path.to_string(),
             executions,
+            active_executions,
             started: AtomicBool::new(false),
             shutdown_tx,
             connection_semaphore: Arc::new(Semaphore::new(max_connections)),
@@ -281,22 +305,37 @@ impl SharedSocketService {
 
     /// Register an execution and return a guard that auto-unregisters on drop
     /// This prevents memory leaks from forgotten unregister calls
-    pub async fn register_execution(&self, execution_id: String) -> ExecutionGuard {
-        let (tx, rx) = mpsc::channel(1);
-        let mut map = self.executions.write().await;
-        map.insert(
-            execution_id.clone(),
-            ExecutionContext {
-                traces_tx: tx,
-                created_at: Instant::now(),
-                bound_execution_id: execution_id.clone(),
-            },
-        );
+    pub async fn register_execution(
+        &self,
+        execution_id: String,
+        emit_traces: bool,
+    ) -> ExecutionGuard {
+        let (tx, rx) = if emit_traces {
+            let (tx, rx) = mpsc::channel(1);
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
+        };
+
+        let ctx = ExecutionContext {
+            traces_tx: tx,
+            created_at: Instant::now(),
+            bound_execution_id: execution_id.clone(),
+        };
+
+        // DashMap insert is lock-free (per-shard locking)
+        let inserted = self.executions.insert(execution_id.clone(), ctx).is_none();
+
+        // Increment counter after successful insert (lock-free)
+        if inserted {
+            self.active_executions.fetch_add(1, Ordering::AcqRel);
+        }
 
         ExecutionGuard {
             execution_id,
             executions: self.executions.clone(),
-            rx: Some(rx),
+            rx,
+            active_executions: self.active_executions.clone(),
         }
     }
 
@@ -310,10 +349,9 @@ impl SharedSocketService {
         get_config().socket_max_connections - self.connection_semaphore.available_permits()
     }
 
-    /// Get current number of registered executions
+    /// Get current number of registered executions (lock-free)
     pub async fn registered_executions_count(&self) -> usize {
-        let map = self.executions.read().await;
-        map.len()
+        self.active_executions.load(Ordering::Relaxed)
     }
 
     /// Signal shutdown to the listener and wait for active connections to drain
@@ -342,6 +380,7 @@ impl SharedSocketService {
     /// Start the shared socket service
     /// This spawns a background task that listens for connections
     /// Safe to call multiple times - will only start once per instance
+    /// Waits for listener to be ready before returning to prevent ECONNREFUSED
     #[allow(clippy::type_complexity)]
     pub async fn start<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         self: Arc<Self>,
@@ -367,9 +406,46 @@ impl SharedSocketService {
             return Ok(());
         }
 
-        // Create the listener and move it into the task
-        let listener = UnixListener::bind(&self.socket_path)
-            .map_err(|e| PluginError::SocketError(format!("Failed to bind listener: {e}")))?;
+        // Create the listener with configured backlog to handle connection bursts
+        // Using socket2 to explicitly set the backlog (prevents ECONNREFUSED under load)
+        let config = get_config();
+        let backlog = config.pool_socket_backlog as i32;
+
+        // Create Unix domain socket with socket2 for full control
+        let socket = Socket::new(Domain::UNIX, Type::STREAM, None)
+            .map_err(|e| PluginError::SocketError(format!("Failed to create socket: {e}")))?;
+
+        // Bind to the socket path
+        let addr = socket2::SockAddr::unix(&self.socket_path)
+            .map_err(|e| PluginError::SocketError(format!("Invalid socket path: {e}")))?;
+        socket
+            .bind(&addr)
+            .map_err(|e| PluginError::SocketError(format!("Failed to bind: {e}")))?;
+
+        // Set the backlog explicitly (this is the key fix for ECONNREFUSED!)
+        socket
+            .listen(backlog)
+            .map_err(|e| PluginError::SocketError(format!("Failed to listen: {e}")))?;
+
+        // Set non-blocking for async compatibility
+        socket
+            .set_nonblocking(true)
+            .map_err(|e| PluginError::SocketError(format!("Failed to set non-blocking: {e}")))?;
+
+        // Convert socket2::Socket -> std::os::unix::net::UnixListener -> tokio::net::UnixListener
+        let std_listener: std::os::unix::net::UnixListener = socket.into();
+        let listener = UnixListener::from_std(std_listener)
+            .map_err(|e| PluginError::SocketError(format!("Failed to convert listener: {e}")))?;
+
+        // Create readiness channel to signal when listener loop starts
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+
+        info!(
+            socket_path = %self.socket_path,
+            backlog = backlog,
+            max_connections = config.socket_max_connections,
+            "Shared socket listener created with custom backlog"
+        );
         let executions = self.executions.clone();
         let relayer_api = Arc::new(RelayerApi);
         let socket_path = self.socket_path.clone();
@@ -449,7 +525,49 @@ impl SharedSocketService {
             info!("Shared socket service: listener stopped");
         });
 
-        Ok(())
+        // Test that socket is actually accepting connections before returning
+        // This prevents ECONNREFUSED race where client connects before listener is ready
+        let test_socket_path = self.socket_path.clone();
+        tokio::spawn(async move {
+            // Give listener a moment to enter accept loop
+            tokio::time::sleep(Duration::from_millis(5)).await;
+
+            // Attempt test connection
+            match tokio::time::timeout(
+                Duration::from_millis(100),
+                UnixStream::connect(&test_socket_path),
+            )
+            .await
+            {
+                Ok(Ok(stream)) => {
+                    // Connection successful - socket is ready
+                    drop(stream);
+                    let _ = ready_tx.send(());
+                }
+                Ok(Err(e)) => {
+                    warn!("Socket readiness test failed: {}", e);
+                    // Don't send ready signal - start() will error
+                }
+                Err(_) => {
+                    warn!("Socket readiness test timed out");
+                    // Don't send ready signal - start() will error
+                }
+            }
+        });
+
+        // Wait for listener to be ready before returning (prevents ECONNREFUSED race)
+        match tokio::time::timeout(Duration::from_millis(500), ready_rx).await {
+            Ok(Ok(())) => {
+                debug!("Shared socket service: listener ready to accept connections");
+                Ok(())
+            }
+            Ok(Err(_)) => Err(PluginError::SocketError(
+                "Listener readiness test failed".to_string(),
+            )),
+            Err(_) => Err(PluginError::SocketError(
+                "Listener readiness test timed out".to_string(),
+            )),
+        }
     }
 
     /// Handle connection with overall idle timeout
@@ -458,7 +576,7 @@ impl SharedSocketService {
         stream: UnixStream,
         relayer_api: Arc<RelayerApi>,
         state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
-        executions: Arc<RwLock<HashMap<String, ExecutionContext>>>,
+        executions: Arc<DashMap<String, ExecutionContext>>,
         idle_timeout: Duration,
         read_timeout: Duration,
     ) -> Result<(), PluginError>
@@ -502,7 +620,7 @@ impl SharedSocketService {
         stream: UnixStream,
         relayer_api: Arc<RelayerApi>,
         state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
-        executions: Arc<RwLock<HashMap<String, ExecutionContext>>>,
+        executions: Arc<DashMap<String, ExecutionContext>>,
         read_timeout: Duration,
     ) -> Result<(), PluginError>
     where
@@ -522,7 +640,8 @@ impl SharedSocketService {
     {
         let (r, mut w) = stream.into_split();
         let mut reader = BufReader::new(r).lines();
-        let mut traces = Vec::new();
+        let mut traces: Option<Vec<serde_json::Value>> = None;
+        let mut traces_enabled = false;
 
         // Connection-bound execution_id (prevents spoofing)
         // Once set, this cannot be changed for the lifetime of the connection
@@ -575,15 +694,19 @@ impl SharedSocketService {
                             break;
                         }
 
-                        // Validate execution_id exists in registry
-                        let map = executions.read().await;
-                        if !map.contains_key(&execution_id) {
+                        // Validate execution_id exists in registry (lock-free with DashMap)
+                        if let Some(entry) = executions.get(&execution_id) {
+                            traces_enabled = entry.value().traces_tx.is_some();
+                        } else {
                             warn!("Unknown execution_id: {}", execution_id);
                             break;
                         }
-                        drop(map);
 
-                        debug!("Connection registered with execution_id: {}", execution_id);
+                        debug!(
+                            execution_id = %execution_id,
+                            traces_enabled = traces_enabled,
+                            "Connection registered"
+                        );
                         bound_execution_id = Some(execution_id);
                     }
 
@@ -638,7 +761,14 @@ impl SharedSocketService {
 
                     PluginMessage::Trace { trace } => {
                         // Collect trace for observability
-                        traces.push(trace);
+                        if traces_enabled {
+                            if traces.is_none() {
+                                traces = Some(Vec::new());
+                            }
+                            if let Some(ref mut collected) = traces {
+                                collected.push(trace);
+                            }
+                        }
                     }
 
                     PluginMessage::Shutdown => {
@@ -665,8 +795,8 @@ impl SharedSocketService {
 
                         // Validate execution_id exists (same as new protocol)
                         if let Some(ref id) = candidate_id {
-                            let map = executions.read().await;
-                            if map.contains_key(id) {
+                            if let Some(entry) = executions.get(id) {
+                                traces_enabled = entry.value().traces_tx.is_some();
                                 bound_execution_id = candidate_id;
                             } else {
                                 debug!("Legacy request with unknown execution_id: {}", id);
@@ -697,12 +827,16 @@ impl SharedSocketService {
 
         // Send traces back to caller if execution context exists
         if let Some(exec_id) = bound_execution_id {
-            let map = executions.read().await;
-            if let Some(ctx) = map.get(&exec_id) {
-                // Send traces with timeout to prevent blocking
+            // DashMap get is lock-free (no await needed)
+            let traces_tx = executions
+                .get(&exec_id)
+                .and_then(|entry| entry.value().traces_tx.clone());
+
+            if let Some(tx) = traces_tx {
+                // Send traces with timeout to prevent blocking (no lock held)
+                let traces = traces.unwrap_or_default();
                 let trace_count = traces.len();
-                match tokio::time::timeout(Duration::from_secs(5), ctx.traces_tx.send(traces)).await
-                {
+                match tokio::time::timeout(Duration::from_secs(5), tx.send(traces)).await {
                     Ok(Ok(())) => {}
                     Ok(Err(_)) => {
                         // Only warn if traces were collected but couldn't be delivered
@@ -748,8 +882,21 @@ pub fn get_shared_socket_service() -> Result<Arc<SharedSocketService>, PluginErr
     let socket_path = "/tmp/relayer-plugin-shared.sock";
 
     let result = SHARED_SOCKET.get_or_init(|| {
-        // Remove existing socket file if it exists (from previous runs)
-        let _ = std::fs::remove_file(socket_path);
+        // Force remove existing socket file (handles stale sockets from crashes)
+        // Try multiple times in case of timing issues
+        for _ in 0..3 {
+            match std::fs::remove_file(socket_path) {
+                Ok(_) => {
+                    // Wait a bit for OS to fully release the socket
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    break;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+                Err(_) => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
+        }
 
         match SharedSocketService::new(socket_path) {
             Ok(service) => Ok(Arc::new(service)),
@@ -811,7 +958,7 @@ mod tests {
 
         // Register execution
         let execution_id = "test-exec-123".to_string();
-        let _guard = service.register_execution(execution_id.clone()).await;
+        let _guard = service.register_execution(execution_id.clone(), true).await;
 
         // Give the listener time to start
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -871,7 +1018,7 @@ mod tests {
             .unwrap();
 
         let execution_id = "test-exec-456".to_string();
-        let _guard = service.register_execution(execution_id.clone()).await;
+        let _guard = service.register_execution(execution_id.clone(), true).await;
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -924,7 +1071,7 @@ mod tests {
             .unwrap();
 
         let execution_id = "test-exec-789".to_string();
-        let _guard = service.register_execution(execution_id.clone()).await;
+        let _guard = service.register_execution(execution_id.clone(), true).await;
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -976,7 +1123,7 @@ mod tests {
             .unwrap();
 
         let execution_id = "test-exec-trace".to_string();
-        let guard = service.register_execution(execution_id.clone()).await;
+        let guard = service.register_execution(execution_id.clone(), true).await;
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -1024,7 +1171,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Collect traces
-        let mut traces_rx = guard.into_receiver();
+        let mut traces_rx = guard.into_receiver().unwrap();
         let traces = traces_rx.recv().await.unwrap();
 
         // Should have collected 2 trace events
@@ -1044,20 +1191,18 @@ mod tests {
         let execution_id = "test-exec-guard".to_string();
 
         {
-            let _guard = service.register_execution(execution_id.clone()).await;
+            let _guard = service.register_execution(execution_id.clone(), true).await;
 
-            // Verify execution is registered
-            let map = service.executions.read().await;
-            assert!(map.contains_key(&execution_id));
+            // Verify execution is registered (use atomic counter)
+            assert_eq!(service.registered_executions_count().await, 1);
         }
         // Guard dropped here
 
         // Give tokio task time to run
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        // Verify execution was auto-unregistered
-        let map = service.executions.read().await;
-        assert!(!map.contains_key(&execution_id));
+        // Verify execution was auto-unregistered (counter should be 0)
+        assert_eq!(service.registered_executions_count().await, 0);
     }
 
     #[tokio::test]
@@ -1197,7 +1342,7 @@ mod tests {
             .unwrap();
 
         let execution_id = "test-exec-idle".to_string();
-        let _guard = service.register_execution(execution_id.clone()).await;
+        let _guard = service.register_execution(execution_id.clone(), true).await;
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -1245,7 +1390,7 @@ mod tests {
             .unwrap();
 
         let execution_id = "test-exec-read-timeout".to_string();
-        let _guard = service.register_execution(execution_id.clone()).await;
+        let _guard = service.register_execution(execution_id.clone(), true).await;
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -1288,7 +1433,7 @@ mod tests {
             .unwrap();
 
         let execution_id = "test-exec-multi".to_string();
-        let _guard = service.register_execution(execution_id.clone()).await;
+        let _guard = service.register_execution(execution_id.clone(), true).await;
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -1381,7 +1526,7 @@ mod tests {
             .unwrap();
 
         let execution_id = "test-exec-malformed".to_string();
-        let _guard = service.register_execution(execution_id.clone()).await;
+        let _guard = service.register_execution(execution_id.clone(), true).await;
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -1437,7 +1582,7 @@ mod tests {
             .unwrap();
 
         let execution_id = "test-exec-invalid-dir".to_string();
-        let _guard = service.register_execution(execution_id.clone()).await;
+        let _guard = service.register_execution(execution_id.clone(), true).await;
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -1490,23 +1635,17 @@ mod tests {
         // Register an execution manually with old timestamp
         let execution_id = "stale-exec".to_string();
         let (tx, _rx) = mpsc::channel(1);
-        {
-            let mut map = service.executions.write().await;
-            map.insert(
-                execution_id.clone(),
-                ExecutionContext {
-                    traces_tx: tx,
-                    created_at: Instant::now() - Duration::from_secs(400), // 6+ minutes old
-                    bound_execution_id: execution_id.clone(),
-                },
-            );
-        }
+        service.executions.insert(
+            execution_id.clone(),
+            ExecutionContext {
+                traces_tx: Some(tx),
+                created_at: Instant::now() - Duration::from_secs(400), // 6+ minutes old
+                bound_execution_id: execution_id.clone(),
+            },
+        );
 
-        // Verify it's registered
-        {
-            let map = service.executions.read().await;
-            assert!(map.contains_key(&execution_id));
-        }
+        // Verify it's registered in DashMap (note: active_executions counter tracks guards, not manual inserts)
+        assert!(service.executions.contains_key(&execution_id));
 
         // Wait for cleanup task to run (it runs every 60 seconds, but we can't wait that long)
         // Instead, we verify the cleanup logic by checking the code in new()
@@ -1541,7 +1680,7 @@ mod tests {
             .unwrap();
 
         let execution_id = "test-exec-trace-timeout".to_string();
-        let guard = service.register_execution(execution_id.clone()).await;
+        let guard = service.register_execution(execution_id.clone(), true).await;
 
         // Don't consume the receiver - this will cause the channel to fill up
         drop(guard);

@@ -76,6 +76,11 @@ impl PoolConnection {
     ) -> Result<PoolResponse, PluginError> {
         // Extract task_id from request for validation
         let request_task_id = Self::extract_task_id(request);
+        tracing::debug!(
+            connection_id = self.id,
+            task_id = %request_task_id,
+            "Sending request to pool"
+        );
 
         let json = serde_json::to_string(request)
             .map_err(|e| PluginError::PluginError(format!("Failed to serialize request: {e}")))?;
@@ -145,7 +150,16 @@ impl PoolConnection {
             self.send_request(request),
         )
         .await
-        .map_err(|_| PluginError::SocketError("Request timed out".to_string()))?
+        .map_err(|_| {
+            let task_id = Self::extract_task_id(request);
+            tracing::debug!(
+                connection_id = self.id,
+                task_id = %task_id,
+                timeout_secs = timeout_secs,
+                "Pool request timed out"
+            );
+            PluginError::SocketError("Request timed out".to_string())
+        })?
     }
 
     /// Get the connection ID

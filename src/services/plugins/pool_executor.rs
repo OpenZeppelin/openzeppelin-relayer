@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::{oneshot, RwLock};
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use super::config::get_config;
@@ -60,7 +60,7 @@ pub struct ParsedHealthResult {
 pub struct PoolManager {
     socket_path: String,
     process: tokio::sync::Mutex<Option<Child>>,
-    initialized: RwLock<bool>,
+    initialized: Arc<AtomicBool>,
     /// Lock to prevent concurrent restarts (thundering herd)
     restart_lock: tokio::sync::Mutex<()>,
     /// Connection pool for reusing connections
@@ -277,7 +277,7 @@ impl PoolManager {
             connection_pool,
             socket_path,
             process: tokio::sync::Mutex::new(None),
-            initialized: RwLock::new(false),
+            initialized: Arc::new(AtomicBool::new(false)),
             restart_lock: tokio::sync::Mutex::new(()),
             request_tx: tx,
             max_queue_size,
@@ -586,28 +586,23 @@ impl PoolManager {
     /// This is useful for health checks to determine if the plugin pool
     /// is expected to be running.
     pub async fn is_initialized(&self) -> bool {
-        *self.initialized.read().await
+        self.initialized.load(Ordering::Acquire)
     }
 
     /// Start the pool server if not already running
     pub async fn ensure_started(&self) -> Result<(), PluginError> {
-        if *self.initialized.read().await {
+        if self.initialized.load(Ordering::Acquire) {
             return Ok(());
         }
 
         let _startup_guard = self.restart_lock.lock().await;
 
-        if *self.initialized.read().await {
-            return Ok(());
-        }
-
-        let mut initialized = self.initialized.write().await;
-        if *initialized {
+        if self.initialized.load(Ordering::Acquire) {
             return Ok(());
         }
 
         self.start_pool_server().await?;
-        *initialized = true;
+        self.initialized.store(true, Ordering::Release);
         Ok(())
     }
 
@@ -632,8 +627,7 @@ impl PoolManager {
 
     /// Check process status and restart if needed
     async fn check_and_restart_if_needed(&self) -> Result<(), PluginError> {
-        let _restart_guard = self.restart_lock.lock().await;
-
+        // Check process status without holding restart lock
         let process_status = {
             let mut process_guard = self.process.lock().await;
             if let Some(child) = process_guard.as_mut() {
@@ -661,25 +655,32 @@ impl PoolManager {
             }
         };
 
-        match process_status {
+        // Determine if restart is needed
+        let needs_restart = match process_status {
             ProcessStatus::Running => {
                 let socket_exists = std::path::Path::new(&self.socket_path).exists();
                 if !socket_exists {
                     tracing::warn!(
                         socket_path = %self.socket_path,
-                        "Pool server socket file missing, restarting"
+                        "Pool server socket file missing, needs restart"
                     );
-                    self.consecutive_failures.fetch_add(1, Ordering::Relaxed);
-                    self.restart_internal().await?;
-                    self.consecutive_failures.store(0, Ordering::Relaxed);
+                    true
+                } else {
+                    false
                 }
             }
             ProcessStatus::Exited | ProcessStatus::Unknown | ProcessStatus::NoProcess => {
-                tracing::warn!("Pool server not running, restarting");
-                self.consecutive_failures.fetch_add(1, Ordering::Relaxed);
-                self.restart_internal().await?;
-                self.consecutive_failures.store(0, Ordering::Relaxed);
+                tracing::warn!("Pool server not running, needs restart");
+                true
             }
+        };
+
+        // Only acquire restart lock if restart is actually needed
+        if needs_restart {
+            let _restart_guard = self.restart_lock.lock().await;
+            self.consecutive_failures.fetch_add(1, Ordering::Relaxed);
+            self.restart_internal().await?;
+            self.consecutive_failures.store(0, Ordering::Relaxed);
         }
 
         Ok(())
@@ -857,6 +858,12 @@ impl PoolManager {
         method: Option<String>,
         query: Option<serde_json::Value>,
     ) -> Result<ScriptResult, PluginError> {
+        tracing::debug!(
+            plugin_id = %plugin_id,
+            http_request_id = ?http_request_id,
+            timeout_secs = ?timeout_secs,
+            "Pool execute request received"
+        );
         let recovery_allowance = if self.recovery_mode.load(Ordering::Relaxed) {
             Some(self.recovery_allowance.load(Ordering::Relaxed))
         } else {
@@ -883,10 +890,20 @@ impl PoolManager {
         let start_time = Instant::now();
 
         self.ensure_started_and_healthy().await?;
+        tracing::debug!(
+            plugin_id = %plugin_id,
+            http_request_id = ?http_request_id,
+            "Pool execute start (healthy/started)"
+        );
 
         let circuit_breaker = self.circuit_breaker.clone();
         match self.connection_pool.semaphore.clone().try_acquire_owned() {
             Ok(permit) => {
+                tracing::debug!(
+                    plugin_id = %plugin_id,
+                    http_request_id = ?http_request_id,
+                    "Pool execute acquired connection permit (fast path)"
+                );
                 let result = Self::execute_with_permit(
                     &self.connection_pool,
                     Some(permit),
@@ -925,9 +942,19 @@ impl PoolManager {
                     }
                 }
 
+                tracing::debug!(
+                    elapsed_ms = elapsed_ms,
+                    result_ok = result.is_ok(),
+                    "Pool execute finished (fast path)"
+                );
                 result
             }
             Err(_) => {
+                tracing::debug!(
+                    plugin_id = %plugin_id,
+                    http_request_id = ?http_request_id,
+                    "Pool execute queueing (no permits)"
+                );
                 let (response_tx, response_rx) = oneshot::channel();
 
                 let queued_request = QueuedRequest {
@@ -956,11 +983,22 @@ impl PoolManager {
                                 "Plugin queue is over 50% capacity"
                             );
                         }
-                        response_rx.await.map_err(|_| {
-                            PluginError::PluginExecutionError(
+                        // Add timeout to response_rx to prevent hung requests if worker crashes
+                        let response_timeout = timeout_secs
+                            .map(Duration::from_secs)
+                            .unwrap_or(Duration::from_secs(get_config().pool_request_timeout_secs))
+                            + Duration::from_secs(5); // Add 5s buffer for queue processing
+
+                        match tokio::time::timeout(response_timeout, response_rx).await {
+                            Ok(Ok(result)) => result,
+                            Ok(Err(_)) => Err(PluginError::PluginExecutionError(
                                 "Request queue processor closed".to_string(),
-                            )
-                        })?
+                            )),
+                            Err(_) => Err(PluginError::PluginExecutionError(format!(
+                                "Request timed out after {}s waiting for worker response",
+                                response_timeout.as_secs()
+                            ))),
+                        }
                     }
                     Err(async_channel::TrySendError::Full(req)) => {
                         let queue_timeout_ms = get_config().pool_queue_send_timeout_ms;
@@ -972,11 +1010,22 @@ impl PoolManager {
                                     queue_len = queue_len,
                                     "Request queued after waiting for queue space"
                                 );
-                                response_rx.await.map_err(|_| {
-                                    PluginError::PluginExecutionError(
+                                // Add timeout to response_rx to prevent hung requests if worker crashes
+                                let response_timeout =
+                                    timeout_secs.map(Duration::from_secs).unwrap_or(
+                                        Duration::from_secs(get_config().pool_request_timeout_secs),
+                                    ) + Duration::from_secs(5); // Add 5s buffer for queue processing
+
+                                match tokio::time::timeout(response_timeout, response_rx).await {
+                                    Ok(Ok(result)) => result,
+                                    Ok(Err(_)) => Err(PluginError::PluginExecutionError(
                                         "Request queue processor closed".to_string(),
-                                    )
-                                })?
+                                    )),
+                                    Err(_) => Err(PluginError::PluginExecutionError(format!(
+                                        "Request timed out after {}s waiting for worker response",
+                                        response_timeout.as_secs()
+                                    ))),
+                                }
                             }
                             Ok(Err(async_channel::SendError(_))) => {
                                 Err(PluginError::PluginExecutionError(
@@ -1025,6 +1074,11 @@ impl PoolManager {
                     }
                 }
 
+                tracing::debug!(
+                    elapsed_ms = elapsed_ms,
+                    result_ok = result.is_ok(),
+                    "Pool execute finished (queued path)"
+                );
                 result
             }
         }
@@ -1123,7 +1177,7 @@ impl PoolManager {
 
     /// Invalidate a cached plugin
     pub async fn invalidate_plugin(&self, plugin_id: String) -> Result<(), PluginError> {
-        if !*self.initialized.read().await {
+        if !self.initialized.load(Ordering::Acquire) {
             return Ok(());
         }
 
@@ -1194,7 +1248,7 @@ impl PoolManager {
 
         let socket_stats = self.collect_socket_stats().await;
 
-        if !*self.initialized.read().await {
+        if !self.initialized.load(Ordering::Acquire) {
             let (circuit_state, avg_rt, recovering, recovery_pct) = circuit_info();
             let (shared_available, shared_active, shared_executions, pool_available, pool_active) =
                 socket_stats;
@@ -1252,6 +1306,18 @@ impl PoolManager {
                     let is_pool_exhausted =
                         err_str.contains("semaphore") || err_str.contains("Connection refused");
 
+                    // Try to check process status without blocking on lock
+                    let process_status = match self.process.try_lock() {
+                        Ok(guard) => {
+                            if let Some(child) = guard.as_ref() {
+                                format!("process_pid_{}", child.id().unwrap_or(0))
+                            } else {
+                                "no_process".to_string()
+                            }
+                        }
+                        Err(_) => "process_lock_busy".to_string(),
+                    };
+
                     let (circuit_state, avg_rt, recovering, recovery_pct) = circuit_info();
                     let (
                         shared_available,
@@ -1263,9 +1329,9 @@ impl PoolManager {
                     return Ok(HealthStatus {
                         healthy: is_pool_exhausted,
                         status: if is_pool_exhausted {
-                            format!("pool_exhausted: {e}")
+                            format!("pool_exhausted: {e} ({process_status})")
                         } else {
-                            format!("connection_failed: {e}")
+                            format!("connection_failed: {e} ({process_status})")
                         },
                         uptime_ms: None,
                         memory: None,
@@ -1462,10 +1528,7 @@ impl PoolManager {
 
         Self::cleanup_socket_file(&self.socket_path).await;
 
-        {
-            let mut initialized = self.initialized.write().await;
-            *initialized = false;
-        }
+        self.initialized.store(false, Ordering::Release);
 
         let mut process_guard = self.process.lock().await;
         if process_guard.is_some() {
@@ -1475,10 +1538,7 @@ impl PoolManager {
         let child = Self::spawn_pool_server_process(&self.socket_path, "restart").await?;
         *process_guard = Some(child);
 
-        {
-            let mut initialized = self.initialized.write().await;
-            *initialized = true;
-        }
+        self.initialized.store(true, Ordering::Release);
 
         self.recovery_allowance.store(10, Ordering::Relaxed);
         self.recovery_mode.store(true, Ordering::Relaxed);
@@ -1518,8 +1578,7 @@ impl PoolManager {
 
     /// Shutdown the pool server gracefully
     pub async fn shutdown(&self) -> Result<(), PluginError> {
-        let mut initialized = self.initialized.write().await;
-        if !*initialized {
+        if !self.initialized.load(Ordering::Acquire) {
             return Ok(());
         }
 
@@ -1582,7 +1641,7 @@ impl PoolManager {
 
         let _ = std::fs::remove_file(&self.socket_path);
 
-        *initialized = false;
+        self.initialized.store(false, Ordering::Release);
         tracing::info!("Plugin pool server shutdown complete");
         Ok(())
     }
