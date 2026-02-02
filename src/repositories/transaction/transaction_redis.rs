@@ -1348,8 +1348,22 @@ impl TransactionRepository for RedisTransactionRepository {
                                         .inc();
                                 }
                                 TransactionStatus::Failed => {
+                                    // Parse status_reason to determine failure type
+                                    let failure_reason = updated_tx
+                                        .status_reason
+                                        .as_deref()
+                                        .map(|reason| {
+                                            if reason.starts_with("Submission failed:") {
+                                                "submission_failed"
+                                            } else if reason.starts_with("Preparation failed:") {
+                                                "preparation_failed"
+                                            } else {
+                                                "failed"
+                                            }
+                                        })
+                                        .unwrap_or("failed");
                                     TRANSACTIONS_FAILED
-                                        .with_label_values(&[relayer_id, &network_type, "failed"])
+                                        .with_label_values(&[relayer_id, &network_type, failure_reason])
                                         .inc();
                                 }
                                 TransactionStatus::Expired => {
