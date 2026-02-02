@@ -75,6 +75,11 @@ where
             Ok(prepared_tx) => Ok(prepared_tx),
             Err(error) => {
                 // Always cleanup on failure - this is the critical safety mechanism
+                warn!(
+                    tx_id = %tx.id,
+                    error = %error,
+                    "preparation error caught, calling handle_prepare_failure"
+                );
                 self.handle_prepare_failure(tx, error).await
             }
         }

@@ -427,7 +427,7 @@ where
                     max_retries = %config.max_retries,
                     error = %e,
                     retriable = %is_retriable,
-                    "rpc call failed"
+                    "rpc call failed (will retry if retriable)"
                 );
 
                 if !is_retriable {
