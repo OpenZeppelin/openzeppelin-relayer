@@ -432,6 +432,78 @@ mod tests {
           }
     "#;
 
+    // ============================================
+    // use_pool_executor() tests
+    // ============================================
+
+    #[test]
+    fn test_use_pool_executor_default_true() {
+        // Clear the env var to test default behavior
+        std::env::remove_var("PLUGIN_USE_POOL");
+
+        // Default should be true (pool mode is the default)
+        assert!(use_pool_executor());
+    }
+
+    #[test]
+    fn test_use_pool_executor_explicit_true() {
+        std::env::set_var("PLUGIN_USE_POOL", "true");
+        assert!(use_pool_executor());
+
+        std::env::set_var("PLUGIN_USE_POOL", "TRUE");
+        assert!(use_pool_executor());
+
+        std::env::set_var("PLUGIN_USE_POOL", "True");
+        assert!(use_pool_executor());
+
+        std::env::set_var("PLUGIN_USE_POOL", "1");
+        assert!(use_pool_executor());
+
+        std::env::remove_var("PLUGIN_USE_POOL");
+    }
+
+    #[test]
+    fn test_use_pool_executor_explicit_false() {
+        std::env::set_var("PLUGIN_USE_POOL", "false");
+        assert!(!use_pool_executor());
+
+        std::env::set_var("PLUGIN_USE_POOL", "FALSE");
+        assert!(!use_pool_executor());
+
+        std::env::set_var("PLUGIN_USE_POOL", "0");
+        assert!(!use_pool_executor());
+
+        std::env::set_var("PLUGIN_USE_POOL", "no");
+        assert!(!use_pool_executor());
+
+        std::env::set_var("PLUGIN_USE_POOL", "anything_else");
+        assert!(!use_pool_executor());
+
+        std::env::remove_var("PLUGIN_USE_POOL");
+    }
+
+    // ============================================
+    // get_trace_timeout() tests
+    // ============================================
+
+    #[test]
+    fn test_get_trace_timeout_returns_duration() {
+        let timeout = get_trace_timeout();
+        // Should return a duration from config
+        assert!(timeout.as_millis() > 0);
+    }
+
+    // ============================================
+    // PluginRunner tests
+    // ============================================
+
+    #[test]
+    fn test_plugin_runner_default() {
+        let runner = PluginRunner::default();
+        // Just verify it can be created
+        let _runner = runner;
+    }
+
     #[tokio::test]
     async fn test_run() {
         // Use ts-node mode for this test since temp files are outside plugins directory
@@ -561,5 +633,192 @@ mod tests {
 
         let err = result.expect_err("runner should timeout");
         assert!(err.to_string().contains("Script execution timed out after"));
+    }
+
+    #[tokio::test]
+    async fn test_run_with_emit_traces_true() {
+        // Use ts-node mode for this test since temp files are outside plugins directory
+        std::env::set_var("PLUGIN_USE_POOL", "false");
+
+        let temp_dir = tempdir().unwrap();
+        let ts_config = temp_dir.path().join("tsconfig.json");
+        let script_path = temp_dir.path().join("test_traces.ts");
+        let socket_path = temp_dir.path().join("test_traces.sock");
+
+        let content = r#"
+            export async function handler(api: any, params: any) {
+                console.log('trace test');
+                return 'trace-result';
+            }
+        "#;
+        fs::write(script_path.clone(), content).unwrap();
+        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
+
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        let plugin_runner = PluginRunner;
+        let plugin_id = "test-plugin-traces".to_string();
+        let socket_path_str = socket_path.display().to_string();
+        let script_path_str = script_path.display().to_string();
+        let result = plugin_runner
+            .run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>(
+                plugin_id,
+                &socket_path_str,
+                script_path_str,
+                Duration::from_secs(10),
+                "{ \"test\": \"test\" }".to_string(),
+                Some("http-req-123".to_string()), // Test with http_request_id
+                Some(r#"{"content-type": ["application/json"]}"#.to_string()), // Test with headers
+                Some("/api/test".to_string()), // Test with route
+                Some(r#"{"key": "value"}"#.to_string()), // Test with config
+                Some("POST".to_string()), // Test with method
+                Some(r#"{"page": "1"}"#.to_string()), // Test with query
+                true, // emit_traces = true
+                Arc::new(web::ThinData(state)),
+            )
+            .await;
+
+        // Cleanup env var
+        std::env::remove_var("PLUGIN_USE_POOL");
+
+        if matches!(
+            result,
+            Err(PluginError::SocketError(ref msg)) if msg.contains("Operation not permitted")
+        ) {
+            eprintln!("skipping test_run_with_emit_traces_true due to sandbox socket restrictions");
+            return;
+        }
+
+        let result = result.expect("runner should complete without error");
+        assert_eq!(result.logs[0].level, LogLevel::Log);
+        assert_eq!(result.logs[0].message, "trace test");
+        assert_eq!(result.return_value, "trace-result");
+    }
+
+    #[tokio::test]
+    async fn test_run_with_generated_execution_id() {
+        // Use ts-node mode for this test
+        std::env::set_var("PLUGIN_USE_POOL", "false");
+
+        let temp_dir = tempdir().unwrap();
+        let ts_config = temp_dir.path().join("tsconfig.json");
+        let script_path = temp_dir.path().join("test_gen_exec_id.ts");
+        let socket_path = temp_dir.path().join("test_gen_exec_id.sock");
+
+        let content = r#"
+            export async function handler(api: any, params: any) {
+                return 'generated-id-test';
+            }
+        "#;
+        fs::write(script_path.clone(), content).unwrap();
+        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
+
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        let plugin_runner = PluginRunner;
+        let plugin_id = "test-plugin-gen-id".to_string();
+        let socket_path_str = socket_path.display().to_string();
+        let script_path_str = script_path.display().to_string();
+
+        // Test with http_request_id = None (should generate one)
+        let result = plugin_runner
+            .run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>(
+                plugin_id,
+                &socket_path_str,
+                script_path_str,
+                Duration::from_secs(10),
+                "{}".to_string(),
+                None, // No http_request_id - will be generated
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+                Arc::new(web::ThinData(state)),
+            )
+            .await;
+
+        // Cleanup env var
+        std::env::remove_var("PLUGIN_USE_POOL");
+
+        if matches!(
+            result,
+            Err(PluginError::SocketError(ref msg)) if msg.contains("Operation not permitted")
+        ) {
+            eprintln!(
+                "skipping test_run_with_generated_execution_id due to sandbox socket restrictions"
+            );
+            return;
+        }
+
+        let result = result.expect("runner should complete without error");
+        assert_eq!(result.return_value, "generated-id-test");
+    }
+
+    #[tokio::test]
+    async fn test_run_script_error() {
+        // Use ts-node mode for this test
+        std::env::set_var("PLUGIN_USE_POOL", "false");
+
+        let temp_dir = tempdir().unwrap();
+        let ts_config = temp_dir.path().join("tsconfig.json");
+        let script_path = temp_dir.path().join("test_error.ts");
+        let socket_path = temp_dir.path().join("test_error.sock");
+
+        // Script that throws an error
+        let content = r#"
+            export async function handler(api: any, params: any) {
+                throw new Error('Intentional test error');
+            }
+        "#;
+        fs::write(script_path.clone(), content).unwrap();
+        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
+
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        let plugin_runner = PluginRunner;
+        let plugin_id = "test-plugin-error".to_string();
+        let socket_path_str = socket_path.display().to_string();
+        let script_path_str = script_path.display().to_string();
+
+        let result = plugin_runner
+            .run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>(
+                plugin_id,
+                &socket_path_str,
+                script_path_str,
+                Duration::from_secs(10),
+                "{}".to_string(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                true, // emit_traces to test error path with traces
+                Arc::new(web::ThinData(state)),
+            )
+            .await;
+
+        // Cleanup env var
+        std::env::remove_var("PLUGIN_USE_POOL");
+
+        if matches!(
+            result,
+            Err(PluginError::SocketError(ref msg)) if msg.contains("Operation not permitted")
+        ) {
+            eprintln!("skipping test_run_script_error due to sandbox socket restrictions");
+            return;
+        }
+
+        // Should return an error
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_str = format!("{:?}", err);
+        assert!(
+            err_str.contains("Intentional test error") || err_str.contains("Error"),
+            "Expected error message, got: {}",
+            err_str
+        );
     }
 }

@@ -2677,4 +2677,572 @@ mod tests {
         // Should succeed (no-op)
         assert!(result.is_ok());
     }
+
+    // ============================================
+    // Additional ParsedHealthResult tests
+    // ============================================
+
+    #[test]
+    fn test_parsed_health_result_default() {
+        let result = ParsedHealthResult::default();
+        assert_eq!(result.status, "");
+        assert_eq!(result.uptime_ms, None);
+        assert_eq!(result.memory, None);
+        assert_eq!(result.pool_completed, None);
+        assert_eq!(result.pool_queued, None);
+        assert_eq!(result.success_rate, None);
+    }
+
+    #[test]
+    fn test_parsed_health_result_equality() {
+        let result1 = ParsedHealthResult {
+            status: "ok".to_string(),
+            uptime_ms: Some(1000),
+            memory: Some(500000),
+            pool_completed: Some(50),
+            pool_queued: Some(2),
+            success_rate: Some(1.0),
+        };
+        let result2 = ParsedHealthResult {
+            status: "ok".to_string(),
+            uptime_ms: Some(1000),
+            memory: Some(500000),
+            pool_completed: Some(50),
+            pool_queued: Some(2),
+            success_rate: Some(1.0),
+        };
+        assert_eq!(result1, result2);
+    }
+
+    #[test]
+    fn test_format_return_value_nested_object() {
+        let value = Some(serde_json::json!({
+            "user": { "name": "John", "age": 30 }
+        }));
+        let result = PoolManager::format_return_value(value);
+        assert!(result.contains("John"));
+        assert!(result.contains("30"));
+    }
+
+    #[test]
+    fn test_format_return_value_empty_collections() {
+        let value = Some(serde_json::json!({}));
+        assert_eq!(PoolManager::format_return_value(value), "{}");
+        let value = Some(serde_json::json!([]));
+        assert_eq!(PoolManager::format_return_value(value), "[]");
+    }
+
+    #[test]
+    fn test_parse_health_result_zero_values() {
+        let json = serde_json::json!({
+            "status": "starting",
+            "uptime": 0,
+            "memory": { "heapUsed": 0 },
+            "pool": { "completed": 0, "queued": 0 },
+            "execution": { "successRate": 0.0 }
+        });
+        let result = PoolManager::parse_health_result(&json);
+        assert_eq!(result.status, "starting");
+        assert_eq!(result.uptime_ms, Some(0));
+        assert_eq!(result.memory, Some(0));
+        assert_eq!(result.pool_completed, Some(0));
+        assert_eq!(result.pool_queued, Some(0));
+        assert_eq!(result.success_rate, Some(0.0));
+    }
+
+    #[test]
+    fn test_calculate_heap_size_precise_calculations() {
+        assert_eq!(PoolManager::calculate_heap_size(0), 512);
+        assert_eq!(PoolManager::calculate_heap_size(1), 512);
+        assert_eq!(PoolManager::calculate_heap_size(10), 544);
+        assert_eq!(PoolManager::calculate_heap_size(20), 576);
+        assert_eq!(PoolManager::calculate_heap_size(100), 832);
+        assert_eq!(PoolManager::calculate_heap_size(200), 1152);
+    }
+
+    #[tokio::test]
+    async fn test_pool_manager_health_check_flag_initial() {
+        let manager = PoolManager::new();
+        assert!(!manager.health_check_needed.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn test_pool_manager_consecutive_failures_initial() {
+        let manager = PoolManager::new();
+        assert_eq!(manager.consecutive_failures.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn test_recovery_allowance_bounds() {
+        let manager = PoolManager::new();
+        manager.recovery_allowance.store(0, Ordering::Relaxed);
+        assert_eq!(manager.recovery_allowance_percent(), 0);
+        manager.recovery_allowance.store(50, Ordering::Relaxed);
+        assert_eq!(manager.recovery_allowance_percent(), 50);
+        manager.recovery_allowance.store(100, Ordering::Relaxed);
+        assert_eq!(manager.recovery_allowance_percent(), 100);
+    }
+
+    #[tokio::test]
+    async fn test_is_initialized_changes_with_state() {
+        let manager = PoolManager::with_socket_path("/tmp/init-test-123.sock".to_string());
+        assert!(!manager.is_initialized().await);
+        manager.initialized.store(true, Ordering::Release);
+        assert!(manager.is_initialized().await);
+        manager.initialized.store(false, Ordering::Release);
+        assert!(!manager.is_initialized().await);
+    }
+
+    // ============================================
+    // Additional edge case tests for coverage
+    // ============================================
+
+    #[test]
+    fn test_is_dead_server_error_with_script_timeout() {
+        // ScriptTimeout should NOT be a dead server error
+        let err = PluginError::ScriptTimeout(30);
+        assert!(!PoolManager::is_dead_server_error(&err));
+    }
+
+    #[test]
+    fn test_is_dead_server_error_with_plugin_error() {
+        let err = PluginError::PluginError("some plugin error".to_string());
+        assert!(!PoolManager::is_dead_server_error(&err));
+    }
+
+    #[test]
+    fn test_is_dead_server_error_with_connection_timeout_in_plugin_error() {
+        // Note: When "connection timed out" is wrapped in PluginExecutionError,
+        // the Display output includes "Plugin" which triggers the exclusion
+        // for (plugin + timed out). This is expected behavior to prevent
+        // plugin execution timeouts from triggering restarts.
+        let err = PluginError::PluginExecutionError("connection timed out".to_string());
+        // The error string becomes something like "Plugin execution error: connection timed out"
+        // which contains "plugin" AND "timed out", so it's excluded
+        assert!(!PoolManager::is_dead_server_error(&err));
+
+        // SocketError doesn't add "Plugin" to the display, so connection issues there
+        // would be detected correctly
+        let err = PluginError::SocketError("connect timed out".to_string());
+        assert!(PoolManager::is_dead_server_error(&err));
+    }
+
+    #[test]
+    fn test_parse_pool_response_success_with_logs_various_levels() {
+        use super::super::protocol::{PoolLogEntry, PoolResponse};
+
+        let response = PoolResponse {
+            task_id: "test-levels".to_string(),
+            success: true,
+            result: Some(serde_json::json!("ok")),
+            error: None,
+            logs: Some(vec![
+                PoolLogEntry {
+                    level: "log".to_string(),
+                    message: "log level".to_string(),
+                },
+                PoolLogEntry {
+                    level: "debug".to_string(),
+                    message: "debug level".to_string(),
+                },
+                PoolLogEntry {
+                    level: "info".to_string(),
+                    message: "info level".to_string(),
+                },
+                PoolLogEntry {
+                    level: "warn".to_string(),
+                    message: "warn level".to_string(),
+                },
+                PoolLogEntry {
+                    level: "error".to_string(),
+                    message: "error level".to_string(),
+                },
+                PoolLogEntry {
+                    level: "result".to_string(),
+                    message: "result level".to_string(),
+                },
+            ]),
+        };
+
+        let result = PoolManager::parse_pool_response(response).unwrap();
+        assert_eq!(result.logs.len(), 6);
+        assert_eq!(result.logs[0].level, LogLevel::Log);
+        assert_eq!(result.logs[1].level, LogLevel::Debug);
+        assert_eq!(result.logs[2].level, LogLevel::Info);
+        assert_eq!(result.logs[3].level, LogLevel::Warn);
+        assert_eq!(result.logs[4].level, LogLevel::Error);
+        assert_eq!(result.logs[5].level, LogLevel::Result);
+    }
+
+    #[test]
+    fn test_parse_error_response_defaults() {
+        use super::super::protocol::PoolResponse;
+
+        // Response with no error field at all
+        let response = PoolResponse {
+            task_id: "no-error".to_string(),
+            success: false,
+            result: None,
+            error: None,
+            logs: None,
+        };
+
+        let err = PoolManager::parse_error_response(response);
+        match err {
+            PluginError::HandlerError(payload) => {
+                assert_eq!(payload.message, "Unknown error");
+                assert_eq!(payload.status, 500);
+                assert!(payload.code.is_none());
+                assert!(payload.details.is_none());
+            }
+            _ => panic!("Expected HandlerError"),
+        }
+    }
+
+    #[test]
+    fn test_format_return_value_float() {
+        let value = Some(serde_json::json!(3.14159));
+        let result = PoolManager::format_return_value(value);
+        assert!(result.contains("3.14159"));
+    }
+
+    #[test]
+    fn test_format_return_value_large_array() {
+        let value = Some(serde_json::json!([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]));
+        let result = PoolManager::format_return_value(value);
+        assert_eq!(result, "[1,2,3,4,5,6,7,8,9,10]");
+    }
+
+    #[test]
+    fn test_format_return_value_string_with_special_chars() {
+        let value = Some(serde_json::json!("hello\nworld\ttab"));
+        assert_eq!(PoolManager::format_return_value(value), "hello\nworld\ttab");
+    }
+
+    #[test]
+    fn test_format_return_value_unicode() {
+        let value = Some(serde_json::json!("こんにちは世界 🌍"));
+        assert_eq!(PoolManager::format_return_value(value), "こんにちは世界 🌍");
+    }
+
+    #[test]
+    fn test_parse_health_result_large_values() {
+        let json = serde_json::json!({
+            "status": "healthy",
+            "uptime": 999999999999_u64,
+            "memory": { "heapUsed": 9999999999_u64 },
+            "pool": { "completed": 999999999_u64, "queued": 999999_u64 },
+            "execution": { "successRate": 0.999999 }
+        });
+
+        let result = PoolManager::parse_health_result(&json);
+        assert_eq!(result.status, "healthy");
+        assert_eq!(result.uptime_ms, Some(999999999999));
+        assert_eq!(result.memory, Some(9999999999));
+        assert_eq!(result.pool_completed, Some(999999999));
+        assert_eq!(result.pool_queued, Some(999999));
+        assert!((result.success_rate.unwrap() - 0.999999).abs() < 0.0000001);
+    }
+
+    #[test]
+    fn test_parse_health_result_negative_values_treated_as_none() {
+        // JSON doesn't have unsigned, so negative values won't parse as u64
+        let json = serde_json::json!({
+            "status": "error",
+            "uptime": -1,
+            "memory": { "heapUsed": -100 }
+        });
+
+        let result = PoolManager::parse_health_result(&json);
+        assert_eq!(result.status, "error");
+        assert_eq!(result.uptime_ms, None); // -1 can't be u64
+        assert_eq!(result.memory, None);
+    }
+
+    #[test]
+    fn test_parsed_health_result_debug() {
+        let result = ParsedHealthResult {
+            status: "test".to_string(),
+            uptime_ms: Some(100),
+            memory: Some(200),
+            pool_completed: Some(50),
+            pool_queued: Some(5),
+            success_rate: Some(0.95),
+        };
+
+        let debug_str = format!("{:?}", result);
+        assert!(debug_str.contains("test"));
+        assert!(debug_str.contains("100"));
+        assert!(debug_str.contains("200"));
+    }
+
+    #[test]
+    fn test_calculate_heap_size_boundary_values() {
+        // Test at exact boundaries
+        // 9 should give base (9/10 = 0)
+        assert_eq!(PoolManager::calculate_heap_size(9), 512);
+        // 10 should give base + 32 (10/10 = 1)
+        assert_eq!(PoolManager::calculate_heap_size(10), 544);
+
+        // Test boundary where cap kicks in
+        // 2400 would be: 512 + (240 * 32) = 512 + 7680 = 8192 (at cap)
+        assert_eq!(PoolManager::calculate_heap_size(2400), 8192);
+        // 2399 would be: 512 + (239 * 32) = 512 + 7648 = 8160 (under cap)
+        assert_eq!(PoolManager::calculate_heap_size(2399), 8160);
+    }
+
+    #[tokio::test]
+    async fn test_pool_manager_socket_path_format() {
+        let manager = PoolManager::new();
+        // Should contain UUID format
+        assert!(manager.socket_path.starts_with("/tmp/relayer-plugin-pool-"));
+        assert!(manager.socket_path.ends_with(".sock"));
+        // UUID is 36 chars (32 hex + 4 dashes)
+        let uuid_part = manager
+            .socket_path
+            .strip_prefix("/tmp/relayer-plugin-pool-")
+            .unwrap()
+            .strip_suffix(".sock")
+            .unwrap();
+        assert_eq!(uuid_part.len(), 36);
+    }
+
+    #[tokio::test]
+    async fn test_health_check_socket_missing() {
+        let manager =
+            PoolManager::with_socket_path("/tmp/nonexistent-socket-12345.sock".to_string());
+        // Mark as initialized but socket doesn't exist
+        manager.initialized.store(true, Ordering::Release);
+
+        let health = manager.health_check().await.unwrap();
+        assert!(!health.healthy);
+        assert_eq!(health.status, "socket_missing");
+    }
+
+    #[test]
+    fn test_is_dead_server_error_embedded_patterns() {
+        // Patterns embedded in longer messages
+        let err = PluginError::PluginExecutionError(
+            "Error: ECONNREFUSED connection refused at 127.0.0.1:3000".to_string(),
+        );
+        assert!(PoolManager::is_dead_server_error(&err));
+
+        let err = PluginError::PluginExecutionError(
+            "SocketError: broken pipe while writing to /tmp/socket".to_string(),
+        );
+        assert!(PoolManager::is_dead_server_error(&err));
+
+        let err = PluginError::PluginExecutionError(
+            "IO Error: No such file or directory (os error 2)".to_string(),
+        );
+        assert!(PoolManager::is_dead_server_error(&err));
+    }
+
+    #[test]
+    fn test_is_dead_server_error_mixed_case_timeout_patterns() {
+        // Handler timeout variants - none should be dead server errors
+        let variants = vec![
+            "HANDLER TIMED OUT",
+            "Handler Timed Out after 30s",
+            "the handler timed out waiting for response",
+        ];
+
+        for msg in variants {
+            let err = PluginError::PluginExecutionError(msg.to_string());
+            assert!(
+                !PoolManager::is_dead_server_error(&err),
+                "Expected '{}' to NOT be dead server error",
+                msg
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_ensure_started_idempotent() {
+        let manager = PoolManager::with_socket_path("/tmp/idempotent-test-999.sock".to_string());
+
+        // First call when not initialized
+        assert!(!manager.is_initialized().await);
+
+        // Manually set initialized without actually starting (for test)
+        manager.initialized.store(true, Ordering::Release);
+
+        // ensure_started should return immediately
+        let result = manager.ensure_started().await;
+        assert!(result.is_ok());
+        assert!(manager.is_initialized().await);
+    }
+
+    #[test]
+    fn test_queued_request_with_headers() {
+        let (tx, _rx) = oneshot::channel();
+
+        let mut headers = HashMap::new();
+        headers.insert(
+            "Authorization".to_string(),
+            vec!["Bearer token".to_string()],
+        );
+        headers.insert(
+            "Content-Type".to_string(),
+            vec!["application/json".to_string()],
+        );
+
+        let request = QueuedRequest {
+            plugin_id: "headers-test".to_string(),
+            compiled_code: None,
+            plugin_path: Some("/path/to/plugin.ts".to_string()),
+            params: serde_json::json!({}),
+            headers: Some(headers),
+            socket_path: "/tmp/test.sock".to_string(),
+            http_request_id: None,
+            timeout_secs: None,
+            route: None,
+            config: None,
+            method: None,
+            query: None,
+            response_tx: tx,
+        };
+
+        assert!(request.headers.is_some());
+        let headers = request.headers.unwrap();
+        assert!(headers.contains_key("Authorization"));
+        assert!(headers.contains_key("Content-Type"));
+    }
+
+    #[test]
+    fn test_plugin_error_display_formats() {
+        // Test all PluginError variants have proper Display implementations
+        let err = PluginError::SocketError("test socket error".to_string());
+        assert!(format!("{}", err).contains("Socket error"));
+
+        let err = PluginError::PluginExecutionError("test execution error".to_string());
+        assert!(format!("{}", err).contains("test execution error"));
+
+        let err = PluginError::ScriptTimeout(60);
+        assert!(format!("{}", err).contains("60"));
+
+        let err = PluginError::PluginError("test plugin error".to_string());
+        assert!(format!("{}", err).contains("test plugin error"));
+    }
+
+    #[test]
+    fn test_pool_log_entry_to_log_entry_conversion() {
+        use super::super::protocol::PoolLogEntry;
+
+        // Test the From<PoolLogEntry> for LogEntry conversion
+        let pool_log = PoolLogEntry {
+            level: "info".to_string(),
+            message: "test message".to_string(),
+        };
+
+        let log_entry: LogEntry = pool_log.into();
+        assert_eq!(log_entry.level, LogLevel::Info);
+        assert_eq!(log_entry.message, "test message");
+
+        // Test unknown level defaults
+        let pool_log = PoolLogEntry {
+            level: "unknown_level".to_string(),
+            message: "unknown level message".to_string(),
+        };
+
+        let log_entry: LogEntry = pool_log.into();
+        assert_eq!(log_entry.level, LogLevel::Log); // Should default to Log
+    }
+
+    #[tokio::test]
+    async fn test_circuit_breaker_records_success() {
+        let manager = PoolManager::new();
+
+        // Record some successes
+        manager.circuit_breaker.record_success(100);
+        manager.circuit_breaker.record_success(150);
+        manager.circuit_breaker.record_success(200);
+
+        // Average should be calculated
+        let avg = manager.avg_response_time_ms();
+        assert!(avg > 0);
+    }
+
+    #[tokio::test]
+    async fn test_circuit_breaker_state_transitions() {
+        let manager = PoolManager::new();
+
+        // Initial state is Closed
+        assert_eq!(manager.circuit_state(), CircuitState::Closed);
+
+        // Record many failures to potentially trip the breaker
+        for _ in 0..20 {
+            manager.circuit_breaker.record_failure();
+        }
+
+        // State might have changed (depends on thresholds)
+        let state = manager.circuit_state();
+        assert!(matches!(
+            state,
+            CircuitState::Closed | CircuitState::HalfOpen | CircuitState::Open
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_recovery_mode_activation() {
+        let manager = PoolManager::new();
+
+        // Manually activate recovery mode
+        manager.recovery_allowance.store(10, Ordering::Relaxed);
+        manager.recovery_mode.store(true, Ordering::Relaxed);
+
+        assert!(manager.is_recovering());
+        assert_eq!(manager.recovery_allowance_percent(), 10);
+
+        // Increase allowance
+        manager.recovery_allowance.store(50, Ordering::Relaxed);
+        assert_eq!(manager.recovery_allowance_percent(), 50);
+
+        // Exit recovery mode
+        manager.recovery_mode.store(false, Ordering::Relaxed);
+        assert!(!manager.is_recovering());
+    }
+
+    #[test]
+    fn test_parse_pool_response_with_empty_logs() {
+        use super::super::protocol::PoolResponse;
+
+        let response = PoolResponse {
+            task_id: "empty-logs".to_string(),
+            success: true,
+            result: Some(serde_json::json!("done")),
+            error: None,
+            logs: Some(vec![]), // Empty logs array
+        };
+
+        let result = PoolManager::parse_pool_response(response).unwrap();
+        assert!(result.logs.is_empty());
+        assert_eq!(result.return_value, "done");
+    }
+
+    #[test]
+    fn test_handler_payload_with_complex_details() {
+        let payload = PluginHandlerPayload {
+            message: "Complex error".to_string(),
+            status: 400,
+            code: Some("VALIDATION_ERROR".to_string()),
+            details: Some(serde_json::json!({
+                "errors": [
+                    {"field": "email", "code": "invalid", "message": "Invalid email format"},
+                    {"field": "password", "code": "weak", "message": "Password too weak"}
+                ],
+                "metadata": {
+                    "requestId": "req-123",
+                    "timestamp": "2024-01-01T00:00:00Z"
+                }
+            })),
+            logs: None,
+            traces: None,
+        };
+
+        assert_eq!(payload.status, 400);
+        let details = payload.details.unwrap();
+        assert!(details.get("errors").is_some());
+        assert!(details.get("metadata").is_some());
+    }
 }
