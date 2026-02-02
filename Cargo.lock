@@ -5684,7 +5684,6 @@ dependencies = [
  "sha2 0.10.9",
  "sha3",
  "simple_asn1",
- "socket2 0.5.10",
  "solana-client",
  "solana-commitment-config",
  "solana-program 2.3.0",
