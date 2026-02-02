@@ -6,7 +6,8 @@
 //! - `sendTransaction` - sends a transaction to the relayer.
 //!
 use crate::domain::{
-    get_network_relayer, get_relayer_by_id, get_transaction_by_id, Relayer, SignTransactionRequest,
+    get_network_relayer, get_network_relayer_by_model, get_relayer_by_id, get_transaction_by_id,
+    Relayer, SignTransactionRequest,
 };
 use crate::jobs::JobProducerTrait;
 use crate::models::{
@@ -228,7 +229,8 @@ impl RelayerApi {
             .validate_active_state()
             .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-        let network_relayer = get_network_relayer(request.relayer_id.clone(), state)
+        // Use get_network_relayer_by_model to avoid duplicate Redis lookup
+        let network_relayer = get_network_relayer_by_model(relayer_repo_model.clone(), state)
             .await
             .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
@@ -445,7 +447,8 @@ impl RelayerApi {
             .validate_active_state()
             .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-        let network_relayer = get_network_relayer(request.relayer_id.clone(), state)
+        // Use get_network_relayer_by_model to avoid duplicate Redis lookup
+        let network_relayer = get_network_relayer_by_model(relayer_repo_model.clone(), state)
             .await
             .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 

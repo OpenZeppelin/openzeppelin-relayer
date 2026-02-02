@@ -48,7 +48,6 @@ impl RedisPluginRepository {
         Ok(Self {
             connections,
             key_prefix,
-            // Cache up to 100 compiled plugins (typical: 50-500KB each = 5-50MB total)
             compiled_code_cache: Arc::new(RwLock::new(LruCache::new(
                 NonZeroUsize::new(100).unwrap(),
             ))),
