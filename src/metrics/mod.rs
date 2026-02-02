@@ -128,6 +128,64 @@ lazy_static! {
         REGISTRY.register(Box::new(gauge.clone())).unwrap();
         gauge
     };
+
+    // Counter for total transaction requests received.
+    pub static ref TRANSACTIONS_REQUESTED: CounterVec = {
+        let opts = Opts::new("transactions_requested_total", "Total number of transaction requests received");
+        let counter_vec = CounterVec::new(opts, &["relayer_id", "network", "network_type"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
+
+    // Gauge for pending transactions count.
+    pub static ref TRANSACTIONS_PENDING: GaugeVec = {
+        let gauge_vec = GaugeVec::new(
+            Opts::new("transactions_pending_total", "Number of transactions in pending state"),
+            &["relayer_id", "network", "network_type"]
+        ).unwrap();
+        REGISTRY.register(Box::new(gauge_vec.clone())).unwrap();
+        gauge_vec
+    };
+
+    // Counter for submitted transactions.
+    pub static ref TRANSACTIONS_SUBMITTED: CounterVec = {
+        let opts = Opts::new("transactions_submitted_total", "Total number of transactions submitted to the network");
+        let counter_vec = CounterVec::new(opts, &["relayer_id", "network", "network_type"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
+
+    // Counter for confirmed transactions.
+    pub static ref TRANSACTIONS_CONFIRMED: CounterVec = {
+        let opts = Opts::new("transactions_confirmed_total", "Total number of confirmed transactions");
+        let counter_vec = CounterVec::new(opts, &["relayer_id", "network", "network_type"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
+
+    // Counter for failed transactions.
+    pub static ref TRANSACTIONS_FAILED: CounterVec = {
+        let opts = Opts::new("transactions_failed_total", "Total number of failed transactions");
+        let counter_vec = CounterVec::new(opts, &["relayer_id", "network", "network_type", "reason"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
+
+    // Counter for expired transactions.
+    pub static ref TRANSACTIONS_EXPIRED: CounterVec = {
+        let opts = Opts::new("transactions_expired_total", "Total number of expired transactions");
+        let counter_vec = CounterVec::new(opts, &["relayer_id", "network", "network_type"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
+
+    // Counter for canceled transactions.
+    pub static ref TRANSACTIONS_CANCELED: CounterVec = {
+        let opts = Opts::new("transactions_canceled_total", "Total number of canceled transactions");
+        let counter_vec = CounterVec::new(opts, &["relayer_id", "network", "network_type"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
 }
 
 /// Gather all metrics and encode into the provided format.
@@ -186,6 +244,64 @@ fn get_close_wait_count() -> Result<usize, std::io::Error> {
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         Ok(0) // Unsupported platform
+    }
+}
+
+/// Updates transaction metrics based on status change.
+///
+/// This function should be called whenever a transaction status changes.
+///
+/// # Arguments
+/// * `relayer_id` - The ID of the relayer
+/// * `network` - The network name (e.g., "sepolia", "mainnet", "testnet")
+/// * `network_type` - The network type (e.g., "evm", "stellar", "solana")
+/// * `old_status` - The previous status (None if this is a new transaction)
+/// * `new_status` - The new status
+/// * `status_reason` - Optional reason for status change (used for failures)
+pub fn update_transaction_metrics(
+    relayer_id: &str,
+    network: &str,
+    network_type: &str,
+    old_status: Option<&str>,
+    new_status: &str,
+    status_reason: Option<&str>,
+) {
+    let labels = &[relayer_id, network, network_type];
+
+    // Decrement old status gauge if applicable
+    if let Some(old) = old_status {
+        match old {
+            "pending" => {
+                TRANSACTIONS_PENDING.with_label_values(labels).dec();
+            }
+            _ => {}
+        }
+    }
+
+    // Update counters and gauges based on new status
+    match new_status {
+        "pending" => {
+            TRANSACTIONS_PENDING.with_label_values(labels).inc();
+        }
+        "submitted" | "sent" => {
+            TRANSACTIONS_SUBMITTED.with_label_values(labels).inc();
+        }
+        "confirmed" | "mined" => {
+            TRANSACTIONS_CONFIRMED.with_label_values(labels).inc();
+        }
+        "failed" => {
+            let reason = status_reason.unwrap_or("unknown");
+            TRANSACTIONS_FAILED
+                .with_label_values(&[relayer_id, network, network_type, reason])
+                .inc();
+        }
+        "expired" => {
+            TRANSACTIONS_EXPIRED.with_label_values(labels).inc();
+        }
+        "canceled" => {
+            TRANSACTIONS_CANCELED.with_label_values(labels).inc();
+        }
+        _ => {}
     }
 }
 
@@ -486,6 +602,115 @@ mod actix_tests {
             found,
             "Expected error metric with endpoint '/test_error' not found"
         );
+    }
+
+    #[actix_rt::test]
+    async fn test_transaction_metrics() {
+        // Test transaction requested metric
+        TRANSACTIONS_REQUESTED
+            .with_label_values(&["test-relayer", "11155111", "evm"])
+            .inc();
+
+        // Test pending transactions
+        TRANSACTIONS_PENDING
+            .with_label_values(&["test-relayer", "11155111", "evm"])
+            .inc();
+
+        // Test status transition metrics
+        update_transaction_metrics(
+            "test-relayer",
+            "11155111",
+            "evm",
+            Some("pending"),
+            "submitted",
+            None,
+        );
+
+        // Verify pending was decremented and submitted was incremented
+        let families = REGISTRY.gather();
+
+        // Check transactions_requested_total
+        let requested_fam = find_metric_family("transactions_requested_total", &families)
+            .expect("transactions_requested_total metric family not found");
+        assert!(
+            requested_fam.get_metric().len() > 0,
+            "Expected at least one transactions_requested metric"
+        );
+
+        // Check transactions_submitted_total
+        let submitted_fam = find_metric_family("transactions_submitted_total", &families)
+            .expect("transactions_submitted_total metric family not found");
+        let mut found_submitted = false;
+        for m in submitted_fam.get_metric() {
+            let labels = m.get_label();
+            if labels
+                .iter()
+                .any(|l| l.name() == "relayer_id" && l.value() == "test-relayer")
+                && labels
+                    .iter()
+                    .any(|l| l.name() == "network" && l.value() == "11155111")
+                && labels
+                    .iter()
+                    .any(|l| l.name() == "network_type" && l.value() == "evm")
+            {
+                found_submitted = true;
+                assert!(
+                    m.get_counter().value() >= 1.0,
+                    "Expected submitted counter to be >= 1"
+                );
+            }
+        }
+        assert!(
+            found_submitted,
+            "Expected to find submitted metric for test-relayer"
+        );
+
+        // Test confirmed transaction
+        update_transaction_metrics(
+            "test-relayer",
+            "11155111",
+            "evm",
+            Some("submitted"),
+            "confirmed",
+            None,
+        );
+
+        let families = REGISTRY.gather();
+        let confirmed_fam = find_metric_family("transactions_confirmed_total", &families)
+            .expect("transactions_confirmed_total metric family not found");
+        assert!(
+            confirmed_fam.get_metric().len() > 0,
+            "Expected at least one confirmed metric"
+        );
+
+        // Test failed transaction with reason
+        update_transaction_metrics(
+            "test-relayer",
+            "11155111",
+            "evm",
+            Some("submitted"),
+            "failed",
+            Some("insufficient_gas"),
+        );
+
+        let families = REGISTRY.gather();
+        let failed_fam = find_metric_family("transactions_failed_total", &families)
+            .expect("transactions_failed_total metric family not found");
+        let mut found_failed = false;
+        for m in failed_fam.get_metric() {
+            let labels = m.get_label();
+            if labels
+                .iter()
+                .any(|l| l.name() == "reason" && l.value() == "insufficient_gas")
+            {
+                found_failed = true;
+                assert!(
+                    m.get_counter().value() >= 1.0,
+                    "Expected failed counter to be >= 1"
+                );
+            }
+        }
+        assert!(found_failed, "Expected to find failed metric with reason");
     }
 }
 
