@@ -1,7 +1,10 @@
 //! Redis-backed implementation of the TransactionRepository.
 
 use crate::domain::transaction::common::is_final_state;
-use crate::metrics::{TRANSACTIONS_CREATED, TRANSACTIONS_FAILED, TRANSACTIONS_SUBMITTED, TRANSACTIONS_SUCCESS};
+use crate::metrics::{
+    TRANSACTIONS_BY_STATUS, TRANSACTIONS_CREATED, TRANSACTIONS_FAILED, TRANSACTIONS_SUBMITTED,
+    TRANSACTIONS_SUCCESS, TRANSACTION_PROCESSING_TIME,
+};
 use crate::models::{
     NetworkTransactionData, PaginationQuery, RepositoryError, TransactionRepoModel,
     TransactionStatus, TransactionUpdateRequest,
@@ -13,6 +16,7 @@ use crate::repositories::{
 };
 use crate::utils::RedisConnections;
 use async_trait::async_trait;
+use chrono::Utc;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
@@ -546,8 +550,15 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
         // Track transaction creation metric
         let network_type = format!("{:?}", entity.network_type).to_lowercase();
-        crate::metrics::TRANSACTIONS_CREATED
-            .with_label_values(&[entity.relayer_id.as_str(), &network_type])
+        let relayer_id = entity.relayer_id.as_str();
+        TRANSACTIONS_CREATED
+            .with_label_values(&[relayer_id, &network_type])
+            .inc();
+
+        // Track initial status distribution (Pending)
+        let status_str = format!("{:?}", entity.status).to_lowercase();
+        TRANSACTIONS_BY_STATUS
+            .with_label_values(&[relayer_id, &network_type, &status_str])
             .inc();
 
         debug!(tx_id = %entity.id, "successfully created transaction");
@@ -1349,6 +1360,32 @@ impl TransactionRepository for RedisTransactionRepository {
                             TRANSACTIONS_SUBMITTED
                                 .with_label_values(&[relayer_id, &network_type])
                                 .inc();
+
+                            // Track processing time: creation to submission
+                            if let Ok(created_time) =
+                                chrono::DateTime::parse_from_rfc3339(&updated_tx.created_at)
+                            {
+                                let processing_seconds = (Utc::now()
+                                    - created_time.with_timezone(&Utc))
+                                .num_seconds() as f64;
+                                TRANSACTION_PROCESSING_TIME
+                                    .with_label_values(&[relayer_id, &network_type, "creation_to_submission"])
+                                    .observe(processing_seconds);
+                            }
+                        }
+
+                        // Track status distribution (update gauge when status changes)
+                        if original_tx.status != *new_status {
+                            // Decrement old status
+                            let old_status_str = format!("{:?}", original_tx.status).to_lowercase();
+                            TRANSACTIONS_BY_STATUS
+                                .with_label_values(&[relayer_id, &network_type, &old_status_str])
+                                .dec();
+                            // Increment new status
+                            let new_status_str = format!("{:?}", new_status).to_lowercase();
+                            TRANSACTIONS_BY_STATUS
+                                .with_label_values(&[relayer_id, &network_type, &new_status_str])
+                                .inc();
                         }
 
                         // Track metrics for final transaction states
@@ -1362,6 +1399,51 @@ impl TransactionRepository for RedisTransactionRepository {
                                     TRANSACTIONS_SUCCESS
                                         .with_label_values(&[relayer_id, &network_type])
                                         .inc();
+
+                                    // Track processing time: submission to confirmation
+                                    if let (Some(sent_at_str), Some(confirmed_at_str)) =
+                                        (&updated_tx.sent_at, &updated_tx.confirmed_at)
+                                    {
+                                        if let (Ok(sent_time), Ok(confirmed_time)) = (
+                                            chrono::DateTime::parse_from_rfc3339(sent_at_str),
+                                            chrono::DateTime::parse_from_rfc3339(confirmed_at_str),
+                                        ) {
+                                            let processing_seconds = (confirmed_time
+                                                .with_timezone(&Utc)
+                                                - sent_time.with_timezone(&Utc))
+                                            .num_seconds() as f64;
+                                            TRANSACTION_PROCESSING_TIME
+                                                .with_label_values(&[
+                                                    relayer_id,
+                                                    &network_type,
+                                                    "submission_to_confirmation",
+                                                ])
+                                                .observe(processing_seconds);
+                                        }
+                                    }
+
+                                    // Track processing time: creation to confirmation
+                                    if let Ok(created_time) =
+                                        chrono::DateTime::parse_from_rfc3339(&updated_tx.created_at)
+                                    {
+                                        if let Some(confirmed_at_str) = &updated_tx.confirmed_at {
+                                            if let Ok(confirmed_time) =
+                                                chrono::DateTime::parse_from_rfc3339(confirmed_at_str)
+                                            {
+                                                let processing_seconds = (confirmed_time
+                                                    .with_timezone(&Utc)
+                                                    - created_time.with_timezone(&Utc))
+                                                .num_seconds() as f64;
+                                                TRANSACTION_PROCESSING_TIME
+                                                    .with_label_values(&[
+                                                        relayer_id,
+                                                        &network_type,
+                                                        "creation_to_confirmation",
+                                                    ])
+                                                    .observe(processing_seconds);
+                                            }
+                                        }
+                                    }
                                 }
                                 TransactionStatus::Failed => {
                                     // Parse status_reason to determine failure type

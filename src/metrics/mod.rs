@@ -170,6 +170,34 @@ lazy_static! {
         REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
         counter_vec
     };
+
+    // Gauge for transaction status distribution (current count of transactions in each status).
+    pub static ref TRANSACTIONS_BY_STATUS: GaugeVec = {
+        let gauge_vec = GaugeVec::new(
+            Opts::new("transactions_by_status", "Current number of transactions by status"),
+            &["relayer_id", "network_type", "status"]
+        ).unwrap();
+        REGISTRY.register(Box::new(gauge_vec.clone())).unwrap();
+        gauge_vec
+    };
+
+    // Histogram for transaction processing times (creation to submission).
+    pub static ref TRANSACTION_PROCESSING_TIME: HistogramVec = {
+        let histogram_opts = HistogramOpts::new("transaction_processing_seconds", "Transaction processing time in seconds")
+            .buckets(vec![0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0]);
+        let histogram_vec = HistogramVec::new(histogram_opts, &["relayer_id", "network_type", "stage"]).unwrap();
+        REGISTRY.register(Box::new(histogram_vec.clone())).unwrap();
+        histogram_vec
+    };
+
+    // Histogram for RPC call latency.
+    pub static ref RPC_CALL_LATENCY: HistogramVec = {
+        let histogram_opts = HistogramOpts::new("rpc_call_latency_seconds", "RPC call latency in seconds")
+            .buckets(vec![0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0]);
+        let histogram_vec = HistogramVec::new(histogram_opts, &["relayer_id", "network_type", "operation_name"]).unwrap();
+        REGISTRY.register(Box::new(histogram_vec.clone())).unwrap();
+        histogram_vec
+    };
 }
 
 /// Gather all metrics and encode into the provided format.
