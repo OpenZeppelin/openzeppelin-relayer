@@ -477,7 +477,7 @@ where
                 // Track RPC failure metric
                 crate::metrics::API_RPC_FAILURES
                     .with_label_values(&[
-                        &self.relayer.id,
+                        self.relayer.id.as_str(),
                         "stellar",
                         "get_balance",
                         "get_account_failed",
@@ -509,7 +509,7 @@ where
                 // Track RPC failure metric
                 crate::metrics::API_RPC_FAILURES
                     .with_label_values(&[
-                        &relayer_model.id,
+                        relayer_model.id.as_str(),
                         "stellar",
                         "get_status",
                         "get_account_failed",
