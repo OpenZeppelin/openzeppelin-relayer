@@ -1,7 +1,7 @@
 //! Redis-backed implementation of the TransactionRepository.
 
 use crate::domain::transaction::common::is_final_state;
-use crate::metrics::{TRANSACTIONS_FAILED, TRANSACTIONS_SUCCESS};
+use crate::metrics::{TRANSACTIONS_CREATED, TRANSACTIONS_FAILED, TRANSACTIONS_SUBMITTED, TRANSACTIONS_SUCCESS};
 use crate::models::{
     NetworkTransactionData, PaginationQuery, RepositoryError, TransactionRepoModel,
     TransactionStatus, TransactionUpdateRequest,
