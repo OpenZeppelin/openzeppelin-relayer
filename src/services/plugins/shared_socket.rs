@@ -190,6 +190,9 @@ pub struct ExecutionGuard {
     rx: Option<mpsc::Receiver<Vec<serde_json::Value>>>,
     /// Shared counter for tracking active executions (lock-free)
     active_count: Arc<AtomicUsize>,
+    /// Whether this guard was successfully registered (insertion succeeded)
+    /// Only registered guards should decrement active_count on drop
+    registered: bool,
 }
 
 impl ExecutionGuard {
@@ -204,7 +207,10 @@ impl Drop for ExecutionGuard {
     fn drop(&mut self) {
         // Auto-unregister on drop - synchronous with scc::HashMap (no spawn needed!)
         // This eliminates the overhead of spawning a task for every request
-        if self.executions.remove(&self.execution_id).is_some() {
+        let _ = self.executions.remove(&self.execution_id);
+        // Only decrement counter if this guard was successfully registered
+        // This prevents counter underflow when insertion failed (duplicate execution_id)
+        if self.registered {
             self.active_count.fetch_sub(1, Ordering::AcqRel);
         }
     }
@@ -320,15 +326,26 @@ impl SharedSocketService {
             bound_execution_id: execution_id.clone(),
         };
 
-        // scc::HashMap insert - returns Ok if new, Err if key existed
-        if self.executions.insert(execution_id.clone(), ctx).is_ok() {
-            self.active_count.fetch_add(1, Ordering::AcqRel);
-        }
+        // scc::HashMap insert - returns Ok if new, Err if key existed (duplicate)
+        let registered = match self.executions.insert(execution_id.clone(), ctx) {
+            Ok(_) => {
+                self.active_count.fetch_add(1, Ordering::AcqRel);
+                true
+            }
+            Err((existing_key, _)) => {
+                tracing::warn!(
+                    execution_id = %existing_key,
+                    "Duplicate execution_id detected during registration, guard will not decrement counter"
+                );
+                false
+            }
+        };
 
         ExecutionGuard {
             execution_id,
             executions: self.executions.clone(),
             rx,
+            registered,
             active_count: self.active_count.clone(),
         }
     }
@@ -1651,5 +1668,69 @@ mod tests {
         let path1 = svc1.socket_path();
         let path2 = svc2.socket_path();
         assert_eq!(path1, path2);
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_execution_id_does_not_corrupt_counter() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_duplicate_exec.sock");
+
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+        let execution_id = "duplicate-exec-id".to_string();
+
+        // Initial count should be 0
+        assert_eq!(service.registered_executions_count().await, 0);
+
+        // Register first execution
+        let guard1 = service.register_execution(execution_id.clone(), true).await;
+        assert_eq!(service.registered_executions_count().await, 1);
+
+        // Try to register with same execution_id (duplicate)
+        // This should NOT increment the counter (insertion will fail)
+        let guard2 = service.register_execution(execution_id.clone(), true).await;
+        // Counter should still be 1 (not 2)
+        assert_eq!(service.registered_executions_count().await, 1);
+
+        // Drop the duplicate guard first - should NOT decrement counter
+        // (because it was never successfully registered)
+        drop(guard2);
+        assert_eq!(service.registered_executions_count().await, 1);
+
+        // Drop the original guard - should decrement counter
+        drop(guard1);
+        assert_eq!(service.registered_executions_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_execution_guard_registered_field() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_registered_field.sock");
+
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+
+        // Register a unique execution_id
+        let execution_id_1 = "unique-exec-1".to_string();
+        let guard1 = service
+            .register_execution(execution_id_1.clone(), true)
+            .await;
+        assert_eq!(service.registered_executions_count().await, 1);
+
+        // Register another unique execution_id
+        let execution_id_2 = "unique-exec-2".to_string();
+        let guard2 = service
+            .register_execution(execution_id_2.clone(), false)
+            .await;
+        assert_eq!(service.registered_executions_count().await, 2);
+
+        // into_receiver should work regardless of registered status
+        let rx = guard1.into_receiver();
+        assert!(rx.is_some()); // emit_traces=true
+
+        // guard2 had emit_traces=false
+        let rx2 = guard2.into_receiver();
+        assert!(rx2.is_none()); // emit_traces=false
+
+        // After guards are consumed via into_receiver, counter should be decremented
+        assert_eq!(service.registered_executions_count().await, 0);
     }
 }
