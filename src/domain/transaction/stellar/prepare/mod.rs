@@ -181,17 +181,25 @@ where
 
         // Step 1: Sync sequence from chain to recover from any potential sequence drift
         if let Ok(stellar_data) = tx.network_data.get_stellar_transaction_data() {
-            info!("syncing sequence from chain after failed transaction preparation");
+            info!(
+                tx_id = %tx_id,
+                source_account = %stellar_data.source_account,
+                "syncing sequence from chain after failed transaction preparation"
+            );
             // Always sync from chain on preparation failure to ensure correct sequence state
             match self
                 .sync_sequence_from_chain(&stellar_data.source_account)
                 .await
             {
                 Ok(()) => {
-                    info!("successfully synced sequence from chain");
+                    info!(tx_id = %tx_id, "successfully synced sequence from chain");
                 }
                 Err(sync_error) => {
-                    warn!(error = %sync_error, "failed to sync sequence from chain");
+                    warn!(
+                        tx_id = %tx_id,
+                        error = %sync_error,
+                        "failed to sync sequence from chain (non-fatal, transaction already marked as failed)"
+                    );
                 }
             }
         }
