@@ -1342,17 +1342,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_token_balance_contract_token_no_balance_entry() {
+        use soroban_rs::xdr::Int128Parts;
+
         let mut provider = create_mock_provider();
 
-        // Mock empty response (no balance entry)
-        provider.expect_get_ledger_entries().returning(|_| {
-            Box::pin(ready(Ok(
-                soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse {
-                    entries: None,
-                    latest_ledger: 0,
-                },
-            )))
-        });
+        // Mock call_contract to return 0 balance (contract returns 0 for non-existent balances)
+        provider
+            .expect_call_contract()
+            .returning(|_, _, _| Box::pin(ready(Ok(ScVal::I128(Int128Parts { hi: 0, lo: 0 })))));
 
         let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
         let account = TEST_PK;
@@ -1366,46 +1363,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_token_balance_contract_token_i128_balance() {
-        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
-        use soroban_rs::xdr::{
-            ContractDataDurability, ContractDataEntry, ExtensionPoint, Int128Parts, LedgerEntry,
-            LedgerEntryData, LedgerEntryExt, ScVal, WriteXdr,
-        };
+        use soroban_rs::xdr::Int128Parts;
 
         let mut provider = create_mock_provider();
 
-        // Mock response with I128 balance
-        provider.expect_get_ledger_entries().returning(|_| {
-            let balance_val = ScVal::I128(Int128Parts { hi: 0, lo: 1000000 });
-
-            let contract_data = ContractDataEntry {
-                ext: ExtensionPoint::V0,
-                contract: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
-                key: ScVal::Vec(None),
-                durability: ContractDataDurability::Persistent,
-                val: balance_val,
-            };
-
-            let ledger_entry = LedgerEntry {
-                last_modified_ledger_seq: 0,
-                data: LedgerEntryData::ContractData(contract_data),
-                ext: LedgerEntryExt::V0,
-            };
-
-            let xdr_base64 = ledger_entry
-                .data
-                .to_xdr_base64(soroban_rs::xdr::Limits::none())
-                .unwrap();
-
-            Box::pin(ready(Ok(GetLedgerEntriesResponse {
-                entries: Some(vec![LedgerEntryResult {
-                    key: String::new(),
-                    xdr: xdr_base64,
-                    last_modified_ledger: 0,
-                    live_until_ledger_seq_ledger_seq: None,
-                }]),
-                latest_ledger: 0,
-            })))
+        // Mock call_contract to return I128 balance
+        provider.expect_call_contract().returning(|_, _, _| {
+            Box::pin(ready(Ok(ScVal::I128(Int128Parts { hi: 0, lo: 1000000 }))))
         });
 
         let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
@@ -1418,49 +1382,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_token_balance_contract_token_i128_balance_too_large() {
-        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
-        use soroban_rs::xdr::{
-            ContractDataDurability, ContractDataEntry, ExtensionPoint, Int128Parts, LedgerEntry,
-            LedgerEntryData, LedgerEntryExt, ScVal, WriteXdr,
-        };
+        use soroban_rs::xdr::Int128Parts;
 
         let mut provider = create_mock_provider();
 
-        // Mock response with I128 balance where hi != 0
-        provider.expect_get_ledger_entries().returning(|_| {
-            let balance_val = ScVal::I128(Int128Parts {
+        // Mock call_contract to return I128 balance with hi != 0 (too large)
+        provider.expect_call_contract().returning(|_, _, _| {
+            Box::pin(ready(Ok(ScVal::I128(Int128Parts {
                 hi: 1, // Non-zero hi means balance is too large
                 lo: 1000000,
-            });
-
-            let contract_data = ContractDataEntry {
-                ext: ExtensionPoint::V0,
-                contract: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
-                key: ScVal::Vec(None),
-                durability: ContractDataDurability::Persistent,
-                val: balance_val,
-            };
-
-            let ledger_entry = LedgerEntry {
-                last_modified_ledger_seq: 0,
-                data: LedgerEntryData::ContractData(contract_data),
-                ext: LedgerEntryExt::V0,
-            };
-
-            let xdr_base64 = ledger_entry
-                .data
-                .to_xdr_base64(soroban_rs::xdr::Limits::none())
-                .unwrap();
-
-            Box::pin(ready(Ok(GetLedgerEntriesResponse {
-                entries: Some(vec![LedgerEntryResult {
-                    key: String::new(),
-                    xdr: xdr_base64,
-                    last_modified_ledger: 0,
-                    live_until_ledger_seq_ledger_seq: None,
-                }]),
-                latest_ledger: 0,
-            })))
+            }))))
         });
 
         let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
@@ -1479,49 +1410,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_token_balance_contract_token_i128_negative() {
-        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
-        use soroban_rs::xdr::{
-            ContractDataDurability, ContractDataEntry, ExtensionPoint, Int128Parts, LedgerEntry,
-            LedgerEntryData, LedgerEntryExt, ScVal, WriteXdr,
-        };
+        use soroban_rs::xdr::Int128Parts;
 
         let mut provider = create_mock_provider();
 
-        // Mock response with negative I128 balance
-        provider.expect_get_ledger_entries().returning(|_| {
-            let balance_val = ScVal::I128(Int128Parts {
+        // Mock call_contract to return negative I128 balance
+        provider.expect_call_contract().returning(|_, _, _| {
+            Box::pin(ready(Ok(ScVal::I128(Int128Parts {
                 hi: 0,
                 lo: u64::MAX, // When cast to i64, this is negative
-            });
-
-            let contract_data = ContractDataEntry {
-                ext: ExtensionPoint::V0,
-                contract: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
-                key: ScVal::Vec(None),
-                durability: ContractDataDurability::Persistent,
-                val: balance_val,
-            };
-
-            let ledger_entry = LedgerEntry {
-                last_modified_ledger_seq: 0,
-                data: LedgerEntryData::ContractData(contract_data),
-                ext: LedgerEntryExt::V0,
-            };
-
-            let xdr_base64 = ledger_entry
-                .data
-                .to_xdr_base64(soroban_rs::xdr::Limits::none())
-                .unwrap();
-
-            Box::pin(ready(Ok(GetLedgerEntriesResponse {
-                entries: Some(vec![LedgerEntryResult {
-                    key: String::new(),
-                    xdr: xdr_base64,
-                    last_modified_ledger: 0,
-                    live_until_ledger_seq_ledger_seq: None,
-                }]),
-                latest_ledger: 0,
-            })))
+            }))))
         });
 
         let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
@@ -1537,208 +1435,75 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_token_balance_contract_token_u64_balance() {
-        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
-        use soroban_rs::xdr::{
-            ContractDataDurability, ContractDataEntry, ExtensionPoint, LedgerEntry,
-            LedgerEntryData, LedgerEntryExt, ScVal, WriteXdr,
-        };
-
         let mut provider = create_mock_provider();
 
-        // Mock response with U64 balance
-        provider.expect_get_ledger_entries().returning(|_| {
-            let balance_val = ScVal::U64(5000000);
-
-            let contract_data = ContractDataEntry {
-                ext: ExtensionPoint::V0,
-                contract: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
-                key: ScVal::Vec(None),
-                durability: ContractDataDurability::Persistent,
-                val: balance_val,
-            };
-
-            let ledger_entry = LedgerEntry {
-                last_modified_ledger_seq: 0,
-                data: LedgerEntryData::ContractData(contract_data),
-                ext: LedgerEntryExt::V0,
-            };
-
-            let xdr_base64 = ledger_entry
-                .data
-                .to_xdr_base64(soroban_rs::xdr::Limits::none())
-                .unwrap();
-
-            Box::pin(ready(Ok(GetLedgerEntriesResponse {
-                entries: Some(vec![LedgerEntryResult {
-                    key: String::new(),
-                    xdr: xdr_base64,
-                    last_modified_ledger: 0,
-                    live_until_ledger_seq_ledger_seq: None,
-                }]),
-                latest_ledger: 0,
-            })))
-        });
+        // Mock call_contract to return U64 balance - this is unexpected for balance() which returns i128
+        provider
+            .expect_call_contract()
+            .returning(|_, _, _| Box::pin(ready(Ok(ScVal::U64(5000000)))));
 
         let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
         let account = TEST_PK;
 
         let result = get_token_balance(&provider, account, contract_addr).await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 5000000);
+        // U64 is not a valid return type for balance(), should return UnexpectedBalanceType
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::UnexpectedBalanceType(_) => {}
+            e => panic!("Expected UnexpectedBalanceType, got: {:?}", e),
+        }
     }
 
     #[tokio::test]
     async fn test_get_token_balance_contract_token_i64_positive() {
-        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
-        use soroban_rs::xdr::{
-            ContractDataDurability, ContractDataEntry, ExtensionPoint, LedgerEntry,
-            LedgerEntryData, LedgerEntryExt, ScVal, WriteXdr,
-        };
-
         let mut provider = create_mock_provider();
 
-        // Mock response with positive I64 balance
-        provider.expect_get_ledger_entries().returning(|_| {
-            let balance_val = ScVal::I64(3000000);
-
-            let contract_data = ContractDataEntry {
-                ext: ExtensionPoint::V0,
-                contract: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
-                key: ScVal::Vec(None),
-                durability: ContractDataDurability::Persistent,
-                val: balance_val,
-            };
-
-            let ledger_entry = LedgerEntry {
-                last_modified_ledger_seq: 0,
-                data: LedgerEntryData::ContractData(contract_data),
-                ext: LedgerEntryExt::V0,
-            };
-
-            let xdr_base64 = ledger_entry
-                .data
-                .to_xdr_base64(soroban_rs::xdr::Limits::none())
-                .unwrap();
-
-            Box::pin(ready(Ok(GetLedgerEntriesResponse {
-                entries: Some(vec![LedgerEntryResult {
-                    key: String::new(),
-                    xdr: xdr_base64,
-                    last_modified_ledger: 0,
-                    live_until_ledger_seq_ledger_seq: None,
-                }]),
-                latest_ledger: 0,
-            })))
-        });
+        // Mock call_contract to return I64 balance - this is unexpected for balance() which returns i128
+        provider
+            .expect_call_contract()
+            .returning(|_, _, _| Box::pin(ready(Ok(ScVal::I64(3000000)))));
 
         let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
         let account = TEST_PK;
 
         let result = get_token_balance(&provider, account, contract_addr).await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 3000000);
+        // I64 is not a valid return type for balance(), should return UnexpectedBalanceType
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::UnexpectedBalanceType(_) => {}
+            e => panic!("Expected UnexpectedBalanceType, got: {:?}", e),
+        }
     }
 
     #[tokio::test]
     async fn test_get_token_balance_contract_token_i64_negative() {
-        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
-        use soroban_rs::xdr::{
-            ContractDataDurability, ContractDataEntry, ExtensionPoint, LedgerEntry,
-            LedgerEntryData, LedgerEntryExt, ScVal, WriteXdr,
-        };
-
         let mut provider = create_mock_provider();
 
-        // Mock response with negative I64 balance
-        provider.expect_get_ledger_entries().returning(|_| {
-            let balance_val = ScVal::I64(-1000);
-
-            let contract_data = ContractDataEntry {
-                ext: ExtensionPoint::V0,
-                contract: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
-                key: ScVal::Vec(None),
-                durability: ContractDataDurability::Persistent,
-                val: balance_val,
-            };
-
-            let ledger_entry = LedgerEntry {
-                last_modified_ledger_seq: 0,
-                data: LedgerEntryData::ContractData(contract_data),
-                ext: LedgerEntryExt::V0,
-            };
-
-            let xdr_base64 = ledger_entry
-                .data
-                .to_xdr_base64(soroban_rs::xdr::Limits::none())
-                .unwrap();
-
-            Box::pin(ready(Ok(GetLedgerEntriesResponse {
-                entries: Some(vec![LedgerEntryResult {
-                    key: String::new(),
-                    xdr: xdr_base64,
-                    last_modified_ledger: 0,
-                    live_until_ledger_seq_ledger_seq: None,
-                }]),
-                latest_ledger: 0,
-            })))
-        });
+        // Mock call_contract to return I64 balance - this is unexpected for balance() which returns i128
+        provider
+            .expect_call_contract()
+            .returning(|_, _, _| Box::pin(ready(Ok(ScVal::I64(-1000)))));
 
         let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
         let account = TEST_PK;
 
         let result = get_token_balance(&provider, account, contract_addr).await;
+        // I64 is not a valid return type for balance(), should return UnexpectedBalanceType
         assert!(result.is_err());
         match result.unwrap_err() {
-            StellarTransactionUtilsError::NegativeBalanceI64(n) => {
-                assert_eq!(n, -1000);
-            }
-            e => panic!("Expected NegativeBalanceI64, got: {:?}", e),
+            StellarTransactionUtilsError::UnexpectedBalanceType(_) => {}
+            e => panic!("Expected UnexpectedBalanceType, got: {:?}", e),
         }
     }
 
     #[tokio::test]
     async fn test_get_token_balance_contract_token_unexpected_balance_type() {
-        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
-        use soroban_rs::xdr::{
-            ContractDataDurability, ContractDataEntry, ExtensionPoint, LedgerEntry,
-            LedgerEntryData, LedgerEntryExt, ScVal, WriteXdr,
-        };
-
         let mut provider = create_mock_provider();
 
-        // Mock response with unexpected balance type (Bool)
-        provider.expect_get_ledger_entries().returning(|_| {
-            let balance_val = ScVal::Bool(true);
-
-            let contract_data = ContractDataEntry {
-                ext: ExtensionPoint::V0,
-                contract: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
-                key: ScVal::Vec(None),
-                durability: ContractDataDurability::Persistent,
-                val: balance_val,
-            };
-
-            let ledger_entry = LedgerEntry {
-                last_modified_ledger_seq: 0,
-                data: LedgerEntryData::ContractData(contract_data),
-                ext: LedgerEntryExt::V0,
-            };
-
-            let xdr_base64 = ledger_entry
-                .data
-                .to_xdr_base64(soroban_rs::xdr::Limits::none())
-                .unwrap();
-
-            Box::pin(ready(Ok(GetLedgerEntriesResponse {
-                entries: Some(vec![LedgerEntryResult {
-                    key: String::new(),
-                    xdr: xdr_base64,
-                    last_modified_ledger: 0,
-                    live_until_ledger_seq_ledger_seq: None,
-                }]),
-                latest_ledger: 0,
-            })))
-        });
+        // Mock call_contract to return unexpected balance type (Bool)
+        provider
+            .expect_call_contract()
+            .returning(|_, _, _| Box::pin(ready(Ok(ScVal::Bool(true)))));
 
         let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
         let account = TEST_PK;
