@@ -47,11 +47,6 @@ impl From<JobProducerError> for RelayerError {
 
 /// Job producer that enqueues jobs to Redis-backed queues.
 ///
-/// # Design Notes
-/// - Holds `Queue` directly without a Mutex for lock-free concurrent access
-/// - Each produce method clones the specific storage before the Redis call
-/// - `RedisStorage` cloning is cheap (just `Arc` clones internally)
-/// - This design eliminates lock contention under high load
 #[derive(Debug, Clone)]
 pub struct JobProducer {
     queue: Queue,
@@ -121,7 +116,6 @@ impl JobProducerTrait for JobProducer {
             transaction_process_job
         );
         // Clone the specific storage - this is cheap (Arc clone internally)
-        // and allows concurrent Redis operations without lock contention
         let mut storage = self.queue.transaction_request_queue.clone();
         let job = Job::new(JobType::TransactionRequest, transaction_process_job)
             .with_request_id(get_request_id());
