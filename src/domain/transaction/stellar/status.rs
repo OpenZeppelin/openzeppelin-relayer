@@ -21,7 +21,10 @@ use crate::{
         TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
-    services::{provider::StellarProviderTrait, signer::Signer},
+    services::{
+        provider::StellarProviderTrait,
+        signer::{Signer, StellarSignTrait},
+    },
 };
 
 impl<R, T, J, S, P, C, D> StellarRelayerTransaction<R, T, J, S, P, C, D>
@@ -29,7 +32,7 @@ where
     R: Repository<RelayerRepoModel, String> + Send + Sync,
     T: TransactionRepository + Send + Sync,
     J: JobProducerTrait + Send + Sync,
-    S: Signer + Send + Sync,
+    S: Signer + StellarSignTrait + Send + Sync,
     P: StellarProviderTrait + Send + Sync,
     C: TransactionCounterTrait + Send + Sync,
     D: crate::services::stellar_dex::StellarDexServiceTrait + Send + Sync + 'static,
@@ -1987,8 +1990,7 @@ mod tests {
                 MockRelayerRepository, MockTransactionCounterTrait, MockTransactionRepository,
             },
             services::{
-                provider::MockStellarProviderTrait, signer::MockSigner,
-                stellar_dex::MockStellarDexServiceTrait,
+                provider::MockStellarProviderTrait, stellar_dex::MockStellarDexServiceTrait,
             },
         };
         use chrono::{Duration, Utc};
@@ -1998,7 +2000,7 @@ mod tests {
             MockRelayerRepository,
             MockTransactionRepository,
             MockJobProducerTrait,
-            MockSigner,
+            MockStellarCombinedSigner,
             MockStellarProviderTrait,
             MockTransactionCounterTrait,
             MockStellarDexServiceTrait,

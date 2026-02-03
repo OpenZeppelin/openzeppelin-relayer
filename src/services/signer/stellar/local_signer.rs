@@ -31,7 +31,9 @@ use ed25519_dalek::{ed25519::signature::SignerMut, SigningKey};
 use eyre::Result;
 use sha2::{Digest, Sha256};
 use soroban_rs::xdr::{
-    DecoratedSignature, Hash, Limits, ReadXdr, Signature, SignatureHint, Transaction,
+    DecoratedSignature, Hash, HashIdPreimage, HashIdPreimageSorobanAuthorization, Limits, ReadXdr,
+    ScBytes, ScMap, ScMapEntry, ScSymbol, ScVal, ScVec, Signature, SignatureHint,
+    SorobanAddressCredentials, SorobanAuthorizationEntry, SorobanCredentials, Transaction,
     TransactionEnvelope, TransactionSignaturePayload, TransactionSignaturePayloadTaggedTransaction,
     Uint256, VecM, WriteXdr,
 };
@@ -132,7 +134,9 @@ impl Signer for LocalSigner {
                         SignerError::SigningError(format!("failed to sign transaction: {e}"))
                     })?
             }
-            TransactionInput::UnsignedXdr(xdr) | TransactionInput::SignedXdr { xdr, .. } => {
+            TransactionInput::UnsignedXdr(xdr)
+            | TransactionInput::SignedXdr { xdr, .. }
+            | TransactionInput::SorobanGasAbstraction { xdr, .. } => {
                 // Parse the XDR envelope and sign
                 let envelope = TransactionEnvelope::from_xdr_base64(xdr, Limits::none())
                     .map_err(|e| SignerError::SigningError(format!("invalid envelope XDR: {e}")))?;

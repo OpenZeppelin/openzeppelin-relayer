@@ -27,6 +27,12 @@ pub struct StellarTransactionRequest {
     /// Maximum fee in stroops (defaults to 0.1 XLM = 1,000,000 stroops)
     #[schema(nullable = true)]
     pub max_fee: Option<i64>,
+    /// Signed Soroban authorization entry (base64 encoded SorobanAuthorizationEntry XDR)
+    /// Used for Soroban gas abstraction: contains the user's signed auth entry from /build response.
+    /// When provided, transaction_xdr must also be provided (the FeeForwarder transaction from /build).
+    /// The relayer will inject this signed auth entry into the transaction before submitting.
+    #[schema(nullable = true)]
+    pub signed_auth_entry: Option<String>,
 }
 
 impl StellarTransactionRequest {
@@ -34,6 +40,8 @@ impl StellarTransactionRequest {
     /// - Only one input type allowed (operations XOR transaction_xdr)
     /// - If fee_bump is true, transaction_xdr must be provided
     /// - Operations mode cannot use fee_bump
+    /// - If signed_auth_entry is provided, transaction_xdr must also be provided
+    /// - signed_auth_entry and fee_bump are mutually exclusive
     pub fn validate(&self) -> Result<(), crate::models::ApiError> {
         use crate::models::ApiError;
 
@@ -44,6 +52,7 @@ impl StellarTransactionRequest {
             .map(|ops| !ops.is_empty())
             .unwrap_or(false);
         let has_xdr = self.transaction_xdr.is_some();
+        let has_signed_auth_entry = self.signed_auth_entry.is_some();
 
         match (has_operations, has_xdr) {
             (true, true) => {
@@ -64,6 +73,20 @@ impl StellarTransactionRequest {
             return Err(ApiError::BadRequest(
                 "Cannot request fee_bump with operations mode".to_string(),
             ));
+        }
+
+        // Validate signed_auth_entry usage (Soroban gas abstraction)
+        if has_signed_auth_entry {
+            if !has_xdr {
+                return Err(ApiError::BadRequest(
+                    "signed_auth_entry requires transaction_xdr to be provided".to_string(),
+                ));
+            }
+            if self.fee_bump == Some(true) {
+                return Err(ApiError::BadRequest(
+                    "Cannot use both signed_auth_entry and fee_bump".to_string(),
+                ));
+            }
         }
 
         Ok(())
@@ -109,6 +132,7 @@ mod tests {
             transaction_xdr: Some("AAAAA...".to_string()),
             fee_bump: None,
             max_fee: None,
+            signed_auth_entry: None,
         };
 
         let result = req.validate();
@@ -132,6 +156,7 @@ mod tests {
             transaction_xdr: None,
             fee_bump: None,
             max_fee: None,
+            signed_auth_entry: None,
         };
 
         let result = req.validate();
@@ -159,6 +184,7 @@ mod tests {
             transaction_xdr: None,
             fee_bump: Some(true),
             max_fee: None,
+            signed_auth_entry: None,
         };
 
         let result = req.validate();
@@ -182,6 +208,7 @@ mod tests {
             transaction_xdr: Some("AAAAA...".to_string()),
             fee_bump: Some(true),
             max_fee: Some(10000000),
+            signed_auth_entry: None,
         };
 
         let result = req.validate();
@@ -205,6 +232,7 @@ mod tests {
             transaction_xdr: None,
             fee_bump: None,
             max_fee: None,
+            signed_auth_entry: None,
         };
 
         let result = req.validate();
@@ -224,6 +252,7 @@ mod tests {
             transaction_xdr: Some("AAAAA...".to_string()),
             fee_bump: None,
             max_fee: None,
+            signed_auth_entry: None,
         };
 
         let result = req.validate();
@@ -243,6 +272,7 @@ mod tests {
             transaction_xdr: None,
             fee_bump: None,
             max_fee: None,
+            signed_auth_entry: None,
         };
 
         assert_eq!(
@@ -256,6 +286,7 @@ mod tests {
         assert!(req.transaction_xdr.is_none());
         assert!(req.fee_bump.is_none());
         assert!(req.max_fee.is_none());
+        assert!(req.signed_auth_entry.is_none());
     }
 
     #[test]
@@ -316,6 +347,97 @@ mod tests {
         assert_eq!(req.network, "testnet");
         assert!(req.transaction_xdr.is_some());
         assert!(req.operations.is_none());
+
+        // Validate should pass
+        assert!(req.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_signed_auth_entry_with_xdr() {
+        // Soroban gas abstraction: signed_auth_entry with transaction_xdr is valid
+        let req = StellarTransactionRequest {
+            source_account: None,
+            network: "testnet".to_string(),
+            operations: None,
+            memo: None,
+            valid_until: None,
+            transaction_xdr: Some("AAAAA...".to_string()),
+            fee_bump: None,
+            max_fee: None,
+            signed_auth_entry: Some("BBBBB...".to_string()),
+        };
+
+        let result = req.validate();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_signed_auth_entry_without_xdr() {
+        // signed_auth_entry without transaction_xdr should fail
+        let req = StellarTransactionRequest {
+            source_account: None,
+            network: "testnet".to_string(),
+            operations: Some(vec![OperationSpec::Payment {
+                destination: "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".to_string(),
+                amount: 1000000,
+                asset: crate::models::transaction::stellar::AssetSpec::Native,
+            }]),
+            memo: None,
+            valid_until: None,
+            transaction_xdr: None,
+            fee_bump: None,
+            max_fee: None,
+            signed_auth_entry: Some("BBBBB...".to_string()),
+        };
+
+        let result = req.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("signed_auth_entry requires transaction_xdr"));
+    }
+
+    #[test]
+    fn test_validate_signed_auth_entry_with_fee_bump() {
+        // signed_auth_entry with fee_bump should fail (mutually exclusive)
+        let req = StellarTransactionRequest {
+            source_account: None,
+            network: "testnet".to_string(),
+            operations: None,
+            memo: None,
+            valid_until: None,
+            transaction_xdr: Some("AAAAA...".to_string()),
+            fee_bump: Some(true),
+            max_fee: Some(10000000),
+            signed_auth_entry: Some("BBBBB...".to_string()),
+        };
+
+        let result = req.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Cannot use both signed_auth_entry and fee_bump"));
+    }
+
+    #[test]
+    fn test_serde_signed_auth_entry() {
+        // Test JSON deserialization with signed_auth_entry
+        let json = r#"{
+            "network": "testnet",
+            "transaction_xdr": "AAAAAgAAAACige4lTdwSB/sto4SniEdJ2kOa2X65s5bqkd40J4DjSwAAAAEAAHAkAAAADwAAAAAAAAAAAAAAAQAAAAAAAAABAAAAAKKB7iVN3BIH+y2jhKeIR0naQ5rZfrmzluqR3jQngONLAAAAAAAAAAAAD0JAAAAAAAAAAAA=",
+            "signed_auth_entry": "AAAAAQAAAAEAAAAHYm9pbGVycz..."
+        }"#;
+
+        let req: StellarTransactionRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.network, "testnet");
+        assert!(req.transaction_xdr.is_some());
+        assert!(req.signed_auth_entry.is_some());
+        assert_eq!(
+            req.signed_auth_entry,
+            Some("AAAAAQAAAAEAAAAHYm9pbGVycz...".to_string())
+        );
 
         // Validate should pass
         assert!(req.validate().is_ok());

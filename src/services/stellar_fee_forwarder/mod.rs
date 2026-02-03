@@ -11,7 +11,7 @@
 //! ## Authorization Flow
 //!
 //! User signs authorization for `fee_forwarder.forward()` with sub-invocations:
-//! - `fee_token.approve(fee_forwarder, max_fee_amount, expiration_ledger)`
+//! - `fee_token.approve(user, fee_forwarder, max_fee_amount, expiration_ledger)`
 //! - `target_contract.target_fn(target_args)` (if target requires auth)
 
 use crate::services::provider::StellarProviderTrait;
@@ -120,8 +120,10 @@ where
         // Build sub-invocations
         let mut sub_invocations = Vec::new();
 
-        // 1. fee_token.approve(fee_forwarder, max_fee_amount, expiration_ledger)
+        // 1. fee_token.approve(user, fee_forwarder, max_fee_amount, expiration_ledger)
+        // Note: When called from another contract, approve requires 'from' address as first arg
         let approve_args: ScVec = vec![
+            ScVal::Address(user_addr.clone()),
             ScVal::Address(fee_forwarder_addr.clone()),
             Self::i128_to_scval(params.max_fee_amount),
             ScVal::U32(params.expiration_ledger),
@@ -403,7 +405,7 @@ where
     ///
     /// This creates the authorization structure that the user needs to sign.
     /// The authorization includes sub-invocations for:
-    /// - fee_token.approve(fee_forwarder, max_fee_amount, expiration_ledger)
+    /// - fee_token.approve(user, fee_forwarder, max_fee_amount, expiration_ledger)
     /// - target_contract.target_fn(target_args) (if requires_target_auth is true)
     ///
     /// # Arguments
@@ -429,8 +431,10 @@ where
         // Build sub-invocations
         let mut sub_invocations = Vec::new();
 
-        // 1. fee_token.approve(fee_forwarder, max_fee_amount, expiration_ledger)
+        // 1. fee_token.approve(user, fee_forwarder, max_fee_amount, expiration_ledger)
+        // Note: When called from another contract, approve requires 'from' address as first arg
         let approve_args: ScVec = vec![
+            ScVal::Address(user_addr.clone()),
             ScVal::Address(fee_forwarder_addr.clone()),
             Self::i128_to_scval(params.max_fee_amount),
             ScVal::U32(params.expiration_ledger),

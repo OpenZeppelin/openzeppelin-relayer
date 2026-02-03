@@ -727,26 +727,14 @@ where
             relayer: self.relayer.address.clone(),
         };
 
-        // Build the user authorization entry using the standalone method
-        // requires_target_auth defaults to true (safer default)
-        let user_auth_entry = FeeForwarderService::<P>::build_user_auth_entry_standalone(
-            &fee_forwarder,
-            &fee_params,
-            true,
-        )
-        .map_err(|e| RelayerError::Internal(format!("Failed to build user auth entry: {e}")))?;
-
-        // Build relayer auth entry - required by FeeForwarder contract
-        let relayer_auth_entry = FeeForwarderService::<P>::build_relayer_auth_entry_standalone(
-            &fee_forwarder,
-            &fee_params,
-        )
-        .map_err(|e| RelayerError::Internal(format!("Failed to build relayer auth entry: {e}")))?;
-
+        // For simulation, we don't include auth entries because the FeeForwarder
+        // contract has custom auth verification that fails on empty signatures.
+        // Unlike standard Soroban "recording mode", this contract explicitly checks
+        // for valid signatures and returns Error when none are found.
         let invoke_op = FeeForwarderService::<P>::build_invoke_operation_standalone(
             &fee_forwarder,
             &fee_params,
-            vec![user_auth_entry, relayer_auth_entry],
+            vec![], // Empty auth entries for simulation
         )
         .map_err(|e| RelayerError::Internal(format!("Failed to build invoke operation: {e}")))?;
 
@@ -800,6 +788,7 @@ where
         fee_params.fee_amount = fee_quote.fee_in_token as i128;
         fee_params.max_fee_amount = apply_max_fee_slippage(fee_quote.fee_in_token);
 
+        // Build the user authorization entry for the user to sign
         let user_auth_entry = FeeForwarderService::<P>::build_user_auth_entry_standalone(
             &fee_forwarder,
             &fee_params,
@@ -817,6 +806,10 @@ where
         )
         .map_err(|e| RelayerError::Internal(format!("Failed to build relayer auth entry: {e}")))?;
 
+        // Build the final invoke operation WITH auth entries
+        // Note: We don't simulate again because the contract's custom auth verification
+        // would fail on empty signatures. We use the simulation data from the first
+        // simulation (without auth entries) to set the fee and resources.
         let invoke_op = FeeForwarderService::<P>::build_invoke_operation_standalone(
             &fee_forwarder,
             &fee_params,
@@ -830,12 +823,9 @@ where
             base_fee_stroops as u32,
         )?;
 
-        let sim_response = self
-            .provider
-            .simulate_transaction_envelope(&envelope)
-            .await
-            .map_err(|e| RelayerError::Internal(format!("Simulation failed: {e}")))?;
-
+        // Apply simulation data from the first simulation (without auth entries)
+        // This sets the fee and Soroban resource data on the final envelope
+        // Also extends the footprint to include the relayer's account for require_auth
         apply_simulation_to_soroban_envelope(&mut envelope, &sim_response, 1)?;
 
         let transaction_xdr = envelope

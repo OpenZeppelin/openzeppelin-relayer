@@ -343,6 +343,7 @@ pub mod mockutils {
             redis_reader_pool_max_size: 1000,
             stellar_fee_forwarder_address: None,
             stellar_soroswap_router_address: None,
+            stellar_soroswap_factory_address: None,
             stellar_soroswap_native_wrapper_address: None,
         }
     }

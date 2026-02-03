@@ -469,6 +469,13 @@ pub enum TransactionInput {
     UnsignedXdr(String),
     /// Pre-built signed XDR that needs fee-bumping
     SignedXdr { xdr: String, max_fee: i64 },
+    /// Soroban gas abstraction: FeeForwarder transaction with user's signed auth entry
+    /// The XDR is the FeeForwarder transaction from /build, and the signed_auth_entry
+    /// contains the user's signed SorobanAuthorizationEntry to be injected.
+    SorobanGasAbstraction {
+        xdr: String,
+        signed_auth_entry: String,
+    },
 }
 
 impl Default for TransactionInput {
@@ -482,6 +489,24 @@ impl TransactionInput {
     pub fn from_stellar_request(
         request: &StellarTransactionRequest,
     ) -> Result<Self, TransactionError> {
+        // Handle Soroban gas abstraction mode (XDR + signed_auth_entry)
+        if let (Some(xdr), Some(signed_auth_entry)) =
+            (&request.transaction_xdr, &request.signed_auth_entry)
+        {
+            // Validation: signed_auth_entry and fee_bump are mutually exclusive
+            // (already validated in StellarTransactionRequest::validate(), but double-check here)
+            if request.fee_bump == Some(true) {
+                return Err(TransactionError::ValidationError(
+                    "Cannot use both signed_auth_entry and fee_bump".to_string(),
+                ));
+            }
+
+            return Ok(TransactionInput::SorobanGasAbstraction {
+                xdr: xdr.clone(),
+                signed_auth_entry: signed_auth_entry.clone(),
+            });
+        }
+
         // Handle XDR mode
         if let Some(xdr) = &request.transaction_xdr {
             let envelope = parse_transaction_xdr(xdr, false)
@@ -640,6 +665,10 @@ impl StellarTransactionData {
                 // Parse the inner transaction (for fee-bump cases)
                 self.parse_xdr_envelope(xdr)
             }
+            TransactionInput::SorobanGasAbstraction { xdr, .. } => {
+                // Parse the FeeForwarder transaction XDR
+                self.parse_xdr_envelope(xdr)
+            }
         }
     }
 
@@ -681,6 +710,12 @@ impl StellarTransactionData {
             TransactionInput::SignedXdr { xdr, .. } => {
                 // Already signed
                 self.parse_xdr_envelope(xdr)
+            }
+            TransactionInput::SorobanGasAbstraction { xdr, .. } => {
+                // For Soroban gas abstraction, the signed auth entry is injected during prepare
+                // Parse and attach the relayer's signature
+                let envelope = self.parse_xdr_envelope(xdr)?;
+                self.attach_signatures_to_envelope(envelope)
             }
         }
     }
@@ -1871,6 +1906,7 @@ mod tests {
             transaction_xdr: None,
             fee_bump: None,
             max_fee: None,
+            signed_auth_entry: None,
         });
 
         let relayer_model = RelayerRepoModel {
@@ -2315,6 +2351,7 @@ mod tests {
             transaction_xdr: None,
             fee_bump: None,
             max_fee: None,
+            signed_auth_entry: None,
         };
 
         let request = NetworkTransactionRequest::Stellar(stellar_request);
@@ -2343,6 +2380,7 @@ mod tests {
             transaction_xdr: Some(unsigned_xdr.to_string()),
             fee_bump: None,
             max_fee: None,
+            signed_auth_entry: None,
         };
 
         let request = NetworkTransactionRequest::Stellar(stellar_request);
@@ -2427,6 +2465,7 @@ mod tests {
             transaction_xdr: Some(signed_xdr.to_string()),
             fee_bump: Some(true),
             max_fee: Some(20000000),
+            signed_auth_entry: None,
         };
 
         let request = NetworkTransactionRequest::Stellar(stellar_request);
@@ -2456,6 +2495,7 @@ mod tests {
             transaction_xdr: Some(signed_xdr.clone()),
             fee_bump: None,
             max_fee: None,
+            signed_auth_entry: None,
         };
 
         let request = NetworkTransactionRequest::Stellar(stellar_request);
@@ -2482,6 +2522,7 @@ mod tests {
             transaction_xdr: None,
             fee_bump: Some(true),
             max_fee: None,
+            signed_auth_entry: None,
         };
 
         let request = NetworkTransactionRequest::Stellar(stellar_request);
@@ -2515,6 +2556,7 @@ mod tests {
             transaction_xdr: None,
             fee_bump: None,
             max_fee: None,
+            signed_auth_entry: None,
         };
 
         let request = NetworkTransactionRequest::Stellar(stellar_request);
@@ -2547,6 +2589,7 @@ mod tests {
             transaction_xdr: None,
             fee_bump: None,
             max_fee: None,
+            signed_auth_entry: None,
         };
 
         let request = NetworkTransactionRequest::Stellar(stellar_request);
@@ -2591,6 +2634,7 @@ mod tests {
             transaction_xdr: None,
             fee_bump: None,
             max_fee: None,
+            signed_auth_entry: None,
         };
 
         let request = NetworkTransactionRequest::Stellar(stellar_request);
@@ -2633,6 +2677,7 @@ mod tests {
             transaction_xdr: None,
             fee_bump: None,
             max_fee: None,
+            signed_auth_entry: None,
         };
 
         let request = NetworkTransactionRequest::Stellar(stellar_request);
@@ -2659,6 +2704,7 @@ mod tests {
             transaction_xdr: None,
             fee_bump: None,
             max_fee: None,
+            signed_auth_entry: None,
         };
 
         let request = NetworkTransactionRequest::Stellar(stellar_request);
@@ -2694,6 +2740,7 @@ mod tests {
             transaction_xdr: None,
             fee_bump: None,
             max_fee: None,
+            signed_auth_entry: None,
         };
 
         let request = NetworkTransactionRequest::Stellar(stellar_request);
@@ -2721,6 +2768,7 @@ mod tests {
             transaction_xdr: None,
             fee_bump: None,
             max_fee: None,
+            signed_auth_entry: None,
         };
 
         let request = NetworkTransactionRequest::Stellar(stellar_request);
@@ -2748,6 +2796,7 @@ mod tests {
             transaction_xdr: None,
             fee_bump: None,
             max_fee: None,
+            signed_auth_entry: None,
         };
 
         let request = NetworkTransactionRequest::Stellar(stellar_request);
@@ -3212,6 +3261,7 @@ mod tests {
                 transaction_xdr,
                 fee_bump: None,
                 max_fee: None,
+                signed_auth_entry: None,
             }
         }
 
