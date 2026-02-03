@@ -25,7 +25,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use super::lane_gate;
 
