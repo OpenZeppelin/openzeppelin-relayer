@@ -170,6 +170,15 @@ impl RelayerApi {
         }
     }
 
+    #[instrument(
+        name = "Plugin::process_request",
+        skip_all,
+        fields(
+            method = %request.method,
+            relayer_id = %request.relayer_id,
+            plugin_req_id = %request.http_request_id.as_ref().unwrap_or(&request.request_id)
+        )
+    )]
     async fn process_request<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         &self,
         request: Request,
@@ -190,50 +199,26 @@ impl RelayerApi {
         PR: PluginRepositoryTrait + Send + Sync + 'static,
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {
-        #[instrument(
-            name = "Plugin::process_request",
-            skip_all,
-            fields(
-                method = %request.method,
-                relayer_id = %request.relayer_id,
-                plugin_req_id = %request.http_request_id.as_ref().unwrap_or(&request.request_id)
-            )
-        )]
-        async fn inner<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
-            this: &RelayerApi,
-            request: Request,
-            state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
-        ) -> Result<Response, PluginError>
-        where
-            J: JobProducerTrait + 'static,
-            TR: TransactionRepository
-                + Repository<TransactionRepoModel, String>
-                + Send
-                + Sync
-                + 'static,
-            RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
-            NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
-            NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
-            SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
-            TCR: TransactionCounterTrait + Send + Sync + 'static,
-            PR: PluginRepositoryTrait + Send + Sync + 'static,
-            AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
-        {
-            match request.method {
-                PluginMethod::SendTransaction => this.handle_send_transaction(request, state).await,
-                PluginMethod::GetTransaction => this.handle_get_transaction(request, state).await,
-                PluginMethod::GetRelayerStatus => {
-                    this.handle_get_relayer_status(request, state).await
-                }
-                PluginMethod::SignTransaction => this.handle_sign_transaction(request, state).await,
-                PluginMethod::GetRelayer => this.handle_get_relayer_info(request, state).await,
-                PluginMethod::Rpc => this.handle_rpc_request(request, state).await,
-            }
+        match request.method {
+            PluginMethod::SendTransaction => self.handle_send_transaction(request, state).await,
+            PluginMethod::GetTransaction => self.handle_get_transaction(request, state).await,
+            PluginMethod::GetRelayerStatus => self.handle_get_relayer_status(request, state).await,
+            PluginMethod::SignTransaction => self.handle_sign_transaction(request, state).await,
+            PluginMethod::GetRelayer => self.handle_get_relayer_info(request, state).await,
+            PluginMethod::Rpc => self.handle_rpc_request(request, state).await,
         }
-
-        inner(self, request, state).await
     }
 
+    #[instrument(
+        name = "Plugin::handle_send_transaction",
+        skip_all,
+        fields(
+            method = %request.method,
+            relayer_id = %request.relayer_id,
+            plugin_req_id = %request.http_request_id.as_ref().unwrap_or(&request.request_id),
+            tx_id = tracing::field::Empty
+        )
+    )]
     async fn handle_send_transaction<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         &self,
         request: Request,
@@ -254,83 +239,61 @@ impl RelayerApi {
         PR: PluginRepositoryTrait + Send + Sync + 'static,
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {
-        #[instrument(
-            name = "Plugin::handle_send_transaction",
-            skip_all,
-            fields(
-                method = %request.method,
-                relayer_id = %request.relayer_id,
-                plugin_req_id = %request.http_request_id.as_ref().unwrap_or(&request.request_id),
-                tx_id = tracing::field::Empty
-            )
-        )]
-        async fn inner<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
-            request: Request,
-            state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
-        ) -> Result<Response, PluginError>
-        where
-            J: JobProducerTrait + 'static,
-            TR: TransactionRepository
-                + Repository<TransactionRepoModel, String>
-                + Send
-                + Sync
-                + 'static,
-            RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
-            NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
-            NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
-            SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
-            TCR: TransactionCounterTrait + Send + Sync + 'static,
-            PR: PluginRepositoryTrait + Send + Sync + 'static,
-            AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
-        {
-            let relayer_repo_model = get_relayer_by_id(request.relayer_id.clone(), state)
-                .await
-                .map_err(|e| PluginError::RelayerError(e.to_string()))?;
-
-            relayer_repo_model
-                .validate_active_state()
-                .map_err(|e| PluginError::RelayerError(e.to_string()))?;
-
-            let network_relayer = get_network_relayer(request.relayer_id.clone(), state)
-                .await
-                .map_err(|e| PluginError::RelayerError(e.to_string()))?;
-
-            let tx_request = NetworkTransactionRequest::from_json(
-                &relayer_repo_model.network_type,
-                request.payload.clone(),
-            )
+        let relayer_repo_model = get_relayer_by_id(request.relayer_id.clone(), state)
+            .await
             .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-            tx_request
-                .validate(&relayer_repo_model)
-                .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+        relayer_repo_model
+            .validate_active_state()
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-            let transaction = network_relayer
-                .process_transaction_request(tx_request)
-                .await
-                .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+        let network_relayer = get_network_relayer(request.relayer_id.clone(), state)
+            .await
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-            tracing::Span::current().record("tx_id", transaction.id.as_str());
-            debug!(
-                tx_id = %transaction.id,
-                status = ?transaction.status,
-                "plugin created transaction"
-            );
+        let tx_request = NetworkTransactionRequest::from_json(
+            &relayer_repo_model.network_type,
+            request.payload.clone(),
+        )
+        .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-            let transaction_response: TransactionResponse = transaction.into();
-            let result = serde_json::to_value(transaction_response)
-                .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+        tx_request
+            .validate(&relayer_repo_model)
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-            Ok(Response {
-                request_id: request.request_id,
-                result: Some(result),
-                error: None,
-            })
-        }
+        let transaction = network_relayer
+            .process_transaction_request(tx_request)
+            .await
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-        inner(request, state).await
+        tracing::Span::current().record("tx_id", transaction.id.as_str());
+        debug!(
+            tx_id = %transaction.id,
+            status = ?transaction.status,
+            "plugin created transaction"
+        );
+
+        let transaction_response: TransactionResponse = transaction.into();
+        let result = serde_json::to_value(transaction_response)
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+
+        Ok(Response {
+            request_id: request.request_id,
+            result: Some(result),
+            error: None,
+        })
     }
 
+    #[instrument(
+        name = "Plugin::handle_get_transaction",
+        skip_all,
+        fields(
+            method = %request.method,
+            relayer_id = %request.relayer_id,
+            plugin_req_id = %request.http_request_id.as_ref().unwrap_or(&request.request_id),
+            tx_id = tracing::field::Empty
+        )
+    )]
     async fn handle_get_transaction<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         &self,
         request: Request,
@@ -351,65 +314,41 @@ impl RelayerApi {
         PR: PluginRepositoryTrait + Send + Sync + 'static,
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {
-        #[instrument(
-            name = "Plugin::handle_get_transaction",
-            skip_all,
-            fields(
-                method = %request.method,
-                relayer_id = %request.relayer_id,
-                plugin_req_id = %request.http_request_id.as_ref().unwrap_or(&request.request_id),
-                tx_id = tracing::field::Empty
-            )
-        )]
-        async fn inner<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
-            request: Request,
-            state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
-        ) -> Result<Response, PluginError>
-        where
-            J: JobProducerTrait + 'static,
-            TR: TransactionRepository
-                + Repository<TransactionRepoModel, String>
-                + Send
-                + Sync
-                + 'static,
-            RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
-            NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
-            NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
-            SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
-            TCR: TransactionCounterTrait + Send + Sync + 'static,
-            PR: PluginRepositoryTrait + Send + Sync + 'static,
-            AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
-        {
-            // validation purpose only, checks if relayer exists
-            get_relayer_by_id(request.relayer_id.clone(), state)
-                .await
-                .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+        // validation purpose only, checks if relayer exists
+        get_relayer_by_id(request.relayer_id.clone(), state)
+            .await
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-            let get_transaction_request: GetTransactionRequest =
-                serde_json::from_value(request.payload)
-                    .map_err(|e| PluginError::InvalidPayload(e.to_string()))?;
+        let get_transaction_request: GetTransactionRequest =
+            serde_json::from_value(request.payload)
+                .map_err(|e| PluginError::InvalidPayload(e.to_string()))?;
 
-            tracing::Span::current()
-                .record("tx_id", get_transaction_request.transaction_id.as_str());
-            let transaction = get_transaction_by_id(get_transaction_request.transaction_id, state)
-                .await
-                .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+        tracing::Span::current().record("tx_id", get_transaction_request.transaction_id.as_str());
+        let transaction = get_transaction_by_id(get_transaction_request.transaction_id, state)
+            .await
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-            let transaction_response: TransactionResponse = transaction.into();
+        let transaction_response: TransactionResponse = transaction.into();
 
-            let result = serde_json::to_value(transaction_response)
-                .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+        let result = serde_json::to_value(transaction_response)
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-            Ok(Response {
-                request_id: request.request_id,
-                result: Some(result),
-                error: None,
-            })
-        }
-
-        inner(request, state).await
+        Ok(Response {
+            request_id: request.request_id,
+            result: Some(result),
+            error: None,
+        })
     }
 
+    #[instrument(
+        name = "Plugin::handle_get_relayer_status",
+        skip_all,
+        fields(
+            method = %request.method,
+            relayer_id = %request.relayer_id,
+            plugin_req_id = %request.http_request_id.as_ref().unwrap_or(&request.request_id)
+        )
+    )]
     async fn handle_get_relayer_status<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         &self,
         request: Request,
@@ -430,56 +369,34 @@ impl RelayerApi {
         PR: PluginRepositoryTrait + Send + Sync + 'static,
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {
-        #[instrument(
-            name = "Plugin::handle_get_relayer_status",
-            skip_all,
-            fields(
-                method = %request.method,
-                relayer_id = %request.relayer_id,
-                plugin_req_id = %request.http_request_id.as_ref().unwrap_or(&request.request_id)
-            )
-        )]
-        async fn inner<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
-            request: Request,
-            state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
-        ) -> Result<Response, PluginError>
-        where
-            J: JobProducerTrait + 'static,
-            TR: TransactionRepository
-                + Repository<TransactionRepoModel, String>
-                + Send
-                + Sync
-                + 'static,
-            RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
-            NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
-            NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
-            SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
-            TCR: TransactionCounterTrait + Send + Sync + 'static,
-            PR: PluginRepositoryTrait + Send + Sync + 'static,
-            AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
-        {
-            let network_relayer = get_network_relayer(request.relayer_id.clone(), state)
-                .await
-                .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+        let network_relayer = get_network_relayer(request.relayer_id.clone(), state)
+            .await
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-            let status = network_relayer
-                .get_status()
-                .await
-                .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+        let status = network_relayer
+            .get_status()
+            .await
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-            let result = serde_json::to_value(status)
-                .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+        let result =
+            serde_json::to_value(status).map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-            Ok(Response {
-                request_id: request.request_id,
-                result: Some(result),
-                error: None,
-            })
-        }
-
-        inner(request, state).await
+        Ok(Response {
+            request_id: request.request_id,
+            result: Some(result),
+            error: None,
+        })
     }
 
+    #[instrument(
+        name = "Plugin::handle_sign_transaction",
+        skip_all,
+        fields(
+            method = %request.method,
+            relayer_id = %request.relayer_id,
+            plugin_req_id = %request.http_request_id.as_ref().unwrap_or(&request.request_id)
+        )
+    )]
     async fn handle_sign_transaction<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         &self,
         request: Request,
@@ -500,59 +417,37 @@ impl RelayerApi {
         PR: PluginRepositoryTrait + Send + Sync + 'static,
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {
-        #[instrument(
-            name = "Plugin::handle_sign_transaction",
-            skip_all,
-            fields(
-                method = %request.method,
-                relayer_id = %request.relayer_id,
-                plugin_req_id = %request.http_request_id.as_ref().unwrap_or(&request.request_id)
-            )
-        )]
-        async fn inner<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
-            request: Request,
-            state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
-        ) -> Result<Response, PluginError>
-        where
-            J: JobProducerTrait + 'static,
-            TR: TransactionRepository
-                + Repository<TransactionRepoModel, String>
-                + Send
-                + Sync
-                + 'static,
-            RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
-            NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
-            NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
-            SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
-            TCR: TransactionCounterTrait + Send + Sync + 'static,
-            PR: PluginRepositoryTrait + Send + Sync + 'static,
-            AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
-        {
-            let sign_request: SignTransactionRequest = serde_json::from_value(request.payload)
-                .map_err(|e| PluginError::InvalidPayload(e.to_string()))?;
+        let sign_request: SignTransactionRequest = serde_json::from_value(request.payload)
+            .map_err(|e| PluginError::InvalidPayload(e.to_string()))?;
 
-            let network_relayer = get_network_relayer(request.relayer_id.clone(), state)
-                .await
-                .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+        let network_relayer = get_network_relayer(request.relayer_id.clone(), state)
+            .await
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-            let response = network_relayer
-                .sign_transaction(&sign_request)
-                .await
-                .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+        let response = network_relayer
+            .sign_transaction(&sign_request)
+            .await
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-            let result = serde_json::to_value(response)
-                .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+        let result =
+            serde_json::to_value(response).map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-            Ok(Response {
-                request_id: request.request_id,
-                result: Some(result),
-                error: None,
-            })
-        }
-
-        inner(request, state).await
+        Ok(Response {
+            request_id: request.request_id,
+            result: Some(result),
+            error: None,
+        })
     }
 
+    #[instrument(
+        name = "Plugin::handle_get_relayer_info",
+        skip_all,
+        fields(
+            method = %request.method,
+            relayer_id = %request.relayer_id,
+            plugin_req_id = %request.http_request_id.as_ref().unwrap_or(&request.request_id)
+        )
+    )]
     async fn handle_get_relayer_info<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         &self,
         request: Request,
@@ -573,50 +468,28 @@ impl RelayerApi {
         PR: PluginRepositoryTrait + Send + Sync + 'static,
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {
-        #[instrument(
-            name = "Plugin::handle_get_relayer_info",
-            skip_all,
-            fields(
-                method = %request.method,
-                relayer_id = %request.relayer_id,
-                plugin_req_id = %request.http_request_id.as_ref().unwrap_or(&request.request_id)
-            )
-        )]
-        async fn inner<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
-            request: Request,
-            state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
-        ) -> Result<Response, PluginError>
-        where
-            J: JobProducerTrait + 'static,
-            TR: TransactionRepository
-                + Repository<TransactionRepoModel, String>
-                + Send
-                + Sync
-                + 'static,
-            RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
-            NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
-            NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
-            SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
-            TCR: TransactionCounterTrait + Send + Sync + 'static,
-            PR: PluginRepositoryTrait + Send + Sync + 'static,
-            AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
-        {
-            let relayer = get_relayer_by_id(request.relayer_id.clone(), state)
-                .await
-                .map_err(|e| PluginError::RelayerError(e.to_string()))?;
-            let relayer_response: crate::models::RelayerResponse = relayer.into();
-            let result = serde_json::to_value(relayer_response)
-                .map_err(|e| PluginError::RelayerError(e.to_string()))?;
-            Ok(Response {
-                request_id: request.request_id,
-                result: Some(result),
-                error: None,
-            })
-        }
-
-        inner(request, state).await
+        let relayer = get_relayer_by_id(request.relayer_id.clone(), state)
+            .await
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+        let relayer_response: crate::models::RelayerResponse = relayer.into();
+        let result = serde_json::to_value(relayer_response)
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+        Ok(Response {
+            request_id: request.request_id,
+            result: Some(result),
+            error: None,
+        })
     }
 
+    #[instrument(
+        name = "Plugin::handle_rpc_request",
+        skip_all,
+        fields(
+            method = %request.method,
+            relayer_id = %request.relayer_id,
+            plugin_req_id = %request.http_request_id.as_ref().unwrap_or(&request.request_id)
+        )
+    )]
     async fn handle_rpc_request<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         &self,
         request: Request,
@@ -637,72 +510,41 @@ impl RelayerApi {
         PR: PluginRepositoryTrait + Send + Sync + 'static,
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {
-        #[instrument(
-            name = "Plugin::handle_rpc_request",
-            skip_all,
-            fields(
-                method = %request.method,
-                relayer_id = %request.relayer_id,
-                plugin_req_id = %request.http_request_id.as_ref().unwrap_or(&request.request_id)
-            )
-        )]
-        async fn inner<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
-            request: Request,
-            state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
-        ) -> Result<Response, PluginError>
-        where
-            J: JobProducerTrait + 'static,
-            TR: TransactionRepository
-                + Repository<TransactionRepoModel, String>
-                + Send
-                + Sync
-                + 'static,
-            RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
-            NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
-            NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
-            SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
-            TCR: TransactionCounterTrait + Send + Sync + 'static,
-            PR: PluginRepositoryTrait + Send + Sync + 'static,
-            AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
-        {
-            let relayer_repo_model = get_relayer_by_id(request.relayer_id.clone(), state)
-                .await
-                .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+        let relayer_repo_model = get_relayer_by_id(request.relayer_id.clone(), state)
+            .await
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-            relayer_repo_model
-                .validate_active_state()
-                .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+        relayer_repo_model
+            .validate_active_state()
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-            let network_relayer = get_network_relayer(request.relayer_id.clone(), state)
-                .await
-                .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+        let network_relayer = get_network_relayer(request.relayer_id.clone(), state)
+            .await
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-            // Use the network type from relayer_repo_model to parse the request with correct type context
-            let network_rpc_request: JsonRpcRequest<NetworkRpcRequest> =
-                convert_to_internal_rpc_request(request.payload, &relayer_repo_model.network_type)
-                    .map_err(|e| PluginError::InvalidPayload(e.to_string()))?;
+        // Use the network type from relayer_repo_model to parse the request with correct type context
+        let network_rpc_request: JsonRpcRequest<NetworkRpcRequest> =
+            convert_to_internal_rpc_request(request.payload, &relayer_repo_model.network_type)
+                .map_err(|e| PluginError::InvalidPayload(e.to_string()))?;
 
-            let result = network_relayer.rpc(network_rpc_request).await;
+        let result = network_relayer.rpc(network_rpc_request).await;
 
-            match result {
-                Ok(json_rpc_response) => {
-                    let result_value = serde_json::to_value(json_rpc_response)
-                        .map_err(|e| PluginError::RelayerError(e.to_string()))?;
-                    Ok(Response {
-                        request_id: request.request_id,
-                        result: Some(result_value),
-                        error: None,
-                    })
-                }
-                Err(e) => Ok(Response {
+        match result {
+            Ok(json_rpc_response) => {
+                let result_value = serde_json::to_value(json_rpc_response)
+                    .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+                Ok(Response {
                     request_id: request.request_id,
-                    result: None,
-                    error: Some(e.to_string()),
-                }),
+                    result: Some(result_value),
+                    error: None,
+                })
             }
+            Err(e) => Ok(Response {
+                request_id: request.request_id,
+                result: None,
+                error: Some(e.to_string()),
+            }),
         }
-
-        inner(request, state).await
     }
 }
 

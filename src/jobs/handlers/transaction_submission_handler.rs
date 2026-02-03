@@ -104,7 +104,7 @@ async fn handle_request(
                 relayer_id = %transaction.relayer_id,
                 status = ?transaction.status,
                 reason = %reason,
-                "cancelling transaction {}", transaction.id
+                "cancelling transaction"
             );
             relayer_transaction.submit_transaction(transaction).await?;
         }

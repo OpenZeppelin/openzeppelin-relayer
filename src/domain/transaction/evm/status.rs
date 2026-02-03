@@ -671,7 +671,6 @@ where
         let tx = if status != tx.status {
             debug!(
                 tx_id = %tx.id,
-                relayer_id = %tx.relayer_id,
                 old_status = ?tx.status,
                 new_status = ?status,
                 relayer_id = %tx.relayer_id,
