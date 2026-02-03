@@ -37,6 +37,7 @@ use eyre::Result;
 #[cfg(test)]
 use mockall::automock;
 use std::sync::Arc;
+use tracing::instrument;
 
 pub mod common;
 pub mod evm;
@@ -197,6 +198,17 @@ impl Transaction for NetworkTransaction {
     /// # Returns
     ///
     /// A `Result` containing the prepared `TransactionRepoModel` or a `TransactionError`.
+    #[instrument(
+        level = "debug",
+        skip(self, tx),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            tx_status = ?tx.status,
+            network_type = ?tx.network_type,
+        )
+    )]
     async fn prepare_transaction(
         &self,
         tx: TransactionRepoModel,
@@ -217,6 +229,17 @@ impl Transaction for NetworkTransaction {
     /// # Returns
     ///
     /// A `Result` containing the submitted `TransactionRepoModel` or a `TransactionError`.
+    #[instrument(
+        level = "debug",
+        skip(self, tx),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            tx_status = ?tx.status,
+            network_type = ?tx.network_type,
+        )
+    )]
     async fn submit_transaction(
         &self,
         tx: TransactionRepoModel,
@@ -236,6 +259,17 @@ impl Transaction for NetworkTransaction {
     /// # Returns
     ///
     /// A `Result` containing the resubmitted `TransactionRepoModel` or a `TransactionError`.
+    #[instrument(
+        level = "debug",
+        skip(self, tx),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            tx_status = ?tx.status,
+            network_type = ?tx.network_type,
+        )
+    )]
     async fn resubmit_transaction(
         &self,
         tx: TransactionRepoModel,
@@ -259,6 +293,18 @@ impl Transaction for NetworkTransaction {
     /// # Returns
     ///
     /// A `Result` containing the updated `TransactionRepoModel` or a `TransactionError`.
+    #[instrument(
+        level = "debug",
+        skip(self, tx, context),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            tx_status = ?tx.status,
+            network_type = ?tx.network_type,
+            has_context = %context.is_some(),
+        )
+    )]
     async fn handle_transaction_status(
         &self,
         tx: TransactionRepoModel,
@@ -286,6 +332,17 @@ impl Transaction for NetworkTransaction {
     /// # Returns
     ///
     /// A `Result` containing the canceled `TransactionRepoModel` or a `TransactionError`.
+    #[instrument(
+        level = "debug",
+        skip(self, tx),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            tx_status = ?tx.status,
+            network_type = ?tx.network_type,
+        )
+    )]
     async fn cancel_transaction(
         &self,
         tx: TransactionRepoModel,
@@ -307,6 +364,17 @@ impl Transaction for NetworkTransaction {
     /// # Returns
     ///
     /// A `Result` containing the new `TransactionRepoModel` or a `TransactionError`.
+    #[instrument(
+        level = "debug",
+        skip(self, old_tx, new_tx_request),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            tx_id = %old_tx.id,
+            relayer_id = %old_tx.relayer_id,
+            tx_status = ?old_tx.status,
+            network_type = ?old_tx.network_type,
+        )
+    )]
     async fn replace_transaction(
         &self,
         old_tx: TransactionRepoModel,
@@ -332,6 +400,17 @@ impl Transaction for NetworkTransaction {
     /// # Returns
     ///
     /// A `Result` containing the signed `TransactionRepoModel` or a `TransactionError`.
+    #[instrument(
+        level = "debug",
+        skip(self, tx),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            tx_status = ?tx.status,
+            network_type = ?tx.network_type,
+        )
+    )]
     async fn sign_transaction(
         &self,
         tx: TransactionRepoModel,
@@ -353,6 +432,17 @@ impl Transaction for NetworkTransaction {
     ///
     /// A `Result` containing a boolean indicating the validity of the transaction or a
     /// `TransactionError`.
+    #[instrument(
+        level = "debug",
+        skip(self, tx),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            tx_status = ?tx.status,
+            network_type = ?tx.network_type,
+        )
+    )]
     async fn validate_transaction(
         &self,
         tx: TransactionRepoModel,
@@ -406,6 +496,23 @@ impl RelayerTransactionFactory {
     /// # Returns
     ///
     /// A `Result` containing the created `NetworkTransaction` or a `TransactionError`.
+    #[instrument(
+        level = "debug",
+        skip(
+            relayer,
+            signer,
+            relayer_repository,
+            network_repository,
+            transaction_repository,
+            transaction_counter_store,
+            job_producer
+        ),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %relayer.id,
+            network_type = ?relayer.network_type,
+        )
+    )]
     pub async fn create_transaction(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,

@@ -6,7 +6,7 @@
 //! - Updates transaction status after submission
 //! - Enqueues status monitoring jobs
 use actix_web::web::ThinData;
-use apalis::prelude::{Attempt, Data, *};
+use apalis::prelude::{Attempt, Data, TaskId, *};
 use eyre::Result;
 use tracing::{debug, info, instrument};
 
@@ -31,6 +31,7 @@ use crate::{
         attempt = %attempt.current(),
         tx_id = %job.data.transaction_id,
         relayer_id = %job.data.relayer_id,
+        task_id = %task_id.to_string(),
         command = ?job.data.command,
     )
 )]
@@ -38,14 +39,16 @@ pub async fn transaction_submission_handler(
     job: Job<TransactionSend>,
     state: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
+    task_id: TaskId,
 ) -> Result<(), Error> {
     if let Some(request_id) = job.request_id.clone() {
         set_request_id(request_id);
     }
 
     debug!(
-        "handling transaction submission {}",
-        job.data.transaction_id
+        tx_id = %job.data.transaction_id,
+        relayer_id = %job.data.relayer_id,
+        "handling transaction submission"
     );
 
     let command = job.data.command.clone();
@@ -79,12 +82,27 @@ async fn handle_request(
 
     let transaction = get_transaction_by_id(status_request.transaction_id, &state).await?;
 
+    // Capture transaction info for completion log
+    let tx_id = transaction.id.clone();
+    let relayer_id = transaction.relayer_id.clone();
+    let command = status_request.command.clone();
+
+    debug!(
+        tx_id = %transaction.id,
+        relayer_id = %transaction.relayer_id,
+        status = ?transaction.status,
+        "loaded transaction for submission"
+    );
+
     match status_request.command {
         TransactionCommand::Submit => {
             relayer_transaction.submit_transaction(transaction).await?;
         }
         TransactionCommand::Cancel { reason } => {
             info!(
+                tx_id = %transaction.id,
+                relayer_id = %transaction.relayer_id,
+                status = ?transaction.status,
                 reason = %reason,
                 "cancelling transaction {}", transaction.id
             );
@@ -92,20 +110,32 @@ async fn handle_request(
         }
         TransactionCommand::Resubmit => {
             debug!(
-                "resubmitting transaction with updated parameters {}",
-                transaction.id
+                tx_id = %transaction.id,
+                relayer_id = %transaction.relayer_id,
+                status = ?transaction.status,
+                "resubmitting transaction with updated parameters"
             );
             relayer_transaction
                 .resubmit_transaction(transaction)
                 .await?;
         }
         TransactionCommand::Resend => {
-            debug!("resending transaction {}", transaction.id);
+            debug!(
+                tx_id = %transaction.id,
+                relayer_id = %transaction.relayer_id,
+                status = ?transaction.status,
+                "resending transaction"
+            );
             relayer_transaction.submit_transaction(transaction).await?;
         }
     };
 
-    debug!("transaction handled successfully");
+    debug!(
+        tx_id = %tx_id,
+        relayer_id = %relayer_id,
+        command = ?command,
+        "transaction submission completed"
+    );
 
     Ok(())
 }

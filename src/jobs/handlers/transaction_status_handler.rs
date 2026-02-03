@@ -100,6 +100,7 @@ async fn handle_result(
             // Transaction reached final state - job complete, clean up counters
             debug!(
                 tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
                 status = ?tx.status,
                 consecutive_failures = ?consecutive_failures,
                 total_failures = ?total_failures,
@@ -117,6 +118,7 @@ async fn handle_result(
             // Success but not final - RESET consecutive counter, keep total unchanged
             debug!(
                 tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
                 status = ?tx.status,
                 "transaction not in final state"
             );
@@ -126,7 +128,7 @@ async fn handle_result(
             match (consecutive_failures, total_failures) {
                 (Some(consecutive), Some(total)) if consecutive > 0 || total > 0 => {
                     if let Err(e) = update_counters_in_redis(redis_pool, tx_id, 0, total).await {
-                        warn!(error = %e, tx_id = %tx_id, "failed to reset consecutive counter in Redis");
+                        warn!(error = %e, tx_id = %tx_id, relayer_id = %tx.relayer_id, "failed to reset consecutive counter in Redis");
                     }
                 }
                 _ => {
@@ -325,6 +327,11 @@ async fn handle_request(
     task_id: &TaskId,
 ) -> HandleRequestResult {
     let tx_id = &status_request.transaction_id;
+    debug!(
+        tx_id = %tx_id,
+        relayer_id = %status_request.relayer_id,
+        "handling transaction status check"
+    );
 
     // Fetch transaction - if this fails, we can't read counters yet
     let transaction = match get_transaction_by_id(tx_id.clone(), state).await {
@@ -415,10 +422,11 @@ async fn handle_request(
         .await
         .map_err(|e| e.into());
 
-    if result.is_ok() {
+    if let Ok(tx) = result.as_ref() {
         debug!(
-            "status check handled successfully for tx_id {}",
-            status_request.transaction_id
+            tx_id = %tx.id,
+            status = ?tx.status,
+            "status check handled successfully"
         );
     }
 

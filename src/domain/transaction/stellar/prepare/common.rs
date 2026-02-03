@@ -296,6 +296,12 @@ where
 {
     let job = TransactionSend::submit(tx.id.clone(), tx.relayer_id.clone());
     let scheduled_on = delay_seconds.map(calculate_scheduled_timestamp);
+    debug!(
+        tx_id = %tx.id,
+        relayer_id = %tx.relayer_id,
+        delay_seconds = ?delay_seconds,
+        "enqueueing submit transaction job"
+    );
     job_producer
         .produce_submit_transaction_job(job, scheduled_on)
         .await?;
@@ -314,6 +320,11 @@ where
     T: TransactionRepository + Send + Sync,
     J: JobProducerTrait + Send + Sync,
 {
+    debug!(
+        tx_id = %tx_id,
+        "updating transaction status to Sent"
+    );
+
     // Update the transaction with the final stellar data
     let update_req = TransactionUpdateRequest {
         status: Some(TransactionStatus::Sent),
@@ -324,6 +335,13 @@ where
     let saved_tx = transaction_repository
         .partial_update(tx_id, update_req)
         .await?;
+
+    debug!(
+        tx_id = %saved_tx.id,
+        relayer_id = %saved_tx.relayer_id,
+        status = ?saved_tx.status,
+        "transaction updated, enqueueing submit job"
+    );
 
     send_submit_transaction_job(job_producer, &saved_tx, None).await?;
 

@@ -142,6 +142,10 @@ impl JobProducerTrait for JobProducer {
         let mut queue = self.queue.lock().await;
         let job = Job::new(JobType::TransactionRequest, transaction_process_job)
             .with_request_id(get_request_id());
+        let job_id = job.message_id.clone();
+        let request_id = job.request_id.clone();
+        let tx_id = job.data.transaction_id.clone();
+        let relayer_id = job.data.relayer_id.clone();
 
         match scheduled_on {
             Some(scheduled_on) => {
@@ -154,7 +158,15 @@ impl JobProducerTrait for JobProducer {
                 queue.transaction_request_queue.push(job).await?;
             }
         }
-        debug!("Transaction job produced successfully");
+        debug!(
+            job_type = %JobType::TransactionRequest,
+            job_id = %job_id,
+            request_id = ?request_id,
+            tx_id = %tx_id,
+            relayer_id = %relayer_id,
+            scheduled_on = ?scheduled_on,
+            "transaction request job produced"
+        );
 
         Ok(())
     }
@@ -167,6 +179,11 @@ impl JobProducerTrait for JobProducer {
         let mut queue = self.queue.lock().await;
         let job = Job::new(JobType::TransactionSend, transaction_submit_job)
             .with_request_id(get_request_id());
+        let job_id = job.message_id.clone();
+        let request_id = job.request_id.clone();
+        let tx_id = job.data.transaction_id.clone();
+        let relayer_id = job.data.relayer_id.clone();
+        let command = job.data.command.clone();
 
         match scheduled_on {
             Some(on) => {
@@ -176,7 +193,16 @@ impl JobProducerTrait for JobProducer {
                 queue.transaction_submission_queue.push(job).await?;
             }
         }
-        debug!("Transaction Submit job produced successfully");
+        debug!(
+            job_type = %JobType::TransactionSend,
+            job_id = %job_id,
+            request_id = ?request_id,
+            tx_id = %tx_id,
+            relayer_id = %relayer_id,
+            command = ?command,
+            scheduled_on = ?scheduled_on,
+            "transaction submission job produced"
+        );
 
         Ok(())
     }
@@ -192,6 +218,10 @@ impl JobProducerTrait for JobProducer {
             transaction_status_check_job.clone(),
         )
         .with_request_id(get_request_id());
+        let job_id = job.message_id.clone();
+        let request_id = job.request_id.clone();
+        let tx_id = job.data.transaction_id.clone();
+        let relayer_id = job.data.relayer_id.clone();
 
         // Route to the appropriate queue based on network type
         use crate::models::NetworkType;
@@ -210,7 +240,13 @@ impl JobProducerTrait for JobProducer {
             }
         }
         debug!(
+            job_type = %JobType::TransactionStatusCheck,
+            job_id = %job_id,
+            request_id = ?request_id,
+            tx_id = %tx_id,
+            relayer_id = %relayer_id,
             network_type = ?transaction_status_check_job.network_type,
+            scheduled_on = ?scheduled_on,
             "Transaction Status Check job produced successfully"
         );
         Ok(())
@@ -224,6 +260,9 @@ impl JobProducerTrait for JobProducer {
         let mut queue = self.queue.lock().await;
         let job = Job::new(JobType::NotificationSend, notification_send_job)
             .with_request_id(get_request_id());
+        let job_id = job.message_id.clone();
+        let request_id = job.request_id.clone();
+        let notification_id = job.data.notification_id.clone();
 
         match scheduled_on {
             Some(on) => {
@@ -234,7 +273,14 @@ impl JobProducerTrait for JobProducer {
             }
         }
 
-        debug!("Notification Send job produced successfully");
+        debug!(
+            job_type = %JobType::NotificationSend,
+            job_id = %job_id,
+            request_id = ?request_id,
+            notification_id = %notification_id,
+            scheduled_on = ?scheduled_on,
+            "notification send job produced"
+        );
         Ok(())
     }
 
@@ -246,6 +292,9 @@ impl JobProducerTrait for JobProducer {
         let mut queue = self.queue.lock().await;
         let job =
             Job::new(JobType::TokenSwapRequest, swap_request_job).with_request_id(get_request_id());
+        let job_id = job.message_id.clone();
+        let request_id = job.request_id.clone();
+        let relayer_id = job.data.relayer_id.clone();
 
         match scheduled_on {
             Some(on) => {
@@ -256,7 +305,14 @@ impl JobProducerTrait for JobProducer {
             }
         }
 
-        debug!("Token swap job produced successfully");
+        debug!(
+            job_type = %JobType::TokenSwapRequest,
+            job_id = %job_id,
+            request_id = ?request_id,
+            relayer_id = %relayer_id,
+            scheduled_on = ?scheduled_on,
+            "token swap job produced"
+        );
         Ok(())
     }
 
@@ -270,6 +326,9 @@ impl JobProducerTrait for JobProducer {
             relayer_health_check_job.clone(),
         )
         .with_request_id(get_request_id());
+        let job_id = job.message_id.clone();
+        let request_id = job.request_id.clone();
+        let relayer_id = job.data.relayer_id.clone();
 
         let mut queue = self.queue.lock().await;
 
@@ -285,6 +344,14 @@ impl JobProducerTrait for JobProducer {
             }
         }
 
+        debug!(
+            job_type = %JobType::RelayerHealthCheck,
+            job_id = %job_id,
+            request_id = ?request_id,
+            relayer_id = %relayer_id,
+            scheduled_on = ?scheduled_on,
+            "relayer health check job produced"
+        );
         Ok(())
     }
 }

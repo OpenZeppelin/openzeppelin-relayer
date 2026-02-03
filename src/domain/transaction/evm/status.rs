@@ -5,7 +5,7 @@
 use alloy::network::ReceiptResponse;
 use chrono::{DateTime, Duration, Utc};
 use eyre::Result;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 use super::EvmRelayerTransaction;
 use super::{
@@ -106,12 +106,22 @@ where
                 last_block_number,
                 network.required_confirmations,
             ) {
-                debug!(tx_hash = %tx_hash, "transaction mined but not confirmed");
+                debug!(
+                    tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
+                    tx_hash = %tx_hash,
+                    "transaction mined but not confirmed"
+                );
                 return Ok(TransactionStatus::Mined);
             }
             Ok(TransactionStatus::Confirmed)
         } else {
-            debug!(tx_hash = %tx_hash, "transaction not yet mined");
+            debug!(
+                tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
+                tx_hash = %tx_hash,
+                "transaction not yet mined"
+            );
 
             // FALLBACK: Try to find transaction by checking all historical hashes
             // Only do this for transactions that have multiple resubmission attempts
@@ -168,7 +178,12 @@ where
         };
 
         if age > Duration::milliseconds(timeout_with_backoff) {
-            info!("Transaction has been pending for too long, resubmitting");
+            debug!(
+                tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
+                age_ms = %age.num_milliseconds(),
+                "transaction has been pending for too long, resubmitting"
+            );
             return Ok(true);
         }
         Ok(false)
@@ -188,7 +203,7 @@ where
         tx: &TransactionRepoModel,
     ) -> Result<(bool, Option<String>), TransactionError> {
         if too_many_noop_attempts(tx) {
-            info!("Transaction has too many NOOP attempts already");
+            debug!("Transaction has too many NOOP attempts already");
             return Ok((false, None));
         }
 
@@ -215,13 +230,23 @@ where
         if network.is_rollup() && too_many_attempts(tx) {
             let reason =
                 "Rollup transaction has too many attempts. Replacing with NOOP.".to_string();
-            info!("{}", reason);
+            debug!(
+                tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
+                reason = %reason,
+                "replacing transaction with NOOP"
+            );
             return Ok((true, Some(reason)));
         }
 
         if !is_transaction_valid(&tx.created_at, &tx.valid_until) {
             let reason = "Transaction is expired. Replacing with NOOP.".to_string();
-            info!("{}", reason);
+            debug!(
+                tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
+                reason = %reason,
+                "replacing transaction with NOOP"
+            );
             return Ok((true, Some(reason)));
         }
 
@@ -238,7 +263,12 @@ where
                     "Transaction in Pending state for over {} minutes. Replacing with NOOP.",
                     get_evm_prepare_timeout().num_minutes()
                 );
-                info!("{}", reason);
+                debug!(
+                    tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
+                    reason = %reason,
+                    "replacing transaction with NOOP"
+                );
                 return Ok((true, Some(reason)));
             }
         }
@@ -336,7 +366,12 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!("scheduling resubmit job for transaction");
+        debug!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            status = ?tx.status,
+            "scheduling resubmit job for transaction"
+        );
 
         // Check if transaction gas limit exceeds block gas limit before resubmitting
         let (should_noop, reason) = self.should_noop(&tx).await?;
@@ -356,7 +391,12 @@ where
         tx: &TransactionRepoModel,
         reason: Option<String>,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!("preparing transaction NOOP before resubmission");
+        debug!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            status = ?tx.status,
+            "preparing transaction NOOP before resubmission"
+        );
         let update = self.prepare_noop_update_request(tx, false, reason).await?;
         let updated_tx = self
             .transaction_repository()
@@ -367,9 +407,10 @@ where
         if let Err(e) = res {
             error!(
                 tx_id = %updated_tx.id,
+                relayer_id = %updated_tx.relayer_id,
                 status = ?updated_tx.status,
-                "sending transaction update notification failed for NOOP transaction: {:?}",
-                e
+                error = %e,
+                "sending transaction update notification failed for NOOP transaction"
             );
         }
         Ok(updated_tx)
@@ -386,6 +427,7 @@ where
             // instead of NOOP. This matches prepare_transaction behavior.
             debug!(
                 tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
                 reason = %reason.as_ref().unwrap_or(&"unknown".to_string()),
                 "marking pending transaction as Failed (nonce not assigned, no NOOP needed)"
             );
@@ -403,9 +445,10 @@ where
             if let Err(e) = res {
                 error!(
                     tx_id = %updated_tx.id,
+                    relayer_id = %updated_tx.relayer_id,
                     status = ?updated_tx.status,
-                    "sending transaction update notification failed: {:?}",
-                    e
+                    error = %e,
+                    "sending transaction update notification failed for Pending state NOOP"
                 );
             }
             return Ok(updated_tx);
@@ -416,6 +459,7 @@ where
         if age > get_evm_pending_recovery_trigger_timeout() {
             warn!(
                 tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
                 age_seconds = age.num_seconds(),
                 "transaction stuck in Pending, queuing prepare job"
             );
@@ -451,7 +495,12 @@ where
         tx: TransactionRepoModel,
         reason: String,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        warn!(tx_id = %tx.id, reason = %reason, "force-failing transaction due to circuit breaker");
+        warn!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            reason = %reason,
+            "force-failing transaction due to circuit breaker"
+        );
 
         let update = TransactionUpdateRequest {
             status: Some(TransactionStatus::Failed),
@@ -468,6 +517,7 @@ where
         if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
             error!(
                 tx_id = %updated_tx.id,
+                relayer_id = %updated_tx.relayer_id,
                 error = %e,
                 "failed to send notification for force-failed transaction"
             );
@@ -505,6 +555,7 @@ where
                 // Both are safe to mark as Failed - transaction can't execute on-chain
                 debug!(
                     tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
                     status = ?tx.status,
                     "circuit breaker: transaction never broadcast - safe to mark as Failed"
                 );
@@ -518,6 +569,7 @@ where
                 // Note: NOOP transactions are filtered out before entering this function.
                 warn!(
                     tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
                     "circuit breaker: Submitted transaction - triggering NOOP to safely clear nonce"
                 );
                 let noop_reason = Some(format!(
@@ -531,6 +583,7 @@ where
                 // Final states shouldn't reach here, but handle gracefully
                 debug!(
                     tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
                     status = ?tx.status,
                     "circuit breaker: unexpected status, returning transaction unchanged"
                 );
@@ -548,11 +601,21 @@ where
         tx: TransactionRepoModel,
         context: Option<StatusCheckContext>,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!("checking transaction status {}", tx.id);
+        debug!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            status = ?tx.status,
+            "checking transaction status"
+        );
 
         // 1. Early return if final state
         if is_final_state(&tx.status) {
-            debug!(status = ?tx.status, "transaction already in final state");
+            debug!(
+                tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
+                status = ?tx.status,
+                "transaction already in final state"
+            );
             return Ok(tx);
         }
 
@@ -582,6 +645,7 @@ where
                 debug!(
                     tx_id = %tx.id,
                     consecutive_failures = ctx.consecutive_failures,
+                    relayer_id = %tx.relayer_id,
                     "circuit breaker would trigger but transaction is NOOP - continuing with normal status logic"
                 );
             }
@@ -597,6 +661,7 @@ where
             tx_id = %tx.id,
             previous_status = ?tx.status,
             new_status = ?status,
+            relayer_id = %tx.relayer_id,
             "transaction status check completed"
         );
 
@@ -606,8 +671,10 @@ where
         let tx = if status != tx.status {
             debug!(
                 tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
                 old_status = ?tx.status,
                 new_status = ?status,
+                relayer_id = %tx.relayer_id,
                 "status changed during check, reloading transaction from DB to ensure fresh data"
             );
             self.transaction_repository()
@@ -644,12 +711,20 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!(tx_id = %tx.id, "handling Sent state");
+        debug!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            "handling Sent state"
+        );
 
         // Check if transaction should be replaced with NOOP (expired, too many attempts on rollup, etc.)
         let (should_noop, reason) = self.should_noop(&tx).await?;
         if should_noop {
-            debug!("preparing NOOP for sent transaction {}", tx.id);
+            debug!(
+                tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
+                "preparing NOOP for sent transaction"
+            );
             let update = self.prepare_noop_update_request(&tx, false, reason).await?;
             let updated_tx = self
                 .transaction_repository()
@@ -661,9 +736,10 @@ where
             if let Err(e) = res {
                 error!(
                     tx_id = %updated_tx.id,
+                    relayer_id = %updated_tx.relayer_id,
                     status = ?updated_tx.status,
-                    "sending transaction update notification failed for Sent state NOOP: {:?}",
-                    e
+                    error = %e,
+                    "sending transaction update notification failed for Sent state NOOP"
                 );
             }
             return Ok(updated_tx);
@@ -676,6 +752,7 @@ where
         if age_since_sent > get_evm_resend_timeout() {
             warn!(
                 tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
                 age_seconds = age_since_sent.num_seconds(),
                 "transaction stuck in Sent, queuing resubmit job with repricing"
             );
@@ -740,6 +817,7 @@ where
     ) -> Result<Option<TransactionRepoModel>, TransactionError> {
         warn!(
             tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
             current_hash = ?evm_data.hash,
             total_hashes = %tx.hashes.len(),
             "attempting hash recovery - checking historical hashes"
@@ -754,6 +832,7 @@ where
 
             debug!(
                 tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
                 hash = %historical_hash,
                 index = %idx,
                 "checking historical hash"
@@ -768,6 +847,7 @@ where
                 Ok(Some(receipt)) => {
                     warn!(
                         tx_id = %tx.id,
+                        relayer_id = %tx.relayer_id,
                         mined_hash = %historical_hash,
                         wrong_hash = ?evm_data.hash,
                         block_number = ?receipt.block_number,
@@ -795,6 +875,7 @@ where
                     // Network error, log but continue checking other hashes
                     warn!(
                         tx_id = %tx.id,
+                        relayer_id = %tx.relayer_id,
                         hash = %historical_hash,
                         error = %e,
                         "error checking historical hash, continuing to next"
@@ -807,6 +888,7 @@ where
         // None of the historical hashes found on-chain
         debug!(
             tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
             "hash recovery completed - no historical hashes found on-chain"
         );
         Ok(None)
@@ -841,8 +923,9 @@ where
         if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
             error!(
                 tx_id = %updated_tx.id,
+                relayer_id = %updated_tx.relayer_id,
                 error = %e,
-                "failed to send notification after hash recovery"
+                "failed to send notification for hash recovery"
             );
         }
 

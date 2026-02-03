@@ -46,11 +46,21 @@ where
         tx: TransactionRepoModel,
         context: Option<StatusCheckContext>,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!(tx_id = %tx.id, status = ?tx.status, "handling transaction status");
+        debug!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            status = ?tx.status,
+            "handling transaction status"
+        );
 
         // Early exit for final states - no need to check
         if is_final_state(&tx.status) {
-            info!(tx_id = %tx.id, status = ?tx.status, "transaction in final state, skipping status check");
+            debug!(
+                tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
+                status = ?tx.status,
+                "transaction in final state, skipping status check"
+            );
             return Ok(tx);
         }
 
@@ -242,7 +252,7 @@ where
 
         // Try to enqueue next transaction
         if let Err(e) = self.enqueue_next_pending_transaction(&tx.id).await {
-            warn!(error = %e, "failed to enqueue next pending transaction after expiration");
+            warn!(tx_id = %tx.id, relayer_id = %tx.relayer_id, error = %e, "failed to enqueue next pending transaction after expiration");
         }
 
         Ok(expired_tx)
@@ -502,7 +512,12 @@ where
         tx: TransactionRepoModel,
         original_status_str: String,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!(status = %original_status_str, "stellar transaction status is still pending, will retry check later");
+        debug!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            status = %original_status_str,
+            "stellar transaction status is still pending, will retry check later"
+        );
 
         // Check for expiration and max lifetime for Submitted transactions
         if tx.status == TransactionStatus::Submitted {
