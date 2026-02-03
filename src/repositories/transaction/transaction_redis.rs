@@ -556,7 +556,8 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             .inc();
 
         // Track initial status distribution (Pending)
-        let status_str = format!("{entity.status:?}").to_lowercase();
+        let status = &entity.status;
+        let status_str = format!("{status:?}").to_lowercase();
         TRANSACTIONS_BY_STATUS
             .with_label_values(&[relayer_id, &network_type, &status_str])
             .inc();
@@ -1380,7 +1381,8 @@ impl TransactionRepository for RedisTransactionRepository {
                         // Track status distribution (update gauge when status changes)
                         if original_tx.status != *new_status {
                             // Decrement old status
-                            let old_status_str = format!("{original_tx.status:?}").to_lowercase();
+                            let old_status = &original_tx.status;
+                            let old_status_str = format!("{old_status:?}").to_lowercase();
                             TRANSACTIONS_BY_STATUS
                                 .with_label_values(&[relayer_id, &network_type, &old_status_str])
                                 .dec();
