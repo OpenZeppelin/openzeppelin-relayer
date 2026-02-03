@@ -19,7 +19,6 @@ use apalis_redis::RedisError;
 use async_trait::async_trait;
 use serde::Serialize;
 use thiserror::Error;
-use tokio::sync::Mutex;
 use tracing::{debug, error};
 
 use super::{JobType, TokenSwapRequest};
@@ -34,36 +33,28 @@ pub enum JobProducerError {
 }
 
 impl From<RedisError> for JobProducerError {
-    fn from(_: RedisError) -> Self {
-        JobProducerError::QueueError("Queue error".to_string())
+    fn from(err: RedisError) -> Self {
+        error!(error = %err, "Redis error during job production");
+        JobProducerError::QueueError(err.to_string())
     }
 }
 
 impl From<JobProducerError> for RelayerError {
-    fn from(_: JobProducerError) -> Self {
-        RelayerError::QueueError("Queue error".to_string())
+    fn from(err: JobProducerError) -> Self {
+        RelayerError::QueueError(err.to_string())
     }
 }
 
-#[derive(Debug)]
+/// Job producer that enqueues jobs to Redis-backed queues.
+///
+/// # Design Notes
+/// - Holds `Queue` directly without a Mutex for lock-free concurrent access
+/// - Each produce method clones the specific storage before the Redis call
+/// - `RedisStorage` cloning is cheap (just `Arc` clones internally)
+/// - This design eliminates lock contention under high load
+#[derive(Debug, Clone)]
 pub struct JobProducer {
-    queue: Mutex<Queue>,
-}
-
-impl Clone for JobProducer {
-    fn clone(&self) -> Self {
-        // We can't clone the Mutex directly, but we can create a new one with a cloned Queue
-        // This requires getting the lock first
-        let queue = self
-            .queue
-            .try_lock()
-            .expect("Failed to lock queue for cloning")
-            .clone();
-
-        Self {
-            queue: Mutex::new(queue),
-        }
-    }
+    queue: Queue,
 }
 
 #[async_trait]
@@ -110,24 +101,14 @@ pub trait JobProducerTrait: Send + Sync {
 
 impl JobProducer {
     pub fn new(queue: Queue) -> Self {
-        Self {
-            queue: Mutex::new(queue.clone()),
-        }
-    }
-
-    pub async fn get_queue(&self) -> Result<Queue, JobProducerError> {
-        let queue = self.queue.lock().await;
-
-        Ok(queue.clone())
+        Self { queue }
     }
 }
 
 #[async_trait]
 impl JobProducerTrait for JobProducer {
     async fn get_queue(&self) -> Result<Queue, JobProducerError> {
-        let queue = self.queue.lock().await;
-
-        Ok(queue.clone())
+        Ok(self.queue.clone())
     }
 
     async fn produce_transaction_request_job(
@@ -139,19 +120,18 @@ impl JobProducerTrait for JobProducer {
             "Producing transaction request job: {:?}",
             transaction_process_job
         );
-        let mut queue = self.queue.lock().await;
+        // Clone the specific storage - this is cheap (Arc clone internally)
+        // and allows concurrent Redis operations without lock contention
+        let mut storage = self.queue.transaction_request_queue.clone();
         let job = Job::new(JobType::TransactionRequest, transaction_process_job)
             .with_request_id(get_request_id());
 
         match scheduled_on {
             Some(scheduled_on) => {
-                queue
-                    .transaction_request_queue
-                    .schedule(job, scheduled_on)
-                    .await?;
+                storage.schedule(job, scheduled_on).await?;
             }
             None => {
-                queue.transaction_request_queue.push(job).await?;
+                storage.push(job).await?;
             }
         }
         debug!("Transaction job produced successfully");
@@ -164,16 +144,16 @@ impl JobProducerTrait for JobProducer {
         transaction_submit_job: TransactionSend,
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError> {
-        let mut queue = self.queue.lock().await;
+        let mut storage = self.queue.transaction_submission_queue.clone();
         let job = Job::new(JobType::TransactionSend, transaction_submit_job)
             .with_request_id(get_request_id());
 
         match scheduled_on {
             Some(on) => {
-                queue.transaction_submission_queue.schedule(job, on).await?;
+                storage.schedule(job, on).await?;
             }
             None => {
-                queue.transaction_submission_queue.push(job).await?;
+                storage.push(job).await?;
             }
         }
         debug!("Transaction Submit job produced successfully");
@@ -186,7 +166,6 @@ impl JobProducerTrait for JobProducer {
         transaction_status_check_job: TransactionStatusCheck,
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError> {
-        let mut queue = self.queue.lock().await;
         let job = Job::new(
             JobType::TransactionStatusCheck,
             transaction_status_check_job.clone(),
@@ -194,19 +173,20 @@ impl JobProducerTrait for JobProducer {
         .with_request_id(get_request_id());
 
         // Route to the appropriate queue based on network type
+        // Clone the specific storage to avoid lock contention
         use crate::models::NetworkType;
-        let status_queue = match transaction_status_check_job.network_type {
-            Some(NetworkType::Evm) => &mut queue.transaction_status_queue_evm,
-            Some(NetworkType::Stellar) => &mut queue.transaction_status_queue_stellar,
-            _ => &mut queue.transaction_status_queue, // Generic queue or legacy messages without network_type
+        let mut storage = match transaction_status_check_job.network_type {
+            Some(NetworkType::Evm) => self.queue.transaction_status_queue_evm.clone(),
+            Some(NetworkType::Stellar) => self.queue.transaction_status_queue_stellar.clone(),
+            _ => self.queue.transaction_status_queue.clone(), // Generic queue or legacy messages without network_type
         };
 
         match scheduled_on {
             Some(on) => {
-                status_queue.schedule(job, on).await?;
+                storage.schedule(job, on).await?;
             }
             None => {
-                status_queue.push(job).await?;
+                storage.push(job).await?;
             }
         }
         debug!(
@@ -221,16 +201,16 @@ impl JobProducerTrait for JobProducer {
         notification_send_job: NotificationSend,
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError> {
-        let mut queue = self.queue.lock().await;
+        let mut storage = self.queue.notification_queue.clone();
         let job = Job::new(JobType::NotificationSend, notification_send_job)
             .with_request_id(get_request_id());
 
         match scheduled_on {
             Some(on) => {
-                queue.notification_queue.schedule(job, on).await?;
+                storage.schedule(job, on).await?;
             }
             None => {
-                queue.notification_queue.push(job).await?;
+                storage.push(job).await?;
             }
         }
 
@@ -243,16 +223,16 @@ impl JobProducerTrait for JobProducer {
         swap_request_job: TokenSwapRequest,
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError> {
-        let mut queue = self.queue.lock().await;
+        let mut storage = self.queue.token_swap_request_queue.clone();
         let job =
             Job::new(JobType::TokenSwapRequest, swap_request_job).with_request_id(get_request_id());
 
         match scheduled_on {
             Some(on) => {
-                queue.token_swap_request_queue.schedule(job, on).await?;
+                storage.schedule(job, on).await?;
             }
             None => {
-                queue.token_swap_request_queue.push(job).await?;
+                storage.push(job).await?;
             }
         }
 
@@ -265,23 +245,19 @@ impl JobProducerTrait for JobProducer {
         relayer_health_check_job: RelayerHealthCheck,
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError> {
+        let mut storage = self.queue.relayer_health_check_queue.clone();
         let job = Job::new(
             JobType::RelayerHealthCheck,
             relayer_health_check_job.clone(),
         )
         .with_request_id(get_request_id());
 
-        let mut queue = self.queue.lock().await;
-
         match scheduled_on {
             Some(scheduled_on) => {
-                queue
-                    .relayer_health_check_queue
-                    .schedule(job, scheduled_on)
-                    .await?;
+                storage.schedule(job, scheduled_on).await?;
             }
             None => {
-                queue.relayer_health_check_queue.push(job).await?;
+                storage.push(job).await?;
             }
         }
 
@@ -297,6 +273,7 @@ mod tests {
         WebhookPayload, U256,
     };
     use crate::utils::calculate_scheduled_timestamp;
+    use tokio::sync::Mutex;
 
     #[derive(Clone, Debug)]
     // Define a simplified queue for testing without using complex mocks
@@ -656,13 +633,13 @@ mod tests {
 
     #[test]
     fn test_job_producer_error_conversion() {
-        // Test error conversion without using specific Redis error types
+        // Test error conversion preserves original error message
         let job_error = JobProducerError::QueueError("Test error".to_string());
         let relayer_error: RelayerError = job_error.into();
 
         match relayer_error {
             RelayerError::QueueError(msg) => {
-                assert_eq!(msg, "Queue error");
+                assert_eq!(msg, "Queue error: Test error");
             }
             _ => panic!("Unexpected error type"),
         }
@@ -1073,12 +1050,13 @@ mod tests {
 
     #[test]
     fn test_job_producer_error_to_relayer_error() {
+        // Test error conversion preserves original error message
         let job_error = JobProducerError::QueueError("Connection failed".to_string());
         let relayer_error: RelayerError = job_error.into();
 
         match relayer_error {
             RelayerError::QueueError(msg) => {
-                assert_eq!(msg, "Queue error");
+                assert_eq!(msg, "Queue error: Connection failed");
             }
             _ => panic!("Expected QueueError variant"),
         }

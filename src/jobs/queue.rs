@@ -102,19 +102,23 @@ impl Queue {
     pub async fn setup(redis_connections: Arc<RedisConnections>) -> Result<Self> {
         let server_config = ServerConfig::from_env();
         let redis_url = &server_config.redis_url;
-        let timeout = Duration::from_millis(server_config.redis_connection_timeout_ms);
 
         // Create Redis client
         let client = redis::Client::open(redis_url.as_str())
             .map_err(|e| eyre::eyre!("Failed to create Redis client for queue: {}", e))?;
 
-        // Configure ConnectionManager with proper timeouts and retry settings
-        // These settings ensure the connection recovers gracefully from failures
+        // Configure ConnectionManager with timeouts tuned for HTTP request lifecycle.
+        // Goal: fail fast enough
+        // while still recovering from brief Redis hiccups.
+        //
+        // Worst case calculation: 3 attempts × 5s timeout + ~0.3s backoff = ~15.3s
+        // This leaves headroom for DB operations and other processing.
+        let queue_timeout = Duration::from_secs(5); // Cap at 5s regardless of env setting
         let conn_config = ConnectionManagerConfig::new()
-            .set_connection_timeout(timeout)   // TCP connection timeout
-            .set_response_timeout(timeout)     // Redis command response timeout
-            .set_number_of_retries(8)          // Reconnection attempts (default: 6)
-            .set_max_delay(5000); // Cap backoff at 5s (default: unbounded, would grow to 25.6s at retry 8)
+            .set_connection_timeout(queue_timeout) // TCP connection timeout
+            .set_response_timeout(queue_timeout)   // Redis command response timeout
+            .set_number_of_retries(2)              // 2 retries = 3 total attempts
+            .set_max_delay(1000); // Cap backoff at 1s for faster failure detection
 
         // Create ConnectionManager with config - provides auto-reconnect for queue operations
         let conn = ConnectionManager::new_with_config(client, conn_config)
@@ -125,9 +129,11 @@ impl Queue {
 
         info!(
             redis_url = %redis_url,
-            connection_timeout_ms = %server_config.redis_connection_timeout_ms,
-            response_timeout_ms = %server_config.redis_connection_timeout_ms,
-            "Queue setup: created ConnectionManager with configured timeouts"
+            connection_timeout_ms = 5000,
+            response_timeout_ms = 5000,
+            retries = 2,
+            max_backoff_ms = 1000,
+            "Queue setup: created ConnectionManager with fast-fail timeouts"
         );
 
         // use REDIS_KEY_PREFIX only if set, otherwise do not use it

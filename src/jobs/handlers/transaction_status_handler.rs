@@ -17,7 +17,7 @@ use crate::{
     config::ServerConfig,
     constants::{get_max_consecutive_status_failures, get_max_total_status_failures},
     domain::{get_relayer_transaction, get_transaction_by_id, is_final_state, Transaction},
-    jobs::{Job, StatusCheckContext, TransactionStatusCheck},
+    jobs::{Job, JobProducerTrait, StatusCheckContext, TransactionStatusCheck},
     models::{ApiError, DefaultAppState, TransactionRepoModel},
     observability::request_id::set_request_id,
 };
