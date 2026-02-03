@@ -144,6 +144,16 @@ lazy_static! {
         REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
         counter_vec
     };
+
+    // Counter for RPC failures during API requests (before transaction creation).
+    // This tracks failures that occur during operations like get_status, get_balance, etc.
+    // that happen before a transaction is created.
+    pub static ref API_RPC_FAILURES: CounterVec = {
+        let opts = Opts::new("api_rpc_failures_total", "Total number of RPC failures during API requests (before transaction creation)");
+        let counter_vec = CounterVec::new(opts, &["relayer_id", "network_type", "operation_name", "error_type"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
 }
 
 /// Gather all metrics and encode into the provided format.
