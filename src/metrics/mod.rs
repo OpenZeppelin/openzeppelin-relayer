@@ -154,6 +154,22 @@ lazy_static! {
         REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
         counter_vec
     };
+
+    // Counter for transaction creation (when a transaction is successfully created in the repository).
+    pub static ref TRANSACTIONS_CREATED: CounterVec = {
+        let opts = Opts::new("transactions_created_total", "Total number of transactions created");
+        let counter_vec = CounterVec::new(opts, &["relayer_id", "network_type"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
+
+    // Counter for transaction submissions (when status changes to Submitted).
+    pub static ref TRANSACTIONS_SUBMITTED: CounterVec = {
+        let opts = Opts::new("transactions_submitted_total", "Total number of transactions submitted to the network");
+        let counter_vec = CounterVec::new(opts, &["relayer_id", "network_type"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
 }
 
 /// Gather all metrics and encode into the provided format.

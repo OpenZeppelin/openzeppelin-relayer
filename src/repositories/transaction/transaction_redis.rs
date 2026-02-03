@@ -544,6 +544,12 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             return Err(e);
         }
 
+        // Track transaction creation metric
+        let network_type = format!("{:?}", entity.network_type).to_lowercase();
+        crate::metrics::TRANSACTIONS_CREATED
+            .with_label_values(&[entity.relayer_id.as_str(), &network_type])
+            .inc();
+
         debug!(tx_id = %entity.id, "successfully created transaction");
         Ok(entity)
     }
@@ -1330,17 +1336,27 @@ impl TransactionRepository for RedisTransactionRepository {
                 Ok(_) => {
                     debug!(tx_id = %tx_id, attempt = %attempt, "successfully updated transaction");
 
-                    // Track metrics for final transaction states
-                    // Only track when status changes from non-final to final state
+                    // Track metrics for transaction state changes
                     if let Some(new_status) = &update.status {
+                        let network_type =
+                            format!("{:?}", updated_tx.network_type).to_lowercase();
+                        let relayer_id = updated_tx.relayer_id.as_str();
+
+                        // Track submission (when status changes to Submitted)
+                        if original_tx.status != TransactionStatus::Submitted
+                            && *new_status == TransactionStatus::Submitted
+                        {
+                            TRANSACTIONS_SUBMITTED
+                                .with_label_values(&[relayer_id, &network_type])
+                                .inc();
+                        }
+
+                        // Track metrics for final transaction states
+                        // Only track when status changes from non-final to final state
                         let was_final = is_final_state(&original_tx.status);
                         let is_final = is_final_state(new_status);
 
                         if !was_final && is_final {
-                            let network_type =
-                                format!("{:?}", updated_tx.network_type).to_lowercase();
-                            let relayer_id = updated_tx.relayer_id.as_str();
-
                             match new_status {
                                 TransactionStatus::Confirmed => {
                                     TRANSACTIONS_SUCCESS
