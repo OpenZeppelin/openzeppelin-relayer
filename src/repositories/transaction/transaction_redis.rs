@@ -1349,8 +1349,7 @@ impl TransactionRepository for RedisTransactionRepository {
 
                     // Track metrics for transaction state changes
                     if let Some(new_status) = &update.status {
-                        let network_type =
-                            format!("{:?}", updated_tx.network_type).to_lowercase();
+                        let network_type = format!("{:?}", updated_tx.network_type).to_lowercase();
                         let relayer_id = updated_tx.relayer_id.as_str();
 
                         // Track submission (when status changes to Submitted)
@@ -1365,11 +1364,15 @@ impl TransactionRepository for RedisTransactionRepository {
                             if let Ok(created_time) =
                                 chrono::DateTime::parse_from_rfc3339(&updated_tx.created_at)
                             {
-                                let processing_seconds = (Utc::now()
-                                    - created_time.with_timezone(&Utc))
-                                .num_seconds() as f64;
+                                let processing_seconds =
+                                    (Utc::now() - created_time.with_timezone(&Utc)).num_seconds()
+                                        as f64;
                                 TRANSACTION_PROCESSING_TIME
-                                    .with_label_values(&[relayer_id, &network_type, "creation_to_submission"])
+                                    .with_label_values(&[
+                                        relayer_id,
+                                        &network_type,
+                                        "creation_to_submission",
+                                    ])
                                     .observe(processing_seconds);
                             }
                         }
@@ -1411,7 +1414,8 @@ impl TransactionRepository for RedisTransactionRepository {
                                             let processing_seconds = (confirmed_time
                                                 .with_timezone(&Utc)
                                                 - sent_time.with_timezone(&Utc))
-                                            .num_seconds() as f64;
+                                            .num_seconds()
+                                                as f64;
                                             TRANSACTION_PROCESSING_TIME
                                                 .with_label_values(&[
                                                     relayer_id,
@@ -1428,12 +1432,15 @@ impl TransactionRepository for RedisTransactionRepository {
                                     {
                                         if let Some(confirmed_at_str) = &updated_tx.confirmed_at {
                                             if let Ok(confirmed_time) =
-                                                chrono::DateTime::parse_from_rfc3339(confirmed_at_str)
+                                                chrono::DateTime::parse_from_rfc3339(
+                                                    confirmed_at_str,
+                                                )
                                             {
                                                 let processing_seconds = (confirmed_time
                                                     .with_timezone(&Utc)
                                                     - created_time.with_timezone(&Utc))
-                                                .num_seconds() as f64;
+                                                .num_seconds()
+                                                    as f64;
                                                 TRANSACTION_PROCESSING_TIME
                                                     .with_label_values(&[
                                                         relayer_id,
@@ -1461,7 +1468,11 @@ impl TransactionRepository for RedisTransactionRepository {
                                         })
                                         .unwrap_or("failed");
                                     TRANSACTIONS_FAILED
-                                        .with_label_values(&[relayer_id, &network_type, failure_reason])
+                                        .with_label_values(&[
+                                            relayer_id,
+                                            &network_type,
+                                            failure_reason,
+                                        ])
                                         .inc();
                                 }
                                 TransactionStatus::Expired => {

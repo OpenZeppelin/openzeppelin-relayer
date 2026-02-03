@@ -402,7 +402,7 @@ where
         let result = operation(provider.clone())
             .await
             .map_err(InternalRetryError::NonRetriable);
-        
+
         // Record RPC latency even for single attempts
         if result.is_ok() {
             let latency_seconds = start_time.elapsed().as_secs_f64();
@@ -410,7 +410,7 @@ where
                 .with_label_values(&["unknown", "unknown", operation_name])
                 .observe(latency_seconds);
         }
-        
+
         return result;
     }
 
@@ -419,7 +419,7 @@ where
 
         // Start timing for RPC latency metric
         let start_time = Instant::now();
-        
+
         match operation(provider.clone()).await {
             Ok(result) => {
                 // Record RPC latency (using "unknown" for relayer_id/network_type since not available at this layer)
@@ -427,7 +427,7 @@ where
                 RPC_CALL_LATENCY
                     .with_label_values(&["unknown", "unknown", operation_name])
                     .observe(latency_seconds);
-                
+
                 tracing::debug!(
                     operation_name = %operation_name,
                     provider_url = %provider_url,

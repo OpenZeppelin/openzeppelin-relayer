@@ -250,7 +250,9 @@ where
                     error = %e,
                     "failed to fetch sequence from chain in sync_sequence_from_chain"
                 );
-                TransactionError::UnexpectedError(format!("Failed to sync sequence from chain: {e}"))
+                TransactionError::UnexpectedError(format!(
+                    "Failed to sync sequence from chain: {e}"
+                ))
             })?;
 
         // Update the local counter to the next usable sequence
