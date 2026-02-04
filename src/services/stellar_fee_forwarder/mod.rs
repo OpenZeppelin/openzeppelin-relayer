@@ -592,11 +592,36 @@ mod tests {
     use super::*;
     use crate::services::provider::StellarProvider;
 
+    // Test constants
+    const VALID_CONTRACT_ADDR: &str = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+    const VALID_ACCOUNT_ADDR: &str = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
+    const VALID_ACCOUNT_ADDR_2: &str = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+
+    fn create_test_params() -> FeeForwarderParams {
+        FeeForwarderParams {
+            fee_token: VALID_CONTRACT_ADDR.to_string(),
+            fee_amount: 1_000_000,
+            max_fee_amount: 2_000_000,
+            expiration_ledger: 100000,
+            target_contract: VALID_CONTRACT_ADDR.to_string(),
+            target_fn: "transfer".to_string(),
+            target_args: vec![ScVal::U32(42)],
+            user: VALID_ACCOUNT_ADDR.to_string(),
+            relayer: VALID_ACCOUNT_ADDR_2.to_string(),
+        }
+    }
+
+    // ==================== parse_contract_address tests ====================
+
     #[test]
     fn test_parse_contract_address_valid() {
-        let addr = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
-        let result = FeeForwarderService::<StellarProvider>::parse_contract_address(addr);
+        let result =
+            FeeForwarderService::<StellarProvider>::parse_contract_address(VALID_CONTRACT_ADDR);
         assert!(result.is_ok());
+        match result.unwrap() {
+            ScAddress::Contract(_) => {}
+            _ => panic!("Expected Contract address"),
+        }
     }
 
     #[test]
@@ -604,6 +629,50 @@ mod tests {
         let addr = "INVALID";
         let result = FeeForwarderService::<StellarProvider>::parse_contract_address(addr);
         assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, FeeForwarderError::InvalidContractAddress(_)));
+    }
+
+    #[test]
+    fn test_parse_contract_address_with_account_address() {
+        // Account addresses (G...) should fail when parsed as contract addresses
+        let result =
+            FeeForwarderService::<StellarProvider>::parse_contract_address(VALID_ACCOUNT_ADDR);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_contract_address_empty() {
+        let result = FeeForwarderService::<StellarProvider>::parse_contract_address("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_contract_address_public() {
+        let result = FeeForwarderService::<StellarProvider>::parse_contract_address_public(
+            VALID_CONTRACT_ADDR,
+        );
+        assert!(result.is_ok());
+    }
+
+    // ==================== parse_account_address tests ====================
+
+    #[test]
+    fn test_parse_account_address_valid() {
+        let result =
+            FeeForwarderService::<StellarProvider>::parse_account_address(VALID_ACCOUNT_ADDR);
+        assert!(result.is_ok());
+        match result.unwrap() {
+            ScAddress::Account(_) => {}
+            _ => panic!("Expected Account address"),
+        }
+    }
+
+    #[test]
+    fn test_parse_account_address_valid_2() {
+        let result =
+            FeeForwarderService::<StellarProvider>::parse_account_address(VALID_ACCOUNT_ADDR_2);
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -611,7 +680,25 @@ mod tests {
         let addr = "GABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCDEFGH";
         let result = FeeForwarderService::<StellarProvider>::parse_account_address(addr);
         assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, FeeForwarderError::InvalidAccountAddress(_)));
     }
+
+    #[test]
+    fn test_parse_account_address_with_contract_address() {
+        // Contract addresses (C...) should fail when parsed as account addresses
+        let result =
+            FeeForwarderService::<StellarProvider>::parse_account_address(VALID_CONTRACT_ADDR);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_account_address_empty() {
+        let result = FeeForwarderService::<StellarProvider>::parse_account_address("");
+        assert!(result.is_err());
+    }
+
+    // ==================== i128_to_scval tests ====================
 
     #[test]
     fn test_i128_to_scval() {
@@ -627,9 +714,459 @@ mod tests {
     }
 
     #[test]
+    fn test_i128_to_scval_zero() {
+        let amount: i128 = 0;
+        let scval = FeeForwarderService::<StellarProvider>::i128_to_scval(amount);
+        match scval {
+            ScVal::I128(parts) => {
+                assert_eq!(parts.hi, 0);
+                assert_eq!(parts.lo, 0);
+            }
+            _ => panic!("Expected I128"),
+        }
+    }
+
+    #[test]
+    fn test_i128_to_scval_negative() {
+        let amount: i128 = -1_000_000;
+        let scval = FeeForwarderService::<StellarProvider>::i128_to_scval(amount);
+        match scval {
+            ScVal::I128(parts) => {
+                let recovered = ((parts.hi as i128) << 64) | (parts.lo as i128);
+                assert_eq!(amount, recovered);
+            }
+            _ => panic!("Expected I128"),
+        }
+    }
+
+    #[test]
+    fn test_i128_to_scval_max() {
+        let amount: i128 = i128::MAX;
+        let scval = FeeForwarderService::<StellarProvider>::i128_to_scval(amount);
+        match scval {
+            ScVal::I128(parts) => {
+                let recovered = ((parts.hi as i128) << 64) | (parts.lo as i128);
+                assert_eq!(amount, recovered);
+            }
+            _ => panic!("Expected I128"),
+        }
+    }
+
+    #[test]
+    fn test_i128_to_scval_min() {
+        let amount: i128 = i128::MIN;
+        let scval = FeeForwarderService::<StellarProvider>::i128_to_scval(amount);
+        match scval {
+            ScVal::I128(parts) => {
+                let recovered = ((parts.hi as i128) << 64) | (parts.lo as i128);
+                assert_eq!(amount, recovered);
+            }
+            _ => panic!("Expected I128"),
+        }
+    }
+
+    // ==================== create_symbol tests ====================
+
+    #[test]
     fn test_create_symbol() {
         let result = FeeForwarderService::<StellarProvider>::create_symbol("forward");
         assert!(result.is_ok());
         assert_eq!(result.unwrap().to_utf8_string_lossy(), "forward");
+    }
+
+    #[test]
+    fn test_create_symbol_approve() {
+        let result = FeeForwarderService::<StellarProvider>::create_symbol("approve");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().to_utf8_string_lossy(), "approve");
+    }
+
+    #[test]
+    fn test_create_symbol_transfer() {
+        let result = FeeForwarderService::<StellarProvider>::create_symbol("transfer");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().to_utf8_string_lossy(), "transfer");
+    }
+
+    #[test]
+    fn test_create_symbol_empty() {
+        let result = FeeForwarderService::<StellarProvider>::create_symbol("");
+        assert!(result.is_ok());
+    }
+
+    // ==================== build_user_auth_entry_standalone tests ====================
+
+    #[test]
+    fn test_build_user_auth_entry_standalone_without_target_auth() {
+        let params = create_test_params();
+        let result = FeeForwarderService::<StellarProvider>::build_user_auth_entry_standalone(
+            VALID_CONTRACT_ADDR,
+            &params,
+            false,
+        );
+        assert!(result.is_ok());
+
+        let auth_entry = result.unwrap();
+        match &auth_entry.credentials {
+            SorobanCredentials::Address(creds) => {
+                assert_eq!(creds.signature_expiration_ledger, params.expiration_ledger);
+                // Signature should be empty vec for simulation
+                match &creds.signature {
+                    ScVal::Vec(Some(v)) => assert!(v.is_empty()),
+                    _ => panic!("Expected empty Vec signature"),
+                }
+            }
+            _ => panic!("Expected Address credentials"),
+        }
+
+        // Should have 1 sub-invocation (approve only)
+        assert_eq!(auth_entry.root_invocation.sub_invocations.len(), 1);
+    }
+
+    #[test]
+    fn test_build_user_auth_entry_standalone_with_target_auth() {
+        let params = create_test_params();
+        let result = FeeForwarderService::<StellarProvider>::build_user_auth_entry_standalone(
+            VALID_CONTRACT_ADDR,
+            &params,
+            true,
+        );
+        assert!(result.is_ok());
+
+        let auth_entry = result.unwrap();
+        // Should have 2 sub-invocations (approve + target)
+        assert_eq!(auth_entry.root_invocation.sub_invocations.len(), 2);
+    }
+
+    #[test]
+    fn test_build_user_auth_entry_standalone_invalid_fee_forwarder() {
+        let params = create_test_params();
+        let result = FeeForwarderService::<StellarProvider>::build_user_auth_entry_standalone(
+            "INVALID", &params, false,
+        );
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            FeeForwarderError::InvalidContractAddress(_)
+        ));
+    }
+
+    #[test]
+    fn test_build_user_auth_entry_standalone_invalid_fee_token() {
+        let mut params = create_test_params();
+        params.fee_token = "INVALID".to_string();
+        let result = FeeForwarderService::<StellarProvider>::build_user_auth_entry_standalone(
+            VALID_CONTRACT_ADDR,
+            &params,
+            false,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_build_user_auth_entry_standalone_invalid_user() {
+        let mut params = create_test_params();
+        params.user = "INVALID".to_string();
+        let result = FeeForwarderService::<StellarProvider>::build_user_auth_entry_standalone(
+            VALID_CONTRACT_ADDR,
+            &params,
+            false,
+        );
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            FeeForwarderError::InvalidAccountAddress(_)
+        ));
+    }
+
+    #[test]
+    fn test_build_user_auth_entry_standalone_invalid_relayer() {
+        let mut params = create_test_params();
+        params.relayer = "INVALID".to_string();
+        let result = FeeForwarderService::<StellarProvider>::build_user_auth_entry_standalone(
+            VALID_CONTRACT_ADDR,
+            &params,
+            false,
+        );
+        assert!(result.is_err());
+    }
+
+    // ==================== build_relayer_auth_entry_standalone tests ====================
+
+    #[test]
+    fn test_build_relayer_auth_entry_standalone() {
+        let params = create_test_params();
+        let result = FeeForwarderService::<StellarProvider>::build_relayer_auth_entry_standalone(
+            VALID_CONTRACT_ADDR,
+            &params,
+        );
+        assert!(result.is_ok());
+
+        let auth_entry = result.unwrap();
+        match &auth_entry.credentials {
+            SorobanCredentials::Address(creds) => {
+                assert_eq!(creds.signature_expiration_ledger, params.expiration_ledger);
+                // Relayer has no sub-invocations
+            }
+            _ => panic!("Expected Address credentials"),
+        }
+
+        // Relayer should have no sub-invocations
+        assert!(auth_entry.root_invocation.sub_invocations.is_empty());
+    }
+
+    #[test]
+    fn test_build_relayer_auth_entry_standalone_invalid_fee_forwarder() {
+        let params = create_test_params();
+        let result = FeeForwarderService::<StellarProvider>::build_relayer_auth_entry_standalone(
+            "INVALID", &params,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_build_relayer_auth_entry_standalone_invalid_relayer() {
+        let mut params = create_test_params();
+        params.relayer = "INVALID".to_string();
+        let result = FeeForwarderService::<StellarProvider>::build_relayer_auth_entry_standalone(
+            VALID_CONTRACT_ADDR,
+            &params,
+        );
+        assert!(result.is_err());
+    }
+
+    // ==================== build_forward_args tests ====================
+
+    #[test]
+    fn test_build_forward_args_for_invoke_contract_args() {
+        let params = create_test_params();
+        let result =
+            FeeForwarderService::<StellarProvider>::build_forward_args_for_invoke_contract_args(
+                VALID_CONTRACT_ADDR,
+                &params,
+            );
+        assert!(result.is_ok());
+
+        let args = result.unwrap();
+        // Should have 9 arguments
+        assert_eq!(args.len(), 9);
+    }
+
+    #[test]
+    fn test_build_forward_args_standalone_invalid_fee_token() {
+        let mut params = create_test_params();
+        params.fee_token = "INVALID".to_string();
+        let result =
+            FeeForwarderService::<StellarProvider>::build_forward_args_for_invoke_contract_args(
+                VALID_CONTRACT_ADDR,
+                &params,
+            );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_build_forward_args_standalone_invalid_target_contract() {
+        let mut params = create_test_params();
+        params.target_contract = "INVALID".to_string();
+        let result =
+            FeeForwarderService::<StellarProvider>::build_forward_args_for_invoke_contract_args(
+                VALID_CONTRACT_ADDR,
+                &params,
+            );
+        assert!(result.is_err());
+    }
+
+    // ==================== serialize/deserialize auth entry tests ====================
+
+    #[test]
+    fn test_serialize_and_deserialize_auth_entry() {
+        let params = create_test_params();
+        let auth_entry = FeeForwarderService::<StellarProvider>::build_user_auth_entry_standalone(
+            VALID_CONTRACT_ADDR,
+            &params,
+            false,
+        )
+        .unwrap();
+
+        let serialized = FeeForwarderService::<StellarProvider>::serialize_auth_entry(&auth_entry);
+        assert!(serialized.is_ok());
+
+        let xdr_string = serialized.unwrap();
+        assert!(!xdr_string.is_empty());
+
+        let deserialized =
+            FeeForwarderService::<StellarProvider>::deserialize_auth_entry(&xdr_string);
+        assert!(deserialized.is_ok());
+    }
+
+    #[test]
+    fn test_deserialize_auth_entry_invalid_xdr() {
+        let result =
+            FeeForwarderService::<StellarProvider>::deserialize_auth_entry("not-valid-base64-xdr!");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            FeeForwarderError::XdrError(_)
+        ));
+    }
+
+    #[test]
+    fn test_deserialize_auth_entry_empty() {
+        let result = FeeForwarderService::<StellarProvider>::deserialize_auth_entry("");
+        assert!(result.is_err());
+    }
+
+    // ==================== build_invoke_operation_standalone tests ====================
+
+    #[test]
+    fn test_build_invoke_operation_standalone() {
+        let params = create_test_params();
+        let user_auth = FeeForwarderService::<StellarProvider>::build_user_auth_entry_standalone(
+            VALID_CONTRACT_ADDR,
+            &params,
+            false,
+        )
+        .unwrap();
+        let relayer_auth =
+            FeeForwarderService::<StellarProvider>::build_relayer_auth_entry_standalone(
+                VALID_CONTRACT_ADDR,
+                &params,
+            )
+            .unwrap();
+
+        let result = FeeForwarderService::<StellarProvider>::build_invoke_operation_standalone(
+            VALID_CONTRACT_ADDR,
+            &params,
+            vec![user_auth, relayer_auth],
+        );
+        assert!(result.is_ok());
+
+        let operation = result.unwrap();
+        assert!(operation.source_account.is_none());
+        match operation.body {
+            OperationBody::InvokeHostFunction(op) => {
+                assert_eq!(op.auth.len(), 2);
+            }
+            _ => panic!("Expected InvokeHostFunction operation"),
+        }
+    }
+
+    #[test]
+    fn test_build_invoke_operation_standalone_invalid_fee_forwarder() {
+        let params = create_test_params();
+        let result = FeeForwarderService::<StellarProvider>::build_invoke_operation_standalone(
+            "INVALID",
+            &params,
+            vec![],
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_build_invoke_operation_standalone_empty_auth() {
+        let params = create_test_params();
+        let result = FeeForwarderService::<StellarProvider>::build_invoke_operation_standalone(
+            VALID_CONTRACT_ADDR,
+            &params,
+            vec![],
+        );
+        assert!(result.is_ok());
+    }
+
+    // ==================== FeeForwarderParams tests ====================
+
+    #[test]
+    fn test_fee_forwarder_params_clone() {
+        let params = create_test_params();
+        let cloned = params.clone();
+        assert_eq!(params.fee_token, cloned.fee_token);
+        assert_eq!(params.fee_amount, cloned.fee_amount);
+        assert_eq!(params.max_fee_amount, cloned.max_fee_amount);
+        assert_eq!(params.expiration_ledger, cloned.expiration_ledger);
+        assert_eq!(params.target_contract, cloned.target_contract);
+        assert_eq!(params.target_fn, cloned.target_fn);
+        assert_eq!(params.user, cloned.user);
+        assert_eq!(params.relayer, cloned.relayer);
+    }
+
+    #[test]
+    fn test_fee_forwarder_params_with_empty_target_args() {
+        let mut params = create_test_params();
+        params.target_args = vec![];
+
+        let result = FeeForwarderService::<StellarProvider>::build_user_auth_entry_standalone(
+            VALID_CONTRACT_ADDR,
+            &params,
+            true,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_fee_forwarder_params_with_multiple_target_args() {
+        let mut params = create_test_params();
+        params.target_args = vec![
+            ScVal::U32(1),
+            ScVal::U32(2),
+            ScVal::U32(3),
+            ScVal::Bool(true),
+        ];
+
+        let result = FeeForwarderService::<StellarProvider>::build_user_auth_entry_standalone(
+            VALID_CONTRACT_ADDR,
+            &params,
+            true,
+        );
+        assert!(result.is_ok());
+    }
+
+    // ==================== Error display tests ====================
+
+    #[test]
+    fn test_error_display_invalid_contract_address() {
+        let err = FeeForwarderError::InvalidContractAddress("test".to_string());
+        assert!(err.to_string().contains("Invalid contract address"));
+    }
+
+    #[test]
+    fn test_error_display_invalid_account_address() {
+        let err = FeeForwarderError::InvalidAccountAddress("test".to_string());
+        assert!(err.to_string().contains("Invalid account address"));
+    }
+
+    #[test]
+    fn test_error_display_authorization_build_error() {
+        let err = FeeForwarderError::AuthorizationBuildError("test".to_string());
+        assert!(err.to_string().contains("Failed to build authorization"));
+    }
+
+    #[test]
+    fn test_error_display_provider_error() {
+        let err = FeeForwarderError::ProviderError("test".to_string());
+        assert!(err.to_string().contains("Provider error"));
+    }
+
+    #[test]
+    fn test_error_display_xdr_error() {
+        let err = FeeForwarderError::XdrError("test".to_string());
+        assert!(err.to_string().contains("XDR serialization error"));
+    }
+
+    #[test]
+    fn test_error_display_invalid_function_name() {
+        let err = FeeForwarderError::InvalidFunctionName("test".to_string());
+        assert!(err.to_string().contains("Invalid function name"));
+    }
+
+    // ==================== Constants tests ====================
+
+    #[test]
+    fn test_default_validity_seconds() {
+        assert_eq!(DEFAULT_VALIDITY_SECONDS, 300);
+    }
+
+    #[test]
+    fn test_ledger_time_seconds() {
+        assert_eq!(LEDGER_TIME_SECONDS, 5);
     }
 }

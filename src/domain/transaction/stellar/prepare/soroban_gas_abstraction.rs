@@ -425,16 +425,17 @@ fn build_simulation_envelope(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_rs::xdr::VecM;
+    use soroban_rs::xdr::{
+        ContractId, FeeBumpTransaction, FeeBumpTransactionEnvelope, FeeBumpTransactionExt,
+        FeeBumpTransactionInnerTx, Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp,
+        Memo, MuxedAccount, Preconditions, ScAddress, ScSymbol, ScVal, SequenceNumber,
+        SorobanAddressCredentials, SorobanAuthorizedFunction, SorobanAuthorizedInvocation,
+        Transaction, TransactionExt, TransactionV0, TransactionV0Envelope, TransactionV0Ext,
+        TransactionV1Envelope, Uint256, VecM,
+    };
 
-    #[test]
-    fn test_update_envelope_sequence() {
-        use soroban_rs::xdr::{
-            Memo, MuxedAccount, Preconditions, SequenceNumber, Transaction, TransactionExt,
-            TransactionV1Envelope, Uint256,
-        };
-
-        // Create a minimal transaction envelope
+    // Helper to create a minimal V1 transaction envelope
+    fn create_minimal_v1_envelope() -> TransactionEnvelope {
         let tx = Transaction {
             source_account: MuxedAccount::Ed25519(Uint256([0u8; 32])),
             fee: 100,
@@ -445,19 +446,953 @@ mod tests {
             ext: TransactionExt::V0,
         };
 
+        TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: VecM::default(),
+        })
+    }
+
+    // Helper to create a V0 transaction envelope
+    fn create_v0_envelope() -> TransactionEnvelope {
+        let tx = TransactionV0 {
+            source_account_ed25519: Uint256([0u8; 32]),
+            fee: 100,
+            seq_num: SequenceNumber(0),
+            time_bounds: None,
+            memo: Memo::None,
+            operations: VecM::default(),
+            ext: TransactionV0Ext::V0,
+        };
+
+        TransactionEnvelope::TxV0(TransactionV0Envelope {
+            tx,
+            signatures: VecM::default(),
+        })
+    }
+
+    // Helper to create a fee bump transaction envelope
+    fn create_fee_bump_envelope() -> TransactionEnvelope {
+        let inner_tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256([0u8; 32])),
+            fee: 100,
+            seq_num: SequenceNumber(0),
+            cond: Preconditions::None,
+            memo: Memo::None,
+            operations: VecM::default(),
+            ext: TransactionExt::V0,
+        };
+
+        let inner_envelope = TransactionV1Envelope {
+            tx: inner_tx,
+            signatures: VecM::default(),
+        };
+
+        let fee_bump_tx = FeeBumpTransaction {
+            fee_source: MuxedAccount::Ed25519(Uint256([1u8; 32])),
+            fee: 200,
+            inner_tx: FeeBumpTransactionInnerTx::Tx(inner_envelope),
+            ext: FeeBumpTransactionExt::V0,
+        };
+
+        TransactionEnvelope::TxFeeBump(FeeBumpTransactionEnvelope {
+            tx: fee_bump_tx,
+            signatures: VecM::default(),
+        })
+    }
+
+    // Helper to create a V1 envelope with an InvokeHostFunction operation
+    fn create_invoke_host_function_envelope(
+        auth_entries: Vec<SorobanAuthorizationEntry>,
+    ) -> TransactionEnvelope {
+        let invoke_op = InvokeHostFunctionOp {
+            host_function: HostFunction::InvokeContract(InvokeContractArgs {
+                contract_address: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
+                function_name: ScSymbol("test".try_into().unwrap()),
+                args: VecM::default(),
+            }),
+            auth: auth_entries.try_into().unwrap_or_default(),
+        };
+
+        let operation = Operation {
+            source_account: None,
+            body: OperationBody::InvokeHostFunction(invoke_op),
+        };
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256([0u8; 32])),
+            fee: 100,
+            seq_num: SequenceNumber(0),
+            cond: Preconditions::None,
+            memo: Memo::None,
+            operations: vec![operation].try_into().unwrap(),
+            ext: TransactionExt::V0,
+        };
+
+        TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: VecM::default(),
+        })
+    }
+
+    // Helper to create a mock SorobanAuthorizationEntry with Address credentials
+    fn create_address_auth_entry() -> SorobanAuthorizationEntry {
+        SorobanAuthorizationEntry {
+            credentials: SorobanCredentials::Address(SorobanAddressCredentials {
+                address: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
+                nonce: 0,
+                signature_expiration_ledger: 100,
+                signature: ScVal::Void,
+            }),
+            root_invocation: SorobanAuthorizedInvocation {
+                function: SorobanAuthorizedFunction::ContractFn(InvokeContractArgs {
+                    contract_address: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
+                    function_name: ScSymbol("test".try_into().unwrap()),
+                    args: VecM::default(),
+                }),
+                sub_invocations: VecM::default(),
+            },
+        }
+    }
+
+    // Helper to create a mock SorobanAuthorizationEntry with SourceAccount credentials
+    fn create_source_account_auth_entry() -> SorobanAuthorizationEntry {
+        SorobanAuthorizationEntry {
+            credentials: SorobanCredentials::SourceAccount,
+            root_invocation: SorobanAuthorizedInvocation {
+                function: SorobanAuthorizedFunction::ContractFn(InvokeContractArgs {
+                    contract_address: ScAddress::Contract(ContractId(Hash([1u8; 32]))),
+                    function_name: ScSymbol("relayer_fn".try_into().unwrap()),
+                    args: VecM::default(),
+                }),
+                sub_invocations: VecM::default(),
+            },
+        }
+    }
+
+    // ==================== update_envelope_sequence tests ====================
+
+    #[test]
+    fn test_update_envelope_sequence() {
+        let mut envelope = create_minimal_v1_envelope();
+        update_envelope_sequence(&mut envelope, 12345).unwrap();
+
+        if let TransactionEnvelope::Tx(v1) = &envelope {
+            assert_eq!(v1.tx.seq_num.0, 12345);
+        } else {
+            panic!("Expected Tx envelope");
+        }
+    }
+
+    #[test]
+    fn test_update_envelope_sequence_v0_returns_error() {
+        let mut envelope = create_v0_envelope();
+        let result = update_envelope_sequence(&mut envelope, 12345);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::ValidationError(msg) => {
+                assert!(msg.contains("V0 transactions are not supported"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_update_envelope_sequence_fee_bump_returns_error() {
+        let mut envelope = create_fee_bump_envelope();
+        let result = update_envelope_sequence(&mut envelope, 12345);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::ValidationError(msg) => {
+                assert!(msg.contains("Cannot update sequence number on fee bump transaction"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_update_envelope_sequence_zero() {
+        let mut envelope = create_minimal_v1_envelope();
+        update_envelope_sequence(&mut envelope, 0).unwrap();
+
+        if let TransactionEnvelope::Tx(v1) = &envelope {
+            assert_eq!(v1.tx.seq_num.0, 0);
+        } else {
+            panic!("Expected Tx envelope");
+        }
+    }
+
+    #[test]
+    fn test_update_envelope_sequence_max_value() {
+        let mut envelope = create_minimal_v1_envelope();
+        update_envelope_sequence(&mut envelope, i64::MAX).unwrap();
+
+        if let TransactionEnvelope::Tx(v1) = &envelope {
+            assert_eq!(v1.tx.seq_num.0, i64::MAX);
+        } else {
+            panic!("Expected Tx envelope");
+        }
+    }
+
+    // ==================== apply_resource_buffer tests ====================
+
+    #[test]
+    fn test_apply_resource_buffer_standard_values() {
+        let mut resources = SorobanResources {
+            footprint: soroban_rs::xdr::LedgerFootprint {
+                read_only: VecM::default(),
+                read_write: VecM::default(),
+            },
+            instructions: 1000,
+            disk_read_bytes: 2000,
+            write_bytes: 500,
+        };
+
+        apply_resource_buffer(&mut resources);
+
+        // 15% buffer: value * 115 / 100
+        assert_eq!(resources.instructions, 1150);
+        assert_eq!(resources.disk_read_bytes, 2300);
+        assert_eq!(resources.write_bytes, 575);
+    }
+
+    #[test]
+    fn test_apply_resource_buffer_zero_values() {
+        let mut resources = SorobanResources {
+            footprint: soroban_rs::xdr::LedgerFootprint {
+                read_only: VecM::default(),
+                read_write: VecM::default(),
+            },
+            instructions: 0,
+            disk_read_bytes: 0,
+            write_bytes: 0,
+        };
+
+        apply_resource_buffer(&mut resources);
+
+        assert_eq!(resources.instructions, 0);
+        assert_eq!(resources.disk_read_bytes, 0);
+        assert_eq!(resources.write_bytes, 0);
+    }
+
+    #[test]
+    fn test_apply_resource_buffer_large_values_no_overflow() {
+        let large_value = u32::MAX - 1000;
+        let mut resources = SorobanResources {
+            footprint: soroban_rs::xdr::LedgerFootprint {
+                read_only: VecM::default(),
+                read_write: VecM::default(),
+            },
+            instructions: large_value,
+            disk_read_bytes: large_value,
+            write_bytes: large_value,
+        };
+
+        apply_resource_buffer(&mut resources);
+
+        // Should saturate at u32::MAX, not overflow
+        assert!(resources.instructions <= u32::MAX);
+        assert!(resources.disk_read_bytes <= u32::MAX);
+        assert!(resources.write_bytes <= u32::MAX);
+    }
+
+    #[test]
+    fn test_apply_resource_buffer_max_value_saturates() {
+        let mut resources = SorobanResources {
+            footprint: soroban_rs::xdr::LedgerFootprint {
+                read_only: VecM::default(),
+                read_write: VecM::default(),
+            },
+            instructions: u32::MAX,
+            disk_read_bytes: u32::MAX,
+            write_bytes: u32::MAX,
+        };
+
+        apply_resource_buffer(&mut resources);
+
+        // Should saturate at u32::MAX
+        assert_eq!(resources.instructions, u32::MAX);
+        assert_eq!(resources.disk_read_bytes, u32::MAX);
+        assert_eq!(resources.write_bytes, u32::MAX);
+    }
+
+    #[test]
+    fn test_apply_resource_buffer_preserves_footprint() {
+        use soroban_rs::xdr::{LedgerFootprint, LedgerKey, LedgerKeyAccount};
+
+        let account_key = LedgerKey::Account(LedgerKeyAccount {
+            account_id: soroban_rs::xdr::AccountId(
+                soroban_rs::xdr::PublicKey::PublicKeyTypeEd25519(Uint256([0u8; 32])),
+            ),
+        });
+
+        let mut resources = SorobanResources {
+            footprint: LedgerFootprint {
+                read_only: vec![account_key.clone()].try_into().unwrap(),
+                read_write: VecM::default(),
+            },
+            instructions: 1000,
+            disk_read_bytes: 1000,
+            write_bytes: 1000,
+        };
+
+        apply_resource_buffer(&mut resources);
+
+        // Footprint should be unchanged
+        assert_eq!(resources.footprint.read_only.len(), 1);
+    }
+
+    // ==================== inject_auth_entries_into_envelope tests ====================
+
+    #[test]
+    fn test_inject_auth_entries_v0_envelope_returns_error() {
+        let mut envelope = create_v0_envelope();
+        let signed_user_auth = create_address_auth_entry();
+
+        let result = inject_auth_entries_into_envelope(&mut envelope, signed_user_auth);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::ValidationError(msg) => {
+                assert!(msg.contains("V0 transactions are not supported for Soroban"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_inject_auth_entries_fee_bump_returns_error() {
+        let mut envelope = create_fee_bump_envelope();
+        let signed_user_auth = create_address_auth_entry();
+
+        let result = inject_auth_entries_into_envelope(&mut envelope, signed_user_auth);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::ValidationError(msg) => {
+                assert!(msg.contains("Fee bump transactions should not be used"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_inject_auth_entries_no_operations_returns_error() {
+        let mut envelope = create_minimal_v1_envelope();
+        let signed_user_auth = create_address_auth_entry();
+
+        let result = inject_auth_entries_into_envelope(&mut envelope, signed_user_auth);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::ValidationError(msg) => {
+                assert!(msg.contains("Transaction has no operations"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_inject_auth_entries_non_invoke_host_function_returns_error() {
+        use soroban_rs::xdr::{Asset, PaymentOp};
+
+        // Create envelope with a Payment operation (not InvokeHostFunction)
+        let payment_op = Operation {
+            source_account: None,
+            body: OperationBody::Payment(PaymentOp {
+                destination: MuxedAccount::Ed25519(Uint256([0u8; 32])),
+                asset: Asset::Native,
+                amount: 1000,
+            }),
+        };
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256([0u8; 32])),
+            fee: 100,
+            seq_num: SequenceNumber(0),
+            cond: Preconditions::None,
+            memo: Memo::None,
+            operations: vec![payment_op].try_into().unwrap(),
+            ext: TransactionExt::V0,
+        };
+
         let mut envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
             tx,
             signatures: VecM::default(),
         });
 
-        // Update sequence number
-        update_envelope_sequence(&mut envelope, 12345).unwrap();
+        let signed_user_auth = create_address_auth_entry();
+        let result = inject_auth_entries_into_envelope(&mut envelope, signed_user_auth);
 
-        // Verify the update
-        if let TransactionEnvelope::Tx(v1) = &envelope {
-            assert_eq!(v1.tx.seq_num.0, 12345);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::ValidationError(msg) => {
+                assert!(msg.contains("First operation is not InvokeHostFunction"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_inject_auth_entries_empty_auth_adds_user_entry() {
+        let mut envelope = create_invoke_host_function_envelope(vec![]);
+        let signed_user_auth = create_address_auth_entry();
+
+        let result = inject_auth_entries_into_envelope(&mut envelope, signed_user_auth.clone());
+
+        assert!(result.is_ok());
+        let auth_entries = result.unwrap();
+        assert_eq!(auth_entries.len(), 1);
+    }
+
+    #[test]
+    fn test_inject_auth_entries_replaces_first_entry() {
+        let original_auth = create_address_auth_entry();
+        let mut envelope = create_invoke_host_function_envelope(vec![original_auth]);
+
+        let signed_user_auth = create_address_auth_entry();
+        let result = inject_auth_entries_into_envelope(&mut envelope, signed_user_auth);
+
+        assert!(result.is_ok());
+        let auth_entries = result.unwrap();
+        assert_eq!(auth_entries.len(), 1);
+    }
+
+    #[test]
+    fn test_inject_auth_entries_converts_relayer_to_source_account() {
+        let user_auth = create_address_auth_entry();
+        let relayer_auth = create_address_auth_entry();
+        let mut envelope = create_invoke_host_function_envelope(vec![user_auth, relayer_auth]);
+
+        let signed_user_auth = create_address_auth_entry();
+        let result = inject_auth_entries_into_envelope(&mut envelope, signed_user_auth);
+
+        assert!(result.is_ok());
+        let auth_entries = result.unwrap();
+        assert_eq!(auth_entries.len(), 2);
+
+        // Second entry should have SourceAccount credentials
+        match &auth_entries[1].credentials {
+            SorobanCredentials::SourceAccount => {} // expected
+            _ => panic!("Expected SourceAccount credentials for relayer auth entry"),
+        }
+    }
+
+    // ==================== build_simulation_envelope tests ====================
+
+    #[test]
+    fn test_build_simulation_envelope_v0_returns_error() {
+        let envelope = create_v0_envelope();
+        let auth_entries = vec![create_address_auth_entry()];
+
+        let result = build_simulation_envelope(&envelope, &auth_entries);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::ValidationError(msg) => {
+                assert!(msg.contains("Expected V1 transaction envelope"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_build_simulation_envelope_fee_bump_returns_error() {
+        let envelope = create_fee_bump_envelope();
+        let auth_entries = vec![create_address_auth_entry()];
+
+        let result = build_simulation_envelope(&envelope, &auth_entries);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::ValidationError(msg) => {
+                assert!(msg.contains("Expected V1 transaction envelope"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_build_simulation_envelope_no_operations_returns_error() {
+        let envelope = create_minimal_v1_envelope();
+        let auth_entries = vec![create_address_auth_entry()];
+
+        let result = build_simulation_envelope(&envelope, &auth_entries);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::ValidationError(msg) => {
+                assert!(msg.contains("Transaction has no operations"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_build_simulation_envelope_non_invoke_host_function_returns_error() {
+        use soroban_rs::xdr::{Asset, PaymentOp};
+
+        let payment_op = Operation {
+            source_account: None,
+            body: OperationBody::Payment(PaymentOp {
+                destination: MuxedAccount::Ed25519(Uint256([0u8; 32])),
+                asset: Asset::Native,
+                amount: 1000,
+            }),
+        };
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256([0u8; 32])),
+            fee: 100,
+            seq_num: SequenceNumber(0),
+            cond: Preconditions::None,
+            memo: Memo::None,
+            operations: vec![payment_op].try_into().unwrap(),
+            ext: TransactionExt::V0,
+        };
+
+        let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: VecM::default(),
+        });
+
+        let auth_entries = vec![create_address_auth_entry()];
+        let result = build_simulation_envelope(&envelope, &auth_entries);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::ValidationError(msg) => {
+                assert!(msg.contains("First operation is not InvokeHostFunction"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_build_simulation_envelope_success() {
+        let original_auth = create_address_auth_entry();
+        let envelope = create_invoke_host_function_envelope(vec![original_auth]);
+
+        let new_auth = create_source_account_auth_entry();
+        let result = build_simulation_envelope(&envelope, &vec![new_auth]);
+
+        assert!(result.is_ok());
+
+        // Verify the simulation envelope has the new auth entries
+        let sim_envelope = result.unwrap();
+        if let TransactionEnvelope::Tx(v1) = sim_envelope {
+            assert_eq!(v1.signatures.len(), 0); // Simulation envelope should have no signatures
+            assert_eq!(v1.tx.operations.len(), 1);
         } else {
             panic!("Expected Tx envelope");
+        }
+    }
+
+    #[test]
+    fn test_build_simulation_envelope_preserves_transaction_fields() {
+        let original_auth = create_address_auth_entry();
+        let mut envelope = create_invoke_host_function_envelope(vec![original_auth]);
+
+        // Modify some fields to verify they're preserved
+        if let TransactionEnvelope::Tx(ref mut v1) = envelope {
+            v1.tx.fee = 500;
+            v1.tx.seq_num = SequenceNumber(42);
+        }
+
+        let new_auth = create_source_account_auth_entry();
+        let result = build_simulation_envelope(&envelope, &vec![new_auth]);
+
+        assert!(result.is_ok());
+        let sim_envelope = result.unwrap();
+
+        if let TransactionEnvelope::Tx(v1) = sim_envelope {
+            assert_eq!(v1.tx.fee, 500);
+            assert_eq!(v1.tx.seq_num.0, 42);
+        } else {
+            panic!("Expected Tx envelope");
+        }
+    }
+}
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+    use crate::models::TransactionInput;
+    use crate::repositories::MockTransactionCounterTrait;
+    use crate::services::provider::MockStellarProviderTrait;
+    use soroban_rs::stellar_rpc_client::SimulateTransactionResponse;
+    use soroban_rs::xdr::{
+        ContractId, Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, Memo,
+        MuxedAccount, Operation, Preconditions, ScAddress, ScSymbol, ScVal, SequenceNumber,
+        SorobanAddressCredentials, SorobanAuthorizationEntry, SorobanAuthorizedFunction,
+        SorobanAuthorizedInvocation, SorobanCredentials, SorobanTransactionData, Transaction,
+        TransactionExt, TransactionV1Envelope, Uint256, VecM,
+    };
+    use std::future::ready;
+
+    fn create_gas_abstraction_envelope() -> TransactionEnvelope {
+        let user_auth = SorobanAuthorizationEntry {
+            credentials: SorobanCredentials::Address(SorobanAddressCredentials {
+                address: ScAddress::Contract(ContractId(Hash([1u8; 32]))),
+                nonce: 12345,
+                signature_expiration_ledger: 1000,
+                signature: ScVal::Void,
+            }),
+            root_invocation: SorobanAuthorizedInvocation {
+                function: SorobanAuthorizedFunction::ContractFn(InvokeContractArgs {
+                    contract_address: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
+                    function_name: ScSymbol("forward".try_into().unwrap()),
+                    args: VecM::default(),
+                }),
+                sub_invocations: VecM::default(),
+            },
+        };
+
+        let relayer_auth = SorobanAuthorizationEntry {
+            credentials: SorobanCredentials::Address(SorobanAddressCredentials {
+                address: ScAddress::Contract(ContractId(Hash([2u8; 32]))),
+                nonce: 67890,
+                signature_expiration_ledger: 1000,
+                signature: ScVal::Void,
+            }),
+            root_invocation: SorobanAuthorizedInvocation {
+                function: SorobanAuthorizedFunction::ContractFn(InvokeContractArgs {
+                    contract_address: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
+                    function_name: ScSymbol("collect".try_into().unwrap()),
+                    args: VecM::default(),
+                }),
+                sub_invocations: VecM::default(),
+            },
+        };
+
+        let invoke_op = InvokeHostFunctionOp {
+            host_function: HostFunction::InvokeContract(InvokeContractArgs {
+                contract_address: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
+                function_name: ScSymbol("forward".try_into().unwrap()),
+                args: VecM::default(),
+            }),
+            auth: vec![user_auth, relayer_auth].try_into().unwrap(),
+        };
+
+        let operation = Operation {
+            source_account: None,
+            body: OperationBody::InvokeHostFunction(invoke_op),
+        };
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256([0u8; 32])),
+            fee: 100,
+            seq_num: SequenceNumber(0),
+            cond: Preconditions::None,
+            memo: Memo::None,
+            operations: vec![operation].try_into().unwrap(),
+            ext: TransactionExt::V0,
+        };
+
+        TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: VecM::default(),
+        })
+    }
+
+    fn create_valid_soroban_tx_data_xdr() -> String {
+        use soroban_rs::xdr::SorobanTransactionDataExt;
+
+        let tx_data = SorobanTransactionData {
+            ext: SorobanTransactionDataExt::V0,
+            resources: soroban_rs::xdr::SorobanResources {
+                footprint: soroban_rs::xdr::LedgerFootprint {
+                    read_only: VecM::default(),
+                    read_write: VecM::default(),
+                },
+                instructions: 1000,
+                disk_read_bytes: 500,
+                write_bytes: 200,
+            },
+            resource_fee: 100,
+        };
+        tx_data.to_xdr_base64(Limits::none()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_process_soroban_gas_abstraction_invalid_input_type() {
+        let counter = MockTransactionCounterTrait::new();
+        let provider = MockStellarProviderTrait::new();
+
+        let stellar_data = StellarTransactionData {
+            source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            fee: Some(100),
+            sequence_number: None,
+            transaction_input: TransactionInput::Operations(vec![]), // Wrong type
+            memo: None,
+            valid_until: None,
+            signatures: vec![],
+            hash: None,
+            simulation_transaction_data: None,
+            signed_envelope_xdr: None,
+            transaction_result_xdr: None,
+        };
+
+        let result = process_soroban_gas_abstraction(
+            &counter,
+            "relayer-1",
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+            &provider,
+            stellar_data,
+        )
+        .await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::ValidationError(msg) => {
+                assert!(msg.contains("Expected SorobanGasAbstraction"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_soroban_gas_abstraction_invalid_xdr() {
+        let counter = MockTransactionCounterTrait::new();
+        let provider = MockStellarProviderTrait::new();
+
+        let stellar_data = StellarTransactionData {
+            source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            fee: Some(100),
+            sequence_number: None,
+            transaction_input: TransactionInput::SorobanGasAbstraction {
+                xdr: "invalid-xdr".to_string(),
+                signed_auth_entry: "also-invalid".to_string(),
+            },
+            memo: None,
+            valid_until: None,
+            signatures: vec![],
+            hash: None,
+            simulation_transaction_data: None,
+            signed_envelope_xdr: None,
+            transaction_result_xdr: None,
+        };
+
+        let result = process_soroban_gas_abstraction(
+            &counter,
+            "relayer-1",
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+            &provider,
+            stellar_data,
+        )
+        .await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::ValidationError(msg) => {
+                assert!(msg.contains("Failed to parse transaction XDR"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_soroban_gas_abstraction_invalid_auth_entry() {
+        let counter = MockTransactionCounterTrait::new();
+        let provider = MockStellarProviderTrait::new();
+
+        let envelope = create_gas_abstraction_envelope();
+        let xdr = envelope.to_xdr_base64(Limits::none()).unwrap();
+
+        let stellar_data = StellarTransactionData {
+            source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            fee: Some(100),
+            sequence_number: None,
+            transaction_input: TransactionInput::SorobanGasAbstraction {
+                xdr,
+                signed_auth_entry: "invalid-auth-entry".to_string(),
+            },
+            memo: None,
+            valid_until: None,
+            signatures: vec![],
+            hash: None,
+            simulation_transaction_data: None,
+            signed_envelope_xdr: None,
+            transaction_result_xdr: None,
+        };
+
+        let result = process_soroban_gas_abstraction(
+            &counter,
+            "relayer-1",
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+            &provider,
+            stellar_data,
+        )
+        .await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::ValidationError(msg) => {
+                assert!(
+                    msg.contains("Failed to deserialize") || msg.contains("XdrError"),
+                    "Unexpected error message: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected ValidationError, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_soroban_gas_abstraction_simulation_error() {
+        let mut counter = MockTransactionCounterTrait::new();
+        counter
+            .expect_get_and_increment()
+            .returning(|_, _| Box::pin(ready(Ok(42u64))));
+
+        let mut provider = MockStellarProviderTrait::new();
+        provider
+            .expect_simulate_transaction_envelope()
+            .returning(|_| {
+                Box::pin(ready(Ok(SimulateTransactionResponse {
+                    error: Some("Simulation failed: insufficient resources".to_string()),
+                    min_resource_fee: 0,
+                    transaction_data: String::new(),
+                    ..Default::default()
+                })))
+            });
+
+        let envelope = create_gas_abstraction_envelope();
+        let xdr = envelope.to_xdr_base64(Limits::none()).unwrap();
+
+        // Create a valid signed auth entry
+        let signed_auth = SorobanAuthorizationEntry {
+            credentials: SorobanCredentials::Address(SorobanAddressCredentials {
+                address: ScAddress::Contract(ContractId(Hash([1u8; 32]))),
+                nonce: 12345,
+                signature_expiration_ledger: 1000,
+                signature: ScVal::Void,
+            }),
+            root_invocation: SorobanAuthorizedInvocation {
+                function: SorobanAuthorizedFunction::ContractFn(InvokeContractArgs {
+                    contract_address: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
+                    function_name: ScSymbol("forward".try_into().unwrap()),
+                    args: VecM::default(),
+                }),
+                sub_invocations: VecM::default(),
+            },
+        };
+        let signed_auth_xdr = signed_auth.to_xdr_base64(Limits::none()).unwrap();
+
+        let stellar_data = StellarTransactionData {
+            source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            fee: Some(100),
+            sequence_number: None,
+            transaction_input: TransactionInput::SorobanGasAbstraction {
+                xdr,
+                signed_auth_entry: signed_auth_xdr,
+            },
+            memo: None,
+            valid_until: None,
+            signatures: vec![],
+            hash: None,
+            simulation_transaction_data: None,
+            signed_envelope_xdr: None,
+            transaction_result_xdr: None,
+        };
+
+        let result = process_soroban_gas_abstraction(
+            &counter,
+            "relayer-1",
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+            &provider,
+            stellar_data,
+        )
+        .await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::UnexpectedError(msg) => {
+                assert!(msg.contains("Simulation failed"));
+            }
+            other => panic!("Expected UnexpectedError, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_soroban_gas_abstraction_success() {
+        let mut counter = MockTransactionCounterTrait::new();
+        counter
+            .expect_get_and_increment()
+            .returning(|_, _| Box::pin(ready(Ok(42u64))));
+
+        let mut provider = MockStellarProviderTrait::new();
+        provider
+            .expect_simulate_transaction_envelope()
+            .returning(|_| {
+                Box::pin(ready(Ok(SimulateTransactionResponse {
+                    error: None,
+                    min_resource_fee: 1000,
+                    transaction_data: create_valid_soroban_tx_data_xdr(),
+                    ..Default::default()
+                })))
+            });
+
+        let envelope = create_gas_abstraction_envelope();
+        let xdr = envelope.to_xdr_base64(Limits::none()).unwrap();
+
+        let signed_auth = SorobanAuthorizationEntry {
+            credentials: SorobanCredentials::Address(SorobanAddressCredentials {
+                address: ScAddress::Contract(ContractId(Hash([1u8; 32]))),
+                nonce: 12345,
+                signature_expiration_ledger: 1000,
+                signature: ScVal::Void,
+            }),
+            root_invocation: SorobanAuthorizedInvocation {
+                function: SorobanAuthorizedFunction::ContractFn(InvokeContractArgs {
+                    contract_address: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
+                    function_name: ScSymbol("forward".try_into().unwrap()),
+                    args: VecM::default(),
+                }),
+                sub_invocations: VecM::default(),
+            },
+        };
+        let signed_auth_xdr = signed_auth.to_xdr_base64(Limits::none()).unwrap();
+
+        let stellar_data = StellarTransactionData {
+            source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            fee: Some(100),
+            sequence_number: None,
+            transaction_input: TransactionInput::SorobanGasAbstraction {
+                xdr,
+                signed_auth_entry: signed_auth_xdr,
+            },
+            memo: None,
+            valid_until: None,
+            signatures: vec![],
+            hash: None,
+            simulation_transaction_data: None,
+            signed_envelope_xdr: None,
+            transaction_result_xdr: None,
+        };
+
+        let result = process_soroban_gas_abstraction(
+            &counter,
+            "relayer-1",
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+            &provider,
+            stellar_data,
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let prepared = result.unwrap();
+
+        assert_eq!(prepared.sequence_number, Some(42));
+        match prepared.transaction_input {
+            TransactionInput::UnsignedXdr(_) => {} // Expected
+            _ => panic!("Expected UnsignedXdr transaction input"),
         }
     }
 }

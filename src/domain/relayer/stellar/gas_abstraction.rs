@@ -1151,6 +1151,7 @@ mod tests {
         },
     };
     use mockall::predicate::*;
+    use serial_test::serial;
     use soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse;
     use soroban_rs::stellar_rpc_client::LedgerEntryResult;
     use soroban_rs::xdr::{
@@ -2005,5 +2006,1430 @@ mod tests {
         )
         .await;
         assert!(result.is_err());
+    }
+
+    // ============================================================================
+    // Tests for detect_soroban_invoke_from_xdr
+    // ============================================================================
+
+    #[test]
+    fn test_detect_soroban_invoke_from_xdr_classic_transaction() {
+        // Classic payment transaction should return None
+        let xdr = create_test_transaction_xdr();
+        let result = detect_soroban_invoke_from_xdr(&xdr);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_detect_soroban_invoke_from_xdr_invalid_xdr() {
+        let result = detect_soroban_invoke_from_xdr("INVALID_XDR");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            RelayerError::ValidationError(_)
+        ));
+    }
+
+    #[test]
+    fn test_detect_soroban_invoke_from_xdr_with_soroban_transaction() {
+        use soroban_rs::xdr::{
+            ContractId, Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, Memo,
+            MuxedAccount, Operation, OperationBody, Preconditions, ScAddress, ScSymbol, ScVal,
+            SequenceNumber, Transaction, TransactionEnvelope, TransactionExt,
+            TransactionV1Envelope, Uint256, VecM,
+        };
+
+        // Create a Soroban InvokeHostFunction transaction
+        let contract_id = ContractId(Hash([1u8; 32]));
+        let invoke_args = InvokeContractArgs {
+            contract_address: ScAddress::Contract(contract_id),
+            function_name: ScSymbol("test_function".try_into().unwrap()),
+            args: vec![ScVal::Bool(true)].try_into().unwrap(),
+        };
+
+        let invoke_op = InvokeHostFunctionOp {
+            host_function: HostFunction::InvokeContract(invoke_args),
+            auth: VecM::default(),
+        };
+
+        let operation = Operation {
+            source_account: None,
+            body: OperationBody::InvokeHostFunction(invoke_op),
+        };
+
+        let source_pk = Ed25519PublicKey::from_string(
+            "GCZ54QGQCUZ6U5WJF4AG5JEZCUMYTS2F6JRLUS76XF2PQMEJ2E3JISI2",
+        )
+        .unwrap();
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            cond: Preconditions::None,
+            memo: Memo::None,
+            operations: vec![operation].try_into().unwrap(),
+            ext: TransactionExt::V0,
+        };
+
+        let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: VecM::default(),
+        });
+
+        let xdr = envelope.to_xdr_base64(Limits::none()).unwrap();
+        let result = detect_soroban_invoke_from_xdr(&xdr);
+        assert!(result.is_ok());
+
+        let soroban_info = result.unwrap();
+        assert!(soroban_info.is_some());
+
+        let info = soroban_info.unwrap();
+        assert_eq!(info.target_fn, "test_function");
+        assert_eq!(info.target_args.len(), 1);
+        // Verify contract address format (C...)
+        assert!(info.target_contract.starts_with('C'));
+    }
+
+    #[test]
+    fn test_detect_soroban_invoke_from_xdr_multiple_operations_error() {
+        use soroban_rs::xdr::{
+            ContractId, Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, Memo,
+            MuxedAccount, Operation, OperationBody, PaymentOp, Preconditions, ScAddress, ScSymbol,
+            SequenceNumber, Transaction, TransactionEnvelope, TransactionExt,
+            TransactionV1Envelope, Uint256, VecM,
+        };
+
+        // Create a transaction with InvokeHostFunction AND another operation (invalid for Soroban)
+        let contract_id = ContractId(Hash([1u8; 32]));
+        let invoke_args = InvokeContractArgs {
+            contract_address: ScAddress::Contract(contract_id),
+            function_name: ScSymbol("test".try_into().unwrap()),
+            args: VecM::default(),
+        };
+
+        let invoke_op = InvokeHostFunctionOp {
+            host_function: HostFunction::InvokeContract(invoke_args),
+            auth: VecM::default(),
+        };
+
+        let source_pk = Ed25519PublicKey::from_string(
+            "GCZ54QGQCUZ6U5WJF4AG5JEZCUMYTS2F6JRLUS76XF2PQMEJ2E3JISI2",
+        )
+        .unwrap();
+        let dest_pk = Ed25519PublicKey::from_string(
+            "GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ",
+        )
+        .unwrap();
+
+        let payment_op = PaymentOp {
+            destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
+            asset: soroban_rs::xdr::Asset::Native,
+            amount: 1000000,
+        };
+
+        let operations: VecM<Operation, 100> = vec![
+            Operation {
+                source_account: None,
+                body: OperationBody::InvokeHostFunction(invoke_op),
+            },
+            Operation {
+                source_account: None,
+                body: OperationBody::Payment(payment_op),
+            },
+        ]
+        .try_into()
+        .unwrap();
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            cond: Preconditions::None,
+            memo: Memo::None,
+            operations,
+            ext: TransactionExt::V0,
+        };
+
+        let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: VecM::default(),
+        });
+
+        let xdr = envelope.to_xdr_base64(Limits::none()).unwrap();
+        let result = detect_soroban_invoke_from_xdr(&xdr);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, RelayerError::ValidationError(_)));
+        if let RelayerError::ValidationError(msg) = err {
+            assert!(msg.contains("exactly one operation"));
+        }
+    }
+
+    #[test]
+    fn test_detect_soroban_invoke_from_xdr_v0_envelope() {
+        use soroban_rs::xdr::{
+            Memo, Operation, OperationBody, PaymentOp, SequenceNumber, TransactionEnvelope,
+            TransactionV0, TransactionV0Envelope, TransactionV0Ext, Uint256, VecM,
+        };
+
+        // Create a V0 envelope (legacy format)
+        let source_pk = Ed25519PublicKey::from_string(
+            "GCZ54QGQCUZ6U5WJF4AG5JEZCUMYTS2F6JRLUS76XF2PQMEJ2E3JISI2",
+        )
+        .unwrap();
+        let dest_pk = Ed25519PublicKey::from_string(
+            "GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ",
+        )
+        .unwrap();
+
+        let payment_op = PaymentOp {
+            destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
+            asset: soroban_rs::xdr::Asset::Native,
+            amount: 1000000,
+        };
+
+        let tx = TransactionV0 {
+            source_account_ed25519: Uint256(source_pk.0),
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            time_bounds: None,
+            memo: Memo::None,
+            operations: vec![Operation {
+                source_account: None,
+                body: OperationBody::Payment(payment_op),
+            }]
+            .try_into()
+            .unwrap(),
+            ext: TransactionV0Ext::V0,
+        };
+
+        let envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
+            tx,
+            signatures: VecM::default(),
+        });
+
+        let xdr = envelope.to_xdr_base64(Limits::none()).unwrap();
+        let result = detect_soroban_invoke_from_xdr(&xdr);
+
+        // V0 envelope with classic operation should return None
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_detect_soroban_invoke_from_xdr_fee_bump_envelope() {
+        use soroban_rs::xdr::{
+            FeeBumpTransaction, FeeBumpTransactionEnvelope, FeeBumpTransactionExt,
+            FeeBumpTransactionInnerTx, Memo, MuxedAccount, Operation, OperationBody, PaymentOp,
+            Preconditions, SequenceNumber, Transaction, TransactionEnvelope, TransactionExt,
+            TransactionV1Envelope, Uint256, VecM,
+        };
+
+        let source_pk = Ed25519PublicKey::from_string(
+            "GCZ54QGQCUZ6U5WJF4AG5JEZCUMYTS2F6JRLUS76XF2PQMEJ2E3JISI2",
+        )
+        .unwrap();
+        let dest_pk = Ed25519PublicKey::from_string(
+            "GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ",
+        )
+        .unwrap();
+
+        let payment_op = PaymentOp {
+            destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
+            asset: soroban_rs::xdr::Asset::Native,
+            amount: 1000000,
+        };
+
+        let inner_tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            cond: Preconditions::None,
+            memo: Memo::None,
+            operations: vec![Operation {
+                source_account: None,
+                body: OperationBody::Payment(payment_op),
+            }]
+            .try_into()
+            .unwrap(),
+            ext: TransactionExt::V0,
+        };
+
+        let inner_envelope = TransactionV1Envelope {
+            tx: inner_tx,
+            signatures: VecM::default(),
+        };
+
+        let fee_bump_tx = FeeBumpTransaction {
+            fee_source: MuxedAccount::Ed25519(Uint256(source_pk.0)),
+            fee: 200,
+            inner_tx: FeeBumpTransactionInnerTx::Tx(inner_envelope),
+            ext: FeeBumpTransactionExt::V0,
+        };
+
+        let envelope = TransactionEnvelope::TxFeeBump(FeeBumpTransactionEnvelope {
+            tx: fee_bump_tx,
+            signatures: VecM::default(),
+        });
+
+        let xdr = envelope.to_xdr_base64(Limits::none()).unwrap();
+        let result = detect_soroban_invoke_from_xdr(&xdr);
+
+        // Fee bump with classic operation should return None
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_detect_soroban_invoke_non_contract_address_error() {
+        use soroban_rs::xdr::{
+            HostFunction, InvokeContractArgs, InvokeHostFunctionOp, Memo, MuxedAccount, Operation,
+            OperationBody, Preconditions, ScAddress, ScSymbol, SequenceNumber, Transaction,
+            TransactionEnvelope, TransactionExt, TransactionV1Envelope, Uint256, VecM,
+        };
+
+        // Create a Soroban transaction with account address instead of contract address
+        let source_pk = Ed25519PublicKey::from_string(
+            "GCZ54QGQCUZ6U5WJF4AG5JEZCUMYTS2F6JRLUS76XF2PQMEJ2E3JISI2",
+        )
+        .unwrap();
+
+        let invoke_args = InvokeContractArgs {
+            contract_address: ScAddress::Account(AccountId(PublicKey::PublicKeyTypeEd25519(
+                Uint256(source_pk.0),
+            ))),
+            function_name: ScSymbol("test".try_into().unwrap()),
+            args: VecM::default(),
+        };
+
+        let invoke_op = InvokeHostFunctionOp {
+            host_function: HostFunction::InvokeContract(invoke_args),
+            auth: VecM::default(),
+        };
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            cond: Preconditions::None,
+            memo: Memo::None,
+            operations: vec![Operation {
+                source_account: None,
+                body: OperationBody::InvokeHostFunction(invoke_op),
+            }]
+            .try_into()
+            .unwrap(),
+            ext: TransactionExt::V0,
+        };
+
+        let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: VecM::default(),
+        });
+
+        let xdr = envelope.to_xdr_base64(Limits::none()).unwrap();
+        let result = detect_soroban_invoke_from_xdr(&xdr);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, RelayerError::ValidationError(_)));
+        if let RelayerError::ValidationError(msg) = err {
+            assert!(msg.contains("contract address"));
+        }
+    }
+
+    // ============================================================================
+    // Tests for apply_max_fee_slippage
+    // ============================================================================
+
+    #[test]
+    fn test_apply_max_fee_slippage_basic() {
+        // 5% slippage on 10000 should give 10500
+        let result = apply_max_fee_slippage(10000);
+        assert_eq!(result, 10500);
+    }
+
+    #[test]
+    fn test_apply_max_fee_slippage_zero() {
+        let result = apply_max_fee_slippage(0);
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn test_apply_max_fee_slippage_large_value() {
+        // Test with a large value to ensure no overflow
+        let large_fee: u64 = 1_000_000_000_000;
+        let result = apply_max_fee_slippage(large_fee);
+        // 5% of 1 trillion = 50 billion, so result = 1.05 trillion
+        assert_eq!(result, 1_050_000_000_000i128);
+    }
+
+    #[test]
+    fn test_apply_max_fee_slippage_small_value() {
+        // Small value: 100 * 10500 / 10000 = 105
+        let result = apply_max_fee_slippage(100);
+        assert_eq!(result, 105);
+    }
+
+    // ============================================================================
+    // Tests for calculate_total_soroban_fee
+    // ============================================================================
+
+    #[test]
+    fn test_calculate_total_soroban_fee_success() {
+        let sim_response = soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
+            error: None,
+            transaction_data: "".to_string(),
+            min_resource_fee: 50000,
+            ..Default::default()
+        };
+
+        let result = calculate_total_soroban_fee(&sim_response, 1);
+        assert!(result.is_ok());
+        // inclusion_fee (100) + resource_fee (50000) = 50100
+        let fee = result.unwrap();
+        assert_eq!(fee, 50100);
+    }
+
+    #[test]
+    fn test_calculate_total_soroban_fee_with_multiple_operations() {
+        let sim_response = soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
+            error: None,
+            transaction_data: "".to_string(),
+            min_resource_fee: 50000,
+            ..Default::default()
+        };
+
+        let result = calculate_total_soroban_fee(&sim_response, 3);
+        assert!(result.is_ok());
+        // inclusion_fee (100 * 3) + resource_fee (50000) = 50300
+        let fee = result.unwrap();
+        assert_eq!(fee, 50300);
+    }
+
+    #[test]
+    fn test_calculate_total_soroban_fee_simulation_error() {
+        let sim_response = soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
+            error: Some("Simulation failed: insufficient funds".to_string()),
+            transaction_data: "".to_string(),
+            min_resource_fee: 0,
+            ..Default::default()
+        };
+
+        let result = calculate_total_soroban_fee(&sim_response, 1);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, RelayerError::ValidationError(_)));
+        if let RelayerError::ValidationError(msg) = err {
+            assert!(msg.contains("Simulation failed"));
+        }
+    }
+
+    #[test]
+    fn test_calculate_total_soroban_fee_minimum_fee() {
+        // When calculated fee is less than minimum, should return minimum
+        let sim_response = soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
+            error: None,
+            transaction_data: "".to_string(),
+            min_resource_fee: 0, // Very low resource fee
+            ..Default::default()
+        };
+
+        let result = calculate_total_soroban_fee(&sim_response, 1);
+        assert!(result.is_ok());
+        // Should be at least STELLAR_DEFAULT_TRANSACTION_FEE (100)
+        let fee = result.unwrap();
+        assert!(fee >= STELLAR_DEFAULT_TRANSACTION_FEE);
+    }
+
+    // ============================================================================
+    // Tests for build_soroban_transaction_envelope
+    // ============================================================================
+
+    #[test]
+    fn test_build_soroban_transaction_envelope_success() {
+        use soroban_rs::xdr::{
+            ContractId, Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, Operation,
+            OperationBody, ScAddress, ScSymbol, VecM,
+        };
+
+        let contract_id = ContractId(Hash([1u8; 32]));
+        let invoke_args = InvokeContractArgs {
+            contract_address: ScAddress::Contract(contract_id),
+            function_name: ScSymbol("test".try_into().unwrap()),
+            args: VecM::default(),
+        };
+
+        let invoke_op = InvokeHostFunctionOp {
+            host_function: HostFunction::InvokeContract(invoke_args),
+            auth: VecM::default(),
+        };
+
+        let operation = Operation {
+            source_account: None,
+            body: OperationBody::InvokeHostFunction(invoke_op),
+        };
+
+        let result = build_soroban_transaction_envelope(TEST_PK, operation.clone(), 100);
+        assert!(result.is_ok());
+
+        let envelope = result.unwrap();
+        if let TransactionEnvelope::Tx(tx_env) = envelope {
+            assert_eq!(tx_env.tx.fee, 100);
+            assert_eq!(tx_env.tx.seq_num.0, 0); // Placeholder sequence
+            assert_eq!(tx_env.tx.operations.len(), 1);
+        } else {
+            panic!("Expected Tx envelope");
+        }
+    }
+
+    #[test]
+    fn test_build_soroban_transaction_envelope_invalid_source() {
+        use soroban_rs::xdr::{
+            ContractId, Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, Operation,
+            OperationBody, ScAddress, ScSymbol, VecM,
+        };
+
+        let contract_id = ContractId(Hash([1u8; 32]));
+        let invoke_args = InvokeContractArgs {
+            contract_address: ScAddress::Contract(contract_id),
+            function_name: ScSymbol("test".try_into().unwrap()),
+            args: VecM::default(),
+        };
+
+        let invoke_op = InvokeHostFunctionOp {
+            host_function: HostFunction::InvokeContract(invoke_args),
+            auth: VecM::default(),
+        };
+
+        let operation = Operation {
+            source_account: None,
+            body: OperationBody::InvokeHostFunction(invoke_op),
+        };
+
+        let result = build_soroban_transaction_envelope("INVALID_ADDRESS", operation, 100);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            RelayerError::ValidationError(_)
+        ));
+    }
+
+    // ============================================================================
+    // Tests for get_expiration_ledger
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_get_expiration_ledger_success() {
+        let mut provider = MockStellarProviderTrait::new();
+        provider.expect_get_latest_ledger().returning(|| {
+            Box::pin(ready(Ok(
+                soroban_rs::stellar_rpc_client::GetLatestLedgerResponse {
+                    id: "test".to_string(),
+                    protocol_version: 20,
+                    sequence: 1000,
+                },
+            )))
+        });
+
+        // 300 seconds / 5 seconds per ledger = 60 ledgers
+        let result = get_expiration_ledger(&provider, 300).await;
+        assert!(result.is_ok());
+        let expiration = result.unwrap();
+        assert_eq!(expiration, 1060); // 1000 + 60
+    }
+
+    #[tokio::test]
+    async fn test_get_expiration_ledger_zero_seconds() {
+        let mut provider = MockStellarProviderTrait::new();
+        provider.expect_get_latest_ledger().returning(|| {
+            Box::pin(ready(Ok(
+                soroban_rs::stellar_rpc_client::GetLatestLedgerResponse {
+                    id: "test".to_string(),
+                    protocol_version: 20,
+                    sequence: 1000,
+                },
+            )))
+        });
+
+        // 0 seconds should still add at least 1 ledger
+        let result = get_expiration_ledger(&provider, 0).await;
+        assert!(result.is_ok());
+        let expiration = result.unwrap();
+        assert_eq!(expiration, 1001); // 1000 + 1 (minimum)
+    }
+
+    // ============================================================================
+    // Tests for add_payment_operation_to_envelope
+    // ============================================================================
+
+    #[test]
+    fn test_add_payment_operation_to_envelope_classic() {
+        let envelope = create_test_envelope_for_payment();
+        let fee_quote = FeeQuote {
+            fee_in_token: 1000000,
+            fee_in_token_ui: "1.0".to_string(),
+            fee_in_stroops: 10000,
+            conversion_rate: 100.0,
+        };
+
+        let result = add_payment_operation_to_envelope(envelope, &fee_quote, USDC_ASSET, TEST_PK);
+        assert!(result.is_ok());
+
+        let updated_envelope = result.unwrap();
+        // Classic transaction should have 2 operations now (original + payment)
+        if let TransactionEnvelope::Tx(tx_env) = updated_envelope {
+            assert_eq!(tx_env.tx.operations.len(), 2);
+        }
+    }
+
+    #[test]
+    fn test_add_payment_operation_to_envelope_soroban_no_op_added() {
+        use soroban_rs::xdr::{
+            ContractId, Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, Memo,
+            Operation, OperationBody, Preconditions, ScAddress, ScSymbol, SequenceNumber,
+            Transaction, TransactionEnvelope, TransactionExt, TransactionV1Envelope, Uint256, VecM,
+        };
+
+        // Create a Soroban transaction (InvokeHostFunction)
+        let source_pk = Ed25519PublicKey::from_string(
+            "GCZ54QGQCUZ6U5WJF4AG5JEZCUMYTS2F6JRLUS76XF2PQMEJ2E3JISI2",
+        )
+        .unwrap();
+
+        let contract_id = ContractId(Hash([1u8; 32]));
+        let invoke_args = InvokeContractArgs {
+            contract_address: ScAddress::Contract(contract_id),
+            function_name: ScSymbol("test".try_into().unwrap()),
+            args: VecM::default(),
+        };
+
+        let invoke_op = InvokeHostFunctionOp {
+            host_function: HostFunction::InvokeContract(invoke_args),
+            auth: VecM::default(),
+        };
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            cond: Preconditions::None,
+            memo: Memo::None,
+            operations: vec![Operation {
+                source_account: None,
+                body: OperationBody::InvokeHostFunction(invoke_op),
+            }]
+            .try_into()
+            .unwrap(),
+            ext: TransactionExt::V0,
+        };
+
+        let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: VecM::default(),
+        });
+
+        let fee_quote = FeeQuote {
+            fee_in_token: 1000000,
+            fee_in_token_ui: "1.0".to_string(),
+            fee_in_stroops: 10000,
+            conversion_rate: 100.0,
+        };
+
+        let result = add_payment_operation_to_envelope(envelope, &fee_quote, USDC_ASSET, TEST_PK);
+        assert!(result.is_ok());
+
+        // Soroban transactions should NOT have payment operation added
+        let updated_envelope = result.unwrap();
+        if let TransactionEnvelope::Tx(tx_env) = updated_envelope {
+            assert_eq!(tx_env.tx.operations.len(), 1); // Still only 1 operation
+        }
+    }
+
+    /// Helper to create a test envelope for payment tests
+    fn create_test_envelope_for_payment() -> TransactionEnvelope {
+        let source_pk = Ed25519PublicKey::from_string(
+            "GCZ54QGQCUZ6U5WJF4AG5JEZCUMYTS2F6JRLUS76XF2PQMEJ2E3JISI2",
+        )
+        .unwrap();
+        let dest_pk = Ed25519PublicKey::from_string(
+            "GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ",
+        )
+        .unwrap();
+
+        let payment_op = PaymentOp {
+            destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
+            asset: soroban_rs::xdr::Asset::Native,
+            amount: 1000000,
+        };
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            cond: Preconditions::None,
+            memo: soroban_rs::xdr::Memo::None,
+            operations: vec![Operation {
+                source_account: None,
+                body: OperationBody::Payment(payment_op),
+            }]
+            .try_into()
+            .unwrap(),
+            ext: TransactionExt::V0,
+        };
+
+        TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: VecM::default(),
+        })
+    }
+
+    // ============================================================================
+    // Tests for add_fee_payment_operation
+    // ============================================================================
+
+    #[test]
+    fn test_add_fee_payment_operation_success() {
+        let mut envelope = create_test_envelope_for_payment();
+        let result = add_fee_payment_operation(&mut envelope, USDC_ASSET, 1000000, TEST_PK);
+        assert!(result.is_ok());
+
+        // Verify operation was added
+        if let TransactionEnvelope::Tx(tx_env) = envelope {
+            assert_eq!(tx_env.tx.operations.len(), 2);
+        }
+    }
+
+    #[test]
+    fn test_add_fee_payment_operation_native_asset() {
+        let mut envelope = create_test_envelope_for_payment();
+        let result = add_fee_payment_operation(&mut envelope, "native", 1000000, TEST_PK);
+        assert!(result.is_ok());
+    }
+
+    // ============================================================================
+    // Tests for SorobanInvokeInfo
+    // ============================================================================
+
+    #[test]
+    fn test_soroban_invoke_info_debug_clone() {
+        use soroban_rs::xdr::ScVal;
+
+        let info = SorobanInvokeInfo {
+            target_contract: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(),
+            target_fn: "transfer".to_string(),
+            target_args: vec![ScVal::Bool(true)],
+        };
+
+        // Test Debug trait
+        let debug_str = format!("{:?}", info);
+        assert!(debug_str.contains("SorobanInvokeInfo"));
+        assert!(debug_str.contains("transfer"));
+
+        // Test Clone trait
+        let cloned = info.clone();
+        assert_eq!(cloned.target_contract, info.target_contract);
+        assert_eq!(cloned.target_fn, info.target_fn);
+        assert_eq!(cloned.target_args.len(), info.target_args.len());
+    }
+
+    // ============================================================================
+    // Tests for fee payment strategy validation
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_build_sponsored_transaction_non_user_fee_strategy() {
+        // Create relayer with Relayer fee payment strategy (not User)
+        let mut policy = RelayerStellarPolicy::default();
+        policy.fee_payment_strategy = Some(crate::models::StellarFeePaymentStrategy::Relayer);
+        policy.allowed_tokens = Some(vec![crate::models::StellarAllowedTokensPolicy {
+            asset: USDC_ASSET.to_string(),
+            metadata: None,
+            max_allowed_fee: None,
+            swap_config: None,
+        }]);
+
+        let relayer_model = RelayerRepoModel {
+            id: "test-relayer-id".to_string(),
+            name: "Test Relayer".to_string(),
+            network: "testnet".to_string(),
+            paused: false,
+            network_type: NetworkType::Stellar,
+            signer_id: "signer-id".to_string(),
+            policies: RelayerNetworkPolicy::Stellar(policy),
+            address: TEST_PK.to_string(),
+            notification_id: Some("notification-id".to_string()),
+            system_disabled: false,
+            custom_rpc_urls: None,
+            ..Default::default()
+        };
+
+        let provider = MockStellarProviderTrait::new();
+        let dex_service = create_mock_dex_service();
+        let relayer = create_test_relayer_instance(relayer_model, provider, dex_service).await;
+
+        let transaction_xdr = create_test_transaction_xdr();
+        let request = SponsoredTransactionBuildRequest::Stellar(
+            crate::models::StellarPrepareTransactionRequestParams {
+                transaction_xdr: Some(transaction_xdr),
+                operations: None,
+                source_account: None,
+                fee_token: USDC_ASSET.to_string(),
+            },
+        );
+
+        let result = relayer.build_sponsored_transaction(request).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, RelayerError::ValidationError(_)));
+        if let RelayerError::ValidationError(msg) = err {
+            assert!(msg.contains("fee_payment_strategy: User"));
+        }
+    }
+
+    // ============================================================================
+    // Tests for quote_soroban_from_xdr (via quote_sponsored_transaction)
+    // ============================================================================
+
+    /// Helper function to create a valid SorobanTransactionData XDR for mocking simulation responses
+    fn create_valid_soroban_transaction_data_xdr() -> String {
+        use soroban_rs::xdr::{
+            LedgerFootprint, SorobanResources, SorobanTransactionData, SorobanTransactionDataExt,
+        };
+
+        let soroban_data = SorobanTransactionData {
+            ext: SorobanTransactionDataExt::V0,
+            resources: SorobanResources {
+                footprint: LedgerFootprint {
+                    read_only: VecM::default(),
+                    read_write: VecM::default(),
+                },
+                instructions: 1000000,
+                disk_read_bytes: 10000,
+                write_bytes: 1000,
+            },
+            resource_fee: 50000,
+        };
+
+        soroban_data.to_xdr_base64(Limits::none()).unwrap()
+    }
+
+    /// Helper function to create a Soroban InvokeHostFunction transaction XDR
+    fn create_test_soroban_transaction_xdr() -> String {
+        use soroban_rs::xdr::{
+            ContractId, Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, Memo,
+            ScAddress, ScSymbol, ScVal,
+        };
+
+        let source_pk = Ed25519PublicKey::from_string(
+            "GCZ54QGQCUZ6U5WJF4AG5JEZCUMYTS2F6JRLUS76XF2PQMEJ2E3JISI2",
+        )
+        .unwrap();
+
+        // Create a Soroban contract call operation
+        let contract_id = ContractId(Hash([1u8; 32]));
+        let invoke_args = InvokeContractArgs {
+            contract_address: ScAddress::Contract(contract_id),
+            function_name: ScSymbol("transfer".try_into().unwrap()),
+            args: vec![ScVal::Bool(true)].try_into().unwrap(),
+        };
+
+        let invoke_op = InvokeHostFunctionOp {
+            host_function: HostFunction::InvokeContract(invoke_args),
+            auth: VecM::default(),
+        };
+
+        let operation = Operation {
+            source_account: None,
+            body: OperationBody::InvokeHostFunction(invoke_op),
+        };
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            cond: Preconditions::None,
+            memo: Memo::None,
+            operations: vec![operation].try_into().unwrap(),
+            ext: TransactionExt::V0,
+        };
+
+        let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: VecM::default(),
+        });
+
+        envelope.to_xdr_base64(Limits::none()).unwrap()
+    }
+
+    /// Helper function to create a relayer with Soroban token support
+    fn create_test_relayer_with_soroban_token() -> RelayerRepoModel {
+        let mut policy = RelayerStellarPolicy::default();
+        policy.fee_payment_strategy = Some(crate::models::StellarFeePaymentStrategy::User);
+        // Use a Soroban contract address (C...) as the allowed token
+        policy.allowed_tokens = Some(vec![crate::models::StellarAllowedTokensPolicy {
+            asset: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(),
+            metadata: None,
+            max_allowed_fee: None,
+            swap_config: None,
+        }]);
+
+        RelayerRepoModel {
+            id: "test-relayer-id".to_string(),
+            name: "Test Relayer".to_string(),
+            network: "testnet".to_string(),
+            paused: false,
+            network_type: NetworkType::Stellar,
+            signer_id: "signer-id".to_string(),
+            policies: RelayerNetworkPolicy::Stellar(policy),
+            address: TEST_PK.to_string(),
+            notification_id: Some("notification-id".to_string()),
+            system_disabled: false,
+            custom_rpc_urls: None,
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_quote_soroban_from_xdr_success() {
+        // Set required env var for FeeForwarder
+        std::env::set_var(
+            "STELLAR_FEE_FORWARDER_ADDRESS",
+            "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+        );
+
+        let relayer_model = create_test_relayer_with_soroban_token();
+        let mut provider = MockStellarProviderTrait::new();
+
+        // Mock get_latest_ledger for expiration calculation
+        provider.expect_get_latest_ledger().returning(|| {
+            Box::pin(ready(Ok(
+                soroban_rs::stellar_rpc_client::GetLatestLedgerResponse {
+                    id: "test".to_string(),
+                    protocol_version: 20,
+                    sequence: 1000,
+                },
+            )))
+        });
+
+        // Mock simulate_transaction_envelope for Soroban fee estimation
+        provider
+            .expect_simulate_transaction_envelope()
+            .returning(|_| {
+                Box::pin(ready(Ok(
+                    soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
+                        min_resource_fee: 50000,
+                        transaction_data: "AAAAAQAAAAAAAAACAAAAAAAAAAAAAAAAAAAABgAAAAEAAAAGAAAAAG0JZTO9fU6p3NeJp5w3TpKhZmx6p1pR7mq9wFwCnEIuAAAAFAAAAAEAAAAAAAAAB8NVb2IAAAH0AAAAAQAAAAAAABfAAAAAAAAAAPUAAAAAAAAENgAAAAA=".to_string(),
+                        ..Default::default()
+                    },
+                )))
+            });
+
+        // Mock call_contract for Soroban token balance check (balance function)
+        provider.expect_call_contract().returning(|_, _, _| {
+            use soroban_rs::xdr::Int128Parts;
+            // Return a balance of 10_000_000 (10 tokens with 6 decimals)
+            Box::pin(ready(Ok(ScVal::I128(Int128Parts {
+                hi: 0,
+                lo: 10_000_000,
+            }))))
+        });
+
+        let mut dex_service = MockStellarDexServiceTrait::new();
+        dex_service.expect_supported_asset_types().returning(|| {
+            std::collections::HashSet::from([AssetType::Native, AssetType::Contract])
+        });
+
+        // Mock get_xlm_to_token_quote for fee conversion
+        dex_service
+            .expect_get_xlm_to_token_quote()
+            .returning(|_, _, _, _| {
+                Box::pin(ready(Ok(
+                    crate::services::stellar_dex::StellarQuoteResponse {
+                        input_asset: "native".to_string(),
+                        output_asset: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
+                            .to_string(),
+                        in_amount: 50100,    // fee in stroops
+                        out_amount: 1500000, // fee in token
+                        price_impact_pct: 0.0,
+                        slippage_bps: 100,
+                        path: None,
+                    },
+                )))
+            });
+
+        let dex_service = Arc::new(dex_service);
+        let relayer = create_test_relayer_instance(relayer_model, provider, dex_service).await;
+
+        let transaction_xdr = create_test_soroban_transaction_xdr();
+        let request = SponsoredTransactionQuoteRequest::Stellar(
+            crate::models::StellarFeeEstimateRequestParams {
+                transaction_xdr: Some(transaction_xdr),
+                operations: None,
+                source_account: None,
+                fee_token: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(),
+            },
+        );
+
+        let result = relayer.quote_sponsored_transaction(request).await;
+        if let Err(e) = &result {
+            eprintln!("Soroban quote error: {:?}", e);
+        }
+        assert!(result.is_ok());
+
+        if let SponsoredTransactionQuoteResponse::Stellar(quote) = result.unwrap() {
+            assert_eq!(quote.fee_in_token, "1500000");
+            assert!(!quote.fee_in_token_ui.is_empty());
+            assert!(!quote.conversion_rate.is_empty());
+        } else {
+            panic!("Expected Stellar quote response");
+        }
+
+        // Clean up env var
+        std::env::remove_var("STELLAR_FEE_FORWARDER_ADDRESS");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_quote_soroban_from_xdr_missing_fee_forwarder() {
+        // Ensure env var is NOT set
+        std::env::remove_var("STELLAR_FEE_FORWARDER_ADDRESS");
+
+        let relayer_model = create_test_relayer_with_soroban_token();
+        let provider = MockStellarProviderTrait::new();
+
+        let mut dex_service = MockStellarDexServiceTrait::new();
+        dex_service.expect_supported_asset_types().returning(|| {
+            std::collections::HashSet::from([AssetType::Native, AssetType::Contract])
+        });
+
+        let dex_service = Arc::new(dex_service);
+        let relayer = create_test_relayer_instance(relayer_model, provider, dex_service).await;
+
+        let transaction_xdr = create_test_soroban_transaction_xdr();
+        let request = SponsoredTransactionQuoteRequest::Stellar(
+            crate::models::StellarFeeEstimateRequestParams {
+                transaction_xdr: Some(transaction_xdr),
+                operations: None,
+                source_account: None,
+                fee_token: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(),
+            },
+        );
+
+        let result = relayer.quote_sponsored_transaction(request).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, RelayerError::ValidationError(_)));
+        if let RelayerError::ValidationError(msg) = err {
+            assert!(msg.contains("STELLAR_FEE_FORWARDER_ADDRESS"));
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_quote_soroban_from_xdr_invalid_fee_token_format() {
+        // Set required env var for FeeForwarder
+        std::env::set_var(
+            "STELLAR_FEE_FORWARDER_ADDRESS",
+            "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+        );
+
+        // Create relayer that allows both classic and Soroban tokens
+        let mut policy = RelayerStellarPolicy::default();
+        policy.fee_payment_strategy = Some(crate::models::StellarFeePaymentStrategy::User);
+        policy.allowed_tokens = Some(vec![
+            crate::models::StellarAllowedTokensPolicy {
+                asset: USDC_ASSET.to_string(), // Classic asset
+                metadata: None,
+                max_allowed_fee: None,
+                swap_config: None,
+            },
+            crate::models::StellarAllowedTokensPolicy {
+                asset: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(),
+                metadata: None,
+                max_allowed_fee: None,
+                swap_config: None,
+            },
+        ]);
+
+        let relayer_model = RelayerRepoModel {
+            id: "test-relayer-id".to_string(),
+            name: "Test Relayer".to_string(),
+            network: "testnet".to_string(),
+            paused: false,
+            network_type: NetworkType::Stellar,
+            signer_id: "signer-id".to_string(),
+            policies: RelayerNetworkPolicy::Stellar(policy),
+            address: TEST_PK.to_string(),
+            notification_id: Some("notification-id".to_string()),
+            system_disabled: false,
+            custom_rpc_urls: None,
+            ..Default::default()
+        };
+
+        let provider = MockStellarProviderTrait::new();
+
+        let mut dex_service = MockStellarDexServiceTrait::new();
+        dex_service
+            .expect_supported_asset_types()
+            .returning(|| std::collections::HashSet::from([AssetType::Native, AssetType::Classic]));
+
+        let dex_service = Arc::new(dex_service);
+        let relayer = create_test_relayer_instance(relayer_model, provider, dex_service).await;
+
+        // Use Soroban XDR but with classic asset as fee_token (invalid for Soroban path)
+        let transaction_xdr = create_test_soroban_transaction_xdr();
+        let request = SponsoredTransactionQuoteRequest::Stellar(
+            crate::models::StellarFeeEstimateRequestParams {
+                transaction_xdr: Some(transaction_xdr),
+                operations: None,
+                source_account: None,
+                fee_token: USDC_ASSET.to_string(), // Classic asset, not valid C... format
+            },
+        );
+
+        let result = relayer.quote_sponsored_transaction(request).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, RelayerError::ValidationError(_)));
+        if let RelayerError::ValidationError(msg) = err {
+            assert!(msg.contains("Soroban contract address"));
+        }
+
+        // Clean up env var
+        std::env::remove_var("STELLAR_FEE_FORWARDER_ADDRESS");
+    }
+
+    // ============================================================================
+    // Tests for build_soroban_sponsored (via build_sponsored_transaction)
+    // ============================================================================
+
+    #[tokio::test]
+    #[serial]
+    async fn test_build_soroban_sponsored_success() {
+        // Set required env var for FeeForwarder
+        std::env::set_var(
+            "STELLAR_FEE_FORWARDER_ADDRESS",
+            "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+        );
+
+        let relayer_model = create_test_relayer_with_soroban_token();
+        let mut provider = MockStellarProviderTrait::new();
+
+        // Mock get_latest_ledger for expiration calculation (called twice - for simulation and for valid_until)
+        provider.expect_get_latest_ledger().returning(|| {
+            Box::pin(ready(Ok(
+                soroban_rs::stellar_rpc_client::GetLatestLedgerResponse {
+                    id: "test".to_string(),
+                    protocol_version: 20,
+                    sequence: 1000,
+                },
+            )))
+        });
+
+        // Mock simulate_transaction_envelope for Soroban fee estimation
+        let valid_tx_data = create_valid_soroban_transaction_data_xdr();
+        provider
+            .expect_simulate_transaction_envelope()
+            .returning(move |_| {
+                let tx_data = valid_tx_data.clone();
+                Box::pin(ready(Ok(
+                    soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
+                        min_resource_fee: 50000,
+                        transaction_data: tx_data,
+                        ..Default::default()
+                    },
+                )))
+            });
+
+        // Mock call_contract for Soroban token balance check
+        provider.expect_call_contract().returning(|_, _, _| {
+            use soroban_rs::xdr::Int128Parts;
+            // Return a balance of 10_000_000 (sufficient for fee)
+            Box::pin(ready(Ok(ScVal::I128(Int128Parts {
+                hi: 0,
+                lo: 10_000_000,
+            }))))
+        });
+
+        let mut dex_service = MockStellarDexServiceTrait::new();
+        dex_service.expect_supported_asset_types().returning(|| {
+            std::collections::HashSet::from([AssetType::Native, AssetType::Contract])
+        });
+
+        // Mock get_xlm_to_token_quote for fee conversion
+        dex_service
+            .expect_get_xlm_to_token_quote()
+            .returning(|_, _, _, _| {
+                Box::pin(ready(Ok(
+                    crate::services::stellar_dex::StellarQuoteResponse {
+                        input_asset: "native".to_string(),
+                        output_asset: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
+                            .to_string(),
+                        in_amount: 50100,
+                        out_amount: 1500000,
+                        price_impact_pct: 0.0,
+                        slippage_bps: 100,
+                        path: None,
+                    },
+                )))
+            });
+
+        let dex_service = Arc::new(dex_service);
+        let relayer = create_test_relayer_instance(relayer_model, provider, dex_service).await;
+
+        let transaction_xdr = create_test_soroban_transaction_xdr();
+        let request = SponsoredTransactionBuildRequest::Stellar(
+            crate::models::StellarPrepareTransactionRequestParams {
+                transaction_xdr: Some(transaction_xdr),
+                operations: None,
+                source_account: None,
+                fee_token: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(),
+            },
+        );
+
+        let result = relayer.build_sponsored_transaction(request).await;
+        if let Err(e) = &result {
+            eprintln!("Soroban build error: {:?}", e);
+        }
+        assert!(result.is_ok());
+
+        if let SponsoredTransactionBuildResponse::Stellar(build) = result.unwrap() {
+            assert!(!build.transaction.is_empty());
+            assert_eq!(build.fee_in_token, "1500000");
+            assert!(!build.fee_in_token_ui.is_empty());
+            assert_eq!(
+                build.fee_token,
+                "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
+            );
+            assert!(!build.valid_until.is_empty());
+            // Soroban transactions should have user_auth_entry
+            assert!(build.user_auth_entry.is_some());
+            assert!(!build.user_auth_entry.unwrap().is_empty());
+        } else {
+            panic!("Expected Stellar build response");
+        }
+
+        // Clean up env var
+        std::env::remove_var("STELLAR_FEE_FORWARDER_ADDRESS");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_build_soroban_sponsored_missing_fee_forwarder() {
+        // Ensure env var is NOT set
+        std::env::remove_var("STELLAR_FEE_FORWARDER_ADDRESS");
+
+        let relayer_model = create_test_relayer_with_soroban_token();
+        let provider = MockStellarProviderTrait::new();
+
+        let mut dex_service = MockStellarDexServiceTrait::new();
+        dex_service.expect_supported_asset_types().returning(|| {
+            std::collections::HashSet::from([AssetType::Native, AssetType::Contract])
+        });
+
+        let dex_service = Arc::new(dex_service);
+        let relayer = create_test_relayer_instance(relayer_model, provider, dex_service).await;
+
+        let transaction_xdr = create_test_soroban_transaction_xdr();
+        let request = SponsoredTransactionBuildRequest::Stellar(
+            crate::models::StellarPrepareTransactionRequestParams {
+                transaction_xdr: Some(transaction_xdr),
+                operations: None,
+                source_account: None,
+                fee_token: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(),
+            },
+        );
+
+        let result = relayer.build_sponsored_transaction(request).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, RelayerError::ValidationError(_)));
+        if let RelayerError::ValidationError(msg) = err {
+            assert!(msg.contains("STELLAR_FEE_FORWARDER_ADDRESS"));
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_build_soroban_sponsored_insufficient_balance() {
+        // Set required env var for FeeForwarder
+        std::env::set_var(
+            "STELLAR_FEE_FORWARDER_ADDRESS",
+            "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+        );
+
+        let relayer_model = create_test_relayer_with_soroban_token();
+        let mut provider = MockStellarProviderTrait::new();
+
+        // Mock get_latest_ledger
+        provider.expect_get_latest_ledger().returning(|| {
+            Box::pin(ready(Ok(
+                soroban_rs::stellar_rpc_client::GetLatestLedgerResponse {
+                    id: "test".to_string(),
+                    protocol_version: 20,
+                    sequence: 1000,
+                },
+            )))
+        });
+
+        // Mock simulate_transaction_envelope
+        provider
+            .expect_simulate_transaction_envelope()
+            .returning(|_| {
+                Box::pin(ready(Ok(
+                    soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
+                        min_resource_fee: 50000,
+                        transaction_data: "AAAAAQAAAAAAAAACAAAAAAAAAAAAAAAAAAAABgAAAAEAAAAGAAAAAG0JZTO9fU6p3NeJp5w3TpKhZmx6p1pR7mq9wFwCnEIuAAAAFAAAAAEAAAAAAAAAB8NVb2IAAAH0AAAAAQAAAAAAABfAAAAAAAAAAPUAAAAAAAAENgAAAAA=".to_string(),
+                        ..Default::default()
+                    },
+                )))
+            });
+
+        // Mock call_contract with INSUFFICIENT balance
+        provider.expect_call_contract().returning(|_, _, _| {
+            use soroban_rs::xdr::Int128Parts;
+            // Return a very low balance (100, much less than required 1500000)
+            Box::pin(ready(Ok(ScVal::I128(Int128Parts { hi: 0, lo: 100 }))))
+        });
+
+        let mut dex_service = MockStellarDexServiceTrait::new();
+        dex_service.expect_supported_asset_types().returning(|| {
+            std::collections::HashSet::from([AssetType::Native, AssetType::Contract])
+        });
+
+        // Mock get_xlm_to_token_quote
+        dex_service
+            .expect_get_xlm_to_token_quote()
+            .returning(|_, _, _, _| {
+                Box::pin(ready(Ok(
+                    crate::services::stellar_dex::StellarQuoteResponse {
+                        input_asset: "native".to_string(),
+                        output_asset: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
+                            .to_string(),
+                        in_amount: 50100,
+                        out_amount: 1500000, // Fee required
+                        price_impact_pct: 0.0,
+                        slippage_bps: 100,
+                        path: None,
+                    },
+                )))
+            });
+
+        let dex_service = Arc::new(dex_service);
+        let relayer = create_test_relayer_instance(relayer_model, provider, dex_service).await;
+
+        let transaction_xdr = create_test_soroban_transaction_xdr();
+        let request = SponsoredTransactionBuildRequest::Stellar(
+            crate::models::StellarPrepareTransactionRequestParams {
+                transaction_xdr: Some(transaction_xdr),
+                operations: None,
+                source_account: None,
+                fee_token: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(),
+            },
+        );
+
+        let result = relayer.build_sponsored_transaction(request).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, RelayerError::ValidationError(_)));
+        if let RelayerError::ValidationError(msg) = err {
+            assert!(msg.contains("Insufficient balance"));
+        }
+
+        // Clean up env var
+        std::env::remove_var("STELLAR_FEE_FORWARDER_ADDRESS");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_build_soroban_sponsored_simulation_error() {
+        // Set required env var for FeeForwarder
+        std::env::set_var(
+            "STELLAR_FEE_FORWARDER_ADDRESS",
+            "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+        );
+
+        let relayer_model = create_test_relayer_with_soroban_token();
+        let mut provider = MockStellarProviderTrait::new();
+
+        // Mock get_latest_ledger
+        provider.expect_get_latest_ledger().returning(|| {
+            Box::pin(ready(Ok(
+                soroban_rs::stellar_rpc_client::GetLatestLedgerResponse {
+                    id: "test".to_string(),
+                    protocol_version: 20,
+                    sequence: 1000,
+                },
+            )))
+        });
+
+        // Mock simulate_transaction_envelope to return error
+        provider
+            .expect_simulate_transaction_envelope()
+            .returning(|_| {
+                Box::pin(ready(Ok(
+                    soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
+                        error: Some(
+                            "Contract execution failed: insufficient resources".to_string(),
+                        ),
+                        min_resource_fee: 0,
+                        transaction_data: "".to_string(),
+                        ..Default::default()
+                    },
+                )))
+            });
+
+        let mut dex_service = MockStellarDexServiceTrait::new();
+        dex_service.expect_supported_asset_types().returning(|| {
+            std::collections::HashSet::from([AssetType::Native, AssetType::Contract])
+        });
+
+        // Mock get_xlm_to_token_quote for initial fee estimation
+        dex_service
+            .expect_get_xlm_to_token_quote()
+            .returning(|_, _, _, _| {
+                Box::pin(ready(Ok(
+                    crate::services::stellar_dex::StellarQuoteResponse {
+                        input_asset: "native".to_string(),
+                        output_asset: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
+                            .to_string(),
+                        in_amount: 100,
+                        out_amount: 1500,
+                        price_impact_pct: 0.0,
+                        slippage_bps: 100,
+                        path: None,
+                    },
+                )))
+            });
+
+        let dex_service = Arc::new(dex_service);
+        let relayer = create_test_relayer_instance(relayer_model, provider, dex_service).await;
+
+        let transaction_xdr = create_test_soroban_transaction_xdr();
+        let request = SponsoredTransactionBuildRequest::Stellar(
+            crate::models::StellarPrepareTransactionRequestParams {
+                transaction_xdr: Some(transaction_xdr),
+                operations: None,
+                source_account: None,
+                fee_token: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(),
+            },
+        );
+
+        let result = relayer.build_sponsored_transaction(request).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        // Simulation errors are wrapped in ValidationError via calculate_total_soroban_fee
+        assert!(matches!(err, RelayerError::ValidationError(_)));
+        if let RelayerError::ValidationError(msg) = err {
+            assert!(msg.contains("Simulation failed"));
+        }
+
+        // Clean up env var
+        std::env::remove_var("STELLAR_FEE_FORWARDER_ADDRESS");
     }
 }
