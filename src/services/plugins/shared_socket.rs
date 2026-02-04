@@ -207,10 +207,15 @@ impl Drop for ExecutionGuard {
     fn drop(&mut self) {
         // Auto-unregister on drop - synchronous with scc::HashMap (no spawn needed!)
         // This eliminates the overhead of spawning a task for every request
-        let _ = self.executions.remove(&self.execution_id);
-        // Only decrement counter if this guard was successfully registered
-        // This prevents counter underflow when insertion failed (duplicate execution_id)
-        if self.registered {
+        //
+        // Only registered guards should remove entries and decrement counters.
+        // Non-registered guards (from duplicate execution_id) don't own the entry.
+        //
+        // For registered guards, only decrement if we actually removed the entry.
+        // This prevents double-decrement: if a long-running execution is GC'd by the
+        // stale entry cleanup task (which decrements the counter), and then the guard
+        // drops later, we must NOT decrement again.
+        if self.registered && self.executions.remove(&self.execution_id).is_some() {
             self.active_count.fetch_sub(1, Ordering::AcqRel);
         }
     }
