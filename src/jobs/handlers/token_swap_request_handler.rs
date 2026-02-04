@@ -4,7 +4,7 @@
 //! swap jobs from the queue for all supported networks (Solana and Stellar).
 
 use actix_web::web::ThinData;
-use apalis::prelude::{Attempt, Data, Error};
+use apalis::prelude::{Attempt, Data, Error, TaskId};
 use eyre::Result as EyreResult;
 use tracing::{debug, info, instrument};
 
@@ -33,18 +33,23 @@ use crate::{
         job_type = %job.job_type.to_string(),
         attempt = %attempt.current(),
         relayer_id = %job.data.relayer_id,
+        task_id = %task_id.to_string(),
     )
 )]
 pub async fn token_swap_request_handler(
     job: Job<TokenSwapRequest>,
     context: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
+    task_id: TaskId,
 ) -> std::result::Result<(), Error> {
     if let Some(request_id) = job.request_id.clone() {
         set_request_id(request_id);
     }
 
-    debug!(relayer_id = %job.data.relayer_id, "handling token swap request");
+    debug!(
+        relayer_id = %job.data.relayer_id,
+        "handling token swap request"
+    );
 
     let result = handle_request(job.data, context).await;
 
@@ -100,7 +105,10 @@ async fn handle_request(
     request: TokenSwapRequest,
     context: Data<ThinData<DefaultAppState>>,
 ) -> EyreResult<()> {
-    debug!(relayer_id = %request.relayer_id, "processing token swap");
+    debug!(
+        relayer_id = %request.relayer_id,
+        "processing token swap"
+    );
 
     let relayer = get_network_relayer(request.relayer_id.clone(), &context).await?;
 
@@ -108,6 +116,11 @@ async fn handle_request(
         .handle_token_swap_request(request.relayer_id.clone())
         .await
         .map_err(|e| eyre::eyre!("Failed to handle token swap request: {}", e))?;
+
+    debug!(
+        relayer_id = %request.relayer_id,
+        "token swap request completed"
+    );
 
     Ok(())
 }

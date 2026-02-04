@@ -32,12 +32,18 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!(tx_id = %tx.id, status = ?tx.status, "submitting stellar transaction");
+        info!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            status = ?tx.status,
+            "submitting stellar transaction"
+        );
 
         // Defensive check: if transaction is in a final state or unexpected state, don't retry
         if is_final_state(&tx.status) {
             warn!(
                 tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
                 status = ?tx.status,
                 "transaction already in final state, skipping submission"
             );
@@ -48,6 +54,7 @@ where
         if self.is_transaction_expired(&tx)? {
             info!(
                 tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
                 valid_until = ?tx.valid_until,
                 "transaction has expired, marking as Expired"
             );
@@ -97,6 +104,7 @@ where
                 if response.status == "DUPLICATE" {
                     info!(
                         tx_id = %tx.id,
+                        relayer_id = %tx.relayer_id,
                         hash = %response.hash,
                         "transaction already submitted (DUPLICATE status)"
                     );
@@ -147,6 +155,7 @@ where
                 // Unknown status - treat as error
                 warn!(
                     tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
                     status = %unknown,
                     "received unknown transaction status from RPC"
                 );
@@ -166,38 +175,70 @@ where
     ) -> Result<TransactionRepoModel, TransactionError> {
         let error_reason = format!("Submission failed: {error}");
         let tx_id = tx.id.clone();
-        warn!(reason = %error_reason, "transaction submission failed");
+        let relayer_id = tx.relayer_id.clone();
+        warn!(
+            tx_id = %tx_id,
+            relayer_id = %relayer_id,
+            reason = %error_reason,
+            "transaction submission failed"
+        );
 
         if is_bad_sequence_error(&error_reason) {
             // For bad sequence errors, sync sequence from chain first
             if let Ok(stellar_data) = tx.network_data.get_stellar_transaction_data() {
-                info!("syncing sequence from chain after bad sequence error");
+                info!(
+                    tx_id = %tx_id,
+                    relayer_id = %relayer_id,
+                    "syncing sequence from chain after bad sequence error"
+                );
                 match self
                     .sync_sequence_from_chain(&stellar_data.source_account)
                     .await
                 {
                     Ok(()) => {
-                        info!("successfully synced sequence from chain");
+                        info!(
+                            tx_id = %tx_id,
+                            relayer_id = %relayer_id,
+                            "successfully synced sequence from chain"
+                        );
                     }
                     Err(sync_error) => {
-                        warn!(error = %sync_error, "failed to sync sequence from chain");
+                        warn!(
+                            tx_id = %tx_id,
+                            relayer_id = %relayer_id,
+                            error = %sync_error,
+                            "failed to sync sequence from chain"
+                        );
                     }
                 }
             }
 
             // Reset the transaction to pending state
             // Status check will handle resubmission when it detects a pending transaction without hash
-            info!("bad sequence error detected, resetting transaction to pending state");
+            info!(
+                tx_id = %tx_id,
+                relayer_id = %relayer_id,
+                "bad sequence error detected, resetting transaction to pending state"
+            );
             match self.reset_transaction_for_retry(tx.clone()).await {
                 Ok(reset_tx) => {
-                    info!("transaction reset to pending, status check will handle resubmission");
+                    info!(
+                        tx_id = %tx_id,
+                        relayer_id = %relayer_id,
+                        "transaction reset to pending, status check will handle resubmission"
+                    );
                     // Return success since we've reset the transaction
                     // Status check job (scheduled with delay) will detect pending without hash
                     // and schedule a recovery job to go through the pipeline again
                     return Ok(reset_tx);
                 }
                 Err(reset_error) => {
-                    warn!(error = %reset_error, "failed to reset transaction for retry");
+                    warn!(
+                        tx_id = %tx_id,
+                        relayer_id = %relayer_id,
+                        error = %reset_error,
+                        "failed to reset transaction for retry"
+                    );
                     // Fall through to normal failure handling
                 }
             }
@@ -216,17 +257,32 @@ where
         {
             Ok(updated_tx) => updated_tx,
             Err(finalize_error) => {
-                warn!(error = %finalize_error, "failed to mark transaction as failed, continuing with lane cleanup");
+                warn!(
+                    tx_id = %tx_id,
+                    relayer_id = %relayer_id,
+                    error = %finalize_error,
+                    "failed to mark transaction as failed, continuing with lane cleanup"
+                );
                 tx
             }
         };
 
         // Attempt to enqueue next pending transaction or release lane
         if let Err(enqueue_error) = self.enqueue_next_pending_transaction(&tx_id).await {
-            warn!(error = %enqueue_error, "failed to enqueue next pending transaction after submission failure");
+            warn!(
+                tx_id = %tx_id,
+                relayer_id = %relayer_id,
+                error = %enqueue_error,
+                "failed to enqueue next pending transaction after submission failure"
+            );
         }
 
-        info!(error = %error_reason, "transaction submission failure handled");
+        info!(
+            tx_id = %tx_id,
+            relayer_id = %relayer_id,
+            error = %error_reason,
+            "transaction submission failure handled"
+        );
 
         Err(error)
     }
