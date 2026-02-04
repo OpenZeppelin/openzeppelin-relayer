@@ -22,6 +22,7 @@ use super::health::{
     CircuitBreaker, CircuitState, DeadServerIndicator, HealthStatus, ProcessStatus,
 };
 use super::protocol::{PoolError, PoolRequest, PoolResponse};
+use super::shared_socket::get_shared_socket_service;
 use super::{LogEntry, PluginError, PluginHandlerPayload, ScriptResult};
 
 /// Request queue entry for throttling
@@ -580,6 +581,14 @@ impl PoolManager {
         .await
     }
 
+    /// Check if the pool manager has been initialized.
+    ///
+    /// This is useful for health checks to determine if the plugin pool
+    /// is expected to be running.
+    pub async fn is_initialized(&self) -> bool {
+        *self.initialized.read().await
+    }
+
     /// Start the pool server if not already running
     pub async fn ensure_started(&self) -> Result<(), PluginError> {
         if *self.initialized.read().await {
@@ -1132,6 +1141,42 @@ impl PoolManager {
     }
 
     /// Health check - verify the pool server is responding
+    /// Collect socket connection statistics
+    async fn collect_socket_stats(
+        &self,
+    ) -> (
+        Option<usize>,
+        Option<usize>,
+        Option<usize>,
+        Option<usize>,
+        Option<usize>,
+    ) {
+        // Collect shared socket stats
+        let (shared_available, shared_active, shared_executions) = match get_shared_socket_service()
+        {
+            Ok(service) => {
+                let available = service.available_connection_slots();
+                let active = service.active_connection_count();
+                let executions = service.registered_executions_count().await;
+                (Some(available), Some(active), Some(executions))
+            }
+            Err(_) => (None, None, None),
+        };
+
+        // Collect connection pool stats (for pool server connections)
+        let pool_available = self.connection_pool.semaphore.available_permits();
+        let pool_max = get_config().pool_max_connections;
+        let pool_active = pool_max.saturating_sub(pool_available);
+
+        (
+            shared_available,
+            shared_active,
+            shared_executions,
+            Some(pool_available),
+            Some(pool_active),
+        )
+    }
+
     pub async fn health_check(&self) -> Result<HealthStatus, PluginError> {
         let circuit_info = || {
             let state = match self.circuit_breaker.state() {
@@ -1147,8 +1192,12 @@ impl PoolManager {
             )
         };
 
+        let socket_stats = self.collect_socket_stats().await;
+
         if !*self.initialized.read().await {
             let (circuit_state, avg_rt, recovering, recovery_pct) = circuit_info();
+            let (shared_available, shared_active, shared_executions, pool_available, pool_active) =
+                socket_stats;
             return Ok(HealthStatus {
                 healthy: false,
                 status: "not_initialized".to_string(),
@@ -1161,11 +1210,18 @@ impl PoolManager {
                 avg_response_time_ms: avg_rt,
                 recovering,
                 recovery_percent: recovery_pct,
+                shared_socket_available_slots: shared_available,
+                shared_socket_active_connections: shared_active,
+                shared_socket_registered_executions: shared_executions,
+                connection_pool_available_slots: pool_available,
+                connection_pool_active_connections: pool_active,
             });
         }
 
         if !std::path::Path::new(&self.socket_path).exists() {
             let (circuit_state, avg_rt, recovering, recovery_pct) = circuit_info();
+            let (shared_available, shared_active, shared_executions, pool_available, pool_active) =
+                socket_stats;
             return Ok(HealthStatus {
                 healthy: false,
                 status: "socket_missing".to_string(),
@@ -1178,6 +1234,11 @@ impl PoolManager {
                 avg_response_time_ms: avg_rt,
                 recovering,
                 recovery_percent: recovery_pct,
+                shared_socket_available_slots: shared_available,
+                shared_socket_active_connections: shared_active,
+                shared_socket_registered_executions: shared_executions,
+                connection_pool_available_slots: pool_available,
+                connection_pool_active_connections: pool_active,
             });
         }
 
@@ -1192,6 +1253,13 @@ impl PoolManager {
                         err_str.contains("semaphore") || err_str.contains("Connection refused");
 
                     let (circuit_state, avg_rt, recovering, recovery_pct) = circuit_info();
+                    let (
+                        shared_available,
+                        shared_active,
+                        shared_executions,
+                        pool_available,
+                        pool_active,
+                    ) = socket_stats;
                     return Ok(HealthStatus {
                         healthy: is_pool_exhausted,
                         status: if is_pool_exhausted {
@@ -1208,10 +1276,22 @@ impl PoolManager {
                         avg_response_time_ms: avg_rt,
                         recovering,
                         recovery_percent: recovery_pct,
+                        shared_socket_available_slots: shared_available,
+                        shared_socket_active_connections: shared_active,
+                        shared_socket_registered_executions: shared_executions,
+                        connection_pool_available_slots: pool_available,
+                        connection_pool_active_connections: pool_active,
                     });
                 }
                 Err(_) => {
                     let (circuit_state, avg_rt, recovering, recovery_pct) = circuit_info();
+                    let (
+                        shared_available,
+                        shared_active,
+                        shared_executions,
+                        pool_available,
+                        pool_active,
+                    ) = socket_stats;
                     return Ok(HealthStatus {
                         healthy: true,
                         status: "pool_busy".to_string(),
@@ -1224,6 +1304,11 @@ impl PoolManager {
                         avg_response_time_ms: avg_rt,
                         recovering,
                         recovery_percent: recovery_pct,
+                        shared_socket_available_slots: shared_available,
+                        shared_socket_active_connections: shared_active,
+                        shared_socket_registered_executions: shared_executions,
+                        connection_pool_available_slots: pool_available,
+                        connection_pool_active_connections: pool_active,
                     });
                 }
             };
@@ -1241,20 +1326,41 @@ impl PoolManager {
                     // Use extracted parsing function for testability
                     let parsed = Self::parse_health_result(&result);
 
-                    Ok(HealthStatus {
-                        healthy: true,
-                        status: parsed.status,
-                        uptime_ms: parsed.uptime_ms,
-                        memory: parsed.memory,
-                        pool_completed: parsed.pool_completed,
-                        pool_queued: parsed.pool_queued,
-                        success_rate: parsed.success_rate,
-                        circuit_state,
-                        avg_response_time_ms: avg_rt,
-                        recovering,
-                        recovery_percent: recovery_pct,
-                    })
+                    {
+                        let (
+                            shared_available,
+                            shared_active,
+                            shared_executions,
+                            pool_available,
+                            pool_active,
+                        ) = socket_stats;
+                        Ok(HealthStatus {
+                            healthy: true,
+                            status: parsed.status,
+                            uptime_ms: parsed.uptime_ms,
+                            memory: parsed.memory,
+                            pool_completed: parsed.pool_completed,
+                            pool_queued: parsed.pool_queued,
+                            success_rate: parsed.success_rate,
+                            circuit_state,
+                            avg_response_time_ms: avg_rt,
+                            recovering,
+                            recovery_percent: recovery_pct,
+                            shared_socket_available_slots: shared_available,
+                            shared_socket_active_connections: shared_active,
+                            shared_socket_registered_executions: shared_executions,
+                            connection_pool_available_slots: pool_available,
+                            connection_pool_active_connections: pool_active,
+                        })
+                    }
                 } else {
+                    let (
+                        shared_available,
+                        shared_active,
+                        shared_executions,
+                        pool_available,
+                        pool_active,
+                    ) = socket_stats;
                     Ok(HealthStatus {
                         healthy: false,
                         status: response
@@ -1270,22 +1376,41 @@ impl PoolManager {
                         avg_response_time_ms: avg_rt,
                         recovering,
                         recovery_percent: recovery_pct,
+                        shared_socket_available_slots: shared_available,
+                        shared_socket_active_connections: shared_active,
+                        shared_socket_registered_executions: shared_executions,
+                        connection_pool_available_slots: pool_available,
+                        connection_pool_active_connections: pool_active,
                     })
                 }
             }
-            Err(e) => Ok(HealthStatus {
-                healthy: false,
-                status: format!("request_failed: {e}"),
-                uptime_ms: None,
-                memory: None,
-                pool_completed: None,
-                pool_queued: None,
-                success_rate: None,
-                circuit_state,
-                avg_response_time_ms: avg_rt,
-                recovering,
-                recovery_percent: recovery_pct,
-            }),
+            Err(e) => {
+                let (
+                    shared_available,
+                    shared_active,
+                    shared_executions,
+                    pool_available,
+                    pool_active,
+                ) = socket_stats;
+                Ok(HealthStatus {
+                    healthy: false,
+                    status: format!("request_failed: {e}"),
+                    uptime_ms: None,
+                    memory: None,
+                    pool_completed: None,
+                    pool_queued: None,
+                    success_rate: None,
+                    circuit_state,
+                    avg_response_time_ms: avg_rt,
+                    recovering,
+                    recovery_percent: recovery_pct,
+                    shared_socket_available_slots: shared_available,
+                    shared_socket_active_connections: shared_active,
+                    shared_socket_registered_executions: shared_executions,
+                    connection_pool_available_slots: pool_available,
+                    connection_pool_active_connections: pool_active,
+                })
+            }
         }
     }
 

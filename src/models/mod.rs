@@ -57,3 +57,6 @@ pub use plugin::*;
 
 mod api_key;
 pub use api_key::*;
+
+pub mod health;
+pub use health::*;
