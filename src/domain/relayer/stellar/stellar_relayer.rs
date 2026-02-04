@@ -517,6 +517,21 @@ where
             .get_account(&self.relayer.address)
             .await
             .map_err(|e| {
+                warn!(
+                    relayer_id = %self.relayer.id,
+                    address = %self.relayer.address,
+                    error = %e,
+                    "get_account failed in get_balance (called before transaction creation)"
+                );
+                // Track RPC failure metric
+                crate::metrics::API_RPC_FAILURES
+                    .with_label_values(&[
+                        self.relayer.id.as_str(),
+                        "stellar",
+                        "get_balance",
+                        "get_account_failed",
+                    ])
+                    .inc();
                 RelayerError::ProviderError(format!("Failed to fetch account for balance: {e}"))
             })?;
 
@@ -542,6 +557,21 @@ where
             .get_account(&relayer_model.address)
             .await
             .map_err(|e| {
+                warn!(
+                    relayer_id = %relayer_model.id,
+                    address = %relayer_model.address,
+                    error = %e,
+                    "get_account failed in get_status (called before transaction creation)"
+                );
+                // Track RPC failure metric
+                crate::metrics::API_RPC_FAILURES
+                    .with_label_values(&[
+                        relayer_model.id.as_str(),
+                        "stellar",
+                        "get_status",
+                        "get_account_failed",
+                    ])
+                    .inc();
                 RelayerError::ProviderError(format!("Failed to get account details: {e}"))
             })?;
 
