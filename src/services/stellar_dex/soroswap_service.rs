@@ -439,38 +439,761 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::provider::StellarProvider;
+    use crate::services::provider::MockStellarProviderTrait;
+    use futures::FutureExt;
+
+    fn create_mock_provider() -> Arc<MockStellarProviderTrait> {
+        Arc::new(MockStellarProviderTrait::new())
+    }
+
+    fn create_test_service(
+        provider: Arc<MockStellarProviderTrait>,
+        is_testnet: bool,
+    ) -> SoroswapService<MockStellarProviderTrait> {
+        SoroswapService::new(
+            "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(), // router
+            "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA".to_string(), // factory
+            None,
+            provider,
+            "Test SDF Network ; September 2015".to_string(),
+            is_testnet,
+        )
+    }
+
+    // ==================== Constructor Tests ====================
 
     #[test]
-    fn test_can_handle_asset_native() {
-        // We can't easily test this without a mock provider
-        // This test just validates the asset type detection logic
-        assert!(
-            "native".is_empty() || "native" == "native",
-            "Should handle native"
-        );
+    fn test_new_testnet_uses_testnet_native_wrapper() {
+        let provider = create_mock_provider();
+        let service = create_test_service(provider, true);
+        assert_eq!(service.native_wrapper_address, TESTNET_NATIVE_WRAPPER);
     }
 
     #[test]
-    fn test_can_handle_asset_contract() {
+    fn test_new_mainnet_uses_mainnet_native_wrapper() {
+        let provider = create_mock_provider();
+        let service = create_test_service(provider, false);
+        assert_eq!(service.native_wrapper_address, MAINNET_NATIVE_WRAPPER);
+    }
+
+    #[test]
+    fn test_new_with_custom_native_wrapper() {
+        let provider = create_mock_provider();
+        let custom_wrapper = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M".to_string();
+        let service = SoroswapService::new(
+            "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(),
+            "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA".to_string(),
+            Some(custom_wrapper.clone()),
+            provider,
+            "Test SDF Network ; September 2015".to_string(),
+            true,
+        );
+        assert_eq!(service.native_wrapper_address, custom_wrapper);
+    }
+
+    // ==================== parse_contract_address Tests ====================
+
+    #[test]
+    fn test_parse_contract_address_valid() {
+        let addr = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+        let result = SoroswapService::<MockStellarProviderTrait>::parse_contract_address(addr);
+        assert!(result.is_ok());
+        match result.unwrap() {
+            ScAddress::Contract(_) => {}
+            _ => panic!("Expected Contract address"),
+        }
+    }
+
+    #[test]
+    fn test_parse_contract_address_invalid_format() {
+        let addr = "INVALID_ADDRESS";
+        let result = SoroswapService::<MockStellarProviderTrait>::parse_contract_address(addr);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarDexServiceError::InvalidAssetIdentifier(msg) => {
+                assert!(msg.contains("Invalid Soroban contract address"));
+            }
+            _ => panic!("Expected InvalidAssetIdentifier error"),
+        }
+    }
+
+    #[test]
+    fn test_parse_contract_address_stellar_account_not_contract() {
+        // A valid Stellar account address (G...) but not a contract (C...)
+        let addr = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+        let result = SoroswapService::<MockStellarProviderTrait>::parse_contract_address(addr);
+        assert!(result.is_err());
+    }
+
+    // ==================== can_handle_asset Tests ====================
+
+    #[test]
+    fn test_can_handle_asset_native() {
+        let provider = create_mock_provider();
+        let service = create_test_service(provider, true);
+        assert!(service.can_handle_asset("native"));
+    }
+
+    #[test]
+    fn test_can_handle_asset_empty_string() {
+        let provider = create_mock_provider();
+        let service = create_test_service(provider, true);
+        assert!(service.can_handle_asset(""));
+    }
+
+    #[test]
+    fn test_can_handle_asset_valid_contract() {
+        let provider = create_mock_provider();
+        let service = create_test_service(provider, true);
         let contract_addr = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
-        assert!(contract_addr.starts_with('C'));
-        assert_eq!(contract_addr.len(), 56);
-        assert!(!contract_addr.contains(':'));
-        assert!(stellar_strkey::Contract::from_string(contract_addr).is_ok());
+        assert!(service.can_handle_asset(contract_addr));
     }
 
     #[test]
     fn test_cannot_handle_classic_asset() {
+        let provider = create_mock_provider();
+        let service = create_test_service(provider, true);
         let classic_asset = "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
-        assert!(classic_asset.contains(':'));
+        assert!(!service.can_handle_asset(classic_asset));
     }
 
     #[test]
-    fn test_i128_conversion() {
+    fn test_cannot_handle_short_address() {
+        let provider = create_mock_provider();
+        let service = create_test_service(provider, true);
+        assert!(!service.can_handle_asset("CSHORT"));
+    }
+
+    #[test]
+    fn test_cannot_handle_non_c_prefix() {
+        let provider = create_mock_provider();
+        let service = create_test_service(provider, true);
+        // Stellar account address (G prefix)
+        let addr = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+        assert!(!service.can_handle_asset(addr));
+    }
+
+    #[test]
+    fn test_cannot_handle_invalid_contract_checksum() {
+        let provider = create_mock_provider();
+        let service = create_test_service(provider, true);
+        // Valid format but invalid checksum
+        let invalid_addr = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        assert!(!service.can_handle_asset(invalid_addr));
+    }
+
+    // ==================== supported_asset_types Tests ====================
+
+    #[test]
+    fn test_supported_asset_types() {
+        let provider = create_mock_provider();
+        let service = create_test_service(provider, true);
+        let types = service.supported_asset_types();
+        assert!(types.contains(&AssetType::Native));
+        assert!(types.contains(&AssetType::Contract));
+        assert_eq!(types.len(), 2);
+    }
+
+    // ==================== i128 Conversion Tests ====================
+
+    #[test]
+    fn test_i128_to_scval_and_back_positive() {
         let original: i128 = 1_000_000_000;
-        let scval = SoroswapService::<StellarProvider>::i128_to_scval(original);
-        let recovered = SoroswapService::<StellarProvider>::scval_to_i128(&scval).unwrap();
+        let scval = SoroswapService::<MockStellarProviderTrait>::i128_to_scval(original);
+        let recovered = SoroswapService::<MockStellarProviderTrait>::scval_to_i128(&scval).unwrap();
         assert_eq!(original, recovered);
+    }
+
+    #[test]
+    fn test_i128_to_scval_and_back_zero() {
+        let original: i128 = 0;
+        let scval = SoroswapService::<MockStellarProviderTrait>::i128_to_scval(original);
+        let recovered = SoroswapService::<MockStellarProviderTrait>::scval_to_i128(&scval).unwrap();
+        assert_eq!(original, recovered);
+    }
+
+    #[test]
+    fn test_i128_to_scval_and_back_negative() {
+        let original: i128 = -1_000_000_000;
+        let scval = SoroswapService::<MockStellarProviderTrait>::i128_to_scval(original);
+        let recovered = SoroswapService::<MockStellarProviderTrait>::scval_to_i128(&scval).unwrap();
+        assert_eq!(original, recovered);
+    }
+
+    #[test]
+    fn test_i128_to_scval_and_back_large_positive() {
+        let original: i128 = i128::MAX / 2;
+        let scval = SoroswapService::<MockStellarProviderTrait>::i128_to_scval(original);
+        let recovered = SoroswapService::<MockStellarProviderTrait>::scval_to_i128(&scval).unwrap();
+        assert_eq!(original, recovered);
+    }
+
+    #[test]
+    fn test_i128_to_scval_and_back_large_negative() {
+        let original: i128 = i128::MIN / 2;
+        let scval = SoroswapService::<MockStellarProviderTrait>::i128_to_scval(original);
+        let recovered = SoroswapService::<MockStellarProviderTrait>::scval_to_i128(&scval).unwrap();
+        assert_eq!(original, recovered);
+    }
+
+    #[test]
+    fn test_scval_to_i128_wrong_type() {
+        let scval = ScVal::Bool(true);
+        let result = SoroswapService::<MockStellarProviderTrait>::scval_to_i128(&scval);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarDexServiceError::UnknownError(msg) => {
+                assert!(msg.contains("Expected I128 value"));
+            }
+            _ => panic!("Expected UnknownError"),
+        }
+    }
+
+    // ==================== scval_to_amounts_vec Tests ====================
+
+    #[test]
+    fn test_scval_to_amounts_vec_valid() {
+        let amounts: Vec<i128> = vec![100, 200, 300];
+        let sc_vals: Vec<ScVal> = amounts
+            .iter()
+            .map(|&a| SoroswapService::<MockStellarProviderTrait>::i128_to_scval(a))
+            .collect();
+        let sc_vec: ScVec = sc_vals.try_into().unwrap();
+        let scval = ScVal::Vec(Some(sc_vec));
+
+        let result =
+            SoroswapService::<MockStellarProviderTrait>::scval_to_amounts_vec(&scval).unwrap();
+        assert_eq!(result, vec![100, 200, 300]);
+    }
+
+    #[test]
+    fn test_scval_to_amounts_vec_empty() {
+        let sc_vec: ScVec = vec![].try_into().unwrap();
+        let scval = ScVal::Vec(Some(sc_vec));
+
+        let result =
+            SoroswapService::<MockStellarProviderTrait>::scval_to_amounts_vec(&scval).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_scval_to_amounts_vec_wrong_type() {
+        let scval = ScVal::Bool(true);
+        let result = SoroswapService::<MockStellarProviderTrait>::scval_to_amounts_vec(&scval);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarDexServiceError::UnknownError(msg) => {
+                assert!(msg.contains("Expected Vec of I128 values"));
+            }
+            _ => panic!("Expected UnknownError"),
+        }
+    }
+
+    #[test]
+    fn test_scval_to_amounts_vec_none() {
+        let scval = ScVal::Vec(None);
+        let result = SoroswapService::<MockStellarProviderTrait>::scval_to_amounts_vec(&scval);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_scval_to_amounts_vec_mixed_types() {
+        // Vec containing a non-I128 value
+        let sc_vec: ScVec = vec![ScVal::Bool(true)].try_into().unwrap();
+        let scval = ScVal::Vec(Some(sc_vec));
+
+        let result = SoroswapService::<MockStellarProviderTrait>::scval_to_amounts_vec(&scval);
+        assert!(result.is_err());
+    }
+
+    // ==================== build_path Tests ====================
+
+    #[test]
+    fn test_build_path_valid() {
+        let provider = create_mock_provider();
+        let service = create_test_service(provider, true);
+        let from = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+        let to = "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA";
+
+        let result = service.build_path(from, to);
+        assert!(result.is_ok());
+        match result.unwrap() {
+            ScVal::Vec(Some(vec)) => {
+                assert_eq!(vec.len(), 2);
+            }
+            _ => panic!("Expected Vec"),
+        }
+    }
+
+    #[test]
+    fn test_build_path_invalid_from() {
+        let provider = create_mock_provider();
+        let service = create_test_service(provider, true);
+        let result = service.build_path(
+            "INVALID",
+            "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA",
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_build_path_invalid_to() {
+        let provider = create_mock_provider();
+        let service = create_test_service(provider, true);
+        let result = service.build_path(
+            "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+            "INVALID",
+        );
+        assert!(result.is_err());
+    }
+
+    // ==================== Async Quote Tests ====================
+
+    #[tokio::test]
+    async fn test_get_token_to_xlm_quote_native_returns_1_to_1() {
+        let provider = create_mock_provider();
+        let service = create_test_service(provider, true);
+
+        let quote = service
+            .get_token_to_xlm_quote("native", 1_000_000, 0.5, None)
+            .await
+            .unwrap();
+
+        assert_eq!(quote.input_asset, "native");
+        assert_eq!(quote.output_asset, "native");
+        assert_eq!(quote.in_amount, 1_000_000);
+        assert_eq!(quote.out_amount, 1_000_000);
+        assert_eq!(quote.price_impact_pct, 0.0);
+        assert_eq!(quote.slippage_bps, 50);
+        assert!(quote.path.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_token_to_xlm_quote_empty_returns_1_to_1() {
+        let provider = create_mock_provider();
+        let service = create_test_service(provider, true);
+
+        let quote = service
+            .get_token_to_xlm_quote("", 1_000_000, 1.0, None)
+            .await
+            .unwrap();
+
+        assert_eq!(quote.input_asset, "native");
+        assert_eq!(quote.output_asset, "native");
+        assert_eq!(quote.in_amount, quote.out_amount);
+    }
+
+    #[tokio::test]
+    async fn test_get_xlm_to_token_quote_native_returns_1_to_1() {
+        let provider = create_mock_provider();
+        let service = create_test_service(provider, true);
+
+        let quote = service
+            .get_xlm_to_token_quote("native", 1_000_000, 0.5, None)
+            .await
+            .unwrap();
+
+        assert_eq!(quote.input_asset, "native");
+        assert_eq!(quote.output_asset, "native");
+        assert_eq!(quote.in_amount, 1_000_000);
+        assert_eq!(quote.out_amount, 1_000_000);
+    }
+
+    #[tokio::test]
+    async fn test_get_xlm_to_token_quote_empty_returns_1_to_1() {
+        let provider = create_mock_provider();
+        let service = create_test_service(provider, true);
+
+        let quote = service
+            .get_xlm_to_token_quote("", 500_000, 0.25, None)
+            .await
+            .unwrap();
+
+        assert_eq!(quote.input_asset, "native");
+        assert_eq!(quote.output_asset, "native");
+        assert_eq!(quote.slippage_bps, 25);
+    }
+
+    #[tokio::test]
+    async fn test_get_token_to_xlm_quote_with_mock_provider() {
+        let mut mock = MockStellarProviderTrait::new();
+
+        // Build expected output - amounts vec with input and output
+        let amounts: Vec<i128> = vec![1_000_000, 950_000];
+        let sc_vals: Vec<ScVal> = amounts
+            .iter()
+            .map(|&a| SoroswapService::<MockStellarProviderTrait>::i128_to_scval(a))
+            .collect();
+        let sc_vec: ScVec = sc_vals.try_into().unwrap();
+        let result_scval = ScVal::Vec(Some(sc_vec));
+
+        mock.expect_call_contract().returning(move |_, _, _| {
+            let result = result_scval.clone();
+            async move { Ok(result) }.boxed()
+        });
+
+        let provider = Arc::new(mock);
+        let service = create_test_service(provider, true);
+
+        let quote = service
+            .get_token_to_xlm_quote(
+                "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+                1_000_000,
+                0.5,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(quote.in_amount, 1_000_000);
+        assert_eq!(quote.out_amount, 950_000);
+        assert_eq!(quote.output_asset, "native");
+        assert!(quote.path.is_some());
+        assert_eq!(quote.path.as_ref().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_xlm_to_token_quote_with_mock_provider() {
+        let mut mock = MockStellarProviderTrait::new();
+
+        let amounts: Vec<i128> = vec![1_000_000, 1_050_000];
+        let sc_vals: Vec<ScVal> = amounts
+            .iter()
+            .map(|&a| SoroswapService::<MockStellarProviderTrait>::i128_to_scval(a))
+            .collect();
+        let sc_vec: ScVec = sc_vals.try_into().unwrap();
+        let result_scval = ScVal::Vec(Some(sc_vec));
+
+        mock.expect_call_contract().returning(move |_, _, _| {
+            let result = result_scval.clone();
+            async move { Ok(result) }.boxed()
+        });
+
+        let provider = Arc::new(mock);
+        let service = create_test_service(provider, true);
+
+        let quote = service
+            .get_xlm_to_token_quote(
+                "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+                1_000_000,
+                0.5,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(quote.in_amount, 1_000_000);
+        assert_eq!(quote.out_amount, 1_050_000);
+        assert_eq!(quote.input_asset, "native");
+    }
+
+    #[tokio::test]
+    async fn test_get_token_to_xlm_quote_empty_amounts_returns_no_path() {
+        let mut mock = MockStellarProviderTrait::new();
+
+        // Return empty amounts vec
+        let sc_vec: ScVec = vec![].try_into().unwrap();
+        let result_scval = ScVal::Vec(Some(sc_vec));
+
+        mock.expect_call_contract().returning(move |_, _, _| {
+            let result = result_scval.clone();
+            async move { Ok(result) }.boxed()
+        });
+
+        let provider = Arc::new(mock);
+        let service = create_test_service(provider, true);
+
+        let result = service
+            .get_token_to_xlm_quote(
+                "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+                1_000_000,
+                0.5,
+                None,
+            )
+            .await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarDexServiceError::NoPathFound => {}
+            e => panic!("Expected NoPathFound error, got {:?}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_token_to_xlm_quote_zero_output_returns_no_path() {
+        let mut mock = MockStellarProviderTrait::new();
+
+        let amounts: Vec<i128> = vec![1_000_000, 0];
+        let sc_vals: Vec<ScVal> = amounts
+            .iter()
+            .map(|&a| SoroswapService::<MockStellarProviderTrait>::i128_to_scval(a))
+            .collect();
+        let sc_vec: ScVec = sc_vals.try_into().unwrap();
+        let result_scval = ScVal::Vec(Some(sc_vec));
+
+        mock.expect_call_contract().returning(move |_, _, _| {
+            let result = result_scval.clone();
+            async move { Ok(result) }.boxed()
+        });
+
+        let provider = Arc::new(mock);
+        let service = create_test_service(provider, true);
+
+        let result = service
+            .get_token_to_xlm_quote(
+                "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+                1_000_000,
+                0.5,
+                None,
+            )
+            .await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarDexServiceError::NoPathFound => {}
+            e => panic!("Expected NoPathFound error, got {:?}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_token_to_xlm_quote_negative_output_returns_no_path() {
+        let mut mock = MockStellarProviderTrait::new();
+
+        let amounts: Vec<i128> = vec![1_000_000, -100];
+        let sc_vals: Vec<ScVal> = amounts
+            .iter()
+            .map(|&a| SoroswapService::<MockStellarProviderTrait>::i128_to_scval(a))
+            .collect();
+        let sc_vec: ScVec = sc_vals.try_into().unwrap();
+        let result_scval = ScVal::Vec(Some(sc_vec));
+
+        mock.expect_call_contract().returning(move |_, _, _| {
+            let result = result_scval.clone();
+            async move { Ok(result) }.boxed()
+        });
+
+        let provider = Arc::new(mock);
+        let service = create_test_service(provider, true);
+
+        let result = service
+            .get_token_to_xlm_quote(
+                "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+                1_000_000,
+                0.5,
+                None,
+            )
+            .await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarDexServiceError::NoPathFound => {}
+            e => panic!("Expected NoPathFound error, got {:?}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_token_to_xlm_quote_provider_error() {
+        let mut mock = MockStellarProviderTrait::new();
+
+        mock.expect_call_contract().returning(|_, _, _| {
+            async move {
+                Err(crate::services::provider::ProviderError::Other(
+                    "Connection failed".to_string(),
+                ))
+            }
+            .boxed()
+        });
+
+        let provider = Arc::new(mock);
+        let service = create_test_service(provider, true);
+
+        let result = service
+            .get_token_to_xlm_quote(
+                "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+                1_000_000,
+                0.5,
+                None,
+            )
+            .await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarDexServiceError::ApiError { message } => {
+                assert!(message.contains("router call failed"));
+            }
+            e => panic!("Expected ApiError, got {:?}", e),
+        }
+    }
+
+    // ==================== prepare_swap_transaction Tests ====================
+
+    #[tokio::test]
+    async fn test_prepare_swap_transaction_token_to_native() {
+        let mut mock = MockStellarProviderTrait::new();
+
+        let amounts: Vec<i128> = vec![1_000_000, 950_000];
+        let sc_vals: Vec<ScVal> = amounts
+            .iter()
+            .map(|&a| SoroswapService::<MockStellarProviderTrait>::i128_to_scval(a))
+            .collect();
+        let sc_vec: ScVec = sc_vals.try_into().unwrap();
+        let result_scval = ScVal::Vec(Some(sc_vec));
+
+        mock.expect_call_contract().returning(move |_, _, _| {
+            let result = result_scval.clone();
+            async move { Ok(result) }.boxed()
+        });
+
+        let provider = Arc::new(mock);
+        let service = create_test_service(provider, true);
+
+        let params = SwapTransactionParams {
+            source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            source_asset: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(),
+            destination_asset: "native".to_string(),
+            amount: 1_000_000,
+            slippage_percent: 0.5,
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            source_asset_decimals: Some(7),
+            destination_asset_decimals: None,
+        };
+
+        let (xdr, quote) = service.prepare_swap_transaction(params).await.unwrap();
+
+        assert!(xdr.is_empty()); // Placeholder
+        assert_eq!(quote.out_amount, 950_000);
+    }
+
+    #[tokio::test]
+    async fn test_prepare_swap_transaction_native_to_token() {
+        let mut mock = MockStellarProviderTrait::new();
+
+        let amounts: Vec<i128> = vec![1_000_000, 1_050_000];
+        let sc_vals: Vec<ScVal> = amounts
+            .iter()
+            .map(|&a| SoroswapService::<MockStellarProviderTrait>::i128_to_scval(a))
+            .collect();
+        let sc_vec: ScVec = sc_vals.try_into().unwrap();
+        let result_scval = ScVal::Vec(Some(sc_vec));
+
+        mock.expect_call_contract().returning(move |_, _, _| {
+            let result = result_scval.clone();
+            async move { Ok(result) }.boxed()
+        });
+
+        let provider = Arc::new(mock);
+        let service = create_test_service(provider, true);
+
+        let params = SwapTransactionParams {
+            source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            source_asset: "native".to_string(),
+            destination_asset: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
+                .to_string(),
+            amount: 1_000_000,
+            slippage_percent: 0.5,
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            source_asset_decimals: None,
+            destination_asset_decimals: Some(7),
+        };
+
+        let (xdr, quote) = service.prepare_swap_transaction(params).await.unwrap();
+
+        assert!(xdr.is_empty()); // Placeholder
+        assert_eq!(quote.out_amount, 1_050_000);
+    }
+
+    #[tokio::test]
+    async fn test_prepare_swap_transaction_token_to_token_not_supported() {
+        let provider = create_mock_provider();
+        let service = create_test_service(provider, true);
+
+        let params = SwapTransactionParams {
+            source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            source_asset: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(),
+            destination_asset: "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"
+                .to_string(),
+            amount: 1_000_000,
+            slippage_percent: 0.5,
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            source_asset_decimals: Some(7),
+            destination_asset_decimals: Some(7),
+        };
+
+        let result = service.prepare_swap_transaction(params).await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarDexServiceError::InvalidAssetIdentifier(msg) => {
+                assert!(msg.contains("only supports swaps involving native XLM"));
+            }
+            e => panic!("Expected InvalidAssetIdentifier, got {:?}", e),
+        }
+    }
+
+    // ==================== execute_swap Tests ====================
+
+    #[tokio::test]
+    async fn test_execute_swap_not_implemented() {
+        let provider = create_mock_provider();
+        let service = create_test_service(provider, true);
+
+        let params = SwapTransactionParams {
+            source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            source_asset: "native".to_string(),
+            destination_asset: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
+                .to_string(),
+            amount: 1_000_000,
+            slippage_percent: 0.5,
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            source_asset_decimals: None,
+            destination_asset_decimals: Some(7),
+        };
+
+        let result = service.execute_swap(params).await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarDexServiceError::UnknownError(msg) => {
+                assert!(msg.contains("not yet implemented"));
+            }
+            e => panic!("Expected UnknownError, got {:?}", e),
+        }
+    }
+
+    // ==================== Price Impact Calculation Tests ====================
+
+    #[tokio::test]
+    async fn test_price_impact_calculation() {
+        let mut mock = MockStellarProviderTrait::new();
+
+        // 10% price impact: in 1_000_000, out 900_000
+        let amounts: Vec<i128> = vec![1_000_000, 900_000];
+        let sc_vals: Vec<ScVal> = amounts
+            .iter()
+            .map(|&a| SoroswapService::<MockStellarProviderTrait>::i128_to_scval(a))
+            .collect();
+        let sc_vec: ScVec = sc_vals.try_into().unwrap();
+        let result_scval = ScVal::Vec(Some(sc_vec));
+
+        mock.expect_call_contract().returning(move |_, _, _| {
+            let result = result_scval.clone();
+            async move { Ok(result) }.boxed()
+        });
+
+        let provider = Arc::new(mock);
+        let service = create_test_service(provider, true);
+
+        let quote = service
+            .get_token_to_xlm_quote(
+                "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+                1_000_000,
+                0.5,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Price impact should be around 10%
+        assert!(quote.price_impact_pct > 9.0 && quote.price_impact_pct < 11.0);
     }
 }
