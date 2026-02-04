@@ -9,11 +9,11 @@
 //! - Relayer health checks
 use std::{env, sync::Arc};
 
-use apalis_redis::{Config, RedisStorage};
+use apalis::prelude::MakeShared;
+use apalis_redis::{
+    aio::MultiplexedConnection, shared::SharedRedisStorage, RedisConfig, RedisStorage,
+};
 use color_eyre::{eyre, Result};
-use redis::aio::{ConnectionManager, ConnectionManagerConfig};
-use serde::{Deserialize, Serialize};
-use tokio::time::Duration;
 use tracing::info;
 
 use crate::{config::ServerConfig, utils::RedisConnections};
@@ -25,17 +25,19 @@ use super::{
 
 #[derive(Clone)]
 pub struct Queue {
-    pub transaction_request_queue: RedisStorage<Job<TransactionRequest>>,
-    pub transaction_submission_queue: RedisStorage<Job<TransactionSend>>,
+    pub transaction_request_queue: RedisStorage<Job<TransactionRequest>, MultiplexedConnection>,
+    pub transaction_submission_queue: RedisStorage<Job<TransactionSend>, MultiplexedConnection>,
     /// Default/fallback status queue for backward compatibility, Solana, and future networks
-    pub transaction_status_queue: RedisStorage<Job<TransactionStatusCheck>>,
+    pub transaction_status_queue: RedisStorage<Job<TransactionStatusCheck>, MultiplexedConnection>,
     /// EVM-specific status queue with slower retries
-    pub transaction_status_queue_evm: RedisStorage<Job<TransactionStatusCheck>>,
+    pub transaction_status_queue_evm:
+        RedisStorage<Job<TransactionStatusCheck>, MultiplexedConnection>,
     /// Stellar-specific status queue with fast retries
-    pub transaction_status_queue_stellar: RedisStorage<Job<TransactionStatusCheck>>,
-    pub notification_queue: RedisStorage<Job<NotificationSend>>,
-    pub token_swap_request_queue: RedisStorage<Job<TokenSwapRequest>>,
-    pub relayer_health_check_queue: RedisStorage<Job<RelayerHealthCheck>>,
+    pub transaction_status_queue_stellar:
+        RedisStorage<Job<TransactionStatusCheck>, MultiplexedConnection>,
+    pub notification_queue: RedisStorage<Job<NotificationSend>, MultiplexedConnection>,
+    pub token_swap_request_queue: RedisStorage<Job<TokenSwapRequest>, MultiplexedConnection>,
+    pub relayer_health_check_queue: RedisStorage<Job<RelayerHealthCheck>, MultiplexedConnection>,
     /// Redis connection pools for handlers that need pool-based access.
     /// Provides both primary (write) and reader (read) pools for:
     /// - Distributed locking
@@ -61,79 +63,44 @@ impl std::fmt::Debug for Queue {
 }
 
 impl Queue {
-    /// Creates a RedisStorage for a specific job type using a ConnectionManager.
-    ///
-    /// # Arguments
-    /// * `namespace` - Redis key namespace for this queue
-    /// * `conn` - ConnectionManager with auto-reconnect
-    /// * `poll_interval` - How often to poll for scheduled jobs (None = default 2s for high-frequency queues)
-    ///
-    /// ConnectionManager provides automatic reconnection on connection failures,
-    /// ensuring queue processing continues even if the Redis connection drops temporarily.
-    fn storage<T: Serialize + for<'de> Deserialize<'de>>(
-        namespace: &str,
-        conn: ConnectionManager,
-        poll_interval: Option<Duration>,
-    ) -> RedisStorage<T> {
-        // Default to 2 seconds for high-frequency queues (transaction processing)
-        // Use longer intervals for lower-frequency queues to reduce Redis load
-        let interval = poll_interval.unwrap_or(Duration::from_secs(2));
-
-        let config = Config::default()
-            .set_namespace(namespace)
-            .set_enqueue_scheduled(interval);
-
-        RedisStorage::new_with_config(conn, config)
-    }
-
     /// Sets up all job queues with properly configured Redis connections.
     ///
     /// # Architecture
-    /// - **Queue storages**: Use `ConnectionManager` with configured timeouts for auto-reconnect
+    /// - **Queue storages**: Use `SharedRedisStorage` for efficient connection sharing
     /// - **Handler operations**: Use `redis_connections` pool for metadata, locking, counters
     ///
     /// # Arguments
     /// * `redis_connections` - Redis connection pools for handler operations.
     ///
     /// # Connection Configuration
-    /// - `connection_timeout`: Max time to establish TCP connection to Redis
-    /// - `response_timeout`: Max time to wait for Redis command responses
-    /// - Auto-reconnect: ConnectionManager automatically reconnects on failures
+    /// Uses `SharedRedisStorage` from apalis-redis v1.0 which internally manages
+    /// connection pooling and reconnection. Each queue gets its own storage instance
+    /// but shares the underlying Redis connection for efficiency.
     pub async fn setup(redis_connections: Arc<RedisConnections>) -> Result<Self> {
         let server_config = ServerConfig::from_env();
         let redis_url = &server_config.redis_url;
 
-        // Create Redis client
+        // Create Redis client for SharedRedisStorage with RESP3 protocol
+        // apalis-redis v1.0.0-rc.3 requires RESP3 for push notifications
         let client = redis::Client::open(redis_url.as_str())
             .map_err(|e| eyre::eyre!("Failed to create Redis client for queue: {}", e))?;
 
-        // Configure ConnectionManager with timeouts tuned for HTTP request lifecycle.
-        // Goal: fail fast enough
-        // while still recovering from brief Redis hiccups.
-        //
-        // Worst case calculation: 3 attempts × 5s timeout + ~0.3s backoff = ~15.3s
-        // This leaves headroom for DB operations and other processing.
-        let queue_timeout = Duration::from_secs(5); // Cap at 5s regardless of env setting
-        let conn_config = ConnectionManagerConfig::new()
-            .set_connection_timeout(queue_timeout) // TCP connection timeout
-            .set_response_timeout(queue_timeout)   // Redis command response timeout
-            .set_number_of_retries(2)              // 2 retries = 3 total attempts
-            .set_max_delay(1000); // Cap backoff at 1s for faster failure detection
+        // Get connection info and set RESP3 protocol
+        let mut connection_info = client.get_connection_info().clone();
+        connection_info.redis.protocol = redis::ProtocolVersion::RESP3;
 
-        // Create ConnectionManager with config - provides auto-reconnect for queue operations
-        let conn = ConnectionManager::new_with_config(client, conn_config)
+        // Recreate client with RESP3 protocol
+        let client = redis::Client::open(connection_info)
+            .map_err(|e| eyre::eyre!("Failed to create Redis client with RESP3: {}", e))?;
+
+        // Create SharedRedisStorage - manages connection internally with auto-reconnect
+        let mut shared_storage = SharedRedisStorage::new(client)
             .await
-            .map_err(|e| {
-                eyre::eyre!("Failed to create Redis connection manager for queue: {}", e)
-            })?;
+            .map_err(|e| eyre::eyre!("Failed to create SharedRedisStorage: {}", e))?;
 
         info!(
             redis_url = %redis_url,
-            connection_timeout_ms = 5000,
-            response_timeout_ms = 5000,
-            retries = 2,
-            max_backoff_ms = 1000,
-            "Queue setup: created ConnectionManager with fast-fail timeouts"
+            "Queue setup: created SharedRedisStorage for efficient connection sharing"
         );
 
         // use REDIS_KEY_PREFIX only if set, otherwise do not use it
@@ -143,55 +110,57 @@ impl Queue {
             .map(|value| format!("{value}:queue:"))
             .unwrap_or_default();
 
-        // Poll intervals for scheduled jobs:
-        // - High-frequency queues (transactions): 2s (default) for responsive processing
-        // - Lower-frequency queues: 20s to reduce Redis polling load
-        let poll_fast = Some(Duration::from_secs(2)); // Uses default 2s
-        let poll_slow = Some(Duration::from_secs(20));
-
         Ok(Self {
             // Transaction queues - need fast polling for responsive processing
-            transaction_request_queue: Self::storage(
-                &format!("{redis_key_prefix}transaction_request_queue"),
-                conn.clone(),
-                poll_slow, // scheduling not used
-            ),
-            transaction_submission_queue: Self::storage(
-                &format!("{redis_key_prefix}transaction_submission_queue"),
-                conn.clone(),
-                poll_slow, // scheduling not used
-            ),
-            transaction_status_queue: Self::storage(
-                &format!("{redis_key_prefix}transaction_status_queue"),
-                conn.clone(),
-                poll_fast,
-            ),
-            transaction_status_queue_evm: Self::storage(
-                &format!("{redis_key_prefix}transaction_status_queue_evm"),
-                conn.clone(),
-                poll_fast,
-            ),
-            transaction_status_queue_stellar: Self::storage(
-                &format!("{redis_key_prefix}transaction_status_queue_stellar"),
-                conn.clone(),
-                poll_fast,
-            ),
-            // Lower-frequency queues - can use longer poll interval
-            notification_queue: Self::storage(
-                &format!("{redis_key_prefix}notification_queue"),
-                conn.clone(),
-                poll_slow, // scheduling not used
-            ),
-            token_swap_request_queue: Self::storage(
-                &format!("{redis_key_prefix}token_swap_request_queue"),
-                conn.clone(),
-                poll_slow, // scheduling not used
-            ),
-            relayer_health_check_queue: Self::storage(
-                &format!("{redis_key_prefix}relayer_health_check_queue"),
-                conn,
-                poll_slow, // scheduling not used
-            ),
+            transaction_request_queue: shared_storage
+                .make_shared_with_config(
+                    RedisConfig::default()
+                        .set_namespace(&format!("{redis_key_prefix}transaction_request_queue")),
+                )
+                .map_err(|e| eyre::eyre!("Failed to create transaction_request_queue: {}", e))?,
+            transaction_submission_queue: shared_storage
+                .make_shared_with_config(
+                    RedisConfig::default()
+                        .set_namespace(&format!("{redis_key_prefix}transaction_submission_queue")),
+                )
+                .map_err(|e| eyre::eyre!("Failed to create transaction_submission_queue: {}", e))?,
+            transaction_status_queue: shared_storage
+                .make_shared_with_config(
+                    RedisConfig::default()
+                        .set_namespace(&format!("{redis_key_prefix}transaction_status_queue")),
+                )
+                .map_err(|e| eyre::eyre!("Failed to create transaction_status_queue: {}", e))?,
+            transaction_status_queue_evm: shared_storage
+                .make_shared_with_config(
+                    RedisConfig::default()
+                        .set_namespace(&format!("{redis_key_prefix}transaction_status_queue_evm")),
+                )
+                .map_err(|e| eyre::eyre!("Failed to create transaction_status_queue_evm: {}", e))?,
+            transaction_status_queue_stellar: shared_storage
+                .make_shared_with_config(RedisConfig::default().set_namespace(&format!(
+                    "{redis_key_prefix}transaction_status_queue_stellar"
+                )))
+                .map_err(|e| {
+                    eyre::eyre!("Failed to create transaction_status_queue_stellar: {}", e)
+                })?,
+            notification_queue: shared_storage
+                .make_shared_with_config(
+                    RedisConfig::default()
+                        .set_namespace(&format!("{redis_key_prefix}notification_queue")),
+                )
+                .map_err(|e| eyre::eyre!("Failed to create notification_queue: {}", e))?,
+            token_swap_request_queue: shared_storage
+                .make_shared_with_config(
+                    RedisConfig::default()
+                        .set_namespace(&format!("{redis_key_prefix}token_swap_request_queue")),
+                )
+                .map_err(|e| eyre::eyre!("Failed to create token_swap_request_queue: {}", e))?,
+            relayer_health_check_queue: shared_storage
+                .make_shared_with_config(
+                    RedisConfig::default()
+                        .set_namespace(&format!("{redis_key_prefix}relayer_health_check_queue")),
+                )
+                .map_err(|e| eyre::eyre!("Failed to create relayer_health_check_queue: {}", e))?,
             redis_connections,
         })
     }
@@ -207,13 +176,13 @@ impl Queue {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use apalis_redis::RedisConfig;
 
     #[test]
     fn test_queue_storage_configuration() {
         // Test the config creation logic without actual Redis connections
         let namespace = "test_namespace";
-        let config = Config::default().set_namespace(namespace);
+        let config = RedisConfig::default().set_namespace(namespace);
 
         assert_eq!(config.get_namespace(), namespace);
     }
@@ -289,7 +258,7 @@ mod tests {
         let queue_name = "transaction_request_queue";
         let full_namespace = format!("{}{}", prefix, queue_name);
 
-        let config = Config::default().set_namespace(&full_namespace);
+        let config = RedisConfig::default().set_namespace(&full_namespace);
         assert_eq!(
             config.get_namespace(),
             "myprefix:queue:transaction_request_queue"
@@ -301,7 +270,7 @@ mod tests {
         // Test that namespace works without prefix
         let queue_name = "transaction_request_queue";
 
-        let config = Config::default().set_namespace(queue_name);
+        let config = RedisConfig::default().set_namespace(queue_name);
         assert_eq!(config.get_namespace(), "transaction_request_queue");
     }
 }

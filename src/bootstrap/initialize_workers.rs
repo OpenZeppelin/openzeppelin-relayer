@@ -33,12 +33,12 @@ use apalis::prelude::*;
 
 use apalis::layers::retry::backoff::MakeBackoff;
 use apalis::layers::retry::{backoff::ExponentialBackoffMaker, RetryPolicy};
-use apalis::layers::ErrorHandlingLayer;
 
 /// Re-exports from [`tower::util`]
 pub use tower::util::rng::HasherRng;
 
 use apalis_cron::CronStream;
+use cron::Schedule;
 use eyre::Result;
 use std::{str::FromStr, time::Duration};
 use tokio::signal::unix::SignalKind;
@@ -93,184 +93,254 @@ where
 {
     let queue = app_state.job_producer.get_queue().await?;
 
-    let transaction_request_queue_worker = WorkerBuilder::new(TRANSACTION_REQUEST)
-        .layer(ErrorHandlingLayer::new())
-        .retry(
-            RetryPolicy::retries(WORKER_TRANSACTION_REQUEST_RETRIES)
-                .with_backoff(create_backoff(500, 5000, 0.99)?.make_backoff()),
-        )
-        .enable_tracing()
-        .catch_panic()
-        .concurrency(ServerConfig::get_worker_concurrency(
-            TRANSACTION_REQUEST,
-            DEFAULT_CONCURRENCY_TRANSACTION_REQUEST,
-        ))
-        .data(app_state.clone())
-        .backend(queue.transaction_request_queue.clone())
-        .build_fn(transaction_request_handler);
+    // Pre-create backoff makers for workers
+    let transaction_request_backoff = create_backoff(500, 5000, 0.99)?;
+    let transaction_submit_backoff = create_backoff(500, 2000, 0.99)?;
+    let transaction_status_backoff = create_backoff(5000, 8000, 0.99)?;
+    let transaction_status_evm_backoff = create_backoff(8000, 12000, 0.99)?;
+    let transaction_status_stellar_backoff = create_backoff(2000, 3000, 0.99)?;
+    let notification_backoff = create_backoff(2000, 8000, 0.99)?;
+    let token_swap_backoff = create_backoff(5000, 20000, 0.99)?;
+    let transaction_cleanup_backoff = create_backoff(5000, 20000, 0.99)?;
+    let system_cleanup_backoff = create_backoff(5000, 20000, 0.99)?;
+    let health_check_backoff = create_backoff(2000, 10000, 0.99)?;
 
-    let transaction_submission_queue_worker = WorkerBuilder::new(TRANSACTION_SENDER)
-        .layer(ErrorHandlingLayer::new())
-        .enable_tracing()
-        .catch_panic()
-        .retry(
-            RetryPolicy::retries(WORKER_TRANSACTION_SUBMIT_RETRIES)
-                .with_backoff(create_backoff(500, 2000, 0.99)?.make_backoff()),
-        )
-        .concurrency(ServerConfig::get_worker_concurrency(
-            TRANSACTION_SENDER,
-            DEFAULT_CONCURRENCY_TRANSACTION_SENDER,
-        ))
-        .data(app_state.clone())
-        .backend(queue.transaction_submission_queue.clone())
-        .build_fn(transaction_submission_handler);
+    // Cron schedules
+    let transaction_cleanup_schedule = Schedule::from_str("0 */10 * * * *")?; // every 10 minutes
+    let system_cleanup_schedule = Schedule::from_str("0 0 * * * *")?; // every hour
 
-    // Generic status checker
-    // Uses medium settings that work reasonably for most chains
-    let transaction_status_queue_worker = WorkerBuilder::new(TRANSACTION_STATUS_CHECKER)
-        .layer(ErrorHandlingLayer::new())
-        .enable_tracing()
-        .catch_panic()
-        .retry(
-            RetryPolicy::retries(WORKER_TRANSACTION_STATUS_CHECKER_RETRIES)
-                .with_backoff(create_backoff(5000, 8000, 0.99)?.make_backoff()),
-        )
-        .concurrency(ServerConfig::get_worker_concurrency(
-            TRANSACTION_STATUS_CHECKER,
-            DEFAULT_CONCURRENCY_STATUS_CHECKER,
-        ))
-        .data(app_state.clone())
-        .backend(queue.transaction_status_queue.clone())
-        .build_fn(transaction_status_handler);
+    // Clone queues for closures
+    let transaction_request_queue = queue.transaction_request_queue.clone();
+    let transaction_submission_queue = queue.transaction_submission_queue.clone();
+    let transaction_status_queue = queue.transaction_status_queue.clone();
+    let transaction_status_queue_evm = queue.transaction_status_queue_evm.clone();
+    let transaction_status_queue_stellar = queue.transaction_status_queue_stellar.clone();
+    let notification_queue = queue.notification_queue.clone();
+    let token_swap_request_queue = queue.token_swap_request_queue.clone();
+    let relayer_health_check_queue = queue.relayer_health_check_queue.clone();
 
-    // EVM status checker - slower retries to avoid premature resubmission
-    // EVM has longer block times (~12s) and needs time for resubmission logic
-    let transaction_status_queue_worker_evm = WorkerBuilder::new(TRANSACTION_STATUS_CHECKER_EVM)
-        .layer(ErrorHandlingLayer::new())
-        .enable_tracing()
-        .catch_panic()
-        .retry(
-            RetryPolicy::retries(WORKER_TRANSACTION_STATUS_CHECKER_RETRIES)
-                .with_backoff(create_backoff(8000, 12000, 0.99)?.make_backoff()),
-        )
-        .concurrency(ServerConfig::get_worker_concurrency(
-            TRANSACTION_STATUS_CHECKER_EVM,
-            DEFAULT_CONCURRENCY_STATUS_CHECKER_EVM,
-        ))
-        .data(app_state.clone())
-        .backend(queue.transaction_status_queue_evm.clone())
-        .build_fn(transaction_status_handler);
-
-    // Stellar status checker - fast retries for fast finality
-    // Stellar has sub-second finality, needs more frequent status checks
-    let transaction_status_queue_worker_stellar =
-        WorkerBuilder::new(TRANSACTION_STATUS_CHECKER_STELLAR)
-            .layer(ErrorHandlingLayer::new())
-            .enable_tracing()
-            .catch_panic()
-            .retry(
-                RetryPolicy::retries(WORKER_TRANSACTION_STATUS_CHECKER_RETRIES)
-                    .with_backoff(create_backoff(2000, 3000, 0.99)?.make_backoff()),
-            )
-            .concurrency(ServerConfig::get_worker_concurrency(
-                TRANSACTION_STATUS_CHECKER_STELLAR,
-                DEFAULT_CONCURRENCY_STATUS_CHECKER_STELLAR,
-            ))
-            .data(app_state.clone())
-            .backend(queue.transaction_status_queue_stellar.clone())
-            .build_fn(transaction_status_handler);
-
-    let notification_queue_worker = WorkerBuilder::new(NOTIFICATION_SENDER)
-        .layer(ErrorHandlingLayer::new())
-        .enable_tracing()
-        .catch_panic()
-        .retry(
-            RetryPolicy::retries(WORKER_NOTIFICATION_SENDER_RETRIES)
-                .with_backoff(create_backoff(2000, 8000, 0.99)?.make_backoff()),
-        )
-        .concurrency(ServerConfig::get_worker_concurrency(
-            NOTIFICATION_SENDER,
-            DEFAULT_CONCURRENCY_NOTIFICATION,
-        ))
-        .data(app_state.clone())
-        .backend(queue.notification_queue.clone())
-        .build_fn(notification_handler);
-
-    let token_swap_request_queue_worker = WorkerBuilder::new(TOKEN_SWAP_REQUEST)
-        .layer(ErrorHandlingLayer::new())
-        .enable_tracing()
-        .catch_panic()
-        .retry(
-            RetryPolicy::retries(WORKER_TOKEN_SWAP_REQUEST_RETRIES)
-                .with_backoff(create_backoff(5000, 20000, 0.99)?.make_backoff()),
-        )
-        .concurrency(ServerConfig::get_worker_concurrency(
-            TOKEN_SWAP_REQUEST,
-            DEFAULT_CONCURRENCY_TOKEN_SWAP,
-        ))
-        .data(app_state.clone())
-        .backend(queue.token_swap_request_queue.clone())
-        .build_fn(token_swap_request_handler);
-
-    let transaction_cleanup_queue_worker = WorkerBuilder::new(TRANSACTION_CLEANUP)
-        .layer(ErrorHandlingLayer::new())
-        .enable_tracing()
-        .catch_panic()
-        .retry(
-            RetryPolicy::retries(WORKER_TRANSACTION_CLEANUP_RETRIES)
-                .with_backoff(create_backoff(5000, 20000, 0.99)?.make_backoff()),
-        )
-        .concurrency(ServerConfig::get_worker_concurrency(TRANSACTION_CLEANUP, 1)) // Default to 1 to avoid DB conflicts
-        .data(app_state.clone())
-        .backend(CronStream::new(
-            // every 10 minutes
-            apalis_cron::Schedule::from_str("0 */10 * * * *")?,
-        ))
-        .build_fn(transaction_cleanup_handler);
-
-    let system_cleanup_queue_worker = WorkerBuilder::new(SYSTEM_CLEANUP)
-        .layer(ErrorHandlingLayer::new())
-        .enable_tracing()
-        .catch_panic()
-        .retry(
-            RetryPolicy::retries(WORKER_SYSTEM_CLEANUP_RETRIES)
-                .with_backoff(create_backoff(5000, 20000, 0.99)?.make_backoff()),
-        )
-        .concurrency(1)
-        .data(app_state.clone())
-        .backend(CronStream::new(
-            // Runs at the start of every hour
-            apalis_cron::Schedule::from_str("0 0 * * * *")?,
-        ))
-        .build_fn(system_cleanup_handler);
-
-    let relayer_health_check_worker = WorkerBuilder::new(RELAYER_HEALTH_CHECK)
-        .layer(ErrorHandlingLayer::new())
-        .enable_tracing()
-        .catch_panic()
-        .retry(
-            RetryPolicy::retries(WORKER_RELAYER_HEALTH_CHECK_RETRIES)
-                .with_backoff(create_backoff(2000, 10000, 0.99)?.make_backoff()),
-        )
-        .concurrency(ServerConfig::get_worker_concurrency(
-            RELAYER_HEALTH_CHECK,
-            DEFAULT_CONCURRENCY_HEALTH_CHECK,
-        ))
-        .data(app_state.clone())
-        .backend(queue.relayer_health_check_queue.clone())
-        .build_fn(relayer_health_check_handler);
+    // Clone app_state for each closure
+    let app_state_1 = app_state.clone();
+    let app_state_2 = app_state.clone();
+    let app_state_3 = app_state.clone();
+    let app_state_4 = app_state.clone();
+    let app_state_5 = app_state.clone();
+    let app_state_6 = app_state.clone();
+    let app_state_7 = app_state.clone();
+    let app_state_8 = app_state.clone();
+    let app_state_9 = app_state.clone();
+    let app_state_10 = app_state.clone();
 
     let monitor = Monitor::new()
-        .register(transaction_request_queue_worker)
-        .register(transaction_submission_queue_worker)
-        .register(transaction_status_queue_worker)
-        .register(transaction_status_queue_worker_evm)
-        .register(transaction_status_queue_worker_stellar)
-        .register(notification_queue_worker)
-        .register(token_swap_request_queue_worker)
-        .register(transaction_cleanup_queue_worker)
-        .register(system_cleanup_queue_worker)
-        .register(relayer_health_check_worker)
+        .register({
+            let queue = transaction_request_queue.clone();
+            let backoff = transaction_request_backoff.clone();
+            let app_state = app_state_1.clone();
+            move |_| {
+                WorkerBuilder::new(TRANSACTION_REQUEST)
+                    .backend(queue.clone())
+                    .retry(
+                        RetryPolicy::retries(WORKER_TRANSACTION_REQUEST_RETRIES)
+                            .with_backoff(backoff.clone().make_backoff()),
+                    )
+                    .enable_tracing()
+                    .catch_panic()
+                    .concurrency(ServerConfig::get_worker_concurrency(
+                        TRANSACTION_REQUEST,
+                        DEFAULT_CONCURRENCY_TRANSACTION_REQUEST,
+                    ))
+                    .data(app_state.clone())
+                    .build(transaction_request_handler)
+            }
+        })
+        .register({
+            let queue = transaction_submission_queue.clone();
+            let backoff = transaction_submit_backoff.clone();
+            let app_state = app_state_2.clone();
+            move |_| {
+                WorkerBuilder::new(TRANSACTION_SENDER)
+                    .backend(queue.clone())
+                    .enable_tracing()
+                    .catch_panic()
+                    .retry(
+                        RetryPolicy::retries(WORKER_TRANSACTION_SUBMIT_RETRIES)
+                            .with_backoff(backoff.clone().make_backoff()),
+                    )
+                    .concurrency(ServerConfig::get_worker_concurrency(
+                        TRANSACTION_SENDER,
+                        DEFAULT_CONCURRENCY_TRANSACTION_SENDER,
+                    ))
+                    .data(app_state.clone())
+                    .build(transaction_submission_handler)
+            }
+        })
+        // Generic status checker - uses medium settings that work reasonably for most chains
+        .register({
+            let queue = transaction_status_queue.clone();
+            let backoff = transaction_status_backoff.clone();
+            let app_state = app_state_3.clone();
+            move |_| {
+                WorkerBuilder::new(TRANSACTION_STATUS_CHECKER)
+                    .backend(queue.clone())
+                    .enable_tracing()
+                    .catch_panic()
+                    .retry(
+                        RetryPolicy::retries(WORKER_TRANSACTION_STATUS_CHECKER_RETRIES)
+                            .with_backoff(backoff.clone().make_backoff()),
+                    )
+                    .concurrency(ServerConfig::get_worker_concurrency(
+                        TRANSACTION_STATUS_CHECKER,
+                        DEFAULT_CONCURRENCY_STATUS_CHECKER,
+                    ))
+                    .data(app_state.clone())
+                    .build(transaction_status_handler)
+            }
+        })
+        // EVM status checker - slower retries to avoid premature resubmission
+        // EVM has longer block times (~12s) and needs time for resubmission logic
+        .register({
+            let queue = transaction_status_queue_evm.clone();
+            let backoff = transaction_status_evm_backoff.clone();
+            let app_state = app_state_4.clone();
+            move |_| {
+                WorkerBuilder::new(TRANSACTION_STATUS_CHECKER_EVM)
+                    .backend(queue.clone())
+                    .enable_tracing()
+                    .catch_panic()
+                    .retry(
+                        RetryPolicy::retries(WORKER_TRANSACTION_STATUS_CHECKER_RETRIES)
+                            .with_backoff(backoff.clone().make_backoff()),
+                    )
+                    .concurrency(ServerConfig::get_worker_concurrency(
+                        TRANSACTION_STATUS_CHECKER_EVM,
+                        DEFAULT_CONCURRENCY_STATUS_CHECKER_EVM,
+                    ))
+                    .data(app_state.clone())
+                    .build(transaction_status_handler)
+            }
+        })
+        // Stellar status checker - fast retries for fast finality
+        // Stellar has sub-second finality, needs more frequent status checks
+        .register({
+            let queue = transaction_status_queue_stellar.clone();
+            let backoff = transaction_status_stellar_backoff.clone();
+            let app_state = app_state_5.clone();
+            move |_| {
+                WorkerBuilder::new(TRANSACTION_STATUS_CHECKER_STELLAR)
+                    .backend(queue.clone())
+                    .enable_tracing()
+                    .catch_panic()
+                    .retry(
+                        RetryPolicy::retries(WORKER_TRANSACTION_STATUS_CHECKER_RETRIES)
+                            .with_backoff(backoff.clone().make_backoff()),
+                    )
+                    .concurrency(ServerConfig::get_worker_concurrency(
+                        TRANSACTION_STATUS_CHECKER_STELLAR,
+                        DEFAULT_CONCURRENCY_STATUS_CHECKER_STELLAR,
+                    ))
+                    .data(app_state.clone())
+                    .build(transaction_status_handler)
+            }
+        })
+        .register({
+            let queue = notification_queue.clone();
+            let backoff = notification_backoff.clone();
+            let app_state = app_state_6.clone();
+            move |_| {
+                WorkerBuilder::new(NOTIFICATION_SENDER)
+                    .backend(queue.clone())
+                    .enable_tracing()
+                    .catch_panic()
+                    .retry(
+                        RetryPolicy::retries(WORKER_NOTIFICATION_SENDER_RETRIES)
+                            .with_backoff(backoff.clone().make_backoff()),
+                    )
+                    .concurrency(ServerConfig::get_worker_concurrency(
+                        NOTIFICATION_SENDER,
+                        DEFAULT_CONCURRENCY_NOTIFICATION,
+                    ))
+                    .data(app_state.clone())
+                    .build(notification_handler)
+            }
+        })
+        .register({
+            let queue = token_swap_request_queue.clone();
+            let backoff = token_swap_backoff.clone();
+            let app_state = app_state_7.clone();
+            move |_| {
+                WorkerBuilder::new(TOKEN_SWAP_REQUEST)
+                    .backend(queue.clone())
+                    .enable_tracing()
+                    .catch_panic()
+                    .retry(
+                        RetryPolicy::retries(WORKER_TOKEN_SWAP_REQUEST_RETRIES)
+                            .with_backoff(backoff.clone().make_backoff()),
+                    )
+                    .concurrency(ServerConfig::get_worker_concurrency(
+                        TOKEN_SWAP_REQUEST,
+                        DEFAULT_CONCURRENCY_TOKEN_SWAP,
+                    ))
+                    .data(app_state.clone())
+                    .build(token_swap_request_handler)
+            }
+        })
+        .register({
+            let schedule = transaction_cleanup_schedule.clone();
+            let backoff = transaction_cleanup_backoff.clone();
+            let app_state = app_state_8.clone();
+            move |_| {
+                WorkerBuilder::new(TRANSACTION_CLEANUP)
+                    .backend(CronStream::new(schedule.clone()))
+                    .enable_tracing()
+                    .catch_panic()
+                    .retry(
+                        RetryPolicy::retries(WORKER_TRANSACTION_CLEANUP_RETRIES)
+                            .with_backoff(backoff.clone().make_backoff()),
+                    )
+                    .concurrency(ServerConfig::get_worker_concurrency(TRANSACTION_CLEANUP, 1))
+                    .data(app_state.clone())
+                    .build(transaction_cleanup_handler)
+            }
+        })
+        .register({
+            let schedule = system_cleanup_schedule.clone();
+            let backoff = system_cleanup_backoff.clone();
+            let app_state = app_state_9.clone();
+            move |_| {
+                WorkerBuilder::new(SYSTEM_CLEANUP)
+                    .backend(CronStream::new(schedule.clone()))
+                    .enable_tracing()
+                    .catch_panic()
+                    .retry(
+                        RetryPolicy::retries(WORKER_SYSTEM_CLEANUP_RETRIES)
+                            .with_backoff(backoff.clone().make_backoff()),
+                    )
+                    .concurrency(1)
+                    .data(app_state.clone())
+                    .build(system_cleanup_handler)
+            }
+        })
+        .register({
+            let queue = relayer_health_check_queue.clone();
+            let backoff = health_check_backoff.clone();
+            let app_state = app_state_10.clone();
+            move |_| {
+                WorkerBuilder::new(RELAYER_HEALTH_CHECK)
+                    .backend(queue.clone())
+                    .enable_tracing()
+                    .catch_panic()
+                    .retry(
+                        RetryPolicy::retries(WORKER_RELAYER_HEALTH_CHECK_RETRIES)
+                            .with_backoff(backoff.clone().make_backoff()),
+                    )
+                    .concurrency(ServerConfig::get_worker_concurrency(
+                        RELAYER_HEALTH_CHECK,
+                        DEFAULT_CONCURRENCY_HEALTH_CHECK,
+                    ))
+                    .data(app_state.clone())
+                    .build(relayer_health_check_handler)
+            }
+        })
         .on_event(monitor_handle_event)
         .shutdown_timeout(Duration::from_millis(5000));
 
@@ -378,9 +448,11 @@ where
         relayers_with_swap_enabled.len()
     );
 
-    let mut workers = Vec::new();
+    let swap_backoff = create_backoff(2000, 5000, 0.99)?;
 
-    let swap_backoff = create_backoff(2000, 5000, 0.99)?.make_backoff();
+    let mut monitor = Monitor::new()
+        .on_event(monitor_handle_event)
+        .shutdown_timeout(Duration::from_millis(5000));
 
     for relayer in relayers_with_swap_enabled {
         debug!(relayer = ?relayer, "found relayer with swap enabled");
@@ -418,7 +490,7 @@ where
             }
         };
 
-        let calendar_schedule = match apalis_cron::Schedule::from_str(&cron_schedule) {
+        let calendar_schedule = match Schedule::from_str(&cron_schedule) {
             Ok(schedule) => schedule,
             Err(e) => {
                 error!(relayer_id = %relayer.id, error = %e, "Failed to parse cron schedule; skipping");
@@ -426,40 +498,34 @@ where
             }
         };
 
-        // Create worker and add to the workers vector
-        let worker = WorkerBuilder::new(format!(
-            "{}-swap-schedule-{}",
-            network_type,
-            relayer.id.clone()
-        ))
-        .layer(ErrorHandlingLayer::new())
-        .enable_tracing()
-        .catch_panic()
-        .retry(
-            RetryPolicy::retries(WORKER_TOKEN_SWAP_REQUEST_RETRIES)
-                .with_backoff(swap_backoff.clone()),
-        )
-        .concurrency(1)
-        .data(relayer.id.clone())
-        .data(app_state.clone())
-        .backend(CronStream::new(calendar_schedule))
-        .build_fn(token_swap_cron_handler);
+        // Clone data for the closure
+        let worker_name = format!("{}-swap-schedule-{}", network_type, relayer.id.clone());
+        let relayer_id = relayer.id.clone();
+        let app_state_clone = app_state.clone();
+        let backoff = swap_backoff.clone();
+        let schedule = calendar_schedule.clone();
 
-        workers.push(worker);
+        // Register worker with the monitor
+        monitor = monitor.register(move |_| {
+            WorkerBuilder::new(worker_name.clone())
+                .backend(CronStream::new(schedule.clone()))
+                .enable_tracing()
+                .catch_panic()
+                .retry(
+                    RetryPolicy::retries(WORKER_TOKEN_SWAP_REQUEST_RETRIES)
+                        .with_backoff(backoff.clone().make_backoff()),
+                )
+                .concurrency(1)
+                .data(relayer_id.clone())
+                .data(app_state_clone.clone())
+                .build(token_swap_cron_handler)
+        });
+
         debug!(
             relayer_id = %relayer.id,
             network_type = %network_type,
             "Created worker for relayer with swap enabled"
         );
-    }
-
-    let mut monitor = Monitor::new()
-        .on_event(monitor_handle_event)
-        .shutdown_timeout(Duration::from_millis(5000));
-
-    // Register all workers with the monitor
-    for worker in workers {
-        monitor = monitor.register(worker);
     }
 
     let monitor_future = monitor.run_with_signal(async {
@@ -487,26 +553,26 @@ where
     Ok(())
 }
 
-fn monitor_handle_event(e: Worker<Event>) {
-    let worker_id = e.id();
-    match e.inner() {
-        Event::Engage(task_id) => {
-            debug!(worker_id = %worker_id, task_id = %task_id, "worker got a job");
+fn monitor_handle_event(ctx: &WorkerContext, event: &Event) {
+    let worker_name = ctx.name();
+    match event {
+        Event::Start => {
+            debug!(worker_name = %worker_name, "worker started");
+        }
+        Event::Success => {
+            debug!(worker_name = %worker_name, "worker processed a job successfully");
         }
         Event::Error(e) => {
-            error!(worker_id = %worker_id, error = %e, "worker encountered an error");
-        }
-        Event::Exit => {
-            debug!(worker_id = %worker_id, "worker exited");
-        }
-        Event::Idle => {
-            debug!(worker_id = %worker_id, "worker is idle");
-        }
-        Event::Start => {
-            debug!(worker_id = %worker_id, "worker started");
+            error!(worker_name = %worker_name, error = %e, "worker encountered an error");
         }
         Event::Stop => {
-            debug!(worker_id = %worker_id, "worker stopped");
+            debug!(worker_name = %worker_name, "worker stopped");
+        }
+        Event::Idle => {
+            debug!(worker_name = %worker_name, "worker is idle");
+        }
+        Event::HeartBeat => {
+            // Heartbeat events are typically too frequent to log
         }
         _ => {}
     }

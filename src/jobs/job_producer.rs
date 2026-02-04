@@ -14,7 +14,7 @@ use crate::{
     models::RelayerError,
     observability::request_id::get_request_id,
 };
-use apalis::prelude::Storage;
+use apalis::prelude::{Task, TaskSink};
 use apalis_redis::RedisError;
 use async_trait::async_trait;
 use serde::Serialize;
@@ -126,10 +126,19 @@ impl JobProducerTrait for JobProducer {
 
         match scheduled_on {
             Some(scheduled_on) => {
-                storage.schedule(job, scheduled_on).await?;
+                let task = Task::builder(job)
+                    .run_at_timestamp(scheduled_on as u64)
+                    .build();
+                storage
+                    .push_task(task)
+                    .await
+                    .map_err(|e| JobProducerError::QueueError(e.to_string()))?;
             }
             None => {
-                storage.push(job).await?;
+                storage
+                    .push(job)
+                    .await
+                    .map_err(|e| JobProducerError::QueueError(e.to_string()))?;
             }
         }
         debug!(
@@ -161,10 +170,17 @@ impl JobProducerTrait for JobProducer {
 
         match scheduled_on {
             Some(on) => {
-                storage.schedule(job, on).await?;
+                let task = Task::builder(job).run_at_timestamp(on as u64).build();
+                storage
+                    .push_task(task)
+                    .await
+                    .map_err(|e| JobProducerError::QueueError(e.to_string()))?;
             }
             None => {
-                storage.push(job).await?;
+                storage
+                    .push(job)
+                    .await
+                    .map_err(|e| JobProducerError::QueueError(e.to_string()))?;
             }
         }
         debug!(
@@ -207,10 +223,17 @@ impl JobProducerTrait for JobProducer {
 
         match scheduled_on {
             Some(on) => {
-                storage.schedule(job, on).await?;
+                let task = Task::builder(job).run_at_timestamp(on as u64).build();
+                storage
+                    .push_task(task)
+                    .await
+                    .map_err(|e| JobProducerError::QueueError(e.to_string()))?;
             }
             None => {
-                storage.push(job).await?;
+                storage
+                    .push(job)
+                    .await
+                    .map_err(|e| JobProducerError::QueueError(e.to_string()))?;
             }
         }
         debug!(
@@ -240,10 +263,17 @@ impl JobProducerTrait for JobProducer {
 
         match scheduled_on {
             Some(on) => {
-                storage.schedule(job, on).await?;
+                let task = Task::builder(job).run_at_timestamp(on as u64).build();
+                storage
+                    .push_task(task)
+                    .await
+                    .map_err(|e| JobProducerError::QueueError(e.to_string()))?;
             }
             None => {
-                storage.push(job).await?;
+                storage
+                    .push(job)
+                    .await
+                    .map_err(|e| JobProducerError::QueueError(e.to_string()))?;
             }
         }
 
@@ -272,10 +302,17 @@ impl JobProducerTrait for JobProducer {
 
         match scheduled_on {
             Some(on) => {
-                storage.schedule(job, on).await?;
+                let task = Task::builder(job).run_at_timestamp(on as u64).build();
+                storage
+                    .push_task(task)
+                    .await
+                    .map_err(|e| JobProducerError::QueueError(e.to_string()))?;
             }
             None => {
-                storage.push(job).await?;
+                storage
+                    .push(job)
+                    .await
+                    .map_err(|e| JobProducerError::QueueError(e.to_string()))?;
             }
         }
 
@@ -307,10 +344,19 @@ impl JobProducerTrait for JobProducer {
 
         match scheduled_on {
             Some(scheduled_on) => {
-                storage.schedule(job, scheduled_on).await?;
+                let task = Task::builder(job)
+                    .run_at_timestamp(scheduled_on as u64)
+                    .build();
+                storage
+                    .push_task(task)
+                    .await
+                    .map_err(|e| JobProducerError::QueueError(e.to_string()))?;
             }
             None => {
-                storage.push(job).await?;
+                storage
+                    .push(job)
+                    .await
+                    .map_err(|e| JobProducerError::QueueError(e.to_string()))?;
             }
         }
 

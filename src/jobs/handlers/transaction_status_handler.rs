@@ -5,13 +5,14 @@
 //! - Updating transaction status in storage
 //! - Tracking failure counts for circuit breaker decisions (stored in Redis by tx_id)
 use actix_web::web::ThinData;
-use apalis::prelude::{Attempt, Data, TaskId, *};
+use apalis::prelude::{Attempt, BoxDynError, Data, TaskId};
 use apalis_redis::RedisContext;
 use deadpool_redis::Pool;
 use eyre::Result;
 use redis::AsyncCommands;
 use std::sync::Arc;
 use tracing::{debug, info, instrument, warn};
+use ulid::Ulid;
 
 use crate::{
     config::ServerConfig,
@@ -43,9 +44,9 @@ pub async fn transaction_status_handler(
     job: Job<TransactionStatusCheck>,
     state: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
-    task_id: TaskId,
+    task_id: TaskId<Ulid>,
     _ctx: RedisContext,
-) -> Result<(), Error> {
+) -> Result<(), BoxDynError> {
     if let Some(request_id) = job.request_id.clone() {
         set_request_id(request_id);
     }
@@ -55,7 +56,7 @@ pub async fn transaction_status_handler(
         .job_producer()
         .get_queue()
         .await
-        .map_err(|e| Error::Failed(Arc::new(format!("Failed to get queue: {e}").into())))?;
+        .map_err(|e| eyre::eyre!("Failed to get queue: {e}"))?;
 
     let redis_pool = queue.redis_connections().primary().clone();
 
@@ -94,7 +95,7 @@ async fn handle_result(
     consecutive_failures: Option<u32>,
     total_failures: Option<u32>,
     should_retry_on_error: bool,
-) -> Result<(), Error> {
+) -> Result<(), BoxDynError> {
     match result {
         Ok(tx) if is_final_state(&tx.status) => {
             // Transaction reached final state - job complete, clean up counters
@@ -137,13 +138,11 @@ async fn handle_result(
             }
 
             // Return error to trigger Apalis retry
-            Err(Error::Failed(Arc::new(
-                format!(
-                    "transaction status: {:?} - not in final state, retrying",
-                    tx.status
-                )
-                .into(),
-            )))
+            Err(eyre::eyre!(
+                "transaction status: {:?} - not in final state, retrying",
+                tx.status
+            )
+            .into())
         }
         Err(e) => {
             // Check if this is a permanent failure that shouldn't retry
@@ -189,7 +188,7 @@ async fn handle_result(
             }
 
             // Return error to trigger Apalis retry
-            Err(Error::Failed(Arc::new(format!("{e}").into())))
+            Err(eyre::eyre!("{e}").into())
         }
     }
 }
@@ -324,7 +323,7 @@ async fn handle_request(
     state: &Data<ThinData<DefaultAppState>>,
     redis_pool: &Arc<Pool>,
     attempt: usize,
-    task_id: &TaskId,
+    task_id: &TaskId<Ulid>,
 ) -> HandleRequestResult {
     let tx_id = &status_request.transaction_id;
     debug!(

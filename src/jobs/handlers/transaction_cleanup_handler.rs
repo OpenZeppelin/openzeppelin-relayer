@@ -12,7 +12,8 @@
 //! ensuring the lock expires before the next scheduled run.
 
 use actix_web::web::ThinData;
-use apalis::prelude::{Attempt, Data, *};
+use apalis::prelude::{Attempt, BoxDynError, Data};
+use apalis_cron::Tick;
 use chrono::{DateTime, Utc};
 use eyre::Result;
 use std::sync::Arc;
@@ -86,10 +87,10 @@ const CLEANUP_LOCK_TTL_SECS: u64 = 9 * 60;
     err
 )]
 pub async fn transaction_cleanup_handler(
-    job: TransactionCleanupCronReminder,
+    job: Tick<Utc>,
     data: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
-) -> Result<(), Error> {
+) -> Result<(), BoxDynError> {
     let result = handle_request(job, data, attempt.clone()).await;
 
     handle_result(
@@ -99,10 +100,6 @@ pub async fn transaction_cleanup_handler(
         WORKER_TRANSACTION_CLEANUP_RETRIES,
     )
 }
-
-/// Represents a cron reminder job for triggering cleanup operations.
-#[derive(Default, Debug, Clone)]
-pub struct TransactionCleanupCronReminder();
 
 /// Handles the actual transaction cleanup request logic.
 ///
@@ -118,7 +115,7 @@ pub struct TransactionCleanupCronReminder();
 /// # Returns
 /// * `Result<()>` - Success or failure of the cleanup operation
 async fn handle_request(
-    _job: TransactionCleanupCronReminder,
+    _job: Tick<Utc>,
     data: Data<ThinData<DefaultAppState>>,
     _attempt: Attempt,
 ) -> Result<()> {

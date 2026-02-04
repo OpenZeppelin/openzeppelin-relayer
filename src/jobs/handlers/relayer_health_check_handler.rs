@@ -20,10 +20,11 @@ use crate::{
     utils::calculate_scheduled_timestamp,
 };
 use actix_web::web::ThinData;
-use apalis::prelude::{Attempt, Data, TaskId, *};
+use apalis::prelude::{Attempt, BoxDynError, Data, TaskId};
 use eyre::Result;
 use std::time::Duration;
 use tracing::{debug, info, instrument, warn};
+use ulid::Ulid;
 
 /// Handler for relayer health check jobs.
 ///
@@ -65,8 +66,8 @@ pub async fn relayer_health_check_handler(
     job: Job<RelayerHealthCheck>,
     app_state: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
-    task_id: TaskId,
-) -> Result<(), Error> {
+    task_id: TaskId<Ulid>,
+) -> Result<(), BoxDynError> {
     if let Some(request_id) = job.request_id.clone() {
         set_request_id(request_id);
     }
@@ -80,7 +81,7 @@ async fn relayer_health_check_handler_impl<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>
     job: Job<RelayerHealthCheck>,
     app_state: Data<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
     attempt: Attempt,
-) -> Result<(), Error>
+) -> Result<(), BoxDynError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,

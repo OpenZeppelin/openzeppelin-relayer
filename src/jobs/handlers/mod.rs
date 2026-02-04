@@ -1,6 +1,4 @@
-use std::sync::Arc;
-
-use apalis::prelude::{Attempt, Error};
+use apalis::prelude::{AbortError, Attempt, BoxDynError};
 use eyre::Report;
 use tracing::{debug, error, warn};
 
@@ -43,7 +41,7 @@ pub fn handle_result(
     attempt: Attempt,
     job_type: &str,
     max_attempts: usize,
-) -> Result<(), Error> {
+) -> Result<(), BoxDynError> {
     if result.is_ok() {
         debug!(
             job_type = %job_type,
@@ -70,12 +68,11 @@ pub fn handle_result(
             max_attempts = %max_attempts,
             "max attempts reached, failing job"
         );
-        return Err(Error::Abort(Arc::new("Failed to handle request".into())));
+        return Err(AbortError::new("Failed to handle request").into());
     }
 
-    Err(Error::Failed(Arc::new(
-        "Failed to handle request. Retrying".into(),
-    )))
+    // Return error to trigger retry - apalis will retry on any non-abort error
+    Err(eyre::eyre!("Failed to handle request. Retrying").into())
 }
 
 #[cfg(test)]
@@ -100,12 +97,10 @@ mod tests {
         let handled = handle_result(result, attempt, "test_job", 3);
 
         assert!(handled.is_err());
-        match handled {
-            Err(Error::Failed(_)) => {
-                // This is the expected error type for a retry
-            }
-            _ => panic!("Expected Failed error for retry"),
-        }
+        // In apalis 1.0.0-rc.3, any non-AbortError triggers retry
+        // The error should not be an AbortError (which would abort the job)
+        let err = handled.unwrap_err();
+        assert!(!err.is::<AbortError>(), "Expected non-AbortError for retry");
     }
 
     #[test]
@@ -119,12 +114,12 @@ mod tests {
         let handled = handle_result(result, attempt, "test_job", 3);
 
         assert!(handled.is_err());
-        match handled {
-            Err(Error::Abort(_)) => {
-                // This is the expected error type for an abort
-            }
-            _ => panic!("Expected Abort error for max attempts"),
-        }
+        // AbortError is returned when max attempts reached
+        let err = handled.unwrap_err();
+        assert!(
+            err.is::<AbortError>(),
+            "Expected AbortError for max attempts"
+        );
     }
 
     #[test]
@@ -138,11 +133,11 @@ mod tests {
         let handled = handle_result(result, attempt, "test_job", 3);
 
         assert!(handled.is_err());
-        match handled {
-            Err(Error::Abort(_)) => {
-                // This is the expected error type for exceeding max attempts
-            }
-            _ => panic!("Expected Abort error for exceeding max attempts"),
-        }
+        // AbortError is returned when max attempts exceeded
+        let err = handled.unwrap_err();
+        assert!(
+            err.is::<AbortError>(),
+            "Expected AbortError for exceeding max attempts"
+        );
     }
 }

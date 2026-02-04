@@ -3,9 +3,10 @@
 //! Handles the validation and preparation of transactions before they are
 //! submitted to the network
 use actix_web::web::ThinData;
-use apalis::prelude::{Attempt, Context, Data, TaskId, Worker, *};
+use apalis::prelude::{Attempt, BoxDynError, Data, TaskId};
 use apalis_redis::RedisContext;
 use tracing::instrument;
+use ulid::Ulid;
 
 use crate::{
     constants::WORKER_TRANSACTION_REQUEST_RETRIES,
@@ -17,7 +18,7 @@ use crate::{
 
 #[instrument(
     level = "debug",
-    skip(job, state, _worker, _ctx),
+    skip(job, state, _ctx),
     fields(
         request_id = ?job.request_id,
         job_id = %job.message_id,
@@ -32,10 +33,9 @@ pub async fn transaction_request_handler(
     job: Job<TransactionRequest>,
     state: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
-    _worker: Worker<Context>,
-    task_id: TaskId,
+    task_id: TaskId<Ulid>,
     _ctx: RedisContext,
-) -> Result<(), Error> {
+) -> Result<(), BoxDynError> {
     if let Some(request_id) = job.request_id.clone() {
         set_request_id(request_id);
     }

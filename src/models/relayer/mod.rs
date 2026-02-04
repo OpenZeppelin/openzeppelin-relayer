@@ -32,7 +32,7 @@ use crate::{
     constants::ID_REGEX,
     utils::{deserialize_optional_u128, serialize_optional_u128},
 };
-use apalis_cron::Schedule;
+use cron::Schedule;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{

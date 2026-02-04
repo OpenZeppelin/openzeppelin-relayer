@@ -4,9 +4,10 @@
 //! notification jobs from the queue.
 
 use actix_web::web::ThinData;
-use apalis::prelude::{Attempt, Data, TaskId, *};
+use apalis::prelude::{Attempt, BoxDynError, Data, TaskId};
 use eyre::Result;
 use tracing::{debug, instrument};
+use ulid::Ulid;
 
 use crate::{
     constants::WORKER_NOTIFICATION_SENDER_RETRIES,
@@ -24,7 +25,7 @@ use crate::{
 /// * `context` - Application state containing notification services
 ///
 /// # Returns
-/// * `Result<(), Error>` - Success or failure of notification processing
+/// * `Result<(), BoxDynError>` - Success or failure of notification processing
 #[instrument(
     level = "debug",
     skip(job, context),
@@ -41,8 +42,8 @@ pub async fn notification_handler(
     job: Job<NotificationSend>,
     context: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
-    task_id: TaskId,
-) -> Result<(), Error> {
+    task_id: TaskId<Ulid>,
+) -> Result<(), BoxDynError> {
     if let Some(request_id) = job.request_id.clone() {
         set_request_id(request_id);
     }

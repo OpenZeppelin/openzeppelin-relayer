@@ -4,9 +4,12 @@
 //! swap jobs from the queue for all supported networks (Solana and Stellar).
 
 use actix_web::web::ThinData;
-use apalis::prelude::{Attempt, Data, Error, TaskId};
+use apalis::prelude::{Attempt, BoxDynError, Data, TaskId};
+use apalis_cron::Tick;
+use chrono::Utc;
 use eyre::Result as EyreResult;
 use tracing::{debug, info, instrument};
+use ulid::Ulid;
 
 use crate::{
     constants::WORKER_TOKEN_SWAP_REQUEST_RETRIES,
@@ -23,7 +26,7 @@ use crate::{
 /// * `context` - Application state containing services
 ///
 /// # Returns
-/// * `Result<(), Error>` - Success or failure of swap processing
+/// * `Result<(), BoxDynError>` - Success or failure of swap processing
 #[instrument(
     level = "debug",
     skip(job, context),
@@ -40,8 +43,8 @@ pub async fn token_swap_request_handler(
     job: Job<TokenSwapRequest>,
     context: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
-    task_id: TaskId,
-) -> std::result::Result<(), Error> {
+    task_id: TaskId<Ulid>,
+) -> std::result::Result<(), BoxDynError> {
     if let Some(request_id) = job.request_id.clone() {
         set_request_id(request_id);
     }
@@ -61,13 +64,10 @@ pub async fn token_swap_request_handler(
     )
 }
 
-#[derive(Default, Debug, Clone)]
-pub struct TokenSwapCronReminder();
-
 /// Handles incoming swap jobs from the cron queue.
 #[instrument(
     level = "info",
-    skip(_job, data, relayer_id),
+    skip(_tick, data, relayer_id),
     fields(
         job_type = "token_swap_cron",
         attempt = %attempt.current(),
@@ -75,11 +75,11 @@ pub struct TokenSwapCronReminder();
     err
 )]
 pub async fn token_swap_cron_handler(
-    _job: TokenSwapCronReminder,
+    _tick: Tick<Utc>,
     relayer_id: Data<String>,
     data: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
-) -> std::result::Result<(), Error> {
+) -> std::result::Result<(), BoxDynError> {
     info!(
         relayer_id = %*relayer_id,
         "handling token swap cron request"

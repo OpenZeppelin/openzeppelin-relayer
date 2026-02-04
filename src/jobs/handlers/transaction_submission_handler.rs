@@ -6,9 +6,10 @@
 //! - Updates transaction status after submission
 //! - Enqueues status monitoring jobs
 use actix_web::web::ThinData;
-use apalis::prelude::{Attempt, Data, TaskId, *};
+use apalis::prelude::{Attempt, BoxDynError, Data, TaskId};
 use eyre::Result;
 use tracing::{debug, info, instrument};
+use ulid::Ulid;
 
 use crate::{
     constants::{
@@ -39,8 +40,8 @@ pub async fn transaction_submission_handler(
     job: Job<TransactionSend>,
     state: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
-    task_id: TaskId,
-) -> Result<(), Error> {
+    task_id: TaskId<Ulid>,
+) -> Result<(), BoxDynError> {
     if let Some(request_id) = job.request_id.clone() {
         set_request_id(request_id);
     }

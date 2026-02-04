@@ -20,7 +20,9 @@
 //! ensuring the lock expires before the next scheduled run.
 
 use actix_web::web::ThinData;
-use apalis::prelude::{Attempt, Data, *};
+use apalis::prelude::{Attempt, BoxDynError, Data};
+use apalis_cron::Tick;
+use chrono::Utc;
 use deadpool_redis::Pool;
 use eyre::Result;
 use std::env;
@@ -68,10 +70,6 @@ const QUEUE_NAMES: &[&str] = &[
 /// Sorted set suffixes that contain job IDs to clean up.
 const SORTED_SET_SUFFIXES: &[&str] = &[":done", ":failed", ":dead"];
 
-/// Represents a cron reminder job for triggering system cleanup operations.
-#[derive(Default, Debug, Clone)]
-pub struct SystemCleanupCronReminder();
-
 /// Handles periodic queue metadata cleanup jobs.
 ///
 /// This function processes stale job metadata by:
@@ -97,10 +95,10 @@ pub struct SystemCleanupCronReminder();
     err
 )]
 pub async fn system_cleanup_handler(
-    job: SystemCleanupCronReminder,
+    job: Tick<Utc>,
     data: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
-) -> Result<(), Error> {
+) -> Result<(), BoxDynError> {
     let result = handle_cleanup_request(job, data, attempt.clone()).await;
 
     handle_result(
@@ -120,7 +118,7 @@ pub async fn system_cleanup_handler(
 /// Note: Queue metadata cleanup only runs when using Redis storage.
 /// In-memory mode skips cleanup since distributed locking is not needed.
 async fn handle_cleanup_request(
-    _job: SystemCleanupCronReminder,
+    _job: Tick<Utc>,
     data: Data<ThinData<DefaultAppState>>,
     _attempt: Attempt,
 ) -> Result<()> {
