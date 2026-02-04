@@ -36,9 +36,6 @@ ENV PATH="/usr/local/bin:$PATH"
 
 RUN npm install -g pnpm ts-node typescript
 
-# removes apk and unneeded wolfi-base tools.
-# RUN apk del wolfi-base apk-tools
-
 # Copy plugins folder and install dependencies
 COPY --chown=nonroot:nonroot ./plugins /app/plugins
 
