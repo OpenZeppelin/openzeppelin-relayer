@@ -5,7 +5,7 @@
 //! # Usage
 //!
 //! ```bash
-//! cargo run --example sign_auth_entry -- \
+//! cargo run --example sign_soroban_auth_entry -- \
 //!   --secret-key "S..." \
 //!   --auth-entry "<base64 XDR>" \
 //!   --network testnet

@@ -607,11 +607,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_account_address_valid() {
+    fn test_parse_account_address_invalid_format() {
         let addr = "GABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCDEFGH";
-        // This is not a valid strkey, just testing the function signature
         let result = FeeForwarderService::<StellarProvider>::parse_account_address(addr);
-        // Expected to fail since it's not a valid G... address
         assert!(result.is_err());
     }
 

@@ -153,7 +153,6 @@ where
                         self.transaction_counter_service(),
                         &self.relayer().id,
                         &self.relayer().address,
-                        self.signer(),
                         self.provider(),
                         stellar_data,
                     )

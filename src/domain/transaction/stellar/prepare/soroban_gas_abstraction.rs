@@ -15,7 +15,6 @@ use crate::{
     repositories::TransactionCounterTrait,
     services::{
         provider::{StellarProvider, StellarProviderTrait},
-        signer::StellarSignTrait,
         stellar_fee_forwarder::{FeeForwarderError, FeeForwarderService},
     },
 };
@@ -39,20 +38,17 @@ use super::common::get_next_sequence;
 /// * `counter_service` - Service for managing sequence numbers
 /// * `relayer_id` - The relayer's ID for sequence tracking
 /// * `relayer_address` - The relayer's Stellar address (source account for the transaction)
-/// * `_signer` - Unused, kept for API compatibility
 /// * `provider` - The Stellar provider for simulation
 /// * `stellar_data` - The transaction data containing the XDR and signed auth entry
-pub async fn process_soroban_gas_abstraction<C, S, P>(
+pub async fn process_soroban_gas_abstraction<C, P>(
     counter_service: &C,
     relayer_id: &str,
     relayer_address: &str,
-    _signer: &S,
     provider: &P,
     mut stellar_data: StellarTransactionData,
 ) -> Result<StellarTransactionData, TransactionError>
 where
     C: TransactionCounterTrait + Send + Sync,
-    S: StellarSignTrait + Send + Sync,
     P: StellarProviderTrait + Send + Sync,
 {
     // Extract XDR and signed auth entry from transaction input
@@ -251,15 +247,17 @@ fn update_envelope_sequence(
 ///
 /// Simulation can be slightly inaccurate due to timing differences or other factors.
 /// Adding a 15% buffer prevents "exceeded limit" errors during execution.
+/// Uses saturating arithmetic to prevent silent truncation if scaled values exceed u32::MAX.
 fn apply_resource_buffer(resources: &mut SorobanResources) {
-    const RESOURCE_BUFFER_PERCENT: u32 = 15;
-    const BUFFER_MULTIPLIER: u32 = 100 + RESOURCE_BUFFER_PERCENT; // 115
+    const BUFFER_MULTIPLIER: u64 = 115;
 
-    resources.instructions =
-        (resources.instructions as u64 * BUFFER_MULTIPLIER as u64 / 100) as u32;
-    resources.disk_read_bytes =
-        (resources.disk_read_bytes as u64 * BUFFER_MULTIPLIER as u64 / 100) as u32;
-    resources.write_bytes = (resources.write_bytes as u64 * BUFFER_MULTIPLIER as u64 / 100) as u32;
+    let scale = |value: u32| -> u32 {
+        ((value as u64).saturating_mul(BUFFER_MULTIPLIER) / 100).min(u32::MAX as u64) as u32
+    };
+
+    resources.instructions = scale(resources.instructions);
+    resources.disk_read_bytes = scale(resources.disk_read_bytes);
+    resources.write_bytes = scale(resources.write_bytes);
 }
 
 /// Re-simulate the transaction with signed auth entries and update resources.

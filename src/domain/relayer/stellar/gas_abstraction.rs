@@ -682,6 +682,14 @@ where
                 )
             })?;
 
+        // Validate fee_token is a valid Soroban contract address (C...)
+        if stellar_strkey::Contract::from_string(&params.fee_token).is_err() {
+            return Err(RelayerError::ValidationError(format!(
+                "fee_token must be a valid Soroban contract address (C...), got '{}'",
+                params.fee_token
+            )));
+        }
+
         // Extract user_address from transaction_xdr source account
         // Soroban gas abstraction requires transaction_xdr, so we can unwrap here
         let xdr = params.transaction_xdr.as_ref().ok_or_else(|| {
@@ -984,8 +992,13 @@ where
         .await
         .map_err(|e| RelayerError::Internal(format!("Failed to get latest ledger: {e}")))?;
 
-    let ledgers_to_add = validity_seconds / LEDGER_TIME_SECONDS;
-    Ok(current_ledger.sequence + ledgers_to_add as u32)
+    let mut ledgers_to_add = validity_seconds.div_ceil(LEDGER_TIME_SECONDS);
+    if ledgers_to_add == 0 {
+        ledgers_to_add = 1;
+    }
+    Ok(current_ledger
+        .sequence
+        .saturating_add(ledgers_to_add as u32))
 }
 
 /// Add payment operation to envelope using a pre-computed fee quote

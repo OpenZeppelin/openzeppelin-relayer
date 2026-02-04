@@ -31,11 +31,8 @@ use ed25519_dalek::{ed25519::signature::SignerMut, SigningKey};
 use eyre::Result;
 use sha2::{Digest, Sha256};
 use soroban_rs::xdr::{
-    DecoratedSignature, Hash, HashIdPreimage, HashIdPreimageSorobanAuthorization, Limits, ReadXdr,
-    ScBytes, ScMap, ScMapEntry, ScSymbol, ScVal, ScVec, Signature, SignatureHint,
-    SorobanAddressCredentials, SorobanAuthorizationEntry, SorobanCredentials, Transaction,
-    TransactionEnvelope, TransactionSignaturePayload, TransactionSignaturePayloadTaggedTransaction,
-    Uint256, VecM, WriteXdr,
+    DecoratedSignature, Hash, Limits, ReadXdr, Signature, SignatureHint, Transaction,
+    TransactionEnvelope, Uint256, WriteXdr,
 };
 use tracing::info;
 
