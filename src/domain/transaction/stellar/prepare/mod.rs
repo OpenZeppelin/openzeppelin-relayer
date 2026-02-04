@@ -40,7 +40,12 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!(status = ?tx.status, "preparing stellar transaction");
+        debug!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            status = ?tx.status,
+            "preparing stellar transaction"
+        );
 
         // Defensive check: if transaction is in a final state or unexpected state, don't retry
         if is_final_state(&tx.status) {
@@ -64,11 +69,19 @@ where
 
         if !self.concurrent_transactions_enabled() && !lane_gate::claim(&self.relayer().id, &tx.id)
         {
-            info!("relayer already has a transaction in flight, must wait");
+            info!(
+                tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
+                "relayer already has a transaction in flight, must wait"
+            );
             return Ok(tx);
         }
 
-        debug!("preparing transaction {}", tx.id);
+        debug!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            "preparing transaction"
+        );
 
         // Call core preparation logic with error handling
         match self.prepare_core(tx.clone()).await {
@@ -96,7 +109,11 @@ where
         let policy = self.relayer().policies.get_stellar_policy();
         match &stellar_data.transaction_input {
             TransactionInput::Operations(_) => {
-                debug!("preparing operations-based transaction {}", tx.id);
+                debug!(
+                    tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
+                    "preparing operations-based transaction"
+                );
                 let stellar_data_with_sim = operations::process_operations(
                     self.transaction_counter_service(),
                     &self.relayer().id,
@@ -112,7 +129,11 @@ where
                     .await
             }
             TransactionInput::UnsignedXdr(_) => {
-                debug!("preparing unsigned xdr transaction {}", tx.id);
+                debug!(
+                    tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
+                    "preparing unsigned xdr transaction"
+                );
                 let stellar_data_with_sim = unsigned_xdr::process_unsigned_xdr(
                     self.transaction_counter_service(),
                     &self.relayer().id,
@@ -128,7 +149,7 @@ where
                     .await
             }
             TransactionInput::SignedXdr { .. } => {
-                debug!("preparing fee-bump transaction {}", tx.id);
+                debug!(tx_id = %tx.id, "preparing fee-bump transaction");
                 let stellar_data_with_fee_bump = fee_bump::process_fee_bump(
                     &self.relayer().address,
                     stellar_data,

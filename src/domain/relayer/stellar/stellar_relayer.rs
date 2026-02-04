@@ -56,7 +56,7 @@ use async_trait::async_trait;
 use eyre::Result;
 use futures::future::try_join_all;
 use std::sync::Arc;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, instrument, warn};
 
 use crate::domain::relayer::stellar::xdr_utils::parse_transaction_xdr;
 use crate::domain::relayer::{Relayer, RelayerError, StellarRelayerDexTrait};
@@ -215,10 +215,18 @@ where
         })
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn sync_sequence(&self) -> Result<(), RelayerError> {
         info!(
-            "Syncing sequence for relayer: {} ({})",
-            self.relayer.id, self.relayer.address
+            address = %self.relayer.address,
+            "syncing sequence from chain"
         );
 
         let next = fetch_next_sequence_from_chain(&self.provider, &self.relayer.address)
@@ -226,8 +234,8 @@ where
             .map_err(RelayerError::ProviderError)?;
 
         info!(
-            "Setting next sequence {} for relayer {}",
-            next, self.relayer.id
+            next_sequence = %next,
+            "setting next sequence"
         );
         self.transaction_counter_service
             .set(next)
@@ -245,6 +253,14 @@ where
     ///
     /// If no allowed tokens are specified, it logs an informational message and returns the policy
     /// unchanged.
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn populate_allowed_tokens_metadata(&self) -> Result<RelayerStellarPolicy, RelayerError> {
         let mut policy = self.relayer.policies.get_stellar_policy();
         // Check if allowed_tokens is specified; if not, return the policy unchanged.
@@ -295,6 +311,14 @@ where
     ///
     /// In-memory relayers don't need this migration as they are recreated from config.json
     /// on startup, which would have the policy set if using a newer version.
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn migrate_fee_payment_strategy_if_needed(&self) -> Result<(), RelayerError> {
         // Only migrate if using persistent storage (Redis)
         // In-memory relayers are recreated from config.json on startup
@@ -347,6 +371,14 @@ where
     /// Checks the relayer's XLM balance and triggers token swap if it falls below the
     /// specified threshold. Only proceeds with swap if balance is below the configured
     /// min_balance_threshold.
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn check_balance_and_trigger_token_swap_if_needed(&self) -> Result<(), RelayerError> {
         let policy = self.relayer.policies.get_stellar_policy();
 
@@ -417,6 +449,15 @@ where
     TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
     S: StellarSignTrait + Send + Sync + 'static,
 {
+    #[instrument(
+        level = "debug",
+        skip(self, network_transaction),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+            network_type = ?self.relayer.network_type,
+        )
+    )]
     async fn process_transaction_request(
         &self,
         network_transaction: NetworkTransactionRequest,
@@ -462,6 +503,14 @@ where
         Ok(transaction)
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn get_balance(&self) -> Result<BalanceResponse, RelayerError> {
         let account_entry = self
             .provider
@@ -492,6 +541,14 @@ where
         })
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn get_status(&self) -> Result<RelayerStatus, RelayerError> {
         let relayer_model = &self.relayer;
 
@@ -558,6 +615,14 @@ where
         })
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn delete_pending_transactions(
         &self,
     ) -> Result<DeletePendingTransactionsResponse, RelayerError> {
@@ -569,12 +634,28 @@ where
         })
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self, _request),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn sign_data(&self, _request: SignDataRequest) -> Result<SignDataResponse, RelayerError> {
         Err(RelayerError::NotSupported(
             "Signing data not supported for Stellar".to_string(),
         ))
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self, _request),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn sign_typed_data(
         &self,
         _request: SignTypedDataRequest,
@@ -584,6 +665,14 @@ where
         ))
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self, request),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn rpc(
         &self,
         request: JsonRpcRequest<NetworkRpcRequest>,
@@ -630,12 +719,28 @@ where
         }
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn validate_min_balance(&self) -> Result<(), RelayerError> {
         Ok(())
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn initialize_relayer(&self) -> Result<(), RelayerError> {
-        debug!("initializing Stellar relayer {}", self.relayer.id);
+        debug!("initializing Stellar relayer");
 
         // Migration: Check if relayer needs fee_payment_strategy migration
         // Older relayers persisted in Redis may not have this policy set.
@@ -702,6 +807,14 @@ where
         Ok(())
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn check_health(&self) -> Result<(), Vec<HealthCheckFailure>> {
         debug!(
             "running health checks for Stellar relayer {}",
@@ -766,6 +879,14 @@ where
         }
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self, request),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn sign_transaction(
         &self,
         request: &SignTransactionRequest,

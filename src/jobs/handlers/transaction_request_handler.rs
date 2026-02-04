@@ -40,6 +40,12 @@ pub async fn transaction_request_handler(
         set_request_id(request_id);
     }
 
+    tracing::debug!(
+        tx_id = %job.data.transaction_id,
+        relayer_id = %job.data.relayer_id,
+        "handling transaction request"
+    );
+
     let result = handle_request(job.data, state.clone()).await;
 
     handle_result(
@@ -58,7 +64,21 @@ async fn handle_request(
 
     let transaction = get_transaction_by_id(request.transaction_id.clone(), &state).await?;
 
-    relayer_transaction.prepare_transaction(transaction).await?;
+    tracing::debug!(
+        tx_id = %transaction.id,
+        relayer_id = %transaction.relayer_id,
+        status = ?transaction.status,
+        "preparing transaction"
+    );
+
+    let prepared = relayer_transaction.prepare_transaction(transaction).await?;
+
+    tracing::debug!(
+        tx_id = %prepared.id,
+        relayer_id = %prepared.relayer_id,
+        status = ?prepared.status,
+        "transaction prepared"
+    );
 
     Ok(())
 }

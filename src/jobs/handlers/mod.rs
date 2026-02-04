@@ -4,6 +4,8 @@ use apalis::prelude::{Attempt, Error};
 use eyre::Report;
 use tracing::{debug, error, warn};
 
+use crate::observability::request_id::get_request_id;
+
 mod transaction_request_handler;
 pub use transaction_request_handler::*;
 
@@ -45,6 +47,7 @@ pub fn handle_result(
     if result.is_ok() {
         debug!(
             job_type = %job_type,
+            request_id = ?get_request_id(),
             "request handled successfully"
         );
         return Ok(());
@@ -53,6 +56,7 @@ pub fn handle_result(
     let err = result.as_ref().unwrap_err();
     warn!(
         job_type = %job_type,
+        request_id = ?get_request_id(),
         error = %err,
         attempt = %attempt.current(),
         max_attempts = %max_attempts,
@@ -62,6 +66,7 @@ pub fn handle_result(
     if attempt.current() >= max_attempts {
         error!(
             job_type = %job_type,
+            request_id = ?get_request_id(),
             max_attempts = %max_attempts,
             "max attempts reached, failing job"
         );
