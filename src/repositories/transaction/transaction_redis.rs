@@ -1493,7 +1493,6 @@ impl TransactionRepository for RedisTransactionRepository {
                             }
                         }
                     }
-
                     return Ok(updated_tx);
                 }
                 Err(e) if attempt < MAX_RETRIES - 1 => {
