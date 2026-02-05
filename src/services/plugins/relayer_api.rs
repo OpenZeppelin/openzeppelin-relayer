@@ -6,7 +6,8 @@
 //! - `sendTransaction` - sends a transaction to the relayer.
 //!
 use crate::domain::{
-    get_network_relayer, get_relayer_by_id, get_transaction_by_id, Relayer, SignTransactionRequest,
+    get_network_relayer, get_network_relayer_by_model, get_relayer_by_id, get_transaction_by_id,
+    Relayer, SignTransactionRequest,
 };
 use crate::jobs::JobProducerTrait;
 use crate::models::{
@@ -24,7 +25,7 @@ use actix_web::web;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use strum::Display;
-use tracing::instrument;
+use tracing::{debug, instrument};
 
 #[cfg(test)]
 use mockall::automock;
@@ -170,6 +171,15 @@ impl RelayerApi {
         }
     }
 
+    #[instrument(
+        name = "Plugin::process_request",
+        skip_all,
+        fields(
+            method = %request.method,
+            relayer_id = %request.relayer_id,
+            plugin_req_id = %request.http_request_id.as_ref().unwrap_or(&request.request_id)
+        )
+    )]
     async fn process_request<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         &self,
         request: Request,
@@ -200,6 +210,16 @@ impl RelayerApi {
         }
     }
 
+    #[instrument(
+        name = "Plugin::handle_send_transaction",
+        skip_all,
+        fields(
+            method = %request.method,
+            relayer_id = %request.relayer_id,
+            plugin_req_id = %request.http_request_id.as_ref().unwrap_or(&request.request_id),
+            tx_id = tracing::field::Empty
+        )
+    )]
     async fn handle_send_transaction<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         &self,
         request: Request,
@@ -228,7 +248,8 @@ impl RelayerApi {
             .validate_active_state()
             .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-        let network_relayer = get_network_relayer(request.relayer_id.clone(), state)
+        // Use get_network_relayer_by_model to avoid duplicate Redis lookup
+        let network_relayer = get_network_relayer_by_model(relayer_repo_model.clone(), state)
             .await
             .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
@@ -247,6 +268,13 @@ impl RelayerApi {
             .await
             .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
+        tracing::Span::current().record("tx_id", transaction.id.as_str());
+        debug!(
+            tx_id = %transaction.id,
+            status = ?transaction.status,
+            "plugin created transaction"
+        );
+
         let transaction_response: TransactionResponse = transaction.into();
         let result = serde_json::to_value(transaction_response)
             .map_err(|e| PluginError::RelayerError(e.to_string()))?;
@@ -258,6 +286,16 @@ impl RelayerApi {
         })
     }
 
+    #[instrument(
+        name = "Plugin::handle_get_transaction",
+        skip_all,
+        fields(
+            method = %request.method,
+            relayer_id = %request.relayer_id,
+            plugin_req_id = %request.http_request_id.as_ref().unwrap_or(&request.request_id),
+            tx_id = tracing::field::Empty
+        )
+    )]
     async fn handle_get_transaction<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         &self,
         request: Request,
@@ -287,6 +325,7 @@ impl RelayerApi {
             serde_json::from_value(request.payload)
                 .map_err(|e| PluginError::InvalidPayload(e.to_string()))?;
 
+        tracing::Span::current().record("tx_id", get_transaction_request.transaction_id.as_str());
         let transaction = get_transaction_by_id(get_transaction_request.transaction_id, state)
             .await
             .map_err(|e| PluginError::RelayerError(e.to_string()))?;
@@ -303,6 +342,15 @@ impl RelayerApi {
         })
     }
 
+    #[instrument(
+        name = "Plugin::handle_get_relayer_status",
+        skip_all,
+        fields(
+            method = %request.method,
+            relayer_id = %request.relayer_id,
+            plugin_req_id = %request.http_request_id.as_ref().unwrap_or(&request.request_id)
+        )
+    )]
     async fn handle_get_relayer_status<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         &self,
         request: Request,
@@ -342,6 +390,15 @@ impl RelayerApi {
         })
     }
 
+    #[instrument(
+        name = "Plugin::handle_sign_transaction",
+        skip_all,
+        fields(
+            method = %request.method,
+            relayer_id = %request.relayer_id,
+            plugin_req_id = %request.http_request_id.as_ref().unwrap_or(&request.request_id)
+        )
+    )]
     async fn handle_sign_transaction<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         &self,
         request: Request,
@@ -384,6 +441,15 @@ impl RelayerApi {
         })
     }
 
+    #[instrument(
+        name = "Plugin::handle_get_relayer_info",
+        skip_all,
+        fields(
+            method = %request.method,
+            relayer_id = %request.relayer_id,
+            plugin_req_id = %request.http_request_id.as_ref().unwrap_or(&request.request_id)
+        )
+    )]
     async fn handle_get_relayer_info<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         &self,
         request: Request,
@@ -417,6 +483,15 @@ impl RelayerApi {
         })
     }
 
+    #[instrument(
+        name = "Plugin::handle_rpc_request",
+        skip_all,
+        fields(
+            method = %request.method,
+            relayer_id = %request.relayer_id,
+            plugin_req_id = %request.http_request_id.as_ref().unwrap_or(&request.request_id)
+        )
+    )]
     async fn handle_rpc_request<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         &self,
         request: Request,
@@ -445,7 +520,8 @@ impl RelayerApi {
             .validate_active_state()
             .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-        let network_relayer = get_network_relayer(request.relayer_id.clone(), state)
+        // Use get_network_relayer_by_model to avoid duplicate Redis lookup
+        let network_relayer = get_network_relayer_by_model(relayer_repo_model.clone(), state)
             .await
             .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 

@@ -390,6 +390,16 @@ pub struct HealthStatus {
     pub recovering: Option<bool>,
     /// Current recovery allowance percentage
     pub recovery_percent: Option<u32>,
+    /// Shared socket available connection slots
+    pub shared_socket_available_slots: Option<usize>,
+    /// Shared socket active connection count
+    pub shared_socket_active_connections: Option<usize>,
+    /// Shared socket registered execution count
+    pub shared_socket_registered_executions: Option<usize>,
+    /// Connection pool available slots (for pool server connections)
+    pub connection_pool_available_slots: Option<usize>,
+    /// Connection pool active connections (for pool server connections)
+    pub connection_pool_active_connections: Option<usize>,
 }
 
 #[cfg(test)]

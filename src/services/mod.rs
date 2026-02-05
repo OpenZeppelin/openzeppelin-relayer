@@ -39,3 +39,6 @@ mod aws_kms;
 pub use aws_kms::*;
 
 pub mod plugins;
+
+pub mod health;
+pub use health::*;

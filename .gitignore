@@ -41,6 +41,7 @@ tests/integration/config/local-standalone/
 tests/integration/config/testnet/
 
 !examples/**/*.json
+examples/**/config/keys/
 
 
 # docs

@@ -66,6 +66,7 @@ hmac = { version = "0.12" }
 sha2 = { version = "0.10" }
 sha3 = { version = "0.10" }
 dashmap = { version = "6.1" }
+scc = "2"
 crossbeam = { version = "0.8.4" }
 async-channel = "2.5"
 actix-governor = "0.8"
@@ -103,6 +104,7 @@ solana-system-interface = { version = "2.0.0", features = ["bincode"] }
 cdp-sdk = "0.1.0"
 reqwest-middleware = { version = "0.4.2", default-features = false, features = ["json"] }
 url = "2"
+lru = "0.16"
 
 [dev-dependencies]
 cargo-llvm-cov = "0.6"
@@ -113,7 +115,7 @@ proptest = "1.6.0"
 rand = "0.9.0"
 tempfile = "3.2"
 serial_test = "3.2"
-clap = { version = "4.4", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"] }
 
 
 [[bin]]

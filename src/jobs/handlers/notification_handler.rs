@@ -4,7 +4,7 @@
 //! notification jobs from the queue.
 
 use actix_web::web::ThinData;
-use apalis::prelude::{Attempt, Data, *};
+use apalis::prelude::{Attempt, Data, TaskId, *};
 use eyre::Result;
 use tracing::{debug, instrument};
 
@@ -33,6 +33,7 @@ use crate::{
         job_id = %job.message_id,
         job_type = %job.job_type.to_string(),
         attempt = %attempt.current(),
+        task_id = %task_id.to_string(),
         notification_id = %job.data.notification_id,
     )
 )]
@@ -40,12 +41,16 @@ pub async fn notification_handler(
     job: Job<NotificationSend>,
     context: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
+    task_id: TaskId,
 ) -> Result<(), Error> {
     if let Some(request_id) = job.request_id.clone() {
         set_request_id(request_id);
     }
 
-    debug!("handling notification {}", job.data.notification_id);
+    debug!(
+        notification_id = %job.data.notification_id,
+        "handling notification"
+    );
 
     let result = handle_request(job.data, context).await;
 
@@ -61,10 +66,13 @@ async fn handle_request(
     request: NotificationSend,
     context: Data<ThinData<DefaultAppState>>,
 ) -> Result<()> {
-    debug!("sending notification {}", request.notification_id);
+    debug!(
+        notification_id = %request.notification_id,
+        "sending notification"
+    );
     let notification = context
         .notification_repository
-        .get_by_id(request.notification_id)
+        .get_by_id(request.notification_id.clone())
         .await?;
 
     let notification_service =
@@ -73,6 +81,11 @@ async fn handle_request(
     notification_service
         .send_notification(request.notification)
         .await?;
+
+    debug!(
+        notification_id = %request.notification_id,
+        "notification sent successfully"
+    );
 
     Ok(())
 }

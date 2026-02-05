@@ -9,7 +9,7 @@ use crate::models::StellarValidationError;
 use eyre::{eyre, Result};
 use soroban_rs::xdr::{
     DecoratedSignature, FeeBumpTransaction, FeeBumpTransactionEnvelope, FeeBumpTransactionInnerTx,
-    Limits, MuxedAccount, Operation, OperationBody, ReadXdr, TransactionEnvelope,
+    Limits, MuxedAccount, Operation, OperationBody, ReadXdr, TransactionEnvelope, TransactionExt,
     TransactionV1Envelope, Uint256, VecM, WriteXdr,
 };
 use stellar_strkey::ed25519::{MuxedAccount as StrkeyMuxedAccount, PublicKey};
@@ -216,6 +216,33 @@ pub fn xdr_needs_simulation(envelope: &TransactionEnvelope) -> Result<bool> {
     }
 
     Ok(false)
+}
+
+/// Extract the resource fee from a transaction's SorobanTransactionData if present.
+///
+/// Returns Some(resource_fee) if the transaction has TransactionExt::V1 with resourceFee > 0.
+/// Returns None if TransactionExt::V0 or resourceFee is 0 or the transaction is V0 format.
+pub fn extract_soroban_resource_fee(envelope: &TransactionEnvelope) -> Option<i64> {
+    let ext = match envelope {
+        TransactionEnvelope::TxV0(_) => return None, // V0 doesn't support Soroban
+        TransactionEnvelope::Tx(e) => &e.tx.ext,
+        TransactionEnvelope::TxFeeBump(fb) => {
+            let FeeBumpTransactionInnerTx::Tx(inner) = &fb.tx.inner_tx;
+            &inner.tx.ext
+        }
+    };
+
+    match ext {
+        TransactionExt::V1(soroban_data) => {
+            let fee = soroban_data.resource_fee;
+            if fee > 0 {
+                Some(fee)
+            } else {
+                None
+            }
+        }
+        TransactionExt::V0 => None,
+    }
 }
 
 /// Attach signatures to a transaction envelope
@@ -1378,5 +1405,258 @@ mod tests {
         } else {
             panic!("Expected V1 envelope");
         }
+    }
+
+    #[test]
+    fn test_extract_soroban_resource_fee_with_v1_data() {
+        use soroban_rs::xdr::{
+            LedgerFootprint, Memo, SequenceNumber, SorobanResources, SorobanTransactionData,
+            SorobanTransactionDataExt, Transaction, TransactionV1Envelope,
+        };
+        use stellar_strkey::ed25519::PublicKey;
+
+        let source_pk =
+            PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
+                .unwrap();
+
+        // Create Soroban transaction data with a resource fee
+        let soroban_data = SorobanTransactionData {
+            ext: SorobanTransactionDataExt::V0,
+            resources: SorobanResources {
+                footprint: LedgerFootprint {
+                    read_only: vec![].try_into().unwrap(),
+                    read_write: vec![].try_into().unwrap(),
+                },
+                instructions: 1000,
+                disk_read_bytes: 100,
+                write_bytes: 50,
+            },
+            resource_fee: 50000, // The resource fee we expect to extract
+        };
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
+            fee: 100,
+            seq_num: SequenceNumber(42),
+            cond: soroban_rs::xdr::Preconditions::None,
+            memo: Memo::None,
+            operations: VecM::default(),
+            ext: soroban_rs::xdr::TransactionExt::V1(soroban_data),
+        };
+
+        let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        let result = extract_soroban_resource_fee(&envelope);
+        assert_eq!(result, Some(50000));
+    }
+
+    #[test]
+    fn test_extract_soroban_resource_fee_with_v0_data() {
+        use soroban_rs::xdr::{
+            Memo, Operation, OperationBody, PaymentOp, SequenceNumber, Transaction,
+            TransactionV1Envelope,
+        };
+        use stellar_strkey::ed25519::PublicKey;
+
+        let source_pk =
+            PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
+                .unwrap();
+        let dest_pk =
+            PublicKey::from_string("GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ")
+                .unwrap();
+
+        let payment_op = Operation {
+            source_account: None,
+            body: OperationBody::Payment(PaymentOp {
+                destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
+                asset: soroban_rs::xdr::Asset::Native,
+                amount: 1000000,
+            }),
+        };
+
+        let operations: VecM<Operation, 100> = vec![payment_op].try_into().unwrap();
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
+            fee: 100,
+            seq_num: SequenceNumber(42),
+            cond: soroban_rs::xdr::Preconditions::None,
+            memo: Memo::None,
+            operations,
+            ext: soroban_rs::xdr::TransactionExt::V0, // V0 extension
+        };
+
+        let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        let result = extract_soroban_resource_fee(&envelope);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_soroban_resource_fee_with_zero_fee() {
+        use soroban_rs::xdr::{
+            LedgerFootprint, Memo, SequenceNumber, SorobanResources, SorobanTransactionData,
+            SorobanTransactionDataExt, Transaction, TransactionV1Envelope,
+        };
+        use stellar_strkey::ed25519::PublicKey;
+
+        let source_pk =
+            PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
+                .unwrap();
+
+        // Create Soroban transaction data with zero resource fee
+        let soroban_data = SorobanTransactionData {
+            ext: SorobanTransactionDataExt::V0,
+            resources: SorobanResources {
+                footprint: LedgerFootprint {
+                    read_only: vec![].try_into().unwrap(),
+                    read_write: vec![].try_into().unwrap(),
+                },
+                instructions: 0,
+                disk_read_bytes: 0,
+                write_bytes: 0,
+            },
+            resource_fee: 0, // Zero resource fee
+        };
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
+            fee: 100,
+            seq_num: SequenceNumber(42),
+            cond: soroban_rs::xdr::Preconditions::None,
+            memo: Memo::None,
+            operations: VecM::default(),
+            ext: soroban_rs::xdr::TransactionExt::V1(soroban_data),
+        };
+
+        let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        let result = extract_soroban_resource_fee(&envelope);
+        assert_eq!(result, None); // Should return None for zero fee
+    }
+
+    #[test]
+    fn test_extract_soroban_resource_fee_from_fee_bump() {
+        use soroban_rs::xdr::{
+            DecoratedSignature, FeeBumpTransaction, FeeBumpTransactionEnvelope,
+            FeeBumpTransactionInnerTx, LedgerFootprint, Memo, SequenceNumber, Signature,
+            SignatureHint, SorobanResources, SorobanTransactionData, SorobanTransactionDataExt,
+            Transaction, TransactionV1Envelope,
+        };
+        use stellar_strkey::ed25519::PublicKey;
+
+        let source_pk =
+            PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
+                .unwrap();
+        let fee_source_pk =
+            PublicKey::from_string("GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ")
+                .unwrap();
+
+        // Create Soroban transaction data with a resource fee
+        let soroban_data = SorobanTransactionData {
+            ext: SorobanTransactionDataExt::V0,
+            resources: SorobanResources {
+                footprint: LedgerFootprint {
+                    read_only: vec![].try_into().unwrap(),
+                    read_write: vec![].try_into().unwrap(),
+                },
+                instructions: 2000,
+                disk_read_bytes: 200,
+                write_bytes: 100,
+            },
+            resource_fee: 75000, // The resource fee we expect to extract
+        };
+
+        let inner_tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
+            fee: 100,
+            seq_num: SequenceNumber(42),
+            cond: soroban_rs::xdr::Preconditions::None,
+            memo: Memo::None,
+            operations: VecM::default(),
+            ext: soroban_rs::xdr::TransactionExt::V1(soroban_data),
+        };
+
+        // Add a signature to the inner transaction
+        let sig = DecoratedSignature {
+            hint: SignatureHint([1, 2, 3, 4]),
+            signature: Signature(vec![5u8; 64].try_into().unwrap()),
+        };
+
+        let inner_envelope = TransactionV1Envelope {
+            tx: inner_tx,
+            signatures: vec![sig].try_into().unwrap(),
+        };
+
+        // Create fee-bump envelope
+        let fee_bump_tx = FeeBumpTransaction {
+            fee_source: MuxedAccount::Ed25519(Uint256(fee_source_pk.0)),
+            fee: 10_000_000,
+            inner_tx: FeeBumpTransactionInnerTx::Tx(inner_envelope),
+            ext: soroban_rs::xdr::FeeBumpTransactionExt::V0,
+        };
+
+        let fee_bump_envelope = TransactionEnvelope::TxFeeBump(FeeBumpTransactionEnvelope {
+            tx: fee_bump_tx,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        let result = extract_soroban_resource_fee(&fee_bump_envelope);
+        assert_eq!(result, Some(75000));
+    }
+
+    #[test]
+    fn test_extract_soroban_resource_fee_from_v0_envelope() {
+        use soroban_rs::xdr::{
+            Memo, Operation, OperationBody, PaymentOp, SequenceNumber, TransactionV0,
+            TransactionV0Envelope,
+        };
+        use stellar_strkey::ed25519::PublicKey;
+
+        let source_pk =
+            PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
+                .unwrap();
+        let dest_pk =
+            PublicKey::from_string("GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ")
+                .unwrap();
+
+        let payment_op = Operation {
+            source_account: None,
+            body: OperationBody::Payment(PaymentOp {
+                destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
+                asset: soroban_rs::xdr::Asset::Native,
+                amount: 1000000,
+            }),
+        };
+
+        let operations: VecM<Operation, 100> = vec![payment_op].try_into().unwrap();
+
+        let tx_v0 = TransactionV0 {
+            source_account_ed25519: Uint256(source_pk.0),
+            fee: 100,
+            seq_num: SequenceNumber(42),
+            time_bounds: None,
+            memo: Memo::None,
+            operations,
+            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+        };
+
+        let envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
+            tx: tx_v0,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        // V0 envelopes don't support Soroban, so should return None
+        let result = extract_soroban_resource_fee(&envelope);
+        assert_eq!(result, None);
     }
 }

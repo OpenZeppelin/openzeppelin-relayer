@@ -109,6 +109,9 @@ LOG_LEVEL=info
 FEE_LIMIT=100000000                 # Max fee per API key in stroops (optional)
 FEE_RESET_PERIOD_SECONDS=86400      # Reset fee consumption every N seconds (e.g., 86400 = 24 hours)
 API_KEY_HEADER=x-api-key            # Header for fee tracking (default: x-api-key)
+# Contract Capacity Limits (optional)
+LIMITED_CONTRACTS=CONTRACT_ADDRESS_1,CONTRACT_ADDRESS_2  # Contracts with restricted pool access
+CONTRACT_CAPACITY_RATIO=0.8         # Pool portion for limited contracts (0-1, default: 0.8)
 ```
 
 ### 3. Verify Configuration
@@ -496,6 +499,34 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
   "ok": true
 }
 ```
+
+### Contract Capacity Limits
+
+The plugin supports per-contract capacity limits to prevent high-volume contracts from monopolizing the channel pool. This ensures fair resource distribution by restricting certain contracts to a subset of available channels.
+
+**Environment Variables:**
+
+- `LIMITED_CONTRACTS`: Comma-separated list of contract addresses with restricted pool access
+- `CONTRACT_CAPACITY_RATIO`: Ratio (0-1) determining what portion of the channel pool limited contracts can access (default: 0.8)
+
+**Example Configuration:**
+
+```env
+# Restrict high-volume contracts to 20% of the channel pool
+LIMITED_CONTRACTS=CBPHOAZIYIKNTXD2WNVNNEJG4O3YHLHTF77WMHJFFFCYNUAAVMTWGFPB,CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA
+CONTRACT_CAPACITY_RATIO=0.2
+```
+
+**How It Works:**
+
+When a transaction targets a contract listed in `LIMITED_CONTRACTS`, Channels restricts that transaction to a deterministic subset of the channel pool based on the configured `CONTRACT_CAPACITY_RATIO`. The subset is selected using hash-based partitioning, ensuring consistent channel assignment for each limited contract.
+
+**Behavior Notes:**
+
+- Contract addresses are case-insensitive (normalized to uppercase)
+- Limited contracts are always guaranteed at least 1 channel, even with low capacity ratios
+- Contracts not in `LIMITED_CONTRACTS` retain full access to all channels
+- The same contract always gets the same subset of channels (deterministic selection)
 
 ### Generating XDR for the Relayer
 

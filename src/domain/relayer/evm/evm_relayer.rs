@@ -57,7 +57,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use eyre::Result;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, instrument, warn};
 
 use super::{create_error_response, create_success_response, EvmTransactionValidator};
 use crate::utils::{map_provider_error, sanitize_error_description};
@@ -139,6 +139,14 @@ where
     /// # Returns
     ///
     /// A `Result` indicating success or a `RelayerError` if the operation fails.
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn sync_nonce(&self) -> Result<(), RelayerError> {
         let on_chain_nonce = self
             .provider
@@ -157,8 +165,10 @@ where
         let nonce = std::cmp::max(on_chain_nonce, transaction_counter_nonce);
 
         debug!(
-            "Relayer: {} - On-chain nonce: {}, Transaction counter nonce: {}",
-            self.relayer.id, on_chain_nonce, transaction_counter_nonce
+            relayer_id = %self.relayer.id,
+            on_chain_nonce = %on_chain_nonce,
+            transaction_counter_nonce = %transaction_counter_nonce,
+            "syncing nonce"
         );
 
         debug!(nonce = %nonce, "setting nonce for relayer");
@@ -173,6 +183,14 @@ where
     /// # Returns
     ///
     /// A `Result` indicating success or a `RelayerError` if the operation fails.
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn validate_rpc(&self) -> Result<(), RelayerError> {
         self.provider
             .health_check()
@@ -191,6 +209,15 @@ where
     /// # Returns
     ///
     /// A `Result` indicating success or a `RelayerError` if the job creation fails.
+    #[instrument(
+        level = "debug",
+        skip(self, transaction),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+            tx_id = %transaction.id,
+        )
+    )]
     async fn cancel_transaction_via_job(
         &self,
         transaction: TransactionRepoModel,
@@ -234,6 +261,15 @@ where
     /// # Returns
     ///
     /// A `Result` containing the `TransactionRepoModel` or a `RelayerError`.
+    #[instrument(
+        level = "debug",
+        skip(self, network_transaction),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+            network_type = ?self.relayer.network_type,
+        )
+    )]
     async fn process_transaction_request(
         &self,
         network_transaction: NetworkTransactionRequest,
@@ -286,6 +322,14 @@ where
     /// # Returns
     ///
     /// A `Result` containing the `BalanceResponse` or a `RelayerError`.
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn get_balance(&self) -> Result<BalanceResponse, RelayerError> {
         let balance: u128 = self
             .provider
@@ -308,6 +352,14 @@ where
     /// # Returns
     ///
     /// A `Result` containing a boolean indicating the status or a `RelayerError`.
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn get_status(&self) -> Result<RelayerStatus, RelayerError> {
         let relayer_model = &self.relayer;
 
@@ -365,6 +417,14 @@ where
     ///
     /// A `Result` containing a `DeletePendingTransactionsResponse` with details
     /// about which transactions were cancelled and which failed, or a `RelayerError`.
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn delete_pending_transactions(
         &self,
     ) -> Result<DeletePendingTransactionsResponse, RelayerError> {
@@ -385,8 +445,8 @@ where
 
         if transaction_count == 0 {
             info!(
-                "No pending transactions found for relayer: {}",
-                self.relayer.id
+                relayer_id = %self.relayer.id,
+                "no pending transactions found for relayer"
             );
             return Ok(DeletePendingTransactionsResponse {
                 queued_for_cancellation_transaction_ids: vec![],
@@ -396,8 +456,9 @@ where
         }
 
         info!(
-            "Processing {} pending transactions for relayer: {}",
-            transaction_count, self.relayer.id
+            relayer_id = %self.relayer.id,
+            transaction_count = %transaction_count,
+            "processing pending transactions for relayer"
         );
 
         let mut cancelled_transaction_ids = Vec::new();
@@ -409,15 +470,19 @@ where
                 Ok(_) => {
                     cancelled_transaction_ids.push(transaction.id.clone());
                     info!(
-                        "Initiated cancellation for transaction {} with status {:?} for relayer {}",
-                        transaction.id, transaction.status, self.relayer.id
+                        tx_id = %transaction.id,
+                        relayer_id = %self.relayer.id,
+                        status = ?transaction.status,
+                        "initiated cancellation for transaction"
                     );
                 }
                 Err(e) => {
                     failed_transaction_ids.push(transaction.id.clone());
                     warn!(
-                        "Failed to cancel transaction {} for relayer {}: {}",
-                        transaction.id, self.relayer.id, e
+                        tx_id = %transaction.id,
+                        relayer_id = %self.relayer.id,
+                        error = %e,
+                        "failed to cancel transaction"
                     );
                 }
             }
@@ -447,6 +512,14 @@ where
     /// # Returns
     ///
     /// A `Result` containing the `SignDataResponse` or a `RelayerError`.
+    #[instrument(
+        level = "debug",
+        skip(self, request),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, RelayerError> {
         let result = self.signer.sign_data(request).await?;
 
@@ -462,6 +535,14 @@ where
     /// # Returns
     ///
     /// A `Result` containing the `SignDataResponse` or a `RelayerError`.
+    #[instrument(
+        level = "debug",
+        skip(self, request),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn sign_typed_data(
         &self,
         request: SignTypedDataRequest,
@@ -480,6 +561,14 @@ where
     /// # Returns
     ///
     /// A `Result` containing the `JsonRpcResponse` or a `RelayerError`.
+    #[instrument(
+        level = "debug",
+        skip(self, request),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn rpc(
         &self,
         request: JsonRpcRequest<NetworkRpcRequest>,
@@ -527,6 +616,14 @@ where
     /// # Returns
     ///
     /// A `Result` indicating success or a `RelayerError` if the balance is insufficient.
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn validate_min_balance(&self) -> Result<(), RelayerError> {
         let policy = self.relayer.policies.get_evm_policy();
         EvmTransactionValidator::init_balance_validation(
@@ -545,8 +642,16 @@ where
     /// # Returns
     ///
     /// A `Result` indicating success or a `RelayerError` if any initialization step fails.
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn check_health(&self) -> Result<(), Vec<HealthCheckFailure>> {
-        debug!("running health checks for EVM relayer {}", self.relayer.id);
+        debug!("running health checks");
 
         let nonce_sync_result = self.sync_nonce().await;
         let validate_rpc_result = self.validate_rpc().await;
@@ -577,8 +682,16 @@ where
         }
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn initialize_relayer(&self) -> Result<(), RelayerError> {
-        debug!("initializing EVM relayer {}", self.relayer.id);
+        debug!("initializing EVM relayer");
 
         match self.check_health().await {
             Ok(_) => {
@@ -630,6 +743,14 @@ where
         }
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self, _request),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn sign_transaction(
         &self,
         _request: &SignTransactionRequest,

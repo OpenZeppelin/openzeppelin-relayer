@@ -54,7 +54,7 @@ use async_trait::async_trait;
 use eyre::Result;
 use futures::future::try_join_all;
 use solana_sdk::{account::Account, pubkey::Pubkey};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 use super::{NetworkDex, SolanaRpcError, SolanaTokenProgram, SwapResult, TokenAccount};
 
@@ -142,6 +142,14 @@ where
     ///
     /// This method sends a request to the Solana RPC to obtain the latest blockhash.
     /// If the call fails, it returns a `RelayerError::ProviderError` containing the error message.
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn validate_rpc(&self) -> Result<(), RelayerError> {
         self.provider
             .get_latest_blockhash()
@@ -162,6 +170,14 @@ where
     /// unchanged.
     ///
     /// Finally, the updated policy is stored in the repository.
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn populate_allowed_tokens_metadata(&self) -> Result<RelayerSolanaPolicy, RelayerError> {
         let mut policy = self.relayer.policies.get_solana_policy();
         // Check if allowed_tokens is specified; if not, return the policy unchanged.
@@ -210,6 +226,14 @@ where
     /// verifies that the program is executable.
     /// If any of the programs are not executable, it returns a
     /// `RelayerError::PolicyConfigurationError`.
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn validate_program_policy(&self) -> Result<(), RelayerError> {
         let policy = self.relayer.policies.get_solana_policy();
         let allowed_programs = match policy.allowed_programs.as_ref() {
@@ -246,6 +270,14 @@ where
 
     /// Checks the relayer's balance and triggers a token swap if the balance is below the
     /// specified threshold.
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn check_balance_and_trigger_token_swap_if_needed(&self) -> Result<(), RelayerError> {
         let policy = self.relayer.policies.get_solana_policy();
         let swap_config = match policy.get_swap_config() {
@@ -342,6 +374,14 @@ where
     /// 4. Collects and returns all `SwapResult`s (empty if no swaps were needed).
     ///
     /// Returns a `RelayerError` on any repository, provider, or swap execution failure.
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn handle_token_swap_request(
         &self,
         relayer_id: String,
@@ -532,6 +572,15 @@ where
     SP: SolanaProviderTrait + Send + Sync + 'static,
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
 {
+    #[instrument(
+        level = "debug",
+        skip(self, network_transaction),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+            network_type = ?self.relayer.network_type,
+        )
+    )]
     async fn process_transaction_request(
         &self,
         network_transaction: crate::models::NetworkTransactionRequest,
@@ -632,6 +681,14 @@ where
         }
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn get_balance(&self) -> Result<BalanceResponse, RelayerError> {
         let address = &self.relayer.address;
         let balance = self.provider.get_balance(address).await?;
@@ -642,6 +699,14 @@ where
         })
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn delete_pending_transactions(
         &self,
     ) -> Result<DeletePendingTransactionsResponse, RelayerError> {
@@ -650,6 +715,14 @@ where
         ))
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self, _request),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn sign_data(
         &self,
         _request: SignDataRequest,
@@ -659,6 +732,14 @@ where
         ))
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self, _request),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn sign_typed_data(
         &self,
         _request: SignTypedDataRequest,
@@ -668,6 +749,14 @@ where
         ))
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self, request),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn sign_transaction(
         &self,
         request: &SignTransactionRequest,
@@ -759,6 +848,14 @@ where
         }
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self, request),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn rpc(
         &self,
         request: JsonRpcRequest<NetworkRpcRequest>,
@@ -919,6 +1016,14 @@ where
         }
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn get_status(&self) -> Result<RelayerStatus, RelayerError> {
         let address = &self.relayer.address;
         let balance = self.provider.get_balance(address).await?;
@@ -958,8 +1063,16 @@ where
         })
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn initialize_relayer(&self) -> Result<(), RelayerError> {
-        debug!("initializing Solana relayer {}", self.relayer.id);
+        debug!("initializing Solana relayer");
 
         // Populate model with allowed token metadata and update DB entry
         // Error will be thrown if any of the tokens are not found
@@ -1029,6 +1142,14 @@ where
         Ok(())
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn check_health(&self) -> Result<(), Vec<HealthCheckFailure>> {
         debug!(
             "running health checks for Solana relayer {}",
@@ -1060,6 +1181,14 @@ where
         }
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn validate_min_balance(&self) -> Result<(), RelayerError> {
         let balance = self
             .provider
@@ -1092,6 +1221,14 @@ where
     SP: SolanaProviderTrait + Send + Sync + 'static,
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
 {
+    #[instrument(
+        level = "debug",
+        skip(self, params),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn quote_sponsored_transaction(
         &self,
         params: SponsoredTransactionQuoteRequest,
@@ -1115,6 +1252,14 @@ where
         Ok(SponsoredTransactionQuoteResponse::Solana(result))
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self, params),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
     async fn build_sponsored_transaction(
         &self,
         params: SponsoredTransactionBuildRequest,

@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use soroban_rs::xdr::{Limits, Operation, TransactionEnvelope, WriteXdr};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::constants::{
     get_default_fee_forwarder, get_stellar_sponsored_transaction_validity_duration,
@@ -1114,6 +1114,13 @@ where
         // Fetch the user's current sequence number from the network
         // This is required because the user will sign the transaction with their account
         let account_entry = provider.get_account(source_account).await.map_err(|e| {
+            warn!(
+                source_account = %source_account,
+                error = %e,
+                "get_account failed in build_envelope_from_request (called before transaction creation)"
+            );
+            // Note: We don't have relayer_id here, so we can't track the metric with relayer_id
+            // This is called during gas abstraction operations before transaction creation
             RelayerError::Internal(format!(
                 "Failed to fetch account sequence number for {source_account}: {e}",
             ))

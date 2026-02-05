@@ -187,6 +187,31 @@ export MAX_FEE=1000000                              # Maximum fee in stroops (de
 - `FEE_LIMIT`: Fair use limit for fee consumption per API key in stroops. When exceeded, requests are rejected with `FEE_LIMIT_EXCEEDED` error (when not set, fee tracking is disabled)
 - `FEE_RESET_PERIOD_SECONDS`: Reset fee consumption every N seconds (e.g., 86400 = 24 hours). When configured, each API key's fee consumption resets automatically after the period expires
 - `API_KEY_HEADER`: HTTP header name used to extract the client API key for fee tracking (default: x-api-key)
+- `LIMITED_CONTRACTS`: Comma-separated list of contract addresses with restricted pool access. Comma separation will be trimmed and can handle spaces.
+- `CONTRACT_CAPACITY_RATIO`: Ratio (0-1) determining what portion of the channel pool limited contracts can access (default: 0.8). The ratio is converted using Math.floor() which always rounds DOWN to the nearest integer, with a minimum guarantee of 1 channel.
+
+### Contract Capacity Limits
+
+Channels supports per-contract capacity limits to prevent high-volume contracts from monopolizing the channel pool. This feature ensures fair resource distribution by restricting certain contracts to a subset of available channels while allowing other contracts full pool access.
+
+**_How It Works:_**
+
+When a transaction targets a contract listed in `LIMITED_CONTRACTS`, Channels restricts that transaction to a deterministic subset of the channel pool based on the configured `CONTRACT_CAPACITY_RATIO`. The subset is selected using hash-based partitioning, ensuring consistent channel assignment for each limited contract.
+
+**_Configuration:_**
+
+```bash
+# Restrict high-volume contracts to 80% of the channel pool
+export LIMITED_CONTRACTS="CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC,CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA"
+export CONTRACT_CAPACITY_RATIO=0.8
+```
+
+**_Behavior Notes:_**
+
+- **_Case-insensitive matching_**: Contract addresses are normalized to uppercase for comparison
+- **_Minimum guarantee_**: Limited contracts are always guaranteed at least 1 channel, even with low capacity ratios
+- **_Unlisted contracts_**: Contracts not in `LIMITED_CONTRACTS` retain full access to all channels
+- **_Deterministic selection_**: The same contract always gets the same subset of channels, ensuring predictable behavior
 
 ### Relayer Configuration
 
