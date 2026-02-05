@@ -149,16 +149,17 @@ async fn plugin_call(
     plugin_call_request.query = Some(extract_query_params(&http_req));
 
     let result = plugin::call_plugin(plugin_id.clone(), plugin_call_request, data).await;
-
+    
     // Track the request with appropriate status
-    let status = match &result {
-        Ok(response) => response.status().as_str(),
-        Err(e) => e.error_response().status().as_str(),
+    let status_code = match &result {
+        Ok(response) => response.status(),
+        Err(e) => e.error_response().status(),
     };
+    let status = status_code.as_str();
     PLUGIN_CALLS
         .with_label_values(&[plugin_id.as_str(), "POST", status])
         .inc();
-
+    
     result
 }
 
@@ -208,10 +209,11 @@ async fn plugin_call_get(
     let result = plugin::call_plugin(plugin_id.clone(), plugin_call_request, data).await;
     
     // Track the request with appropriate status
-    let status = match &result {
-        Ok(response) => response.status().as_str(),
-        Err(e) => e.error_response().status().as_str(),
+    let status_code = match &result {
+        Ok(response) => response.status(),
+        Err(e) => e.error_response().status(),
     };
+    let status = status_code.as_str();
     PLUGIN_CALLS
         .with_label_values(&[plugin_id.as_str(), "GET", status])
         .inc();
