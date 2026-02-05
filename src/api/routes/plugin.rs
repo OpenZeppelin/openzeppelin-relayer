@@ -136,12 +136,29 @@ async fn plugin_call(
     let mut plugin_call_request =
         match build_plugin_call_request_from_post_body(&route, &http_req, body.as_ref()) {
             Ok(req) => req,
-            Err(resp) => return Ok(resp),
+            Err(resp) => {
+                // Track failed request (400 Bad Request)
+                PLUGIN_CALLS
+                    .with_label_values(&[&plugin_id, "POST", "400"])
+                    .inc();
+                return Ok(resp);
+            }
         };
     plugin_call_request.method = Some("POST".to_string());
     plugin_call_request.query = Some(extract_query_params(&http_req));
 
-    plugin::call_plugin(plugin_id, plugin_call_request, data).await
+    let result = plugin::call_plugin(plugin_id.clone(), plugin_call_request, data).await;
+
+    // Track the request with appropriate status
+    let status = match &result {
+        Ok(response) => response.status().as_str(),
+        Err(e) => e.as_response_error().status_code().as_str(),
+    };
+    PLUGIN_CALLS
+        .with_label_values(&[&plugin_id, "POST", status])
+        .inc();
+
+    result
 }
 
 /// Calls a plugin method via GET request.
@@ -155,13 +172,24 @@ async fn plugin_call_get(
     let route = resolve_route(&path_route, &http_req);
 
     // Check if GET requests are allowed for this plugin
-    let plugin = data
-        .plugin_repository
-        .get_by_id(&plugin_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Plugin with id {plugin_id} not found")))?;
+    let plugin = match data.plugin_repository.get_by_id(&plugin_id).await? {
+        Some(p) => p,
+        None => {
+            // Track 404
+            PLUGIN_CALLS
+                .with_label_values(&[&plugin_id, "GET", "404"])
+                .inc();
+            return Err(ApiError::NotFound(format!(
+                "Plugin with id {plugin_id} not found"
+            )));
+        }
+    };
 
     if !plugin.allow_get_invocation {
+        // Track 405 Method Not Allowed
+        PLUGIN_CALLS
+            .with_label_values(&[&plugin_id, "GET", "405"])
+            .inc();
         return Ok(HttpResponse::MethodNotAllowed().json(ApiResponse::<()>::error(
             "GET requests are not enabled for this plugin. Set 'allow_get_invocation: true' in plugin configuration to enable.",
         )));
@@ -176,7 +204,18 @@ async fn plugin_call_get(
         query: Some(extract_query_params(&http_req)),
     };
 
-    plugin::call_plugin(plugin_id, plugin_call_request, data).await
+    let result = plugin::call_plugin(plugin_id.clone(), plugin_call_request, data).await;
+
+    // Track the request with appropriate status
+    let status = match &result {
+        Ok(response) => response.status().as_str(),
+        Err(e) => e.as_response_error().status_code().as_str(),
+    };
+    PLUGIN_CALLS
+        .with_label_values(&[&plugin_id, "GET", status])
+        .inc();
+
+    result
 }
 
 /// Get plugin by ID

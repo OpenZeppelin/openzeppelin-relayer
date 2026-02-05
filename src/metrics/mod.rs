@@ -198,6 +198,14 @@ lazy_static! {
         REGISTRY.register(Box::new(histogram_vec.clone())).unwrap();
         histogram_vec
     };
+
+    // Counter for plugin calls (tracks requests to /api/v1/plugins/{plugin_id}/call endpoints).
+    pub static ref PLUGIN_CALLS: CounterVec = {
+        let opts = Opts::new("plugin_calls_total", "Total number of plugin calls");
+        let counter_vec = CounterVec::new(opts, &["plugin_id", "method", "status"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
 }
 
 /// Gather all metrics and encode into the provided format.
