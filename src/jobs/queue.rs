@@ -63,10 +63,6 @@ impl std::fmt::Debug for Queue {
 /// Configuration for queue storage tuning.
 #[derive(Clone, Debug)]
 struct QueueConfig {
-    /// How often to poll Redis for new jobs (default: 100ms)
-    poll_interval: Duration,
-    /// How many jobs to fetch per poll cycle (default: 10)
-    buffer_size: usize,
     /// How often to move scheduled jobs to active queue (default: 30s)
     enqueue_scheduled: Duration,
 }
@@ -74,21 +70,15 @@ struct QueueConfig {
 impl Default for QueueConfig {
     fn default() -> Self {
         Self {
-            poll_interval: Duration::from_millis(100),
-            buffer_size: 10,
             enqueue_scheduled: Duration::from_secs(30),
         }
     }
 }
 
 impl QueueConfig {
-    /// Configuration for high-throughput queues (transaction_request, transaction_status).
-    /// - Larger buffer to fetch more jobs per poll
     /// - Faster poll interval for lower latency
-    fn high_throughput() -> Self {
+    fn high_frequency() -> Self {
         Self {
-            poll_interval: Duration::from_millis(50),
-            buffer_size: 100,
             enqueue_scheduled: Duration::from_secs(2),
         }
     }
@@ -98,8 +88,6 @@ impl QueueConfig {
     /// - Slower scheduled job polling (reduces Redis load)
     fn low_frequency() -> Self {
         Self {
-            poll_interval: Duration::from_millis(100),
-            buffer_size: 10,
             enqueue_scheduled: Duration::from_secs(20),
         }
     }
@@ -122,8 +110,6 @@ impl Queue {
     ) -> RedisStorage<T> {
         let config = Config::default()
             .set_namespace(namespace)
-            .set_poll_interval(queue_config.poll_interval)
-            .set_buffer_size(queue_config.buffer_size)
             .set_enqueue_scheduled(queue_config.enqueue_scheduled);
 
         RedisStorage::new_with_config(conn, config)
@@ -206,53 +192,52 @@ impl Queue {
             .unwrap_or_default();
 
         // Queue configurations:
-        // - High-throughput: transaction_request, transaction_status (critical path)
-        // - Low-frequency: notifications, health checks, swaps
-        let high_throughput = QueueConfig::high_throughput();
+        // - High-frequency: transaction_status (critical path)
+        // - Low-frequency: request, submission, notifications, health checks, swaps
+        let high_frequency = QueueConfig::high_frequency();
         let low_frequency = QueueConfig::low_frequency();
 
         Ok(Self {
-            // Critical high-throughput queues
             transaction_request_queue: Self::storage(
                 &format!("{redis_key_prefix}transaction_request_queue"),
                 conn_tx_request,
-                high_throughput.clone(),
+                low_frequency.clone(), // scheduling not used
             ),
             transaction_submission_queue: Self::storage(
                 &format!("{redis_key_prefix}transaction_submission_queue"),
                 conn_tx_submit,
-                high_throughput.clone(),
+                low_frequency.clone(), // scheduling not used
             ),
             transaction_status_queue: Self::storage(
                 &format!("{redis_key_prefix}transaction_status_queue"),
                 conn_status,
-                high_throughput.clone(),
+                high_frequency.clone(),
             ),
             transaction_status_queue_evm: Self::storage(
                 &format!("{redis_key_prefix}transaction_status_queue_evm"),
                 conn_status_evm,
-                high_throughput.clone(),
+                high_frequency.clone(),
             ),
             transaction_status_queue_stellar: Self::storage(
                 &format!("{redis_key_prefix}transaction_status_queue_stellar"),
                 conn_status_stellar,
-                high_throughput,
+                high_frequency.clone(),
             ),
             // Lower-frequency queues
             notification_queue: Self::storage(
                 &format!("{redis_key_prefix}notification_queue"),
                 conn_notification,
-                low_frequency.clone(),
+                low_frequency.clone(), // scheduling not used
             ),
             token_swap_request_queue: Self::storage(
                 &format!("{redis_key_prefix}token_swap_request_queue"),
                 conn_swap,
-                low_frequency.clone(),
+                low_frequency.clone(), // scheduling not used
             ),
             relayer_health_check_queue: Self::storage(
                 &format!("{redis_key_prefix}relayer_health_check_queue"),
                 conn_health,
-                low_frequency,
+                low_frequency.clone(), // scheduling not used
             ),
             redis_connections,
         })
@@ -371,36 +356,29 @@ mod tests {
     fn test_queue_config_default() {
         let config = QueueConfig::default();
 
-        assert_eq!(config.poll_interval, Duration::from_millis(100));
-        assert_eq!(config.buffer_size, 10);
         assert_eq!(config.enqueue_scheduled, Duration::from_secs(30));
     }
 
     #[test]
     fn test_queue_config_high_throughput() {
-        let config = QueueConfig::high_throughput();
+        let config = QueueConfig::high_frequency();
 
-        // High throughput should have faster polling and larger buffer
-        assert_eq!(config.poll_interval, Duration::from_millis(50));
-        assert_eq!(config.buffer_size, 100);
+        // High frequency should have faster enqueue_scheduled
         assert_eq!(config.enqueue_scheduled, Duration::from_secs(2));
 
         // Verify it's faster than default
         let default = QueueConfig::default();
-        assert!(config.poll_interval < default.poll_interval);
-        assert!(config.buffer_size > default.buffer_size);
+        assert!(config.enqueue_scheduled < default.enqueue_scheduled);
     }
 
     #[test]
     fn test_queue_config_low_frequency() {
         let config = QueueConfig::low_frequency();
 
-        assert_eq!(config.poll_interval, Duration::from_millis(100));
-        assert_eq!(config.buffer_size, 10);
         assert_eq!(config.enqueue_scheduled, Duration::from_secs(20));
 
-        // Low frequency should have longer enqueue_scheduled than high throughput
-        let high = QueueConfig::high_throughput();
+        // Low frequency should have longer enqueue_scheduled than high frequency
+        let high = QueueConfig::high_frequency();
         assert!(config.enqueue_scheduled > high.enqueue_scheduled);
     }
 }
