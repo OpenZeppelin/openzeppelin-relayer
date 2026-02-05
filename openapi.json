@@ -5315,7 +5315,7 @@
               },
               {
                 "$ref": "#/components/schemas/StellarPrepareTransactionResult",
-                "description": "Stellar-specific prepare transaction result"
+                "description": "Stellar-specific prepare transaction result (classic and Soroban)\nFor Soroban: includes optional user_auth_entry, expiration_ledger"
               }
             ],
             "description": "Network-agnostic prepare transaction response for gasless transactions.\nContains network-specific prepare transaction results."
@@ -5348,7 +5348,7 @@
               },
               {
                 "$ref": "#/components/schemas/StellarFeeEstimateResult",
-                "description": "Stellar-specific fee estimate result"
+                "description": "Stellar-specific fee estimate result (classic and Soroban)"
               }
             ],
             "description": "Network-agnostic fee estimate response for gasless transactions.\nContains network-specific fee estimate results."
@@ -9104,10 +9104,10 @@
           },
           {
             "$ref": "#/components/schemas/StellarPrepareTransactionRequestParams",
-            "description": "Stellar-specific prepare transaction request parameters"
+            "description": "Stellar-specific prepare transaction request parameters (classic and Soroban)"
           }
         ],
-        "description": "Network-agnostic prepare transaction request parameters for gasless transactions.\nContains network-specific request parameters for preparing transactions with fee payments.\nThe network type is inferred from the relayer's network configuration."
+        "description": "Network-agnostic prepare transaction request parameters for gasless transactions.\nContains network-specific request parameters for preparing transactions with fee payments.\nThe network type is inferred from the relayer's network configuration.\n\nFor Stellar, supports both classic and Soroban gas abstraction:\n- Classic: Pass operations or transaction_xdr with classic fee token\n- Soroban: Pass transaction_xdr containing InvokeHostFunction, user_address, and contract fee token"
       },
       "SponsoredTransactionBuildResponse": {
         "oneOf": [
@@ -9117,7 +9117,7 @@
           },
           {
             "$ref": "#/components/schemas/StellarPrepareTransactionResult",
-            "description": "Stellar-specific prepare transaction result"
+            "description": "Stellar-specific prepare transaction result (classic and Soroban)\nFor Soroban: includes optional user_auth_entry, expiration_ledger"
           }
         ],
         "description": "Network-agnostic prepare transaction response for gasless transactions.\nContains network-specific prepare transaction results."
@@ -9130,10 +9130,10 @@
           },
           {
             "$ref": "#/components/schemas/StellarFeeEstimateRequestParams",
-            "description": "Stellar-specific fee estimate request parameters"
+            "description": "Stellar-specific fee estimate request parameters (classic and Soroban)"
           }
         ],
-        "description": "Network-agnostic fee estimate request parameters for gasless transactions.\nContains network-specific request parameters for fee estimation.\nThe network type is inferred from the relayer's network configuration."
+        "description": "Network-agnostic fee estimate request parameters for gasless transactions.\nContains network-specific request parameters for fee estimation.\nThe network type is inferred from the relayer's network configuration.\n\nFor Stellar, supports both classic and Soroban gas abstraction:\n- Classic: Pass operations or transaction_xdr with classic fee token (native/USDC:GA...)\n- Soroban: Pass transaction_xdr containing InvokeHostFunction, user_address, and contract fee token (C...)"
       },
       "SponsoredTransactionQuoteResponse": {
         "oneOf": [
@@ -9143,7 +9143,7 @@
           },
           {
             "$ref": "#/components/schemas/StellarFeeEstimateResult",
-            "description": "Stellar-specific fee estimate result"
+            "description": "Stellar-specific fee estimate result (classic and Soroban)"
           }
         ],
         "description": "Network-agnostic fee estimate response for gasless transactions.\nContains network-specific fee estimate results."
@@ -9210,7 +9210,7 @@
         "properties": {
           "fee_token": {
             "type": "string",
-            "description": "Asset identifier for fee token (e.g., \"native\" or \"USDC:GA5Z...\")"
+            "description": "Asset identifier for fee token.\nFor classic: \"native\" or \"USDC:GA5Z...\" format.\nFor Soroban: contract address (C...) format."
           },
           "operations": {
             "type": [
@@ -9234,7 +9234,7 @@
               "string",
               "null"
             ],
-            "description": "Pre-built transaction XDR (base64 encoded, signed or unsigned)\nMutually exclusive with operations field"
+            "description": "Pre-built transaction XDR (base64 encoded, signed or unsigned)\nMutually exclusive with operations field.\nFor Soroban gas abstraction: pass XDR containing InvokeHostFunction operation."
           }
         },
         "additionalProperties": false
@@ -9258,6 +9258,20 @@
           "fee_in_token_ui": {
             "type": "string",
             "description": "Estimated fee in token amount (decimal UI representation as string)"
+          },
+          "max_fee_in_token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Maximum fee in token amount (raw units as string).\nOnly present for Soroban gas abstraction - includes slippage buffer."
+          },
+          "max_fee_in_token_ui": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Maximum fee in token amount (decimal UI representation as string).\nOnly present for Soroban gas abstraction - includes slippage buffer."
           }
         }
       },
@@ -9322,7 +9336,7 @@
         "properties": {
           "fee_token": {
             "type": "string",
-            "description": "Asset identifier for fee token"
+            "description": "Asset identifier for fee token.\nFor classic: \"native\" or \"USDC:GA5Z...\" format.\nFor Soroban: contract address (C...) format."
           },
           "operations": {
             "type": [
@@ -9346,7 +9360,7 @@
               "string",
               "null"
             ],
-            "description": "Pre-built transaction XDR (base64 encoded, signed or unsigned)\nMutually exclusive with operations field"
+            "description": "Pre-built transaction XDR (base64 encoded, signed or unsigned)\nMutually exclusive with operations field.\nFor Soroban gas abstraction: pass XDR containing InvokeHostFunction operation."
           }
         },
         "additionalProperties": false
@@ -9378,9 +9392,30 @@
             "type": "string",
             "description": "Asset identifier for fee token"
           },
+          "max_fee_in_token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Maximum fee in token amount (raw units as string).\nOnly present for Soroban gas abstraction - includes slippage buffer."
+          },
+          "max_fee_in_token_ui": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Maximum fee in token amount (decimal UI representation as string).\nOnly present for Soroban gas abstraction - includes slippage buffer."
+          },
           "transaction": {
             "type": "string",
             "description": "Extended transaction XDR (base64 encoded)"
+          },
+          "user_auth_entry": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "User authorization entry XDR (base64 encoded).\nPresent for Soroban gas abstraction - user must sign this auth entry."
           },
           "valid_until": {
             "type": "string",
@@ -9538,6 +9573,13 @@
               "$ref": "#/components/schemas/OperationSpec"
             }
           },
+          "signed_auth_entry": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Signed Soroban authorization entry (base64 encoded SorobanAuthorizationEntry XDR)\nUsed for Soroban gas abstraction: contains the user's signed auth entry from /build response.\nWhen provided, transaction_xdr must also be provided (the FeeForwarder transaction from /build).\nThe relayer will inject this signed auth entry into the transaction before submitting."
+          },
           "source_account": {
             "type": [
               "string",
@@ -9549,7 +9591,7 @@
               "string",
               "null"
             ],
-            "description": "Pre-built transaction XDR (base64 encoded, signed or unsigned)\nMutually exclusive with operations field"
+            "description": "Pre-built transaction XDR (base64 encoded, signed or unsigned)\nMutually exclusive with operations field.\nFor Soroban gas abstraction: submit the transaction XDR from sponsored/build response\nwith the user's signed auth entry updated inside."
           },
           "valid_until": {
             "type": [
