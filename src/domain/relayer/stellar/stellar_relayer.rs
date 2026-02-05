@@ -42,6 +42,7 @@ use crate::{
         RelayerNetworkPolicy, RelayerRepoModel, RelayerStatus, RelayerStellarPolicy,
         RepositoryError, RpcErrorCodes, StellarAllowedTokensPolicy, StellarFeePaymentStrategy,
         StellarNetwork, StellarRpcRequest, TransactionRepoModel, TransactionStatus,
+        TransactionUpdateRequest,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
@@ -56,7 +57,7 @@ use async_trait::async_trait;
 use eyre::Result;
 use futures::future::try_join_all;
 use std::sync::Arc;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 use crate::domain::relayer::stellar::xdr_utils::parse_transaction_xdr;
 use crate::domain::relayer::{Relayer, RelayerError, StellarRelayerDexTrait};
@@ -480,14 +481,11 @@ where
             .await
             .map_err(|e| RepositoryError::TransactionFailure(e.to_string()))?;
 
-        self.job_producer
-            .produce_transaction_request_job(
-                TransactionRequest::new(transaction.id.clone(), transaction.relayer_id.clone()),
-                None,
-            )
-            .await?;
-
-        self.job_producer
+        // Status check FIRST - this is our safety net for monitoring.
+        // If this fails, mark transaction as failed and don't proceed.
+        // This ensures we never have an unmonitored transaction.
+        if let Err(e) = self
+            .job_producer
             .produce_check_transaction_status_job(
                 TransactionStatusCheck::new(
                     transaction.id.clone(),
@@ -497,6 +495,44 @@ where
                 Some(calculate_scheduled_timestamp(
                     STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS,
                 )),
+            )
+            .await
+        {
+            // Status queue failed - mark transaction as failed to prevent orphaned tx
+            error!(
+                relayer_id = %self.relayer.id,
+                transaction_id = %transaction.id,
+                error = %e,
+                "Status check queue push failed - marking transaction as failed"
+            );
+            if let Err(update_err) = self
+                .transaction_repository
+                .partial_update(
+                    transaction.id.clone(),
+                    TransactionUpdateRequest {
+                        status: Some(TransactionStatus::Failed),
+                        status_reason: Some("Queue unavailable".to_string()),
+                        ..Default::default()
+                    },
+                )
+                .await
+            {
+                warn!(
+                    relayer_id = %self.relayer.id,
+                    transaction_id = %transaction.id,
+                    error = %update_err,
+                    "Failed to mark transaction as failed after queue push failure"
+                );
+            }
+            return Err(e.into());
+        }
+
+        // Now safe to push transaction request.
+        // Even if this fails, status check will monitor and detect the stuck transaction.
+        self.job_producer
+            .produce_transaction_request_job(
+                TransactionRequest::new(transaction.id.clone(), transaction.relayer_id.clone()),
+                None,
             )
             .await?;
 
@@ -2169,8 +2205,15 @@ mod tests {
             let mut tx_repo = MockTransactionRepository::new();
             tx_repo.expect_create().returning(|t| Ok(t.clone()));
 
-            // Mock produce_transaction_request_job to fail
             let mut job_producer = MockJobProducerTrait::new();
+
+            // Status check is called FIRST and succeeds (safety net)
+            job_producer
+                .expect_produce_check_transaction_status_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            // Transaction request fails AFTER status check succeeds
+            // This is safe because status check will monitor the stuck transaction
             job_producer
                 .expect_produce_transaction_request_job()
                 .returning(|_, _| {
@@ -2180,8 +2223,6 @@ mod tests {
                         ))
                     })
                 });
-
-            // Status check job should NOT be called if request job fails
 
             let relayer_repo = Arc::new(MockRelayerRepository::new());
             let counter = MockTransactionCounterServiceTrait::new();
@@ -2220,21 +2261,84 @@ mod tests {
 
             let mut tx_repo = MockTransactionRepository::new();
             tx_repo.expect_create().returning(|t| Ok(t.clone()));
+            // When status check fails, transaction is marked as failed
+            tx_repo
+                .expect_partial_update()
+                .returning(|_, _| Ok(TransactionRepoModel::default()));
 
             let mut job_producer = MockJobProducerTrait::new();
 
-            // Request job succeeds
-            job_producer
-                .expect_produce_transaction_request_job()
-                .returning(|_, _| Box::pin(async { Ok(()) }));
-
-            // Status check job fails
+            // Status check is called FIRST and fails
+            // This prevents orphaned transactions without monitoring
             job_producer
                 .expect_produce_check_transaction_status_job()
                 .returning(|_, _| {
                     Box::pin(async {
                         Err(crate::jobs::JobProducerError::QueueError(
                             "Failed to queue job".to_string(),
+                        ))
+                    })
+                });
+
+            // Transaction request should NOT be called when status check fails
+            // (no expectation set = test fails if called)
+
+            let relayer_repo = Arc::new(MockRelayerRepository::new());
+            let counter = MockTransactionCounterServiceTrait::new();
+
+            let relayer = StellarRelayer::new(
+                relayer_model,
+                signer,
+                provider,
+                StellarRelayerDependencies::new(
+                    relayer_repo,
+                    ctx.network_repository.clone(),
+                    Arc::new(tx_repo),
+                    Arc::new(counter),
+                    Arc::new(job_producer),
+                ),
+                dex_service,
+            )
+            .await
+            .unwrap();
+
+            let result = relayer.process_transaction_request(tx_request).await;
+            assert!(result.is_err());
+        }
+
+        #[tokio::test]
+        async fn test_process_transaction_request_status_check_failure_marks_tx_failed() {
+            // Verify that when status check queue fails, the transaction is marked
+            // as Failed with "Queue unavailable" reason
+            let ctx = TestCtx::default();
+            ctx.setup_network().await;
+            let relayer_model = ctx.relayer_model.clone();
+
+            let provider = MockStellarProviderTrait::new();
+            let signer = Arc::new(MockStellarSignTrait::new());
+            let dex_service = create_mock_dex_service();
+
+            let tx_request = create_test_transaction_request();
+
+            let mut tx_repo = MockTransactionRepository::new();
+            tx_repo.expect_create().returning(|t| Ok(t.clone()));
+
+            // Verify partial_update is called with correct status and reason
+            tx_repo
+                .expect_partial_update()
+                .withf(|_tx_id, update| {
+                    update.status == Some(TransactionStatus::Failed)
+                        && update.status_reason == Some("Queue unavailable".to_string())
+                })
+                .returning(|_, _| Ok(TransactionRepoModel::default()));
+
+            let mut job_producer = MockJobProducerTrait::new();
+            job_producer
+                .expect_produce_check_transaction_status_job()
+                .returning(|_, _| {
+                    Box::pin(async {
+                        Err(crate::jobs::JobProducerError::QueueError(
+                            "Redis timeout".to_string(),
                         ))
                     })
                 });
@@ -2260,6 +2364,7 @@ mod tests {
 
             let result = relayer.process_transaction_request(tx_request).await;
             assert!(result.is_err());
+            // The mock verification (withf) ensures partial_update was called correctly
         }
 
         #[tokio::test]
