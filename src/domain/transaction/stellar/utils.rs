@@ -277,10 +277,14 @@ where
     );
 
     // Fetch account info from chain
-    let account = provider
-        .get_account(relayer_address)
-        .await
-        .map_err(|e| format!("Failed to fetch account from chain: {e}"))?;
+    let account = provider.get_account(relayer_address).await.map_err(|e| {
+        warn!(
+            address = %relayer_address,
+            error = %e,
+            "get_account failed in fetch_next_sequence_from_chain"
+        );
+        format!("Failed to fetch account from chain: {e}")
+    })?;
 
     let on_chain_seq = account.seq_num.0; // Extract the i64 value
     let next_usable = next_sequence_u64(on_chain_seq)

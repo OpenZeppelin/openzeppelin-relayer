@@ -25,7 +25,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use super::lane_gate;
 
@@ -244,7 +244,16 @@ where
         // Use the shared helper to fetch the next sequence
         let next_usable_seq = fetch_next_sequence_from_chain(self.provider(), relayer_address)
             .await
-            .map_err(TransactionError::UnexpectedError)?;
+            .map_err(|e| {
+                warn!(
+                    address = %relayer_address,
+                    error = %e,
+                    "failed to fetch sequence from chain in sync_sequence_from_chain"
+                );
+                TransactionError::UnexpectedError(format!(
+                    "Failed to sync sequence from chain: {e}"
+                ))
+            })?;
 
         // Update the local counter to the next usable sequence
         self.transaction_counter_service()

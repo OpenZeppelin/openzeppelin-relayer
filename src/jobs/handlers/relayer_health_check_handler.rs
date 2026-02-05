@@ -12,6 +12,7 @@ use crate::{
         NotificationRepoModel, RelayerRepoModel, SignerRepoModel, ThinDataAppState,
         TransactionRepoModel,
     },
+    observability::request_id::set_request_id,
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
         Repository, TransactionCounterTrait, TransactionRepository,
@@ -19,10 +20,10 @@ use crate::{
     utils::calculate_scheduled_timestamp,
 };
 use actix_web::web::ThinData;
-use apalis::prelude::{Attempt, Data, *};
+use apalis::prelude::{Attempt, Data, TaskId, *};
 use eyre::Result;
 use std::time::Duration;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, instrument, warn};
 
 /// Handler for relayer health check jobs.
 ///
@@ -48,11 +49,28 @@ use tracing::{debug, info, warn};
 /// # Returns
 ///
 /// Returns `Ok(())` if the health check completes successfully, or an error otherwise.
+#[instrument(
+    level = "debug",
+    skip(job, app_state),
+    fields(
+        request_id = ?job.request_id,
+        job_id = %job.message_id,
+        job_type = %job.job_type.to_string(),
+        attempt = %attempt.current(),
+        relayer_id = %job.data.relayer_id,
+        task_id = %task_id.to_string(),
+    )
+)]
 pub async fn relayer_health_check_handler(
     job: Job<RelayerHealthCheck>,
     app_state: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
+    task_id: TaskId,
 ) -> Result<(), Error> {
+    if let Some(request_id) = job.request_id.clone() {
+        set_request_id(request_id);
+    }
+
     relayer_health_check_handler_impl(job, app_state, attempt).await
 }
 

@@ -328,10 +328,12 @@ where
 /// Process a complete configuration file by initializing all repositories.
 ///
 /// This function processes the entire configuration file in the following order:
-/// 1. Process signers
-/// 2. Process notifications
-/// 3. Process networks
-/// 4. Process relayers
+/// 1. Process plugins
+/// 2. Process signers
+/// 3. Process notifications
+/// 4. Process networks
+/// 5. Process relayers
+/// 6. Process API key
 pub async fn process_config_file<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     config_file: Config,
     server_config: Arc<ServerConfig>,

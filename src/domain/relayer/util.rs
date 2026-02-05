@@ -25,6 +25,7 @@ use crate::{
 };
 
 use super::NetworkRelayer;
+use tracing::instrument;
 
 /// Retrieves a relayer by its ID from the repository.
 ///
@@ -37,6 +38,14 @@ use super::NetworkRelayer;
 ///
 /// * `Result<RelayerRepoModel, ApiError>` - Returns a `RelayerRepoModel` on success, or an
 ///   `ApiError` on failure.
+#[instrument(
+    level = "debug",
+    skip(state),
+    fields(
+        request_id = ?crate::observability::request_id::get_request_id(),
+        relayer_id = %relayer_id,
+    )
+)]
 pub async fn get_relayer_by_id<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     relayer_id: String,
     state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
@@ -70,6 +79,14 @@ where
 ///
 /// * `Result<NetworkRelayer, ApiError>` - Returns a `NetworkRelayer` on success, or an `ApiError`
 ///   on failure.
+#[instrument(
+    level = "debug",
+    skip(state),
+    fields(
+        request_id = ?crate::observability::request_id::get_request_id(),
+        relayer_id = %relayer_id,
+    )
+)]
 pub async fn get_network_relayer<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     relayer_id: String,
     state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
@@ -107,6 +124,14 @@ where
 ///
 /// * `Result<NetworkRelayer, ApiError>` - Returns a `NetworkRelayer` on success, or an `ApiError`
 ///   on failure.
+#[instrument(
+    level = "debug",
+    skip(state, relayer_model),
+    fields(
+        request_id = ?crate::observability::request_id::get_request_id(),
+        relayer_id = %relayer_model.id,
+    )
+)]
 pub async fn get_network_relayer_by_model<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     relayer_model: RelayerRepoModel,
     state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,

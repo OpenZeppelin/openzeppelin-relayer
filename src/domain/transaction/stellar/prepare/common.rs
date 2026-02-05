@@ -11,7 +11,9 @@ use crate::{
     constants::STELLAR_DEFAULT_TRANSACTION_FEE,
     domain::{
         stellar::i64_from_u64,
-        xdr_utils::{update_xdr_fee, update_xdr_sequence, xdr_needs_simulation},
+        xdr_utils::{
+            extract_soroban_resource_fee, update_xdr_fee, update_xdr_sequence, xdr_needs_simulation,
+        },
         SignTransactionResponse,
     },
     jobs::{JobProducerTrait, TransactionSend},
@@ -204,6 +206,8 @@ pub async fn ensure_minimum_fee(
 /// Calculate the required fee for a fee-bump transaction.
 ///
 /// For Soroban transactions, this includes both the inclusion fee and resource fee.
+/// If the inner transaction already has SorobanTransactionData with a resource fee,
+/// that fee is used instead of re-simulating (useful for pre-simulated signed transactions).
 /// For regular transactions, it uses the provided max_fee.
 pub async fn calculate_fee_bump_required_fee<P>(
     inner_envelope: &TransactionEnvelope,
@@ -213,6 +217,33 @@ pub async fn calculate_fee_bump_required_fee<P>(
 where
     P: StellarProviderTrait + Send + Sync,
 {
+    // Check if the inner transaction already has SorobanTransactionData with resource fee.
+    // This allows skipping simulation for pre-simulated signed transactions.
+    if let Some(existing_resource_fee) = extract_soroban_resource_fee(inner_envelope) {
+        let inclusion_fee = STELLAR_DEFAULT_TRANSACTION_FEE as i64;
+        let required_fee = inclusion_fee.checked_add(existing_resource_fee).ok_or_else(|| {
+            TransactionError::ValidationError(format!(
+                "Fee overflow: inclusion fee ({inclusion_fee}) + resource fee ({existing_resource_fee}) exceeds i64::MAX"
+            ))
+        })?;
+
+        debug!(
+            "Using existing resource fee from inner transaction. \
+             Inclusion fee: {}, Resource fee: {}, Total: {}",
+            inclusion_fee, existing_resource_fee, required_fee
+        );
+
+        // Validate max_fee covers the existing fee
+        if max_fee < required_fee {
+            return Err(TransactionError::ValidationError(format!(
+                "max_fee ({max_fee}) is insufficient. Required fee: {required_fee} \
+                 (inclusion: {inclusion_fee} + resource: {existing_resource_fee})"
+            )));
+        }
+
+        return Ok(max_fee as u32);
+    }
+
     // Check if the inner transaction needs simulation (Soroban operations)
     if xdr_needs_simulation(inner_envelope).unwrap_or(false) {
         debug!("Inner transaction contains Soroban operations, simulating to determine resource fee...");
@@ -265,6 +296,12 @@ where
 {
     let job = TransactionSend::submit(tx.id.clone(), tx.relayer_id.clone());
     let scheduled_on = delay_seconds.map(calculate_scheduled_timestamp);
+    debug!(
+        tx_id = %tx.id,
+        relayer_id = %tx.relayer_id,
+        delay_seconds = ?delay_seconds,
+        "enqueueing submit transaction job"
+    );
     job_producer
         .produce_submit_transaction_job(job, scheduled_on)
         .await?;
@@ -283,6 +320,11 @@ where
     T: TransactionRepository + Send + Sync,
     J: JobProducerTrait + Send + Sync,
 {
+    debug!(
+        tx_id = %tx_id,
+        "updating transaction status to Sent"
+    );
+
     // Update the transaction with the final stellar data
     let update_req = TransactionUpdateRequest {
         status: Some(TransactionStatus::Sent),
@@ -293,6 +335,13 @@ where
     let saved_tx = transaction_repository
         .partial_update(tx_id, update_req)
         .await?;
+
+    debug!(
+        tx_id = %saved_tx.id,
+        relayer_id = %saved_tx.relayer_id,
+        status = ?saved_tx.status,
+        "transaction updated, enqueueing submit job"
+    );
 
     send_submit_transaction_job(job_producer, &saved_tx, None).await?;
 
@@ -589,5 +638,148 @@ mod send_submit_transaction_job_tests {
 
         let result = send_submit_transaction_job(handler.job_producer(), &tx, None).await;
         assert!(result.is_err());
+    }
+}
+
+#[cfg(test)]
+mod calculate_fee_bump_required_fee_tests {
+    use super::*;
+    use crate::services::provider::MockStellarProviderTrait;
+    use soroban_rs::xdr::{
+        Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, LedgerFootprint, Memo,
+        MuxedAccount, Operation, OperationBody, ScAddress, SequenceNumber, SorobanResources,
+        SorobanTransactionData, SorobanTransactionDataExt, Transaction, TransactionV1Envelope,
+        Uint256, VecM,
+    };
+    use stellar_strkey::ed25519::PublicKey;
+
+    /// Creates a Soroban transaction envelope with existing SorobanTransactionData.
+    /// Includes an InvokeHostFunction operation so xdr_needs_simulation returns true.
+    fn create_soroban_envelope_with_existing_data(resource_fee: i64) -> TransactionEnvelope {
+        let pk = PublicKey([0; 32]);
+        let source = MuxedAccount::Ed25519(Uint256(pk.0));
+
+        let soroban_data = SorobanTransactionData {
+            ext: SorobanTransactionDataExt::V0,
+            resources: SorobanResources {
+                footprint: LedgerFootprint {
+                    read_only: vec![].try_into().unwrap(),
+                    read_write: vec![].try_into().unwrap(),
+                },
+                instructions: 1000,
+                disk_read_bytes: 100,
+                write_bytes: 50,
+            },
+            resource_fee,
+        };
+
+        // Create an InvokeHostFunction operation so xdr_needs_simulation returns true
+        let invoke_op = Operation {
+            source_account: None,
+            body: OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
+                host_function: HostFunction::InvokeContract(InvokeContractArgs {
+                    contract_address: ScAddress::Contract(soroban_rs::xdr::ContractId(Hash(
+                        [0u8; 32],
+                    ))),
+                    function_name: "test".try_into().unwrap(),
+                    args: vec![].try_into().unwrap(),
+                }),
+                auth: vec![].try_into().unwrap(),
+            }),
+        };
+
+        let tx = Transaction {
+            source_account: source,
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            cond: soroban_rs::xdr::Preconditions::None,
+            memo: Memo::None,
+            operations: vec![invoke_op].try_into().unwrap(),
+            ext: soroban_rs::xdr::TransactionExt::V1(soroban_data),
+        };
+
+        TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: VecM::default(),
+        })
+    }
+
+    fn create_envelope_without_soroban_data() -> TransactionEnvelope {
+        let pk = PublicKey([0; 32]);
+        let source = MuxedAccount::Ed25519(Uint256(pk.0));
+
+        let tx = Transaction {
+            source_account: source,
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            cond: soroban_rs::xdr::Preconditions::None,
+            memo: Memo::None,
+            operations: VecM::default(),
+            ext: soroban_rs::xdr::TransactionExt::V0,
+        };
+
+        TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: VecM::default(),
+        })
+    }
+
+    #[tokio::test]
+    async fn test_calculate_fee_bump_skips_simulation_with_existing_data() {
+        // Create a Soroban transaction envelope with existing SorobanTransactionData
+        // This includes an InvokeHostFunction op, so xdr_needs_simulation would return true
+        // if we didn't short-circuit on the existing resource fee
+        let resource_fee = 50000i64;
+        let envelope = create_soroban_envelope_with_existing_data(resource_fee);
+
+        // Verify that the envelope does need simulation (has Soroban op)
+        assert!(xdr_needs_simulation(&envelope).unwrap());
+
+        // Provider should NOT be called for simulation since we have existing data
+        // If simulate_transaction_envelope is called, mockall will panic because
+        // no expectation is set
+        let provider = MockStellarProviderTrait::new();
+
+        let max_fee = 100000i64;
+        let result = calculate_fee_bump_required_fee(&envelope, max_fee, &provider).await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), max_fee as u32);
+    }
+
+    #[tokio::test]
+    async fn test_calculate_fee_bump_validates_max_fee_with_existing_data() {
+        // Create a Soroban transaction envelope with existing SorobanTransactionData
+        let resource_fee = 50000i64;
+        let envelope = create_soroban_envelope_with_existing_data(resource_fee);
+
+        let provider = MockStellarProviderTrait::new();
+
+        // max_fee is less than required (inclusion_fee + resource_fee)
+        // inclusion_fee = 100 (STELLAR_DEFAULT_TRANSACTION_FEE)
+        // required = 100 + 50000 = 50100
+        let max_fee = 40000i64; // Less than required
+
+        let result = calculate_fee_bump_required_fee(&envelope, max_fee, &provider).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, TransactionError::ValidationError(msg) if msg.contains("insufficient"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_calculate_fee_bump_falls_back_to_max_fee_without_soroban_data() {
+        // Create a transaction envelope without SorobanTransactionData (V0 ext)
+        let envelope = create_envelope_without_soroban_data();
+
+        let provider = MockStellarProviderTrait::new();
+
+        let max_fee = 100000i64;
+        let result = calculate_fee_bump_required_fee(&envelope, max_fee, &provider).await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), max_fee as u32);
     }
 }

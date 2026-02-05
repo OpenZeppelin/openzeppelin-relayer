@@ -310,6 +310,12 @@ impl SharedSocketService {
         get_config().socket_max_connections - self.connection_semaphore.available_permits()
     }
 
+    /// Get current number of registered executions
+    pub async fn registered_executions_count(&self) -> usize {
+        let map = self.executions.read().await;
+        map.len()
+    }
+
     /// Signal shutdown to the listener and wait for active connections to drain
     pub async fn shutdown(&self) {
         let _ = self.shutdown_tx.send(true);
