@@ -12,7 +12,7 @@ use crate::{
     },
     repositories::PluginRepositoryTrait,
 };
-use actix_web::{get, patch, post, web, HttpRequest, HttpResponse, ResponseError, Responder};
+use actix_web::{get, patch, post, web, HttpRequest, HttpResponse, Responder, ResponseError};
 use url::form_urlencoded;
 
 /// List plugins
@@ -149,7 +149,7 @@ async fn plugin_call(
     plugin_call_request.query = Some(extract_query_params(&http_req));
 
     let result = plugin::call_plugin(plugin_id.clone(), plugin_call_request, data).await;
-    
+
     // Track the request with appropriate status
     let status_code = match &result {
         Ok(response) => response.status(),
@@ -159,7 +159,7 @@ async fn plugin_call(
     PLUGIN_CALLS
         .with_label_values(&[plugin_id.as_str(), "POST", status])
         .inc();
-    
+
     result
 }
 
@@ -207,7 +207,7 @@ async fn plugin_call_get(
     };
 
     let result = plugin::call_plugin(plugin_id.clone(), plugin_call_request, data).await;
-    
+
     // Track the request with appropriate status
     let status_code = match &result {
         Ok(response) => response.status(),
@@ -217,7 +217,7 @@ async fn plugin_call_get(
     PLUGIN_CALLS
         .with_label_values(&[plugin_id.as_str(), "GET", status])
         .inc();
-    
+
     result
 }
 
