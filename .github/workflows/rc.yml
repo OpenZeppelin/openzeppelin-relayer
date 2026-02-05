@@ -36,7 +36,7 @@ jobs:
           if [[ ! "$INPUT_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "Invalid commit SHA: $INPUT_COMMIT_SHA. Please provide the full 40-character SHA."
             echo "Provided SHA: $INPUT_COMMIT_SHA"
-            echo "Length: ${#$INPUT_COMMIT_SHA}"
+            echo "Length: ${#INPUT_COMMIT_SHA}"
             exit 1
           fi
           echo "Valid commit SHA: $INPUT_COMMIT_SHA"

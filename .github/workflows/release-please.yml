@@ -128,10 +128,6 @@ jobs:
         with:
           app-id: ${{ vars.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-      - name: Get PR details
-        id: release-branch
-        run: |
-          echo "pr head branch name: >>>>> ${{ needs.release-please.outputs.release_branch }}"
       - name: Checkout release branch
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
         with:
@@ -183,10 +179,6 @@ jobs:
         with:
           app-id: ${{ vars.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-      - name: Get PR details
-        id: release-branch
-        run: |
-          echo "pr head branch name: >>>>> ${{ needs.release-please.outputs.release_branch }}"
       - name: Checkout release branch
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
         with:
