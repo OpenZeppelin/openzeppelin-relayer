@@ -10,14 +10,24 @@ use super::{
     AssetType, PathStep, StellarDexServiceError, StellarDexServiceTrait, StellarQuoteResponse,
     SwapExecutionResult, SwapTransactionParams,
 };
-use crate::constants::get_default_soroswap_native_wrapper;
-use crate::domain::transaction::stellar::utils::parse_contract_address;
+use crate::constants::{get_default_soroswap_native_wrapper, STELLAR_DEFAULT_TRANSACTION_FEE};
+use crate::domain::relayer::string_to_muxed_account;
+use crate::domain::transaction::stellar::utils::{parse_account_id, parse_contract_address};
 use crate::services::provider::StellarProviderTrait;
 use async_trait::async_trait;
-use soroban_rs::xdr::{ContractId, Int128Parts, ScAddress, ScSymbol, ScVal, ScVec};
+use chrono::{Duration as ChronoDuration, Utc};
+use soroban_rs::xdr::{
+    ContractId, HostFunction, Int128Parts, InvokeContractArgs, InvokeHostFunctionOp, Limits, Memo,
+    Operation, OperationBody, Preconditions, ScAddress, ScSymbol, ScVal, ScVec, SequenceNumber,
+    TimeBounds, TimePoint, Transaction, TransactionEnvelope, TransactionExt, TransactionV1Envelope,
+    VecM, WriteXdr,
+};
 use std::collections::HashSet;
 use std::sync::Arc;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
+
+/// Transaction validity window in minutes
+const TRANSACTION_VALIDITY_MINUTES: i64 = 5;
 
 /// Soroswap AMM DEX service for Soroban token swaps
 ///
@@ -178,6 +188,161 @@ where
             })?;
 
         Self::scval_to_amounts_vec(&result)
+    }
+
+    /// Parse a Stellar account address (G...) to ScAddress::Account
+    fn parse_account_to_sc_address(address: &str) -> Result<ScAddress, StellarDexServiceError> {
+        let account_id = parse_account_id(address).map_err(|e| {
+            StellarDexServiceError::InvalidAssetIdentifier(format!(
+                "Invalid Stellar account address '{address}': {e}"
+            ))
+        })?;
+        Ok(ScAddress::Account(account_id))
+    }
+
+    /// Build the Soroswap router swap transaction XDR (unsigned)
+    ///
+    /// Creates an `InvokeHostFunction` transaction that calls the Soroswap router's
+    /// `swap_exact_tokens_for_tokens` function. The transaction is returned as unsigned
+    /// base64-encoded XDR with placeholder sequence number (0). The transaction pipeline
+    /// will handle simulation (to get resources, footprint, and auth entries), sequence
+    /// number assignment, fee calculation, signing, and submission.
+    ///
+    /// Soroswap router function signature:
+    /// ```text
+    /// swap_exact_tokens_for_tokens(
+    ///     amount_in: i128,
+    ///     amount_out_min: i128,
+    ///     path: Vec<Address>,
+    ///     to: Address,
+    ///     deadline: u64
+    /// ) -> Vec<i128>
+    /// ```
+    fn build_swap_transaction_xdr(
+        &self,
+        params: &SwapTransactionParams,
+        quote: &StellarQuoteResponse,
+    ) -> Result<String, StellarDexServiceError> {
+        // Step 1: Parse source account to MuxedAccount (for transaction source)
+        let source_account = string_to_muxed_account(&params.source_account).map_err(|e| {
+            StellarDexServiceError::InvalidAssetIdentifier(format!("Invalid source account: {e}"))
+        })?;
+
+        // Step 2: Parse source account to ScAddress (for the `to` parameter — relayer swaps to itself)
+        let to_address = Self::parse_account_to_sc_address(&params.source_account)?;
+
+        // Step 3: Calculate amount_out_min with slippage protection
+        // Formula: out_amount * (10000 - slippage_bps) / 10000
+        let out_amount = quote.out_amount as u128;
+        let slippage_bps = quote.slippage_bps as u128;
+        let basis = 10000u128;
+
+        let amount_out_min_u128 = out_amount
+            .checked_mul(basis.saturating_sub(slippage_bps))
+            .ok_or_else(|| {
+                StellarDexServiceError::UnknownError(
+                    "Overflow calculating minimum output amount".to_string(),
+                )
+            })?
+            .checked_div(basis)
+            .ok_or_else(|| StellarDexServiceError::UnknownError("Division error".to_string()))?;
+
+        // Ensure we don't request 0 if the quote was non-zero
+        let amount_out_min = if amount_out_min_u128 == 0 && out_amount > 0 {
+            1i128
+        } else {
+            amount_out_min_u128 as i128
+        };
+
+        // Step 4: Resolve token addresses (replace "native" with wrapper contract address)
+        let from_token = if params.source_asset == "native" || params.source_asset.is_empty() {
+            self.native_wrapper_address.clone()
+        } else {
+            params.source_asset.clone()
+        };
+
+        let to_token =
+            if params.destination_asset == "native" || params.destination_asset.is_empty() {
+                self.native_wrapper_address.clone()
+            } else {
+                params.destination_asset.clone()
+            };
+
+        // Step 5: Build the path as Vec<ScVal::Address>
+        let path = self.build_path(&from_token, &to_token)?;
+
+        // Step 6: Calculate deadline (Unix timestamp, now + validity window)
+        let now = Utc::now();
+        let deadline = now + ChronoDuration::minutes(TRANSACTION_VALIDITY_MINUTES);
+        let deadline_timestamp = deadline.timestamp() as u64;
+
+        // Step 7: Build router contract invocation args
+        let router_addr = Self::parse_contract_to_sc_address(&self.router_address)?;
+        let function_name = ScSymbol::try_from("swap_exact_tokens_for_tokens").map_err(|_| {
+            StellarDexServiceError::UnknownError(
+                "Failed to create swap function symbol".to_string(),
+            )
+        })?;
+
+        let args: VecM<ScVal> = vec![
+            Self::i128_to_scval(params.amount as i128), // amount_in
+            Self::i128_to_scval(amount_out_min),        // amount_out_min
+            path,                                       // path: Vec<Address>
+            ScVal::Address(to_address),                 // to: relayer address
+            ScVal::U64(deadline_timestamp),             // deadline: Unix timestamp
+        ]
+        .try_into()
+        .map_err(|_| {
+            StellarDexServiceError::UnknownError("Failed to create swap function args".to_string())
+        })?;
+
+        // Step 8: Create InvokeHostFunction operation
+        let host_function = HostFunction::InvokeContract(InvokeContractArgs {
+            contract_address: router_addr,
+            function_name,
+            args,
+        });
+
+        let invoke_op = Operation {
+            source_account: None,
+            body: OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
+                host_function,
+                auth: VecM::default(), // Empty — simulation will populate auth entries
+            }),
+        };
+
+        // Step 9: Build time bounds
+        let time_bounds = TimeBounds {
+            min_time: TimePoint(0),
+            max_time: TimePoint(deadline_timestamp),
+        };
+
+        // Step 10: Build Transaction with placeholder sequence and fee
+        let transaction = Transaction {
+            source_account,
+            fee: STELLAR_DEFAULT_TRANSACTION_FEE,
+            seq_num: SequenceNumber(0), // Placeholder — pipeline updates
+            cond: Preconditions::Time(time_bounds),
+            memo: Memo::None,
+            operations: vec![invoke_op].try_into().map_err(|_| {
+                StellarDexServiceError::UnknownError(
+                    "Failed to create operations vector".to_string(),
+                )
+            })?,
+            ext: TransactionExt::V0,
+        };
+
+        // Step 11: Create TransactionEnvelope and serialize
+        let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx: transaction,
+            signatures: VecM::default(), // Unsigned
+        });
+
+        envelope.to_xdr_base64(Limits::none()).map_err(|e| {
+            StellarDexServiceError::UnknownError(format!(
+                "Failed to serialize transaction to XDR: {e}"
+            ))
+        })
     }
 }
 
@@ -367,13 +532,7 @@ where
         &self,
         params: SwapTransactionParams,
     ) -> Result<(String, StellarQuoteResponse), StellarDexServiceError> {
-        // For gas abstraction, we don't actually need to prepare a swap transaction
-        // The FeeForwarder contract handles the token transfer
-        // This method is mainly used for the relayer's own token swaps
-
-        warn!("Soroswap prepare_swap_transaction is not yet fully implemented");
-
-        // Get the quote first
+        // Get a quote for the swap
         let quote = if params.destination_asset == "native" {
             self.get_token_to_xlm_quote(
                 &params.source_asset,
@@ -396,11 +555,20 @@ where
             ));
         };
 
-        // TODO: Build the actual swap transaction XDR
-        // For now, return empty transaction as placeholder
-        let placeholder_xdr = String::new();
+        info!(
+            "Preparing Soroswap swap transaction: {} {} -> {} (min receive: {})",
+            params.amount, params.source_asset, params.destination_asset, quote.out_amount
+        );
 
-        Ok((placeholder_xdr, quote))
+        // Build the unsigned swap transaction XDR
+        let xdr = self.build_swap_transaction_xdr(&params, &quote)?;
+
+        info!(
+            "Successfully prepared Soroswap swap transaction XDR ({} bytes)",
+            xdr.len()
+        );
+
+        Ok((xdr, quote))
     }
 
     async fn execute_swap(
@@ -426,6 +594,7 @@ mod tests {
     };
     use crate::services::provider::MockStellarProviderTrait;
     use futures::FutureExt;
+    use soroban_rs::xdr::ReadXdr;
 
     fn create_mock_provider() -> Arc<MockStellarProviderTrait> {
         Arc::new(MockStellarProviderTrait::new())
@@ -1054,8 +1223,23 @@ mod tests {
 
         let (xdr, quote) = service.prepare_swap_transaction(params).await.unwrap();
 
-        assert!(xdr.is_empty()); // Placeholder
+        assert!(!xdr.is_empty());
         assert_eq!(quote.out_amount, 950_000);
+
+        // Verify XDR is a valid TransactionEnvelope with InvokeHostFunction
+        let envelope = TransactionEnvelope::from_xdr_base64(&xdr, Limits::none()).unwrap();
+        match &envelope {
+            TransactionEnvelope::Tx(env) => {
+                assert_eq!(env.tx.operations.len(), 1);
+                assert!(matches!(
+                    env.tx.operations[0].body,
+                    OperationBody::InvokeHostFunction(_)
+                ));
+                // Sequence should be 0 (placeholder)
+                assert_eq!(env.tx.seq_num.0, 0);
+            }
+            _ => panic!("Expected Tx envelope"),
+        }
     }
 
     #[tokio::test]
@@ -1092,8 +1276,21 @@ mod tests {
 
         let (xdr, quote) = service.prepare_swap_transaction(params).await.unwrap();
 
-        assert!(xdr.is_empty()); // Placeholder
+        assert!(!xdr.is_empty());
         assert_eq!(quote.out_amount, 1_050_000);
+
+        // Verify XDR is valid
+        let envelope = TransactionEnvelope::from_xdr_base64(&xdr, Limits::none()).unwrap();
+        match &envelope {
+            TransactionEnvelope::Tx(env) => {
+                assert_eq!(env.tx.operations.len(), 1);
+                assert!(matches!(
+                    env.tx.operations[0].body,
+                    OperationBody::InvokeHostFunction(_)
+                ));
+            }
+            _ => panic!("Expected Tx envelope"),
+        }
     }
 
     #[tokio::test]
@@ -1121,6 +1318,243 @@ mod tests {
                 assert!(msg.contains("only supports swaps involving native XLM"));
             }
             e => panic!("Expected InvalidAssetIdentifier, got {:?}", e),
+        }
+    }
+
+    // ==================== parse_account_to_sc_address Tests ====================
+
+    #[test]
+    fn test_parse_account_to_sc_address_valid() {
+        let addr = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+        let result = SoroswapService::<MockStellarProviderTrait>::parse_account_to_sc_address(addr);
+        assert!(result.is_ok());
+        match result.unwrap() {
+            ScAddress::Account(_) => {}
+            _ => panic!("Expected Account address"),
+        }
+    }
+
+    #[test]
+    fn test_parse_account_to_sc_address_invalid() {
+        let addr = "INVALID";
+        let result = SoroswapService::<MockStellarProviderTrait>::parse_account_to_sc_address(addr);
+        assert!(result.is_err());
+    }
+
+    // ==================== build_swap_transaction_xdr Tests ====================
+
+    #[test]
+    fn test_build_swap_transaction_xdr_token_to_xlm() {
+        let provider = create_mock_provider();
+        let service = create_test_service(provider, true);
+
+        let quote = StellarQuoteResponse {
+            input_asset: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(),
+            output_asset: "native".to_string(),
+            in_amount: 1_000_000,
+            out_amount: 950_000,
+            price_impact_pct: 0.0,
+            slippage_bps: 50,
+            path: None,
+        };
+
+        let params = SwapTransactionParams {
+            source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            source_asset: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(),
+            destination_asset: "native".to_string(),
+            amount: 1_000_000,
+            slippage_percent: 0.5,
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            source_asset_decimals: Some(7),
+            destination_asset_decimals: None,
+        };
+
+        let xdr = service.build_swap_transaction_xdr(&params, &quote).unwrap();
+
+        // Verify the XDR parses correctly
+        let envelope = TransactionEnvelope::from_xdr_base64(&xdr, Limits::none()).unwrap();
+        match &envelope {
+            TransactionEnvelope::Tx(env) => {
+                // Verify transaction structure
+                assert_eq!(env.tx.operations.len(), 1);
+                assert_eq!(env.tx.seq_num.0, 0); // Placeholder
+                assert_eq!(env.tx.fee, STELLAR_DEFAULT_TRANSACTION_FEE);
+                assert!(env.signatures.is_empty()); // Unsigned
+
+                // Verify it's an InvokeHostFunction with InvokeContract
+                match &env.tx.operations[0].body {
+                    OperationBody::InvokeHostFunction(op) => {
+                        match &op.host_function {
+                            HostFunction::InvokeContract(args) => {
+                                // Verify router contract address
+                                match &args.contract_address {
+                                    ScAddress::Contract(_) => {}
+                                    _ => panic!("Expected Contract address for router"),
+                                }
+                                // Verify function name
+                                assert_eq!(
+                                    args.function_name.to_string(),
+                                    "swap_exact_tokens_for_tokens"
+                                );
+                                // Verify 5 arguments
+                                assert_eq!(args.args.len(), 5);
+                            }
+                            _ => panic!("Expected InvokeContract"),
+                        }
+                        // Auth should be empty (simulation fills it)
+                        assert!(op.auth.is_empty());
+                    }
+                    _ => panic!("Expected InvokeHostFunction"),
+                }
+
+                // Verify time bounds
+                match &env.tx.cond {
+                    Preconditions::Time(tb) => {
+                        assert_eq!(tb.min_time.0, 0);
+                        assert!(tb.max_time.0 > 0);
+                    }
+                    _ => panic!("Expected Time preconditions"),
+                }
+            }
+            _ => panic!("Expected Tx envelope"),
+        }
+    }
+
+    #[test]
+    fn test_build_swap_transaction_xdr_native_to_token() {
+        let provider = create_mock_provider();
+        let service = create_test_service(provider, true);
+
+        let quote = StellarQuoteResponse {
+            input_asset: "native".to_string(),
+            output_asset: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(),
+            in_amount: 1_000_000,
+            out_amount: 1_050_000,
+            price_impact_pct: 0.0,
+            slippage_bps: 50,
+            path: None,
+        };
+
+        let params = SwapTransactionParams {
+            source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            source_asset: "native".to_string(),
+            destination_asset: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
+                .to_string(),
+            amount: 1_000_000,
+            slippage_percent: 0.5,
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            source_asset_decimals: None,
+            destination_asset_decimals: Some(7),
+        };
+
+        let xdr = service.build_swap_transaction_xdr(&params, &quote).unwrap();
+
+        // Verify valid XDR with InvokeHostFunction
+        let envelope = TransactionEnvelope::from_xdr_base64(&xdr, Limits::none()).unwrap();
+        match &envelope {
+            TransactionEnvelope::Tx(env) => {
+                assert_eq!(env.tx.operations.len(), 1);
+                match &env.tx.operations[0].body {
+                    OperationBody::InvokeHostFunction(op) => match &op.host_function {
+                        HostFunction::InvokeContract(args) => {
+                            assert_eq!(
+                                args.function_name.to_string(),
+                                "swap_exact_tokens_for_tokens"
+                            );
+                            assert_eq!(args.args.len(), 5);
+                        }
+                        _ => panic!("Expected InvokeContract"),
+                    },
+                    _ => panic!("Expected InvokeHostFunction"),
+                }
+            }
+            _ => panic!("Expected Tx envelope"),
+        }
+    }
+
+    #[test]
+    fn test_build_swap_transaction_xdr_invalid_source_account() {
+        let provider = create_mock_provider();
+        let service = create_test_service(provider, true);
+
+        let quote = StellarQuoteResponse {
+            input_asset: "native".to_string(),
+            output_asset: "native".to_string(),
+            in_amount: 1_000_000,
+            out_amount: 1_000_000,
+            price_impact_pct: 0.0,
+            slippage_bps: 50,
+            path: None,
+        };
+
+        let params = SwapTransactionParams {
+            source_account: "INVALID_ACCOUNT".to_string(),
+            source_asset: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(),
+            destination_asset: "native".to_string(),
+            amount: 1_000_000,
+            slippage_percent: 0.5,
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            source_asset_decimals: None,
+            destination_asset_decimals: None,
+        };
+
+        let result = service.build_swap_transaction_xdr(&params, &quote);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_build_swap_transaction_xdr_slippage_calculation() {
+        let provider = create_mock_provider();
+        let service = create_test_service(provider, true);
+
+        // With 100 bps (1%) slippage on 1_000_000 output, min should be 990_000
+        let quote = StellarQuoteResponse {
+            input_asset: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(),
+            output_asset: "native".to_string(),
+            in_amount: 1_000_000,
+            out_amount: 1_000_000,
+            price_impact_pct: 0.0,
+            slippage_bps: 100, // 1%
+            path: None,
+        };
+
+        let params = SwapTransactionParams {
+            source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            source_asset: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(),
+            destination_asset: "native".to_string(),
+            amount: 1_000_000,
+            slippage_percent: 1.0,
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            source_asset_decimals: Some(7),
+            destination_asset_decimals: None,
+        };
+
+        let xdr = service.build_swap_transaction_xdr(&params, &quote).unwrap();
+
+        // Parse and verify amount_out_min argument
+        let envelope = TransactionEnvelope::from_xdr_base64(&xdr, Limits::none()).unwrap();
+        match &envelope {
+            TransactionEnvelope::Tx(env) => {
+                match &env.tx.operations[0].body {
+                    OperationBody::InvokeHostFunction(op) => {
+                        match &op.host_function {
+                            HostFunction::InvokeContract(args) => {
+                                // args[1] is amount_out_min
+                                let amount_out_min =
+                                    SoroswapService::<MockStellarProviderTrait>::scval_to_i128(
+                                        &args.args[1],
+                                    )
+                                    .unwrap();
+                                // 1_000_000 * (10000 - 100) / 10000 = 990_000
+                                assert_eq!(amount_out_min, 990_000);
+                            }
+                            _ => panic!("Expected InvokeContract"),
+                        }
+                    }
+                    _ => panic!("Expected InvokeHostFunction"),
+                }
+            }
+            _ => panic!("Expected Tx envelope"),
         }
     }
 

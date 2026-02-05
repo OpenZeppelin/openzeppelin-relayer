@@ -2,7 +2,10 @@
 //! It includes XDR parsing, validation, sequence updating, and fee updating.
 
 use eyre::Result;
-use soroban_rs::xdr::{Limits, OperationBody, ReadXdr, TransactionEnvelope, WriteXdr};
+use soroban_rs::xdr::{
+    HostFunction, Limits, OperationBody, ReadXdr, ScAddress, ScVal, SorobanTransactionData,
+    TransactionEnvelope, TransactionExt, WriteXdr,
+};
 use tracing::debug;
 
 use crate::{
@@ -132,13 +135,27 @@ fn is_valid_swap_transaction(
         return Ok(false);
     }
 
-    // Check if the operation is PathPaymentStrictSend
     let op = &operations[0];
-    let path_payment = match &op.body {
-        OperationBody::PathPaymentStrictSend(path_payment_op) => path_payment_op,
-        _ => return Ok(false),
-    };
 
+    match &op.body {
+        // OrderBook swap: PathPaymentStrictSend (classic assets)
+        OperationBody::PathPaymentStrictSend(path_payment) => {
+            is_valid_orderbook_swap(path_payment, relayer_address, policy)
+        }
+        // Soroswap swap: InvokeHostFunction calling swap_exact_tokens_for_tokens
+        OperationBody::InvokeHostFunction(invoke_op) => {
+            is_valid_soroswap_swap(&invoke_op.host_function, relayer_address)
+        }
+        _ => Ok(false),
+    }
+}
+
+/// Validate an OrderBook swap transaction (PathPaymentStrictSend)
+fn is_valid_orderbook_swap(
+    path_payment: &soroban_rs::xdr::PathPaymentStrictSendOp,
+    relayer_address: &str,
+    policy: &RelayerStellarPolicy,
+) -> Result<bool, TransactionError> {
     // Validate source asset is an allowed token
     let source_asset_id = asset_to_asset_id(&path_payment.send_asset).map_err(|e| {
         TransactionError::ValidationError(format!(
@@ -179,7 +196,46 @@ fn is_valid_swap_transaction(
         return Ok(false);
     }
 
-    // All validations passed - this is a valid swap transaction
+    Ok(true)
+}
+
+/// Validate a Soroswap swap transaction (InvokeHostFunction calling swap_exact_tokens_for_tokens)
+fn is_valid_soroswap_swap(
+    host_function: &HostFunction,
+    relayer_address: &str,
+) -> Result<bool, TransactionError> {
+    let invoke_args = match host_function {
+        HostFunction::InvokeContract(args) => args,
+        _ => return Ok(false),
+    };
+
+    // Must be calling swap_exact_tokens_for_tokens
+    if invoke_args.function_name.to_string() != "swap_exact_tokens_for_tokens" {
+        return Ok(false);
+    }
+
+    // swap_exact_tokens_for_tokens(amount_in, amount_out_min, path, to, deadline)
+    // args[3] is the `to` address — must be the relayer
+    if invoke_args.args.len() != 5 {
+        return Ok(false);
+    }
+
+    let to_address = match &invoke_args.args[3] {
+        ScVal::Address(ScAddress::Account(account_id)) => {
+            use soroban_rs::xdr::PublicKey;
+            match &account_id.0 {
+                PublicKey::PublicKeyTypeEd25519(key) => {
+                    stellar_strkey::ed25519::PublicKey(key.0).to_string()
+                }
+            }
+        }
+        _ => return Ok(false),
+    };
+
+    if to_address != relayer_address {
+        return Ok(false);
+    }
+
     Ok(true)
 }
 
@@ -317,7 +373,81 @@ where
     let stellar_data_with_sim = match simulate_if_needed(&envelope, provider).await? {
         Some(sim_resp) => {
             debug!("Applying simulation results to unsigned XDR transaction");
-            // Get operation count from the envelope
+
+            // Parse SorobanTransactionData from simulation response
+            let soroban_tx_data =
+                SorobanTransactionData::from_xdr_base64(&sim_resp.transaction_data, Limits::none())
+                    .map_err(|e| {
+                        TransactionError::ValidationError(format!(
+                            "Failed to parse simulation transaction_data: {e}"
+                        ))
+                    })?;
+
+            // Apply simulation results to the envelope:
+            // 1. Set TransactionExt::V1 with SorobanTransactionData (resource footprint)
+            // 2. Set auth entries on InvokeHostFunction operations
+            // 3. Update fee based on simulation
+            match &mut envelope {
+                TransactionEnvelope::Tx(ref mut env) => {
+                    // Apply SorobanTransactionData (resource footprint, read/write sets)
+                    env.tx.ext = TransactionExt::V1(soroban_tx_data);
+
+                    // Apply auth entries from simulation results
+                    if let Ok(results) = sim_resp.results() {
+                        if let Some(result) = results.first() {
+                            if !result.auth.is_empty() {
+                                // Find the InvokeHostFunction operation and set auth entries
+                                for op in env.tx.operations.iter_mut() {
+                                    if let OperationBody::InvokeHostFunction(ref mut invoke_op) =
+                                        op.body
+                                    {
+                                        invoke_op.auth =
+                                            result.auth.clone().try_into().map_err(|_| {
+                                                TransactionError::ValidationError(
+                                                    "Failed to set simulation auth entries"
+                                                        .to_string(),
+                                                )
+                                            })?;
+                                        debug!(
+                                            "Applied {} auth entries from simulation",
+                                            result.auth.len()
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Update fee: inclusion fee + resource fee from simulation
+                    let op_count = env.tx.operations.len() as u64;
+                    let inclusion_fee = op_count * STELLAR_DEFAULT_TRANSACTION_FEE as u64;
+                    let resource_fee = sim_resp.min_resource_fee;
+                    let updated_fee = u32::try_from(inclusion_fee + resource_fee)
+                        .unwrap_or(u32::MAX)
+                        .max(STELLAR_DEFAULT_TRANSACTION_FEE);
+                    env.tx.fee = updated_fee;
+
+                    debug!(
+                        "Applied simulation: fee={}, resource_fee={}",
+                        updated_fee, resource_fee
+                    );
+                }
+                _ => {
+                    return Err(TransactionError::ValidationError(
+                        "Expected V1 transaction envelope for Soroban simulation".to_string(),
+                    ));
+                }
+            }
+
+            // Re-serialize the updated envelope with simulation data applied
+            let updated_xdr = envelope.to_xdr_base64(Limits::none()).map_err(|e| {
+                TransactionError::ValidationError(format!(
+                    "Failed to serialize envelope after simulation: {e}"
+                ))
+            })?;
+
+            // Update stellar data with new XDR and simulation metadata
+            stellar_data.transaction_input = TransactionInput::UnsignedXdr(updated_xdr);
             let op_count = extract_operations(&envelope)?.len() as u64;
             stellar_data
                 .with_simulation_data(sim_resp, op_count)

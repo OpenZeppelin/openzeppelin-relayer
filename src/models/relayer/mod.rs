@@ -1047,12 +1047,9 @@ impl Relayer {
 
         // Check if it's a contract address (StrKey format starting with 'C')
         if asset.starts_with('C') && asset.len() == 56 && !asset.contains(':') {
-            return Err(RelayerValidationError::InvalidPolicy(
-                "Contract addresses are not supported. Soroban will be supported soon.".into(),
-            ));
-            // // Basic validation - contract addresses are 56 characters starting with 'C'
-            // // Full validation would require StrKey decoding, but this catches most invalid formats
-            // return Ok(());
+            // Basic validation - contract addresses are 56 characters starting with 'C'
+            // Full validation would require StrKey decoding, but this catches most invalid formats
+            return Ok(());
         }
 
         // Check if it's a classic asset format "CODE:ISSUER"
