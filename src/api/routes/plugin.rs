@@ -12,7 +12,7 @@ use crate::{
     },
     repositories::PluginRepositoryTrait,
 };
-use actix_web::{get, patch, post, web, HttpRequest, HttpResponse, Responder};
+use actix_web::{get, patch, post, web, HttpRequest, HttpResponse, ResponseError, Responder};
 use url::form_urlencoded;
 
 /// List plugins
@@ -140,7 +140,7 @@ async fn plugin_call(
             Err(resp) => {
                 // Track failed request (400 Bad Request)
                 PLUGIN_CALLS
-                    .with_label_values(&[&plugin_id, "POST", "400"])
+                    .with_label_values(&[plugin_id.as_str(), "POST", "400"])
                     .inc();
                 return Ok(resp);
             }
@@ -156,7 +156,7 @@ async fn plugin_call(
         Err(e) => e.error_response().status().as_str(),
     };
     PLUGIN_CALLS
-        .with_label_values(&[&plugin_id, "POST", status])
+        .with_label_values(&[plugin_id.as_str(), "POST", status])
         .inc();
 
     result
@@ -178,7 +178,7 @@ async fn plugin_call_get(
         None => {
             // Track 404
             PLUGIN_CALLS
-                .with_label_values(&[&plugin_id, "GET", "404"])
+                .with_label_values(&[plugin_id.as_str(), "GET", "404"])
                 .inc();
             return Err(ApiError::NotFound(format!(
                 "Plugin with id {plugin_id} not found"
@@ -189,7 +189,7 @@ async fn plugin_call_get(
     if !plugin.allow_get_invocation {
         // Track 405 Method Not Allowed
         PLUGIN_CALLS
-            .with_label_values(&[&plugin_id, "GET", "405"])
+            .with_label_values(&[plugin_id.as_str(), "GET", "405"])
             .inc();
         return Ok(HttpResponse::MethodNotAllowed().json(ApiResponse::<()>::error(
             "GET requests are not enabled for this plugin. Set 'allow_get_invocation: true' in plugin configuration to enable.",
@@ -213,7 +213,7 @@ async fn plugin_call_get(
         Err(e) => e.error_response().status().as_str(),
     };
     PLUGIN_CALLS
-        .with_label_values(&[&plugin_id, "GET", status])
+        .with_label_values(&[plugin_id.as_str(), "GET", status])
         .inc();
     
     result
