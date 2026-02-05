@@ -84,6 +84,16 @@ pub struct FeeEstimateResult {
     pub fee_in_token: String,
     /// Conversion rate from XLM to token (as string)
     pub conversion_rate: String,
+    /// Maximum fee in token amount (raw units as string).
+    /// Only present for Soroban gas abstraction - includes slippage buffer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = true)]
+    pub max_fee_in_token: Option<String>,
+    /// Maximum fee in token amount (decimal UI representation as string).
+    /// Only present for Soroban gas abstraction - includes slippage buffer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = true)]
+    pub max_fee_in_token_ui: Option<String>,
 }
 
 // prepareTransaction
@@ -178,6 +188,16 @@ pub struct PrepareTransactionResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = true)]
     pub user_auth_entry: Option<String>,
+    /// Maximum fee in token amount (raw units as string).
+    /// Only present for Soroban gas abstraction - includes slippage buffer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = true)]
+    pub max_fee_in_token: Option<String>,
+    /// Maximum fee in token amount (decimal UI representation as string).
+    /// Only present for Soroban gas abstraction - includes slippage buffer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = true)]
+    pub max_fee_in_token_ui: Option<String>,
 }
 
 /// Stellar RPC method enum
@@ -529,10 +549,43 @@ mod tests {
             fee_in_token_ui: "1.5".to_string(),
             fee_in_token: "1500000".to_string(),
             conversion_rate: "10.0".to_string(),
+            max_fee_in_token: None,
+            max_fee_in_token_ui: None,
         };
         assert_eq!(result.fee_in_token_ui, "1.5");
         assert_eq!(result.fee_in_token, "1500000");
         assert_eq!(result.conversion_rate, "10.0");
+    }
+
+    #[test]
+    fn test_fee_estimate_result_with_max_fee() {
+        let result = FeeEstimateResult {
+            fee_in_token_ui: "1.5".to_string(),
+            fee_in_token: "1500000".to_string(),
+            conversion_rate: "10.0".to_string(),
+            max_fee_in_token: Some("1575000".to_string()),
+            max_fee_in_token_ui: Some("1.575".to_string()),
+        };
+        assert_eq!(result.max_fee_in_token, Some("1575000".to_string()));
+        assert_eq!(result.max_fee_in_token_ui, Some("1.575".to_string()));
+        // Verify serialization includes max_fee fields when present
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("max_fee_in_token"));
+        assert!(json.contains("max_fee_in_token_ui"));
+    }
+
+    #[test]
+    fn test_fee_estimate_result_skips_none_max_fee() {
+        let result = FeeEstimateResult {
+            fee_in_token_ui: "1.5".to_string(),
+            fee_in_token: "1500000".to_string(),
+            conversion_rate: "10.0".to_string(),
+            max_fee_in_token: None,
+            max_fee_in_token_ui: None,
+        };
+        // Verify serialization skips None fields
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(!json.contains("max_fee_in_token"));
     }
 
     #[test]
@@ -545,8 +598,12 @@ mod tests {
             fee_token: "CUSDC".to_string(),
             valid_until: "2024-01-01T00:00:00Z".to_string(),
             user_auth_entry: Some("AAAABgAAAAA=".to_string()),
+            max_fee_in_token: Some("1575000".to_string()),
+            max_fee_in_token_ui: Some("1.575".to_string()),
         };
         assert!(result.user_auth_entry.is_some());
+        assert!(result.max_fee_in_token.is_some());
+        assert!(result.max_fee_in_token_ui.is_some());
     }
 
     #[test]
@@ -559,9 +616,12 @@ mod tests {
             fee_token: "USDC:GA...".to_string(),
             valid_until: "2024-01-01T00:00:00Z".to_string(),
             user_auth_entry: None,
+            max_fee_in_token: None,
+            max_fee_in_token_ui: None,
         };
         // Verify serialization skips None fields
         let json = serde_json::to_string(&result).unwrap();
         assert!(!json.contains("user_auth_entry"));
+        assert!(!json.contains("max_fee_in_token"));
     }
 }

@@ -22,8 +22,8 @@ use crate::domain::relayer::{
 };
 use crate::domain::transaction::stellar::{
     utils::{
-        add_operation_to_envelope, convert_xlm_fee_to_token, create_fee_payment_operation,
-        estimate_fee, set_time_bounds, FeeQuote,
+        add_operation_to_envelope, amount_to_ui_amount, convert_xlm_fee_to_token,
+        create_fee_payment_operation, estimate_fee, set_time_bounds, FeeQuote,
     },
     StellarTransactionValidator,
 };
@@ -335,6 +335,9 @@ where
                 fee_in_token_ui: fee_quote.fee_in_token_ui,
                 fee_in_token: fee_quote.fee_in_token.to_string(),
                 conversion_rate: fee_quote.conversion_rate.to_string(),
+                // Classic transactions have deterministic fees, no slippage buffer needed
+                max_fee_in_token: None,
+                max_fee_in_token_ui: None,
             },
         ))
     }
@@ -475,6 +478,9 @@ where
                 valid_until: valid_until.to_rfc3339(),
                 // Classic mode: no Soroban-specific fields
                 user_auth_entry: None,
+                // Classic transactions have deterministic fees, no slippage buffer needed
+                max_fee_in_token: None,
+                max_fee_in_token_ui: None,
             },
         ))
     }
@@ -653,11 +659,20 @@ where
         .await
         .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
 
+        // Calculate max_fee with slippage buffer for Soroban
+        let max_fee_in_token = apply_max_fee_slippage(fee_quote.fee_in_token);
+        let token_decimals = policy
+            .get_allowed_token_decimals(&params.fee_token)
+            .unwrap_or(7);
+        let max_fee_in_token_ui = amount_to_ui_amount(max_fee_in_token as u64, token_decimals);
+
         // Return using consolidated result struct
         let result = StellarFeeEstimateResult {
             fee_in_token_ui: fee_quote.fee_in_token_ui,
             fee_in_token: fee_quote.fee_in_token.to_string(),
             conversion_rate: fee_quote.conversion_rate.to_string(),
+            max_fee_in_token: Some(max_fee_in_token.to_string()),
+            max_fee_in_token_ui: Some(max_fee_in_token_ui),
         };
 
         Ok(SponsoredTransactionQuoteResponse::Stellar(result))
@@ -873,6 +888,13 @@ where
             valid_until.to_rfc3339()
         );
 
+        // Calculate max_fee with slippage buffer for Soroban
+        let max_fee_in_token = fee_params.max_fee_amount;
+        let token_decimals = policy
+            .get_allowed_token_decimals(&params.fee_token)
+            .unwrap_or(7);
+        let max_fee_in_token_ui = amount_to_ui_amount(max_fee_in_token as u64, token_decimals);
+
         // Return using consolidated result struct with Soroban-specific fields populated
         let result = StellarPrepareTransactionResult {
             transaction: transaction_xdr,
@@ -883,6 +905,8 @@ where
             valid_until: valid_until.to_rfc3339(),
             // Soroban-specific fields
             user_auth_entry: Some(user_auth_xdr),
+            max_fee_in_token: Some(max_fee_in_token.to_string()),
+            max_fee_in_token_ui: Some(max_fee_in_token_ui),
         };
 
         Ok(SponsoredTransactionBuildResponse::Stellar(result))
@@ -1288,6 +1312,30 @@ mod tests {
         }
     }
 
+    /// Helper function to create a mainnet test network (no default FeeForwarder)
+    fn create_test_mainnet_network() -> NetworkRepoModel {
+        NetworkRepoModel {
+            id: "stellar:mainnet".to_string(),
+            name: "mainnet".to_string(),
+            network_type: NetworkType::Stellar,
+            config: NetworkConfigData::Stellar(StellarNetworkConfig {
+                common: NetworkConfigCommon {
+                    network: "mainnet".to_string(),
+                    from: None,
+                    rpc_urls: Some(vec![RpcConfig::new(
+                        "https://horizon.stellar.org".to_string(),
+                    )]),
+                    explorer_urls: None,
+                    average_blocktime_ms: Some(5000),
+                    is_testnet: Some(false),
+                    tags: None,
+                },
+                passphrase: Some("Public Global Stellar Network ; September 2015".to_string()),
+                horizon_url: Some("https://horizon.stellar.org".to_string()),
+            }),
+        }
+    }
+
     /// Helper function to create a Stellar relayer instance for testing
     async fn create_test_relayer_instance(
         relayer_model: RelayerRepoModel,
@@ -1306,6 +1354,48 @@ mod tests {
         let network_repository = Arc::new(InMemoryNetworkRepository::new());
         let test_network = create_test_network();
         network_repository.create(test_network).await.unwrap();
+
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+        let counter = Arc::new(MockTransactionCounterServiceTrait::new());
+        let signer = Arc::new(MockStellarSignTrait::new());
+
+        crate::domain::relayer::stellar::StellarRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            crate::domain::relayer::stellar::StellarRelayerDependencies::new(
+                relayer_repo,
+                network_repository,
+                tx_repo,
+                counter,
+                job_producer,
+            ),
+            dex_service,
+        )
+        .await
+        .unwrap()
+    }
+
+    /// Helper function to create a Stellar relayer instance with custom network for testing
+    async fn create_test_relayer_instance_with_network(
+        relayer_model: RelayerRepoModel,
+        provider: MockStellarProviderTrait,
+        dex_service: Arc<MockStellarDexServiceTrait>,
+        network: NetworkRepoModel,
+    ) -> crate::domain::relayer::stellar::StellarRelayer<
+        MockStellarProviderTrait,
+        MockRelayerRepository,
+        InMemoryNetworkRepository,
+        MockTransactionRepository,
+        MockJobProducerTrait,
+        MockTransactionCounterServiceTrait,
+        MockStellarSignTrait,
+        MockStellarDexServiceTrait,
+    > {
+        let network_repository = Arc::new(InMemoryNetworkRepository::new());
+        network_repository.create(network).await.unwrap();
 
         let relayer_repo = Arc::new(MockRelayerRepository::new());
         let tx_repo = Arc::new(MockTransactionRepository::new());
@@ -3014,7 +3104,10 @@ mod tests {
         // Ensure env var is NOT set
         std::env::remove_var("STELLAR_FEE_FORWARDER_ADDRESS");
 
-        let relayer_model = create_test_relayer_with_soroban_token();
+        // Use mainnet network where FeeForwarder is not deployed (empty default address)
+        let mut relayer_model = create_test_relayer_with_soroban_token();
+        relayer_model.network = "mainnet".to_string();
+
         let provider = MockStellarProviderTrait::new();
 
         let mut dex_service = MockStellarDexServiceTrait::new();
@@ -3023,7 +3116,13 @@ mod tests {
         });
 
         let dex_service = Arc::new(dex_service);
-        let relayer = create_test_relayer_instance(relayer_model, provider, dex_service).await;
+        let relayer = create_test_relayer_instance_with_network(
+            relayer_model,
+            provider,
+            dex_service,
+            create_test_mainnet_network(),
+        )
+        .await;
 
         let transaction_xdr = create_test_soroban_transaction_xdr();
         let request = SponsoredTransactionQuoteRequest::Stellar(
@@ -3239,7 +3338,10 @@ mod tests {
         // Ensure env var is NOT set
         std::env::remove_var("STELLAR_FEE_FORWARDER_ADDRESS");
 
-        let relayer_model = create_test_relayer_with_soroban_token();
+        // Use mainnet network where FeeForwarder is not deployed (empty default address)
+        let mut relayer_model = create_test_relayer_with_soroban_token();
+        relayer_model.network = "mainnet".to_string();
+
         let provider = MockStellarProviderTrait::new();
 
         let mut dex_service = MockStellarDexServiceTrait::new();
@@ -3248,7 +3350,13 @@ mod tests {
         });
 
         let dex_service = Arc::new(dex_service);
-        let relayer = create_test_relayer_instance(relayer_model, provider, dex_service).await;
+        let relayer = create_test_relayer_instance_with_network(
+            relayer_model,
+            provider,
+            dex_service,
+            create_test_mainnet_network(),
+        )
+        .await;
 
         let transaction_xdr = create_test_soroban_transaction_xdr();
         let request = SponsoredTransactionBuildRequest::Stellar(

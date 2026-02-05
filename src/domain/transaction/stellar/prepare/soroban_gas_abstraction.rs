@@ -196,24 +196,27 @@ fn inject_auth_entries_into_envelope(
     let mut auth_entries: Vec<SorobanAuthorizationEntry> = invoke_op.auth.to_vec();
 
     if auth_entries.is_empty() {
-        // If there are no auth entries, just add the user's signed one
-        auth_entries.push(signed_user_auth);
-    } else {
-        // Replace the first auth entry (user's) with the signed version
-        auth_entries[0] = signed_user_auth;
+        return Err(TransactionError::ValidationError(
+            "FeeForwarder transaction must contain auth entries. The transaction may be \
+            malformed or was not built via the /build endpoint."
+                .to_string(),
+        ));
+    }
 
-        // Convert the relayer's auth entry (second entry) to use SourceAccount credentials.
-        // Since the relayer is the transaction source account, the transaction signature
-        // already authorizes this entry - no separate auth entry signature is needed.
-        if auth_entries.len() > 1 {
-            let relayer_auth = &auth_entries[1];
-            let source_account_auth = SorobanAuthorizationEntry {
-                credentials: SorobanCredentials::SourceAccount,
-                root_invocation: relayer_auth.root_invocation.clone(),
-            };
-            auth_entries[1] = source_account_auth;
-            debug!("Converted relayer auth entry to SourceAccount credentials");
-        }
+    // Replace the first auth entry (user's) with the signed version
+    auth_entries[0] = signed_user_auth;
+
+    // Convert the relayer's auth entry (second entry) to use SourceAccount credentials.
+    // Since the relayer is the transaction source account, the transaction signature
+    // already authorizes this entry - no separate auth entry signature is needed.
+    if auth_entries.len() > 1 {
+        let relayer_auth = &auth_entries[1];
+        let source_account_auth = SorobanAuthorizationEntry {
+            credentials: SorobanCredentials::SourceAccount,
+            root_invocation: relayer_auth.root_invocation.clone(),
+        };
+        auth_entries[1] = source_account_auth;
+        debug!("Converted relayer auth entry to SourceAccount credentials");
     }
 
     // Clone auth_entries before consuming them in try_into (we need to return them)
@@ -1134,15 +1137,16 @@ mod tests {
     }
 
     #[test]
-    fn test_inject_auth_entries_empty_auth_adds_user_entry() {
+    fn test_inject_auth_entries_empty_auth_returns_error() {
         let mut envelope = create_invoke_host_function_envelope(vec![]);
         let signed_user_auth = create_address_auth_entry();
 
         let result = inject_auth_entries_into_envelope(&mut envelope, signed_user_auth.clone());
 
-        assert!(result.is_ok());
-        let auth_entries = result.unwrap();
-        assert_eq!(auth_entries.len(), 1);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, TransactionError::ValidationError(_)));
+        assert!(err.to_string().contains("must contain auth entries"));
     }
 
     #[test]

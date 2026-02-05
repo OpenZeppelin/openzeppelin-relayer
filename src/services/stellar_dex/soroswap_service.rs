@@ -11,9 +11,10 @@ use super::{
     SwapExecutionResult, SwapTransactionParams,
 };
 use crate::constants::get_default_soroswap_native_wrapper;
+use crate::domain::transaction::stellar::utils::parse_contract_address;
 use crate::services::provider::StellarProviderTrait;
 use async_trait::async_trait;
-use soroban_rs::xdr::{ContractId, Hash, Int128Parts, ScAddress, ScSymbol, ScVal, ScVec};
+use soroban_rs::xdr::{ContractId, Int128Parts, ScAddress, ScSymbol, ScVal, ScVec};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::{debug, warn};
@@ -75,14 +76,14 @@ where
     }
 
     /// Parse a Soroban contract address (C...) to ScAddress
-    fn parse_contract_address(address: &str) -> Result<ScAddress, StellarDexServiceError> {
-        let contract = stellar_strkey::Contract::from_string(address).map_err(|e| {
+    fn parse_contract_to_sc_address(address: &str) -> Result<ScAddress, StellarDexServiceError> {
+        let hash = parse_contract_address(address).map_err(|e| {
             StellarDexServiceError::InvalidAssetIdentifier(format!(
                 "Invalid Soroban contract address '{address}': {e}"
             ))
         })?;
 
-        Ok(ScAddress::Contract(ContractId(Hash(contract.0))))
+        Ok(ScAddress::Contract(ContractId(hash)))
     }
 
     /// Build a Vec<ScVal> path for router calls
@@ -91,8 +92,8 @@ where
         from_token: &str,
         to_token: &str,
     ) -> Result<ScVal, StellarDexServiceError> {
-        let from_addr = Self::parse_contract_address(from_token)?;
-        let to_addr = Self::parse_contract_address(to_token)?;
+        let from_addr = Self::parse_contract_to_sc_address(from_token)?;
+        let to_addr = Self::parse_contract_to_sc_address(to_token)?;
 
         // Simple direct path: [from_token, to_token]
         let path_vec: ScVec = vec![ScVal::Address(from_addr), ScVal::Address(to_addr)]
@@ -154,7 +155,7 @@ where
         })?;
 
         // Soroswap's get_amounts_out requires factory address as first argument
-        let factory_addr = Self::parse_contract_address(&self.factory_address)?;
+        let factory_addr = Self::parse_contract_to_sc_address(&self.factory_address)?;
         let args = vec![
             ScVal::Address(factory_addr),
             Self::i128_to_scval(amount_in),
@@ -251,16 +252,6 @@ where
             ))
         })?;
 
-        // Calculate price impact (simplified - assumes 1:1 expected ratio)
-        // TODO: Use pool reserves for accurate price impact calculation
-        let price_impact = if amount > 0 && out_amount_u64 > 0 {
-            let expected_ratio = 1.0;
-            let actual_ratio = out_amount_u64 as f64 / amount as f64;
-            ((expected_ratio - actual_ratio).abs() / expected_ratio * 100.0).min(100.0)
-        } else {
-            0.0
-        };
-
         debug!(
             asset = %asset_id,
             in_amount = amount,
@@ -273,7 +264,7 @@ where
             output_asset: "native".to_string(),
             in_amount: amount,
             out_amount: out_amount_u64,
-            price_impact_pct: price_impact,
+            price_impact_pct: 0.0,
             slippage_bps: (slippage * 100.0) as u32,
             path: Some(vec![
                 PathStep {
@@ -491,12 +482,13 @@ mod tests {
         assert_eq!(service.native_wrapper_address, custom_wrapper);
     }
 
-    // ==================== parse_contract_address Tests ====================
+    // ==================== parse_contract_to_sc_address Tests ====================
 
     #[test]
-    fn test_parse_contract_address_valid() {
+    fn test_parse_contract_to_sc_address_valid() {
         let addr = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
-        let result = SoroswapService::<MockStellarProviderTrait>::parse_contract_address(addr);
+        let result =
+            SoroswapService::<MockStellarProviderTrait>::parse_contract_to_sc_address(addr);
         assert!(result.is_ok());
         match result.unwrap() {
             ScAddress::Contract(_) => {}
@@ -505,9 +497,10 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_contract_address_invalid_format() {
+    fn test_parse_contract_to_sc_address_invalid_format() {
         let addr = "INVALID_ADDRESS";
-        let result = SoroswapService::<MockStellarProviderTrait>::parse_contract_address(addr);
+        let result =
+            SoroswapService::<MockStellarProviderTrait>::parse_contract_to_sc_address(addr);
         assert!(result.is_err());
         match result.unwrap_err() {
             StellarDexServiceError::InvalidAssetIdentifier(msg) => {
@@ -518,10 +511,11 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_contract_address_stellar_account_not_contract() {
+    fn test_parse_contract_to_sc_address_stellar_account_not_contract() {
         // A valid Stellar account address (G...) but not a contract (C...)
         let addr = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
-        let result = SoroswapService::<MockStellarProviderTrait>::parse_contract_address(addr);
+        let result =
+            SoroswapService::<MockStellarProviderTrait>::parse_contract_to_sc_address(addr);
         assert!(result.is_err());
     }
 
@@ -1193,7 +1187,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Price impact should be around 10%
-        assert!(quote.price_impact_pct > 9.0 && quote.price_impact_pct < 11.0);
+        // Price impact is not calculated for token -> XLM quotes (returns 0.0)
+        assert_eq!(quote.price_impact_pct, 0.0);
     }
 }

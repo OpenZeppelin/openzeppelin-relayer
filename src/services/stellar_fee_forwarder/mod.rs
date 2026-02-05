@@ -179,13 +179,16 @@ where
             })?,
         };
 
-        // Generate nonce using timestamp
+        // Generate nonce using timestamp combined with randomness for uniqueness
         let nonce = {
+            use rand::Rng;
             use std::time::{SystemTime, UNIX_EPOCH};
-            SystemTime::now()
+            let timestamp = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_nanos() as i64)
-                .unwrap_or(0)
+                .unwrap_or(0);
+            let random: i64 = rand::rng().random();
+            timestamp ^ random
         };
 
         // For simulation, signature must be an empty vector (not Void)
@@ -237,13 +240,16 @@ where
             sub_invocations: VecM::default(),
         };
 
-        // Generate nonce using timestamp (different from user nonce)
+        // Generate nonce using timestamp combined with randomness for uniqueness
         let nonce = {
+            use rand::Rng;
             use std::time::{SystemTime, UNIX_EPOCH};
-            SystemTime::now()
+            let timestamp = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .map(|d| (d.as_nanos() + 1) as i64) // +1 to ensure different from user nonce
-                .unwrap_or(1)
+                .map(|d| d.as_nanos() as i64)
+                .unwrap_or(0);
+            let random: i64 = rand::rng().random();
+            timestamp ^ random
         };
 
         // For simulation, signature must be an empty vector (not Void)
@@ -510,13 +516,16 @@ where
     /// Generate a nonce for authorization
     ///
     /// The nonce should be unique per authorization to prevent replay attacks.
-    /// Using current timestamp as a simple nonce generator.
+    /// Combines timestamp with randomness for improved uniqueness.
     fn generate_nonce(&self) -> i64 {
+        use rand::Rng;
         use std::time::{SystemTime, UNIX_EPOCH};
-        SystemTime::now()
+        let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos() as i64)
-            .unwrap_or(0)
+            .unwrap_or(0);
+        let random: i64 = rand::rng().random();
+        timestamp ^ random
     }
 
     /// Serialize an authorization entry to base64 XDR
