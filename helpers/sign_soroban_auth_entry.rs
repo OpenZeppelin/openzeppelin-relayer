@@ -142,7 +142,6 @@ fn sign_auth_entry(
     let network_id_bytes: [u8; 32] = Sha256::digest(network_passphrase.as_bytes()).into();
     let network_id = Hash(network_id_bytes);
 
-    eprintln!("Network: {}", network_passphrase);
     eprintln!("Nonce: {}", addr_creds.nonce);
     eprintln!(
         "Signature expiration ledger: {}",
@@ -249,8 +248,7 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&payload)?);
         }
         None => {
-            // Output just the signed auth entry
-            println!("{}", signed_auth_entry);
+            eprintln!("Auth entry signed successfully");
         }
     }
 

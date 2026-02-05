@@ -72,7 +72,7 @@ where
             return Ok(tx);
         }
 
-        debug!("preparing transaction {}", tx.id);
+        debug!(tx_id = %tx.id, "preparing transaction");
 
         // Call core preparation logic with error handling
         match self.prepare_core(tx.clone()).await {
@@ -95,7 +95,7 @@ where
         let policy = self.relayer().policies.get_stellar_policy();
         match &stellar_data.transaction_input {
             TransactionInput::Operations(_) => {
-                debug!("preparing operations-based transaction {}", tx.id);
+                debug!(tx_id = %tx.id, "preparing operations-based transaction");
                 let stellar_data_with_sim = operations::process_operations(
                     self.transaction_counter_service(),
                     &self.relayer().id,
@@ -111,7 +111,7 @@ where
                     .await
             }
             TransactionInput::UnsignedXdr(_) => {
-                debug!("preparing unsigned xdr transaction {}", tx.id);
+                debug!(tx_id = %tx.id, "preparing unsigned xdr transaction");
                 let stellar_data_with_sim = unsigned_xdr::process_unsigned_xdr(
                     self.transaction_counter_service(),
                     &self.relayer().id,
@@ -127,7 +127,7 @@ where
                     .await
             }
             TransactionInput::SignedXdr { .. } => {
-                debug!("preparing fee-bump transaction {}", tx.id);
+                debug!(tx_id = %tx.id, "preparing fee-bump transaction");
                 let stellar_data_with_fee_bump = fee_bump::process_fee_bump(
                     &self.relayer().address,
                     stellar_data,
@@ -147,7 +147,7 @@ where
                 .await
             }
             TransactionInput::SorobanGasAbstraction { .. } => {
-                debug!("preparing soroban gas abstraction transaction {}", tx.id);
+                debug!(tx_id = %tx.id, "preparing soroban gas abstraction transaction");
                 let stellar_data_with_auth =
                     soroban_gas_abstraction::process_soroban_gas_abstraction(
                         self.transaction_counter_service(),
@@ -155,6 +155,8 @@ where
                         &self.relayer().address,
                         self.provider(),
                         stellar_data,
+                        Some(&policy),
+                        self.dex_service(),
                     )
                     .await?;
                 self.finalize_with_signature(tx, stellar_data_with_auth)

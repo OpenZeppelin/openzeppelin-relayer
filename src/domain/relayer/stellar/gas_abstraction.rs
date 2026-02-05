@@ -9,7 +9,8 @@ use soroban_rs::xdr::{Limits, Operation, TransactionEnvelope, WriteXdr};
 use tracing::debug;
 
 use crate::constants::{
-    get_stellar_sponsored_transaction_validity_duration, STELLAR_DEFAULT_TRANSACTION_FEE,
+    get_default_fee_forwarder, get_stellar_sponsored_transaction_validity_duration,
+    STELLAR_DEFAULT_TRANSACTION_FEE,
 };
 
 /// Default slippage tolerance for max_fee_amount in basis points (500 = 5%)
@@ -521,12 +522,19 @@ where
         StellarTransactionValidator::validate_allowed_token(&params.fee_token, &policy)
             .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
 
-        // Validate fee_forwarder is configured in server config
+        // Get fee_forwarder address: env var override takes precedence, otherwise use network default
         let fee_forwarder = crate::config::ServerConfig::get_stellar_fee_forwarder_address()
+            .or_else(|| {
+                let default = get_default_fee_forwarder(self.network.is_testnet());
+                if default.is_empty() {
+                    None
+                } else {
+                    Some(default.to_string())
+                }
+            })
             .ok_or_else(|| {
                 RelayerError::ValidationError(
-                    "STELLAR_FEE_FORWARDER_ADDRESS env var is required for gas abstraction"
-                        .to_string(),
+                    "FeeForwarder address not configured. Set STELLAR_FEE_FORWARDER_ADDRESS env var or wait for default deployment.".to_string(),
                 )
             })?;
 
@@ -673,12 +681,19 @@ where
 
         // Note: validate_allowed_token is already called in build_sponsored_transaction
 
-        // Get fee_forwarder address from server config
+        // Get fee_forwarder address: env var override takes precedence, otherwise use network default
         let fee_forwarder = crate::config::ServerConfig::get_stellar_fee_forwarder_address()
+            .or_else(|| {
+                let default = get_default_fee_forwarder(self.network.is_testnet());
+                if default.is_empty() {
+                    None
+                } else {
+                    Some(default.to_string())
+                }
+            })
             .ok_or_else(|| {
                 RelayerError::ValidationError(
-                    "STELLAR_FEE_FORWARDER_ADDRESS env var is required for gas abstraction"
-                        .to_string(),
+                    "FeeForwarder address not configured. Set STELLAR_FEE_FORWARDER_ADDRESS env var or wait for default deployment.".to_string(),
                 )
             })?;
 

@@ -4,17 +4,19 @@
 //! The relayer also signs its own authorization entry for the FeeForwarder contract.
 
 use soroban_rs::xdr::{
-    InvokeHostFunctionOp, Limits, Operation, OperationBody, ReadXdr, SorobanAuthorizationEntry,
-    SorobanCredentials, SorobanResources, SorobanTransactionData, TransactionEnvelope,
-    TransactionExt, WriteXdr,
+    InvokeHostFunctionOp, Limits, Operation, OperationBody, ReadXdr, ScAddress, ScVal,
+    SorobanAuthorizationEntry, SorobanAuthorizedFunction, SorobanCredentials, SorobanResources,
+    SorobanTransactionData, TransactionEnvelope, TransactionExt, WriteXdr,
 };
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::{
-    models::{StellarTransactionData, TransactionError, TransactionInput},
+    domain::transaction::stellar::{utils::convert_xlm_fee_to_token, StellarTransactionValidator},
+    models::{RelayerStellarPolicy, StellarTransactionData, TransactionError, TransactionInput},
     repositories::TransactionCounterTrait,
     services::{
         provider::{StellarProvider, StellarProviderTrait},
+        stellar_dex::StellarDexServiceTrait,
         stellar_fee_forwarder::{FeeForwarderError, FeeForwarderService},
     },
 };
@@ -26,12 +28,13 @@ use super::common::get_next_sequence;
 /// This function:
 /// 1. Parses the FeeForwarder transaction XDR
 /// 2. Deserializes the user's signed authorization entry
-/// 3. Signs the relayer's authorization entry using the provided signer
-/// 4. Injects both signed auth entries into the transaction
-/// 5. Re-simulates with signed auth entries to get accurate footprint
-/// 6. Updates the transaction's sorobanData with accurate resources
-/// 7. Updates the sequence number
-/// 8. Returns the prepared transaction data for signing
+/// 3. Validates the fee parameters ensure relayer liquidity (token allowed, amount sufficient)
+/// 4. Signs the relayer's authorization entry using the provided signer
+/// 5. Injects both signed auth entries into the transaction
+/// 6. Re-simulates with signed auth entries to get accurate footprint
+/// 7. Updates the transaction's sorobanData with accurate resources
+/// 8. Updates the sequence number
+/// 9. Returns the prepared transaction data for signing
 ///
 /// # Arguments
 ///
@@ -40,16 +43,21 @@ use super::common::get_next_sequence;
 /// * `relayer_address` - The relayer's Stellar address (source account for the transaction)
 /// * `provider` - The Stellar provider for simulation
 /// * `stellar_data` - The transaction data containing the XDR and signed auth entry
-pub async fn process_soroban_gas_abstraction<C, P>(
+/// * `policy` - Optional relayer policy for fee validation
+/// * `dex_service` - DEX service for token-to-XLM conversion quotes
+pub async fn process_soroban_gas_abstraction<C, P, D>(
     counter_service: &C,
     relayer_id: &str,
     relayer_address: &str,
     provider: &P,
     mut stellar_data: StellarTransactionData,
+    policy: Option<&RelayerStellarPolicy>,
+    dex_service: &D,
 ) -> Result<StellarTransactionData, TransactionError>
 where
     C: TransactionCounterTrait + Send + Sync,
     P: StellarProviderTrait + Send + Sync,
+    D: StellarDexServiceTrait + Send + Sync,
 {
     // Extract XDR and signed auth entry from transaction input
     let (xdr, signed_auth_entry_xdr) = match &stellar_data.transaction_input {
@@ -84,6 +92,13 @@ where
                     "Failed to deserialize signed auth entry: {e}"
                 )),
             })?;
+
+    // Validate fee parameters to ensure relayer liquidity
+    // This validates: token is allowed, max_fee_amount covers the required fee
+    if let Some(policy) = policy {
+        validate_gas_abstraction_fee(&envelope, &signed_user_auth, policy, provider, dex_service)
+            .await?;
+    }
 
     // Inject the user's signed auth entry and convert relayer's auth to SourceAccount
     let signed_auth_entries = inject_auth_entries_into_envelope(&mut envelope, signed_user_auth)?;
@@ -151,12 +166,20 @@ fn inject_auth_entries_into_envelope(
         }
     };
 
-    // Get the first operation (should be InvokeHostFunction for FeeForwarder)
+    // Get the operation (Soroban transactions must have exactly one operation)
     let operations: Vec<_> = tx.operations.to_vec();
     if operations.is_empty() {
         return Err(TransactionError::ValidationError(
             "Transaction has no operations".to_string(),
         ));
+    }
+
+    // Soroban protocol constraint: transactions must contain exactly one operation
+    if operations.len() != 1 {
+        return Err(TransactionError::ValidationError(format!(
+            "Soroban transactions must contain exactly one operation, found {}",
+            operations.len()
+        )));
     }
 
     let first_op = &operations[0];
@@ -420,6 +443,223 @@ fn build_simulation_envelope(
             "Expected V1 transaction envelope".to_string(),
         )),
     }
+}
+
+// ============================================================================
+// Fee Validation for Soroban Gas Abstraction
+// ============================================================================
+
+/// Validate that the FeeForwarder transaction parameters ensure relayer liquidity.
+///
+/// This function validates that the user's signed authorization entry contains:
+/// 1. An allowed fee token (per relayer policy)
+/// 2. A max_fee_amount sufficient to cover the required network fee (converted via DEX)
+///
+/// This validation is critical to prevent malicious users from submitting transactions
+/// where the token payment doesn't adequately compensate the relayer for XLM fees.
+///
+/// # Arguments
+///
+/// * `envelope` - The transaction envelope (used to estimate required XLM fee)
+/// * `signed_user_auth` - The user's signed authorization entry
+/// * `policy` - The relayer policy containing allowed tokens and fee settings
+/// * `provider` - Provider for Stellar RPC operations (fee estimation)
+/// * `dex_service` - DEX service for token-to-XLM conversion quotes
+///
+/// # Returns
+///
+/// Ok(()) if validation passes, TransactionError if validation fails
+async fn validate_gas_abstraction_fee<P, D>(
+    envelope: &TransactionEnvelope,
+    signed_user_auth: &SorobanAuthorizationEntry,
+    policy: &RelayerStellarPolicy,
+    provider: &P,
+    dex_service: &D,
+) -> Result<(), TransactionError>
+where
+    P: StellarProviderTrait + Send + Sync,
+    D: StellarDexServiceTrait + Send + Sync,
+{
+    // Step 1: Extract fee parameters from the user's signed auth entry
+    let (fee_token, max_fee_amount) = extract_fee_params_from_auth(signed_user_auth)?;
+
+    debug!(
+        "Validating gas abstraction fee: token={}, max_fee_amount={}",
+        fee_token, max_fee_amount
+    );
+
+    // Step 2: Validate the fee token is allowed by policy
+    StellarTransactionValidator::validate_allowed_token(&fee_token, policy).map_err(|e| {
+        TransactionError::ValidationError(format!("Fee token validation failed: {e}"))
+    })?;
+
+    // Step 3: Validate max_fee_amount against policy's max_allowed_fee (if configured)
+    if max_fee_amount < 0 {
+        return Err(TransactionError::ValidationError(
+            "max_fee_amount cannot be negative".to_string(),
+        ));
+    }
+    StellarTransactionValidator::validate_token_max_fee(&fee_token, max_fee_amount as u64, policy)
+        .map_err(|e| {
+            TransactionError::ValidationError(format!("Max fee validation failed: {e}"))
+        })?;
+
+    // Step 4: Estimate the required XLM fee from the transaction
+    // For Soroban transactions, this includes both inclusion fee and resource fee
+    let required_xlm_fee = estimate_required_xlm_fee(envelope, provider).await?;
+
+    debug!(
+        "Required XLM fee: {} stroops for gas abstraction transaction",
+        required_xlm_fee
+    );
+
+    // Step 5: Convert the required XLM fee to token amount
+    let fee_quote = convert_xlm_fee_to_token(dex_service, policy, required_xlm_fee, &fee_token)
+        .await
+        .map_err(|e| {
+            TransactionError::ValidationError(format!(
+                "Failed to convert XLM fee to token {fee_token}: {e}"
+            ))
+        })?;
+
+    // Step 6: Validate that max_fee_amount covers the required fee in tokens
+    let required_token_fee = fee_quote.fee_in_token as i128;
+    if max_fee_amount < required_token_fee {
+        return Err(TransactionError::ValidationError(format!(
+            "Insufficient max_fee_amount: user authorized {max_fee_amount} but required fee is {required_token_fee} (in token {fee_token}). \
+             This would result in relayer liquidity loss."
+        )));
+    }
+
+    info!(
+        "Gas abstraction fee validation passed: max_fee_amount={} >= required={} (token={})",
+        max_fee_amount, required_token_fee, fee_token
+    );
+
+    Ok(())
+}
+
+/// Extract fee parameters from the user's signed FeeForwarder authorization entry.
+///
+/// The user's auth entry for FeeForwarder.forward() contains these arguments:
+/// - fee_token (arg 0): Address of the token contract
+/// - max_fee_amount (arg 1): Maximum fee amount user authorized (i128)
+/// - expiration_ledger (arg 2): When the authorization expires
+/// - target_contract (arg 3): Contract being called
+/// - target_fn (arg 4): Function being called
+/// - target_args (arg 5): Arguments to the target function
+///
+/// # Arguments
+///
+/// * `auth` - The user's signed authorization entry
+///
+/// # Returns
+///
+/// A tuple of (fee_token_address, max_fee_amount) or an error if extraction fails
+fn extract_fee_params_from_auth(
+    auth: &SorobanAuthorizationEntry,
+) -> Result<(String, i128), TransactionError> {
+    // Extract the function arguments from the root invocation
+    let args = match &auth.root_invocation.function {
+        SorobanAuthorizedFunction::ContractFn(invoke) => invoke.args.to_vec(),
+        _ => {
+            return Err(TransactionError::ValidationError(
+                "Expected ContractFn in auth entry root invocation".to_string(),
+            ));
+        }
+    };
+
+    // User auth args should have at least 2 arguments: fee_token, max_fee_amount
+    if args.len() < 2 {
+        return Err(TransactionError::ValidationError(format!(
+            "Invalid auth entry: expected at least 2 arguments, found {}",
+            args.len()
+        )));
+    }
+
+    // Extract fee_token (arg 0) - should be an Address (contract)
+    let fee_token = extract_contract_address_from_scval(&args[0]).map_err(|e| {
+        TransactionError::ValidationError(format!("Failed to extract fee_token: {e}"))
+    })?;
+
+    // Extract max_fee_amount (arg 1) - should be an I128
+    let max_fee_amount = extract_i128_from_scval(&args[1]).map_err(|e| {
+        TransactionError::ValidationError(format!("Failed to extract max_fee_amount: {e}"))
+    })?;
+
+    Ok((fee_token, max_fee_amount))
+}
+
+/// Extract a contract address string from an ScVal::Address.
+///
+/// Converts a Soroban contract address to its string representation (C...).
+fn extract_contract_address_from_scval(val: &ScVal) -> Result<String, String> {
+    match val {
+        ScVal::Address(ScAddress::Contract(contract_id)) => {
+            let strkey = stellar_strkey::Contract(contract_id.0 .0);
+            Ok(strkey.to_string())
+        }
+        ScVal::Address(ScAddress::Account(_)) => {
+            Err("Expected contract address, found account address".to_string())
+        }
+        _ => Err(format!("Expected Address, found {val:?}")),
+    }
+}
+
+/// Extract an i128 value from an ScVal::I128.
+fn extract_i128_from_scval(val: &ScVal) -> Result<i128, String> {
+    match val {
+        ScVal::I128(parts) => {
+            let value = ((parts.hi as i128) << 64) | (parts.lo as i128);
+            Ok(value)
+        }
+        _ => Err(format!("Expected I128, found {val:?}")),
+    }
+}
+
+/// Estimate the required XLM fee for a Soroban gas abstraction transaction.
+///
+/// This performs a simulation to get accurate resource requirements and calculates
+/// the total fee (inclusion fee + resource fee).
+async fn estimate_required_xlm_fee<P>(
+    envelope: &TransactionEnvelope,
+    provider: &P,
+) -> Result<u64, TransactionError>
+where
+    P: StellarProviderTrait + Send + Sync,
+{
+    // Simulate the transaction to get resource fee
+    let sim_response = provider
+        .simulate_transaction_envelope(envelope)
+        .await
+        .map_err(|e| {
+            TransactionError::UnexpectedError(format!(
+                "Failed to simulate transaction for fee estimation: {e}"
+            ))
+        })?;
+
+    // Check for simulation errors
+    if let Some(err) = &sim_response.error {
+        warn!("Simulation returned error during fee estimation: {}", err);
+        // Still try to use the fee if available, otherwise return error
+        if sim_response.min_resource_fee == 0 {
+            return Err(TransactionError::ValidationError(format!(
+                "Simulation failed during fee estimation: {err}"
+            )));
+        }
+    }
+
+    // Calculate total fee: inclusion fee (100 stroops) + resource fee
+    let inclusion_fee = crate::constants::STELLAR_DEFAULT_TRANSACTION_FEE as u64;
+    let resource_fee = sim_response.min_resource_fee;
+    let total_fee = inclusion_fee + resource_fee;
+
+    debug!(
+        "Estimated XLM fee: inclusion={}, resource={}, total={}",
+        inclusion_fee, resource_fee, total_fee
+    );
+
+    Ok(total_fee)
 }
 
 #[cfg(test)]
@@ -794,6 +1034,65 @@ mod tests {
     }
 
     #[test]
+    fn test_inject_auth_entries_multiple_operations_returns_error() {
+        use soroban_rs::xdr::{Asset, PaymentOp};
+
+        // Create an InvokeHostFunction operation
+        let invoke_op = Operation {
+            source_account: None,
+            body: OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
+                host_function: HostFunction::InvokeContract(InvokeContractArgs {
+                    contract_address: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
+                    function_name: ScSymbol("test".try_into().unwrap()),
+                    args: VecM::default(),
+                }),
+                auth: VecM::default(),
+            }),
+        };
+
+        // Create a second operation (Payment)
+        let payment_op = Operation {
+            source_account: None,
+            body: OperationBody::Payment(PaymentOp {
+                destination: MuxedAccount::Ed25519(Uint256([0u8; 32])),
+                asset: Asset::Native,
+                amount: 1000,
+            }),
+        };
+
+        // Create envelope with two operations (invalid for Soroban)
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256([0u8; 32])),
+            fee: 100,
+            seq_num: SequenceNumber(0),
+            cond: Preconditions::None,
+            memo: Memo::None,
+            operations: vec![invoke_op, payment_op].try_into().unwrap(),
+            ext: TransactionExt::V0,
+        };
+
+        let mut envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: VecM::default(),
+        });
+
+        let signed_user_auth = create_address_auth_entry();
+        let result = inject_auth_entries_into_envelope(&mut envelope, signed_user_auth);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::ValidationError(msg) => {
+                assert!(
+                    msg.contains("Soroban transactions must contain exactly one operation"),
+                    "Expected error about single operation, got: {}",
+                    msg
+                );
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
     fn test_inject_auth_entries_non_invoke_host_function_returns_error() {
         use soroban_rs::xdr::{Asset, PaymentOp};
 
@@ -1013,6 +1312,144 @@ mod tests {
             panic!("Expected Tx envelope");
         }
     }
+
+    // ==================== Fee validation helper tests ====================
+
+    #[test]
+    fn test_extract_i128_from_scval_positive() {
+        use soroban_rs::xdr::Int128Parts;
+        let val = ScVal::I128(Int128Parts { hi: 0, lo: 1000000 });
+        let result = extract_i128_from_scval(&val);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 1000000i128);
+    }
+
+    #[test]
+    fn test_extract_i128_from_scval_large() {
+        use soroban_rs::xdr::Int128Parts;
+        // Test a large value that uses both hi and lo parts
+        let val = ScVal::I128(Int128Parts { hi: 1, lo: 0 });
+        let result = extract_i128_from_scval(&val);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 1i128 << 64);
+    }
+
+    #[test]
+    fn test_extract_i128_from_scval_negative() {
+        use soroban_rs::xdr::Int128Parts;
+        let val = ScVal::I128(Int128Parts {
+            hi: -1,
+            lo: u64::MAX,
+        });
+        let result = extract_i128_from_scval(&val);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), -1i128);
+    }
+
+    #[test]
+    fn test_extract_i128_from_scval_wrong_type() {
+        let val = ScVal::U32(42);
+        let result = extract_i128_from_scval(&val);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Expected I128"));
+    }
+
+    #[test]
+    fn test_extract_contract_address_from_scval_valid() {
+        let contract_id = ContractId(Hash([1u8; 32]));
+        let val = ScVal::Address(ScAddress::Contract(contract_id));
+        let result = extract_contract_address_from_scval(&val);
+        assert!(result.is_ok());
+        // The result should be a valid C... address
+        assert!(result.unwrap().starts_with('C'));
+    }
+
+    #[test]
+    fn test_extract_contract_address_from_scval_account_address() {
+        // Account addresses (G...) should return error
+        let account_id = soroban_rs::xdr::AccountId(
+            soroban_rs::xdr::PublicKey::PublicKeyTypeEd25519(Uint256([0u8; 32])),
+        );
+        let val = ScVal::Address(ScAddress::Account(account_id));
+        let result = extract_contract_address_from_scval(&val);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Expected contract address"));
+    }
+
+    #[test]
+    fn test_extract_contract_address_from_scval_wrong_type() {
+        let val = ScVal::U32(42);
+        let result = extract_contract_address_from_scval(&val);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Expected Address"));
+    }
+
+    #[test]
+    fn test_extract_fee_params_from_auth_valid() {
+        use soroban_rs::xdr::{Int128Parts, InvokeContractArgs, ScSymbol};
+
+        // Create auth entry with proper FeeForwarder args:
+        // fee_token, max_fee_amount, expiration_ledger, target_contract, target_fn, target_args
+        let fee_token = ScVal::Address(ScAddress::Contract(ContractId(Hash([1u8; 32]))));
+        let max_fee_amount = ScVal::I128(Int128Parts { hi: 0, lo: 5000000 }); // 5 tokens
+        let expiration_ledger = ScVal::U32(100000);
+        let target_contract = ScVal::Address(ScAddress::Contract(ContractId(Hash([2u8; 32]))));
+        let target_fn = ScVal::Symbol(ScSymbol("transfer".try_into().unwrap()));
+        let target_args = ScVal::Vec(None);
+
+        let auth = SorobanAuthorizationEntry {
+            credentials: SorobanCredentials::SourceAccount,
+            root_invocation: SorobanAuthorizedInvocation {
+                function: SorobanAuthorizedFunction::ContractFn(InvokeContractArgs {
+                    contract_address: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
+                    function_name: ScSymbol("forward".try_into().unwrap()),
+                    args: vec![
+                        fee_token,
+                        max_fee_amount,
+                        expiration_ledger,
+                        target_contract,
+                        target_fn,
+                        target_args,
+                    ]
+                    .try_into()
+                    .unwrap(),
+                }),
+                sub_invocations: VecM::default(),
+            },
+        };
+
+        let result = extract_fee_params_from_auth(&auth);
+        assert!(result.is_ok());
+
+        let (fee_token_addr, max_fee) = result.unwrap();
+        assert!(fee_token_addr.starts_with('C')); // Contract address
+        assert_eq!(max_fee, 5000000i128);
+    }
+
+    #[test]
+    fn test_extract_fee_params_from_auth_insufficient_args() {
+        use soroban_rs::xdr::{InvokeContractArgs, ScSymbol};
+
+        // Create auth entry with only 1 argument (not enough)
+        let auth = SorobanAuthorizationEntry {
+            credentials: SorobanCredentials::SourceAccount,
+            root_invocation: SorobanAuthorizedInvocation {
+                function: SorobanAuthorizedFunction::ContractFn(InvokeContractArgs {
+                    contract_address: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
+                    function_name: ScSymbol("forward".try_into().unwrap()),
+                    args: vec![ScVal::U32(42)].try_into().unwrap(),
+                }),
+                sub_invocations: VecM::default(),
+            },
+        };
+
+        let result = extract_fee_params_from_auth(&auth);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("at least 2 arguments"));
+    }
 }
 
 #[cfg(test)]
@@ -1021,6 +1458,7 @@ mod integration_tests {
     use crate::models::TransactionInput;
     use crate::repositories::MockTransactionCounterTrait;
     use crate::services::provider::MockStellarProviderTrait;
+    use crate::services::stellar_dex::MockStellarDexServiceTrait;
     use soroban_rs::stellar_rpc_client::SimulateTransactionResponse;
     use soroban_rs::xdr::{
         ContractId, Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, Memo,
@@ -1030,6 +1468,11 @@ mod integration_tests {
         TransactionExt, TransactionV1Envelope, Uint256, VecM,
     };
     use std::future::ready;
+
+    /// Create a mock DEX service for tests (not used when policy is None)
+    fn create_mock_dex_service() -> MockStellarDexServiceTrait {
+        MockStellarDexServiceTrait::new()
+    }
 
     fn create_gas_abstraction_envelope() -> TransactionEnvelope {
         let user_auth = SorobanAuthorizationEntry {
@@ -1135,12 +1578,16 @@ mod integration_tests {
             transaction_result_xdr: None,
         };
 
+        let dex_service = create_mock_dex_service();
+
         let result = process_soroban_gas_abstraction(
             &counter,
             "relayer-1",
             "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
             &provider,
             stellar_data,
+            None, // No policy - skip fee validation
+            &dex_service,
         )
         .await;
 
@@ -1157,6 +1604,7 @@ mod integration_tests {
     async fn test_process_soroban_gas_abstraction_invalid_xdr() {
         let counter = MockTransactionCounterTrait::new();
         let provider = MockStellarProviderTrait::new();
+        let dex_service = create_mock_dex_service();
 
         let stellar_data = StellarTransactionData {
             source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
@@ -1182,6 +1630,8 @@ mod integration_tests {
             "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
             &provider,
             stellar_data,
+            None, // No policy - skip fee validation
+            &dex_service,
         )
         .await;
 
@@ -1198,6 +1648,7 @@ mod integration_tests {
     async fn test_process_soroban_gas_abstraction_invalid_auth_entry() {
         let counter = MockTransactionCounterTrait::new();
         let provider = MockStellarProviderTrait::new();
+        let dex_service = create_mock_dex_service();
 
         let envelope = create_gas_abstraction_envelope();
         let xdr = envelope.to_xdr_base64(Limits::none()).unwrap();
@@ -1226,6 +1677,8 @@ mod integration_tests {
             "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
             &provider,
             stellar_data,
+            None, // No policy - skip fee validation
+            &dex_service,
         )
         .await;
 
@@ -1260,6 +1713,8 @@ mod integration_tests {
                     ..Default::default()
                 })))
             });
+
+        let dex_service = create_mock_dex_service();
 
         let envelope = create_gas_abstraction_envelope();
         let xdr = envelope.to_xdr_base64(Limits::none()).unwrap();
@@ -1307,6 +1762,8 @@ mod integration_tests {
             "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
             &provider,
             stellar_data,
+            None, // No policy - skip fee validation
+            &dex_service,
         )
         .await;
 
@@ -1337,6 +1794,8 @@ mod integration_tests {
                     ..Default::default()
                 })))
             });
+
+        let dex_service = create_mock_dex_service();
 
         let envelope = create_gas_abstraction_envelope();
         let xdr = envelope.to_xdr_base64(Limits::none()).unwrap();
@@ -1383,6 +1842,8 @@ mod integration_tests {
             "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
             &provider,
             stellar_data,
+            None, // No policy - skip fee validation
+            &dex_service,
         )
         .await;
 
@@ -1393,6 +1854,431 @@ mod integration_tests {
         match prepared.transaction_input {
             TransactionInput::UnsignedXdr(_) => {} // Expected
             _ => panic!("Expected UnsignedXdr transaction input"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod validate_gas_abstraction_fee_tests {
+    use super::*;
+    use crate::models::{
+        RelayerStellarPolicy, StellarAllowedTokensPolicy, StellarAllowedTokensSwapConfig,
+    };
+    use crate::services::provider::MockStellarProviderTrait;
+    use crate::services::stellar_dex::{MockStellarDexServiceTrait, StellarQuoteResponse};
+    use soroban_rs::stellar_rpc_client::SimulateTransactionResponse;
+    use soroban_rs::xdr::{
+        ContractId, Hash, HostFunction, Int128Parts, InvokeContractArgs, InvokeHostFunctionOp,
+        Memo, MuxedAccount, Operation, OperationBody, Preconditions, ScAddress, ScSymbol, ScVal,
+        SequenceNumber, SorobanAddressCredentials, SorobanAuthorizationEntry,
+        SorobanAuthorizedFunction, SorobanAuthorizedInvocation, SorobanCredentials,
+        SorobanTransactionData, SorobanTransactionDataExt, Transaction, TransactionExt,
+        TransactionV1Envelope, Uint256, VecM,
+    };
+    use std::future::ready;
+
+    // Helper to get the contract address string from a 32-byte hash
+    fn get_contract_address_from_hash(hash: [u8; 32]) -> String {
+        let strkey = stellar_strkey::Contract(hash);
+        strkey.to_string()
+    }
+
+    /// Create a valid FeeForwarder auth entry with specified fee token and max fee amount
+    fn create_fee_forwarder_auth(
+        fee_token_hash: [u8; 32],
+        max_fee_amount: i128,
+    ) -> SorobanAuthorizationEntry {
+        let fee_token = ScVal::Address(ScAddress::Contract(ContractId(Hash(fee_token_hash))));
+        let max_fee = ScVal::I128(Int128Parts {
+            hi: (max_fee_amount >> 64) as i64,
+            lo: max_fee_amount as u64,
+        });
+        let expiration_ledger = ScVal::U32(100000);
+        let target_contract = ScVal::Address(ScAddress::Contract(ContractId(Hash([2u8; 32]))));
+        let target_fn = ScVal::Symbol(ScSymbol("transfer".try_into().unwrap()));
+        let target_args = ScVal::Vec(None);
+
+        SorobanAuthorizationEntry {
+            credentials: SorobanCredentials::Address(SorobanAddressCredentials {
+                address: ScAddress::Contract(ContractId(Hash([1u8; 32]))),
+                nonce: 12345,
+                signature_expiration_ledger: 1000,
+                signature: ScVal::Void,
+            }),
+            root_invocation: SorobanAuthorizedInvocation {
+                function: SorobanAuthorizedFunction::ContractFn(InvokeContractArgs {
+                    contract_address: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
+                    function_name: ScSymbol("forward".try_into().unwrap()),
+                    args: vec![
+                        fee_token,
+                        max_fee,
+                        expiration_ledger,
+                        target_contract,
+                        target_fn,
+                        target_args,
+                    ]
+                    .try_into()
+                    .unwrap(),
+                }),
+                sub_invocations: VecM::default(),
+            },
+        }
+    }
+
+    /// Create a basic gas abstraction transaction envelope
+    fn create_test_envelope() -> TransactionEnvelope {
+        let invoke_op = InvokeHostFunctionOp {
+            host_function: HostFunction::InvokeContract(InvokeContractArgs {
+                contract_address: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
+                function_name: ScSymbol("forward".try_into().unwrap()),
+                args: VecM::default(),
+            }),
+            auth: VecM::default(),
+        };
+
+        let operation = Operation {
+            source_account: None,
+            body: OperationBody::InvokeHostFunction(invoke_op),
+        };
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256([0u8; 32])),
+            fee: 100,
+            seq_num: SequenceNumber(0),
+            cond: Preconditions::None,
+            memo: Memo::None,
+            operations: vec![operation].try_into().unwrap(),
+            ext: TransactionExt::V0,
+        };
+
+        TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: VecM::default(),
+        })
+    }
+
+    /// Create a valid soroban transaction data XDR for simulation response
+    fn create_valid_soroban_tx_data_xdr() -> String {
+        let tx_data = SorobanTransactionData {
+            ext: SorobanTransactionDataExt::V0,
+            resources: soroban_rs::xdr::SorobanResources {
+                footprint: soroban_rs::xdr::LedgerFootprint {
+                    read_only: VecM::default(),
+                    read_write: VecM::default(),
+                },
+                instructions: 1000,
+                disk_read_bytes: 500,
+                write_bytes: 200,
+            },
+            resource_fee: 100,
+        };
+        tx_data.to_xdr_base64(Limits::none()).unwrap()
+    }
+
+    /// Create a policy with a specific allowed token
+    fn create_policy_with_token(
+        token_address: &str,
+        max_allowed_fee: Option<u64>,
+    ) -> RelayerStellarPolicy {
+        RelayerStellarPolicy {
+            min_balance: None,
+            max_fee: None,
+            timeout_seconds: None,
+            concurrent_transactions: None,
+            allowed_tokens: Some(vec![StellarAllowedTokensPolicy {
+                asset: token_address.to_string(),
+                metadata: None,
+                max_allowed_fee,
+                swap_config: Some(StellarAllowedTokensSwapConfig {
+                    slippage_percentage: Some(1.0),
+                    min_amount: None,
+                    max_amount: None,
+                    retain_min_amount: None,
+                }),
+            }]),
+            fee_payment_strategy: None,
+            slippage_percentage: Some(1.0),
+            fee_margin_percentage: Some(10.0),
+            swap_config: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_gas_abstraction_fee_disallowed_token() {
+        // Setup: provider and dex_service (won't be called for disallowed token)
+        let provider = MockStellarProviderTrait::new();
+        let dex_service = MockStellarDexServiceTrait::new();
+
+        // Create envelope and auth entry
+        let envelope = create_test_envelope();
+        let fee_token_hash = [5u8; 32];
+        let signed_auth = create_fee_forwarder_auth(fee_token_hash, 10_000_000);
+
+        // Create a policy that does NOT include our fee token
+        let different_token = get_contract_address_from_hash([9u8; 32]);
+        let policy = create_policy_with_token(&different_token, Some(50_000_000));
+
+        // Execute
+        let result =
+            validate_gas_abstraction_fee(&envelope, &signed_auth, &policy, &provider, &dex_service)
+                .await;
+
+        // Assert
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            TransactionError::ValidationError(msg) => {
+                assert!(
+                    msg.contains("Fee token validation failed"),
+                    "Expected 'Fee token validation failed' in error message, got: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected ValidationError, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_gas_abstraction_fee_exceeds_max_allowed() {
+        // Setup: provider and dex_service (won't be called if max_allowed_fee check fails first)
+        let provider = MockStellarProviderTrait::new();
+        let dex_service = MockStellarDexServiceTrait::new();
+
+        // Create envelope and auth entry
+        let envelope = create_test_envelope();
+        let fee_token_hash = [5u8; 32];
+        let fee_token_address = get_contract_address_from_hash(fee_token_hash);
+
+        // User is trying to authorize 100 tokens, but policy only allows max 50
+        let signed_auth = create_fee_forwarder_auth(fee_token_hash, 100_000_000);
+
+        // Policy allows this token but with max_allowed_fee of 50
+        let policy = create_policy_with_token(&fee_token_address, Some(50_000_000));
+
+        // Execute
+        let result =
+            validate_gas_abstraction_fee(&envelope, &signed_auth, &policy, &provider, &dex_service)
+                .await;
+
+        // Assert
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            TransactionError::ValidationError(msg) => {
+                assert!(
+                    msg.contains("Max fee validation failed"),
+                    "Expected 'Max fee validation failed' in error message, got: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected ValidationError, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_gas_abstraction_fee_insufficient_max_fee() {
+        // Setup: simulate transaction returns a resource fee, DEX converts it
+        let mut provider = MockStellarProviderTrait::new();
+        provider
+            .expect_simulate_transaction_envelope()
+            .returning(|_| {
+                Box::pin(ready(Ok(SimulateTransactionResponse {
+                    error: None,
+                    min_resource_fee: 10000, // 10000 stroops resource fee
+                    transaction_data: create_valid_soroban_tx_data_xdr(),
+                    ..Default::default()
+                })))
+            });
+
+        let mut dex_service = MockStellarDexServiceTrait::new();
+        // DEX returns that required fee in token is 5_000_000 (5 tokens)
+        // convert_xlm_fee_to_token uses get_xlm_to_token_quote
+        dex_service
+            .expect_get_xlm_to_token_quote()
+            .returning(|_, _, _, _| {
+                Box::pin(ready(Ok(StellarQuoteResponse {
+                    input_asset: "native".to_string(),
+                    output_asset: "token".to_string(),
+                    in_amount: 10000,      // Input XLM
+                    out_amount: 5_000_000, // Required fee in token
+                    price_impact_pct: 0.1,
+                    slippage_bps: 100,
+                    path: None,
+                })))
+            });
+
+        // Create envelope and auth entry
+        let envelope = create_test_envelope();
+        let fee_token_hash = [5u8; 32];
+        let fee_token_address = get_contract_address_from_hash(fee_token_hash);
+
+        // User authorizes only 1_000_000 (1 token), but 5 tokens are needed
+        let signed_auth = create_fee_forwarder_auth(fee_token_hash, 1_000_000);
+
+        // Policy allows token with high max_allowed_fee (no issue there)
+        let policy = create_policy_with_token(&fee_token_address, Some(100_000_000));
+
+        // Execute
+        let result =
+            validate_gas_abstraction_fee(&envelope, &signed_auth, &policy, &provider, &dex_service)
+                .await;
+
+        // Assert
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            TransactionError::ValidationError(msg) => {
+                assert!(
+                    msg.contains("Insufficient max_fee_amount"),
+                    "Expected 'Insufficient max_fee_amount' in error message, got: {}",
+                    msg
+                );
+                assert!(
+                    msg.contains("relayer liquidity loss"),
+                    "Expected 'relayer liquidity loss' warning in error message, got: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected ValidationError, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_gas_abstraction_fee_success() {
+        // Setup: simulate transaction returns a resource fee, DEX converts it
+        let mut provider = MockStellarProviderTrait::new();
+        provider
+            .expect_simulate_transaction_envelope()
+            .returning(|_| {
+                Box::pin(ready(Ok(SimulateTransactionResponse {
+                    error: None,
+                    min_resource_fee: 10000, // 10000 stroops resource fee
+                    transaction_data: create_valid_soroban_tx_data_xdr(),
+                    ..Default::default()
+                })))
+            });
+
+        let mut dex_service = MockStellarDexServiceTrait::new();
+        // DEX returns that required fee in token is 5_000_000 (5 tokens)
+        // convert_xlm_fee_to_token uses get_xlm_to_token_quote
+        dex_service
+            .expect_get_xlm_to_token_quote()
+            .returning(|_, _, _, _| {
+                Box::pin(ready(Ok(StellarQuoteResponse {
+                    input_asset: "native".to_string(),
+                    output_asset: "token".to_string(),
+                    in_amount: 10000,      // Input XLM
+                    out_amount: 5_000_000, // Required fee in token
+                    price_impact_pct: 0.1,
+                    slippage_bps: 100,
+                    path: None,
+                })))
+            });
+
+        // Create envelope and auth entry
+        let envelope = create_test_envelope();
+        let fee_token_hash = [5u8; 32];
+        let fee_token_address = get_contract_address_from_hash(fee_token_hash);
+
+        // User authorizes 10_000_000 (10 tokens), which exceeds the required 5 tokens
+        let signed_auth = create_fee_forwarder_auth(fee_token_hash, 10_000_000);
+
+        // Policy allows token with max_allowed_fee of 20 tokens
+        let policy = create_policy_with_token(&fee_token_address, Some(20_000_000));
+
+        // Execute
+        let result =
+            validate_gas_abstraction_fee(&envelope, &signed_auth, &policy, &provider, &dex_service)
+                .await;
+
+        // Assert
+        assert!(
+            result.is_ok(),
+            "Expected validation to pass, got error: {:?}",
+            result.unwrap_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_gas_abstraction_fee_negative_amount_rejected() {
+        // Setup
+        let provider = MockStellarProviderTrait::new();
+        let dex_service = MockStellarDexServiceTrait::new();
+
+        // Create envelope and auth entry with negative max_fee_amount
+        let envelope = create_test_envelope();
+        let fee_token_hash = [5u8; 32];
+        let fee_token_address = get_contract_address_from_hash(fee_token_hash);
+
+        // User provides negative max_fee_amount
+        let signed_auth = create_fee_forwarder_auth(fee_token_hash, -1000);
+
+        // Policy allows token
+        let policy = create_policy_with_token(&fee_token_address, Some(100_000_000));
+
+        // Execute
+        let result =
+            validate_gas_abstraction_fee(&envelope, &signed_auth, &policy, &provider, &dex_service)
+                .await;
+
+        // Assert
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            TransactionError::ValidationError(msg) => {
+                assert!(
+                    msg.contains("cannot be negative"),
+                    "Expected 'cannot be negative' in error message, got: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected ValidationError, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_gas_abstraction_fee_simulation_error() {
+        // Setup: simulation returns an error with zero resource fee
+        let mut provider = MockStellarProviderTrait::new();
+        provider
+            .expect_simulate_transaction_envelope()
+            .returning(|_| {
+                Box::pin(ready(Ok(SimulateTransactionResponse {
+                    error: Some("Simulation failed: contract not found".to_string()),
+                    min_resource_fee: 0,
+                    transaction_data: String::new(),
+                    ..Default::default()
+                })))
+            });
+
+        let dex_service = MockStellarDexServiceTrait::new();
+
+        // Create envelope and auth entry
+        let envelope = create_test_envelope();
+        let fee_token_hash = [5u8; 32];
+        let fee_token_address = get_contract_address_from_hash(fee_token_hash);
+        let signed_auth = create_fee_forwarder_auth(fee_token_hash, 10_000_000);
+
+        // Policy allows token
+        let policy = create_policy_with_token(&fee_token_address, Some(100_000_000));
+
+        // Execute
+        let result =
+            validate_gas_abstraction_fee(&envelope, &signed_auth, &policy, &provider, &dex_service)
+                .await;
+
+        // Assert: When simulation fails with zero resource fee, it returns ValidationError
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            TransactionError::ValidationError(msg) => {
+                assert!(
+                    msg.contains("Simulation failed"),
+                    "Expected 'Simulation failed' in error message, got: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected ValidationError, got: {:?}", other),
         }
     }
 }

@@ -12,7 +12,10 @@ pub use crate::services::stellar_dex::StellarDexServiceTrait;
 use std::sync::Arc;
 
 use crate::{
-    constants::{STELLAR_HORIZON_MAINNET_URL, STELLAR_HORIZON_TESTNET_URL},
+    constants::{
+        get_default_soroswap_factory, get_default_soroswap_router, STELLAR_HORIZON_MAINNET_URL,
+        STELLAR_HORIZON_TESTNET_URL,
+    },
     jobs::JobProducerTrait,
     models::{
         NetworkRepoModel, NetworkType, RelayerError, RelayerRepoModel, SignerRepoModel,
@@ -117,12 +120,16 @@ pub async fn create_stellar_relayer<
                 // Get Soroswap router address from server config, falling back to default
                 let router_address =
                     crate::config::ServerConfig::get_stellar_soroswap_router_address()
-                        .unwrap_or_else(|| get_default_soroswap_router(network.is_testnet()));
+                        .unwrap_or_else(|| {
+                            get_default_soroswap_router(network.is_testnet()).to_string()
+                        });
 
                 // Get Soroswap factory address from server config, falling back to default
                 let factory_address =
                     crate::config::ServerConfig::get_stellar_soroswap_factory_address()
-                        .unwrap_or_else(|| get_default_soroswap_factory(network.is_testnet()));
+                        .unwrap_or_else(|| {
+                            get_default_soroswap_factory(network.is_testnet()).to_string()
+                        });
 
                 // Get native wrapper address from server config if configured
                 let native_wrapper_address =
@@ -161,196 +168,4 @@ pub async fn create_stellar_relayer<
     .await?;
 
     Ok(relayer)
-}
-
-/// Get the default Soroswap router contract address for the given network
-///
-/// These addresses are the official Soroswap router deployments.
-/// Users can override these via configuration.
-fn get_default_soroswap_router(is_testnet: bool) -> String {
-    if is_testnet {
-        // Soroswap testnet router
-        "CCJUD55AG6W5HAI5LRVNKAE5WDP5XGZBUDS5WNTIVDU7O264UZZE7BRD".to_string()
-    } else {
-        // Soroswap mainnet router
-        "CAG5LRYQ5JVEUI5TEID72EYOVX44TTUJT5BQR2J6J77FH65PCCFAJDDH".to_string()
-    }
-}
-
-/// Get the default Soroswap factory contract address for the given network
-///
-/// These addresses are the official Soroswap factory deployments.
-/// Users can override these via configuration.
-fn get_default_soroswap_factory(is_testnet: bool) -> String {
-    if is_testnet {
-        // Soroswap testnet factory
-        "CDP3HMUH6SMS3S7NPGNDJLULCOXXEPSHY4JKUKMBNQMATHDHWXRRJTBY".to_string()
-    } else {
-        // Soroswap mainnet factory
-        "CA4HEQTL2WPEUYKYKCDOHCDNIV4QHNJ7EL4J4NQ6VADP7SYHVRYZ7AW2".to_string()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    mod get_default_soroswap_router_tests {
-        use super::*;
-
-        #[test]
-        fn test_returns_testnet_router_address_when_testnet() {
-            let router = get_default_soroswap_router(true);
-            assert_eq!(
-                router, "CCJUD55AG6W5HAI5LRVNKAE5WDP5XGZBUDS5WNTIVDU7O264UZZE7BRD",
-                "Should return Soroswap testnet router address"
-            );
-        }
-
-        #[test]
-        fn test_returns_mainnet_router_address_when_mainnet() {
-            let router = get_default_soroswap_router(false);
-            assert_eq!(
-                router, "CAG5LRYQ5JVEUI5TEID72EYOVX44TTUJT5BQR2J6J77FH65PCCFAJDDH",
-                "Should return Soroswap mainnet router address"
-            );
-        }
-
-        #[test]
-        fn test_testnet_and_mainnet_router_addresses_are_different() {
-            let testnet_router = get_default_soroswap_router(true);
-            let mainnet_router = get_default_soroswap_router(false);
-            assert_ne!(
-                testnet_router, mainnet_router,
-                "Testnet and mainnet router addresses should be different"
-            );
-        }
-
-        #[test]
-        fn test_router_addresses_are_valid_stellar_contract_addresses() {
-            let testnet_router = get_default_soroswap_router(true);
-            let mainnet_router = get_default_soroswap_router(false);
-
-            // Stellar contract addresses start with 'C' and are 56 characters long
-            assert!(
-                testnet_router.starts_with('C'),
-                "Testnet router should start with 'C'"
-            );
-            assert_eq!(
-                testnet_router.len(),
-                56,
-                "Testnet router should be 56 characters"
-            );
-
-            assert!(
-                mainnet_router.starts_with('C'),
-                "Mainnet router should start with 'C'"
-            );
-            assert_eq!(
-                mainnet_router.len(),
-                56,
-                "Mainnet router should be 56 characters"
-            );
-        }
-    }
-
-    mod get_default_soroswap_factory_tests {
-        use super::*;
-
-        #[test]
-        fn test_returns_testnet_factory_address_when_testnet() {
-            let factory = get_default_soroswap_factory(true);
-            assert_eq!(
-                factory, "CDP3HMUH6SMS3S7NPGNDJLULCOXXEPSHY4JKUKMBNQMATHDHWXRRJTBY",
-                "Should return Soroswap testnet factory address"
-            );
-        }
-
-        #[test]
-        fn test_returns_mainnet_factory_address_when_mainnet() {
-            let factory = get_default_soroswap_factory(false);
-            assert_eq!(
-                factory, "CA4HEQTL2WPEUYKYKCDOHCDNIV4QHNJ7EL4J4NQ6VADP7SYHVRYZ7AW2",
-                "Should return Soroswap mainnet factory address"
-            );
-        }
-
-        #[test]
-        fn test_testnet_and_mainnet_factory_addresses_are_different() {
-            let testnet_factory = get_default_soroswap_factory(true);
-            let mainnet_factory = get_default_soroswap_factory(false);
-            assert_ne!(
-                testnet_factory, mainnet_factory,
-                "Testnet and mainnet factory addresses should be different"
-            );
-        }
-
-        #[test]
-        fn test_factory_addresses_are_valid_stellar_contract_addresses() {
-            let testnet_factory = get_default_soroswap_factory(true);
-            let mainnet_factory = get_default_soroswap_factory(false);
-
-            // Stellar contract addresses start with 'C' and are 56 characters long
-            assert!(
-                testnet_factory.starts_with('C'),
-                "Testnet factory should start with 'C'"
-            );
-            assert_eq!(
-                testnet_factory.len(),
-                56,
-                "Testnet factory should be 56 characters"
-            );
-
-            assert!(
-                mainnet_factory.starts_with('C'),
-                "Mainnet factory should start with 'C'"
-            );
-            assert_eq!(
-                mainnet_factory.len(),
-                56,
-                "Mainnet factory should be 56 characters"
-            );
-        }
-    }
-
-    mod soroswap_address_consistency_tests {
-        use super::*;
-
-        #[test]
-        fn test_router_and_factory_addresses_are_different() {
-            let testnet_router = get_default_soroswap_router(true);
-            let testnet_factory = get_default_soroswap_factory(true);
-            let mainnet_router = get_default_soroswap_router(false);
-            let mainnet_factory = get_default_soroswap_factory(false);
-
-            assert_ne!(
-                testnet_router, testnet_factory,
-                "Testnet router and factory should be different contracts"
-            );
-            assert_ne!(
-                mainnet_router, mainnet_factory,
-                "Mainnet router and factory should be different contracts"
-            );
-        }
-
-        #[test]
-        fn test_all_four_addresses_are_unique() {
-            let addresses = vec![
-                get_default_soroswap_router(true),
-                get_default_soroswap_router(false),
-                get_default_soroswap_factory(true),
-                get_default_soroswap_factory(false),
-            ];
-
-            let mut unique_addresses = addresses.clone();
-            unique_addresses.sort();
-            unique_addresses.dedup();
-
-            assert_eq!(
-                addresses.len(),
-                unique_addresses.len(),
-                "All Soroswap contract addresses should be unique"
-            );
-        }
-    }
 }

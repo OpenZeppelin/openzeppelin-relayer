@@ -10,17 +10,13 @@ use super::{
     AssetType, PathStep, StellarDexServiceError, StellarDexServiceTrait, StellarQuoteResponse,
     SwapExecutionResult, SwapTransactionParams,
 };
+use crate::constants::get_default_soroswap_native_wrapper;
 use crate::services::provider::StellarProviderTrait;
 use async_trait::async_trait;
 use soroban_rs::xdr::{ContractId, Hash, Int128Parts, ScAddress, ScSymbol, ScVal, ScVec};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::{debug, warn};
-
-/// Native XLM wrapper token contract address
-/// This is the Soroban token contract that wraps native XLM for use in Soroswap
-const MAINNET_NATIVE_WRAPPER: &str = "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA";
-const TESTNET_NATIVE_WRAPPER: &str = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
 
 /// Soroswap AMM DEX service for Soroban token swaps
 ///
@@ -66,13 +62,8 @@ where
         network_passphrase: String,
         is_testnet: bool,
     ) -> Self {
-        let native_wrapper = native_wrapper_address.unwrap_or_else(|| {
-            if is_testnet {
-                TESTNET_NATIVE_WRAPPER.to_string()
-            } else {
-                MAINNET_NATIVE_WRAPPER.to_string()
-            }
-        });
+        let native_wrapper = native_wrapper_address
+            .unwrap_or_else(|| get_default_soroswap_native_wrapper(is_testnet).to_string());
 
         Self {
             router_address,
@@ -439,6 +430,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::{
+        STELLAR_SOROSWAP_MAINNET_NATIVE_WRAPPER, STELLAR_SOROSWAP_TESTNET_NATIVE_WRAPPER,
+    };
     use crate::services::provider::MockStellarProviderTrait;
     use futures::FutureExt;
 
@@ -466,14 +460,20 @@ mod tests {
     fn test_new_testnet_uses_testnet_native_wrapper() {
         let provider = create_mock_provider();
         let service = create_test_service(provider, true);
-        assert_eq!(service.native_wrapper_address, TESTNET_NATIVE_WRAPPER);
+        assert_eq!(
+            service.native_wrapper_address,
+            STELLAR_SOROSWAP_TESTNET_NATIVE_WRAPPER
+        );
     }
 
     #[test]
     fn test_new_mainnet_uses_mainnet_native_wrapper() {
         let provider = create_mock_provider();
         let service = create_test_service(provider, false);
-        assert_eq!(service.native_wrapper_address, MAINNET_NATIVE_WRAPPER);
+        assert_eq!(
+            service.native_wrapper_address,
+            STELLAR_SOROSWAP_MAINNET_NATIVE_WRAPPER
+        );
     }
 
     #[test]
