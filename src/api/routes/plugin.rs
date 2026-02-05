@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 use crate::{
     api::controllers::plugin,
+    metrics::PLUGIN_CALLS,
     models::{
         ApiError, ApiResponse, DefaultAppState, PaginationQuery, PluginCallRequest,
         UpdatePluginRequest,
@@ -152,7 +153,7 @@ async fn plugin_call(
     // Track the request with appropriate status
     let status = match &result {
         Ok(response) => response.status().as_str(),
-        Err(e) => e.as_response_error().status_code().as_str(),
+        Err(e) => e.error_response().status().as_str(),
     };
     PLUGIN_CALLS
         .with_label_values(&[&plugin_id, "POST", status])
@@ -205,16 +206,16 @@ async fn plugin_call_get(
     };
 
     let result = plugin::call_plugin(plugin_id.clone(), plugin_call_request, data).await;
-
+    
     // Track the request with appropriate status
     let status = match &result {
         Ok(response) => response.status().as_str(),
-        Err(e) => e.as_response_error().status_code().as_str(),
+        Err(e) => e.error_response().status().as_str(),
     };
     PLUGIN_CALLS
         .with_label_values(&[&plugin_id, "GET", status])
         .inc();
-
+    
     result
 }
 
