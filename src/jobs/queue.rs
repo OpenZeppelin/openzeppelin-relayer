@@ -87,9 +87,10 @@ impl QueueConfig {
     /// - Faster poll interval for lower latency
     fn high_throughput() -> Self {
         Self {
-            poll_interval: Duration::from_millis(50),
-            buffer_size: 100,
-            enqueue_scheduled: Duration::from_secs(2),
+            // Keep queue consumers responsive while avoiding large in-process buffering.
+            poll_interval: Duration::from_millis(100),
+            buffer_size: 25,
+            enqueue_scheduled: Duration::from_secs(5),
         }
     }
 
@@ -380,14 +381,13 @@ mod tests {
     fn test_queue_config_high_throughput() {
         let config = QueueConfig::high_throughput();
 
-        // High throughput should have faster polling and larger buffer
-        assert_eq!(config.poll_interval, Duration::from_millis(50));
-        assert_eq!(config.buffer_size, 100);
-        assert_eq!(config.enqueue_scheduled, Duration::from_secs(2));
+        // High throughput keeps the same poll interval but uses a larger buffer than default.
+        assert_eq!(config.poll_interval, Duration::from_millis(100));
+        assert_eq!(config.buffer_size, 25);
+        assert_eq!(config.enqueue_scheduled, Duration::from_secs(5));
 
-        // Verify it's faster than default
+        // Verify it buffers more than default
         let default = QueueConfig::default();
-        assert!(config.poll_interval < default.poll_interval);
         assert!(config.buffer_size > default.buffer_size);
     }
 

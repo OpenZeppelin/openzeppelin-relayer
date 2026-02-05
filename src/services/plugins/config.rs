@@ -29,6 +29,7 @@ use crate::constants::{
     MAX_CONCURRENT_TASKS_PER_WORKER,
 };
 use std::sync::OnceLock;
+use tracing::warn;
 
 /// Cached plugin configuration (computed once at startup)
 static CONFIG: OnceLock<PluginConfig> = OnceLock::new();
@@ -92,12 +93,34 @@ impl PluginConfig {
     pub fn from_env() -> Self {
         // === Primary scaling knob ===
         // If set, this drives the auto-derivation of other values
-        let max_concurrency = env_parse("PLUGIN_MAX_CONCURRENCY", DEFAULT_POOL_MAX_CONNECTIONS);
+        let requested_max_concurrency =
+            env_parse("PLUGIN_MAX_CONCURRENCY", DEFAULT_POOL_MAX_CONNECTIONS);
+        let max_concurrency_cap =
+            env_parse("PLUGIN_MAX_CONCURRENCY_CAP", DEFAULT_POOL_MAX_CONNECTIONS).max(1);
+        let max_concurrency = requested_max_concurrency.min(max_concurrency_cap);
+        if requested_max_concurrency != max_concurrency {
+            warn!(
+                requested = requested_max_concurrency,
+                applied = max_concurrency,
+                cap = max_concurrency_cap,
+                "PLUGIN_MAX_CONCURRENCY exceeds safety cap; clamping"
+            );
+        }
 
         // === Auto-derived values (can be individually overridden) ===
 
         // Pool connections = max_concurrency (1:1 ratio)
-        let pool_max_connections = env_parse("PLUGIN_POOL_MAX_CONNECTIONS", max_concurrency);
+        let requested_pool_max_connections =
+            env_parse("PLUGIN_POOL_MAX_CONNECTIONS", max_concurrency);
+        let pool_max_connections = requested_pool_max_connections.min(max_concurrency_cap);
+        if requested_pool_max_connections != pool_max_connections {
+            warn!(
+                requested = requested_pool_max_connections,
+                applied = pool_max_connections,
+                cap = max_concurrency_cap,
+                "PLUGIN_POOL_MAX_CONNECTIONS exceeds safety cap; clamping"
+            );
+        }
 
         // Socket connections = 1.5x max_concurrency (headroom for connection churn)
         let socket_max_connections = env_parse(
@@ -105,8 +128,20 @@ impl PluginConfig {
             (max_concurrency as f64 * 1.5) as usize,
         );
 
-        // Queue size = 2x max_concurrency (absorb bursts)
-        let pool_max_queue_size = env_parse("PLUGIN_POOL_MAX_QUEUE_SIZE", max_concurrency * 2);
+        // Queue size defaults to 1x concurrency to keep bounded memory under load.
+        let requested_pool_max_queue_size =
+            env_parse("PLUGIN_POOL_MAX_QUEUE_SIZE", max_concurrency);
+        let queue_size_cap =
+            env_parse("PLUGIN_POOL_MAX_QUEUE_SIZE_CAP", max_concurrency).max(max_concurrency);
+        let pool_max_queue_size = requested_pool_max_queue_size.min(queue_size_cap);
+        if requested_pool_max_queue_size != pool_max_queue_size {
+            warn!(
+                requested = requested_pool_max_queue_size,
+                applied = pool_max_queue_size,
+                cap = queue_size_cap,
+                "PLUGIN_POOL_MAX_QUEUE_SIZE exceeds safety cap; clamping"
+            );
+        }
 
         // Calculate thread count early for queue timeout derivation
         // NOTE: This must use the SAME formula as the actual thread calculation below
@@ -419,7 +454,7 @@ impl Default for PluginConfig {
         // Apply same formulas as from_env()
         let pool_max_connections = max_concurrency;
         let socket_max_connections = (max_concurrency as f64 * 1.5) as usize;
-        let pool_max_queue_size = max_concurrency * 2;
+        let pool_max_queue_size = max_concurrency;
 
         // Memory-aware thread scaling (same as from_env)
         // Assume 16GB for default since we can't easily detect memory here
@@ -500,7 +535,7 @@ mod tests {
         assert_eq!(config.max_concurrency, DEFAULT_POOL_MAX_CONNECTIONS);
         assert_eq!(config.pool_max_connections, DEFAULT_POOL_MAX_CONNECTIONS);
         // Validate derived ratios
-        assert_eq!(config.pool_max_queue_size, config.max_concurrency * 2);
+        assert_eq!(config.pool_max_queue_size, config.max_concurrency);
         assert!(
             config.socket_max_connections >= config.pool_max_connections,
             "socket connections should be >= pool connections"
@@ -514,7 +549,7 @@ mod tests {
             max_concurrency: 1000,
             pool_max_connections: 1000,
             socket_max_connections: 1500, // 1.5x
-            pool_max_queue_size: 2000,    // 2x
+            pool_max_queue_size: 1000,    // 1x
             ..Default::default()
         };
 
@@ -522,7 +557,7 @@ mod tests {
             config.socket_max_connections,
             config.max_concurrency * 3 / 2
         );
-        assert_eq!(config.pool_max_queue_size, config.max_concurrency * 2);
+        assert_eq!(config.pool_max_queue_size, config.max_concurrency);
     }
 
     #[test]
@@ -537,7 +572,7 @@ mod tests {
 
         let pool_max_connections = max_concurrency;
         let socket_max_connections = (max_concurrency as f64 * 1.5) as usize;
-        let pool_max_queue_size = max_concurrency * 2;
+        let pool_max_queue_size = max_concurrency;
 
         // New memory-aware formula (assuming 16GB)
         let memory_budget_mb = 16384 / 2;
@@ -550,7 +585,7 @@ mod tests {
 
         assert_eq!(pool_max_connections, 10);
         assert_eq!(socket_max_connections, 15); // 1.5x
-        assert_eq!(pool_max_queue_size, 20); // 2x
+        assert_eq!(pool_max_queue_size, 10); // 1x
 
         // Should still have reasonable thread count (warm pool)
         assert!(nodejs_pool_max_threads >= DEFAULT_POOL_MAX_THREADS_FLOOR);
@@ -565,7 +600,7 @@ mod tests {
             .unwrap_or(4);
 
         let socket_max_connections = (max_concurrency as f64 * 1.5) as usize;
-        let pool_max_queue_size = max_concurrency * 2;
+        let pool_max_queue_size = max_concurrency;
 
         // New memory-aware formula (assuming 16GB)
         let memory_budget_mb = 16384 / 2;
@@ -577,7 +612,7 @@ mod tests {
             .min(32);
 
         assert_eq!(socket_max_connections, 1500); // 1.5x
-        assert_eq!(pool_max_queue_size, 2000); // 2x
+        assert_eq!(pool_max_queue_size, 1000); // 1x
 
         // With 16GB memory and 1000 concurrency:
         // memory_based = 8, concurrency_based = max(5, cpu_count)
@@ -592,7 +627,7 @@ mod tests {
         let max_concurrency = 10000;
 
         let socket_max_connections = (max_concurrency as f64 * 1.5) as usize;
-        let pool_max_queue_size = max_concurrency * 2;
+        let pool_max_queue_size = max_concurrency;
 
         let cpu_count = std::thread::available_parallelism()
             .map(|n| n.get())
@@ -608,7 +643,7 @@ mod tests {
             .min(32);
 
         assert_eq!(socket_max_connections, 15000); // 1.5x
-        assert_eq!(pool_max_queue_size, 20000); // 2x
+        assert_eq!(pool_max_queue_size, 10000); // 1x
 
         // With 16GB: memory_based=8, concurrency_based=50 -> result = 8
         // Should NOT hit 64 threads anymore (memory-constrained)
@@ -665,11 +700,11 @@ mod tests {
 
         // Verify the override would be respected
         assert_eq!(pool_max_connections, max_concurrency); // Auto-derived
-        assert_eq!(pool_max_queue_size, 5000); // Manual override (not 2000)
+        assert_eq!(pool_max_queue_size, 5000); // Manual override (not 1000)
 
-        // Also test that auto-derivation would have given 2000
-        let auto_derived_queue = max_concurrency * 2;
-        assert_eq!(auto_derived_queue, 2000);
+        // Also test that auto-derivation would have given 1000
+        let auto_derived_queue = max_concurrency;
+        assert_eq!(auto_derived_queue, 1000);
         assert_ne!(pool_max_queue_size, auto_derived_queue); // Override is different
     }
 }
