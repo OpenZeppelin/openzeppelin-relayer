@@ -31,7 +31,7 @@ use crate::utils::RedisConnections;
 // ============================================================================
 
 /// Timeout for Redis PING operations during health checks.
-const PING_TIMEOUT: Duration = Duration::from_millis(500);
+const PING_TIMEOUT: Duration = Duration::from_millis(3000);
 
 /// Warning file descriptor ratio (70%) - triggers Degraded status.
 const WARNING_FD_RATIO: f64 = 0.7;
@@ -40,10 +40,12 @@ const WARNING_FD_RATIO: f64 = 0.7;
 const MAX_FD_RATIO: f64 = 0.8;
 
 /// Warning CLOSE_WAIT socket count - triggers Degraded status.
-const WARNING_CLOSE_WAIT: usize = 50;
+/// Increased from 50 to tolerate Docker/Redis networking artifacts under load.
+const WARNING_CLOSE_WAIT: usize = 200;
 
 /// Maximum CLOSE_WAIT socket count - triggers Unhealthy status.
-const MAX_CLOSE_WAIT: usize = 100;
+/// Increased from 100 to tolerate Docker/Redis networking artifacts under load.
+const MAX_CLOSE_WAIT: usize = 500;
 
 /// Cache TTL - health checks are cached for this duration.
 const HEALTH_CACHE_TTL: Duration = Duration::from_secs(10);
@@ -391,9 +393,9 @@ fn evaluate_system_metrics(
 /// Check system resources and return health status.
 ///
 /// Monitors file descriptor usage and CLOSE_WAIT socket count.
-/// - Below 70% FD usage and <50 CLOSE_WAIT: Healthy
-/// - 70-80% FD usage or 50-100 CLOSE_WAIT: Degraded
-/// - Above 80% FD usage or >100 CLOSE_WAIT: Unhealthy
+/// - Below 70% FD usage and <200 CLOSE_WAIT: Healthy
+/// - 70-80% FD usage or 200-500 CLOSE_WAIT: Degraded
+/// - Above 80% FD usage or >500 CLOSE_WAIT: Unhealthy
 pub fn check_system_health() -> SystemHealth {
     let fd_count = get_fd_count().unwrap_or(0);
     let fd_limit = get_fd_limit().unwrap_or(1024);
@@ -673,11 +675,11 @@ mod tests {
 
     #[test]
     fn test_constants() {
-        assert_eq!(PING_TIMEOUT, Duration::from_millis(500));
+        assert_eq!(PING_TIMEOUT, Duration::from_millis(3000));
         assert_eq!(WARNING_FD_RATIO, 0.7);
         assert_eq!(MAX_FD_RATIO, 0.8);
-        assert_eq!(WARNING_CLOSE_WAIT, 50);
-        assert_eq!(MAX_CLOSE_WAIT, 100);
+        assert_eq!(WARNING_CLOSE_WAIT, 200);
+        assert_eq!(MAX_CLOSE_WAIT, 500);
         assert_eq!(HEALTH_CACHE_TTL, Duration::from_secs(10));
     }
 
@@ -703,8 +705,8 @@ mod tests {
 
     #[test]
     fn test_evaluate_system_metrics_degraded_close_wait() {
-        // CLOSE_WAIT at 75 (between warning and max)
-        let (status, error) = evaluate_system_metrics(0.5, 500, 1000, 75);
+        // CLOSE_WAIT at 300 (between warning 200 and max 500)
+        let (status, error) = evaluate_system_metrics(0.5, 500, 1000, 300);
         assert_eq!(status, ComponentStatus::Degraded);
         assert!(error.is_none());
     }
@@ -720,8 +722,8 @@ mod tests {
 
     #[test]
     fn test_evaluate_system_metrics_unhealthy_close_wait() {
-        // CLOSE_WAIT at 150 (above max)
-        let (status, error) = evaluate_system_metrics(0.5, 500, 1000, 150);
+        // CLOSE_WAIT at 600 (above max 500)
+        let (status, error) = evaluate_system_metrics(0.5, 500, 1000, 600);
         assert_eq!(status, ComponentStatus::Unhealthy);
         assert!(error.is_some());
         assert!(error.unwrap().contains("CLOSE_WAIT"));
@@ -730,7 +732,7 @@ mod tests {
     #[test]
     fn test_evaluate_system_metrics_both_unhealthy() {
         // Both FD and CLOSE_WAIT above max
-        let (status, error) = evaluate_system_metrics(0.9, 900, 1000, 150);
+        let (status, error) = evaluate_system_metrics(0.9, 900, 1000, 600);
         assert_eq!(status, ComponentStatus::Unhealthy);
         assert!(error.is_some());
         let err = error.unwrap();
@@ -740,8 +742,8 @@ mod tests {
 
     #[test]
     fn test_evaluate_system_metrics_at_warning_threshold() {
-        // Exactly at warning threshold (70% FD, 50 CLOSE_WAIT)
-        let (status, _) = evaluate_system_metrics(0.7, 700, 1000, 50);
+        // Exactly at warning threshold (70% FD, 200 CLOSE_WAIT)
+        let (status, _) = evaluate_system_metrics(0.7, 700, 1000, 200);
         // At exactly warning threshold, should still be healthy (> comparison)
         assert_eq!(status, ComponentStatus::Healthy);
     }
@@ -749,14 +751,14 @@ mod tests {
     #[test]
     fn test_evaluate_system_metrics_just_above_warning() {
         // Just above warning threshold
-        let (status, _) = evaluate_system_metrics(0.71, 710, 1000, 51);
+        let (status, _) = evaluate_system_metrics(0.71, 710, 1000, 201);
         assert_eq!(status, ComponentStatus::Degraded);
     }
 
     #[test]
     fn test_evaluate_system_metrics_at_max_threshold() {
-        // Exactly at max threshold (80% FD, 100 CLOSE_WAIT)
-        let (status, _) = evaluate_system_metrics(0.8, 800, 1000, 100);
+        // Exactly at max threshold (80% FD, 500 CLOSE_WAIT)
+        let (status, _) = evaluate_system_metrics(0.8, 800, 1000, 500);
         // At exactly max, should be degraded (> comparison for unhealthy)
         assert_eq!(status, ComponentStatus::Degraded);
     }
