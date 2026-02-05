@@ -57,7 +57,7 @@ use async_trait::async_trait;
 use eyre::Result;
 use futures::future::try_join_all;
 use std::sync::Arc;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 use crate::domain::relayer::stellar::xdr_utils::parse_transaction_xdr;
 use crate::domain::relayer::{Relayer, RelayerError, StellarRelayerDexTrait};
@@ -499,12 +499,13 @@ where
             .await
         {
             // Status queue failed - mark transaction as failed to prevent orphaned tx
-            warn!(
+            error!(
                 relayer_id = %self.relayer.id,
                 transaction_id = %transaction.id,
-                "Status queue failed - marking transaction as failed"
+                error = %e,
+                "Status check queue push failed - marking transaction as failed"
             );
-            let _ = self
+            if let Err(update_err) = self
                 .transaction_repository
                 .partial_update(
                     transaction.id.clone(),
@@ -514,7 +515,15 @@ where
                         ..Default::default()
                     },
                 )
-                .await;
+                .await
+            {
+                warn!(
+                    relayer_id = %self.relayer.id,
+                    transaction_id = %transaction.id,
+                    error = %update_err,
+                    "Failed to mark transaction as failed after queue push failure"
+                );
+            }
             return Err(e.into());
         }
 
