@@ -19,7 +19,7 @@ use crate::{
     services::{
         provider::{StellarProvider, StellarProviderTrait},
         signer::{Signer, StellarSignTrait, StellarSigner},
-        stellar_dex::{OrderBookService, StellarDexServiceTrait},
+        stellar_dex::{StellarDexService, StellarDexServiceTrait},
     },
     utils::calculate_scheduled_timestamp,
 };
@@ -366,7 +366,7 @@ pub type DefaultStellarTransaction = StellarRelayerTransaction<
     StellarSigner,
     StellarProvider,
     TransactionCounterRepositoryStorage,
-    OrderBookService<StellarProvider, StellarSigner>,
+    StellarDexService<StellarProvider, StellarSigner>,
 >;
 
 #[cfg(test)]

@@ -93,15 +93,24 @@ where
                 )),
             })?;
 
+    // Inject the user's signed auth entry and convert relayer's auth to SourceAccount
+    // This must happen BEFORE fee validation because the simulation in fee estimation
+    // requires proper auth entries with signatures to succeed.
+    let signed_auth_entries = inject_auth_entries_into_envelope(&mut envelope, signed_user_auth)?;
+
     // Validate fee parameters to ensure relayer liquidity
     // This validates: token is allowed, max_fee_amount covers the required fee
+    // Note: We pass the first auth entry (user's) which contains the fee parameters
     if let Some(policy) = policy {
-        validate_gas_abstraction_fee(&envelope, &signed_user_auth, policy, provider, dex_service)
-            .await?;
+        validate_gas_abstraction_fee(
+            &envelope,
+            &signed_auth_entries[0],
+            policy,
+            provider,
+            dex_service,
+        )
+        .await?;
     }
-
-    // Inject the user's signed auth entry and convert relayer's auth to SourceAccount
-    let signed_auth_entries = inject_auth_entries_into_envelope(&mut envelope, signed_user_auth)?;
 
     // Re-simulate with signed auth entries to get accurate footprint.
     //

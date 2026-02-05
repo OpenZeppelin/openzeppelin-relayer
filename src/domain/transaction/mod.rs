@@ -12,11 +12,14 @@
 //! The module leverages async traits to handle asynchronous operations and uses the `eyre` crate
 //! for error handling.
 use crate::{
-    constants::{STELLAR_HORIZON_MAINNET_URL, STELLAR_HORIZON_TESTNET_URL},
+    constants::{
+        get_default_soroswap_factory, get_default_soroswap_router, STELLAR_HORIZON_MAINNET_URL,
+        STELLAR_HORIZON_TESTNET_URL,
+    },
     jobs::{JobProducer, StatusCheckContext},
     models::{
         EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerRepoModel, SignerRepoModel,
-        SolanaNetwork, StellarNetwork, TransactionError, TransactionRepoModel,
+        SolanaNetwork, StellarNetwork, StellarSwapStrategy, TransactionError, TransactionRepoModel,
     },
     repositories::{
         NetworkRepository, NetworkRepositoryStorage, RelayerRepositoryStorage,
@@ -29,7 +32,7 @@ use crate::{
         },
         provider::get_network_provider,
         signer::{EvmSignerFactory, SolanaSignerFactory, StellarSignerFactory},
-        stellar_dex::OrderBookService,
+        stellar_dex::{DexServiceWrapper, OrderBookService, SoroswapService, StellarDexService},
     },
 };
 use async_trait::async_trait;
@@ -635,7 +638,7 @@ impl RelayerTransactionFactory {
                     get_network_provider(&network, relayer.custom_rpc_urls.clone())
                         .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
-                // Create DEX service for swap operations and validations using Horizon API
+                // Create DEX service for swap operations and validations
                 let horizon_url = network.horizon_url.clone().unwrap_or_else(|| {
                     if network.is_testnet() {
                         STELLAR_HORIZON_TESTNET_URL.to_string()
@@ -646,13 +649,70 @@ impl RelayerTransactionFactory {
                 let provider_arc = Arc::new(stellar_provider.clone());
                 // Clone Arc for DEX service (cheap - just increments reference count)
                 let signer_arc = signer_service.clone();
-                let dex_service = Arc::new(
-                    OrderBookService::new(horizon_url, provider_arc, signer_arc).map_err(|e| {
-                        TransactionError::NetworkConfiguration(format!(
-                            "Failed to create DEX service: {e}",
-                        ))
-                    })?,
-                );
+
+                // Get strategies from relayer policy (default to OrderBook if none specified)
+                let strategies = relayer
+                    .policies
+                    .get_stellar_policy()
+                    .get_swap_config()
+                    .and_then(|config| {
+                        if config.strategies.is_empty() {
+                            None
+                        } else {
+                            Some(config.strategies.clone())
+                        }
+                    })
+                    .unwrap_or_else(|| vec![StellarSwapStrategy::OrderBook]);
+
+                // Create DEX services for each configured strategy
+                let mut dex_services: Vec<DexServiceWrapper<_, _>> = Vec::new();
+                for strategy in &strategies {
+                    match strategy {
+                        StellarSwapStrategy::OrderBook => {
+                            let order_book_service = Arc::new(
+                                OrderBookService::new(
+                                    horizon_url.clone(),
+                                    provider_arc.clone(),
+                                    signer_arc.clone(),
+                                )
+                                .map_err(|e| {
+                                    TransactionError::NetworkConfiguration(format!(
+                                        "Failed to create OrderBook DEX service: {e}"
+                                    ))
+                                })?,
+                            );
+                            dex_services.push(DexServiceWrapper::OrderBook(order_book_service));
+                        }
+                        StellarSwapStrategy::Soroswap => {
+                            let router_address =
+                                crate::config::ServerConfig::get_stellar_soroswap_router_address()
+                                    .unwrap_or_else(|| {
+                                        get_default_soroswap_router(network.is_testnet())
+                                            .to_string()
+                                    });
+                            let factory_address =
+                                crate::config::ServerConfig::get_stellar_soroswap_factory_address()
+                                    .unwrap_or_else(|| {
+                                        get_default_soroswap_factory(network.is_testnet())
+                                            .to_string()
+                                    });
+                            let native_wrapper_address = crate::config::ServerConfig::get_stellar_soroswap_native_wrapper_address();
+
+                            let soroswap_service = Arc::new(SoroswapService::new(
+                                router_address,
+                                factory_address,
+                                native_wrapper_address,
+                                provider_arc.clone(),
+                                network.passphrase.clone(),
+                                network.is_testnet(),
+                            ));
+                            dex_services.push(DexServiceWrapper::Soroswap(soroswap_service));
+                        }
+                    }
+                }
+
+                // Create multi-strategy DEX service
+                let dex_service = Arc::new(StellarDexService::new(dex_services));
 
                 Ok(NetworkTransaction::Stellar(DefaultStellarTransaction::new(
                     relayer,
