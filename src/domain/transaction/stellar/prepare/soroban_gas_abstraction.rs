@@ -2208,9 +2208,8 @@ mod validate_gas_abstraction_fee_tests {
         match err {
             TransactionError::ValidationError(msg) => {
                 assert!(
-                    msg.contains("cannot be negative"),
-                    "Expected 'cannot be negative' in error message, got: {}",
-                    msg
+                    msg.contains("must be positive"),
+                    "Expected 'must be positive' in error message, got: {msg}",
                 );
             }
             other => panic!("Expected ValidationError, got: {:?}", other),
