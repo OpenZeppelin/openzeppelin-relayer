@@ -60,37 +60,89 @@ impl std::fmt::Debug for Queue {
     }
 }
 
+/// Configuration for queue storage tuning.
+#[derive(Clone, Debug)]
+struct QueueConfig {
+    /// How often to move scheduled jobs to active queue (default: 30s)
+    enqueue_scheduled: Duration,
+}
+
+impl Default for QueueConfig {
+    fn default() -> Self {
+        Self {
+            enqueue_scheduled: Duration::from_secs(30),
+        }
+    }
+}
+
+impl QueueConfig {
+    /// - Faster poll interval for lower latency
+    fn high_frequency() -> Self {
+        Self {
+            enqueue_scheduled: Duration::from_secs(2),
+        }
+    }
+
+    /// Configuration for lower-frequency queues.
+    /// - Smaller buffer (less memory pressure)
+    /// - Slower scheduled job polling (reduces Redis load)
+    fn low_frequency() -> Self {
+        Self {
+            enqueue_scheduled: Duration::from_secs(20),
+        }
+    }
+}
+
 impl Queue {
     /// Creates a RedisStorage for a specific job type using a ConnectionManager.
     ///
     /// # Arguments
     /// * `namespace` - Redis key namespace for this queue
     /// * `conn` - ConnectionManager with auto-reconnect
-    /// * `poll_interval` - How often to poll for scheduled jobs (None = default 2s for high-frequency queues)
+    /// * `queue_config` - Tuning parameters for this queue
     ///
     /// ConnectionManager provides automatic reconnection on connection failures,
     /// ensuring queue processing continues even if the Redis connection drops temporarily.
     fn storage<T: Serialize + for<'de> Deserialize<'de>>(
         namespace: &str,
         conn: ConnectionManager,
-        poll_interval: Option<Duration>,
+        queue_config: QueueConfig,
     ) -> RedisStorage<T> {
-        // Default to 2 seconds for high-frequency queues (transaction processing)
-        // Use longer intervals for lower-frequency queues to reduce Redis load
-        let interval = poll_interval.unwrap_or(Duration::from_secs(2));
-
         let config = Config::default()
             .set_namespace(namespace)
-            .set_enqueue_scheduled(interval);
+            .set_enqueue_scheduled(queue_config.enqueue_scheduled);
 
         RedisStorage::new_with_config(conn, config)
+    }
+
+    /// Creates a ConnectionManager with the standard queue configuration.
+    ///
+    /// Each ConnectionManager represents a single Redis connection with auto-reconnect.
+    /// Creating separate managers for different queue types enables parallel Redis operations.
+    async fn create_connection_manager(
+        client: &redis::Client,
+        queue_timeout: Duration,
+    ) -> Result<ConnectionManager> {
+        let conn_config = ConnectionManagerConfig::new()
+            .set_connection_timeout(queue_timeout)
+            .set_response_timeout(queue_timeout)
+            .set_number_of_retries(2)
+            .set_max_delay(1000);
+
+        ConnectionManager::new_with_config(client.clone(), conn_config)
+            .await
+            .map_err(|e| eyre::eyre!("Failed to create Redis connection manager: {}", e))
     }
 
     /// Sets up all job queues with properly configured Redis connections.
     ///
     /// # Architecture
-    /// - **Queue storages**: Use `ConnectionManager` with configured timeouts for auto-reconnect
+    /// - **Queue storages**: Each queue gets its own `ConnectionManager` for maximum parallelism
     /// - **Handler operations**: Use `redis_connections` pool for metadata, locking, counters
+    ///
+    /// # Connection Strategy
+    /// Each queue has a dedicated Redis connection to prevent contention under high throughput.
+    /// This allows 8 parallel Redis operations (one per queue type).
     ///
     /// # Arguments
     /// * `redis_connections` - Redis connection pools for handler operations.
@@ -107,25 +159,20 @@ impl Queue {
         let client = redis::Client::open(redis_url.as_str())
             .map_err(|e| eyre::eyre!("Failed to create Redis client for queue: {}", e))?;
 
-        // Configure ConnectionManager with timeouts tuned for HTTP request lifecycle.
-        // Goal: fail fast enough
-        // while still recovering from brief Redis hiccups.
-        //
+        // Configure timeout for all ConnectionManagers
         // Worst case calculation: 3 attempts × 5s timeout + ~0.3s backoff = ~15.3s
-        // This leaves headroom for DB operations and other processing.
-        let queue_timeout = Duration::from_secs(5); // Cap at 5s regardless of env setting
-        let conn_config = ConnectionManagerConfig::new()
-            .set_connection_timeout(queue_timeout) // TCP connection timeout
-            .set_response_timeout(queue_timeout)   // Redis command response timeout
-            .set_number_of_retries(2)              // 2 retries = 3 total attempts
-            .set_max_delay(1000); // Cap backoff at 1s for faster failure detection
+        let queue_timeout = Duration::from_secs(5);
 
-        // Create ConnectionManager with config - provides auto-reconnect for queue operations
-        let conn = ConnectionManager::new_with_config(client, conn_config)
-            .await
-            .map_err(|e| {
-                eyre::eyre!("Failed to create Redis connection manager for queue: {}", e)
-            })?;
+        // Create one ConnectionManager per queue to prevent connection contention.
+        // Each ConnectionManager is a single Redis connection with auto-reconnect.
+        let conn_tx_request = Self::create_connection_manager(&client, queue_timeout).await?;
+        let conn_tx_submit = Self::create_connection_manager(&client, queue_timeout).await?;
+        let conn_status = Self::create_connection_manager(&client, queue_timeout).await?;
+        let conn_status_evm = Self::create_connection_manager(&client, queue_timeout).await?;
+        let conn_status_stellar = Self::create_connection_manager(&client, queue_timeout).await?;
+        let conn_notification = Self::create_connection_manager(&client, queue_timeout).await?;
+        let conn_swap = Self::create_connection_manager(&client, queue_timeout).await?;
+        let conn_health = Self::create_connection_manager(&client, queue_timeout).await?;
 
         info!(
             redis_url = %redis_url,
@@ -133,7 +180,8 @@ impl Queue {
             response_timeout_ms = 5000,
             retries = 2,
             max_backoff_ms = 1000,
-            "Queue setup: created ConnectionManager with fast-fail timeouts"
+            connection_count = 8,
+            "Queue setup: created dedicated ConnectionManager per queue"
         );
 
         // use REDIS_KEY_PREFIX only if set, otherwise do not use it
@@ -143,54 +191,53 @@ impl Queue {
             .map(|value| format!("{value}:queue:"))
             .unwrap_or_default();
 
-        // Poll intervals for scheduled jobs:
-        // - High-frequency queues (transactions): 2s (default) for responsive processing
-        // - Lower-frequency queues: 20s to reduce Redis polling load
-        let poll_fast = Some(Duration::from_secs(2)); // Uses default 2s
-        let poll_slow = Some(Duration::from_secs(20));
+        // Queue configurations:
+        // - High-frequency: transaction_status (critical path)
+        // - Low-frequency: request, submission, notifications, health checks, swaps
+        let high_frequency = QueueConfig::high_frequency();
+        let low_frequency = QueueConfig::low_frequency();
 
         Ok(Self {
-            // Transaction queues - need fast polling for responsive processing
             transaction_request_queue: Self::storage(
                 &format!("{redis_key_prefix}transaction_request_queue"),
-                conn.clone(),
-                poll_slow, // scheduling not used
+                conn_tx_request,
+                low_frequency.clone(), // scheduling not used
             ),
             transaction_submission_queue: Self::storage(
                 &format!("{redis_key_prefix}transaction_submission_queue"),
-                conn.clone(),
-                poll_slow, // scheduling not used
+                conn_tx_submit,
+                low_frequency.clone(), // scheduling not used
             ),
             transaction_status_queue: Self::storage(
                 &format!("{redis_key_prefix}transaction_status_queue"),
-                conn.clone(),
-                poll_fast,
+                conn_status,
+                high_frequency.clone(),
             ),
             transaction_status_queue_evm: Self::storage(
                 &format!("{redis_key_prefix}transaction_status_queue_evm"),
-                conn.clone(),
-                poll_fast,
+                conn_status_evm,
+                high_frequency.clone(),
             ),
             transaction_status_queue_stellar: Self::storage(
                 &format!("{redis_key_prefix}transaction_status_queue_stellar"),
-                conn.clone(),
-                poll_fast,
+                conn_status_stellar,
+                high_frequency.clone(),
             ),
-            // Lower-frequency queues - can use longer poll interval
+            // Lower-frequency queues
             notification_queue: Self::storage(
                 &format!("{redis_key_prefix}notification_queue"),
-                conn.clone(),
-                poll_slow, // scheduling not used
+                conn_notification,
+                low_frequency.clone(), // scheduling not used
             ),
             token_swap_request_queue: Self::storage(
                 &format!("{redis_key_prefix}token_swap_request_queue"),
-                conn.clone(),
-                poll_slow, // scheduling not used
+                conn_swap,
+                low_frequency.clone(), // scheduling not used
             ),
             relayer_health_check_queue: Self::storage(
                 &format!("{redis_key_prefix}relayer_health_check_queue"),
-                conn,
-                poll_slow, // scheduling not used
+                conn_health,
+                low_frequency.clone(), // scheduling not used
             ),
             redis_connections,
         })
@@ -303,5 +350,35 @@ mod tests {
 
         let config = Config::default().set_namespace(queue_name);
         assert_eq!(config.get_namespace(), "transaction_request_queue");
+    }
+
+    #[test]
+    fn test_queue_config_default() {
+        let config = QueueConfig::default();
+
+        assert_eq!(config.enqueue_scheduled, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn test_queue_config_high_throughput() {
+        let config = QueueConfig::high_frequency();
+
+        // High frequency should have faster enqueue_scheduled
+        assert_eq!(config.enqueue_scheduled, Duration::from_secs(2));
+
+        // Verify it's faster than default
+        let default = QueueConfig::default();
+        assert!(config.enqueue_scheduled < default.enqueue_scheduled);
+    }
+
+    #[test]
+    fn test_queue_config_low_frequency() {
+        let config = QueueConfig::low_frequency();
+
+        assert_eq!(config.enqueue_scheduled, Duration::from_secs(20));
+
+        // Low frequency should have longer enqueue_scheduled than high frequency
+        let high = QueueConfig::high_frequency();
+        assert!(config.enqueue_scheduled > high.enqueue_scheduled);
     }
 }
