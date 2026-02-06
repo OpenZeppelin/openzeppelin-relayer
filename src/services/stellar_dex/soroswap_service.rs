@@ -10,7 +10,7 @@ use super::{
     AssetType, PathStep, StellarDexServiceError, StellarDexServiceTrait, StellarQuoteResponse,
     SwapExecutionResult, SwapTransactionParams,
 };
-use crate::constants::{get_default_soroswap_native_wrapper, STELLAR_DEFAULT_TRANSACTION_FEE};
+use crate::constants::STELLAR_DEFAULT_TRANSACTION_FEE;
 use crate::domain::relayer::string_to_muxed_account;
 use crate::domain::transaction::stellar::utils::{parse_account_id, parse_contract_address};
 use crate::services::provider::StellarProviderTrait;
@@ -61,25 +61,20 @@ where
     ///
     /// * `router_address` - Soroswap router contract address
     /// * `factory_address` - Soroswap factory contract address (required for get_amounts_out)
-    /// * `native_wrapper_address` - Optional native XLM wrapper token address (uses default if None)
+    /// * `native_wrapper_address` - Native XLM wrapper token address
     /// * `provider` - Stellar provider for contract calls
     /// * `network_passphrase` - Network passphrase
-    /// * `is_testnet` - Whether this is testnet (affects default addresses)
     pub fn new(
         router_address: String,
         factory_address: String,
-        native_wrapper_address: Option<String>,
+        native_wrapper_address: String,
         provider: Arc<P>,
         network_passphrase: String,
-        is_testnet: bool,
     ) -> Self {
-        let native_wrapper = native_wrapper_address
-            .unwrap_or_else(|| get_default_soroswap_native_wrapper(is_testnet).to_string());
-
         Self {
             router_address,
             factory_address,
-            native_wrapper_address: native_wrapper,
+            native_wrapper_address,
             provider,
             network_passphrase,
         }
@@ -589,12 +584,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants::{
-        STELLAR_SOROSWAP_MAINNET_NATIVE_WRAPPER, STELLAR_SOROSWAP_TESTNET_NATIVE_WRAPPER,
-    };
+    use crate::constants::STELLAR_SOROSWAP_MAINNET_NATIVE_WRAPPER;
     use crate::services::provider::MockStellarProviderTrait;
     use futures::FutureExt;
     use soroban_rs::xdr::ReadXdr;
+
+    const TEST_NATIVE_WRAPPER: &str = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
 
     fn create_mock_provider() -> Arc<MockStellarProviderTrait> {
         Arc::new(MockStellarProviderTrait::new())
@@ -602,34 +597,35 @@ mod tests {
 
     fn create_test_service(
         provider: Arc<MockStellarProviderTrait>,
-        is_testnet: bool,
     ) -> SoroswapService<MockStellarProviderTrait> {
         SoroswapService::new(
             "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(), // router
             "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA".to_string(), // factory
-            None,
+            TEST_NATIVE_WRAPPER.to_string(),
             provider,
             "Test SDF Network ; September 2015".to_string(),
-            is_testnet,
         )
     }
 
     // ==================== Constructor Tests ====================
 
     #[test]
-    fn test_new_testnet_uses_testnet_native_wrapper() {
+    fn test_new_stores_provided_native_wrapper() {
         let provider = create_mock_provider();
-        let service = create_test_service(provider, true);
-        assert_eq!(
-            service.native_wrapper_address,
-            STELLAR_SOROSWAP_TESTNET_NATIVE_WRAPPER
-        );
+        let service = create_test_service(provider);
+        assert_eq!(service.native_wrapper_address, TEST_NATIVE_WRAPPER);
     }
 
     #[test]
-    fn test_new_mainnet_uses_mainnet_native_wrapper() {
+    fn test_new_with_mainnet_native_wrapper() {
         let provider = create_mock_provider();
-        let service = create_test_service(provider, false);
+        let service = SoroswapService::new(
+            "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(),
+            "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA".to_string(),
+            STELLAR_SOROSWAP_MAINNET_NATIVE_WRAPPER.to_string(),
+            provider,
+            "Public Global Stellar Network ; September 2015".to_string(),
+        );
         assert_eq!(
             service.native_wrapper_address,
             STELLAR_SOROSWAP_MAINNET_NATIVE_WRAPPER
@@ -643,10 +639,9 @@ mod tests {
         let service = SoroswapService::new(
             "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(),
             "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA".to_string(),
-            Some(custom_wrapper.clone()),
+            custom_wrapper.clone(),
             provider,
             "Test SDF Network ; September 2015".to_string(),
-            true,
         );
         assert_eq!(service.native_wrapper_address, custom_wrapper);
     }
@@ -693,21 +688,21 @@ mod tests {
     #[test]
     fn test_can_handle_asset_native() {
         let provider = create_mock_provider();
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
         assert!(service.can_handle_asset("native"));
     }
 
     #[test]
     fn test_can_handle_asset_empty_string() {
         let provider = create_mock_provider();
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
         assert!(service.can_handle_asset(""));
     }
 
     #[test]
     fn test_can_handle_asset_valid_contract() {
         let provider = create_mock_provider();
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
         let contract_addr = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
         assert!(service.can_handle_asset(contract_addr));
     }
@@ -715,7 +710,7 @@ mod tests {
     #[test]
     fn test_cannot_handle_classic_asset() {
         let provider = create_mock_provider();
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
         let classic_asset = "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
         assert!(!service.can_handle_asset(classic_asset));
     }
@@ -723,14 +718,14 @@ mod tests {
     #[test]
     fn test_cannot_handle_short_address() {
         let provider = create_mock_provider();
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
         assert!(!service.can_handle_asset("CSHORT"));
     }
 
     #[test]
     fn test_cannot_handle_non_c_prefix() {
         let provider = create_mock_provider();
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
         // Stellar account address (G prefix)
         let addr = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
         assert!(!service.can_handle_asset(addr));
@@ -739,7 +734,7 @@ mod tests {
     #[test]
     fn test_cannot_handle_invalid_contract_checksum() {
         let provider = create_mock_provider();
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
         // Valid format but invalid checksum
         let invalid_addr = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
         assert!(!service.can_handle_asset(invalid_addr));
@@ -750,7 +745,7 @@ mod tests {
     #[test]
     fn test_supported_asset_types() {
         let provider = create_mock_provider();
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
         let types = service.supported_asset_types();
         assert!(types.contains(&AssetType::Native));
         assert!(types.contains(&AssetType::Contract));
@@ -874,7 +869,7 @@ mod tests {
     #[test]
     fn test_build_path_valid() {
         let provider = create_mock_provider();
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
         let from = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
         let to = "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA";
 
@@ -891,7 +886,7 @@ mod tests {
     #[test]
     fn test_build_path_invalid_from() {
         let provider = create_mock_provider();
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
         let result = service.build_path(
             "INVALID",
             "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA",
@@ -902,7 +897,7 @@ mod tests {
     #[test]
     fn test_build_path_invalid_to() {
         let provider = create_mock_provider();
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
         let result = service.build_path(
             "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
             "INVALID",
@@ -915,7 +910,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_token_to_xlm_quote_native_returns_1_to_1() {
         let provider = create_mock_provider();
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
 
         let quote = service
             .get_token_to_xlm_quote("native", 1_000_000, 0.5, None)
@@ -934,7 +929,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_token_to_xlm_quote_empty_returns_1_to_1() {
         let provider = create_mock_provider();
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
 
         let quote = service
             .get_token_to_xlm_quote("", 1_000_000, 1.0, None)
@@ -949,7 +944,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_xlm_to_token_quote_native_returns_1_to_1() {
         let provider = create_mock_provider();
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
 
         let quote = service
             .get_xlm_to_token_quote("native", 1_000_000, 0.5, None)
@@ -965,7 +960,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_xlm_to_token_quote_empty_returns_1_to_1() {
         let provider = create_mock_provider();
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
 
         let quote = service
             .get_xlm_to_token_quote("", 500_000, 0.25, None)
@@ -996,7 +991,7 @@ mod tests {
         });
 
         let provider = Arc::new(mock);
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
 
         let quote = service
             .get_token_to_xlm_quote(
@@ -1033,7 +1028,7 @@ mod tests {
         });
 
         let provider = Arc::new(mock);
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
 
         let quote = service
             .get_xlm_to_token_quote(
@@ -1064,7 +1059,7 @@ mod tests {
         });
 
         let provider = Arc::new(mock);
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
 
         let result = service
             .get_token_to_xlm_quote(
@@ -1100,7 +1095,7 @@ mod tests {
         });
 
         let provider = Arc::new(mock);
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
 
         let result = service
             .get_token_to_xlm_quote(
@@ -1136,7 +1131,7 @@ mod tests {
         });
 
         let provider = Arc::new(mock);
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
 
         let result = service
             .get_token_to_xlm_quote(
@@ -1168,7 +1163,7 @@ mod tests {
         });
 
         let provider = Arc::new(mock);
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
 
         let result = service
             .get_token_to_xlm_quote(
@@ -1208,7 +1203,7 @@ mod tests {
         });
 
         let provider = Arc::new(mock);
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
 
         let params = SwapTransactionParams {
             source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
@@ -1260,7 +1255,7 @@ mod tests {
         });
 
         let provider = Arc::new(mock);
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
 
         let params = SwapTransactionParams {
             source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
@@ -1296,7 +1291,7 @@ mod tests {
     #[tokio::test]
     async fn test_prepare_swap_transaction_token_to_token_not_supported() {
         let provider = create_mock_provider();
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
 
         let params = SwapTransactionParams {
             source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
@@ -1346,7 +1341,7 @@ mod tests {
     #[test]
     fn test_build_swap_transaction_xdr_token_to_xlm() {
         let provider = create_mock_provider();
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
 
         let quote = StellarQuoteResponse {
             input_asset: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(),
@@ -1423,7 +1418,7 @@ mod tests {
     #[test]
     fn test_build_swap_transaction_xdr_native_to_token() {
         let provider = create_mock_provider();
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
 
         let quote = StellarQuoteResponse {
             input_asset: "native".to_string(),
@@ -1475,7 +1470,7 @@ mod tests {
     #[test]
     fn test_build_swap_transaction_xdr_invalid_source_account() {
         let provider = create_mock_provider();
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
 
         let quote = StellarQuoteResponse {
             input_asset: "native".to_string(),
@@ -1505,7 +1500,7 @@ mod tests {
     #[test]
     fn test_build_swap_transaction_xdr_slippage_calculation() {
         let provider = create_mock_provider();
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
 
         // With 100 bps (1%) slippage on 1_000_000 output, min should be 990_000
         let quote = StellarQuoteResponse {
@@ -1563,7 +1558,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_swap_not_implemented() {
         let provider = create_mock_provider();
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
 
         let params = SwapTransactionParams {
             source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
@@ -1609,7 +1604,7 @@ mod tests {
         });
 
         let provider = Arc::new(mock);
-        let service = create_test_service(provider, true);
+        let service = create_test_service(provider);
 
         let quote = service
             .get_token_to_xlm_quote(

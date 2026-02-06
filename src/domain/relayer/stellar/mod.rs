@@ -12,10 +12,7 @@ pub use crate::services::stellar_dex::StellarDexServiceTrait;
 use std::sync::Arc;
 
 use crate::{
-    constants::{
-        get_default_soroswap_factory, get_default_soroswap_router, STELLAR_HORIZON_MAINNET_URL,
-        STELLAR_HORIZON_TESTNET_URL,
-    },
+    constants::{STELLAR_HORIZON_MAINNET_URL, STELLAR_HORIZON_TESTNET_URL},
     jobs::JobProducerTrait,
     models::{
         NetworkRepoModel, NetworkType, RelayerError, RelayerRepoModel, SignerRepoModel,
@@ -117,23 +114,38 @@ pub async fn create_stellar_relayer<
                 dex_services.push(DexServiceWrapper::OrderBook(order_book_service));
             }
             StellarSwapStrategy::Soroswap => {
-                // Get Soroswap router address from server config, falling back to default
+                let is_testnet = network.is_testnet();
+                let network_label = if is_testnet { "TESTNET" } else { "MAINNET" };
+
                 let router_address =
-                    crate::config::ServerConfig::get_stellar_soroswap_router_address()
-                        .unwrap_or_else(|| {
-                            get_default_soroswap_router(network.is_testnet()).to_string()
-                        });
+                    crate::config::ServerConfig::resolve_stellar_soroswap_router_address(
+                        is_testnet,
+                    )
+                    .ok_or_else(|| {
+                        RelayerError::NetworkConfiguration(format!(
+                            "Soroswap router address not configured. Set STELLAR_{network_label}_SOROSWAP_ROUTER_ADDRESS env var."
+                        ))
+                    })?;
 
-                // Get Soroswap factory address from server config, falling back to default
                 let factory_address =
-                    crate::config::ServerConfig::get_stellar_soroswap_factory_address()
-                        .unwrap_or_else(|| {
-                            get_default_soroswap_factory(network.is_testnet()).to_string()
-                        });
+                    crate::config::ServerConfig::resolve_stellar_soroswap_factory_address(
+                        is_testnet,
+                    )
+                    .ok_or_else(|| {
+                        RelayerError::NetworkConfiguration(format!(
+                            "Soroswap factory address not configured. Set STELLAR_{network_label}_SOROSWAP_FACTORY_ADDRESS env var."
+                        ))
+                    })?;
 
-                // Get native wrapper address from server config if configured
                 let native_wrapper_address =
-                    crate::config::ServerConfig::get_stellar_soroswap_native_wrapper_address();
+                    crate::config::ServerConfig::resolve_stellar_soroswap_native_wrapper_address(
+                        is_testnet,
+                    )
+                    .ok_or_else(|| {
+                        RelayerError::NetworkConfiguration(format!(
+                            "Soroswap native wrapper address not configured. Set STELLAR_{network_label}_SOROSWAP_NATIVE_WRAPPER_ADDRESS env var."
+                        ))
+                    })?;
 
                 let soroswap_service = Arc::new(SoroswapService::new(
                     router_address,
@@ -141,7 +153,6 @@ pub async fn create_stellar_relayer<
                     native_wrapper_address,
                     provider_arc.clone(),
                     network.passphrase.clone(),
-                    network.is_testnet(),
                 ));
                 dex_services.push(DexServiceWrapper::Soroswap(soroswap_service));
                 tracing::info!("Soroswap DEX service initialized");

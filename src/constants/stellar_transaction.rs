@@ -74,99 +74,38 @@ pub fn get_stellar_max_stuck_transaction_lifetime() -> Duration {
 }
 
 // =============================================================================
-// Soroswap DEX Contract Addresses
+// Soroswap DEX Contract Addresses (Mainnet Only)
 // =============================================================================
-// Official Soroswap deployments from:
-// - Mainnet: https://github.com/soroswap/core/blob/main/public/mainnet.contracts.json
-// - Testnet: https://github.com/soroswap/core/blob/main/public/testnet.contracts.json
+// Official Soroswap mainnet deployments from:
+// https://github.com/soroswap/core/blob/main/public/mainnet.contracts.json
+//
+// Testnet addresses must be provided via environment variables:
+// - STELLAR_TESTNET_SOROSWAP_ROUTER_ADDRESS
+// - STELLAR_TESTNET_SOROSWAP_FACTORY_ADDRESS
+// - STELLAR_TESTNET_SOROSWAP_NATIVE_WRAPPER_ADDRESS
 
 /// Soroswap router contract address on Stellar mainnet
 pub const STELLAR_SOROSWAP_MAINNET_ROUTER: &str =
     "CAG5LRYQ5JVEUI5TEID72EYOVX44TTUJT5BQR2J6J77FH65PCCFAJDDH";
 
-/// Soroswap router contract address on Stellar testnet
-pub const STELLAR_SOROSWAP_TESTNET_ROUTER: &str =
-    "CCJUD55AG6W5HAI5LRVNKAE5WDP5XGZBUDS5WNTIVDU7O264UZZE7BRD";
-
 /// Soroswap factory contract address on Stellar mainnet
 pub const STELLAR_SOROSWAP_MAINNET_FACTORY: &str =
     "CA4HEQTL2WPEUYKYKCDOHCDNIV4QHNJ7EL4J4NQ6VADP7SYHVRYZ7AW2";
-
-/// Soroswap factory contract address on Stellar testnet
-pub const STELLAR_SOROSWAP_TESTNET_FACTORY: &str =
-    "CDP3HMUH6SMS3S7NPGNDJLULCOXXEPSHY4JKUKMBNQMATHDHWXRRJTBY";
 
 /// Native XLM wrapper token contract address on Stellar mainnet
 /// This is the Soroban token contract that wraps native XLM for use in Soroswap
 pub const STELLAR_SOROSWAP_MAINNET_NATIVE_WRAPPER: &str =
     "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA";
 
-/// Native XLM wrapper token contract address on Stellar testnet
-pub const STELLAR_SOROSWAP_TESTNET_NATIVE_WRAPPER: &str =
-    "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
-
 // =============================================================================
-// FeeForwarder Contract Addresses
+// FeeForwarder Contract Addresses (Mainnet Only)
 // =============================================================================
 // The FeeForwarder contract enables gas abstraction by allowing users to pay
 // transaction fees in tokens instead of native XLM.
+//
+// Testnet address must be provided via environment variable:
+// - STELLAR_TESTNET_FEE_FORWARDER_ADDRESS
 
 /// FeeForwarder contract address on Stellar mainnet
 /// Set to empty string until mainnet deployment is available
 pub const STELLAR_FEE_FORWARDER_MAINNET: &str = "";
-
-/// FeeForwarder contract address on Stellar testnet
-pub const STELLAR_FEE_FORWARDER_TESTNET: &str =
-    "CADRAMMYU62IUEQZEKG5MYVL7DYMH424ETG7QRZ5BVGP552DZNR4MH2Q";
-
-// =============================================================================
-// Helper Functions for Network-Aware Address Resolution
-// =============================================================================
-
-/// Get the default Soroswap router contract address for the given network
-///
-/// Returns the official Soroswap router deployment address.
-/// Users can override this via the `STELLAR_SOROSWAP_ROUTER_ADDRESS` env var.
-pub fn get_default_soroswap_router(is_testnet: bool) -> &'static str {
-    if is_testnet {
-        STELLAR_SOROSWAP_TESTNET_ROUTER
-    } else {
-        STELLAR_SOROSWAP_MAINNET_ROUTER
-    }
-}
-
-/// Get the default Soroswap factory contract address for the given network
-///
-/// Returns the official Soroswap factory deployment address.
-/// Users can override this via the `STELLAR_SOROSWAP_FACTORY_ADDRESS` env var.
-pub fn get_default_soroswap_factory(is_testnet: bool) -> &'static str {
-    if is_testnet {
-        STELLAR_SOROSWAP_TESTNET_FACTORY
-    } else {
-        STELLAR_SOROSWAP_MAINNET_FACTORY
-    }
-}
-
-/// Get the default native XLM wrapper token address for the given network
-///
-/// Returns the Soroban token contract that wraps native XLM for use in Soroswap.
-/// Users can override this via the `STELLAR_SOROSWAP_NATIVE_WRAPPER_ADDRESS` env var.
-pub fn get_default_soroswap_native_wrapper(is_testnet: bool) -> &'static str {
-    if is_testnet {
-        STELLAR_SOROSWAP_TESTNET_NATIVE_WRAPPER
-    } else {
-        STELLAR_SOROSWAP_MAINNET_NATIVE_WRAPPER
-    }
-}
-
-/// Get the default FeeForwarder contract address for the given network
-///
-/// Returns the FeeForwarder deployment address, or None if not yet deployed.
-/// Users can override this via the `STELLAR_FEE_FORWARDER_ADDRESS` env var.
-pub fn get_default_fee_forwarder(is_testnet: bool) -> &'static str {
-    if is_testnet {
-        STELLAR_FEE_FORWARDER_TESTNET
-    } else {
-        STELLAR_FEE_FORWARDER_MAINNET
-    }
-}

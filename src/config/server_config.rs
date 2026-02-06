@@ -6,6 +6,8 @@ use crate::{
     constants::{
         DEFAULT_PROVIDER_FAILURE_EXPIRATION_SECS, DEFAULT_PROVIDER_FAILURE_THRESHOLD,
         DEFAULT_PROVIDER_PAUSE_DURATION_SECS, MINIMUM_SECRET_VALUE_LENGTH,
+        STELLAR_FEE_FORWARDER_MAINNET, STELLAR_SOROSWAP_MAINNET_FACTORY,
+        STELLAR_SOROSWAP_MAINNET_NATIVE_WRAPPER, STELLAR_SOROSWAP_MAINNET_ROUTER,
     },
     models::SecretString,
 };
@@ -25,6 +27,15 @@ impl FromStr for RepositoryStorageType {
             "redis" => Ok(Self::Redis),
             _ => Err(format!("Invalid repository storage type: {s}")),
         }
+    }
+}
+
+/// Returns `Some(s.to_string())` when `s` is non-empty, `None` otherwise.
+fn non_empty_const(s: &str) -> Option<String> {
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.to_string())
     }
 }
 
@@ -101,14 +112,22 @@ pub struct ServerConfig {
     pub connection_backlog: u32,
     /// Request handler timeout in seconds for API endpoints.
     pub request_timeout_seconds: u64,
-    /// Stellar FeeForwarder contract address for gas abstraction (C... format).
-    pub stellar_fee_forwarder_address: Option<String>,
-    /// Stellar Soroswap router contract address for token-to-XLM quotes.
-    pub stellar_soroswap_router_address: Option<String>,
-    /// Stellar Soroswap factory contract address (required for get_amounts_out).
-    pub stellar_soroswap_factory_address: Option<String>,
-    /// Stellar native XLM wrapper token address for Soroswap.
-    pub stellar_soroswap_native_wrapper_address: Option<String>,
+    /// Stellar mainnet FeeForwarder contract address for gas abstraction.
+    pub stellar_mainnet_fee_forwarder_address: Option<String>,
+    /// Stellar testnet FeeForwarder contract address for gas abstraction.
+    pub stellar_testnet_fee_forwarder_address: Option<String>,
+    /// Stellar mainnet Soroswap router contract address.
+    pub stellar_mainnet_soroswap_router_address: Option<String>,
+    /// Stellar testnet Soroswap router contract address.
+    pub stellar_testnet_soroswap_router_address: Option<String>,
+    /// Stellar mainnet Soroswap factory contract address.
+    pub stellar_mainnet_soroswap_factory_address: Option<String>,
+    /// Stellar testnet Soroswap factory contract address.
+    pub stellar_testnet_soroswap_factory_address: Option<String>,
+    /// Stellar mainnet native XLM wrapper token address for Soroswap.
+    pub stellar_mainnet_soroswap_native_wrapper_address: Option<String>,
+    /// Stellar testnet native XLM wrapper token address for Soroswap.
+    pub stellar_testnet_soroswap_native_wrapper_address: Option<String>,
 }
 
 impl ServerConfig {
@@ -173,11 +192,22 @@ impl ServerConfig {
             max_connections: Self::get_max_connections(),
             connection_backlog: Self::get_connection_backlog(),
             request_timeout_seconds: Self::get_request_timeout_seconds(),
-            stellar_fee_forwarder_address: Self::get_stellar_fee_forwarder_address(),
-            stellar_soroswap_router_address: Self::get_stellar_soroswap_router_address(),
-            stellar_soroswap_factory_address: Self::get_stellar_soroswap_factory_address(),
-            stellar_soroswap_native_wrapper_address:
-                Self::get_stellar_soroswap_native_wrapper_address(),
+            stellar_mainnet_fee_forwarder_address: Self::get_stellar_mainnet_fee_forwarder_address(
+            ),
+            stellar_testnet_fee_forwarder_address: Self::get_stellar_testnet_fee_forwarder_address(
+            ),
+            stellar_mainnet_soroswap_router_address:
+                Self::get_stellar_mainnet_soroswap_router_address(),
+            stellar_testnet_soroswap_router_address:
+                Self::get_stellar_testnet_soroswap_router_address(),
+            stellar_mainnet_soroswap_factory_address:
+                Self::get_stellar_mainnet_soroswap_factory_address(),
+            stellar_testnet_soroswap_factory_address:
+                Self::get_stellar_testnet_soroswap_factory_address(),
+            stellar_mainnet_soroswap_native_wrapper_address:
+                Self::get_stellar_mainnet_soroswap_native_wrapper_address(),
+            stellar_testnet_soroswap_native_wrapper_address:
+                Self::get_stellar_testnet_soroswap_native_wrapper_address(),
         }
     }
 
@@ -491,24 +521,86 @@ impl ServerConfig {
             .unwrap_or(30)
     }
 
-    /// Gets the Stellar FeeForwarder contract address from environment variable
-    pub fn get_stellar_fee_forwarder_address() -> Option<String> {
-        env::var("STELLAR_FEE_FORWARDER_ADDRESS").ok()
+    // =========================================================================
+    // Stellar Contract Address Getters (raw env var reads)
+    // =========================================================================
+
+    pub fn get_stellar_mainnet_fee_forwarder_address() -> Option<String> {
+        env::var("STELLAR_MAINNET_FEE_FORWARDER_ADDRESS").ok()
     }
 
-    /// Gets the Stellar Soroswap router contract address from environment variable
-    pub fn get_stellar_soroswap_router_address() -> Option<String> {
-        env::var("STELLAR_SOROSWAP_ROUTER_ADDRESS").ok()
+    pub fn get_stellar_testnet_fee_forwarder_address() -> Option<String> {
+        env::var("STELLAR_TESTNET_FEE_FORWARDER_ADDRESS").ok()
     }
 
-    /// Gets the Stellar Soroswap factory contract address from environment variable
-    pub fn get_stellar_soroswap_factory_address() -> Option<String> {
-        env::var("STELLAR_SOROSWAP_FACTORY_ADDRESS").ok()
+    pub fn get_stellar_mainnet_soroswap_router_address() -> Option<String> {
+        env::var("STELLAR_MAINNET_SOROSWAP_ROUTER_ADDRESS").ok()
     }
 
-    /// Gets the Stellar Soroswap native wrapper token address from environment variable
-    pub fn get_stellar_soroswap_native_wrapper_address() -> Option<String> {
-        env::var("STELLAR_SOROSWAP_NATIVE_WRAPPER_ADDRESS").ok()
+    pub fn get_stellar_testnet_soroswap_router_address() -> Option<String> {
+        env::var("STELLAR_TESTNET_SOROSWAP_ROUTER_ADDRESS").ok()
+    }
+
+    pub fn get_stellar_mainnet_soroswap_factory_address() -> Option<String> {
+        env::var("STELLAR_MAINNET_SOROSWAP_FACTORY_ADDRESS").ok()
+    }
+
+    pub fn get_stellar_testnet_soroswap_factory_address() -> Option<String> {
+        env::var("STELLAR_TESTNET_SOROSWAP_FACTORY_ADDRESS").ok()
+    }
+
+    pub fn get_stellar_mainnet_soroswap_native_wrapper_address() -> Option<String> {
+        env::var("STELLAR_MAINNET_SOROSWAP_NATIVE_WRAPPER_ADDRESS").ok()
+    }
+
+    pub fn get_stellar_testnet_soroswap_native_wrapper_address() -> Option<String> {
+        env::var("STELLAR_TESTNET_SOROSWAP_NATIVE_WRAPPER_ADDRESS").ok()
+    }
+
+    // =========================================================================
+    // Stellar Contract Address Resolvers
+    // =========================================================================
+    // For mainnet: env var override → hardcoded default from constants.
+    // For testnet: env var only (no hardcoded defaults).
+
+    /// Resolves the FeeForwarder contract address for the given network.
+    pub fn resolve_stellar_fee_forwarder_address(is_testnet: bool) -> Option<String> {
+        if is_testnet {
+            Self::get_stellar_testnet_fee_forwarder_address()
+        } else {
+            Self::get_stellar_mainnet_fee_forwarder_address()
+                .or_else(|| non_empty_const(STELLAR_FEE_FORWARDER_MAINNET))
+        }
+    }
+
+    /// Resolves the Soroswap router contract address for the given network.
+    pub fn resolve_stellar_soroswap_router_address(is_testnet: bool) -> Option<String> {
+        if is_testnet {
+            Self::get_stellar_testnet_soroswap_router_address()
+        } else {
+            Self::get_stellar_mainnet_soroswap_router_address()
+                .or_else(|| Some(STELLAR_SOROSWAP_MAINNET_ROUTER.to_string()))
+        }
+    }
+
+    /// Resolves the Soroswap factory contract address for the given network.
+    pub fn resolve_stellar_soroswap_factory_address(is_testnet: bool) -> Option<String> {
+        if is_testnet {
+            Self::get_stellar_testnet_soroswap_factory_address()
+        } else {
+            Self::get_stellar_mainnet_soroswap_factory_address()
+                .or_else(|| Some(STELLAR_SOROSWAP_MAINNET_FACTORY.to_string()))
+        }
+    }
+
+    /// Resolves the Soroswap native wrapper token address for the given network.
+    pub fn resolve_stellar_soroswap_native_wrapper_address(is_testnet: bool) -> Option<String> {
+        if is_testnet {
+            Self::get_stellar_testnet_soroswap_native_wrapper_address()
+        } else {
+            Self::get_stellar_mainnet_soroswap_native_wrapper_address()
+                .or_else(|| Some(STELLAR_SOROSWAP_MAINNET_NATIVE_WRAPPER.to_string()))
+        }
     }
 
     /// Get worker concurrency from environment variable or use default

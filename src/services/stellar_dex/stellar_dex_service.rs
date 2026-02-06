@@ -296,10 +296,9 @@ mod tests {
         Arc::new(SoroswapService::new(
             "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(),
             "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA".to_string(),
-            None,
+            "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(),
             provider,
             "Test SDF Network ; September 2015".to_string(),
-            true,
         ))
     }
 

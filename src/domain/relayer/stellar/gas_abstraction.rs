@@ -9,8 +9,7 @@ use soroban_rs::xdr::{Limits, Operation, TransactionEnvelope, WriteXdr};
 use tracing::{debug, warn};
 
 use crate::constants::{
-    get_default_fee_forwarder, get_stellar_sponsored_transaction_validity_duration,
-    STELLAR_DEFAULT_TRANSACTION_FEE,
+    get_stellar_sponsored_transaction_validity_duration, STELLAR_DEFAULT_TRANSACTION_FEE,
 };
 
 /// Default slippage tolerance for max_fee_amount in basis points (500 = 5%)
@@ -528,21 +527,20 @@ where
         StellarTransactionValidator::validate_allowed_token(&params.fee_token, &policy)
             .map_err(|e| RelayerError::ValidationError(e.to_string()))?;
 
-        // Get fee_forwarder address: env var override takes precedence, otherwise use network default
-        let fee_forwarder = crate::config::ServerConfig::get_stellar_fee_forwarder_address()
-            .or_else(|| {
-                let default = get_default_fee_forwarder(self.network.is_testnet());
-                if default.is_empty() {
-                    None
-                } else {
-                    Some(default.to_string())
-                }
-            })
-            .ok_or_else(|| {
-                RelayerError::ValidationError(
-                    "FeeForwarder address not configured. Set STELLAR_FEE_FORWARDER_ADDRESS env var or wait for default deployment.".to_string(),
-                )
-            })?;
+        // Get fee_forwarder address: env var override takes precedence, otherwise use mainnet default
+        let fee_forwarder = crate::config::ServerConfig::resolve_stellar_fee_forwarder_address(
+            self.network.is_testnet(),
+        )
+        .ok_or_else(|| {
+            let env_var = if self.network.is_testnet() {
+                "STELLAR_TESTNET_FEE_FORWARDER_ADDRESS"
+            } else {
+                "STELLAR_MAINNET_FEE_FORWARDER_ADDRESS"
+            };
+            RelayerError::ValidationError(format!(
+                "FeeForwarder address not configured. Set {env_var} env var."
+            ))
+        })?;
 
         // Validate fee_token is a valid Soroban contract address (C...)
         if stellar_strkey::Contract::from_string(&params.fee_token).is_err() {
@@ -696,21 +694,20 @@ where
 
         // Note: validate_allowed_token is already called in build_sponsored_transaction
 
-        // Get fee_forwarder address: env var override takes precedence, otherwise use network default
-        let fee_forwarder = crate::config::ServerConfig::get_stellar_fee_forwarder_address()
-            .or_else(|| {
-                let default = get_default_fee_forwarder(self.network.is_testnet());
-                if default.is_empty() {
-                    None
-                } else {
-                    Some(default.to_string())
-                }
-            })
-            .ok_or_else(|| {
-                RelayerError::ValidationError(
-                    "FeeForwarder address not configured. Set STELLAR_FEE_FORWARDER_ADDRESS env var or wait for default deployment.".to_string(),
-                )
-            })?;
+        // Get fee_forwarder address: env var override takes precedence, otherwise use mainnet default
+        let fee_forwarder = crate::config::ServerConfig::resolve_stellar_fee_forwarder_address(
+            self.network.is_testnet(),
+        )
+        .ok_or_else(|| {
+            let env_var = if self.network.is_testnet() {
+                "STELLAR_TESTNET_FEE_FORWARDER_ADDRESS"
+            } else {
+                "STELLAR_MAINNET_FEE_FORWARDER_ADDRESS"
+            };
+            RelayerError::ValidationError(format!(
+                "FeeForwarder address not configured. Set {env_var} env var."
+            ))
+        })?;
 
         // Validate fee_token is a valid Soroban contract address (C...)
         if stellar_strkey::Contract::from_string(&params.fee_token).is_err() {
@@ -3008,9 +3005,9 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_quote_soroban_from_xdr_success() {
-        // Set required env var for FeeForwarder
+        // Set required env var for FeeForwarder (testnet network)
         std::env::set_var(
-            "STELLAR_FEE_FORWARDER_ADDRESS",
+            "STELLAR_TESTNET_FEE_FORWARDER_ADDRESS",
             "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
         );
 
@@ -3102,14 +3099,14 @@ mod tests {
         }
 
         // Clean up env var
-        std::env::remove_var("STELLAR_FEE_FORWARDER_ADDRESS");
+        std::env::remove_var("STELLAR_TESTNET_FEE_FORWARDER_ADDRESS");
     }
 
     #[tokio::test]
     #[serial]
     async fn test_quote_soroban_from_xdr_missing_fee_forwarder() {
         // Ensure env var is NOT set
-        std::env::remove_var("STELLAR_FEE_FORWARDER_ADDRESS");
+        std::env::remove_var("STELLAR_MAINNET_FEE_FORWARDER_ADDRESS");
 
         // Use mainnet network where FeeForwarder is not deployed (empty default address)
         let mut relayer_model = create_test_relayer_with_soroban_token();
@@ -3146,16 +3143,16 @@ mod tests {
         let err = result.unwrap_err();
         assert!(matches!(err, RelayerError::ValidationError(_)));
         if let RelayerError::ValidationError(msg) = err {
-            assert!(msg.contains("STELLAR_FEE_FORWARDER_ADDRESS"));
+            assert!(msg.contains("STELLAR_MAINNET_FEE_FORWARDER_ADDRESS"));
         }
     }
 
     #[tokio::test]
     #[serial]
     async fn test_quote_soroban_from_xdr_invalid_fee_token_format() {
-        // Set required env var for FeeForwarder
+        // Set required env var for FeeForwarder (testnet network)
         std::env::set_var(
-            "STELLAR_FEE_FORWARDER_ADDRESS",
+            "STELLAR_TESTNET_FEE_FORWARDER_ADDRESS",
             "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
         );
 
@@ -3222,7 +3219,7 @@ mod tests {
         }
 
         // Clean up env var
-        std::env::remove_var("STELLAR_FEE_FORWARDER_ADDRESS");
+        std::env::remove_var("STELLAR_TESTNET_FEE_FORWARDER_ADDRESS");
     }
 
     // ============================================================================
@@ -3232,9 +3229,9 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_build_soroban_sponsored_success() {
-        // Set required env var for FeeForwarder
+        // Set required env var for FeeForwarder (testnet network)
         std::env::set_var(
-            "STELLAR_FEE_FORWARDER_ADDRESS",
+            "STELLAR_TESTNET_FEE_FORWARDER_ADDRESS",
             "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
         );
 
@@ -3336,14 +3333,14 @@ mod tests {
         }
 
         // Clean up env var
-        std::env::remove_var("STELLAR_FEE_FORWARDER_ADDRESS");
+        std::env::remove_var("STELLAR_TESTNET_FEE_FORWARDER_ADDRESS");
     }
 
     #[tokio::test]
     #[serial]
     async fn test_build_soroban_sponsored_missing_fee_forwarder() {
         // Ensure env var is NOT set
-        std::env::remove_var("STELLAR_FEE_FORWARDER_ADDRESS");
+        std::env::remove_var("STELLAR_MAINNET_FEE_FORWARDER_ADDRESS");
 
         // Use mainnet network where FeeForwarder is not deployed (empty default address)
         let mut relayer_model = create_test_relayer_with_soroban_token();
@@ -3380,16 +3377,16 @@ mod tests {
         let err = result.unwrap_err();
         assert!(matches!(err, RelayerError::ValidationError(_)));
         if let RelayerError::ValidationError(msg) = err {
-            assert!(msg.contains("STELLAR_FEE_FORWARDER_ADDRESS"));
+            assert!(msg.contains("STELLAR_MAINNET_FEE_FORWARDER_ADDRESS"));
         }
     }
 
     #[tokio::test]
     #[serial]
     async fn test_build_soroban_sponsored_insufficient_balance() {
-        // Set required env var for FeeForwarder
+        // Set required env var for FeeForwarder (testnet network)
         std::env::set_var(
-            "STELLAR_FEE_FORWARDER_ADDRESS",
+            "STELLAR_TESTNET_FEE_FORWARDER_ADDRESS",
             "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
         );
 
@@ -3472,15 +3469,15 @@ mod tests {
         }
 
         // Clean up env var
-        std::env::remove_var("STELLAR_FEE_FORWARDER_ADDRESS");
+        std::env::remove_var("STELLAR_TESTNET_FEE_FORWARDER_ADDRESS");
     }
 
     #[tokio::test]
     #[serial]
     async fn test_build_soroban_sponsored_simulation_error() {
-        // Set required env var for FeeForwarder
+        // Set required env var for FeeForwarder (testnet network)
         std::env::set_var(
-            "STELLAR_FEE_FORWARDER_ADDRESS",
+            "STELLAR_TESTNET_FEE_FORWARDER_ADDRESS",
             "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
         );
 
@@ -3560,6 +3557,6 @@ mod tests {
         }
 
         // Clean up env var
-        std::env::remove_var("STELLAR_FEE_FORWARDER_ADDRESS");
+        std::env::remove_var("STELLAR_TESTNET_FEE_FORWARDER_ADDRESS");
     }
 }
