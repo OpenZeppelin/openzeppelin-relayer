@@ -14,6 +14,7 @@
 //! - `fee_token.approve(user, fee_forwarder, max_fee_amount, expiration_ledger)`
 //! - `target_contract.target_fn(target_args)` (if target requires auth)
 
+use crate::constants::STELLAR_LEDGER_TIME_SECONDS;
 use crate::services::provider::StellarProviderTrait;
 use soroban_rs::xdr::{
     ContractId, Hash, Int128Parts, InvokeContractArgs, Limits, Operation, OperationBody, ScAddress,
@@ -23,11 +24,10 @@ use soroban_rs::xdr::{
 use std::sync::Arc;
 use thiserror::Error;
 
-/// Default validity duration for gas abstraction authorizations (5 minutes)
-pub const DEFAULT_VALIDITY_SECONDS: u64 = 300;
-
-/// Approximate ledger time in seconds
-pub const LEDGER_TIME_SECONDS: u64 = 5;
+/// Default validity duration for gas abstraction authorizations (2 minutes).
+///
+/// Matches sponsored transaction validity so authorization expiration aligns with the submission window.
+pub const DEFAULT_VALIDITY_SECONDS: u64 = 120;
 
 /// Errors that can occur in FeeForwarder operations
 #[derive(Error, Debug)]
@@ -370,7 +370,7 @@ where
             .await
             .map_err(|e| FeeForwarderError::ProviderError(e.to_string()))?;
 
-        let ledgers_to_add = validity_seconds / LEDGER_TIME_SECONDS;
+        let ledgers_to_add = validity_seconds / STELLAR_LEDGER_TIME_SECONDS;
         Ok(current_ledger.sequence + ledgers_to_add as u32)
     }
 
@@ -1171,11 +1171,11 @@ mod tests {
 
     #[test]
     fn test_default_validity_seconds() {
-        assert_eq!(DEFAULT_VALIDITY_SECONDS, 300);
+        assert_eq!(DEFAULT_VALIDITY_SECONDS, 120); // 2 minutes, matches sponsored tx validity
     }
 
     #[test]
     fn test_ledger_time_seconds() {
-        assert_eq!(LEDGER_TIME_SECONDS, 5);
+        assert_eq!(STELLAR_LEDGER_TIME_SECONDS, 5);
     }
 }

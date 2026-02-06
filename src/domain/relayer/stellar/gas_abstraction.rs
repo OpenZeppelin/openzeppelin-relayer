@@ -10,12 +10,11 @@ use tracing::{debug, warn};
 
 use crate::constants::{
     get_stellar_sponsored_transaction_validity_duration, STELLAR_DEFAULT_TRANSACTION_FEE,
+    STELLAR_LEDGER_TIME_SECONDS,
 };
 
-/// Default slippage tolerance for max_fee_amount in basis points (500 = 5%)
-/// This allows fee fluctuation between quote and execution time
-const DEFAULT_MAX_FEE_SLIPPAGE_BPS: u64 = 500;
 use crate::domain::relayer::{
+    stellar::utils::{apply_max_fee_slippage, get_expiration_ledger},
     stellar::xdr_utils::{extract_source_account, parse_transaction_xdr},
     GasAbstractionTrait, RelayerError, StellarRelayer,
 };
@@ -41,9 +40,7 @@ use crate::repositories::{
 use crate::services::provider::StellarProviderTrait;
 use crate::services::signer::StellarSignTrait;
 use crate::services::stellar_dex::StellarDexServiceTrait;
-use crate::services::stellar_fee_forwarder::{
-    FeeForwarderParams, FeeForwarderService, LEDGER_TIME_SECONDS,
-};
+use crate::services::stellar_fee_forwarder::{FeeForwarderParams, FeeForwarderService};
 use crate::services::TransactionCounterServiceTrait;
 use soroban_rs::xdr::{HostFunction, OperationBody, ReadXdr, ScVal};
 
@@ -874,7 +871,8 @@ where
                 RelayerError::Internal(format!("Failed to get current ledger: {e}"))
             })?;
         let ledgers_until_expiration = expiration_ledger.saturating_sub(current_ledger.sequence);
-        let seconds_until_expiration = ledgers_until_expiration as u64 * LEDGER_TIME_SECONDS;
+        let seconds_until_expiration =
+            ledgers_until_expiration as u64 * STELLAR_LEDGER_TIME_SECONDS;
         let valid_until = Utc::now() + chrono::Duration::seconds(seconds_until_expiration as i64);
 
         debug!(
@@ -994,47 +992,6 @@ fn apply_simulation_to_soroban_envelope(
     }
 
     Ok(())
-}
-
-/// Apply slippage tolerance to max_fee_amount for FeeForwarder
-///
-/// The FeeForwarder contract has separate `fee_amount` (what relayer charges at execution)
-/// and `max_fee_amount` (user's authorized ceiling). Setting them equal means no room for
-/// fee fluctuation between quote and execution. This function applies a slippage buffer
-/// to allow for price movement.
-///
-/// # Arguments
-/// * `fee_in_token` - The calculated fee amount in token units
-///
-/// # Returns
-/// The max_fee_amount with slippage buffer applied as i128
-fn apply_max_fee_slippage(fee_in_token: u64) -> i128 {
-    // Apply slippage: max_fee = fee * (10000 + slippage_bps) / 10000
-    let fee_with_slippage =
-        (fee_in_token as u128) * (10000 + DEFAULT_MAX_FEE_SLIPPAGE_BPS as u128) / 10000;
-    fee_with_slippage as i128
-}
-
-/// Calculate the expiration ledger for authorization
-///
-/// Uses the provider to get the current ledger sequence and adds the
-/// specified validity duration (in seconds) converted to ledger count.
-async fn get_expiration_ledger<P>(provider: &P, validity_seconds: u64) -> Result<u32, RelayerError>
-where
-    P: StellarProviderTrait + Send + Sync,
-{
-    let current_ledger = provider
-        .get_latest_ledger()
-        .await
-        .map_err(|e| RelayerError::Internal(format!("Failed to get latest ledger: {e}")))?;
-
-    let mut ledgers_to_add = validity_seconds.div_ceil(LEDGER_TIME_SECONDS);
-    if ledgers_to_add == 0 {
-        ledgers_to_add = 1;
-    }
-    Ok(current_ledger
-        .sequence
-        .saturating_add(ledgers_to_add as u32))
 }
 
 /// Add payment operation to envelope using a pre-computed fee quote
@@ -2451,39 +2408,6 @@ mod tests {
     }
 
     // ============================================================================
-    // Tests for apply_max_fee_slippage
-    // ============================================================================
-
-    #[test]
-    fn test_apply_max_fee_slippage_basic() {
-        // 5% slippage on 10000 should give 10500
-        let result = apply_max_fee_slippage(10000);
-        assert_eq!(result, 10500);
-    }
-
-    #[test]
-    fn test_apply_max_fee_slippage_zero() {
-        let result = apply_max_fee_slippage(0);
-        assert_eq!(result, 0);
-    }
-
-    #[test]
-    fn test_apply_max_fee_slippage_large_value() {
-        // Test with a large value to ensure no overflow
-        let large_fee: u64 = 1_000_000_000_000;
-        let result = apply_max_fee_slippage(large_fee);
-        // 5% of 1 trillion = 50 billion, so result = 1.05 trillion
-        assert_eq!(result, 1_050_000_000_000i128);
-    }
-
-    #[test]
-    fn test_apply_max_fee_slippage_small_value() {
-        // Small value: 100 * 10500 / 10000 = 105
-        let result = apply_max_fee_slippage(100);
-        assert_eq!(result, 105);
-    }
-
-    // ============================================================================
     // Tests for calculate_total_soroban_fee
     // ============================================================================
 
@@ -2625,50 +2549,6 @@ mod tests {
             result.unwrap_err(),
             RelayerError::ValidationError(_)
         ));
-    }
-
-    // ============================================================================
-    // Tests for get_expiration_ledger
-    // ============================================================================
-
-    #[tokio::test]
-    async fn test_get_expiration_ledger_success() {
-        let mut provider = MockStellarProviderTrait::new();
-        provider.expect_get_latest_ledger().returning(|| {
-            Box::pin(ready(Ok(
-                soroban_rs::stellar_rpc_client::GetLatestLedgerResponse {
-                    id: "test".to_string(),
-                    protocol_version: 20,
-                    sequence: 1000,
-                },
-            )))
-        });
-
-        // 300 seconds / 5 seconds per ledger = 60 ledgers
-        let result = get_expiration_ledger(&provider, 300).await;
-        assert!(result.is_ok());
-        let expiration = result.unwrap();
-        assert_eq!(expiration, 1060); // 1000 + 60
-    }
-
-    #[tokio::test]
-    async fn test_get_expiration_ledger_zero_seconds() {
-        let mut provider = MockStellarProviderTrait::new();
-        provider.expect_get_latest_ledger().returning(|| {
-            Box::pin(ready(Ok(
-                soroban_rs::stellar_rpc_client::GetLatestLedgerResponse {
-                    id: "test".to_string(),
-                    protocol_version: 20,
-                    sequence: 1000,
-                },
-            )))
-        });
-
-        // 0 seconds should still add at least 1 ledger
-        let result = get_expiration_ledger(&provider, 0).await;
-        assert!(result.is_ok());
-        let expiration = result.unwrap();
-        assert_eq!(expiration, 1001); // 1000 + 1 (minimum)
     }
 
     // ============================================================================

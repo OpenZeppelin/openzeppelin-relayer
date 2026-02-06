@@ -40,9 +40,16 @@ pub const STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS: i64 = 2;
 pub const STELLAR_PENDING_RECOVERY_TRIGGER_SECONDS: i64 = 10;
 
 // Transaction validity
+/// Approximate Stellar ledger close time in seconds (used for ledger-based expiration)
+pub const STELLAR_LEDGER_TIME_SECONDS: u64 = 5;
+
 /// Default transaction validity duration (in minutes) for sponsored transactions
 /// Provides reasonable time for users to review and submit while ensuring transaction doesn't expire too quickly
 pub const STELLAR_SPONSORED_TRANSACTION_VALIDITY_MINUTES: i64 = 2;
+
+/// Sponsored transaction validity in seconds (2 minutes).
+/// Used for gas abstraction authorization validity so it aligns with the transaction submission window.
+pub const STELLAR_SPONSORED_TRANSACTION_VALIDITY_SECONDS: u64 = 120;
 
 /// Get status check initial delay duration
 pub fn get_stellar_status_check_initial_delay() -> Duration {

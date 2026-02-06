@@ -566,13 +566,14 @@ where
         Ok((xdr, quote))
     }
 
+    /// Swap execution is not yet implemented.
+    ///
+    /// Required by [`StellarDexServiceTrait`]. `params` is intentionally unused and will be
+    /// used when building and submitting the Soroswap swap transaction.
     async fn execute_swap(
         &self,
         _params: SwapTransactionParams,
     ) -> Result<SwapExecutionResult, StellarDexServiceError> {
-        // TODO: Implement actual swap execution
-        // This requires building and submitting a Soroswap swap transaction
-
         warn!("Soroswap execute_swap is not yet implemented");
 
         Err(StellarDexServiceError::UnknownError(

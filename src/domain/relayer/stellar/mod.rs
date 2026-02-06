@@ -4,6 +4,7 @@ pub use stellar_relayer::*;
 mod gas_abstraction;
 mod token_swap;
 
+pub mod utils;
 pub mod xdr_utils;
 pub use xdr_utils::*;
 

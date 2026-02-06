@@ -67,6 +67,12 @@ pub enum StellarTransactionUtilsError {
     #[error("Cannot set time bounds on fee-bump transactions")]
     CannotSetTimeBoundsOnFeeBump,
 
+    #[error("V0 transactions are not supported")]
+    V0TransactionsNotSupported,
+
+    #[error("Cannot update sequence number on fee bump transaction")]
+    CannotUpdateSequenceOnFeeBump,
+
     #[error("Invalid transaction format: {0}")]
     InvalidTransactionFormat(String),
 
@@ -182,6 +188,14 @@ impl From<StellarTransactionUtilsError> for RelayerError {
             StellarTransactionUtilsError::CannotSetTimeBoundsOnFeeBump => {
                 RelayerError::ValidationError(
                     "Cannot set time bounds on fee-bump transactions".to_string(),
+                )
+            }
+            StellarTransactionUtilsError::V0TransactionsNotSupported => {
+                RelayerError::ValidationError("V0 transactions are not supported".to_string())
+            }
+            StellarTransactionUtilsError::CannotUpdateSequenceOnFeeBump => {
+                RelayerError::ValidationError(
+                    "Cannot update sequence number on fee bump transaction".to_string(),
                 )
             }
             StellarTransactionUtilsError::InvalidAccountAddress(_, msg)
@@ -353,6 +367,39 @@ pub fn create_transaction_signature_payload(
         tagged_transaction: soroban_rs::xdr::TransactionSignaturePayloadTaggedTransaction::Tx(
             transaction.clone(),
         ),
+    }
+}
+
+/// Update the sequence number in a transaction envelope.
+///
+/// Only V1 (Tx) envelopes are supported; V0 and fee-bump envelopes return an error.
+pub fn update_envelope_sequence(
+    envelope: &mut TransactionEnvelope,
+    sequence: i64,
+) -> Result<(), StellarTransactionUtilsError> {
+    match envelope {
+        TransactionEnvelope::Tx(v1) => {
+            v1.tx.seq_num = soroban_rs::xdr::SequenceNumber(sequence);
+            Ok(())
+        }
+        TransactionEnvelope::TxV0(_) => {
+            Err(StellarTransactionUtilsError::V0TransactionsNotSupported)
+        }
+        TransactionEnvelope::TxFeeBump(_) => {
+            Err(StellarTransactionUtilsError::CannotUpdateSequenceOnFeeBump)
+        }
+    }
+}
+
+/// Extract the fee (in stroops) from a V1 transaction envelope.
+pub fn envelope_fee_in_stroops(
+    envelope: &TransactionEnvelope,
+) -> Result<u64, StellarTransactionUtilsError> {
+    match envelope {
+        TransactionEnvelope::Tx(env) => Ok(u64::from(env.tx.fee)),
+        _ => Err(StellarTransactionUtilsError::InvalidTransactionFormat(
+            "Expected V1 transaction envelope".to_string(),
+        )),
     }
 }
 
@@ -1651,6 +1698,161 @@ mod parse_contract_address_tests {
     #[test]
     fn test_parse_empty_contract_address() {
         let result = parse_contract_address("");
+        assert!(result.is_err());
+    }
+}
+
+// ============================================================================
+// Update Envelope Sequence and Envelope Fee Tests
+// ============================================================================
+
+#[cfg(test)]
+mod update_envelope_sequence_tests {
+    use super::*;
+    use soroban_rs::xdr::{
+        FeeBumpTransaction, FeeBumpTransactionEnvelope, FeeBumpTransactionExt,
+        FeeBumpTransactionInnerTx, Memo, MuxedAccount, Preconditions, SequenceNumber, Transaction,
+        TransactionExt, TransactionV0, TransactionV0Envelope, TransactionV0Ext,
+        TransactionV1Envelope, Uint256, VecM,
+    };
+
+    fn create_minimal_v1_envelope() -> TransactionEnvelope {
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256([0u8; 32])),
+            fee: 100,
+            seq_num: SequenceNumber(0),
+            cond: Preconditions::None,
+            memo: Memo::None,
+            operations: VecM::default(),
+            ext: TransactionExt::V0,
+        };
+        TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: VecM::default(),
+        })
+    }
+
+    fn create_v0_envelope() -> TransactionEnvelope {
+        let tx = TransactionV0 {
+            source_account_ed25519: Uint256([0u8; 32]),
+            fee: 100,
+            seq_num: SequenceNumber(0),
+            time_bounds: None,
+            memo: Memo::None,
+            operations: VecM::default(),
+            ext: TransactionV0Ext::V0,
+        };
+        TransactionEnvelope::TxV0(TransactionV0Envelope {
+            tx,
+            signatures: VecM::default(),
+        })
+    }
+
+    fn create_fee_bump_envelope() -> TransactionEnvelope {
+        let inner_tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256([0u8; 32])),
+            fee: 100,
+            seq_num: SequenceNumber(0),
+            cond: Preconditions::None,
+            memo: Memo::None,
+            operations: VecM::default(),
+            ext: TransactionExt::V0,
+        };
+        let inner_envelope = TransactionV1Envelope {
+            tx: inner_tx,
+            signatures: VecM::default(),
+        };
+        let fee_bump_tx = FeeBumpTransaction {
+            fee_source: MuxedAccount::Ed25519(Uint256([1u8; 32])),
+            fee: 200,
+            inner_tx: FeeBumpTransactionInnerTx::Tx(inner_envelope),
+            ext: FeeBumpTransactionExt::V0,
+        };
+        TransactionEnvelope::TxFeeBump(FeeBumpTransactionEnvelope {
+            tx: fee_bump_tx,
+            signatures: VecM::default(),
+        })
+    }
+
+    #[test]
+    fn test_update_envelope_sequence() {
+        let mut envelope = create_minimal_v1_envelope();
+        update_envelope_sequence(&mut envelope, 12345).unwrap();
+        if let TransactionEnvelope::Tx(v1) = &envelope {
+            assert_eq!(v1.tx.seq_num.0, 12345);
+        } else {
+            panic!("Expected Tx envelope");
+        }
+    }
+
+    #[test]
+    fn test_update_envelope_sequence_v0_returns_error() {
+        let mut envelope = create_v0_envelope();
+        let result = update_envelope_sequence(&mut envelope, 12345);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::V0TransactionsNotSupported => {}
+            _ => panic!("Expected V0TransactionsNotSupported error"),
+        }
+    }
+
+    #[test]
+    fn test_update_envelope_sequence_fee_bump_returns_error() {
+        let mut envelope = create_fee_bump_envelope();
+        let result = update_envelope_sequence(&mut envelope, 12345);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::CannotUpdateSequenceOnFeeBump => {}
+            _ => panic!("Expected CannotUpdateSequenceOnFeeBump error"),
+        }
+    }
+
+    #[test]
+    fn test_update_envelope_sequence_zero() {
+        let mut envelope = create_minimal_v1_envelope();
+        update_envelope_sequence(&mut envelope, 0).unwrap();
+        if let TransactionEnvelope::Tx(v1) = &envelope {
+            assert_eq!(v1.tx.seq_num.0, 0);
+        } else {
+            panic!("Expected Tx envelope");
+        }
+    }
+
+    #[test]
+    fn test_update_envelope_sequence_max_value() {
+        let mut envelope = create_minimal_v1_envelope();
+        update_envelope_sequence(&mut envelope, i64::MAX).unwrap();
+        if let TransactionEnvelope::Tx(v1) = &envelope {
+            assert_eq!(v1.tx.seq_num.0, i64::MAX);
+        } else {
+            panic!("Expected Tx envelope");
+        }
+    }
+
+    #[test]
+    fn test_envelope_fee_in_stroops_v1() {
+        let envelope = create_minimal_v1_envelope();
+        let fee = envelope_fee_in_stroops(&envelope).unwrap();
+        assert_eq!(fee, 100);
+    }
+
+    #[test]
+    fn test_envelope_fee_in_stroops_v0_returns_error() {
+        let envelope = create_v0_envelope();
+        let result = envelope_fee_in_stroops(&envelope);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::InvalidTransactionFormat(msg) => {
+                assert!(msg.contains("Expected V1"));
+            }
+            _ => panic!("Expected InvalidTransactionFormat error"),
+        }
+    }
+
+    #[test]
+    fn test_envelope_fee_in_stroops_fee_bump_returns_error() {
+        let envelope = create_fee_bump_envelope();
+        let result = envelope_fee_in_stroops(&envelope);
         assert!(result.is_err());
     }
 }

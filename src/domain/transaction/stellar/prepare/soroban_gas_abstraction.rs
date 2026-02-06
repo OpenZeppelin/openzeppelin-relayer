@@ -11,7 +11,11 @@ use soroban_rs::xdr::{
 use tracing::{debug, info, warn};
 
 use crate::{
-    domain::transaction::stellar::{utils::convert_xlm_fee_to_token, StellarTransactionValidator},
+    constants::STELLAR_DEFAULT_TRANSACTION_FEE,
+    domain::transaction::stellar::{
+        utils::{convert_xlm_fee_to_token, envelope_fee_in_stroops, update_envelope_sequence},
+        StellarTransactionValidator,
+    },
     models::{RelayerStellarPolicy, StellarTransactionData, TransactionError, TransactionInput},
     repositories::TransactionCounterTrait,
     services::{
@@ -94,41 +98,43 @@ where
             })?;
 
     // Inject the user's signed auth entry and convert relayer's auth to SourceAccount
-    // This must happen BEFORE fee validation because the simulation in fee estimation
-    // requires proper auth entries with signatures to succeed.
+    // This must happen before re-simulation so the simulation uses proper auth entries.
     let signed_auth_entries = inject_auth_entries_into_envelope(&mut envelope, signed_user_auth)?;
 
-    // Validate fee parameters to ensure relayer liquidity
-    // This validates: token is allowed, max_fee_amount covers the required fee
-    // Note: We pass the first auth entry (user's) which contains the fee parameters
-    if let Some(policy) = policy {
-        validate_gas_abstraction_fee(
-            &envelope,
-            &signed_auth_entries[0],
-            policy,
-            provider,
-            dex_service,
-        )
-        .await?;
-    }
-
-    // Re-simulate with signed auth entries to get accurate footprint.
+    // Re-simulate with signed auth entries to get accurate footprint and resources.
+    // This may bump the envelope fee when the new required fee is higher (still under max_fee
+    // check in validation below).
     //
     // According to Soroban flow, after signing auth entries you must re-simulate:
     // 1. Simulation validates the signatures
     // 2. Calculates ledger resources accurately
     // 3. The footprint will include all accounts accessed via require_auth/require_auth_for_args
     // 4. Returns a fully-resourced transaction ready for submission
-    //
-    // The signed auth entries are used directly - this ensures the simulation executes
-    // the full auth verification code path and captures the correct footprint.
     simulate_and_update_resources(&mut envelope, &signed_auth_entries, provider).await?;
+
+    // Validate fee parameters after resource update: token allowed, max_fee_amount covers
+    // the (possibly bumped) required fee. We use the envelope's current fee as required_xlm_fee
+    // to avoid a second simulation.
+    if let Some(policy) = policy {
+        let required_xlm_fee = envelope_fee_in_stroops(&envelope)
+            .map_err(|e| TransactionError::ValidationError(e.to_string()))?;
+        validate_gas_abstraction_fee(
+            &envelope,
+            &signed_auth_entries[0],
+            policy,
+            Some(required_xlm_fee),
+            provider,
+            dex_service,
+        )
+        .await?;
+    }
 
     // Get the next sequence number for the relayer
     let sequence_number = get_next_sequence(counter_service, relayer_id, relayer_address).await?;
 
     // Update the sequence number in the envelope
-    update_envelope_sequence(&mut envelope, sequence_number)?;
+    update_envelope_sequence(&mut envelope, sequence_number)
+        .map_err(|e| TransactionError::ValidationError(e.to_string()))?;
 
     // Serialize the updated envelope back to XDR
     let updated_xdr = envelope.to_xdr_base64(Limits::none()).map_err(|e| {
@@ -259,25 +265,6 @@ fn inject_auth_entries_into_envelope(
     Ok(result_auth_entries)
 }
 
-/// Update the sequence number in a transaction envelope.
-fn update_envelope_sequence(
-    envelope: &mut TransactionEnvelope,
-    sequence: i64,
-) -> Result<(), TransactionError> {
-    match envelope {
-        TransactionEnvelope::Tx(v1) => {
-            v1.tx.seq_num = soroban_rs::xdr::SequenceNumber(sequence);
-            Ok(())
-        }
-        TransactionEnvelope::TxV0(_) => Err(TransactionError::ValidationError(
-            "V0 transactions are not supported".to_string(),
-        )),
-        TransactionEnvelope::TxFeeBump(_) => Err(TransactionError::ValidationError(
-            "Cannot update sequence number on fee bump transaction".to_string(),
-        )),
-    }
-}
-
 /// Apply a buffer to Soroban resources to account for simulation variance.
 ///
 /// Simulation can be slightly inaccurate due to timing differences or other factors.
@@ -314,7 +301,7 @@ async fn simulate_and_update_resources<P>(
 where
     P: StellarProviderTrait + Send + Sync,
 {
-    info!("Re-simulating transaction with signed auth entries for accurate footprint");
+    debug!("Re-simulating transaction with signed auth entries for accurate footprint");
 
     // Use the actual signed auth entries for simulation
     // This allows the simulation to verify signatures and capture the correct footprint
@@ -349,7 +336,7 @@ where
             })?;
 
     // Log the resource values from simulation (before buffer)
-    info!(
+    debug!(
         "Simulation complete: instructions={}, read_bytes={}, write_bytes={}",
         new_tx_data.resources.instructions,
         new_tx_data.resources.disk_read_bytes,
@@ -367,21 +354,33 @@ where
         new_tx_data.resources.write_bytes
     );
 
+    // Compute required XLM fee from this simulation (inclusion + resource fee)
+    let inclusion_fee = STELLAR_DEFAULT_TRANSACTION_FEE as u64;
+    let new_required_xlm_fee = inclusion_fee + sim_response.min_resource_fee;
+    let new_fee_u32 = new_required_xlm_fee.min(u32::MAX as u64) as u32;
+
     // Update the original envelope's sorobanData with accurate resources
-    // Keep the original fee (already calculated and validated at /build time)
+    // Bump fee when the new required fee is higher (still validated against max_fee_amount later)
     match envelope {
         TransactionEnvelope::Tx(ref mut env) => {
             let original_fee = env.tx.fee;
+            let fee_to_set = if new_fee_u32 > original_fee {
+                debug!(
+                    "Bumping envelope fee from {} to {} (required by updated simulation)",
+                    original_fee, new_fee_u32
+                );
+                new_fee_u32
+            } else {
+                original_fee
+            };
 
             // Update the transaction extension with new soroban data
             env.tx.ext = TransactionExt::V1(new_tx_data);
-
-            // Preserve the original fee
-            env.tx.fee = original_fee;
+            env.tx.fee = fee_to_set;
 
             debug!(
-                "Updated transaction sorobanData with simulation results, preserved fee={}",
-                original_fee
+                "Updated transaction sorobanData with simulation results, fee={}",
+                fee_to_set
             );
             Ok(())
         }
@@ -472,10 +471,12 @@ fn build_simulation_envelope(
 ///
 /// # Arguments
 ///
-/// * `envelope` - The transaction envelope (used to estimate required XLM fee)
+/// * `envelope` - The transaction envelope (used to estimate required XLM fee when override is None)
 /// * `signed_user_auth` - The user's signed authorization entry
 /// * `policy` - The relayer policy containing allowed tokens and fee settings
-/// * `provider` - Provider for Stellar RPC operations (fee estimation)
+/// * `required_xlm_fee_override` - If Some, use this as the required XLM fee (e.g. envelope's
+///   current fee after simulate_and_update_resources). If None, estimate via simulation.
+/// * `provider` - Provider for Stellar RPC operations (fee estimation when override is None)
 /// * `dex_service` - DEX service for token-to-XLM conversion quotes
 ///
 /// # Returns
@@ -485,6 +486,7 @@ async fn validate_gas_abstraction_fee<P, D>(
     envelope: &TransactionEnvelope,
     signed_user_auth: &SorobanAuthorizationEntry,
     policy: &RelayerStellarPolicy,
+    required_xlm_fee_override: Option<u64>,
     provider: &P,
     dex_service: &D,
 ) -> Result<(), TransactionError>
@@ -506,9 +508,9 @@ where
     })?;
 
     // Step 3: Validate max_fee_amount against policy's max_allowed_fee (if configured)
-    if max_fee_amount < 0 {
+    if max_fee_amount <= 0 {
         return Err(TransactionError::ValidationError(
-            "max_fee_amount cannot be negative".to_string(),
+            "max_fee_amount must be positive".to_string(),
         ));
     }
     StellarTransactionValidator::validate_token_max_fee(&fee_token, max_fee_amount as u64, policy)
@@ -516,9 +518,11 @@ where
             TransactionError::ValidationError(format!("Max fee validation failed: {e}"))
         })?;
 
-    // Step 4: Estimate the required XLM fee from the transaction
-    // For Soroban transactions, this includes both inclusion fee and resource fee
-    let required_xlm_fee = estimate_required_xlm_fee(envelope, provider).await?;
+    // Step 4: Required XLM fee - use override (e.g. envelope fee after bump) or estimate
+    let required_xlm_fee = match required_xlm_fee_override {
+        Some(fee) => fee,
+        None => estimate_required_xlm_fee(envelope, provider).await?,
+    };
 
     debug!(
         "Required XLM fee: {} stroops for gas abstraction transaction",
@@ -818,72 +822,6 @@ mod tests {
                 }),
                 sub_invocations: VecM::default(),
             },
-        }
-    }
-
-    // ==================== update_envelope_sequence tests ====================
-
-    #[test]
-    fn test_update_envelope_sequence() {
-        let mut envelope = create_minimal_v1_envelope();
-        update_envelope_sequence(&mut envelope, 12345).unwrap();
-
-        if let TransactionEnvelope::Tx(v1) = &envelope {
-            assert_eq!(v1.tx.seq_num.0, 12345);
-        } else {
-            panic!("Expected Tx envelope");
-        }
-    }
-
-    #[test]
-    fn test_update_envelope_sequence_v0_returns_error() {
-        let mut envelope = create_v0_envelope();
-        let result = update_envelope_sequence(&mut envelope, 12345);
-
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            TransactionError::ValidationError(msg) => {
-                assert!(msg.contains("V0 transactions are not supported"));
-            }
-            _ => panic!("Expected ValidationError"),
-        }
-    }
-
-    #[test]
-    fn test_update_envelope_sequence_fee_bump_returns_error() {
-        let mut envelope = create_fee_bump_envelope();
-        let result = update_envelope_sequence(&mut envelope, 12345);
-
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            TransactionError::ValidationError(msg) => {
-                assert!(msg.contains("Cannot update sequence number on fee bump transaction"));
-            }
-            _ => panic!("Expected ValidationError"),
-        }
-    }
-
-    #[test]
-    fn test_update_envelope_sequence_zero() {
-        let mut envelope = create_minimal_v1_envelope();
-        update_envelope_sequence(&mut envelope, 0).unwrap();
-
-        if let TransactionEnvelope::Tx(v1) = &envelope {
-            assert_eq!(v1.tx.seq_num.0, 0);
-        } else {
-            panic!("Expected Tx envelope");
-        }
-    }
-
-    #[test]
-    fn test_update_envelope_sequence_max_value() {
-        let mut envelope = create_minimal_v1_envelope();
-        update_envelope_sequence(&mut envelope, i64::MAX).unwrap();
-
-        if let TransactionEnvelope::Tx(v1) = &envelope {
-            assert_eq!(v1.tx.seq_num.0, i64::MAX);
-        } else {
-            panic!("Expected Tx envelope");
         }
     }
 
@@ -2032,9 +1970,15 @@ mod validate_gas_abstraction_fee_tests {
         let policy = create_policy_with_token(&different_token, Some(50_000_000));
 
         // Execute
-        let result =
-            validate_gas_abstraction_fee(&envelope, &signed_auth, &policy, &provider, &dex_service)
-                .await;
+        let result = validate_gas_abstraction_fee(
+            &envelope,
+            &signed_auth,
+            &policy,
+            None,
+            &provider,
+            &dex_service,
+        )
+        .await;
 
         // Assert
         assert!(result.is_err());
@@ -2069,9 +2013,15 @@ mod validate_gas_abstraction_fee_tests {
         let policy = create_policy_with_token(&fee_token_address, Some(50_000_000));
 
         // Execute
-        let result =
-            validate_gas_abstraction_fee(&envelope, &signed_auth, &policy, &provider, &dex_service)
-                .await;
+        let result = validate_gas_abstraction_fee(
+            &envelope,
+            &signed_auth,
+            &policy,
+            None,
+            &provider,
+            &dex_service,
+        )
+        .await;
 
         // Assert
         assert!(result.is_err());
@@ -2132,9 +2082,15 @@ mod validate_gas_abstraction_fee_tests {
         let policy = create_policy_with_token(&fee_token_address, Some(100_000_000));
 
         // Execute
-        let result =
-            validate_gas_abstraction_fee(&envelope, &signed_auth, &policy, &provider, &dex_service)
-                .await;
+        let result = validate_gas_abstraction_fee(
+            &envelope,
+            &signed_auth,
+            &policy,
+            None,
+            &provider,
+            &dex_service,
+        )
+        .await;
 
         // Assert
         assert!(result.is_err());
@@ -2200,9 +2156,15 @@ mod validate_gas_abstraction_fee_tests {
         let policy = create_policy_with_token(&fee_token_address, Some(20_000_000));
 
         // Execute
-        let result =
-            validate_gas_abstraction_fee(&envelope, &signed_auth, &policy, &provider, &dex_service)
-                .await;
+        let result = validate_gas_abstraction_fee(
+            &envelope,
+            &signed_auth,
+            &policy,
+            None,
+            &provider,
+            &dex_service,
+        )
+        .await;
 
         // Assert
         assert!(
@@ -2230,9 +2192,15 @@ mod validate_gas_abstraction_fee_tests {
         let policy = create_policy_with_token(&fee_token_address, Some(100_000_000));
 
         // Execute
-        let result =
-            validate_gas_abstraction_fee(&envelope, &signed_auth, &policy, &provider, &dex_service)
-                .await;
+        let result = validate_gas_abstraction_fee(
+            &envelope,
+            &signed_auth,
+            &policy,
+            None,
+            &provider,
+            &dex_service,
+        )
+        .await;
 
         // Assert
         assert!(result.is_err());
@@ -2276,9 +2244,15 @@ mod validate_gas_abstraction_fee_tests {
         let policy = create_policy_with_token(&fee_token_address, Some(100_000_000));
 
         // Execute
-        let result =
-            validate_gas_abstraction_fee(&envelope, &signed_auth, &policy, &provider, &dex_service)
-                .await;
+        let result = validate_gas_abstraction_fee(
+            &envelope,
+            &signed_auth,
+            &policy,
+            None,
+            &provider,
+            &dex_service,
+        )
+        .await;
 
         // Assert: When simulation fails with zero resource fee, it returns ValidationError
         assert!(result.is_err());
