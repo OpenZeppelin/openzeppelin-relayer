@@ -52,13 +52,17 @@ impl NetworkTransactionRequest {
 /// Network-agnostic fee estimate request parameters for gasless transactions.
 /// Contains network-specific request parameters for fee estimation.
 /// The network type is inferred from the relayer's network configuration.
+///
+/// For Stellar, supports both classic and Soroban gas abstraction:
+/// - Classic: Pass operations or transaction_xdr with classic fee token (native/USDC:GA...)
+/// - Soroban: Pass transaction_xdr containing InvokeHostFunction, user_address, and contract fee token (C...)
 #[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema, Clone)]
 #[serde(untagged)]
 #[schema(as = SponsoredTransactionQuoteRequest)]
 pub enum SponsoredTransactionQuoteRequest {
     /// Solana-specific fee estimate request parameters
     Solana(SolanaFeeEstimateRequestParams),
-    /// Stellar-specific fee estimate request parameters
+    /// Stellar-specific fee estimate request parameters (classic and Soroban)
     Stellar(StellarFeeEstimateRequestParams),
 }
 
@@ -74,13 +78,17 @@ impl SponsoredTransactionQuoteRequest {
 /// Network-agnostic prepare transaction request parameters for gasless transactions.
 /// Contains network-specific request parameters for preparing transactions with fee payments.
 /// The network type is inferred from the relayer's network configuration.
+///
+/// For Stellar, supports both classic and Soroban gas abstraction:
+/// - Classic: Pass operations or transaction_xdr with classic fee token
+/// - Soroban: Pass transaction_xdr containing InvokeHostFunction, user_address, and contract fee token
 #[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema, Clone)]
 #[serde(untagged)]
 #[schema(as = SponsoredTransactionBuildRequest)]
 pub enum SponsoredTransactionBuildRequest {
     /// Solana-specific prepare transaction request parameters
     Solana(SolanaPrepareTransactionRequestParams),
-    /// Stellar-specific prepare transaction request parameters
+    /// Stellar-specific prepare transaction request parameters (classic and Soroban)
     Stellar(StellarPrepareTransactionRequestParams),
 }
 

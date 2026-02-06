@@ -131,7 +131,7 @@ where
     D: StellarDexServiceTrait + Send + Sync + 'static,
 {
     pub(crate) relayer: RelayerRepoModel,
-    signer: Arc<S>,
+    pub(crate) signer: Arc<S>,
     pub(crate) network: StellarNetwork,
     pub(crate) provider: P,
     pub(crate) relayer_repository: Arc<RR>,
@@ -2004,6 +2004,7 @@ mod tests {
                 transaction_xdr: Some("AAAAAgAAAACige4lTdwSB/sto4SniEdJ2kOa2X65s5bqkd40J4DjSwAAAAEAAHAkAAAADwAAAAAAAAAAAAAAAQAAAAAAAAABAAAAAKKB7iVN3BIH+y2jhKeIR0naQ5rZfrmzluqR3jQngONLAAAAAAAAAAAAD0JAAAAAAAAAAAA=".to_string()),
                 fee_bump: None,
                 max_fee: None,
+                signed_auth_entry: None,
             })
         }
 

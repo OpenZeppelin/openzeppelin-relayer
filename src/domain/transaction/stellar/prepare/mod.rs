@@ -6,6 +6,7 @@
 pub mod common;
 pub mod fee_bump;
 pub mod operations;
+pub mod soroban_gas_abstraction;
 pub mod unsigned_xdr;
 
 use eyre::Result;
@@ -20,7 +21,10 @@ use crate::{
         TransactionUpdateRequest,
     },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
-    services::{provider::StellarProviderTrait, signer::Signer},
+    services::{
+        provider::StellarProviderTrait,
+        signer::{Signer, StellarSignTrait},
+    },
 };
 
 use common::{sign_and_finalize_transaction, update_and_notify_transaction};
@@ -30,7 +34,7 @@ where
     R: Repository<RelayerRepoModel, String> + Send + Sync,
     T: TransactionRepository + Send + Sync,
     J: JobProducerTrait + Send + Sync,
-    S: Signer + Send + Sync,
+    S: Signer + StellarSignTrait + Send + Sync,
     P: StellarProviderTrait + Send + Sync,
     C: TransactionCounterTrait + Send + Sync,
     D: crate::services::stellar_dex::StellarDexServiceTrait + Send + Sync + 'static,
@@ -167,6 +171,22 @@ where
                     self.relayer().notification_id.as_deref(),
                 )
                 .await
+            }
+            TransactionInput::SorobanGasAbstraction { .. } => {
+                debug!(tx_id = %tx.id, "preparing soroban gas abstraction transaction");
+                let stellar_data_with_auth =
+                    soroban_gas_abstraction::process_soroban_gas_abstraction(
+                        self.transaction_counter_service(),
+                        &self.relayer().id,
+                        &self.relayer().address,
+                        self.provider(),
+                        stellar_data,
+                        Some(&policy),
+                        self.dex_service(),
+                    )
+                    .await?;
+                self.finalize_with_signature(tx, stellar_data_with_auth)
+                    .await
             }
         }
     }

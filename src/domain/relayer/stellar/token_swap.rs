@@ -237,6 +237,7 @@ where
                         transaction_xdr: Some(xdr),
                         fee_bump: None,
                         max_fee: None,
+                        signed_auth_entry: None,
                     };
 
                     let network_request = NetworkTransactionRequest::Stellar(stellar_request);

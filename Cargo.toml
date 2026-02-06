@@ -148,5 +148,9 @@ path = "helpers/generate_openapi.rs"
 name = "verify_eip712"
 path = "helpers/verify_eip712.rs"
 
+[[example]]
+name = "sign_soroban_auth_entry"
+path = "helpers/sign_soroban_auth_entry.rs"
+
 [lib]
 path = "src/lib.rs"
