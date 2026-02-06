@@ -1380,12 +1380,20 @@ impl TransactionRepository for RedisTransactionRepository {
 
                         // Track status distribution (update gauge when status changes)
                         if original_tx.status != *new_status {
-                            // Decrement old status
+                            // Decrement old status (with safeguard to prevent negative values)
                             let old_status = &original_tx.status;
                             let old_status_str = format!("{old_status:?}").to_lowercase();
-                            TRANSACTIONS_BY_STATUS
-                                .with_label_values(&[relayer_id, &network_type, &old_status_str])
-                                .dec();
+                            let old_status_gauge = TRANSACTIONS_BY_STATUS
+                                .with_label_values(&[relayer_id, &network_type, &old_status_str);
+                            // Only decrement if value is > 0, otherwise set to 0
+                            let current_value = old_status_gauge.get();
+                            if current_value > 0.0 {
+                                old_status_gauge.dec();
+                            } else {
+                                // If already at 0 or negative, set to 0 to prevent further negatives
+                                old_status_gauge.set(0.0);
+                            }
+                            
                             // Increment new status
                             let new_status_str = format!("{new_status:?}").to_lowercase();
                             TRANSACTIONS_BY_STATUS
