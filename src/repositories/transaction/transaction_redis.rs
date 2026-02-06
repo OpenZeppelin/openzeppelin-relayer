@@ -17,7 +17,7 @@ use crate::repositories::{
 use crate::utils::RedisConnections;
 use async_trait::async_trait;
 use chrono::Utc;
-use redis::AsyncCommands;
+use redis::{AsyncCommands, Script};
 use std::fmt;
 use std::sync::Arc;
 use tracing::{debug, error, warn};
@@ -1297,17 +1297,16 @@ impl TransactionRepository for RedisTransactionRepository {
         const MAX_RETRIES: u32 = 3;
         const BACKOFF_MS: u64 = 100;
 
-        // Fetch the original transaction state ONCE before retrying.
-        // This is critical: if conn.set() succeeds but update_indexes() fails,
-        // subsequent retries must still reference the original state to remove
-        // stale index entries. Otherwise, get_by_id() returns the already-updated
-        // record and update_indexes() skips removing the old indexes.
-        let original_tx = self.get_by_id(tx_id.clone()).await?;
+        // Optimistic CAS: only apply update if the current stored value still matches the
+        // expected pre-update value. This avoids duplicate status metric updates on races.
+        let mut original_tx = self.get_by_id(tx_id.clone()).await?;
         let mut updated_tx = original_tx.clone();
         updated_tx.apply_partial_update(update.clone());
 
         let key = self.tx_key(&updated_tx.relayer_id, &tx_id);
-        let value = self.serialize_entity(&updated_tx, |t| &t.id, "transaction")?;
+        let mut original_value = self.serialize_entity(&original_tx, |t| &t.id, "transaction")?;
+        let mut updated_value = self.serialize_entity(&updated_tx, |t| &t.id, "transaction")?;
+        let mut data_updated = false;
 
         let mut last_error = None;
 
@@ -1327,19 +1326,68 @@ impl TransactionRepository for RedisTransactionRepository {
                 }
             };
 
-            // Try to update transaction data
-            let result: Result<(), _> = conn.set(&key, &value).await;
-            match result {
-                Ok(_) => {}
-                Err(e) => {
+            if !data_updated {
+                let cas_script = Script::new(
+                    r#"
+                    local current = redis.call('GET', KEYS[1])
+                    if not current then
+                        return -1
+                    end
+                    if current == ARGV[1] then
+                        redis.call('SET', KEYS[1], ARGV[2])
+                        return 1
+                    end
+                    return 0
+                    "#,
+                );
+
+                let cas_result: i32 = match cas_script
+                    .key(&key)
+                    .arg(&original_value)
+                    .arg(&updated_value)
+                    .invoke_async(&mut conn)
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(e) => {
+                        if attempt < MAX_RETRIES - 1 {
+                            warn!(tx_id = %tx_id, attempt = %attempt, error = %e, "failed CAS transaction update, retrying");
+                            last_error = Some(self.map_redis_error(e, "partial_update_cas"));
+                            tokio::time::sleep(tokio::time::Duration::from_millis(BACKOFF_MS))
+                                .await;
+                            continue;
+                        }
+                        return Err(self.map_redis_error(e, "partial_update_cas"));
+                    }
+                };
+
+                if cas_result == -1 {
+                    return Err(RepositoryError::NotFound(format!(
+                        "Transaction with ID {} not found",
+                        tx_id
+                    )));
+                }
+
+                if cas_result == 0 {
                     if attempt < MAX_RETRIES - 1 {
-                        warn!(tx_id = %tx_id, attempt = %attempt, error = %e, "failed to set transaction data, retrying");
-                        last_error = Some(self.map_redis_error(e, "partial_update"));
+                        warn!(tx_id = %tx_id, attempt = %attempt, "concurrent transaction update detected, rebasing retry");
+                        original_tx = self.get_by_id(tx_id.clone()).await?;
+                        updated_tx = original_tx.clone();
+                        updated_tx.apply_partial_update(update.clone());
+                        original_value =
+                            self.serialize_entity(&original_tx, |t| &t.id, "transaction")?;
+                        updated_value =
+                            self.serialize_entity(&updated_tx, |t| &t.id, "transaction")?;
                         tokio::time::sleep(tokio::time::Duration::from_millis(BACKOFF_MS)).await;
                         continue;
                     }
-                    return Err(self.map_redis_error(e, "partial_update"));
+                    return Err(RepositoryError::TransactionFailure(format!(
+                        "Concurrent update conflict for transaction {}",
+                        tx_id
+                    )));
                 }
+
+                data_updated = true;
             }
 
             // Try to update indexes with the original pre-update state
@@ -1380,20 +1428,17 @@ impl TransactionRepository for RedisTransactionRepository {
 
                         // Track status distribution (update gauge when status changes)
                         if original_tx.status != *new_status {
-                            // Decrement old status (with safeguard to prevent negative values)
+                            // Decrement old status and clamp to zero to avoid negative gauges.
                             let old_status = &original_tx.status;
                             let old_status_str = format!("{old_status:?}").to_lowercase();
-                            let old_status_gauge = TRANSACTIONS_BY_STATUS
-                                .with_label_values(&[relayer_id, &network_type, &old_status_str);
-                            // Only decrement if value is > 0, otherwise set to 0
-                            let current_value = old_status_gauge.get();
-                            if current_value > 0.0 {
-                                old_status_gauge.dec();
-                            } else {
-                                // If already at 0 or negative, set to 0 to prevent further negatives
-                                old_status_gauge.set(0.0);
-                            }
-                            
+                            let old_status_gauge = TRANSACTIONS_BY_STATUS.with_label_values(&[
+                                relayer_id,
+                                &network_type,
+                                &old_status_str,
+                            ]);
+                            let clamped_value = (old_status_gauge.get() - 1.0).max(0.0);
+                            old_status_gauge.set(clamped_value);
+
                             // Increment new status
                             let new_status_str = format!("{new_status:?}").to_lowercase();
                             TRANSACTIONS_BY_STATUS
@@ -2840,10 +2885,11 @@ mod tests {
             let tolerance = Duration::minutes(5);
 
             assert!(
-                duration_from_before >= expected_duration - tolerance &&
-                duration_from_before <= expected_duration + tolerance,
+                duration_from_before >= expected_duration - tolerance
+                    && duration_from_before <= expected_duration + tolerance,
                 "delete_at should be approximately 6 hours from now for status: {:?}. Duration: {:?}",
-                status, duration_from_before
+                status,
+                duration_from_before
             );
         }
 
