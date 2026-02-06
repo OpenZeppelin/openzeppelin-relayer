@@ -97,6 +97,60 @@ mod tests {
     }
 
     // ============================================================================
+    // Tests for apply_max_fee_slippage_with_bps (direct)
+    // ============================================================================
+
+    #[test]
+    fn test_apply_max_fee_slippage_with_bps_zero_slippage() {
+        // 0 BPS = no slippage
+        let result = apply_max_fee_slippage_with_bps(10000, 0);
+        assert_eq!(result, 10000);
+    }
+
+    #[test]
+    fn test_apply_max_fee_slippage_with_bps_one_percent() {
+        // 100 BPS = 1%
+        let result = apply_max_fee_slippage_with_bps(10000, 100);
+        assert_eq!(result, 10100);
+    }
+
+    #[test]
+    fn test_apply_max_fee_slippage_with_bps_ten_percent() {
+        // 1000 BPS = 10%
+        let result = apply_max_fee_slippage_with_bps(10000, 1000);
+        assert_eq!(result, 11000);
+    }
+
+    #[test]
+    fn test_apply_max_fee_slippage_with_bps_hundred_percent() {
+        // 10000 BPS = 100% (double)
+        let result = apply_max_fee_slippage_with_bps(10000, 10000);
+        assert_eq!(result, 20000);
+    }
+
+    #[test]
+    fn test_apply_max_fee_slippage_with_bps_zero_fee() {
+        let result = apply_max_fee_slippage_with_bps(0, 500);
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn test_apply_max_fee_slippage_with_bps_large_fee() {
+        let large_fee: u64 = 1_000_000_000_000;
+        // 5% slippage
+        let result = apply_max_fee_slippage_with_bps(large_fee, 500);
+        assert_eq!(result, 1_050_000_000_000i128);
+    }
+
+    #[test]
+    fn test_apply_max_fee_slippage_with_bps_small_fee_rounds_down() {
+        // 1 unit with 1 BPS (0.01%) — should round down to 1
+        let result = apply_max_fee_slippage_with_bps(1, 1);
+        // (1 * 10001) / 10000 = 1 (integer division)
+        assert_eq!(result, 1);
+    }
+
+    // ============================================================================
     // Tests for get_expiration_ledger
     // ============================================================================
 
@@ -136,5 +190,106 @@ mod tests {
         assert!(result.is_ok());
         let expiration = result.unwrap();
         assert_eq!(expiration, 1001); // 1000 + 1 (minimum)
+    }
+
+    #[tokio::test]
+    async fn test_get_expiration_ledger_provider_error() {
+        use crate::services::provider::ProviderError;
+
+        let mut provider = MockStellarProviderTrait::new();
+        provider.expect_get_latest_ledger().returning(|| {
+            Box::pin(ready(Err(ProviderError::Other(
+                "network error".to_string(),
+            ))))
+        });
+
+        let result = get_expiration_ledger(&provider, 300).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            RelayerError::Internal(msg) => {
+                assert!(msg.contains("Failed to get latest ledger"));
+            }
+            _ => panic!("Expected Internal error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_expiration_ledger_non_divisible_seconds() {
+        // 7 seconds / 5 seconds per ledger = 2 ledgers (div_ceil)
+        let mut provider = MockStellarProviderTrait::new();
+        provider.expect_get_latest_ledger().returning(|| {
+            Box::pin(ready(Ok(
+                soroban_rs::stellar_rpc_client::GetLatestLedgerResponse {
+                    id: "test".to_string(),
+                    protocol_version: 20,
+                    sequence: 1000,
+                },
+            )))
+        });
+
+        let result = get_expiration_ledger(&provider, 7).await;
+        assert!(result.is_ok());
+        let expiration = result.unwrap();
+        assert_eq!(expiration, 1002); // 1000 + ceil(7/5) = 1000 + 2
+    }
+
+    #[tokio::test]
+    async fn test_get_expiration_ledger_one_second() {
+        let mut provider = MockStellarProviderTrait::new();
+        provider.expect_get_latest_ledger().returning(|| {
+            Box::pin(ready(Ok(
+                soroban_rs::stellar_rpc_client::GetLatestLedgerResponse {
+                    id: "test".to_string(),
+                    protocol_version: 20,
+                    sequence: 500,
+                },
+            )))
+        });
+
+        let result = get_expiration_ledger(&provider, 1).await;
+        assert!(result.is_ok());
+        let expiration = result.unwrap();
+        assert_eq!(expiration, 501); // 500 + ceil(1/5) = 500 + 1
+    }
+
+    #[tokio::test]
+    async fn test_get_expiration_ledger_sequence_near_max() {
+        // Test saturating_add behavior near u32::MAX
+        let mut provider = MockStellarProviderTrait::new();
+        provider.expect_get_latest_ledger().returning(|| {
+            Box::pin(ready(Ok(
+                soroban_rs::stellar_rpc_client::GetLatestLedgerResponse {
+                    id: "test".to_string(),
+                    protocol_version: 20,
+                    sequence: u32::MAX - 1,
+                },
+            )))
+        });
+
+        let result = get_expiration_ledger(&provider, 300).await;
+        assert!(result.is_ok());
+        let expiration = result.unwrap();
+        // saturating_add should cap at u32::MAX
+        assert_eq!(expiration, u32::MAX);
+    }
+
+    #[tokio::test]
+    async fn test_get_expiration_ledger_exact_ledger_time() {
+        // Exactly STELLAR_LEDGER_TIME_SECONDS (5 seconds) = 1 ledger
+        let mut provider = MockStellarProviderTrait::new();
+        provider.expect_get_latest_ledger().returning(|| {
+            Box::pin(ready(Ok(
+                soroban_rs::stellar_rpc_client::GetLatestLedgerResponse {
+                    id: "test".to_string(),
+                    protocol_version: 20,
+                    sequence: 2000,
+                },
+            )))
+        });
+
+        let result = get_expiration_ledger(&provider, STELLAR_LEDGER_TIME_SECONDS).await;
+        assert!(result.is_ok());
+        let expiration = result.unwrap();
+        assert_eq!(expiration, 2001); // 2000 + 1
     }
 }
