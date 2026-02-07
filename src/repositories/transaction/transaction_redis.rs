@@ -1363,8 +1363,7 @@ impl TransactionRepository for RedisTransactionRepository {
 
                 if cas_result == -1 {
                     return Err(RepositoryError::NotFound(format!(
-                        "Transaction with ID {} not found",
-                        tx_id
+                        "Transaction with ID {tx_id} not found",
                     )));
                 }
 
@@ -1382,8 +1381,7 @@ impl TransactionRepository for RedisTransactionRepository {
                         continue;
                     }
                     return Err(RepositoryError::TransactionFailure(format!(
-                        "Concurrent update conflict for transaction {}",
-                        tx_id
+                        "Concurrent update conflict for transaction {tx_id}",
                     )));
                 }
 
