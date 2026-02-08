@@ -9,7 +9,7 @@
 //! - `{namespace}:failed` - Sorted set of failed jobs
 //! - `{namespace}:dead` - Sorted set of dead-letter jobs
 //!
-//! This worker runs hourly to clean up this metadata and prevent Redis memory from growing
+//! This worker runs every 15 minutes to clean up this metadata and prevent Redis memory from growing
 //! indefinitely.
 //!
 //! ## Distributed Lock
