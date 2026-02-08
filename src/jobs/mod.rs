@@ -17,3 +17,6 @@ pub use job::*;
 /// This module provides status check context for circuit breaker decisions.
 mod status_check_context;
 pub use status_check_context::*;
+
+/// This module provides queue backend abstraction (Redis/SQS).
+pub mod queue_backend;
