@@ -48,7 +48,9 @@ fn is_sqs_backend_enabled() -> bool {
 async fn get_sqs_backend() -> Result<Arc<SqsBackend>, JobProducerError> {
     SQS_BACKEND
         .get_or_try_init(|| async {
+            debug!("Initializing SQS backend for job production");
             SqsBackend::new().await.map(Arc::new).map_err(|e| {
+                error!(error = %e, "Failed to initialize SQS backend");
                 JobProducerError::QueueError(format!("Failed to initialize SQS backend: {e}"))
             })
         })
