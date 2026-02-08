@@ -7,9 +7,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use actix_web::web::ThinData;
-use aws_sdk_sqs::types::Message;
+use aws_sdk_sqs::types::{Message, MessageAttributeValue, MessageSystemAttributeName};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
 use crate::{
     config::ServerConfig,
@@ -24,9 +25,15 @@ use crate::{
     },
     models::DefaultAppState,
 };
-use apalis::prelude::{Attempt, Data, TaskId};
+use apalis::prelude::{Attempt, Data, Error as ApalisError, TaskId};
 
 use super::{QueueBackendError, QueueType, WorkerHandle};
+
+#[derive(Debug)]
+enum ProcessingError {
+    Retryable(String),
+    Permanent(String),
+}
 
 /// Spawns a worker task for a specific SQS queue.
 ///
@@ -66,14 +73,25 @@ pub async fn spawn_worker_for_queue(
         let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
 
         loop {
+            // Do not poll for more messages than we can process; otherwise
+            // messages sit in-flight waiting for permits.
+            let available_permits = semaphore.available_permits();
+            if available_permits == 0 {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                continue;
+            }
+
+            let batch_size = available_permits.min(10) as i32;
+
             // Poll SQS for messages
             let messages_result = sqs_client
                 .receive_message()
                 .queue_url(&queue_url)
-                .max_number_of_messages(10) // Batch size (max 10 for FIFO)
+                .max_number_of_messages(batch_size) // SQS max is 10
                 .wait_time_seconds(polling_interval as i32) // Long polling
                 .visibility_timeout(visibility_timeout as i32)
-                .message_system_attribute_names(aws_sdk_sqs::types::MessageSystemAttributeName::All)
+                .message_system_attribute_names(MessageSystemAttributeName::All)
+                .message_attribute_names("All")
                 .send()
                 .await;
 
@@ -88,14 +106,13 @@ pub async fn spawn_worker_for_queue(
                             );
 
                             // Process messages concurrently (up to semaphore limit)
-                            let mut tasks = Vec::new();
                             for message in messages {
                                 let permit = semaphore.clone().acquire_owned().await.unwrap();
                                 let client = sqs_client.clone();
                                 let url = queue_url.clone();
                                 let state = app_state.clone();
 
-                                let task = tokio::spawn(async move {
+                                tokio::spawn(async move {
                                     let result = process_message(
                                         client.clone(),
                                         message,
@@ -116,13 +133,6 @@ pub async fn spawn_worker_for_queue(
 
                                     drop(permit); // Release semaphore
                                 });
-
-                                tasks.push(task);
-                            }
-
-                            // Wait for all tasks to complete
-                            for task in tasks {
-                                let _ = task.await;
                             }
                         }
                     }
@@ -163,18 +173,58 @@ async fn process_message(
         .receipt_handle()
         .ok_or_else(|| QueueBackendError::QueueError("Missing receipt handle".to_string()))?;
 
+    // For jobs with scheduling beyond SQS 15-minute max delay, keep deferring in hops.
+    if let Some(target_scheduled_on) = parse_target_scheduled_on(&message) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .map_err(|e| QueueBackendError::QueueError(format!("System clock error: {e}")))?
+            .as_secs() as i64;
+        let remaining = target_scheduled_on - now;
+        if remaining > 0 {
+            defer_message(
+                &sqs_client,
+                queue_url,
+                body.to_string(),
+                &message,
+                target_scheduled_on,
+                remaining.min(900) as i32,
+            )
+            .await?;
+
+            sqs_client
+                .delete_message()
+                .queue_url(queue_url)
+                .receipt_handle(receipt_handle)
+                .send()
+                .await
+                .map_err(|e| {
+                    QueueBackendError::SqsError(format!(
+                        "Deferred message but failed to delete original: {e}"
+                    ))
+                })?;
+
+            debug!(
+                queue_type = ?queue_type,
+                remaining_seconds = remaining,
+                "Deferred scheduled SQS message for next delay hop"
+            );
+            return Ok(());
+        }
+    }
+
     // Get retry attempt count from message attributes
-    let attempt_number = message
+    let receive_count = message
         .attributes()
-        .and_then(|attrs| {
-            attrs.get(&aws_sdk_sqs::types::MessageSystemAttributeName::ApproximateReceiveCount)
-        })
+        .and_then(|attrs| attrs.get(&MessageSystemAttributeName::ApproximateReceiveCount))
         .and_then(|count| count.parse::<usize>().ok())
         .unwrap_or(1);
+    // SQS receive count starts at 1; Apalis Attempt starts at 0.
+    let attempt_number = receive_count.saturating_sub(1);
 
     debug!(
         queue_type = ?queue_type,
         attempt = attempt_number,
+        receive_count = receive_count,
         max_retries = max_retries,
         "Processing message"
     );
@@ -217,8 +267,8 @@ async fn process_message(
 
             Ok(())
         }
-        Err(e) if attempt_number >= max_retries => {
-            // Max retries exceeded: Delete message (will move to DLQ if configured)
+        Err(ProcessingError::Permanent(e)) => {
+            // Permanent failure: delete immediately (do not retry).
             sqs_client
                 .delete_message()
                 .queue_url(queue_url)
@@ -226,32 +276,43 @@ async fn process_message(
                 .send()
                 .await
                 .map_err(|err| {
-                    error!(error = %err, "Failed to delete failed message from SQS");
+                    error!(error = %err, "Failed to delete permanently failed message from SQS");
                     QueueBackendError::SqsError(format!("DeleteMessage failed: {err}"))
                 })?;
 
             error!(
                 queue_type = ?queue_type,
                 attempt = attempt_number,
-                max_retries = max_retries,
                 error = %e,
-                "Max retries exceeded, message moved to DLQ"
+                "Permanent handler failure, message deleted"
             );
 
             Ok(())
         }
-        Err(e) => {
+        Err(ProcessingError::Retryable(e)) => {
             // Retry: Let message return to queue after visibility timeout
-            warn!(
-                queue_type = ?queue_type,
-                attempt = attempt_number,
-                max_retries = max_retries,
-                error = %e,
-                "Message processing failed, will retry after visibility timeout"
-            );
+            if max_retries != usize::MAX && attempt_number >= max_retries {
+                error!(
+                    queue_type = ?queue_type,
+                    attempt = attempt_number,
+                    receive_count = receive_count,
+                    max_retries = max_retries,
+                    error = %e,
+                    "Max retries exceeded; leaving message for SQS redrive policy / DLQ"
+                );
+            } else {
+                warn!(
+                    queue_type = ?queue_type,
+                    attempt = attempt_number,
+                    receive_count = receive_count,
+                    max_retries = max_retries,
+                    error = %e,
+                    "Message processing failed, will retry after visibility timeout"
+                );
+            }
 
             // Don't delete message - it will automatically return to queue
-            // after visibility timeout expires
+            // after visibility timeout expires and can be redriven to DLQ.
             Ok(())
         }
     }
@@ -264,10 +325,10 @@ async fn process_transaction_request(
     body: &str,
     app_state: Arc<ThinData<DefaultAppState>>,
     attempt: usize,
-) -> Result<(), QueueBackendError> {
+) -> Result<(), ProcessingError> {
     let job: Job<TransactionRequest> = serde_json::from_str(body).map_err(|e| {
         error!(error = %e, "Failed to deserialize TransactionRequest job");
-        QueueBackendError::SerializationError(e.to_string())
+        ProcessingError::Retryable(format!("Failed to deserialize TransactionRequest job: {e}"))
     })?;
 
     transaction_request_handler_sqs(
@@ -277,7 +338,7 @@ async fn process_transaction_request(
         TaskId::new(),
     )
     .await
-    .map_err(|e| QueueBackendError::QueueError(format!("Handler error: {e}")))
+    .map_err(map_apalis_error)
 }
 
 /// Processes a TransactionSend job.
@@ -287,10 +348,10 @@ async fn process_transaction_submission(
     body: &str,
     app_state: Arc<ThinData<DefaultAppState>>,
     attempt: usize,
-) -> Result<(), QueueBackendError> {
+) -> Result<(), ProcessingError> {
     let job: Job<TransactionSend> = serde_json::from_str(body).map_err(|e| {
         error!(error = %e, "Failed to deserialize TransactionSend job");
-        QueueBackendError::SerializationError(e.to_string())
+        ProcessingError::Retryable(format!("Failed to deserialize TransactionSend job: {e}"))
     })?;
 
     transaction_submission_handler(
@@ -300,7 +361,7 @@ async fn process_transaction_submission(
         TaskId::new(),
     )
     .await
-    .map_err(|e| QueueBackendError::QueueError(format!("Handler error: {e}")))
+    .map_err(map_apalis_error)
 }
 
 /// Processes a TransactionStatusCheck job.
@@ -310,10 +371,12 @@ async fn process_transaction_status_check(
     body: &str,
     app_state: Arc<ThinData<DefaultAppState>>,
     attempt: usize,
-) -> Result<(), QueueBackendError> {
+) -> Result<(), ProcessingError> {
     let job: Job<TransactionStatusCheck> = serde_json::from_str(body).map_err(|e| {
         error!(error = %e, "Failed to deserialize TransactionStatusCheck job");
-        QueueBackendError::SerializationError(e.to_string())
+        ProcessingError::Retryable(format!(
+            "Failed to deserialize TransactionStatusCheck job: {e}"
+        ))
     })?;
 
     transaction_status_handler_sqs(
@@ -323,7 +386,7 @@ async fn process_transaction_status_check(
         TaskId::new(),
     )
     .await
-    .map_err(|e| QueueBackendError::QueueError(format!("Handler error: {e}")))
+    .map_err(map_apalis_error)
 }
 
 /// Processes a NotificationSend job.
@@ -333,10 +396,10 @@ async fn process_notification(
     body: &str,
     app_state: Arc<ThinData<DefaultAppState>>,
     attempt: usize,
-) -> Result<(), QueueBackendError> {
+) -> Result<(), ProcessingError> {
     let job: Job<NotificationSend> = serde_json::from_str(body).map_err(|e| {
         error!(error = %e, "Failed to deserialize NotificationSend job");
-        QueueBackendError::SerializationError(e.to_string())
+        ProcessingError::Retryable(format!("Failed to deserialize NotificationSend job: {e}"))
     })?;
 
     notification_handler(
@@ -346,7 +409,69 @@ async fn process_notification(
         TaskId::new(),
     )
     .await
-    .map_err(|e| QueueBackendError::QueueError(format!("Handler error: {e}")))
+    .map_err(map_apalis_error)
+}
+
+fn map_apalis_error(error: ApalisError) -> ProcessingError {
+    match error {
+        ApalisError::Abort(err) => ProcessingError::Permanent(err.to_string()),
+        ApalisError::Failed(err) => ProcessingError::Retryable(err.to_string()),
+        other => ProcessingError::Retryable(other.to_string()),
+    }
+}
+
+fn parse_target_scheduled_on(message: &Message) -> Option<i64> {
+    message
+        .message_attributes()
+        .and_then(|attrs| attrs.get("target_scheduled_on"))
+        .and_then(|value| value.string_value())
+        .and_then(|value| value.parse::<i64>().ok())
+}
+
+fn extract_group_id(message: &Message) -> Option<String> {
+    message
+        .attributes()
+        .and_then(|attrs| attrs.get(&MessageSystemAttributeName::MessageGroupId))
+        .cloned()
+}
+
+async fn defer_message(
+    sqs_client: &aws_sdk_sqs::Client,
+    queue_url: &str,
+    body: String,
+    message: &Message,
+    target_scheduled_on: i64,
+    delay_seconds: i32,
+) -> Result<(), QueueBackendError> {
+    let message_group_id = extract_group_id(message)
+        .unwrap_or_else(|| format!("deferred-{}", Uuid::new_v4().as_simple()));
+
+    sqs_client
+        .send_message()
+        .queue_url(queue_url)
+        .message_body(body)
+        .message_group_id(message_group_id)
+        .message_deduplication_id(Uuid::new_v4().to_string())
+        .delay_seconds(delay_seconds.clamp(1, 900))
+        .message_attributes(
+            "target_scheduled_on",
+            MessageAttributeValue::builder()
+                .data_type("Number")
+                .string_value(target_scheduled_on.to_string())
+                .build()
+                .map_err(|e| {
+                    QueueBackendError::SqsError(format!(
+                        "Failed to build deferred scheduled attribute: {e}"
+                    ))
+                })?,
+        )
+        .send()
+        .await
+        .map_err(|e| {
+            QueueBackendError::SqsError(format!("Failed to defer scheduled message: {e}"))
+        })?;
+
+    Ok(())
 }
 
 /// Gets the concurrency limit for a queue type from environment.

@@ -45,6 +45,7 @@ use dotenvy::dotenv;
 use std::env;
 use tracing::info;
 
+use openzeppelin_relayer::jobs::{queue_backend::create_queue_backend, JobProducerTrait};
 use openzeppelin_relayer::{
     api,
     bootstrap::{
@@ -99,6 +100,20 @@ async fn main() -> Result<()> {
 
     // Setup workers for processing jobs
     initialize_workers(app_state.clone()).await?;
+
+    // Start SQS workers when queue backend is configured to SQS.
+    if matches!(env::var("QUEUE_BACKEND"), Ok(value) if value.eq_ignore_ascii_case("sqs")) {
+        let queue = app_state.job_producer.get_queue().await?;
+        let queue_backend = create_queue_backend(queue.redis_connections()).await?;
+        let handles = queue_backend
+            .initialize_workers(Arc::new(app_state.clone()))
+            .await?;
+        info!(
+            backend = queue_backend.backend_type(),
+            worker_count = handles.len(),
+            "Initialized queue backend workers"
+        );
+    }
 
     // Initialize plugin worker pool (enabled by default for better performance)
     // Set PLUGIN_USE_POOL=false to use legacy ts-node mode

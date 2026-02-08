@@ -4,6 +4,7 @@
 //! It uses FIFO queues to maintain message ordering and prevent duplicates.
 
 use async_trait::async_trait;
+use aws_sdk_sqs::types::MessageAttributeValue;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -132,6 +133,7 @@ impl SqsBackend {
         message_group_id: String,
         message_deduplication_id: String,
         delay_seconds: Option<i32>,
+        target_scheduled_on: Option<i64>,
     ) -> Result<String, QueueBackendError> {
         let mut request = self
             .sqs_client
@@ -140,6 +142,21 @@ impl SqsBackend {
             .message_body(body)
             .message_group_id(message_group_id)
             .message_deduplication_id(message_deduplication_id);
+
+        if let Some(timestamp) = target_scheduled_on {
+            request = request.message_attributes(
+                "target_scheduled_on",
+                MessageAttributeValue::builder()
+                    .data_type("Number")
+                    .string_value(timestamp.to_string())
+                    .build()
+                    .map_err(|e| {
+                        QueueBackendError::SqsError(format!(
+                            "Failed to build scheduled-on attribute: {e}"
+                        ))
+                    })?,
+            );
+        }
 
         // Add delay if specified (max 900 seconds = 15 minutes)
         if let Some(delay) = delay_seconds {
@@ -192,6 +209,85 @@ impl SqsBackend {
             }
         })
     }
+
+    async fn get_dlq_message_count(&self, queue_url: &str) -> u64 {
+        let attrs_output = match self
+            .sqs_client
+            .get_queue_attributes()
+            .queue_url(queue_url)
+            .attribute_names(aws_sdk_sqs::types::QueueAttributeName::RedrivePolicy)
+            .send()
+            .await
+        {
+            Ok(output) => output,
+            Err(err) => {
+                warn!(error = %err, queue_url = %queue_url, "Failed to fetch redrive policy");
+                return 0;
+            }
+        };
+
+        let redrive_policy = attrs_output
+            .attributes()
+            .and_then(|attrs| attrs.get(&aws_sdk_sqs::types::QueueAttributeName::RedrivePolicy))
+            .cloned();
+
+        let Some(redrive_policy) = redrive_policy else {
+            return 0;
+        };
+
+        let dlq_arn = serde_json::from_str::<serde_json::Value>(&redrive_policy)
+            .ok()
+            .and_then(|value| value.get("deadLetterTargetArn").cloned())
+            .and_then(|value| value.as_str().map(|s| s.to_string()));
+
+        let Some(dlq_arn) = dlq_arn else {
+            warn!(queue_url = %queue_url, "Redrive policy is missing deadLetterTargetArn");
+            return 0;
+        };
+
+        let Some(dlq_name) = dlq_arn.rsplit(':').next() else {
+            return 0;
+        };
+
+        let dlq_url = match self
+            .sqs_client
+            .get_queue_url()
+            .queue_name(dlq_name)
+            .send()
+            .await
+        {
+            Ok(output) => output.queue_url().map(str::to_string),
+            Err(err) => {
+                warn!(error = %err, dlq_name = %dlq_name, "Failed to resolve DLQ URL");
+                None
+            }
+        };
+
+        let Some(dlq_url) = dlq_url else {
+            return 0;
+        };
+
+        match self
+            .sqs_client
+            .get_queue_attributes()
+            .queue_url(dlq_url)
+            .attribute_names(aws_sdk_sqs::types::QueueAttributeName::ApproximateNumberOfMessages)
+            .send()
+            .await
+        {
+            Ok(output) => output
+                .attributes()
+                .and_then(|attrs| {
+                    attrs.get(&aws_sdk_sqs::types::QueueAttributeName::ApproximateNumberOfMessages)
+                })
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0),
+            Err(err) => {
+                warn!(error = %err, queue_url = %queue_url, "Failed to fetch DLQ depth");
+                0
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -223,6 +319,7 @@ impl QueueBackend for SqsBackend {
             message_group_id,
             message_deduplication_id,
             delay_seconds,
+            scheduled_on,
         )
         .await
     }
@@ -254,6 +351,7 @@ impl QueueBackend for SqsBackend {
             message_group_id,
             message_deduplication_id,
             delay_seconds,
+            scheduled_on,
         )
         .await
     }
@@ -283,6 +381,7 @@ impl QueueBackend for SqsBackend {
             message_group_id,
             message_deduplication_id,
             delay_seconds,
+            scheduled_on,
         )
         .await
     }
@@ -313,6 +412,7 @@ impl QueueBackend for SqsBackend {
             message_group_id,
             message_deduplication_id,
             delay_seconds,
+            scheduled_on,
         )
         .await
     }
@@ -360,10 +460,11 @@ impl QueueBackend for SqsBackend {
                 .attribute_names(
                     aws_sdk_sqs::types::QueueAttributeName::ApproximateNumberOfMessagesNotVisible,
                 )
+                .attribute_names(aws_sdk_sqs::types::QueueAttributeName::RedrivePolicy)
                 .send()
                 .await;
 
-            let (messages_visible, messages_in_flight, is_healthy) = match result {
+            let (messages_visible, messages_in_flight, messages_dlq, is_healthy) = match result {
                 Ok(output) => {
                     let visible = output
                         .attributes()
@@ -382,7 +483,8 @@ impl QueueBackend for SqsBackend {
                         })
                         .and_then(|v| v.parse::<u64>().ok())
                         .unwrap_or(0);
-                    (visible, in_flight, true)
+                    let dlq_count = self.get_dlq_message_count(queue_url).await;
+                    (visible, in_flight, dlq_count, true)
                 }
                 Err(e) => {
                     error!(
@@ -390,7 +492,7 @@ impl QueueBackend for SqsBackend {
                         queue_type = ?queue_type,
                         "Failed to get queue attributes"
                     );
-                    (0, 0, false)
+                    (0, 0, 0, false)
                 }
             };
 
@@ -398,7 +500,7 @@ impl QueueBackend for SqsBackend {
                 queue_type: *queue_type,
                 messages_visible,
                 messages_in_flight,
-                messages_dlq: 0, // Would need separate DLQ query
+                messages_dlq,
                 backend: "sqs".to_string(),
                 is_healthy,
             });
