@@ -32,6 +32,7 @@ use actix_web::web::ThinData;
 
 pub mod redis_backend;
 pub mod sqs_backend;
+pub mod sqs_worker;
 pub mod types;
 
 pub use types::{QueueBackendError, QueueHealth, QueueType, WorkerHandle};

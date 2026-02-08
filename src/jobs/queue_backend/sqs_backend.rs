@@ -322,11 +322,27 @@ impl QueueBackend for SqsBackend {
 
     async fn initialize_workers(
         &self,
-        _app_state: Arc<ThinData<DefaultAppState>>,
+        app_state: Arc<ThinData<DefaultAppState>>,
     ) -> Result<Vec<WorkerHandle>, QueueBackendError> {
-        // TODO: Implement in Phase 2.3
-        info!("SQS worker initialization not yet implemented (Phase 2.3)");
-        Ok(vec![])
+        info!("Initializing SQS workers for {} queues", self.queue_urls.len());
+
+        let mut handles = Vec::new();
+
+        // Spawn a worker for each queue type
+        for (queue_type, queue_url) in &self.queue_urls {
+            let handle = super::sqs_worker::spawn_worker_for_queue(
+                self.sqs_client.clone(),
+                *queue_type,
+                queue_url.clone(),
+                app_state.clone(),
+            )
+            .await?;
+
+            handles.push(handle);
+        }
+
+        info!("Successfully spawned {} SQS workers", handles.len());
+        Ok(handles)
     }
 
     async fn health_check(&self) -> Result<Vec<QueueHealth>, QueueBackendError> {
