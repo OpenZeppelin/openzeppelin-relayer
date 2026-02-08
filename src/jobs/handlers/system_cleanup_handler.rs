@@ -37,11 +37,11 @@ use crate::{
 /// Only one instance across the cluster should run cleanup at a time.
 const SYSTEM_CLEANUP_LOCK_NAME: &str = "system_queue_cleanup";
 
-/// TTL for the distributed lock (19 minutes).
+/// TTL for the distributed lock (14 minutes).
 ///
 /// This value should be:
 /// 1. Greater than the worst-case cleanup runtime to prevent concurrent execution
-/// 2. Less than the cron interval (10 minutes) to ensure availability for the next run
+/// 2. Less than the cron interval (15 minutes) to ensure availability for the next run
 const SYSTEM_CLEANUP_LOCK_TTL_SECS: u64 = 14 * 60;
 
 /// Age threshold for job metadata cleanup (10 minutes).
