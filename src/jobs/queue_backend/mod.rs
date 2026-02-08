@@ -31,6 +31,7 @@ use crate::{
 use actix_web::web::ThinData;
 
 pub mod redis_backend;
+pub mod sqs_backend;
 pub mod types;
 
 pub use types::{QueueBackendError, QueueHealth, QueueType, WorkerHandle};
@@ -130,10 +131,8 @@ pub async fn create_queue_backend(
             Ok(Arc::new(backend))
         }
         "sqs" => {
-            // SQS backend will be implemented in Phase 2
-            Err(QueueBackendError::ConfigError(
-                "SQS backend not yet implemented. Use QUEUE_BACKEND=redis".to_string(),
-            ))
+            let backend = sqs_backend::SqsBackend::new().await?;
+            Ok(Arc::new(backend))
         }
         other => Err(QueueBackendError::ConfigError(format!(
             "Unsupported QUEUE_BACKEND value: {}. Must be 'redis' or 'sqs'",
