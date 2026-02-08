@@ -1082,21 +1082,17 @@ mod tests {
         let producer = TestJobProducer::new();
 
         // Test with various scheduling delays
-        let delays = vec![1, 10, 60, 300, 3600]; // 1s, 10s, 1m, 5m, 1h
+        let delays = [1, 10, 60, 300, 3600]; // 1s, 10s, 1m, 5m, 1h
 
         for (idx, delay) in delays.iter().enumerate() {
-            let request = TransactionRequest::new(format!("tx-delay-{}", idx), "relayer-1");
+            let request = TransactionRequest::new(format!("tx-delay-{idx}"), "relayer-1");
             let timestamp = calculate_scheduled_timestamp(*delay);
 
             let result = producer
                 .produce_transaction_request_job(request, Some(timestamp))
                 .await;
 
-            assert!(
-                result.is_ok(),
-                "Failed to schedule job with delay {}",
-                delay
-            );
+            assert!(result.is_ok(), "Failed to schedule job with delay {delay}");
         }
     }
 

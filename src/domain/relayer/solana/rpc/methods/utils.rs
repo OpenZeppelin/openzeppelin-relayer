@@ -2261,18 +2261,12 @@ mod tests {
         let includes_correct_token_accounts = modified_tx
             .message
             .account_keys
-            .iter()
-            .any(|key| *key == user_token_account)
+            .contains(&user_token_account)
             && modified_tx
                 .message
                 .account_keys
-                .iter()
-                .any(|key| *key == relayer_token_account)
-            && modified_tx
-                .message
-                .account_keys
-                .iter()
-                .any(|key| *key == token_mint);
+                .contains(&relayer_token_account)
+            && modified_tx.message.account_keys.contains(&token_mint);
 
         assert!(
             includes_correct_token_accounts,
@@ -2713,7 +2707,7 @@ mod tests {
         let user_keypair = Keypair::new();
         let user_pubkey = user_keypair.pubkey();
 
-        println!("relayer pubkey: {}", relayer_pubkey);
+        println!("relayer pubkey: {relayer_pubkey}");
         println!("user pubkey: {}", user_keypair.pubkey());
 
         // Create token mint
@@ -2936,7 +2930,7 @@ mod tests {
         let result = rpc.get_fee_token_quote(test_token, total_fee).await;
 
         // Assert success
-        assert!(result.is_ok(), "Fee quote should succeed: {:?}", result);
+        assert!(result.is_ok(), "Fee quote should succeed: {result:?}");
 
         let quote = result.unwrap();
 
@@ -3023,7 +3017,7 @@ mod tests {
             reconstructed_tx
                 .signatures
                 .iter()
-                .all(|sig| sig.as_ref() == &[0u8; 64]),
+                .all(|sig| sig.as_ref() == [0u8; 64]),
             "All signatures should be default"
         );
 
@@ -3108,8 +3102,8 @@ mod tests {
 
         // Account ordering: fee_payer first, then other writable signers sorted by pubkey, then readonly signers, then writable non-signers, then program IDs
         // Collect the expected writable signers (excluding fee_payer) and sort by pubkey
-        let mut other_writable_signers = vec![fee_payer.pubkey(), signer1.pubkey()];
-        other_writable_signers.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
+        let mut other_writable_signers = [fee_payer.pubkey(), signer1.pubkey()];
+        other_writable_signers.sort_by_key(|a| a.to_string());
 
         // Expected order: new_fee_payer, then sorted other writable signers, then readonly signers, then non-signers, then program IDs
         assert_eq!(

@@ -1233,8 +1233,7 @@ mod tests {
         #[test]
         fn test_classic_asset_valid() {
             let result = StellarTransactionValidator::validate_fee_token_structure(&format!(
-                "USDC:{}",
-                TEST_PK
+                "USDC:{TEST_PK}"
             ));
             assert!(result.is_ok());
         }
@@ -1242,8 +1241,7 @@ mod tests {
         #[test]
         fn test_classic_asset_code_too_long() {
             let result = StellarTransactionValidator::validate_fee_token_structure(&format!(
-                "VERYLONGCODE1:{}",
-                TEST_PK
+                "VERYLONGCODE1:{TEST_PK}"
             ));
             assert!(result.is_err());
             assert!(result
@@ -1315,7 +1313,7 @@ mod tests {
         fn test_native_not_allowed() {
             let mut policy = RelayerStellarPolicy::default();
             policy.allowed_tokens = Some(vec![StellarAllowedTokensPolicy {
-                asset: format!("USDC:{}", TEST_PK),
+                asset: format!("USDC:{TEST_PK}"),
                 metadata: None,
                 swap_config: None,
                 max_allowed_fee: None,
@@ -1330,7 +1328,7 @@ mod tests {
 
         #[test]
         fn test_token_allowed() {
-            let token = format!("USDC:{}", TEST_PK);
+            let token = format!("USDC:{TEST_PK}");
             let mut policy = RelayerStellarPolicy::default();
             policy.allowed_tokens = Some(vec![StellarAllowedTokensPolicy {
                 asset: token.clone(),
@@ -1345,13 +1343,13 @@ mod tests {
         fn test_token_not_allowed() {
             let mut policy = RelayerStellarPolicy::default();
             policy.allowed_tokens = Some(vec![StellarAllowedTokensPolicy {
-                asset: format!("USDC:{}", TEST_PK),
+                asset: format!("USDC:{TEST_PK}"),
                 metadata: None,
                 swap_config: None,
                 max_allowed_fee: None,
             }]);
             let result = StellarTransactionValidator::validate_allowed_token(
-                &format!("AQUA:{}", TEST_PK_2),
+                &format!("AQUA:{TEST_PK_2}"),
                 &policy,
             );
             assert!(result.is_err());
@@ -2016,7 +2014,7 @@ mod tests {
             let result = StellarTransactionValidator::validate_token_payment(
                 &envelope,
                 TEST_PK_2,
-                &format!("USDC:{}", TEST_PK),
+                &format!("USDC:{TEST_PK}"),
                 1_000_000,
                 &policy,
             );
@@ -2059,7 +2057,7 @@ mod tests {
             let envelope = create_simple_v1_envelope(TEST_PK, TEST_PK_2);
             let mut policy = RelayerStellarPolicy::default();
             policy.allowed_tokens = Some(vec![StellarAllowedTokensPolicy {
-                asset: format!("USDC:{}", TEST_PK),
+                asset: format!("USDC:{TEST_PK}"),
                 metadata: None,
                 swap_config: None,
                 max_allowed_fee: None,
@@ -2097,7 +2095,7 @@ mod tests {
 
         #[test]
         fn test_classic_asset_payment() {
-            let usdc_asset = format!("USDC:{}", TEST_PK);
+            let usdc_asset = format!("USDC:{TEST_PK}");
             let payment_op = Operation {
                 source_account: None,
                 body: OperationBody::Payment(soroban_rs::xdr::PaymentOp {
@@ -2146,7 +2144,7 @@ mod tests {
         #[test]
         fn test_multiple_payments_finds_correct_token() {
             // Create envelope with two payments: one USDC to relayer, one XLM to someone else
-            let usdc_asset = format!("USDC:{}", TEST_PK);
+            let usdc_asset = format!("USDC:{TEST_PK}");
             let usdc_payment = Operation {
                 source_account: None,
                 body: OperationBody::Payment(soroban_rs::xdr::PaymentOp {
@@ -2233,7 +2231,7 @@ mod tests {
         }
 
         fn create_usdc_policy() -> RelayerStellarPolicy {
-            let usdc_asset = format!("USDC:{}", USDC_ISSUER);
+            let usdc_asset = format!("USDC:{USDC_ISSUER}");
             let mut policy = RelayerStellarPolicy::default();
             policy.allowed_tokens = Some(vec![StellarAllowedTokensPolicy {
                 asset: usdc_asset,
@@ -2336,7 +2334,7 @@ mod tests {
                     Box::pin(ready(Ok(
                         crate::services::stellar_dex::StellarQuoteResponse {
                             input_asset: "native".to_string(),
-                            output_asset: format!("USDC:{}", USDC_ISSUER),
+                            output_asset: format!("USDC:{USDC_ISSUER}"),
                             in_amount: 100,
                             out_amount: 1_000_000, // 0.1 USDC
                             price_impact_pct: 0.0,
@@ -2506,7 +2504,7 @@ mod tests {
         #[tokio::test]
         async fn test_fee_exceeds_token_max() {
             let envelope = create_usdc_payment_envelope(TEST_PK, TEST_PK_2, 1_000_000);
-            let usdc_asset = format!("USDC:{}", USDC_ISSUER);
+            let usdc_asset = format!("USDC:{USDC_ISSUER}");
             let mut policy = RelayerStellarPolicy::default();
             policy.allowed_tokens = Some(vec![StellarAllowedTokensPolicy {
                 asset: usdc_asset,

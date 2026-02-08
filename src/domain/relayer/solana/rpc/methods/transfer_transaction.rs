@@ -663,7 +663,7 @@ mod tests {
                     } else {
                         Err(
                             crate::services::provider::SolanaProviderError::InvalidAddress(
-                                format!("Invalid token address {}", pubkey),
+                                format!("Invalid token address {pubkey}"),
                             ),
                         )
                     }

@@ -662,7 +662,7 @@ mod tests {
                         && statuses == [TransactionStatus::Pending]
                         && query.page == 1
                         && query.per_page == 1
-                        && *oldest_first == true
+                        && *oldest_first
                 })
                 .times(1)
                 .returning(move |_, _, _, _| {

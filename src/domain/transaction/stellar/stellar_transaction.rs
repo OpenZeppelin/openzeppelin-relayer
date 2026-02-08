@@ -533,7 +533,7 @@ mod tests {
                 statuses == [TransactionStatus::Pending]
                     && query.page == 1
                     && query.per_page == 1
-                    && *oldest_first == true
+                    && *oldest_first
             })
             .times(1)
             .returning(move |_, _, _, _| {
@@ -576,7 +576,7 @@ mod tests {
                 statuses == [TransactionStatus::Pending]
                     && query.page == 1
                     && query.per_page == 1
-                    && *oldest_first == true
+                    && *oldest_first
             })
             .times(1)
             .returning(|_, _, _, _| {
@@ -854,7 +854,7 @@ mod tests {
         let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
         let random_id = Uuid::new_v4().to_string();
-        let key_prefix = format!("test_stellar:{}", random_id);
+        let key_prefix = format!("test_stellar:{random_id}");
         let tx_repo = Arc::new(
             RedisTransactionRepository::new(connections, key_prefix)
                 .expect("Failed to create RedisTransactionRepository"),

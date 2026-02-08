@@ -1020,8 +1020,7 @@ mod tests {
         let url_str = url.unwrap();
         assert!(
             url_str == "https://example1.com/rpc" || url_str == "https://example2.com/rpc",
-            "Unexpected URL: {}",
-            url_str
+            "Unexpected URL: {url_str}"
         );
     }
 

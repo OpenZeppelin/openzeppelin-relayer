@@ -1428,7 +1428,7 @@ mod tests {
             let parsed = service
                 .parse_string_amount_to_stroops(&decimal_str, 7)
                 .unwrap();
-            assert_eq!(parsed, amount, "Roundtrip failed for amount {}", amount);
+            assert_eq!(parsed, amount, "Roundtrip failed for amount {amount}");
         }
     }
 
@@ -1448,7 +1448,7 @@ mod tests {
 
             // Try to convert to XDR Asset
             let xdr_result = Asset::try_from(spec);
-            assert!(xdr_result.is_ok(), "Failed to convert {} to XDR", asset_id);
+            assert!(xdr_result.is_ok(), "Failed to convert {asset_id} to XDR");
         }
     }
 
@@ -1888,11 +1888,7 @@ mod tests {
 
         for (slippage_percent, expected_bps) in test_cases {
             let bps = (slippage_percent * SLIPPAGE_TO_BPS_MULTIPLIER) as u32;
-            assert_eq!(
-                bps, expected_bps,
-                "Failed for slippage {}%",
-                slippage_percent
-            );
+            assert_eq!(bps, expected_bps, "Failed for slippage {slippage_percent}%");
         }
     }
 }

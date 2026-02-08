@@ -249,7 +249,7 @@ mod tests {
     fn test_debug_output_redacts_content() {
         let secret = SecretString::new("should_not_appear_in_debug");
 
-        let debug_str = format!("{:?}", secret);
+        let debug_str = format!("{secret:?}");
 
         assert_eq!(debug_str, "SecretString(REDACTED)");
         assert!(!debug_str.contains("should_not_appear_in_debug"));

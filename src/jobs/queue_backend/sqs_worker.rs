@@ -18,7 +18,7 @@ use crate::{
         DEFAULT_CONCURRENCY_TRANSACTION_REQUEST, DEFAULT_CONCURRENCY_TRANSACTION_SENDER,
     },
     jobs::{
-        notification_handler, transaction_request_handler, transaction_status_handler,
+        notification_handler, transaction_request_handler_sqs, transaction_status_handler_sqs,
         transaction_submission_handler, Job, NotificationSend, TransactionRequest, TransactionSend,
         TransactionStatusCheck,
     },
@@ -159,9 +159,9 @@ async fn process_message(
         .body()
         .ok_or_else(|| QueueBackendError::QueueError("Empty message body".to_string()))?;
 
-    let receipt_handle = message.receipt_handle().ok_or_else(|| {
-        QueueBackendError::QueueError("Missing receipt handle".to_string())
-    })?;
+    let receipt_handle = message
+        .receipt_handle()
+        .ok_or_else(|| QueueBackendError::QueueError("Missing receipt handle".to_string()))?;
 
     // Get retry attempt count from message attributes
     let attempt_number = message
@@ -206,7 +206,7 @@ async fn process_message(
                 .await
                 .map_err(|e| {
                     error!(error = %e, "Failed to delete message from SQS");
-                    QueueBackendError::SqsError(format!("DeleteMessage failed: {}", e))
+                    QueueBackendError::SqsError(format!("DeleteMessage failed: {e}"))
                 })?;
 
             debug!(
@@ -227,7 +227,7 @@ async fn process_message(
                 .await
                 .map_err(|err| {
                     error!(error = %err, "Failed to delete failed message from SQS");
-                    QueueBackendError::SqsError(format!("DeleteMessage failed: {}", err))
+                    QueueBackendError::SqsError(format!("DeleteMessage failed: {err}"))
                 })?;
 
             error!(
@@ -270,27 +270,14 @@ async fn process_transaction_request(
         QueueBackendError::SerializationError(e.to_string())
     })?;
 
-    // Note: Worker and RedisContext are unused (_worker, _ctx) in the handler
-    // Create minimal dummy values to satisfy type checker
-    let worker = unsafe {
-        // SAFETY: Worker is never actually used in the handler (marked as _worker)
-        std::mem::zeroed()
-    };
-    let redis_ctx = unsafe {
-        // SAFETY: RedisContext is never actually used in the handler (marked as _ctx)
-        std::mem::zeroed()
-    };
-
-    transaction_request_handler(
+    transaction_request_handler_sqs(
         job,
         Data::new((*app_state).clone()),
         Attempt::new_with_value(attempt),
-        worker,
         TaskId::new(),
-        redis_ctx,
     )
     .await
-    .map_err(|e| QueueBackendError::QueueError(format!("Handler error: {}", e)))
+    .map_err(|e| QueueBackendError::QueueError(format!("Handler error: {e}")))
 }
 
 /// Processes a TransactionSend job.
@@ -313,7 +300,7 @@ async fn process_transaction_submission(
         TaskId::new(),
     )
     .await
-    .map_err(|e| QueueBackendError::QueueError(format!("Handler error: {}", e)))
+    .map_err(|e| QueueBackendError::QueueError(format!("Handler error: {e}")))
 }
 
 /// Processes a TransactionStatusCheck job.
@@ -329,21 +316,14 @@ async fn process_transaction_status_check(
         QueueBackendError::SerializationError(e.to_string())
     })?;
 
-    // Note: RedisContext is unused (_ctx) in the handler
-    let redis_ctx = unsafe {
-        // SAFETY: RedisContext is never actually used in the handler (marked as _ctx)
-        std::mem::zeroed()
-    };
-
-    transaction_status_handler(
+    transaction_status_handler_sqs(
         job,
         Data::new((*app_state).clone()),
         Attempt::new_with_value(attempt),
         TaskId::new(),
-        redis_ctx,
     )
     .await
-    .map_err(|e| QueueBackendError::QueueError(format!("Handler error: {}", e)))
+    .map_err(|e| QueueBackendError::QueueError(format!("Handler error: {e}")))
 }
 
 /// Processes a NotificationSend job.
@@ -366,7 +346,7 @@ async fn process_notification(
         TaskId::new(),
     )
     .await
-    .map_err(|e| QueueBackendError::QueueError(format!("Handler error: {}", e)))
+    .map_err(|e| QueueBackendError::QueueError(format!("Handler error: {e}")))
 }
 
 /// Gets the concurrency limit for a queue type from environment.
@@ -384,9 +364,10 @@ fn get_concurrency_for_queue(queue_type: QueueType) -> usize {
             "transaction_status_checker_stellar",
             DEFAULT_CONCURRENCY_STATUS_CHECKER_STELLAR,
         ),
-        QueueType::StellarNotification => {
-            ServerConfig::get_worker_concurrency("notification_sender", DEFAULT_CONCURRENCY_NOTIFICATION)
-        }
+        QueueType::StellarNotification => ServerConfig::get_worker_concurrency(
+            "notification_sender",
+            DEFAULT_CONCURRENCY_NOTIFICATION,
+        ),
     }
 }
 

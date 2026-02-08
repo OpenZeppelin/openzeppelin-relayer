@@ -19,7 +19,7 @@ use openzeppelin_relayer::utils::generate_encryption_key;
 /// Main entry point for encryption key generation tool
 fn main() -> Result<()> {
     let encryption_key = generate_encryption_key();
-    println!("Generated new encryption key: {}", encryption_key);
+    println!("Generated new encryption key: {encryption_key}");
     Ok(())
 }
 

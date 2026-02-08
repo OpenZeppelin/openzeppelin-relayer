@@ -726,7 +726,7 @@ mod tests {
 
         for i in 0..5 {
             let tx = create_test_transaction(
-                &format!("expired-tx-{}", i),
+                &format!("expired-tx-{i}"),
                 relayer_id,
                 TransactionStatus::Confirmed,
                 Some(expired_delete_at.clone()),
@@ -738,7 +738,7 @@ mod tests {
         assert_eq!(transaction_repo.count().await.unwrap(), 5);
 
         // Delete them using batch delete
-        let ids: Vec<String> = (0..5).map(|i| format!("expired-tx-{}", i)).collect();
+        let ids: Vec<String> = (0..5).map(|i| format!("expired-tx-{i}")).collect();
         let result = transaction_repo.delete_by_ids(ids).await.unwrap();
 
         assert_eq!(result.deleted_count, 5);
@@ -1135,7 +1135,7 @@ mod tests {
         // Create 5 confirmed transactions
         for i in 1..=5 {
             let mut tx = create_test_transaction(
-                &format!("tx-{}", i),
+                &format!("tx-{i}"),
                 relayer_id,
                 TransactionStatus::Confirmed,
                 None,

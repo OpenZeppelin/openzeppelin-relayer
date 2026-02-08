@@ -386,7 +386,7 @@ mod tests {
 
         // Create a large object with many fields
         for i in 0..100 {
-            object.insert(format!("field_{}", i), json!(format!("value_{}", i)));
+            object.insert(format!("field_{i}"), json!(format!("value_{}", i)));
         }
 
         let response = create_success_response(Some(JsonRpcId::Number(700)), large_object.clone());

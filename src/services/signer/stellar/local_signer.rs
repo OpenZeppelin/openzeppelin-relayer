@@ -219,7 +219,7 @@ mod tests {
         let result = signer.sign_transaction(evm_tx).await;
         assert!(result.is_err());
         let err = result.err().unwrap();
-        assert!(format!("{}", err).contains("failed to get tx data"));
+        assert!(format!("{err}").contains("failed to get tx data"));
     }
 
     #[tokio::test]

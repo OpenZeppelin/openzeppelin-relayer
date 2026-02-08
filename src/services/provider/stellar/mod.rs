@@ -1388,8 +1388,7 @@ mod stellar_rpc_tests {
             // Should contain the "Failed to..." context message
             assert!(
                 err_str.contains("Failed to get account"),
-                "Unexpected error message: {}",
-                err_str
+                "Unexpected error message: {err_str}"
             );
         }
 
@@ -1405,8 +1404,7 @@ mod stellar_rpc_tests {
             // Should contain the "Failed to..." context message
             assert!(
                 err_str.contains("Failed to simulate transaction"),
-                "Unexpected error message: {}",
-                err_str
+                "Unexpected error message: {err_str}"
             );
         }
 
@@ -1422,8 +1420,7 @@ mod stellar_rpc_tests {
             // Should contain the "Failed to..." context message
             assert!(
                 err_str.contains("Failed to send transaction (polling)"),
-                "Unexpected error message: {}",
-                err_str
+                "Unexpected error message: {err_str}"
             );
         }
 
@@ -1438,8 +1435,7 @@ mod stellar_rpc_tests {
             // Should contain the "Failed to..." context message
             assert!(
                 err_str.contains("Failed to get network"),
-                "Unexpected error message: {}",
-                err_str
+                "Unexpected error message: {err_str}"
             );
         }
 
@@ -1454,8 +1450,7 @@ mod stellar_rpc_tests {
             // Should contain the "Failed to..." context message
             assert!(
                 err_str.contains("Failed to get latest ledger"),
-                "Unexpected error message: {}",
-                err_str
+                "Unexpected error message: {err_str}"
             );
         }
 
@@ -1471,8 +1466,7 @@ mod stellar_rpc_tests {
             // Should contain the "Failed to..." context message
             assert!(
                 err_str.contains("Failed to send transaction"),
-                "Unexpected error message: {}",
-                err_str
+                "Unexpected error message: {err_str}"
             );
         }
 
@@ -1488,8 +1482,7 @@ mod stellar_rpc_tests {
             // Should contain the "Failed to..." context message
             assert!(
                 err_str.contains("Failed to get transaction"),
-                "Unexpected error message: {}",
-                err_str
+                "Unexpected error message: {err_str}"
             );
         }
 
@@ -1508,8 +1501,7 @@ mod stellar_rpc_tests {
             // Should contain the "Failed to..." context message
             assert!(
                 err_str.contains("Failed to get transactions"),
-                "Unexpected error message: {}",
-                err_str
+                "Unexpected error message: {err_str}"
             );
         }
 
@@ -1525,8 +1517,7 @@ mod stellar_rpc_tests {
             // Should contain the "Failed to..." context message
             assert!(
                 err_str.contains("Failed to get ledger entries"),
-                "Unexpected error message: {}",
-                err_str
+                "Unexpected error message: {err_str}"
             );
         }
 
@@ -1547,8 +1538,7 @@ mod stellar_rpc_tests {
             // Should contain the "Failed to..." context message
             assert!(
                 err_str.contains("Failed to get events"),
-                "Unexpected error message: {}",
-                err_str
+                "Unexpected error message: {err_str}"
             );
         }
     }

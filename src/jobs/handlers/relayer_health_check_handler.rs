@@ -303,7 +303,7 @@ mod tests {
     fn create_disabled_relayer(id: &str) -> RelayerRepoModel {
         RelayerRepoModel {
             id: id.to_string(),
-            name: format!("Relayer {}", id),
+            name: format!("Relayer {id}"),
             network: "sepolia".to_string(),
             paused: false,
             network_type: NetworkType::Evm,
@@ -553,14 +553,13 @@ mod tests {
             let delay = calculate_backoff_delay(retry);
             if delay < Duration::from_secs(60) {
                 // Before cap, should increase
-                assert!(delay > prev_delay, "Retry {}: delay should increase", retry);
+                assert!(delay > prev_delay, "Retry {retry}: delay should increase");
             } else {
                 // At or after cap, should stay at 60
                 assert_eq!(
                     delay,
                     Duration::from_secs(60),
-                    "Retry {}: should cap at 60s",
-                    retry
+                    "Retry {retry}: should cap at 60s"
                 );
             }
             prev_delay = delay;

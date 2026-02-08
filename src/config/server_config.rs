@@ -1166,8 +1166,7 @@ mod tests {
                 );
                 assert_eq!(
                     actual_env_var, expected_env_var,
-                    "Env var name should be correctly formatted for worker: {}",
-                    worker_name
+                    "Env var name should be correctly formatted for worker: {worker_name}"
                 );
             }
         }
@@ -1518,7 +1517,7 @@ mod tests {
             for (value, description) in test_cases {
                 env::set_var("CONNECTION_BACKLOG", value.to_string());
                 let result = ServerConfig::get_connection_backlog();
-                assert_eq!(result, value, "Should accept {}: {}", description, value);
+                assert_eq!(result, value, "Should accept {description}: {value}");
             }
 
             env::remove_var("CONNECTION_BACKLOG");
@@ -1614,7 +1613,7 @@ mod tests {
             for (value, description) in test_cases {
                 env::set_var("REQUEST_TIMEOUT_SECONDS", value.to_string());
                 let result = ServerConfig::get_request_timeout_seconds();
-                assert_eq!(result, value, "Should accept {}: {}", description, value);
+                assert_eq!(result, value, "Should accept {description}: {value}");
             }
 
             env::remove_var("REQUEST_TIMEOUT_SECONDS");

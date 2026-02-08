@@ -259,10 +259,7 @@ mod tests {
                 (ApiError::InternalError(actual), ApiError::InternalError(expected)) => {
                     assert_eq!(actual, expected);
                 }
-                _ => panic!(
-                    "Error types don't match: {:?} vs {:?}",
-                    api_error, expected_api_error
-                ),
+                _ => panic!("Error types don't match: {api_error:?} vs {expected_api_error:?}"),
             }
         }
     }
@@ -390,11 +387,7 @@ mod tests {
         ];
 
         for error in permanent_errors {
-            assert!(
-                !error.is_transient(),
-                "Error {:?} should be permanent",
-                error
-            );
+            assert!(!error.is_transient(), "Error {error:?} should be permanent");
         }
     }
 
@@ -409,11 +402,7 @@ mod tests {
         ];
 
         for error in transient_errors {
-            assert!(
-                error.is_transient(),
-                "Error {:?} should be transient",
-                error
-            );
+            assert!(error.is_transient(), "Error {error:?} should be transient");
         }
     }
 

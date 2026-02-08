@@ -452,12 +452,11 @@ mod tests {
                 )
             } else {
                 // Fallback
-                let fallback_account = parse_account_id(TEST_PK).unwrap_or_else(|_| {
-                    AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32])))
-                });
+                let fallback_account = parse_account_id(TEST_PK)
+                    .unwrap_or({ AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32]))) });
                 let fallback_issuer =
                     parse_account_id("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN")
-                        .unwrap_or_else(|_| {
+                        .unwrap_or({
                             AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32])))
                         });
                 let fallback_asset = TrustLineAsset::CreditAlphanum4(soroban_rs::xdr::AlphaNum4 {
@@ -759,7 +758,7 @@ mod tests {
         assert!(!swap_result.transaction_signature.is_empty());
 
         // Verify transaction signature format (should be a UUID-like string)
-        assert!(swap_result.transaction_signature.len() > 0);
+        assert!(!swap_result.transaction_signature.is_empty());
     }
 
     #[tokio::test]

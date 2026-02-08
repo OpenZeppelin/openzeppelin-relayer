@@ -1265,10 +1265,7 @@ mod tests {
                 // Also acceptable - network doesn't exist in our mock config
             }
             Err(other) => {
-                panic!(
-                    "Expected DuplicateId or InvalidReference error, got: {:?}",
-                    other
-                );
+                panic!("Expected DuplicateId or InvalidReference error, got: {other:?}");
             }
             Ok(_) => {
                 panic!("Expected validation to fail but it succeeded");

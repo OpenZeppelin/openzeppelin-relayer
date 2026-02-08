@@ -193,7 +193,7 @@ mod tests {
                 let mut buffer = Vec::new();
                 if let Err(e) = encoder.encode(&[mf], &mut buffer) {
                     return HttpResponse::InternalServerError()
-                        .body(format!("Encoding error: {}", e));
+                        .body(format!("Encoding error: {e}"));
                 }
                 return HttpResponse::Ok()
                     .content_type(encoder.format_type())

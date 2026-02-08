@@ -177,7 +177,7 @@ mod tests {
 
         let response = mock_handler.handle_request(request).await;
 
-        assert!(response.is_ok(), "Expected Ok response, got {:?}", response);
+        assert!(response.is_ok(), "Expected Ok response, got {response:?}");
         let json_response = response.unwrap();
         assert_eq!(
             json_response.result,
@@ -213,7 +213,7 @@ mod tests {
 
         let response = mock_handler.handle_request(request).await;
 
-        assert!(response.is_ok(), "Expected Ok response, got {:?}", response);
+        assert!(response.is_ok(), "Expected Ok response, got {response:?}");
         let json_response = response.unwrap();
         assert_eq!(
             json_response.result,
@@ -260,7 +260,7 @@ mod tests {
 
         let response = mock_handler.handle_request(request).await;
 
-        assert!(response.is_ok(), "Expected Ok response, got {:?}", response);
+        assert!(response.is_ok(), "Expected Ok response, got {response:?}");
         let json_response = response.unwrap();
 
         match json_response.result {
@@ -268,7 +268,7 @@ mod tests {
                 if let NetworkRpcResult::Solana(SolanaRpcResult::SignTransaction(result)) = value {
                     assert_eq!(result.signature, mock_signature);
                 } else {
-                    panic!("Expected SignTransaction result, got {:?}", value);
+                    panic!("Expected SignTransaction result, got {value:?}");
                 }
             }
             None => panic!("Expected Some result, got None"),
@@ -320,7 +320,7 @@ mod tests {
                 {
                     assert_eq!(result.signature, mock_signature);
                 } else {
-                    panic!("Expected SignAndSendTransaction result, got {:?}", value);
+                    panic!("Expected SignAndSendTransaction result, got {value:?}");
                 }
             }
             None => panic!("Expected Some result, got None"),
@@ -381,7 +381,7 @@ mod tests {
                     assert!(!result.transaction.into_inner().is_empty());
                     assert!(result.valid_until_blockheight > 0);
                 } else {
-                    panic!("Expected TransferTransaction result, got {:?}", value);
+                    panic!("Expected TransferTransaction result, got {value:?}");
                 }
             }
             None => panic!("Expected Some result, got None"),
@@ -437,7 +437,7 @@ mod tests {
                     assert!(!result.transaction.into_inner().is_empty());
                     assert!(result.valid_until_blockheight > 0);
                 } else {
-                    panic!("Expected PrepareTransaction result, got {:?}", value);
+                    panic!("Expected PrepareTransaction result, got {value:?}");
                 }
             }
             None => panic!("Expected Some result, got None"),

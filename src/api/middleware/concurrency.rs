@@ -247,7 +247,7 @@ mod tests {
         assert_eq!(err.as_response_error().status_code().as_u16(), 429);
 
         // Check error response body contains expected JSON
-        let error_str = format!("{}", err);
+        let error_str = format!("{err}");
         assert!(error_str.contains("Too many concurrent requests"));
         assert!(error_str.contains("max_concurrent"));
 
@@ -587,7 +587,7 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err();
-        let error_str = format!("{}", err);
+        let error_str = format!("{err}");
 
         // Verify the limit value is reported correctly
         assert!(error_str.contains(&max_limit.to_string()));

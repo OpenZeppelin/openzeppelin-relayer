@@ -223,7 +223,7 @@ mod tests {
 
         // Add test notifications
         for i in 1..=5 {
-            let notification = create_test_notification(&format!("notification-{}", i));
+            let notification = create_test_notification(&format!("notification-{i}"));
             storage.create(notification).await?;
         }
 
@@ -402,7 +402,7 @@ mod tests {
 
         // Add multiple notifications
         for i in 1..=5 {
-            let notification = create_test_notification(&format!("notification-{}", i));
+            let notification = create_test_notification(&format!("notification-{i}"));
             storage.create(notification).await?;
         }
 

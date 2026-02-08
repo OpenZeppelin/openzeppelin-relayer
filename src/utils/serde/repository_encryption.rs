@@ -561,8 +561,7 @@ mod tests {
 
         // Create JSON with both plain and encrypted fields
         let mixed_json = format!(
-            r#"{{"plain_field":"plain-text-value","encrypted_field":"{}"}}"#,
-            encrypted_field_value
+            r#"{{"plain_field":"plain-text-value","encrypted_field":"{encrypted_field_value}"}}"#
         );
 
         // Should successfully deserialize both

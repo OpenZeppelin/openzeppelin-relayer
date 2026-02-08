@@ -370,7 +370,7 @@ mod tests {
             for invalid_ts in invalid_timestamps {
                 tx.created_at = invalid_ts.to_string();
                 let result = get_age_since_created(&tx);
-                assert!(result.is_err(), "Expected error for: {}", invalid_ts);
+                assert!(result.is_err(), "Expected error for: {invalid_ts}");
             }
         }
     }

@@ -203,7 +203,7 @@ mod tests {
     #[actix_web::test]
     async fn test_impl_debug() {
         let impl_repo = SignerRepositoryStorage::new_in_memory();
-        let debug_string = format!("{:?}", impl_repo);
+        let debug_string = format!("{impl_repo:?}");
         assert!(debug_string.contains("InMemory"));
     }
 

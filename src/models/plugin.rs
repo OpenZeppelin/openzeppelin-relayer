@@ -178,7 +178,7 @@ mod tests {
         let updated = plugin.apply_update(update).unwrap();
         assert_eq!(updated.timeout, Duration::from_secs(60));
         // Other fields unchanged
-        assert_eq!(updated.emit_logs, false);
+        assert!(!updated.emit_logs);
     }
 
     #[test]

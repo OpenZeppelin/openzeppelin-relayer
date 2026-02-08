@@ -366,7 +366,7 @@ mod tests {
 
         // Create multiple networks
         for i in 0..5 {
-            let network = create_test_network(format!("network-{}", i), NetworkType::Evm);
+            let network = create_test_network(format!("network-{i}"), NetworkType::Evm);
             repo.create(network).await.unwrap();
         }
 

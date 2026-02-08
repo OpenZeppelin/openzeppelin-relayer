@@ -36,6 +36,25 @@ pub async fn transaction_request_handler(
     task_id: TaskId,
     _ctx: RedisContext,
 ) -> Result<(), Error> {
+    process_transaction_request(job, state, attempt, task_id).await
+}
+
+/// SQS-compatible entrypoint without Apalis Redis worker/context arguments.
+pub async fn transaction_request_handler_sqs(
+    job: Job<TransactionRequest>,
+    state: Data<ThinData<DefaultAppState>>,
+    attempt: Attempt,
+    task_id: TaskId,
+) -> Result<(), Error> {
+    process_transaction_request(job, state, attempt, task_id).await
+}
+
+async fn process_transaction_request(
+    job: Job<TransactionRequest>,
+    state: Data<ThinData<DefaultAppState>>,
+    attempt: Attempt,
+    _task_id: TaskId,
+) -> Result<(), Error> {
     if let Some(request_id) = job.request_id.clone() {
         set_request_id(request_id);
     }

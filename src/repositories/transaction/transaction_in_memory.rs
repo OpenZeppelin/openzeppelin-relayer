@@ -466,7 +466,7 @@ mod tests {
                 to: Some("0xRecipient".to_string()),
                 chain_id: 1,
                 signature: None,
-                hash: Some(format!("0x{}", id)),
+                hash: Some(format!("0x{id}")),
                 speed: Some(Speed::Fast),
                 max_fee_per_gas: None,
                 max_priority_fee_per_gas: None,
@@ -501,7 +501,7 @@ mod tests {
                 to: Some("0xRecipient".to_string()),
                 chain_id: 1,
                 signature: None,
-                hash: Some(format!("0x{}", id)),
+                hash: Some(format!("0x{id}")),
                 speed: Some(Speed::Fast),
                 max_fee_per_gas: None,
                 max_priority_fee_per_gas: None,
@@ -728,7 +728,7 @@ mod tests {
 
         // Create multiple transactions
         for i in 1..=10 {
-            let tx = create_test_transaction(&format!("test-{}", i));
+            let tx = create_test_transaction(&format!("test-{i}"));
             repo.create(tx).await.unwrap();
         }
 
@@ -1118,7 +1118,7 @@ mod tests {
         // Create 5 pending transactions
         for i in 1..=5 {
             let tx = create_tx_with_timestamp(
-                &format!("tx{}", i),
+                &format!("tx{i}"),
                 &format!("2025-01-27T{:02}:00:00.000000+00:00", 10 + i),
                 TransactionStatus::Pending,
             );
@@ -1128,7 +1128,7 @@ mod tests {
         // Create 2 confirmed transactions
         for i in 6..=7 {
             let tx = create_tx_with_timestamp(
-                &format!("tx{}", i),
+                &format!("tx{i}"),
                 &format!("2025-01-27T{:02}:00:00.000000+00:00", 10 + i),
                 TransactionStatus::Confirmed,
             );
@@ -1246,7 +1246,7 @@ mod tests {
         // Create 5 pending transactions with ascending timestamps
         for i in 1..=5 {
             let tx = create_tx_with_timestamp(
-                &format!("tx{}", i),
+                &format!("tx{i}"),
                 &format!("2025-01-27T{:02}:00:00.000000+00:00", 10 + i),
                 TransactionStatus::Pending,
             );
@@ -1450,7 +1450,7 @@ mod tests {
         ];
 
         for (i, status) in final_statuses.iter().enumerate() {
-            let tx_id = format!("test-final-{}", i);
+            let tx_id = format!("test-final-{i}");
             let tx = create_test_transaction_pending_state(&tx_id);
 
             // Ensure transaction has no delete_at initially
@@ -1469,8 +1469,7 @@ mod tests {
             // Should have delete_at set
             assert!(
                 updated.delete_at.is_some(),
-                "delete_at should be set for status: {:?}",
-                status
+                "delete_at should be set for status: {status:?}"
             );
 
             // Verify the timestamp is reasonable (approximately 6 hours from now)
@@ -1486,8 +1485,7 @@ mod tests {
             assert!(
                 duration_from_before >= expected_duration - tolerance &&
                 duration_from_before <= expected_duration + tolerance,
-                "delete_at should be approximately 6 hours from now for status: {:?}. Duration: {:?}",
-                status, duration_from_before
+                "delete_at should be approximately 6 hours from now for status: {status:?}. Duration: {duration_from_before:?}"
             );
         }
 
@@ -1513,7 +1511,7 @@ mod tests {
         ];
 
         for (i, status) in non_final_statuses.iter().enumerate() {
-            let tx_id = format!("test-non-final-{}", i);
+            let tx_id = format!("test-non-final-{i}");
             let tx = create_test_transaction_pending_state(&tx_id);
 
             repo.create(tx).await.unwrap();
@@ -1527,8 +1525,7 @@ mod tests {
             // Should NOT have delete_at set
             assert!(
                 updated.delete_at.is_none(),
-                "delete_at should NOT be set for status: {:?}",
-                status
+                "delete_at should NOT be set for status: {status:?}"
             );
         }
 
@@ -1584,8 +1581,7 @@ mod tests {
         assert!(
             duration_from_before >= expected_duration - tolerance
                 && duration_from_before <= expected_duration + tolerance,
-            "delete_at should be approximately 8 hours from now. Duration: {:?}",
-            duration_from_before
+            "delete_at should be approximately 8 hours from now. Duration: {duration_from_before:?}"
         );
 
         // Also verify other fields were updated
@@ -1782,7 +1778,7 @@ mod tests {
 
         // Create multiple transactions
         for i in 1..=5 {
-            let tx = create_test_transaction(&format!("test-{}", i));
+            let tx = create_test_transaction(&format!("test-{i}"));
             repo.create(tx).await.unwrap();
         }
 
@@ -1831,7 +1827,7 @@ mod tests {
 
         // Create some transactions
         for i in 1..=3 {
-            let tx = create_test_transaction(&format!("test-{}", i));
+            let tx = create_test_transaction(&format!("test-{i}"));
             repo.create(tx).await.unwrap();
         }
 
@@ -1866,14 +1862,14 @@ mod tests {
 
         // Create transactions
         for i in 1..=10 {
-            let tx = create_test_transaction(&format!("test-{}", i));
+            let tx = create_test_transaction(&format!("test-{i}"));
             repo.create(tx).await.unwrap();
         }
 
         assert_eq!(repo.count().await.unwrap(), 10);
 
         // Delete all
-        let ids_to_delete: Vec<String> = (1..=10).map(|i| format!("test-{}", i)).collect();
+        let ids_to_delete: Vec<String> = (1..=10).map(|i| format!("test-{i}")).collect();
         let result = repo.delete_by_ids(ids_to_delete).await.unwrap();
 
         assert_eq!(result.deleted_count, 10);

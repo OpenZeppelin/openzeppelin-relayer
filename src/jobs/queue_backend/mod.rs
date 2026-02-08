@@ -136,8 +136,7 @@ pub async fn create_queue_backend(
             Ok(Arc::new(backend))
         }
         other => Err(QueueBackendError::ConfigError(format!(
-            "Unsupported QUEUE_BACKEND value: {}. Must be 'redis' or 'sqs'",
-            other
+            "Unsupported QUEUE_BACKEND value: {other}. Must be 'redis' or 'sqs'"
         ))),
     }
 }
@@ -160,6 +159,51 @@ mod tests {
             assert!(!queue_type.queue_name().is_empty());
             assert!(!queue_type.redis_namespace().is_empty());
             assert!(queue_type.max_retries() > 0 || queue_type.max_retries() == usize::MAX);
+        }
+    }
+
+    #[test]
+    fn test_queue_type_visibility_timeouts_in_range() {
+        // All visibility timeouts should be reasonable (2-15 minutes)
+        assert!(QueueType::StellarTransactionRequest.visibility_timeout_secs() >= 120);
+        assert!(QueueType::StellarTransactionRequest.visibility_timeout_secs() <= 900);
+
+        assert!(QueueType::StellarTransactionSubmission.visibility_timeout_secs() >= 120);
+        assert!(QueueType::StellarTransactionSubmission.visibility_timeout_secs() <= 900);
+
+        assert!(QueueType::StellarStatusCheck.visibility_timeout_secs() >= 120);
+        assert!(QueueType::StellarStatusCheck.visibility_timeout_secs() <= 900);
+
+        assert!(QueueType::StellarNotification.visibility_timeout_secs() >= 120);
+        assert!(QueueType::StellarNotification.visibility_timeout_secs() <= 900);
+    }
+
+    #[test]
+    fn test_queue_type_polling_intervals_appropriate() {
+        // Status check should be fastest
+        assert_eq!(QueueType::StellarStatusCheck.polling_interval_secs(), 2);
+
+        // Others should be slower
+        assert!(QueueType::StellarTransactionRequest.polling_interval_secs() >= 10);
+        assert!(QueueType::StellarTransactionSubmission.polling_interval_secs() >= 10);
+        assert!(QueueType::StellarNotification.polling_interval_secs() >= 10);
+    }
+
+    #[test]
+    fn test_queue_backend_error_variants() {
+        let errors = vec![
+            QueueBackendError::RedisError("test".to_string()),
+            QueueBackendError::SqsError("test".to_string()),
+            QueueBackendError::SerializationError("test".to_string()),
+            QueueBackendError::ConfigError("test".to_string()),
+            QueueBackendError::QueueNotFound("test".to_string()),
+            QueueBackendError::WorkerInitError("test".to_string()),
+            QueueBackendError::QueueError("test".to_string()),
+        ];
+
+        for error in errors {
+            let error_str = error.to_string();
+            assert!(!error_str.is_empty());
         }
     }
 }

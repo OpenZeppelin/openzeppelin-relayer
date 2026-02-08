@@ -1739,8 +1739,7 @@ mod tests {
             let err = PluginError::PluginExecutionError(error_msg.to_string());
             assert!(
                 PoolManager::is_dead_server_error(&err),
-                "Expected '{}' to be detected as dead server error",
-                error_msg
+                "Expected '{error_msg}' to be detected as dead server error"
             );
         }
     }
@@ -1805,8 +1804,7 @@ mod tests {
             let err = PluginError::PluginExecutionError(error_msg.to_string());
             assert!(
                 !PoolManager::is_dead_server_error(&err),
-                "Expected '{}' to NOT be detected as dead server error",
-                error_msg
+                "Expected '{error_msg}' to NOT be detected as dead server error"
             );
         }
     }
@@ -1829,8 +1827,7 @@ mod tests {
             let err = PluginError::PluginExecutionError(error_msg.to_string());
             assert!(
                 !PoolManager::is_dead_server_error(&err),
-                "Expected '{}' to NOT be detected as dead server error",
-                error_msg
+                "Expected '{error_msg}' to NOT be detected as dead server error"
             );
         }
     }
@@ -2548,7 +2545,7 @@ mod tests {
     #[test]
     fn test_plugin_error_socket_error() {
         let err = PluginError::SocketError("Connection failed".to_string());
-        let display = format!("{}", err);
+        let display = format!("{err}");
         assert!(display.contains("Socket error"));
         assert!(display.contains("Connection failed"));
     }
@@ -2556,7 +2553,7 @@ mod tests {
     #[test]
     fn test_plugin_error_plugin_execution_error() {
         let err = PluginError::PluginExecutionError("Execution failed".to_string());
-        let display = format!("{}", err);
+        let display = format!("{err}");
         assert!(display.contains("Execution failed"));
     }
 
@@ -2573,7 +2570,7 @@ mod tests {
         let err = PluginError::HandlerError(Box::new(payload));
 
         // Check that it can be displayed
-        let display = format!("{:?}", err);
+        let display = format!("{err:?}");
         assert!(display.contains("HandlerError"));
     }
 
@@ -2966,7 +2963,7 @@ mod tests {
             success_rate: Some(0.95),
         };
 
-        let debug_str = format!("{:?}", result);
+        let debug_str = format!("{result:?}");
         assert!(debug_str.contains("test"));
         assert!(debug_str.contains("100"));
         assert!(debug_str.contains("200"));
@@ -3047,8 +3044,7 @@ mod tests {
             let err = PluginError::PluginExecutionError(msg.to_string());
             assert!(
                 !PoolManager::is_dead_server_error(&err),
-                "Expected '{}' to NOT be dead server error",
-                msg
+                "Expected '{msg}' to NOT be dead server error"
             );
         }
     }
@@ -3109,16 +3105,16 @@ mod tests {
     fn test_plugin_error_display_formats() {
         // Test all PluginError variants have proper Display implementations
         let err = PluginError::SocketError("test socket error".to_string());
-        assert!(format!("{}", err).contains("Socket error"));
+        assert!(format!("{err}").contains("Socket error"));
 
         let err = PluginError::PluginExecutionError("test execution error".to_string());
-        assert!(format!("{}", err).contains("test execution error"));
+        assert!(format!("{err}").contains("test execution error"));
 
         let err = PluginError::ScriptTimeout(60);
-        assert!(format!("{}", err).contains("60"));
+        assert!(format!("{err}").contains("60"));
 
         let err = PluginError::PluginError("test plugin error".to_string());
-        assert!(format!("{}", err).contains("test plugin error"));
+        assert!(format!("{err}").contains("test plugin error"));
     }
 
     #[test]
@@ -3322,7 +3318,7 @@ mod tests {
             connection_pool_active_connections: None,
         };
 
-        let debug_str = format!("{:?}", status);
+        let debug_str = format!("{status:?}");
         assert!(debug_str.contains("healthy: true"));
         assert!(debug_str.contains("test"));
     }
@@ -3376,7 +3372,7 @@ mod tests {
             query: None,
         };
 
-        let debug_str = format!("{:?}", request);
+        let debug_str = format!("{request:?}");
         assert!(debug_str.contains("debug-test"));
         assert!(debug_str.contains("test-plugin"));
     }
@@ -3392,7 +3388,7 @@ mod tests {
             details: Some(serde_json::json!({"info": "test"})),
         };
 
-        let debug_str = format!("{:?}", error);
+        let debug_str = format!("{error:?}");
         assert!(debug_str.contains("Test error"));
         assert!(debug_str.contains("TEST_ERR"));
     }
@@ -3409,7 +3405,7 @@ mod tests {
             logs: None,
         };
 
-        let debug_str = format!("{:?}", response);
+        let debug_str = format!("{response:?}");
         assert!(debug_str.contains("resp-123"));
         assert!(debug_str.contains("true"));
     }
@@ -3423,7 +3419,7 @@ mod tests {
             message: "Test message".to_string(),
         };
 
-        let debug_str = format!("{:?}", entry);
+        let debug_str = format!("{entry:?}");
         assert!(debug_str.contains("info"));
         assert!(debug_str.contains("Test message"));
     }
@@ -3567,7 +3563,7 @@ mod tests {
 
         for (pattern, expected) in variants {
             let result = DeadServerIndicator::from_error_str(pattern);
-            assert_eq!(result, Some(expected), "Pattern '{}' should match", pattern);
+            assert_eq!(result, Some(expected), "Pattern '{pattern}' should match");
         }
     }
 
@@ -3576,7 +3572,7 @@ mod tests {
         use super::super::health::DeadServerIndicator;
 
         let indicator = DeadServerIndicator::BrokenPipe;
-        let debug_str = format!("{:?}", indicator);
+        let debug_str = format!("{indicator:?}");
         assert_eq!(debug_str, "BrokenPipe");
     }
 
@@ -3868,8 +3864,7 @@ mod tests {
             let log_entry: LogEntry = entry.into();
             assert_eq!(
                 log_entry.level, expected,
-                "Level '{}' should convert to {:?}",
-                input, expected
+                "Level '{input}' should convert to {expected:?}"
             );
         }
     }
@@ -3963,8 +3958,7 @@ mod tests {
             let heap = PoolManager::calculate_heap_size(concurrency);
             assert_eq!(
                 heap, expected_heap,
-                "Concurrency {} should give heap {}",
-                concurrency, expected_heap
+                "Concurrency {concurrency} should give heap {expected_heap}"
             );
         }
     }

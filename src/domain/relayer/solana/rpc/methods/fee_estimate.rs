@@ -422,8 +422,7 @@ mod tests {
                         })
                     } else {
                         Err(SolanaProviderError::RpcError(format!(
-                            "Account not found {}",
-                            pubkey
+                            "Account not found {pubkey}"
                         )))
                     }
                 })

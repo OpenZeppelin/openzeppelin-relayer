@@ -198,7 +198,7 @@ mod tests {
     fn create_test_plugin(id: &str) -> PluginModel {
         PluginModel {
             id: id.to_string(),
-            path: format!("path/{}", id),
+            path: format!("path/{id}"),
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: false,
             emit_traces: false,
@@ -217,7 +217,7 @@ mod tests {
     ) -> PluginModel {
         PluginModel {
             id: id.to_string(),
-            path: format!("path/{}", id),
+            path: format!("path/{id}"),
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs,
             emit_traces,
@@ -272,14 +272,14 @@ mod tests {
         let repo = Arc::new(InMemoryPluginRepository::new());
 
         for i in 1..=5 {
-            let plugin = create_test_plugin(&format!("plugin-{}", i));
+            let plugin = create_test_plugin(&format!("plugin-{i}"));
             repo.add(plugin).await.unwrap();
         }
 
         assert_eq!(repo.count().await.unwrap(), 5);
 
         for i in 1..=5 {
-            let result = repo.get_by_id(&format!("plugin-{}", i)).await.unwrap();
+            let result = repo.get_by_id(&format!("plugin-{i}")).await.unwrap();
             assert!(result.is_some());
         }
     }
@@ -383,7 +383,7 @@ mod tests {
         let repo = Arc::new(InMemoryPluginRepository::new());
 
         for i in 1..=10 {
-            repo.add(create_test_plugin(&format!("plugin-{}", i)))
+            repo.add(create_test_plugin(&format!("plugin-{i}")))
                 .await
                 .unwrap();
         }
@@ -396,7 +396,7 @@ mod tests {
         let repo = Arc::new(InMemoryPluginRepository::new());
 
         for i in 1..=5 {
-            repo.add(create_test_plugin(&format!("plugin-{}", i)))
+            repo.add(create_test_plugin(&format!("plugin-{i}")))
                 .await
                 .unwrap();
         }
@@ -417,7 +417,7 @@ mod tests {
         let repo = Arc::new(InMemoryPluginRepository::new());
 
         for i in 1..=10 {
-            repo.add(create_test_plugin(&format!("plugin-{:02}", i)))
+            repo.add(create_test_plugin(&format!("plugin-{i:02}")))
                 .await
                 .unwrap();
         }
@@ -440,7 +440,7 @@ mod tests {
         let repo = Arc::new(InMemoryPluginRepository::new());
 
         for i in 1..=10 {
-            repo.add(create_test_plugin(&format!("plugin-{:02}", i)))
+            repo.add(create_test_plugin(&format!("plugin-{i:02}")))
                 .await
                 .unwrap();
         }
@@ -462,7 +462,7 @@ mod tests {
         let repo = Arc::new(InMemoryPluginRepository::new());
 
         for i in 1..=10 {
-            repo.add(create_test_plugin(&format!("plugin-{:02}", i)))
+            repo.add(create_test_plugin(&format!("plugin-{i:02}")))
                 .await
                 .unwrap();
         }
@@ -499,7 +499,7 @@ mod tests {
         let repo = Arc::new(InMemoryPluginRepository::new());
 
         for i in 1..=5 {
-            repo.add(create_test_plugin(&format!("plugin-{}", i)))
+            repo.add(create_test_plugin(&format!("plugin-{i}")))
                 .await
                 .unwrap();
         }
@@ -520,7 +520,7 @@ mod tests {
         let repo = Arc::new(InMemoryPluginRepository::new());
 
         for i in 1..=5 {
-            repo.add(create_test_plugin(&format!("plugin-{}", i)))
+            repo.add(create_test_plugin(&format!("plugin-{i}")))
                 .await
                 .unwrap();
         }
@@ -558,7 +558,7 @@ mod tests {
         let repo = Arc::new(InMemoryPluginRepository::new());
 
         for i in 1..=5 {
-            repo.add(create_test_plugin(&format!("plugin-{}", i)))
+            repo.add(create_test_plugin(&format!("plugin-{i}")))
                 .await
                 .unwrap();
         }
@@ -687,14 +687,14 @@ mod tests {
         let repo = InMemoryPluginRepository::new();
 
         for i in 1..=5 {
-            repo.store_compiled_code(&format!("plugin-{}", i), &format!("code-{}", i), None)
+            repo.store_compiled_code(&format!("plugin-{i}"), &format!("code-{i}"), None)
                 .await
                 .unwrap();
         }
 
         for i in 1..=5 {
             assert!(repo
-                .has_compiled_code(&format!("plugin-{}", i))
+                .has_compiled_code(&format!("plugin-{i}"))
                 .await
                 .unwrap());
         }
@@ -703,7 +703,7 @@ mod tests {
 
         for i in 1..=5 {
             assert!(!repo
-                .has_compiled_code(&format!("plugin-{}", i))
+                .has_compiled_code(&format!("plugin-{i}"))
                 .await
                 .unwrap());
         }

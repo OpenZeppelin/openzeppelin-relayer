@@ -2557,8 +2557,7 @@ mod tests {
                 let err_str = err.to_string();
                 assert!(
                     err_str.contains("Soroban operations must be exclusive"),
-                    "Expected error about Soroban operation exclusivity, got: {}",
-                    err_str
+                    "Expected error about Soroban operation exclusivity, got: {err_str}"
                 );
             }
         }
@@ -2601,8 +2600,7 @@ mod tests {
                 let err_str = err.to_string();
                 assert!(
                     err_str.contains("Transaction can contain at most one Soroban operation"),
-                    "Expected error about multiple Soroban operations, got: {}",
-                    err_str
+                    "Expected error about multiple Soroban operations, got: {err_str}"
                 );
             }
         }
@@ -2669,8 +2667,7 @@ mod tests {
                 let err_str = err.to_string();
                 assert!(
                     err_str.contains("Soroban operations cannot have a memo"),
-                    "Expected error about memo restriction, got: {}",
-                    err_str
+                    "Expected error about memo restriction, got: {err_str}"
                 );
             }
         }
@@ -2845,8 +2842,7 @@ mod tests {
             // Should set delete_at for final status
             assert!(
                 transaction.delete_at.is_some(),
-                "delete_at should be set for status: {:?}",
-                status
+                "delete_at should be set for status: {status:?}"
             );
 
             // Verify the timestamp is reasonable
@@ -2866,8 +2862,7 @@ mod tests {
             assert!(
                 duration_from_before >= expected_duration - tolerance &&
                 duration_from_before <= expected_duration + tolerance,
-                "delete_at should be approximately 3 hours from now for status: {:?}. Duration from start: {:?}, Expected: {:?}, Config hours at runtime: {}",
-                status, duration_from_before, expected_duration, actual_hours_at_runtime
+                "delete_at should be approximately 3 hours from now for status: {status:?}. Duration from start: {duration_from_before:?}, Expected: {expected_duration:?}, Config hours at runtime: {actual_hours_at_runtime}"
             );
         }
 
@@ -2911,8 +2906,7 @@ mod tests {
         assert!(
             duration_from_before >= expected_duration - tolerance &&
             duration_from_before <= expected_duration + tolerance,
-            "delete_at should be approximately 4 hours from now (default). Duration from start: {:?}, Expected: {:?}",
-            duration_from_before, expected_duration
+            "delete_at should be approximately 4 hours from now (default). Duration from start: {duration_from_before:?}, Expected: {expected_duration:?}"
         );
     }
 
@@ -2941,8 +2935,7 @@ mod tests {
 
             assert!(
                 transaction.delete_at.is_some(),
-                "delete_at should be set for {} hours",
-                expiration_hours
+                "delete_at should be set for {expiration_hours} hours"
             );
 
             let delete_at_str = transaction.delete_at.unwrap();
@@ -2957,8 +2950,7 @@ mod tests {
             assert!(
                 duration_from_before >= expected_duration - tolerance &&
                 duration_from_before <= expected_duration + tolerance,
-                "delete_at should be approximately {} hours from now. Duration from start: {:?}, Expected: {:?}",
-                expiration_hours, duration_from_before, expected_duration
+                "delete_at should be approximately {expiration_hours} hours from now. Duration from start: {duration_from_before:?}, Expected: {expected_duration:?}"
             );
         }
 
@@ -2979,8 +2971,7 @@ mod tests {
 
             assert!(
                 result.is_some(),
-                "calculate_delete_at should return Some for {} hours",
-                hours
+                "calculate_delete_at should return Some for {hours} hours"
             );
 
             let delete_at_str = result.unwrap();
@@ -2995,8 +2986,7 @@ mod tests {
 
             assert!(
                 delete_at >= expected_min && delete_at <= expected_max,
-                "Calculated delete_at should be approximately {} hours from now. Got: {}, Expected between: {} and {}",
-                hours, delete_at, expected_min, expected_max
+                "Calculated delete_at should be approximately {hours} hours from now. Got: {delete_at}, Expected between: {expected_min} and {expected_max}"
             );
         }
     }

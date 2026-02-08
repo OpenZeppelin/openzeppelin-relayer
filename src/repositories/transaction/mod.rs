@@ -651,7 +651,7 @@ mod tests {
 
         // Add test transactions
         for i in 1..=5 {
-            let tx = create_test_transaction(&format!("tx-{}", i), "test-relayer");
+            let tx = create_test_transaction(&format!("tx-{i}"), "test-relayer");
             storage.create(tx).await?;
         }
 
@@ -813,7 +813,7 @@ mod tests {
 
         // Add multiple transactions
         for i in 1..=5 {
-            let tx = create_test_transaction(&format!("tx-{}", i), "test-relayer");
+            let tx = create_test_transaction(&format!("tx-{i}"), "test-relayer");
             storage.create(tx).await?;
         }
 
@@ -1199,7 +1199,7 @@ mod tests {
 
         // Add many transactions for one relayer
         for i in 1..=10 {
-            let tx = create_test_transaction(&format!("tx-{}", i), "test-relayer");
+            let tx = create_test_transaction(&format!("tx-{i}"), "test-relayer");
             storage.create(tx).await?;
         }
 

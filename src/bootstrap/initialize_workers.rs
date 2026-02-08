@@ -524,7 +524,7 @@ mod tests {
     fn create_test_evm_relayer(id: &str) -> RelayerRepoModel {
         RelayerRepoModel {
             id: id.to_string(),
-            name: format!("EVM Relayer {}", id),
+            name: format!("EVM Relayer {id}"),
             network: "sepolia".to_string(),
             paused: false,
             network_type: NetworkType::Evm,
@@ -542,7 +542,7 @@ mod tests {
     ) -> RelayerRepoModel {
         RelayerRepoModel {
             id: id.to_string(),
-            name: format!("Solana Relayer {}", id),
+            name: format!("Solana Relayer {id}"),
             network: "mainnet-beta".to_string(),
             paused: false,
             network_type: NetworkType::Solana,
@@ -577,7 +577,7 @@ mod tests {
     ) -> RelayerRepoModel {
         RelayerRepoModel {
             id: id.to_string(),
-            name: format!("Stellar Relayer {}", id),
+            name: format!("Stellar Relayer {id}"),
             network: "testnet".to_string(),
             paused: false,
             network_type: NetworkType::Stellar,
@@ -783,7 +783,7 @@ mod tests {
     fn create_test_solana_relayer_without_swap_config(id: &str) -> RelayerRepoModel {
         RelayerRepoModel {
             id: id.to_string(),
-            name: format!("Solana Relayer {}", id),
+            name: format!("Solana Relayer {id}"),
             network: "mainnet-beta".to_string(),
             paused: false,
             network_type: NetworkType::Solana,
@@ -810,7 +810,7 @@ mod tests {
     fn create_test_stellar_relayer_without_swap_config(id: &str) -> RelayerRepoModel {
         RelayerRepoModel {
             id: id.to_string(),
-            name: format!("Stellar Relayer {}", id),
+            name: format!("Stellar Relayer {id}"),
             network: "testnet".to_string(),
             paused: false,
             network_type: NetworkType::Stellar,
@@ -1012,8 +1012,7 @@ mod tests {
 
         assert_eq!(filtered.len(), 2, "Should only include Solana and Stellar");
 
-        let network_types: Vec<NetworkType> =
-            filtered.iter().map(|r| r.network_type.clone()).collect();
+        let network_types: Vec<NetworkType> = filtered.iter().map(|r| r.network_type).collect();
         assert!(
             network_types.contains(&NetworkType::Solana),
             "Should include Solana"

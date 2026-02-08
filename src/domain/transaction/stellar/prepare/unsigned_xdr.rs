@@ -871,7 +871,7 @@ mod tests {
 
         let mut policy = RelayerStellarPolicy::default();
         policy.allowed_tokens = Some(vec![crate::models::StellarAllowedTokensPolicy {
-            asset: format!("USDC:{}", TEST_PK_2),
+            asset: format!("USDC:{TEST_PK_2}"),
             metadata: None,
             swap_config: None,
             max_allowed_fee: None,
@@ -1016,7 +1016,7 @@ mod tests {
 
         let mut policy = RelayerStellarPolicy::default();
         policy.allowed_tokens = Some(vec![crate::models::StellarAllowedTokensPolicy {
-            asset: format!("USDC:{}", TEST_PK_2),
+            asset: format!("USDC:{TEST_PK_2}"),
             metadata: None,
             swap_config: None,
             max_allowed_fee: None,
@@ -1274,11 +1274,10 @@ mod xdr_transaction_tests {
             // The StellarValidationError formats differently - check for the expected/actual pattern
             assert!(
                 msg.contains("does not match relayer account"),
-                "Error message was: {}",
-                msg
+                "Error message was: {msg}"
             );
         } else {
-            panic!("Expected ValidationError, got {:?}", result);
+            panic!("Expected ValidationError, got {result:?}");
         }
     }
 
@@ -1412,8 +1411,7 @@ mod xdr_transaction_tests {
         let result = handler.prepare_transaction_impl(tx).await;
         assert!(
             result.is_ok(),
-            "Expected successful preparation, got: {:?}",
-            result
+            "Expected successful preparation, got: {result:?}"
         );
     }
 
@@ -1464,7 +1462,7 @@ mod xdr_transaction_tests {
                 assert!(msg.contains("not supported via unsigned_xdr path"));
                 assert!(msg.contains("fee_bump"));
             }
-            other => panic!("Expected ValidationError, got: {:?}", other),
+            other => panic!("Expected ValidationError, got: {other:?}"),
         }
     }
 

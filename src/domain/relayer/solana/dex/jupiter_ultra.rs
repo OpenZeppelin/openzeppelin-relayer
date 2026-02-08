@@ -300,11 +300,10 @@ mod tests {
                 assert!(
                     error_message.contains("Failed to get Jupiter Ultra order")
                         && error_message.contains("insufficient liquidity"),
-                    "Error message did not contain expected substrings: {}",
-                    error_message
+                    "Error message did not contain expected substrings: {error_message}"
                 );
             }
-            Err(e) => panic!("Expected DexError but got different error: {:?}", e),
+            Err(e) => panic!("Expected DexError but got different error: {e:?}"),
             Ok(_) => panic!("Expected error but got Ok"),
         }
     }
@@ -349,11 +348,10 @@ mod tests {
             Err(RelayerError::DexError(error_message)) => {
                 assert!(
                     error_message.contains("Failed to get transaction from Jupiter order"),
-                    "Error message did not contain expected substrings: {}",
-                    error_message
+                    "Error message did not contain expected substrings: {error_message}"
                 );
             }
-            Err(e) => panic!("Expected DexError but got different error: {:?}", e),
+            Err(e) => panic!("Expected DexError but got different error: {e:?}"),
             Ok(_) => panic!("Expected error but got Ok"),
         }
     }
@@ -398,11 +396,10 @@ mod tests {
             Err(RelayerError::DexError(error_message)) => {
                 assert!(
                     error_message.contains("Failed to decode swap transaction"),
-                    "Error message did not contain expected substrings: {}",
-                    error_message
+                    "Error message did not contain expected substrings: {error_message}"
                 );
             }
-            Err(e) => panic!("Expected DexError but got different error: {:?}", e),
+            Err(e) => panic!("Expected DexError but got different error: {e:?}"),
             Ok(_) => panic!("Expected error but got Ok"),
         }
     }
@@ -458,11 +455,10 @@ mod tests {
                 assert!(
                     error_message.contains("Failed to sign Dex swap transaction")
                         && error_message.contains("Failed to sign: invalid key"),
-                    "Error message did not contain expected substrings: {}",
-                    error_message
+                    "Error message did not contain expected substrings: {error_message}"
                 );
             }
-            Err(e) => panic!("Expected DexError but got different error: {:?}", e),
+            Err(e) => panic!("Expected DexError but got different error: {e:?}"),
             Ok(_) => panic!("Expected error but got Ok"),
         }
     }
@@ -524,11 +520,10 @@ mod tests {
                 assert!(
                     error_message.contains("Failed to execute order")
                         && error_message.contains("price slippage too high"),
-                    "Error message did not contain expected substrings: {}",
-                    error_message
+                    "Error message did not contain expected substrings: {error_message}"
                 );
             }
-            Err(e) => panic!("Expected DexError but got different error: {:?}", e),
+            Err(e) => panic!("Expected DexError but got different error: {e:?}"),
             Ok(_) => panic!("Expected error but got Ok"),
         }
     }

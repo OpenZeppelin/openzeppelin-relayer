@@ -816,14 +816,14 @@ mod tests {
         let selector = RpcSelector::new_with_defaults(configs).expect("Failed to create selector");
 
         let initializer =
-            |url: &str| -> Result<String, TestError> { Ok(format!("provider-{}", url)) };
+            |url: &str| -> Result<String, TestError> { Ok(format!("provider-{url}")) };
 
         let result = get_provider(&selector, "test_operation", &initializer, &HashSet::new());
         assert!(result.is_ok());
         let (provider, url) = result.unwrap();
         // When weights are equal, selection may start from any provider
         assert!(url == "http://localhost:8545" || url == "http://localhost:8546");
-        assert_eq!(provider, format!("provider-{}", url));
+        assert_eq!(provider, format!("provider-{url}"));
 
         let initializer = |_: &str| -> Result<String, TestError> {
             Err(TestError("Failed to initialize".to_string()))
@@ -832,7 +832,7 @@ mod tests {
         let result = get_provider(&selector, "test_operation", &initializer, &HashSet::new());
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(format!("{}", err).contains("Failed to initialize"));
+        assert!(format!("{err}").contains("Failed to initialize"));
     }
 
     #[tokio::test]
@@ -1158,7 +1158,7 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_ok(), "Expected OK result but got: {:?}", result);
+        assert!(result.is_ok(), "Expected OK result but got: {result:?}");
         assert_eq!(result.unwrap(), 42);
         assert_eq!(attempts.load(AtomicOrdering::SeqCst), 1); // Should be called once
     }
@@ -1205,15 +1205,14 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_ok(), "Expected OK result but got: {:?}", result);
+        assert!(result.is_ok(), "Expected OK result but got: {result:?}");
         assert_eq!(result.unwrap(), 42);
 
         // Final provider should be the second one
         let final_provider = current_provider.lock().unwrap().clone();
         assert!(
             final_provider.contains("8546"),
-            "Wrong provider selected: {}",
-            final_provider
+            "Wrong provider selected: {final_provider}"
         );
     }
 
@@ -1247,7 +1246,7 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_err(), "Expected an error but got: {:?}", result);
+        assert!(result.is_err(), "Expected an error but got: {result:?}");
     }
 
     #[tokio::test]
@@ -1340,17 +1339,15 @@ mod tests {
         let final_count = attempt_count.load(AtomicOrdering::SeqCst);
         assert_eq!(
             final_count, 2,
-            "Expected exactly 2 provider init attempts, got {}",
-            final_count
+            "Expected exactly 2 provider init attempts, got {final_count}"
         );
 
         // Verify: two different URLs were attempted (failover occurred)
         let urls = attempted_urls.lock().unwrap();
-        assert_eq!(urls.len(), 2, "Expected 2 URLs attempted, got {:?}", urls);
+        assert_eq!(urls.len(), 2, "Expected 2 URLs attempted, got {urls:?}");
         assert_ne!(
             urls[0], urls[1],
-            "Expected different URLs to be tried, got {:?}",
-            urls
+            "Expected different URLs to be tried, got {urls:?}"
         );
     }
 
@@ -1367,7 +1364,7 @@ mod tests {
         selector.mark_current_as_failed(); // Now mark it as failed
 
         let provider_initializer =
-            |url: &str| -> Result<String, TestError> { Ok(format!("provider-{}", url)) };
+            |url: &str| -> Result<String, TestError> { Ok(format!("provider-{url}")) };
 
         // Even though the provider is marked as failed/paused, for a single provider
         // we still select it as a last resort since there are no alternatives
@@ -1760,7 +1757,7 @@ mod tests {
             let attempt_count = attempt_count_clone.clone();
             async move {
                 let count = attempt_count.fetch_add(1, AtomicOrdering::SeqCst);
-                Err(TestError(format!("Critical error #{}", count)))
+                Err(TestError(format!("Critical error #{count}")))
             }
         };
 
@@ -1928,28 +1925,25 @@ mod tests {
 
         assert!(
             result.is_ok(),
-            "Operation should succeed eventually, got error: {:?}",
-            result
+            "Operation should succeed eventually, got error: {result:?}"
         );
         let selected = selected_providers.lock().unwrap();
         // Should have tried at least 1 provider (the one that succeeds)
         let unique_providers: HashSet<_> = selected.iter().collect();
         assert!(
-            unique_providers.len() >= 1,
-            "Should have tried at least 1 provider: {:?}",
-            selected
+            !unique_providers.is_empty(),
+            "Should have tried at least 1 provider: {selected:?}"
         );
         // Should have tried provider 3 (the one that succeeds)
         assert!(
             unique_providers.contains(&url3),
-            "Should have tried provider 3: {:?}",
-            selected
+            "Should have tried provider 3: {selected:?}"
         );
         // With max_retries=2, we get multiple attempts per provider
         // If provider 3 is selected first and succeeds, we might only have 1 attempt
         // If providers 1 or 2 are selected first, we'll have more attempts
         assert!(
-            selected.len() >= 1,
+            !selected.is_empty(),
             "Should have at least 1 total attempt, got: {}",
             selected.len()
         );

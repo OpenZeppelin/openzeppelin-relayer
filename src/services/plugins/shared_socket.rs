@@ -932,7 +932,7 @@ mod tests {
             PluginMessage::ApiResponse { request_id, .. } => {
                 assert_eq!(request_id, "req-1");
             }
-            _ => panic!("Expected ApiResponse, got {:?}", response),
+            _ => panic!("Expected ApiResponse, got {response:?}"),
         }
 
         service.shutdown().await;
@@ -1388,7 +1388,7 @@ mod tests {
         // Send multiple API requests
         for i in 1..=3 {
             let api_request = PluginMessage::ApiRequest {
-                request_id: format!("req-{}", i),
+                request_id: format!("req-{i}"),
                 relayer_id: "relayer-1".to_string(),
                 method: crate::services::plugins::relayer_api::PluginMethod::GetRelayerStatus,
                 payload: serde_json::json!({}),
@@ -1405,7 +1405,7 @@ mod tests {
             let response: PluginMessage = serde_json::from_str(&response_line).unwrap();
             match response {
                 PluginMessage::ApiResponse { request_id, .. } => {
-                    assert_eq!(request_id, format!("req-{}", i));
+                    assert_eq!(request_id, format!("req-{i}"));
                 }
                 _ => panic!("Expected ApiResponse"),
             }

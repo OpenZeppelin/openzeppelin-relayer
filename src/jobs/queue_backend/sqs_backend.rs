@@ -78,29 +78,26 @@ impl SqsBackend {
         })?;
 
         let prefix = std::env::var("SQS_QUEUE_URL_PREFIX").unwrap_or_else(|_| {
-            format!(
-                "https://sqs.{}.amazonaws.com/{}/relayer-stellar-",
-                region, account_id
-            )
+            format!("https://sqs.{region}.amazonaws.com/{account_id}/relayer-stellar-")
         });
 
         // Build queue URL mapping for Stellar queues
         let queue_urls = HashMap::from([
             (
                 QueueType::StellarTransactionRequest,
-                format!("{}transaction-request.fifo", prefix),
+                format!("{prefix}transaction-request.fifo"),
             ),
             (
                 QueueType::StellarTransactionSubmission,
-                format!("{}transaction-submission.fifo", prefix),
+                format!("{prefix}transaction-submission.fifo"),
             ),
             (
                 QueueType::StellarStatusCheck,
-                format!("{}status-check.fifo", prefix),
+                format!("{prefix}status-check.fifo"),
             ),
             (
                 QueueType::StellarNotification,
-                format!("{}notification.fifo", prefix),
+                format!("{prefix}notification.fifo"),
             ),
         ]);
 
@@ -160,7 +157,7 @@ impl SqsBackend {
 
         let response = request.send().await.map_err(|e| {
             error!(error = %e, queue_url = %queue_url, "Failed to send message to SQS");
-            QueueBackendError::SqsError(format!("SendMessage failed: {}", e))
+            QueueBackendError::SqsError(format!("SendMessage failed: {e}"))
         })?;
 
         let message_id = response
@@ -324,7 +321,10 @@ impl QueueBackend for SqsBackend {
         &self,
         app_state: Arc<ThinData<DefaultAppState>>,
     ) -> Result<Vec<WorkerHandle>, QueueBackendError> {
-        info!("Initializing SQS workers for {} queues", self.queue_urls.len());
+        info!(
+            "Initializing SQS workers for {} queues",
+            self.queue_urls.len()
+        );
 
         let mut handles = Vec::new();
 
@@ -453,20 +453,119 @@ mod tests {
     }
 
     #[test]
+    fn test_calculate_delay_seconds_edge_cases() {
+        // Exactly at current time (should return None)
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert_eq!(SqsBackend::calculate_delay_seconds(Some(now)), None);
+
+        // Exactly at SQS limit (900s)
+        let future_900s = now + 900;
+        assert_eq!(
+            SqsBackend::calculate_delay_seconds(Some(future_900s)),
+            Some(900)
+        );
+
+        // Just over SQS limit (901s) - should clamp to 900
+        let future_901s = now + 901;
+        assert_eq!(
+            SqsBackend::calculate_delay_seconds(Some(future_901s)),
+            Some(900)
+        );
+    }
+
+    #[test]
     fn test_sqs_backend_debug() {
         // Test Debug implementation (doesn't require AWS credentials)
         let backend = SqsBackend {
             sqs_client: aws_sdk_sqs::Client::from_conf(
                 aws_sdk_sqs::Config::builder()
                     .region(aws_sdk_sqs::config::Region::new("us-east-1"))
+                    .behavior_version(aws_sdk_sqs::config::BehaviorVersion::latest())
                     .build(),
             ),
             queue_urls: HashMap::new(),
             region: "us-east-1".to_string(),
         };
 
-        let debug_str = format!("{:?}", backend);
+        let debug_str = format!("{backend:?}");
         assert!(debug_str.contains("SqsBackend"));
         assert!(debug_str.contains("us-east-1"));
+        assert!(debug_str.contains("queue_count"));
+    }
+
+    #[test]
+    fn test_sqs_backend_type() {
+        let backend = SqsBackend {
+            sqs_client: aws_sdk_sqs::Client::from_conf(
+                aws_sdk_sqs::Config::builder()
+                    .region(aws_sdk_sqs::config::Region::new("us-west-2"))
+                    .behavior_version(aws_sdk_sqs::config::BehaviorVersion::latest())
+                    .build(),
+            ),
+            queue_urls: HashMap::new(),
+            region: "us-west-2".to_string(),
+        };
+
+        assert_eq!(backend.backend_type(), "sqs");
+    }
+
+    #[test]
+    fn test_queue_url_construction() {
+        // Test that queue URLs are correctly constructed
+        let mut queue_urls = HashMap::new();
+        let prefix = "https://sqs.us-east-1.amazonaws.com/123456789/relayer-stellar-";
+
+        queue_urls.insert(
+            QueueType::StellarTransactionRequest,
+            format!("{prefix}transaction-request.fifo"),
+        );
+        queue_urls.insert(
+            QueueType::StellarTransactionSubmission,
+            format!("{prefix}transaction-submission.fifo"),
+        );
+        queue_urls.insert(
+            QueueType::StellarStatusCheck,
+            format!("{prefix}status-check.fifo"),
+        );
+        queue_urls.insert(
+            QueueType::StellarNotification,
+            format!("{prefix}notification.fifo"),
+        );
+
+        // Verify all queue types have URLs
+        assert_eq!(queue_urls.len(), 4);
+        assert!(queue_urls
+            .get(&QueueType::StellarTransactionRequest)
+            .unwrap()
+            .ends_with(".fifo"));
+        assert!(queue_urls
+            .get(&QueueType::StellarTransactionSubmission)
+            .unwrap()
+            .contains("transaction-submission"));
+    }
+
+    #[test]
+    fn test_backend_clone() {
+        let backend = SqsBackend {
+            sqs_client: aws_sdk_sqs::Client::from_conf(
+                aws_sdk_sqs::Config::builder()
+                    .region(aws_sdk_sqs::config::Region::new("us-east-1"))
+                    .behavior_version(aws_sdk_sqs::config::BehaviorVersion::latest())
+                    .build(),
+            ),
+            queue_urls: HashMap::from([(
+                QueueType::StellarTransactionRequest,
+                "https://sqs.us-east-1.amazonaws.com/123/test.fifo".to_string(),
+            )]),
+            region: "us-east-1".to_string(),
+        };
+
+        // Test that backend is cloneable
+        let cloned = backend.clone();
+        assert_eq!(cloned.region, backend.region);
+        assert_eq!(cloned.queue_urls.len(), backend.queue_urls.len());
     }
 }

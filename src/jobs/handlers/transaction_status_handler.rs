@@ -46,6 +46,25 @@ pub async fn transaction_status_handler(
     task_id: TaskId,
     _ctx: RedisContext,
 ) -> Result<(), Error> {
+    process_transaction_status(job, state, attempt, task_id).await
+}
+
+/// SQS-compatible entrypoint without Apalis Redis context argument.
+pub async fn transaction_status_handler_sqs(
+    job: Job<TransactionStatusCheck>,
+    state: Data<ThinData<DefaultAppState>>,
+    attempt: Attempt,
+    task_id: TaskId,
+) -> Result<(), Error> {
+    process_transaction_status(job, state, attempt, task_id).await
+}
+
+async fn process_transaction_status(
+    job: Job<TransactionStatusCheck>,
+    state: Data<ThinData<DefaultAppState>>,
+    attempt: Attempt,
+    task_id: TaskId,
+) -> Result<(), Error> {
     if let Some(request_id) = job.request_id.clone() {
         set_request_id(request_id);
     }
@@ -623,8 +642,7 @@ mod tests {
             for status in final_states {
                 assert!(
                     is_final_state(&status),
-                    "Expected {:?} to be a final state",
-                    status
+                    "Expected {status:?} to be a final state"
                 );
             }
         }
@@ -642,8 +660,7 @@ mod tests {
             for status in non_final_states {
                 assert!(
                     !is_final_state(&status),
-                    "Expected {:?} to NOT be a final state",
-                    status
+                    "Expected {status:?} to NOT be a final state"
                 );
             }
         }

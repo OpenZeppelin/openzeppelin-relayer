@@ -433,7 +433,7 @@ mod tests {
             env::set_var("LOG_MAX_SIZE", "1024"); // 1KB for testing
 
             // We don't call setup_logging() again, but we can test the directory creation logic
-            if let Some(parent) = Path::new(&format!("{}/relayer.log", log_path)).parent() {
+            if let Some(parent) = Path::new(&format!("{log_path}/relayer.log")).parent() {
                 create_dir_all(parent).expect("Failed to create log directory");
             }
 
@@ -897,8 +897,7 @@ mod tests {
         // Should NOT contain reqwest=warn since user configured it
         assert!(
             !result.contains("reqwest=warn"),
-            "Should not add reqwest=warn when user configured reqwest. Result: {}",
-            result
+            "Should not add reqwest=warn when user configured reqwest. Result: {result}"
         );
 
         // Should still contain other suppressions

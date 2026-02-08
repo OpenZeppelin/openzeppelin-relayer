@@ -334,7 +334,7 @@ mod tests {
         // Test that namespace includes prefix when set
         let prefix = "myprefix:queue:";
         let queue_name = "transaction_request_queue";
-        let full_namespace = format!("{}{}", prefix, queue_name);
+        let full_namespace = format!("{prefix}{queue_name}");
 
         let config = Config::default().set_namespace(&full_namespace);
         assert_eq!(

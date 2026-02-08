@@ -415,7 +415,7 @@ mod tests {
         let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
         let random_id = uuid::Uuid::new_v4().to_string();
-        let key_prefix = format!("test_prefix:{}", random_id);
+        let key_prefix = format!("test_prefix:{random_id}");
 
         RedisApiKeyRepository::new(connections, key_prefix)
             .expect("Failed to create Redis api key repository")
@@ -569,7 +569,7 @@ mod tests {
         let result = repo.list_paginated(query).await;
         assert!(result.is_ok());
         let result = result.unwrap();
-        println!("result: {:?}", result);
+        println!("result: {result:?}");
         assert!(result.items.len() == 2);
     }
 

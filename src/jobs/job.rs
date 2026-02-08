@@ -386,7 +386,7 @@ mod tests {
                 assert_eq!(notification_send, deserialized);
             }
             Err(e) => {
-                panic!("Deserialization error: {}", e);
+                panic!("Deserialization error: {e}");
             }
         }
     }
@@ -428,7 +428,7 @@ mod tests {
                 assert_eq!(notification_send, deserialized);
             }
             Err(e) => {
-                panic!("Deserialization error: {}", e);
+                panic!("Deserialization error: {e}");
             }
         }
     }

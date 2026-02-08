@@ -990,9 +990,7 @@ mod tests {
             assert_eq!(
                 captured_req.route,
                 Some(expected_route.to_string()),
-                "Route should be '{}' for URI '{}'",
-                expected_route,
-                uri
+                "Route should be '{expected_route}' for URI '{uri}'"
             );
         }
     }
@@ -1158,8 +1156,7 @@ mod tests {
         let body_str = std::str::from_utf8(&body_bytes).unwrap();
         assert!(
             body_str.contains("Invalid JSON"),
-            "Error message should contain 'Invalid JSON', got: {}",
-            body_str
+            "Error message should contain 'Invalid JSON', got: {body_str}"
         );
 
         // Test case 2: Single quotes (not valid JSON)
@@ -1252,7 +1249,7 @@ mod tests {
 
         // Test with a reasonably long query string (1000 chars)
         let long_value = "a".repeat(1000);
-        let uri = format!("/test?data={}", long_value);
+        let uri = format!("/test?data={long_value}");
 
         let req = TestRequest::default().uri(&uri).to_http_request();
 
@@ -1566,8 +1563,7 @@ mod tests {
         let body_str = std::str::from_utf8(&body).unwrap();
         assert!(
             body_str.contains("Invalid JSON"),
-            "Error message should contain 'Invalid JSON', got: {}",
-            body_str
+            "Error message should contain 'Invalid JSON', got: {body_str}"
         );
 
         // Verify that invalid request was not captured
@@ -1736,9 +1732,7 @@ mod tests {
             assert_eq!(
                 req.route,
                 Some(expected_route.to_string()),
-                "Route '{}' should be preserved as '{}'",
-                route,
-                expected_route
+                "Route '{route}' should be preserved as '{expected_route}'"
             );
         }
     }
@@ -1841,8 +1835,7 @@ mod tests {
 
         if plugin_id == "not-found" {
             return HttpResponse::NotFound().json(ApiResponse::<()>::error(format!(
-                "Plugin with id {} not found",
-                plugin_id
+                "Plugin with id {plugin_id} not found"
             )));
         }
 

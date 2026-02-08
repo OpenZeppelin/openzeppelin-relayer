@@ -232,7 +232,6 @@ impl QueueBackend for RedisBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn test_backend_type() {

@@ -460,11 +460,10 @@ mod tests {
                 let error_string = err.to_string();
                 assert!(
                     error_string.contains("Insufficient balance:"),
-                    "Unexpected error message: {}",
-                    err
+                    "Unexpected error message: {err}"
                 );
             }
-            other => panic!("Expected ValidationError, got: {:?}", other),
+            other => panic!("Expected ValidationError, got: {other:?}"),
         }
     }
 
@@ -622,11 +621,10 @@ mod tests {
                 let error_string = err.to_string();
                 assert!(
                     error_string.contains("Insufficient balance:"),
-                    "Unexpected error message: {}",
-                    err
+                    "Unexpected error message: {err}"
                 );
             }
-            other => panic!("Expected ValidationError, got: {:?}", other),
+            other => panic!("Expected ValidationError, got: {other:?}"),
         }
     }
 
@@ -723,11 +721,10 @@ mod tests {
                         "Policy violation: Transaction requires 2 signatures, which exceeds \
                          maximum allowed 0"
                     ),
-                    "Unexpected error message: {}",
-                    err
+                    "Unexpected error message: {err}"
                 );
             }
-            other => panic!("Expected ValidationError, got: {:?}", other),
+            other => panic!("Expected ValidationError, got: {other:?}"),
         }
     }
 
@@ -786,11 +783,10 @@ mod tests {
                     error_string.contains(
                         "Policy violation: Program 11111111111111111111111111111111 not allowed"
                     ),
-                    "Unexpected error message: {}",
-                    err
+                    "Unexpected error message: {err}"
                 );
             }
-            other => panic!("Expected ValidationError, got: {:?}", other),
+            other => panic!("Expected ValidationError, got: {other:?}"),
         }
     }
 
@@ -853,11 +849,10 @@ mod tests {
                     error_string.contains(
                         "Policy violation: Transaction size 311 exceeds maximum allowed 10"
                     ),
-                    "Unexpected error message: {}",
-                    err
+                    "Unexpected error message: {err}"
                 );
             }
-            other => panic!("Expected ValidationError, got: {:?}", other),
+            other => panic!("Expected ValidationError, got: {other:?}"),
         }
     }
 
@@ -900,11 +895,10 @@ mod tests {
                 let error_string = err.to_string();
                 assert!(
                     error_string.contains("Policy violation: Fee payer"),
-                    "Unexpected error message: {}",
-                    err
+                    "Unexpected error message: {err}"
                 );
             }
-            other => panic!("Expected ValidationError, got: {:?}", other),
+            other => panic!("Expected ValidationError, got: {other:?}"),
         }
     }
 
@@ -1051,11 +1045,10 @@ mod tests {
                     error_string.contains(
                         "Policy violation: Fee amount 5000 exceeds max allowed fee amount 500"
                     ),
-                    "Unexpected error message: {}",
-                    err
+                    "Unexpected error message: {err}"
                 );
             }
-            other => panic!("Expected ValidationError, got: {:?}", other),
+            other => panic!("Expected ValidationError, got: {other:?}"),
         }
     }
 
