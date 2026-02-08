@@ -338,7 +338,9 @@ impl QueueBackend for SqsBackend {
                 .sqs_client
                 .get_queue_attributes()
                 .queue_url(queue_url)
-                .attribute_names(aws_sdk_sqs::types::QueueAttributeName::ApproximateNumberOfMessages)
+                .attribute_names(
+                    aws_sdk_sqs::types::QueueAttributeName::ApproximateNumberOfMessages,
+                )
                 .attribute_names(
                     aws_sdk_sqs::types::QueueAttributeName::ApproximateNumberOfMessagesNotVisible,
                 )
