@@ -16,7 +16,7 @@
 //!
 //! Since this runs on multiple service instances simultaneously (each with its own
 //! CronStream), a distributed lock is used to ensure only one instance processes
-//! the cleanup at a time. The lock has a 55-minute TTL (the cron runs every hour),
+//! the cleanup at a time. The lock has a 14-minute TTL (the cron runs every 15 minutes),
 //! ensuring the lock expires before the next scheduled run.
 
 use actix_web::web::ThinData;
@@ -37,16 +37,16 @@ use crate::{
 /// Only one instance across the cluster should run cleanup at a time.
 const SYSTEM_CLEANUP_LOCK_NAME: &str = "system_queue_cleanup";
 
-/// TTL for the distributed lock (55 minutes).
+/// TTL for the distributed lock (19 minutes).
 ///
 /// This value should be:
 /// 1. Greater than the worst-case cleanup runtime to prevent concurrent execution
-/// 2. Less than the cron interval (1 hour) to ensure availability for the next run
-const SYSTEM_CLEANUP_LOCK_TTL_SECS: u64 = 55 * 60;
+/// 2. Less than the cron interval (10 minutes) to ensure availability for the next run
+const SYSTEM_CLEANUP_LOCK_TTL_SECS: u64 = 14 * 60;
 
-/// Age threshold for job metadata cleanup (1 hour).
+/// Age threshold for job metadata cleanup (10 minutes).
 /// Jobs older than this threshold will be cleaned up.
-const JOB_AGE_THRESHOLD_SECS: i64 = 3600;
+const JOB_AGE_THRESHOLD_SECS: i64 = 360;
 
 /// Batch size for cleanup operations.
 /// Processing in batches prevents memory issues with large datasets.
@@ -349,8 +349,8 @@ mod tests {
 
     #[test]
     fn test_constants() {
-        assert_eq!(SYSTEM_CLEANUP_LOCK_TTL_SECS, 55 * 60); // 55 minutes
-        assert_eq!(JOB_AGE_THRESHOLD_SECS, 3600); // 1 hour
+        assert_eq!(SYSTEM_CLEANUP_LOCK_TTL_SECS, 14 * 60); // 14 minutes
+        assert_eq!(JOB_AGE_THRESHOLD_SECS, 360); // 10 minutes
         assert_eq!(CLEANUP_BATCH_SIZE, 500);
     }
 
