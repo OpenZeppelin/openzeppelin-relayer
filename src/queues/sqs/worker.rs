@@ -3,14 +3,18 @@
 //! This module provides worker tasks that poll SQS queues and process jobs
 //! using the existing handler functions.
 
+use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::Duration;
 
 use actix_web::web::ThinData;
 use aws_sdk_sqs::types::{Message, MessageAttributeValue, MessageSystemAttributeName};
+use futures::FutureExt;
+use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 use tokio::sync::watch;
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -70,8 +74,20 @@ pub async fn spawn_worker_for_queue(
 
     let handle: JoinHandle<()> = tokio::spawn(async move {
         let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
+        let mut inflight = JoinSet::new();
 
         loop {
+            // Reap completed tasks each iteration (prevents unbounded memory)
+            while let Some(result) = inflight.try_join_next() {
+                if let Err(e) = result {
+                    warn!(
+                        queue_type = ?queue_type,
+                        error = %e,
+                        "In-flight task failed"
+                    );
+                }
+            }
+
             // Check shutdown before each iteration
             if *shutdown_rx.borrow() {
                 info!(queue_type = ?queue_type, "Shutdown signal received, stopping SQS worker");
@@ -137,26 +153,44 @@ pub async fn spawn_worker_for_queue(
                                 let url = queue_url.clone();
                                 let state = app_state.clone();
 
-                                tokio::spawn(async move {
-                                    let result = process_message(
+                                inflight.spawn(async move {
+                                    let _permit = permit; // always dropped, even on panic
+
+                                    let result = AssertUnwindSafe(process_message(
                                         client.clone(),
                                         message,
                                         queue_type,
                                         &url,
                                         state,
                                         max_retries,
-                                    )
+                                    ))
+                                    .catch_unwind()
                                     .await;
 
-                                    if let Err(e) = result {
-                                        error!(
-                                            queue_type = ?queue_type,
-                                            error = %e,
-                                            "Failed to process message"
-                                        );
+                                    match result {
+                                        Ok(Ok(())) => {}
+                                        Ok(Err(e)) => {
+                                            error!(
+                                                queue_type = ?queue_type,
+                                                error = %e,
+                                                "Failed to process message"
+                                            );
+                                        }
+                                        Err(panic_info) => {
+                                            let msg = panic_info
+                                                .downcast_ref::<String>()
+                                                .map(|s| s.as_str())
+                                                .or_else(|| {
+                                                    panic_info.downcast_ref::<&str>().copied()
+                                                })
+                                                .unwrap_or("unknown panic");
+                                            error!(
+                                                queue_type = ?queue_type,
+                                                panic = %msg,
+                                                "Message handler panicked"
+                                            );
+                                        }
                                     }
-
-                                    drop(permit); // Release semaphore
                                 });
                             }
                         }
@@ -176,6 +210,38 @@ pub async fn spawn_worker_for_queue(
                             break;
                         }
                     }
+                }
+            }
+        }
+
+        // Drain in-flight tasks before shutdown
+        if !inflight.is_empty() {
+            info!(
+                queue_type = ?queue_type,
+                count = inflight.len(),
+                "Draining in-flight tasks before shutdown"
+            );
+            match tokio::time::timeout(Duration::from_secs(30), async {
+                while let Some(result) = inflight.join_next().await {
+                    if let Err(e) = result {
+                        warn!(
+                            queue_type = ?queue_type,
+                            error = %e,
+                            "In-flight task failed during drain"
+                        );
+                    }
+                }
+            })
+            .await
+            {
+                Ok(()) => info!(queue_type = ?queue_type, "All in-flight tasks drained"),
+                Err(_) => {
+                    warn!(
+                        queue_type = ?queue_type,
+                        remaining = inflight.len(),
+                        "Drain timeout, abandoning remaining tasks"
+                    );
+                    inflight.abort_all();
                 }
             }
         }
@@ -265,20 +331,64 @@ async fn process_message(
     // Route to appropriate handler
     let result = match queue_type {
         QueueType::TransactionRequest => {
-            process_transaction_request(body, app_state, attempt_number).await
+            process_job::<TransactionRequest, _, _>(
+                body,
+                app_state,
+                attempt_number,
+                "TransactionRequest",
+                transaction_request_handler,
+            )
+            .await
         }
         QueueType::TransactionSubmission => {
-            process_transaction_submission(body, app_state, attempt_number).await
+            process_job::<TransactionSend, _, _>(
+                body,
+                app_state,
+                attempt_number,
+                "TransactionSend",
+                transaction_submission_handler,
+            )
+            .await
         }
         QueueType::StatusCheck => {
-            process_transaction_status_check(body, app_state, attempt_number).await
+            process_job::<TransactionStatusCheck, _, _>(
+                body,
+                app_state,
+                attempt_number,
+                "TransactionStatusCheck",
+                transaction_status_handler,
+            )
+            .await
         }
-        QueueType::Notification => process_notification(body, app_state, attempt_number).await,
+        QueueType::Notification => {
+            process_job::<NotificationSend, _, _>(
+                body,
+                app_state,
+                attempt_number,
+                "NotificationSend",
+                notification_handler,
+            )
+            .await
+        }
         QueueType::TokenSwapRequest => {
-            process_token_swap_request(body, app_state, attempt_number).await
+            process_job::<TokenSwapRequest, _, _>(
+                body,
+                app_state,
+                attempt_number,
+                "TokenSwapRequest",
+                token_swap_request_handler,
+            )
+            .await
         }
         QueueType::RelayerHealthCheck => {
-            process_relayer_health_check(body, app_state, attempt_number).await
+            process_job::<RelayerHealthCheck, _, _>(
+                body,
+                app_state,
+                attempt_number,
+                "RelayerHealthCheck",
+                relayer_health_check_handler,
+            )
+            .await
         }
     };
 
@@ -414,104 +524,28 @@ async fn process_message(
     }
 }
 
-/// Processes a TransactionRequest job.
-async fn process_transaction_request(
+/// Generic job processor — deserializes `Job<T>`, creates a `WorkerContext`,
+/// and delegates to the provided handler function.
+async fn process_job<T, F, Fut>(
     body: &str,
     app_state: Arc<ThinData<crate::models::DefaultAppState>>,
     attempt: usize,
-) -> Result<(), ProcessingError> {
-    let job: Job<TransactionRequest> = serde_json::from_str(body).map_err(|e| {
-        error!(error = %e, "Failed to deserialize TransactionRequest job");
-        ProcessingError::Retryable(format!("Failed to deserialize TransactionRequest job: {e}"))
+    type_name: &str,
+    handler: F,
+) -> Result<(), ProcessingError>
+where
+    T: DeserializeOwned,
+    F: FnOnce(Job<T>, ThinData<crate::models::DefaultAppState>, WorkerContext) -> Fut,
+    Fut: Future<Output = Result<(), HandlerError>>,
+{
+    let job: Job<T> = serde_json::from_str(body).map_err(|e| {
+        error!(error = %e, "Failed to deserialize {} job", type_name);
+        // Malformed payload is not recoverable by retrying the same message body.
+        ProcessingError::Permanent(format!("Failed to deserialize {type_name} job: {e}"))
     })?;
 
     let ctx = WorkerContext::new(attempt, uuid::Uuid::new_v4().to_string());
-    transaction_request_handler(job, (*app_state).clone(), ctx)
-        .await
-        .map_err(map_handler_error)
-}
-
-/// Processes a TransactionSend job.
-async fn process_transaction_submission(
-    body: &str,
-    app_state: Arc<ThinData<crate::models::DefaultAppState>>,
-    attempt: usize,
-) -> Result<(), ProcessingError> {
-    let job: Job<TransactionSend> = serde_json::from_str(body).map_err(|e| {
-        error!(error = %e, "Failed to deserialize TransactionSend job");
-        ProcessingError::Retryable(format!("Failed to deserialize TransactionSend job: {e}"))
-    })?;
-
-    let ctx = WorkerContext::new(attempt, uuid::Uuid::new_v4().to_string());
-    transaction_submission_handler(job, (*app_state).clone(), ctx)
-        .await
-        .map_err(map_handler_error)
-}
-
-/// Processes a TransactionStatusCheck job.
-async fn process_transaction_status_check(
-    body: &str,
-    app_state: Arc<ThinData<crate::models::DefaultAppState>>,
-    attempt: usize,
-) -> Result<(), ProcessingError> {
-    let job: Job<TransactionStatusCheck> = serde_json::from_str(body).map_err(|e| {
-        error!(error = %e, "Failed to deserialize TransactionStatusCheck job");
-        ProcessingError::Retryable(format!(
-            "Failed to deserialize TransactionStatusCheck job: {e}"
-        ))
-    })?;
-
-    let ctx = WorkerContext::new(attempt, uuid::Uuid::new_v4().to_string());
-    transaction_status_handler(job, (*app_state).clone(), ctx)
-        .await
-        .map_err(map_handler_error)
-}
-
-/// Processes a NotificationSend job.
-async fn process_notification(
-    body: &str,
-    app_state: Arc<ThinData<crate::models::DefaultAppState>>,
-    attempt: usize,
-) -> Result<(), ProcessingError> {
-    let job: Job<NotificationSend> = serde_json::from_str(body).map_err(|e| {
-        error!(error = %e, "Failed to deserialize NotificationSend job");
-        ProcessingError::Retryable(format!("Failed to deserialize NotificationSend job: {e}"))
-    })?;
-
-    let ctx = WorkerContext::new(attempt, uuid::Uuid::new_v4().to_string());
-    notification_handler(job, (*app_state).clone(), ctx)
-        .await
-        .map_err(map_handler_error)
-}
-
-async fn process_token_swap_request(
-    body: &str,
-    app_state: Arc<ThinData<crate::models::DefaultAppState>>,
-    attempt: usize,
-) -> Result<(), ProcessingError> {
-    let job: Job<TokenSwapRequest> = serde_json::from_str(body).map_err(|e| {
-        error!(error = %e, "Failed to deserialize TokenSwapRequest job");
-        ProcessingError::Retryable(format!("Failed to deserialize TokenSwapRequest job: {e}"))
-    })?;
-
-    let ctx = WorkerContext::new(attempt, uuid::Uuid::new_v4().to_string());
-    token_swap_request_handler(job, (*app_state).clone(), ctx)
-        .await
-        .map_err(map_handler_error)
-}
-
-async fn process_relayer_health_check(
-    body: &str,
-    app_state: Arc<ThinData<crate::models::DefaultAppState>>,
-    attempt: usize,
-) -> Result<(), ProcessingError> {
-    let job: Job<RelayerHealthCheck> = serde_json::from_str(body).map_err(|e| {
-        error!(error = %e, "Failed to deserialize RelayerHealthCheck job");
-        ProcessingError::Retryable(format!("Failed to deserialize RelayerHealthCheck job: {e}"))
-    })?;
-
-    let ctx = WorkerContext::new(attempt, uuid::Uuid::new_v4().to_string());
-    relayer_health_check_handler(job, (*app_state).clone(), ctx)
+    handler(job, (*app_state).clone(), ctx)
         .await
         .map_err(map_handler_error)
 }
@@ -873,5 +907,24 @@ mod tests {
         let id = generate_requeue_dedup_id(body, 1, "msg-1");
         assert!(id.len() <= 128, "Dedup ID must fit SQS 128-char limit");
         assert!(id.len() >= 32);
+    }
+
+    #[tokio::test]
+    async fn test_semaphore_released_on_panic() {
+        let sem = Arc::new(tokio::sync::Semaphore::new(1));
+        let permit = sem.clone().acquire_owned().await.unwrap();
+
+        let handle = tokio::spawn(async move {
+            let _permit = permit; // dropped on scope exit, even after panic
+            let _ = AssertUnwindSafe(async { panic!("test panic") })
+                .catch_unwind()
+                .await;
+        });
+
+        handle.await.unwrap();
+        // Would hang forever if permit leaked
+        let _p = tokio::time::timeout(Duration::from_millis(100), sem.acquire())
+            .await
+            .expect("permit should be available after panic");
     }
 }
