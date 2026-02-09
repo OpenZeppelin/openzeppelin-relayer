@@ -1,7 +1,6 @@
-pub use crate::queues::types;
 pub use crate::queues::{
-    status_check_retry_delay_secs, QueueBackend, QueueBackendError, QueueHealth, QueueType,
-    WorkerHandle,
+    filter_relayers_for_swap, status_check_retry_delay_secs, HandlerError, QueueBackend,
+    QueueBackendError, QueueHealth, QueueType, WorkerContext, WorkerHandle,
 };
 
 pub mod backend;

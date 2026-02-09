@@ -29,7 +29,7 @@ use crate::{
         DefaultAppState, NetworkTransactionData, PaginationQuery, RelayerRepoModel,
         TransactionRepoModel,
     },
-    queues::types::{HandlerError, WorkerContext},
+    queues::{HandlerError, WorkerContext},
     repositories::{PaginatedResult, Repository, TransactionDeleteRequest, TransactionRepository},
     utils::DistributedLock,
 };

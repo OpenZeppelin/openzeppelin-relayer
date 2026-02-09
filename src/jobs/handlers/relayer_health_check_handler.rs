@@ -13,7 +13,7 @@ use crate::{
         TransactionRepoModel,
     },
     observability::request_id::set_request_id,
-    queues::types::{HandlerError, WorkerContext},
+    queues::{HandlerError, WorkerContext},
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
         Repository, TransactionCounterTrait, TransactionRepository,

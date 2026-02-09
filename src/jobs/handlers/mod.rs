@@ -3,7 +3,7 @@ use tracing::{debug, error, warn};
 
 use crate::{
     observability::request_id::get_request_id,
-    queues::types::{HandlerError, WorkerContext},
+    queues::{HandlerError, WorkerContext},
 };
 
 mod transaction_request_handler;

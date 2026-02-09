@@ -12,7 +12,7 @@ use crate::{
     jobs::{handle_result, Job, NotificationSend},
     models::DefaultAppState,
     observability::request_id::set_request_id,
-    queues::types::{HandlerError, WorkerContext},
+    queues::{HandlerError, WorkerContext},
     repositories::Repository,
     services::WebhookNotificationService,
 };

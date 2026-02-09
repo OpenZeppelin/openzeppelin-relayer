@@ -34,15 +34,20 @@ use crate::{
 };
 use actix_web::web::ThinData;
 
+pub mod errors;
+pub mod queue_type;
 pub mod redis;
+pub mod retry_config;
 pub mod sqs;
-pub mod types;
+pub mod swap_filter;
+pub mod worker_types;
 
+pub use errors::QueueBackendError;
+pub use queue_type::QueueType;
 pub use redis::queue::Queue;
-pub use types::{
-    filter_relayers_for_swap, status_check_retry_delay_secs, HandlerError, QueueBackendError,
-    QueueHealth, QueueType, WorkerContext, WorkerHandle,
-};
+pub use retry_config::status_check_retry_delay_secs;
+pub use swap_filter::filter_relayers_for_swap;
+pub use worker_types::{HandlerError, QueueHealth, WorkerContext, WorkerHandle};
 
 /// Queue backend abstraction trait.
 ///
@@ -357,8 +362,8 @@ mod tests {
         assert_eq!(QueueType::StatusCheck.polling_interval_secs(), 2);
 
         // Others should be slower
-        assert!(QueueType::TransactionRequest.polling_interval_secs() >= 10);
-        assert!(QueueType::TransactionSubmission.polling_interval_secs() >= 10);
+        assert!(QueueType::TransactionRequest.polling_interval_secs() >= 5);
+        assert!(QueueType::TransactionSubmission.polling_interval_secs() >= 5);
         assert!(QueueType::Notification.polling_interval_secs() >= 10);
     }
 

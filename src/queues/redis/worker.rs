@@ -48,7 +48,13 @@ use std::{str::FromStr, time::Duration};
 use tokio::signal::unix::SignalKind;
 use tracing::{debug, error, info};
 
-use super::types::{filter_relayers_for_swap, QueueType, WorkerContext};
+use super::{filter_relayers_for_swap, QueueType, WorkerContext};
+use crate::queues::retry_config::{
+    RetryBackoffConfig, NOTIFICATION_BACKOFF, RELAYER_HEALTH_BACKOFF, STATUS_EVM_BACKOFF,
+    STATUS_GENERIC_BACKOFF, STATUS_STELLAR_BACKOFF, SYSTEM_CLEANUP_BACKOFF,
+    TOKEN_SWAP_CRON_BACKOFF, TOKEN_SWAP_REQUEST_BACKOFF, TX_CLEANUP_BACKOFF, TX_REQUEST_BACKOFF,
+    TX_SUBMISSION_BACKOFF,
+};
 
 // ---------------------------------------------------------------------------
 // Apalis adapter functions
@@ -206,6 +212,10 @@ fn create_backoff(initial_ms: u64, max_ms: u64, jitter: f64) -> Result<Exponenti
     Ok(maker)
 }
 
+fn create_backoff_from_config(cfg: RetryBackoffConfig) -> Result<ExponentialBackoffMaker> {
+    create_backoff(cfg.initial_ms, cfg.max_ms, cfg.jitter)
+}
+
 pub async fn initialize_redis_workers<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     app_state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
 ) -> Result<()>
@@ -226,7 +236,7 @@ where
         .layer(ErrorHandlingLayer::new())
         .retry(
             RetryPolicy::retries(WORKER_TRANSACTION_REQUEST_RETRIES)
-                .with_backoff(create_backoff(500, 5000, 0.99)?.make_backoff()),
+                .with_backoff(create_backoff_from_config(TX_REQUEST_BACKOFF)?.make_backoff()),
         )
         .enable_tracing()
         .catch_panic()
@@ -244,7 +254,7 @@ where
         .catch_panic()
         .retry(
             RetryPolicy::retries(WORKER_TRANSACTION_SUBMIT_RETRIES)
-                .with_backoff(create_backoff(500, 2000, 0.99)?.make_backoff()),
+                .with_backoff(create_backoff_from_config(TX_SUBMISSION_BACKOFF)?.make_backoff()),
         )
         .concurrency(ServerConfig::get_worker_concurrency(
             QueueType::TransactionSubmission.concurrency_env_key(),
@@ -262,7 +272,7 @@ where
         .catch_panic()
         .retry(
             RetryPolicy::retries(WORKER_TRANSACTION_STATUS_CHECKER_RETRIES)
-                .with_backoff(create_backoff(5000, 8000, 0.99)?.make_backoff()),
+                .with_backoff(create_backoff_from_config(STATUS_GENERIC_BACKOFF)?.make_backoff()),
         )
         .concurrency(ServerConfig::get_worker_concurrency(
             TRANSACTION_STATUS_CHECKER,
@@ -280,7 +290,7 @@ where
         .catch_panic()
         .retry(
             RetryPolicy::retries(WORKER_TRANSACTION_STATUS_CHECKER_RETRIES)
-                .with_backoff(create_backoff(8000, 12000, 0.99)?.make_backoff()),
+                .with_backoff(create_backoff_from_config(STATUS_EVM_BACKOFF)?.make_backoff()),
         )
         .concurrency(ServerConfig::get_worker_concurrency(
             TRANSACTION_STATUS_CHECKER_EVM,
@@ -298,8 +308,9 @@ where
             .enable_tracing()
             .catch_panic()
             .retry(
-                RetryPolicy::retries(WORKER_TRANSACTION_STATUS_CHECKER_RETRIES)
-                    .with_backoff(create_backoff(2000, 3000, 0.99)?.make_backoff()),
+                RetryPolicy::retries(WORKER_TRANSACTION_STATUS_CHECKER_RETRIES).with_backoff(
+                    create_backoff_from_config(STATUS_STELLAR_BACKOFF)?.make_backoff(),
+                ),
             )
             .concurrency(ServerConfig::get_worker_concurrency(
                 QueueType::StatusCheck.concurrency_env_key(),
@@ -315,7 +326,7 @@ where
         .catch_panic()
         .retry(
             RetryPolicy::retries(WORKER_NOTIFICATION_SENDER_RETRIES)
-                .with_backoff(create_backoff(2000, 8000, 0.99)?.make_backoff()),
+                .with_backoff(create_backoff_from_config(NOTIFICATION_BACKOFF)?.make_backoff()),
         )
         .concurrency(ServerConfig::get_worker_concurrency(
             QueueType::Notification.concurrency_env_key(),
@@ -330,8 +341,9 @@ where
         .enable_tracing()
         .catch_panic()
         .retry(
-            RetryPolicy::retries(WORKER_TOKEN_SWAP_REQUEST_RETRIES)
-                .with_backoff(create_backoff(5000, 20000, 0.99)?.make_backoff()),
+            RetryPolicy::retries(WORKER_TOKEN_SWAP_REQUEST_RETRIES).with_backoff(
+                create_backoff_from_config(TOKEN_SWAP_REQUEST_BACKOFF)?.make_backoff(),
+            ),
         )
         .concurrency(ServerConfig::get_worker_concurrency(
             QueueType::TokenSwapRequest.concurrency_env_key(),
@@ -347,7 +359,7 @@ where
         .catch_panic()
         .retry(
             RetryPolicy::retries(WORKER_TRANSACTION_CLEANUP_RETRIES)
-                .with_backoff(create_backoff(5000, 20000, 0.99)?.make_backoff()),
+                .with_backoff(create_backoff_from_config(TX_CLEANUP_BACKOFF)?.make_backoff()),
         )
         .concurrency(ServerConfig::get_worker_concurrency(TRANSACTION_CLEANUP, 1)) // Default to 1 to avoid DB conflicts
         .data(app_state.clone())
@@ -362,7 +374,7 @@ where
         .catch_panic()
         .retry(
             RetryPolicy::retries(WORKER_SYSTEM_CLEANUP_RETRIES)
-                .with_backoff(create_backoff(5000, 20000, 0.99)?.make_backoff()),
+                .with_backoff(create_backoff_from_config(SYSTEM_CLEANUP_BACKOFF)?.make_backoff()),
         )
         .concurrency(1)
         .data(app_state.clone())
@@ -377,7 +389,7 @@ where
         .catch_panic()
         .retry(
             RetryPolicy::retries(WORKER_RELAYER_HEALTH_CHECK_RETRIES)
-                .with_backoff(create_backoff(2000, 10000, 0.99)?.make_backoff()),
+                .with_backoff(create_backoff_from_config(RELAYER_HEALTH_BACKOFF)?.make_backoff()),
         )
         .concurrency(ServerConfig::get_worker_concurrency(
             QueueType::RelayerHealthCheck.concurrency_env_key(),
@@ -458,7 +470,7 @@ where
 
     let mut workers = Vec::new();
 
-    let swap_backoff = create_backoff(2000, 5000, 0.99)?.make_backoff();
+    let swap_backoff = create_backoff_from_config(TOKEN_SWAP_CRON_BACKOFF)?.make_backoff();
 
     for relayer in relayers_with_swap_enabled {
         debug!(relayer = ?relayer, "found relayer with swap enabled");

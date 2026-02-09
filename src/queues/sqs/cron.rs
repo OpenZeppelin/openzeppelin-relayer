@@ -24,12 +24,12 @@ use crate::{
         SystemCleanupCronReminder, TokenSwapCronReminder, TransactionCleanupCronReminder,
     },
     models::{DefaultAppState, RelayerNetworkPolicy},
-    queues::types::WorkerContext,
+    queues::WorkerContext,
     repositories::RelayerRepository,
     utils::DistributedLock,
 };
 
-use super::types::filter_relayers_for_swap;
+use super::filter_relayers_for_swap;
 
 use super::WorkerHandle;
 

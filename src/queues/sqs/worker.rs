@@ -27,9 +27,8 @@ use crate::{
     },
 };
 
-use super::{status_check_retry_delay_secs, QueueBackendError, QueueType, WorkerHandle};
-
-use super::types::{HandlerError, WorkerContext};
+use super::{HandlerError, WorkerContext};
+use super::{QueueBackendError, QueueType, WorkerHandle};
 
 #[derive(Debug)]
 enum ProcessingError {
@@ -441,7 +440,7 @@ async fn process_message(
             // relying on the 300s visibility timeout. This brings retry intervals
             // from ~5 minutes down to 3-10 seconds, matching Apalis backoff behavior.
             if queue_type == QueueType::StatusCheck {
-                let delay = compute_status_retry_delay(body);
+                let delay = compute_status_retry_delay(body, attempt_number);
                 let requeue_dedup_id = generate_requeue_dedup_id(
                     body,
                     receive_count,
@@ -661,11 +660,13 @@ async fn defer_message(
     Ok(())
 }
 
-/// Extracts the `network_type` from a status check message body and returns
-/// the appropriate retry delay in seconds.
+/// Extracts `network_type` from a status check payload and computes retry delay.
 ///
-/// Uses partial JSON deserialization to avoid deserializing the full job struct.
-fn compute_status_retry_delay(body: &str) -> i32 {
+/// This uses hardcoded network-specific backoff windows aligned with Redis/Apalis:
+/// - EVM: 8s -> 12s cap
+/// - Stellar: 2s -> 3s cap
+/// - Solana/default: 5s -> 8s cap
+fn compute_status_retry_delay(body: &str, attempt: usize) -> i32 {
     // Partial struct matching Job<TransactionStatusCheck>.data.network_type
     #[derive(serde::Deserialize)]
     struct StatusCheckData {
@@ -680,7 +681,7 @@ fn compute_status_retry_delay(body: &str) -> i32 {
         .ok()
         .and_then(|j| j.data.network_type);
 
-    status_check_retry_delay_secs(network_type)
+    crate::queues::retry_config::status_check_retry_delay_secs(network_type, attempt)
 }
 
 /// Generates a unique deduplication ID for re-enqueued status check messages.
@@ -856,30 +857,40 @@ mod tests {
     fn test_compute_status_retry_delay_evm() {
         // NetworkType uses #[serde(rename_all = "lowercase")]
         let body = r#"{"message_id":"m1","version":"1","timestamp":"0","job_type":"TransactionStatusCheck","data":{"transaction_id":"tx1","relayer_id":"r1","network_type":"evm"}}"#;
-        assert_eq!(compute_status_retry_delay(body), 10);
+        assert_eq!(compute_status_retry_delay(body, 0), 8);
+        assert_eq!(compute_status_retry_delay(body, 1), 12);
+        assert_eq!(compute_status_retry_delay(body, 8), 12);
     }
 
     #[test]
     fn test_compute_status_retry_delay_stellar() {
         let body = r#"{"message_id":"m1","version":"1","timestamp":"0","job_type":"TransactionStatusCheck","data":{"transaction_id":"tx1","relayer_id":"r1","network_type":"stellar"}}"#;
-        assert_eq!(compute_status_retry_delay(body), 3);
+        assert_eq!(compute_status_retry_delay(body, 0), 2);
+        assert_eq!(compute_status_retry_delay(body, 1), 3);
+        assert_eq!(compute_status_retry_delay(body, 8), 3);
     }
 
     #[test]
     fn test_compute_status_retry_delay_solana() {
         let body = r#"{"message_id":"m1","version":"1","timestamp":"0","job_type":"TransactionStatusCheck","data":{"transaction_id":"tx1","relayer_id":"r1","network_type":"solana"}}"#;
-        assert_eq!(compute_status_retry_delay(body), 7);
+        assert_eq!(compute_status_retry_delay(body, 0), 5);
+        assert_eq!(compute_status_retry_delay(body, 1), 8);
+        assert_eq!(compute_status_retry_delay(body, 8), 8);
     }
 
     #[test]
     fn test_compute_status_retry_delay_missing_network() {
         let body = r#"{"message_id":"m1","version":"1","timestamp":"0","job_type":"TransactionStatusCheck","data":{"transaction_id":"tx1","relayer_id":"r1"}}"#;
-        assert_eq!(compute_status_retry_delay(body), 5);
+        assert_eq!(compute_status_retry_delay(body, 0), 5);
+        assert_eq!(compute_status_retry_delay(body, 1), 8);
+        assert_eq!(compute_status_retry_delay(body, 8), 8);
     }
 
     #[test]
     fn test_compute_status_retry_delay_invalid_body() {
-        assert_eq!(compute_status_retry_delay("not json"), 5);
+        assert_eq!(compute_status_retry_delay("not json", 0), 5);
+        assert_eq!(compute_status_retry_delay("not json", 1), 8);
+        assert_eq!(compute_status_retry_delay("not json", 8), 8);
     }
 
     #[test]

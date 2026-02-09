@@ -1,5 +1,7 @@
-pub use crate::queues::types;
-pub use crate::queues::{QueueBackend, QueueBackendError, QueueHealth, QueueType, WorkerHandle};
+pub use crate::queues::{
+    filter_relayers_for_swap, QueueBackend, QueueBackendError, QueueHealth, QueueType,
+    WorkerContext, WorkerHandle,
+};
 
 pub mod backend;
 pub mod queue;

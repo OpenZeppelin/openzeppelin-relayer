@@ -18,7 +18,7 @@ use crate::{
     jobs::{handle_result, Job, TransactionCommand, TransactionSend},
     models::DefaultAppState,
     observability::request_id::set_request_id,
-    queues::types::{HandlerError, WorkerContext},
+    queues::{HandlerError, WorkerContext},
 };
 
 #[instrument(

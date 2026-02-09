@@ -32,7 +32,7 @@ use crate::{
     constants::{SYSTEM_CLEANUP_LOCK_TTL_SECS, WORKER_SYSTEM_CLEANUP_RETRIES},
     jobs::handle_result,
     models::DefaultAppState,
-    queues::types::{HandlerError, WorkerContext},
+    queues::{HandlerError, WorkerContext},
     utils::DistributedLock,
 };
 
