@@ -10,7 +10,6 @@ use apalis::prelude::BackendExpose;
 use deadpool_redis::Pool;
 use tokio::sync::RwLock;
 
-use crate::jobs::{JobProducerTrait, Queue};
 use crate::models::health::{
     ComponentStatus, Components, PluginHealth, PoolStatus, QueueHealth, QueueHealthStatus,
     ReadinessResponse, RedisHealth, RedisHealthStatus, SystemHealth,
@@ -25,6 +24,7 @@ use crate::repositories::{
 };
 use crate::services::plugins::get_pool_manager;
 use crate::utils::RedisConnections;
+use crate::{jobs::JobProducerTrait, queues::Queue};
 
 // ============================================================================
 // Constants

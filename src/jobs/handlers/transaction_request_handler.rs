@@ -8,13 +8,10 @@ use tracing::instrument;
 use crate::{
     constants::WORKER_TRANSACTION_REQUEST_RETRIES,
     domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
-    jobs::{
-        handle_result,
-        queue_backend::types::{HandlerError, WorkerContext},
-        Job, TransactionRequest,
-    },
+    jobs::{handle_result, Job, TransactionRequest},
     models::DefaultAppState,
     observability::request_id::set_request_id,
+    queues::types::{HandlerError, WorkerContext},
 };
 
 #[instrument(
@@ -85,7 +82,7 @@ async fn handle_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jobs::queue_backend::types::WorkerContext;
+    use crate::queues::types::WorkerContext;
 
     #[tokio::test]
     async fn test_handler_result_processing() {

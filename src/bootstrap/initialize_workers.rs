@@ -12,8 +12,8 @@ use actix_web::web::ThinData;
 use tracing::info;
 
 use crate::{
-    jobs::queue_backend::{QueueBackend, WorkerHandle},
     models::DefaultAppState,
+    queues::{QueueBackend, WorkerHandle},
 };
 
 /// Creates the queue backend and initializes all workers in a single step.

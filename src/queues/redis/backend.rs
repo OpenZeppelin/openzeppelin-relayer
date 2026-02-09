@@ -9,10 +9,11 @@ use tracing::info;
 
 use crate::{
     jobs::{
-        Job, NotificationSend, Queue, RelayerHealthCheck, TokenSwapRequest, TransactionRequest,
+        Job, NotificationSend, RelayerHealthCheck, TokenSwapRequest, TransactionRequest,
         TransactionSend, TransactionStatusCheck,
     },
     models::{DefaultAppState, NetworkType},
+    queues::Queue,
     utils::RedisConnections,
 };
 use actix_web::web::ThinData;

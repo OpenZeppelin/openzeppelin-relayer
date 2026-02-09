@@ -15,13 +15,10 @@ use crate::{
         WORKER_TRANSACTION_RESUBMIT_RETRIES, WORKER_TRANSACTION_SUBMIT_RETRIES,
     },
     domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
-    jobs::{
-        handle_result,
-        queue_backend::types::{HandlerError, WorkerContext},
-        Job, TransactionCommand, TransactionSend,
-    },
+    jobs::{handle_result, Job, TransactionCommand, TransactionSend},
     models::DefaultAppState,
     observability::request_id::set_request_id,
+    queues::types::{HandlerError, WorkerContext},
 };
 
 #[instrument(

@@ -11,15 +11,13 @@ use tracing::{debug, info, instrument, warn};
 use crate::{
     constants::{get_max_consecutive_status_failures, get_max_total_status_failures},
     domain::{get_relayer_transaction, get_transaction_by_id, is_final_state, Transaction},
-    jobs::{
-        queue_backend::types::{HandlerError, WorkerContext},
-        Job, StatusCheckContext, TransactionStatusCheck,
-    },
+    jobs::{Job, StatusCheckContext, TransactionStatusCheck},
     models::{
         ApiError, DefaultAppState, TransactionMetadata, TransactionRepoModel,
         TransactionUpdateRequest,
     },
     observability::request_id::set_request_id,
+    queues::types::{HandlerError, WorkerContext},
     repositories::TransactionRepository,
 };
 

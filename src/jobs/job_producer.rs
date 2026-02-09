@@ -8,12 +8,12 @@
 
 use crate::{
     jobs::{
-        queue_backend::{QueueBackend, QueueBackendStorage},
-        Job, NotificationSend, Queue, RelayerHealthCheck, TransactionRequest, TransactionSend,
+        Job, NotificationSend, RelayerHealthCheck, TransactionRequest, TransactionSend,
         TransactionStatusCheck,
     },
     models::RelayerError,
     observability::request_id::get_request_id,
+    queues::{Queue, QueueBackend, QueueBackendStorage},
 };
 use async_trait::async_trait;
 use serde::Serialize;

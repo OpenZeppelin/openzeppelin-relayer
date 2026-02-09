@@ -9,13 +9,10 @@ use tracing::{debug, instrument};
 
 use crate::{
     constants::WORKER_NOTIFICATION_SENDER_RETRIES,
-    jobs::{
-        handle_result,
-        queue_backend::types::{HandlerError, WorkerContext},
-        Job, NotificationSend,
-    },
+    jobs::{handle_result, Job, NotificationSend},
     models::DefaultAppState,
     observability::request_id::set_request_id,
+    queues::types::{HandlerError, WorkerContext},
     repositories::Repository,
     services::WebhookNotificationService,
 };

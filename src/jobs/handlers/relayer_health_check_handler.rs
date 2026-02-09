@@ -6,17 +6,14 @@
 use crate::{
     constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
     domain::{get_network_relayer, Relayer},
-    jobs::{
-        handle_result,
-        queue_backend::types::{HandlerError, WorkerContext},
-        Job, JobProducerTrait, RelayerHealthCheck,
-    },
+    jobs::{handle_result, Job, JobProducerTrait, RelayerHealthCheck},
     models::{
         produce_relayer_enabled_payload, DefaultAppState, DisabledReason, NetworkRepoModel,
         NotificationRepoModel, RelayerRepoModel, SignerRepoModel, ThinDataAppState,
         TransactionRepoModel,
     },
     observability::request_id::set_request_id,
+    queues::types::{HandlerError, WorkerContext},
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
         Repository, TransactionCounterTrait, TransactionRepository,

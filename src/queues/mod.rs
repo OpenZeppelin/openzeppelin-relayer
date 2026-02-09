@@ -26,7 +26,7 @@ use std::sync::Arc;
 use crate::{
     config::ServerConfig,
     jobs::{
-        Job, NotificationSend, Queue, RelayerHealthCheck, TokenSwapRequest, TransactionRequest,
+        Job, NotificationSend, RelayerHealthCheck, TokenSwapRequest, TransactionRequest,
         TransactionSend, TransactionStatusCheck,
     },
     models::DefaultAppState,
@@ -34,14 +34,11 @@ use crate::{
 };
 use actix_web::web::ThinData;
 
-pub mod redis_backend;
-pub mod redis_queue;
-pub mod redis_worker;
-pub mod sqs_backend;
-pub mod sqs_cron;
-pub mod sqs_worker;
+pub mod redis;
+pub mod sqs;
 pub mod types;
 
+pub use redis::queue::Queue;
 pub use types::{
     filter_relayers_for_swap, status_check_retry_delay_secs, HandlerError, QueueBackendError,
     QueueHealth, QueueType, WorkerContext, WorkerHandle,
@@ -144,8 +141,8 @@ pub trait QueueBackend: Send + Sync {
 /// instead of `dyn QueueBackend` trait objects.
 #[derive(Clone)]
 pub enum QueueBackendStorage {
-    Redis(Box<redis_backend::RedisBackend>),
-    Sqs(sqs_backend::SqsBackend),
+    Redis(Box<redis::backend::RedisBackend>),
+    Sqs(sqs::backend::SqsBackend),
 }
 
 impl std::fmt::Debug for QueueBackendStorage {
@@ -298,11 +295,11 @@ pub async fn create_queue_backend(
 
     let storage = match backend_type.to_lowercase().as_str() {
         "redis" => {
-            let backend = redis_backend::RedisBackend::new(redis_connections).await?;
+            let backend = redis::backend::RedisBackend::new(redis_connections).await?;
             QueueBackendStorage::Redis(Box::new(backend))
         }
         "sqs" => {
-            let backend = sqs_backend::SqsBackend::new().await?;
+            let backend = sqs::backend::SqsBackend::new().await?;
             QueueBackendStorage::Sqs(backend)
         }
         other => {

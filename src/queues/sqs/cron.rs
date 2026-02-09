@@ -20,11 +20,11 @@ use crate::{
         TRANSACTION_CLEANUP_CRON_SCHEDULE, TRANSACTION_CLEANUP_LOCK_TTL_SECS,
     },
     jobs::{
-        queue_backend::types::WorkerContext, system_cleanup_handler, token_swap_cron_handler,
-        transaction_cleanup_handler, SystemCleanupCronReminder, TokenSwapCronReminder,
-        TransactionCleanupCronReminder,
+        system_cleanup_handler, token_swap_cron_handler, transaction_cleanup_handler,
+        SystemCleanupCronReminder, TokenSwapCronReminder, TransactionCleanupCronReminder,
     },
     models::{DefaultAppState, RelayerNetworkPolicy},
+    queues::types::WorkerContext,
     repositories::RelayerRepository,
     utils::DistributedLock,
 };

@@ -4,8 +4,9 @@
 //! including setting up repositories, job queues, and other necessary components.
 use crate::{
     config::{RepositoryStorageType, ServerConfig},
-    jobs::{self, queue_backend::create_queue_backend},
+    jobs,
     models::{AppState, DefaultAppState},
+    queues::create_queue_backend,
     repositories::{
         ApiKeyRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage,
         PluginRepositoryStorage, RelayerRepositoryStorage, SignerRepositoryStorage,

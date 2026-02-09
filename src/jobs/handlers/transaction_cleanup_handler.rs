@@ -24,14 +24,12 @@ use crate::{
         FINAL_TRANSACTION_STATUSES, TRANSACTION_CLEANUP_LOCK_TTL_SECS,
         WORKER_TRANSACTION_CLEANUP_RETRIES,
     },
-    jobs::{
-        handle_result,
-        queue_backend::types::{HandlerError, WorkerContext},
-    },
+    jobs::handle_result,
     models::{
         DefaultAppState, NetworkTransactionData, PaginationQuery, RelayerRepoModel,
         TransactionRepoModel,
     },
+    queues::types::{HandlerError, WorkerContext},
     repositories::{PaginatedResult, Repository, TransactionDeleteRequest, TransactionRepository},
     utils::DistributedLock,
 };

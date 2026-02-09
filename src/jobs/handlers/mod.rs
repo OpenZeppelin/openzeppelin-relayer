@@ -2,8 +2,8 @@ use eyre::Report;
 use tracing::{debug, error, warn};
 
 use crate::{
-    jobs::queue_backend::types::{HandlerError, WorkerContext},
     observability::request_id::get_request_id,
+    queues::types::{HandlerError, WorkerContext},
 };
 
 mod transaction_request_handler;

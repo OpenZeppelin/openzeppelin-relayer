@@ -10,13 +10,10 @@ use tracing::{debug, info, instrument};
 use crate::{
     constants::WORKER_TOKEN_SWAP_REQUEST_RETRIES,
     domain::get_network_relayer,
-    jobs::{
-        handle_result,
-        queue_backend::types::{HandlerError, WorkerContext},
-        Job, TokenSwapRequest,
-    },
+    jobs::{handle_result, Job, TokenSwapRequest},
     models::DefaultAppState,
     observability::request_id::set_request_id,
+    queues::types::{HandlerError, WorkerContext},
 };
 
 /// Handles incoming swap jobs from the queue.

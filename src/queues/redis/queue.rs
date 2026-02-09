@@ -18,7 +18,7 @@ use tracing::info;
 
 use crate::{config::ServerConfig, utils::RedisConnections};
 
-use super::{
+use crate::jobs::{
     Job, NotificationSend, RelayerHealthCheck, TokenSwapRequest, TransactionRequest,
     TransactionSend, TransactionStatusCheck,
 };
