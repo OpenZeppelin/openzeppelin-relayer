@@ -42,8 +42,8 @@ const DELETE_BATCH_SIZE: usize = 100;
 
 /// Maximum page iterations per status before stopping.
 /// Prevents unbounded cleanup from exceeding the lock TTL.
-/// With CLEANUP_PAGE_SIZE=100, allows up to 100,000 transactions per status per run.
-const MAX_CLEANUP_ITERATIONS_PER_STATUS: u32 = 1000;
+/// With CLEANUP_PAGE_SIZE=100, allows up to 150,000 transactions per status per run.
+const MAX_CLEANUP_ITERATIONS_PER_STATUS: u32 = 1500;
 
 /// Distributed lock name for transaction cleanup.
 /// Only one instance across the cluster should run cleanup at a time.
