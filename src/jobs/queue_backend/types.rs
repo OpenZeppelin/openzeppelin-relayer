@@ -88,6 +88,35 @@ impl QueueType {
         }
     }
 
+    /// Returns the worker name used for the concurrency environment variable.
+    ///
+    /// The resulting env var is `BACKGROUND_WORKER_{name}_CONCURRENCY` (uppercased).
+    /// This ensures both Redis and SQS backends share the same env var names.
+    pub fn concurrency_env_key(&self) -> &'static str {
+        match self {
+            Self::TransactionRequest => "transaction_request",
+            Self::TransactionSubmission => "transaction_sender",
+            Self::StatusCheck => "transaction_status_checker_stellar",
+            Self::Notification => "notification_sender",
+            Self::TokenSwapRequest => "token_swap_request",
+            Self::RelayerHealthCheck => "relayer_health_check",
+        }
+    }
+
+    /// Returns the default concurrency for this queue type.
+    ///
+    /// These defaults are used when no environment variable override is set.
+    pub fn default_concurrency(&self) -> usize {
+        match self {
+            Self::TransactionRequest => 50,
+            Self::TransactionSubmission => 75,
+            Self::StatusCheck => 50,
+            Self::Notification => 30,
+            Self::TokenSwapRequest => 10,
+            Self::RelayerHealthCheck => 10,
+        }
+    }
+
     /// Returns the polling interval in seconds (how often to check for new messages).
     pub fn polling_interval_secs(&self) -> u64 {
         match self {
@@ -340,6 +369,44 @@ mod tests {
             QueueType::RelayerHealthCheck.redis_namespace(),
             "relayer:relayer_health_check"
         );
+    }
+
+    #[test]
+    fn test_queue_type_concurrency_env_keys() {
+        assert_eq!(
+            QueueType::TransactionRequest.concurrency_env_key(),
+            "transaction_request"
+        );
+        assert_eq!(
+            QueueType::TransactionSubmission.concurrency_env_key(),
+            "transaction_sender"
+        );
+        assert_eq!(
+            QueueType::StatusCheck.concurrency_env_key(),
+            "transaction_status_checker_stellar"
+        );
+        assert_eq!(
+            QueueType::Notification.concurrency_env_key(),
+            "notification_sender"
+        );
+        assert_eq!(
+            QueueType::TokenSwapRequest.concurrency_env_key(),
+            "token_swap_request"
+        );
+        assert_eq!(
+            QueueType::RelayerHealthCheck.concurrency_env_key(),
+            "relayer_health_check"
+        );
+    }
+
+    #[test]
+    fn test_queue_type_default_concurrency() {
+        assert_eq!(QueueType::TransactionRequest.default_concurrency(), 50);
+        assert_eq!(QueueType::TransactionSubmission.default_concurrency(), 75);
+        assert_eq!(QueueType::StatusCheck.default_concurrency(), 50);
+        assert_eq!(QueueType::Notification.default_concurrency(), 30);
+        assert_eq!(QueueType::TokenSwapRequest.default_concurrency(), 10);
+        assert_eq!(QueueType::RelayerHealthCheck.default_concurrency(), 10);
     }
 
     #[test]

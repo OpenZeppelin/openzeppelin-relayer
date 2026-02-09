@@ -31,12 +31,7 @@ pub const WORKER_SYSTEM_CLEANUP_RETRIES: usize = 3;
 // Default concurrency for the workers (fallback)
 pub const DEFAULT_CONCURRENCY: usize = 100;
 
-// Optimized per-worker defaults based on typical workload
-pub const DEFAULT_CONCURRENCY_TRANSACTION_REQUEST: usize = 50;
-pub const DEFAULT_CONCURRENCY_TRANSACTION_SENDER: usize = 75;
+// Redis-only worker concurrency defaults (queues not represented in QueueType).
+// For QueueType-mapped queues, defaults are in QueueType::default_concurrency().
 pub const DEFAULT_CONCURRENCY_STATUS_CHECKER: usize = 50; // Generic/Solana
 pub const DEFAULT_CONCURRENCY_STATUS_CHECKER_EVM: usize = 100; // Highest volume (75% of jobs)
-pub const DEFAULT_CONCURRENCY_STATUS_CHECKER_STELLAR: usize = 50;
-pub const DEFAULT_CONCURRENCY_NOTIFICATION: usize = 30;
-pub const DEFAULT_CONCURRENCY_TOKEN_SWAP: usize = 10; // Low volume
-pub const DEFAULT_CONCURRENCY_HEALTH_CHECK: usize = 10; // Low volume

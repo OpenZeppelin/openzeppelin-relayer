@@ -15,11 +15,6 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     config::ServerConfig,
-    constants::{
-        DEFAULT_CONCURRENCY_HEALTH_CHECK, DEFAULT_CONCURRENCY_NOTIFICATION,
-        DEFAULT_CONCURRENCY_STATUS_CHECKER_STELLAR, DEFAULT_CONCURRENCY_TOKEN_SWAP,
-        DEFAULT_CONCURRENCY_TRANSACTION_REQUEST, DEFAULT_CONCURRENCY_TRANSACTION_SENDER,
-    },
     jobs::{
         notification_handler, relayer_health_check_handler, token_swap_request_handler,
         transaction_request_handler, transaction_status_handler, transaction_submission_handler,
@@ -670,32 +665,10 @@ fn generate_requeue_dedup_id(body: &str, receive_count: usize, message_id: &str)
 
 /// Gets the concurrency limit for a queue type from environment.
 fn get_concurrency_for_queue(queue_type: QueueType) -> usize {
-    match queue_type {
-        QueueType::TransactionRequest => ServerConfig::get_worker_concurrency(
-            "transaction_request",
-            DEFAULT_CONCURRENCY_TRANSACTION_REQUEST,
-        ),
-        QueueType::TransactionSubmission => ServerConfig::get_worker_concurrency(
-            "transaction_sender",
-            DEFAULT_CONCURRENCY_TRANSACTION_SENDER,
-        ),
-        QueueType::StatusCheck => ServerConfig::get_worker_concurrency(
-            "transaction_status_checker_stellar",
-            DEFAULT_CONCURRENCY_STATUS_CHECKER_STELLAR,
-        ),
-        QueueType::Notification => ServerConfig::get_worker_concurrency(
-            "notification_sender",
-            DEFAULT_CONCURRENCY_NOTIFICATION,
-        ),
-        QueueType::TokenSwapRequest => ServerConfig::get_worker_concurrency(
-            "token_swap_request",
-            DEFAULT_CONCURRENCY_TOKEN_SWAP,
-        ),
-        QueueType::RelayerHealthCheck => ServerConfig::get_worker_concurrency(
-            "relayer_health_check",
-            DEFAULT_CONCURRENCY_HEALTH_CHECK,
-        ),
-    }
+    ServerConfig::get_worker_concurrency(
+        queue_type.concurrency_env_key(),
+        queue_type.default_concurrency(),
+    )
 }
 
 #[cfg(test)]

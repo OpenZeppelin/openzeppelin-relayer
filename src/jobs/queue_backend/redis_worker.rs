@@ -9,10 +9,7 @@ use actix_web::web::ThinData;
 use crate::{
     config::ServerConfig,
     constants::{
-        DEFAULT_CONCURRENCY_HEALTH_CHECK, DEFAULT_CONCURRENCY_NOTIFICATION,
         DEFAULT_CONCURRENCY_STATUS_CHECKER, DEFAULT_CONCURRENCY_STATUS_CHECKER_EVM,
-        DEFAULT_CONCURRENCY_STATUS_CHECKER_STELLAR, DEFAULT_CONCURRENCY_TOKEN_SWAP,
-        DEFAULT_CONCURRENCY_TRANSACTION_REQUEST, DEFAULT_CONCURRENCY_TRANSACTION_SENDER,
         WORKER_NOTIFICATION_SENDER_RETRIES, WORKER_RELAYER_HEALTH_CHECK_RETRIES,
         WORKER_SYSTEM_CLEANUP_RETRIES, WORKER_TOKEN_SWAP_REQUEST_RETRIES,
         WORKER_TRANSACTION_CLEANUP_RETRIES, WORKER_TRANSACTION_REQUEST_RETRIES,
@@ -50,7 +47,7 @@ use std::{str::FromStr, time::Duration};
 use tokio::signal::unix::SignalKind;
 use tracing::{debug, error, info};
 
-use super::types::{filter_relayers_for_swap, WorkerContext};
+use super::types::{filter_relayers_for_swap, QueueType, WorkerContext};
 
 // ---------------------------------------------------------------------------
 // Apalis adapter functions
@@ -233,8 +230,8 @@ where
         .enable_tracing()
         .catch_panic()
         .concurrency(ServerConfig::get_worker_concurrency(
-            TRANSACTION_REQUEST,
-            DEFAULT_CONCURRENCY_TRANSACTION_REQUEST,
+            QueueType::TransactionRequest.concurrency_env_key(),
+            QueueType::TransactionRequest.default_concurrency(),
         ))
         .data(app_state.clone())
         .backend(queue.transaction_request_queue.clone())
@@ -249,8 +246,8 @@ where
                 .with_backoff(create_backoff(500, 2000, 0.99)?.make_backoff()),
         )
         .concurrency(ServerConfig::get_worker_concurrency(
-            TRANSACTION_SENDER,
-            DEFAULT_CONCURRENCY_TRANSACTION_SENDER,
+            QueueType::TransactionSubmission.concurrency_env_key(),
+            QueueType::TransactionSubmission.default_concurrency(),
         ))
         .data(app_state.clone())
         .backend(queue.transaction_submission_queue.clone())
@@ -304,8 +301,8 @@ where
                     .with_backoff(create_backoff(2000, 3000, 0.99)?.make_backoff()),
             )
             .concurrency(ServerConfig::get_worker_concurrency(
-                TRANSACTION_STATUS_CHECKER_STELLAR,
-                DEFAULT_CONCURRENCY_STATUS_CHECKER_STELLAR,
+                QueueType::StatusCheck.concurrency_env_key(),
+                QueueType::StatusCheck.default_concurrency(),
             ))
             .data(app_state.clone())
             .backend(queue.transaction_status_queue_stellar.clone())
@@ -320,8 +317,8 @@ where
                 .with_backoff(create_backoff(2000, 8000, 0.99)?.make_backoff()),
         )
         .concurrency(ServerConfig::get_worker_concurrency(
-            NOTIFICATION_SENDER,
-            DEFAULT_CONCURRENCY_NOTIFICATION,
+            QueueType::Notification.concurrency_env_key(),
+            QueueType::Notification.default_concurrency(),
         ))
         .data(app_state.clone())
         .backend(queue.notification_queue.clone())
@@ -336,8 +333,8 @@ where
                 .with_backoff(create_backoff(5000, 20000, 0.99)?.make_backoff()),
         )
         .concurrency(ServerConfig::get_worker_concurrency(
-            TOKEN_SWAP_REQUEST,
-            DEFAULT_CONCURRENCY_TOKEN_SWAP,
+            QueueType::TokenSwapRequest.concurrency_env_key(),
+            QueueType::TokenSwapRequest.default_concurrency(),
         ))
         .data(app_state.clone())
         .backend(queue.token_swap_request_queue.clone())
@@ -384,8 +381,8 @@ where
                 .with_backoff(create_backoff(2000, 10000, 0.99)?.make_backoff()),
         )
         .concurrency(ServerConfig::get_worker_concurrency(
-            RELAYER_HEALTH_CHECK,
-            DEFAULT_CONCURRENCY_HEALTH_CHECK,
+            QueueType::RelayerHealthCheck.concurrency_env_key(),
+            QueueType::RelayerHealthCheck.default_concurrency(),
         ))
         .data(app_state.clone())
         .backend(queue.relayer_health_check_queue.clone())
