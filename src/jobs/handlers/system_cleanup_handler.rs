@@ -46,7 +46,7 @@ const SYSTEM_CLEANUP_LOCK_TTL_SECS: u64 = 14 * 60;
 
 /// Age threshold for job metadata cleanup (10 minutes).
 /// Jobs older than this threshold will be cleaned up.
-const JOB_AGE_THRESHOLD_SECS: i64 = 360;
+const JOB_AGE_THRESHOLD_SECS: i64 = 10 * 60;
 
 /// Batch size for cleanup operations.
 /// Processing in batches prevents memory issues with large datasets.
@@ -350,7 +350,7 @@ mod tests {
     #[test]
     fn test_constants() {
         assert_eq!(SYSTEM_CLEANUP_LOCK_TTL_SECS, 14 * 60); // 14 minutes
-        assert_eq!(JOB_AGE_THRESHOLD_SECS, 360); // 10 minutes
+        assert_eq!(JOB_AGE_THRESHOLD_SECS, 10 * 60); // 10 minutes
         assert_eq!(CLEANUP_BATCH_SIZE, 500);
     }
 
