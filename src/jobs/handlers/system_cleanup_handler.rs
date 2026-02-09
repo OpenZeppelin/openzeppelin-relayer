@@ -20,7 +20,6 @@
 //! ensuring the lock expires before the next scheduled run.
 
 use actix_web::web::ThinData;
-use apalis::prelude::{Attempt, Data, *};
 use deadpool_redis::Pool;
 use eyre::Result;
 use std::env;
@@ -29,7 +28,12 @@ use std::time::Duration;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
-    constants::WORKER_SYSTEM_CLEANUP_RETRIES, jobs::handle_result, models::DefaultAppState,
+    constants::WORKER_SYSTEM_CLEANUP_RETRIES,
+    jobs::{
+        handle_result,
+        queue_backend::types::{HandlerError, WorkerContext},
+    },
+    models::DefaultAppState,
     utils::DistributedLock,
 };
 
@@ -83,32 +87,27 @@ pub struct SystemCleanupCronReminder();
 /// # Arguments
 /// * `job` - The cron reminder job triggering the cleanup
 /// * `data` - Application state containing repositories
-/// * `attempt` - Current attempt number for retry logic
+/// * `ctx` - Worker context with attempt number and task ID
 ///
 /// # Returns
-/// * `Result<(), Error>` - Success or failure of cleanup processing
+/// * `Result<(), HandlerError>` - Success or failure of cleanup processing
 #[instrument(
     level = "debug",
     skip(job, data),
     fields(
         job_type = "system_cleanup",
-        attempt = %attempt.current(),
+        attempt = %ctx.attempt,
     ),
     err
 )]
 pub async fn system_cleanup_handler(
     job: SystemCleanupCronReminder,
-    data: Data<ThinData<DefaultAppState>>,
-    attempt: Attempt,
-) -> Result<(), Error> {
-    let result = handle_cleanup_request(job, data, attempt.clone()).await;
+    data: ThinData<DefaultAppState>,
+    ctx: WorkerContext,
+) -> Result<(), HandlerError> {
+    let result = handle_cleanup_request(job, &data).await;
 
-    handle_result(
-        result,
-        attempt,
-        "SystemCleanup",
-        WORKER_SYSTEM_CLEANUP_RETRIES,
-    )
+    handle_result(result, &ctx, "SystemCleanup", WORKER_SYSTEM_CLEANUP_RETRIES)
 }
 
 /// Handles the actual system cleanup request logic.
@@ -121,8 +120,7 @@ pub async fn system_cleanup_handler(
 /// In-memory mode skips cleanup since distributed locking is not needed.
 async fn handle_cleanup_request(
     _job: SystemCleanupCronReminder,
-    data: Data<ThinData<DefaultAppState>>,
-    _attempt: Attempt,
+    data: &ThinData<DefaultAppState>,
 ) -> Result<()> {
     let (pool, key_prefix) = match data.transaction_repository().connection_info() {
         Some((pool, prefix)) => (pool, prefix.to_string()),

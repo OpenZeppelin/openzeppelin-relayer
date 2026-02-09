@@ -9,15 +9,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use actix_web::web::ThinData;
-use apalis::prelude::{Attempt, Data};
 use chrono::Utc;
 use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
 use crate::{
     jobs::{
-        system_cleanup_handler, token_swap_cron_handler, transaction_cleanup_handler,
-        SystemCleanupCronReminder, TokenSwapCronReminder, TransactionCleanupCronReminder,
+        queue_backend::types::WorkerContext, system_cleanup_handler, token_swap_cron_handler,
+        transaction_cleanup_handler, SystemCleanupCronReminder, TokenSwapCronReminder,
+        TransactionCleanupCronReminder,
     },
     models::{DefaultAppState, RelayerNetworkPolicy},
     repositories::RelayerRepository,
@@ -59,11 +59,13 @@ impl SqsCronScheduler {
             self.shutdown_rx.clone(),
             |state| {
                 Box::pin(async move {
-                    let data = Data::new((*state).clone());
-                    let attempt = Attempt::new_with_value(0);
-                    if let Err(e) =
-                        transaction_cleanup_handler(TransactionCleanupCronReminder(), data, attempt)
-                            .await
+                    let ctx = WorkerContext::new(0, uuid::Uuid::new_v4().to_string());
+                    if let Err(e) = transaction_cleanup_handler(
+                        TransactionCleanupCronReminder(),
+                        (*state).clone(),
+                        ctx,
+                    )
+                    .await
                     {
                         warn!(error = %e, "Transaction cleanup handler failed");
                     }
@@ -80,10 +82,10 @@ impl SqsCronScheduler {
             self.shutdown_rx.clone(),
             |state| {
                 Box::pin(async move {
-                    let data = Data::new((*state).clone());
-                    let attempt = Attempt::new_with_value(0);
+                    let ctx = WorkerContext::new(0, uuid::Uuid::new_v4().to_string());
                     if let Err(e) =
-                        system_cleanup_handler(SystemCleanupCronReminder(), data, attempt).await
+                        system_cleanup_handler(SystemCleanupCronReminder(), (*state).clone(), ctx)
+                            .await
                     {
                         warn!(error = %e, "System cleanup handler failed");
                     }
@@ -150,14 +152,12 @@ impl SqsCronScheduler {
                 move |state| {
                     let rid = relayer_id.clone();
                     Box::pin(async move {
-                        let data = Data::new((*state).clone());
-                        let relayer_data = Data::new(rid.clone());
-                        let attempt = Attempt::new_with_value(0);
+                        let ctx = WorkerContext::new(0, uuid::Uuid::new_v4().to_string());
                         if let Err(e) = token_swap_cron_handler(
                             TokenSwapCronReminder(),
-                            relayer_data,
-                            data,
-                            attempt,
+                            rid.clone(),
+                            (*state).clone(),
+                            ctx,
                         )
                         .await
                         {

@@ -6,7 +6,6 @@
 //! - Updates transaction status after submission
 //! - Enqueues status monitoring jobs
 use actix_web::web::ThinData;
-use apalis::prelude::{Attempt, Data, TaskId, *};
 use eyre::Result;
 use tracing::{debug, info, instrument};
 
@@ -16,31 +15,34 @@ use crate::{
         WORKER_TRANSACTION_RESUBMIT_RETRIES, WORKER_TRANSACTION_SUBMIT_RETRIES,
     },
     domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
-    jobs::{handle_result, Job, TransactionCommand, TransactionSend},
+    jobs::{
+        handle_result,
+        queue_backend::types::{HandlerError, WorkerContext},
+        Job, TransactionCommand, TransactionSend,
+    },
     models::DefaultAppState,
     observability::request_id::set_request_id,
 };
 
 #[instrument(
     level = "info",
-    skip(job, state),
+    skip(job, state, ctx),
     fields(
         request_id = ?job.request_id,
         job_id = %job.message_id,
         job_type = %job.job_type.to_string(),
-        attempt = %attempt.current(),
+        attempt = %ctx.attempt,
         tx_id = %job.data.transaction_id,
         relayer_id = %job.data.relayer_id,
-        task_id = %task_id.to_string(),
+        task_id = %ctx.task_id,
         command = ?job.data.command,
     )
 )]
 pub async fn transaction_submission_handler(
     job: Job<TransactionSend>,
-    state: Data<ThinData<DefaultAppState>>,
-    attempt: Attempt,
-    task_id: TaskId,
-) -> Result<(), Error> {
+    state: ThinData<DefaultAppState>,
+    ctx: WorkerContext,
+) -> Result<(), HandlerError> {
     if let Some(request_id) = job.request_id.clone() {
         set_request_id(request_id);
     }
@@ -52,12 +54,12 @@ pub async fn transaction_submission_handler(
     );
 
     let command = job.data.command.clone();
-    let result = handle_request(job.data, state.clone()).await;
+    let result = handle_request(job.data, &state).await;
 
     // Handle result with command-specific retry logic
     handle_result(
         result,
-        attempt,
+        &ctx,
         "Transaction Submission",
         get_max_retries(&command),
     )
@@ -75,12 +77,12 @@ fn get_max_retries(command: &TransactionCommand) -> usize {
 
 async fn handle_request(
     status_request: TransactionSend,
-    state: Data<ThinData<DefaultAppState>>,
+    state: &ThinData<DefaultAppState>,
 ) -> Result<()> {
     let relayer_transaction =
-        get_relayer_transaction(status_request.relayer_id.clone(), &state).await?;
+        get_relayer_transaction(status_request.relayer_id.clone(), state).await?;
 
-    let transaction = get_transaction_by_id(status_request.transaction_id, &state).await?;
+    let transaction = get_transaction_by_id(status_request.transaction_id, state).await?;
 
     // Capture transaction info for completion log
     let tx_id = transaction.id.clone();

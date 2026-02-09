@@ -6,10 +6,9 @@
 //! - WorkerHandle: Handle to running worker tasks
 //! - QueueHealth: Queue health status information
 
-use actix_web::web::ThinData;
-use apalis::prelude::{Attempt, Data, Error, TaskId};
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::sync::Arc;
 use thiserror::Error;
 
 use crate::models::{NetworkType, RelayerNetworkPolicy, RelayerRepoModel};
@@ -187,11 +186,57 @@ pub struct QueueHealth {
     pub is_healthy: bool,
 }
 
-/// Shared worker argument types used by queue backends.
-pub type QueueWorkerData = Data<ThinData<crate::models::DefaultAppState>>;
-pub type QueueWorkerAttempt = Attempt;
-pub type QueueWorkerTaskId = TaskId;
-pub type QueueWorkerError = Error;
+/// Backend-neutral context passed to all job handlers.
+///
+/// Replaces direct use of Apalis `Attempt` and `TaskId` in handler signatures,
+/// allowing handlers to be backend-agnostic (works with both Redis/Apalis and SQS).
+#[derive(Debug, Clone)]
+pub struct WorkerContext {
+    /// Current retry attempt (0-indexed)
+    pub attempt: usize,
+    /// Unique task identifier for tracing
+    pub task_id: String,
+}
+
+impl WorkerContext {
+    pub fn new(attempt: usize, task_id: String) -> Self {
+        Self { attempt, task_id }
+    }
+}
+
+/// Backend-neutral handler error for retry control.
+///
+/// Replaces direct use of `apalis::prelude::Error` in handler return types.
+/// Each queue backend maps this to its own retry mechanism:
+/// - Redis/Apalis: `Retry` → `Error::Failed`, `Abort` → `Error::Abort`
+/// - SQS: `Retry` → message returns via visibility timeout, `Abort` → message deleted
+#[derive(Debug)]
+pub enum HandlerError {
+    /// Retryable failure — backend will reschedule the job
+    Retry(String),
+    /// Permanent failure — backend will move job to dead-letter / abort
+    Abort(String),
+}
+
+impl fmt::Display for HandlerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Retry(msg) => write!(f, "Retry: {msg}"),
+            Self::Abort(msg) => write!(f, "Abort: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for HandlerError {}
+
+impl From<HandlerError> for apalis::prelude::Error {
+    fn from(err: HandlerError) -> Self {
+        match err {
+            HandlerError::Retry(msg) => apalis::prelude::Error::Failed(Arc::new(msg.into())),
+            HandlerError::Abort(msg) => apalis::prelude::Error::Abort(Arc::new(msg.into())),
+        }
+    }
+}
 
 /// Filters relayers to find those eligible for swap workers (Solana or Stellar).
 ///

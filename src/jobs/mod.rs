@@ -18,5 +18,9 @@ pub use job::*;
 mod status_check_context;
 pub use status_check_context::*;
 
+/// This module provides the status check metadata store abstraction.
+mod status_check_metadata;
+pub use status_check_metadata::*;
+
 /// This module provides queue backend abstraction (Redis/SQS).
 pub mod queue_backend;

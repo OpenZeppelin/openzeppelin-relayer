@@ -42,9 +42,8 @@ pub mod sqs_worker;
 pub mod types;
 
 pub use types::{
-    filter_relayers_for_swap, status_check_retry_delay_secs, QueueBackendError, QueueHealth,
-    QueueType, QueueWorkerAttempt, QueueWorkerData, QueueWorkerError, QueueWorkerTaskId,
-    WorkerHandle,
+    filter_relayers_for_swap, status_check_retry_delay_secs, HandlerError, QueueBackendError,
+    QueueHealth, QueueType, WorkerContext, WorkerHandle,
 };
 
 /// Queue backend abstraction trait.

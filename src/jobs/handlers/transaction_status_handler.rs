@@ -5,8 +5,6 @@
 //! - Updating transaction status in storage
 //! - Tracking failure counts for circuit breaker decisions (stored in Redis by tx_id)
 use actix_web::web::ThinData;
-use apalis::prelude::{Attempt, Data, TaskId, *};
-use apalis_redis::RedisContext;
 use deadpool_redis::Pool;
 use eyre::Result;
 use redis::AsyncCommands;
@@ -17,7 +15,10 @@ use crate::{
     config::ServerConfig,
     constants::{get_max_consecutive_status_failures, get_max_total_status_failures},
     domain::{get_relayer_transaction, get_transaction_by_id, is_final_state, Transaction},
-    jobs::{Job, JobProducerTrait, StatusCheckContext, TransactionStatusCheck},
+    jobs::{
+        queue_backend::types::{HandlerError, WorkerContext},
+        Job, JobProducerTrait, StatusCheckContext, TransactionStatusCheck,
+    },
     models::{ApiError, DefaultAppState, TransactionRepoModel},
     observability::request_id::set_request_id,
 };
@@ -28,43 +29,22 @@ const TX_STATUS_CHECK_METADATA_PREFIX: &str = "queue:tx_status_check_metadata";
 
 #[instrument(
     level = "debug",
-    skip(job, state, _ctx),
+    skip(job, state, ctx),
     fields(
         request_id = ?job.request_id,
         job_id = %job.message_id,
         job_type = %job.job_type.to_string(),
-        attempt = %attempt.current(),
+        attempt = %ctx.attempt,
         tx_id = %job.data.transaction_id,
         relayer_id = %job.data.relayer_id,
-        task_id = %task_id.to_string(),
+        task_id = %ctx.task_id,
     )
 )]
 pub async fn transaction_status_handler(
     job: Job<TransactionStatusCheck>,
-    state: Data<ThinData<DefaultAppState>>,
-    attempt: Attempt,
-    task_id: TaskId,
-    _ctx: RedisContext,
-) -> Result<(), Error> {
-    process_transaction_status(job, state, attempt, task_id).await
-}
-
-/// Queue-backend-compatible entrypoint without Apalis Redis context argument.
-pub async fn transaction_status_handler_queue(
-    job: Job<TransactionStatusCheck>,
-    state: Data<ThinData<DefaultAppState>>,
-    attempt: Attempt,
-    task_id: TaskId,
-) -> Result<(), Error> {
-    process_transaction_status(job, state, attempt, task_id).await
-}
-
-async fn process_transaction_status(
-    job: Job<TransactionStatusCheck>,
-    state: Data<ThinData<DefaultAppState>>,
-    attempt: Attempt,
-    task_id: TaskId,
-) -> Result<(), Error> {
+    state: ThinData<DefaultAppState>,
+    ctx: WorkerContext,
+) -> Result<(), HandlerError> {
     if let Some(request_id) = job.request_id.clone() {
         set_request_id(request_id);
     }
@@ -74,13 +54,13 @@ async fn process_transaction_status(
         .job_producer()
         .get_queue()
         .await
-        .map_err(|e| Error::Failed(Arc::new(format!("Failed to get queue: {e}").into())))?;
+        .map_err(|e| HandlerError::Retry(format!("Failed to get queue: {e}")))?;
 
     let redis_pool = queue.redis_connections().primary().clone();
 
     // Execute status check - all logic moved here so errors go through handle_result
     let req_result =
-        handle_request(&job.data, &state, &redis_pool, attempt.current(), &task_id).await;
+        handle_request(&job.data, &state, &redis_pool, ctx.attempt, &ctx.task_id).await;
 
     let tx_id = &job.data.transaction_id;
 
@@ -100,12 +80,12 @@ async fn process_transaction_status(
 ///
 /// # Strategy
 /// - If transaction is in final state → Clean up counters, return Ok (job completes)
-/// - If success but not final → Reset consecutive to 0 in Redis, return Err (Apalis retries)
-/// - If error with should_retry=true → Increment counters in Redis, return Err (Apalis retries)
+/// - If success but not final → Reset consecutive to 0 in Redis, return Err (retries)
+/// - If error with should_retry=true → Increment counters in Redis, return Err (retries)
 /// - If error with should_retry=false → Return Ok (job completes, e.g., transaction not found)
 /// - If counters are None (early failure) → Skip counter updates
 ///
-/// Counters are stored in a separate Redis key by tx_id, independent of Apalis job data.
+/// Counters are stored in a separate Redis key by tx_id, independent of job data.
 async fn handle_result(
     result: Result<TransactionRepoModel>,
     redis_pool: &Arc<Pool>,
@@ -113,7 +93,7 @@ async fn handle_result(
     consecutive_failures: Option<u32>,
     total_failures: Option<u32>,
     should_retry_on_error: bool,
-) -> Result<(), Error> {
+) -> Result<(), HandlerError> {
     match result {
         Ok(tx) if is_final_state(&tx.status) => {
             // Transaction reached final state - job complete, clean up counters
@@ -155,13 +135,10 @@ async fn handle_result(
                 }
             }
 
-            // Return error to trigger Apalis retry
-            Err(Error::Failed(Arc::new(
-                format!(
-                    "transaction status: {:?} - not in final state, retrying",
-                    tx.status
-                )
-                .into(),
+            // Return error to trigger retry
+            Err(HandlerError::Retry(format!(
+                "transaction status: {:?} - not in final state, retrying",
+                tx.status
             )))
         }
         Err(e) => {
@@ -207,8 +184,8 @@ async fn handle_result(
                 }
             }
 
-            // Return error to trigger Apalis retry
-            Err(Error::Failed(Arc::new(format!("{e}").into())))
+            // Return error to trigger retry
+            Err(HandlerError::Retry(format!("{e}")))
         }
     }
 }
@@ -340,10 +317,10 @@ struct HandleRequestResult {
 /// Sets should_retry_on_error=false for permanent failures like transaction not found.
 async fn handle_request(
     status_request: &TransactionStatusCheck,
-    state: &Data<ThinData<DefaultAppState>>,
+    state: &ThinData<DefaultAppState>,
     redis_pool: &Arc<Pool>,
     attempt: usize,
-    task_id: &TaskId,
+    task_id: &str,
 ) -> HandleRequestResult {
     let tx_id = &status_request.transaction_id;
     debug!(
@@ -392,7 +369,7 @@ async fn handle_request(
         max_consecutive,
         max_total,
         attempt,
-        task_id = %task_id.to_string(),
+        task_id = %task_id,
         "handling transaction status check"
     );
 

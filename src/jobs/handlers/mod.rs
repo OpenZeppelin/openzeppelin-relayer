@@ -1,10 +1,10 @@
-use std::sync::Arc;
-
-use apalis::prelude::{Attempt, Error};
 use eyre::Report;
 use tracing::{debug, error, warn};
 
-use crate::observability::request_id::get_request_id;
+use crate::{
+    jobs::queue_backend::types::{HandlerError, WorkerContext},
+    observability::request_id::get_request_id,
+};
 
 mod transaction_request_handler;
 pub use transaction_request_handler::*;
@@ -40,10 +40,10 @@ pub use relayer_health_check_handler::*;
 
 pub fn handle_result(
     result: Result<(), Report>,
-    attempt: Attempt,
+    ctx: &WorkerContext,
     job_type: &str,
     max_attempts: usize,
-) -> Result<(), Error> {
+) -> Result<(), HandlerError> {
     if result.is_ok() {
         debug!(
             job_type = %job_type,
@@ -58,91 +58,69 @@ pub fn handle_result(
         job_type = %job_type,
         request_id = ?get_request_id(),
         error = %err,
-        attempt = %attempt.current(),
+        attempt = %ctx.attempt,
         max_attempts = %max_attempts,
         "request failed"
     );
 
-    if attempt.current() >= max_attempts {
+    if ctx.attempt >= max_attempts {
         error!(
             job_type = %job_type,
             request_id = ?get_request_id(),
             max_attempts = %max_attempts,
             "max attempts reached, failing job"
         );
-        return Err(Error::Abort(Arc::new("Failed to handle request".into())));
+        return Err(HandlerError::Abort("Failed to handle request".into()));
     }
 
-    Err(Error::Failed(Arc::new(
+    Err(HandlerError::Retry(
         "Failed to handle request. Retrying".into(),
-    )))
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use apalis::prelude::Attempt;
 
     #[test]
     fn test_handle_result_success() {
         let result: Result<(), Report> = Ok(());
-        let attempt = Attempt::default();
+        let ctx = WorkerContext::new(0, "test-task".into());
 
-        let handled = handle_result(result, attempt, "test_job", 3);
+        let handled = handle_result(result, &ctx, "test_job", 3);
         assert!(handled.is_ok());
     }
 
     #[test]
     fn test_handle_result_retry() {
         let result: Result<(), Report> = Err(Report::msg("Test error"));
-        let attempt = Attempt::default();
+        let ctx = WorkerContext::new(0, "test-task".into());
 
-        let handled = handle_result(result, attempt, "test_job", 3);
+        let handled = handle_result(result, &ctx, "test_job", 3);
 
         assert!(handled.is_err());
-        match handled {
-            Err(Error::Failed(_)) => {
-                // This is the expected error type for a retry
-            }
-            _ => panic!("Expected Failed error for retry"),
-        }
+        assert!(matches!(handled, Err(HandlerError::Retry(_))));
     }
 
     #[test]
     fn test_handle_result_abort() {
         let result: Result<(), Report> = Err(Report::msg("Test error"));
-        let attempt = Attempt::default();
-        for _ in 0..3 {
-            attempt.increment();
-        }
+        let ctx = WorkerContext::new(3, "test-task".into());
 
-        let handled = handle_result(result, attempt, "test_job", 3);
+        let handled = handle_result(result, &ctx, "test_job", 3);
 
         assert!(handled.is_err());
-        match handled {
-            Err(Error::Abort(_)) => {
-                // This is the expected error type for an abort
-            }
-            _ => panic!("Expected Abort error for max attempts"),
-        }
+        assert!(matches!(handled, Err(HandlerError::Abort(_))));
     }
 
     #[test]
     fn test_handle_result_max_attempts_exceeded() {
         let result: Result<(), Report> = Err(Report::msg("Test error"));
-        let attempt = Attempt::default();
-        for _ in 0..5 {
-            attempt.increment();
-        }
+        let ctx = WorkerContext::new(5, "test-task".into());
 
-        let handled = handle_result(result, attempt, "test_job", 3);
+        let handled = handle_result(result, &ctx, "test_job", 3);
 
         assert!(handled.is_err());
-        match handled {
-            Err(Error::Abort(_)) => {
-                // This is the expected error type for exceeding max attempts
-            }
-            _ => panic!("Expected Abort error for exceeding max attempts"),
-        }
+        assert!(matches!(handled, Err(HandlerError::Abort(_))));
     }
 }

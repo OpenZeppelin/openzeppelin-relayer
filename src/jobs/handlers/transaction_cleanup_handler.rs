@@ -12,7 +12,6 @@
 //! ensuring the lock expires before the next scheduled run.
 
 use actix_web::web::ThinData;
-use apalis::prelude::{Attempt, Data, *};
 use chrono::{DateTime, Utc};
 use eyre::Result;
 use std::sync::Arc;
@@ -21,7 +20,10 @@ use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
     constants::{FINAL_TRANSACTION_STATUSES, WORKER_TRANSACTION_CLEANUP_RETRIES},
-    jobs::handle_result,
+    jobs::{
+        handle_result,
+        queue_backend::types::{HandlerError, WorkerContext},
+    },
     models::{
         DefaultAppState, NetworkTransactionData, PaginationQuery, RelayerRepoModel,
         TransactionRepoModel,
@@ -72,29 +74,29 @@ const CLEANUP_LOCK_TTL_SECS: u64 = 9 * 60;
 /// # Arguments
 /// * `job` - The cron reminder job triggering the cleanup
 /// * `data` - Application state containing repositories
-/// * `attempt` - Current attempt number for retry logic
+/// * `ctx` - Worker context with attempt number and task ID
 ///
 /// # Returns
-/// * `Result<(), Error>` - Success or failure of cleanup processing
+/// * `Result<(), HandlerError>` - Success or failure of cleanup processing
 #[instrument(
     level = "debug",
     skip(job, data),
     fields(
         job_type = "transaction_cleanup",
-        attempt = %attempt.current(),
+        attempt = %ctx.attempt,
     ),
     err
 )]
 pub async fn transaction_cleanup_handler(
     job: TransactionCleanupCronReminder,
-    data: Data<ThinData<DefaultAppState>>,
-    attempt: Attempt,
-) -> Result<(), Error> {
-    let result = handle_request(job, data, attempt.clone()).await;
+    data: ThinData<DefaultAppState>,
+    ctx: WorkerContext,
+) -> Result<(), HandlerError> {
+    let result = handle_request(job, &data).await;
 
     handle_result(
         result,
-        attempt,
+        &ctx,
         "TransactionCleanup",
         WORKER_TRANSACTION_CLEANUP_RETRIES,
     )
@@ -113,14 +115,12 @@ pub struct TransactionCleanupCronReminder();
 /// # Arguments
 /// * `_job` - The cron reminder job (currently unused)
 /// * `data` - Application state containing repositories
-/// * `_attempt` - Current attempt number (currently unused)
 ///
 /// # Returns
 /// * `Result<()>` - Success or failure of the cleanup operation
 async fn handle_request(
     _job: TransactionCleanupCronReminder,
-    data: Data<ThinData<DefaultAppState>>,
-    _attempt: Attempt,
+    data: &ThinData<DefaultAppState>,
 ) -> Result<()> {
     let transaction_repo = data.transaction_repository();
 

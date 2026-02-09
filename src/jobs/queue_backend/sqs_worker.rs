@@ -22,16 +22,15 @@ use crate::{
     },
     jobs::{
         notification_handler, relayer_health_check_handler, token_swap_request_handler,
-        transaction_request_handler_queue, transaction_status_handler_queue,
-        transaction_submission_handler, Job, NotificationSend, RelayerHealthCheck,
-        TokenSwapRequest, TransactionRequest, TransactionSend, TransactionStatusCheck,
+        transaction_request_handler, transaction_status_handler, transaction_submission_handler,
+        Job, NotificationSend, RelayerHealthCheck, TokenSwapRequest, TransactionRequest,
+        TransactionSend, TransactionStatusCheck,
     },
 };
 
-use super::{
-    status_check_retry_delay_secs, QueueBackendError, QueueType, QueueWorkerAttempt,
-    QueueWorkerData, QueueWorkerError, QueueWorkerTaskId, WorkerHandle,
-};
+use super::{status_check_retry_delay_secs, QueueBackendError, QueueType, WorkerHandle};
+
+use super::types::{HandlerError, WorkerContext};
 
 #[derive(Debug)]
 enum ProcessingError {
@@ -421,8 +420,6 @@ async fn process_message(
 }
 
 /// Processes a TransactionRequest job.
-///
-/// transaction_request_handler signature: 6 args (includes Worker and RedisContext)
 async fn process_transaction_request(
     body: &str,
     app_state: Arc<ThinData<crate::models::DefaultAppState>>,
@@ -433,19 +430,13 @@ async fn process_transaction_request(
         ProcessingError::Retryable(format!("Failed to deserialize TransactionRequest job: {e}"))
     })?;
 
-    transaction_request_handler_queue(
-        job,
-        QueueWorkerData::new((*app_state).clone()),
-        QueueWorkerAttempt::new_with_value(attempt),
-        QueueWorkerTaskId::new(),
-    )
-    .await
-    .map_err(map_apalis_error)
+    let ctx = WorkerContext::new(attempt, uuid::Uuid::new_v4().to_string());
+    transaction_request_handler(job, (*app_state).clone(), ctx)
+        .await
+        .map_err(map_handler_error)
 }
 
 /// Processes a TransactionSend job.
-///
-/// transaction_submission_handler signature: 4 args (no Worker, no RedisContext)
 async fn process_transaction_submission(
     body: &str,
     app_state: Arc<ThinData<crate::models::DefaultAppState>>,
@@ -456,19 +447,13 @@ async fn process_transaction_submission(
         ProcessingError::Retryable(format!("Failed to deserialize TransactionSend job: {e}"))
     })?;
 
-    transaction_submission_handler(
-        job,
-        QueueWorkerData::new((*app_state).clone()),
-        QueueWorkerAttempt::new_with_value(attempt),
-        QueueWorkerTaskId::new(),
-    )
-    .await
-    .map_err(map_apalis_error)
+    let ctx = WorkerContext::new(attempt, uuid::Uuid::new_v4().to_string());
+    transaction_submission_handler(job, (*app_state).clone(), ctx)
+        .await
+        .map_err(map_handler_error)
 }
 
 /// Processes a TransactionStatusCheck job.
-///
-/// transaction_status_handler signature: 5 args (no Worker, includes RedisContext)
 async fn process_transaction_status_check(
     body: &str,
     app_state: Arc<ThinData<crate::models::DefaultAppState>>,
@@ -481,19 +466,13 @@ async fn process_transaction_status_check(
         ))
     })?;
 
-    transaction_status_handler_queue(
-        job,
-        QueueWorkerData::new((*app_state).clone()),
-        QueueWorkerAttempt::new_with_value(attempt),
-        QueueWorkerTaskId::new(),
-    )
-    .await
-    .map_err(map_apalis_error)
+    let ctx = WorkerContext::new(attempt, uuid::Uuid::new_v4().to_string());
+    transaction_status_handler(job, (*app_state).clone(), ctx)
+        .await
+        .map_err(map_handler_error)
 }
 
 /// Processes a NotificationSend job.
-///
-/// notification_handler signature: 4 args (no Worker, no RedisContext)
 async fn process_notification(
     body: &str,
     app_state: Arc<ThinData<crate::models::DefaultAppState>>,
@@ -504,14 +483,10 @@ async fn process_notification(
         ProcessingError::Retryable(format!("Failed to deserialize NotificationSend job: {e}"))
     })?;
 
-    notification_handler(
-        job,
-        QueueWorkerData::new((*app_state).clone()),
-        QueueWorkerAttempt::new_with_value(attempt),
-        QueueWorkerTaskId::new(),
-    )
-    .await
-    .map_err(map_apalis_error)
+    let ctx = WorkerContext::new(attempt, uuid::Uuid::new_v4().to_string());
+    notification_handler(job, (*app_state).clone(), ctx)
+        .await
+        .map_err(map_handler_error)
 }
 
 async fn process_token_swap_request(
@@ -524,14 +499,10 @@ async fn process_token_swap_request(
         ProcessingError::Retryable(format!("Failed to deserialize TokenSwapRequest job: {e}"))
     })?;
 
-    token_swap_request_handler(
-        job,
-        QueueWorkerData::new((*app_state).clone()),
-        QueueWorkerAttempt::new_with_value(attempt),
-        QueueWorkerTaskId::new(),
-    )
-    .await
-    .map_err(map_apalis_error)
+    let ctx = WorkerContext::new(attempt, uuid::Uuid::new_v4().to_string());
+    token_swap_request_handler(job, (*app_state).clone(), ctx)
+        .await
+        .map_err(map_handler_error)
 }
 
 async fn process_relayer_health_check(
@@ -544,21 +515,16 @@ async fn process_relayer_health_check(
         ProcessingError::Retryable(format!("Failed to deserialize RelayerHealthCheck job: {e}"))
     })?;
 
-    relayer_health_check_handler(
-        job,
-        QueueWorkerData::new((*app_state).clone()),
-        QueueWorkerAttempt::new_with_value(attempt),
-        QueueWorkerTaskId::new(),
-    )
-    .await
-    .map_err(map_apalis_error)
+    let ctx = WorkerContext::new(attempt, uuid::Uuid::new_v4().to_string());
+    relayer_health_check_handler(job, (*app_state).clone(), ctx)
+        .await
+        .map_err(map_handler_error)
 }
 
-fn map_apalis_error(error: QueueWorkerError) -> ProcessingError {
+fn map_handler_error(error: HandlerError) -> ProcessingError {
     match error {
-        QueueWorkerError::Abort(err) => ProcessingError::Permanent(err.to_string()),
-        QueueWorkerError::Failed(err) => ProcessingError::Retryable(err.to_string()),
-        other => ProcessingError::Retryable(other.to_string()),
+        HandlerError::Abort(msg) => ProcessingError::Permanent(msg),
+        HandlerError::Retry(msg) => ProcessingError::Retryable(msg),
     }
 }
 
@@ -867,24 +833,15 @@ mod tests {
     }
 
     #[test]
-    fn test_map_apalis_error() {
-        // Test error type mapping
-        use std::io;
-
+    fn test_map_handler_error() {
         // Test Abort maps to Permanent
-        let error = QueueWorkerError::Abort(Arc::new(Box::new(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Validation failed",
-        ))));
-        let result = map_apalis_error(error);
+        let error = HandlerError::Abort("Validation failed".to_string());
+        let result = map_handler_error(error);
         assert!(matches!(result, ProcessingError::Permanent(_)));
 
-        // Test Failed maps to Retryable
-        let error = QueueWorkerError::Failed(Arc::new(Box::new(io::Error::new(
-            io::ErrorKind::TimedOut,
-            "Network timeout",
-        ))));
-        let result = map_apalis_error(error);
+        // Test Retry maps to Retryable
+        let error = HandlerError::Retry("Network timeout".to_string());
+        let result = map_handler_error(error);
         assert!(matches!(result, ProcessingError::Retryable(_)));
     }
 

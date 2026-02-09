@@ -4,6 +4,8 @@
 //! queue backend, including WorkerBuilder configurations, Monitor setup,
 //! backoff strategies, and token swap cron workers.
 
+use actix_web::web::ThinData;
+
 use crate::{
     config::ServerConfig,
     constants::{
@@ -20,11 +22,13 @@ use crate::{
         notification_handler, relayer_health_check_handler, system_cleanup_handler,
         token_swap_cron_handler, token_swap_request_handler, transaction_cleanup_handler,
         transaction_request_handler, transaction_status_handler, transaction_submission_handler,
-        JobProducerTrait,
+        Job, JobProducerTrait, NotificationSend, RelayerHealthCheck, SystemCleanupCronReminder,
+        TokenSwapCronReminder, TokenSwapRequest, TransactionCleanupCronReminder,
+        TransactionRequest, TransactionSend, TransactionStatusCheck,
     },
     models::{
-        NetworkRepoModel, NotificationRepoModel, RelayerNetworkPolicy, RelayerRepoModel,
-        SignerRepoModel, ThinDataAppState, TransactionRepoModel,
+        DefaultAppState, NetworkRepoModel, NotificationRepoModel, RelayerNetworkPolicy,
+        RelayerRepoModel, SignerRepoModel, ThinDataAppState, TransactionRepoModel,
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
@@ -46,7 +50,130 @@ use std::{str::FromStr, time::Duration};
 use tokio::signal::unix::SignalKind;
 use tracing::{debug, error, info};
 
-use super::types::filter_relayers_for_swap;
+use super::types::{filter_relayers_for_swap, WorkerContext};
+
+// ---------------------------------------------------------------------------
+// Apalis adapter functions
+//
+// These thin adapters are the ONLY place where Apalis-specific handler types
+// (Data, Attempt, Worker<Context>, TaskId, RedisContext) appear. They convert
+// Apalis types → WorkerContext and HandlerError → apalis::prelude::Error,
+// keeping all handler business logic backend-neutral.
+// ---------------------------------------------------------------------------
+
+async fn apalis_transaction_request_handler(
+    job: Job<TransactionRequest>,
+    state: Data<ThinData<DefaultAppState>>,
+    attempt: Attempt,
+    task_id: TaskId,
+) -> Result<(), apalis::prelude::Error> {
+    let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
+    transaction_request_handler(job, (*state).clone(), ctx)
+        .await
+        .map_err(Into::into)
+}
+
+async fn apalis_transaction_submission_handler(
+    job: Job<TransactionSend>,
+    state: Data<ThinData<DefaultAppState>>,
+    attempt: Attempt,
+    task_id: TaskId,
+) -> Result<(), apalis::prelude::Error> {
+    let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
+    transaction_submission_handler(job, (*state).clone(), ctx)
+        .await
+        .map_err(Into::into)
+}
+
+async fn apalis_transaction_status_handler(
+    job: Job<TransactionStatusCheck>,
+    state: Data<ThinData<DefaultAppState>>,
+    attempt: Attempt,
+    task_id: TaskId,
+) -> Result<(), apalis::prelude::Error> {
+    let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
+    transaction_status_handler(job, (*state).clone(), ctx)
+        .await
+        .map_err(Into::into)
+}
+
+async fn apalis_notification_handler(
+    job: Job<NotificationSend>,
+    state: Data<ThinData<DefaultAppState>>,
+    attempt: Attempt,
+    task_id: TaskId,
+) -> Result<(), apalis::prelude::Error> {
+    let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
+    notification_handler(job, (*state).clone(), ctx)
+        .await
+        .map_err(Into::into)
+}
+
+async fn apalis_token_swap_request_handler(
+    job: Job<TokenSwapRequest>,
+    state: Data<ThinData<DefaultAppState>>,
+    attempt: Attempt,
+    task_id: TaskId,
+) -> Result<(), apalis::prelude::Error> {
+    let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
+    token_swap_request_handler(job, (*state).clone(), ctx)
+        .await
+        .map_err(Into::into)
+}
+
+async fn apalis_relayer_health_check_handler(
+    job: Job<RelayerHealthCheck>,
+    state: Data<ThinData<DefaultAppState>>,
+    attempt: Attempt,
+    task_id: TaskId,
+) -> Result<(), apalis::prelude::Error> {
+    let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
+    relayer_health_check_handler(job, (*state).clone(), ctx)
+        .await
+        .map_err(Into::into)
+}
+
+async fn apalis_transaction_cleanup_handler(
+    _job: TransactionCleanupCronReminder,
+    state: Data<ThinData<DefaultAppState>>,
+    attempt: Attempt,
+    task_id: TaskId,
+) -> Result<(), apalis::prelude::Error> {
+    let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
+    transaction_cleanup_handler(TransactionCleanupCronReminder(), (*state).clone(), ctx)
+        .await
+        .map_err(Into::into)
+}
+
+async fn apalis_system_cleanup_handler(
+    _job: SystemCleanupCronReminder,
+    state: Data<ThinData<DefaultAppState>>,
+    attempt: Attempt,
+    task_id: TaskId,
+) -> Result<(), apalis::prelude::Error> {
+    let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
+    system_cleanup_handler(SystemCleanupCronReminder(), (*state).clone(), ctx)
+        .await
+        .map_err(Into::into)
+}
+
+async fn apalis_token_swap_cron_handler(
+    _job: TokenSwapCronReminder,
+    relayer_id: Data<String>,
+    state: Data<ThinData<DefaultAppState>>,
+    attempt: Attempt,
+    task_id: TaskId,
+) -> Result<(), apalis::prelude::Error> {
+    let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
+    token_swap_cron_handler(
+        TokenSwapCronReminder(),
+        (*relayer_id).clone(),
+        (*state).clone(),
+        ctx,
+    )
+    .await
+    .map_err(Into::into)
+}
 
 const TRANSACTION_REQUEST: &str = "transaction_request";
 const TRANSACTION_SENDER: &str = "transaction_sender";
@@ -111,7 +238,7 @@ where
         ))
         .data(app_state.clone())
         .backend(queue.transaction_request_queue.clone())
-        .build_fn(transaction_request_handler);
+        .build_fn(apalis_transaction_request_handler);
 
     let transaction_submission_queue_worker = WorkerBuilder::new(TRANSACTION_SENDER)
         .layer(ErrorHandlingLayer::new())
@@ -127,7 +254,7 @@ where
         ))
         .data(app_state.clone())
         .backend(queue.transaction_submission_queue.clone())
-        .build_fn(transaction_submission_handler);
+        .build_fn(apalis_transaction_submission_handler);
 
     // Generic status checker
     // Uses medium settings that work reasonably for most chains
@@ -145,7 +272,7 @@ where
         ))
         .data(app_state.clone())
         .backend(queue.transaction_status_queue.clone())
-        .build_fn(transaction_status_handler);
+        .build_fn(apalis_transaction_status_handler);
 
     // EVM status checker - slower retries to avoid premature resubmission
     // EVM has longer block times (~12s) and needs time for resubmission logic
@@ -163,7 +290,7 @@ where
         ))
         .data(app_state.clone())
         .backend(queue.transaction_status_queue_evm.clone())
-        .build_fn(transaction_status_handler);
+        .build_fn(apalis_transaction_status_handler);
 
     // Stellar status checker - fast retries for fast finality
     // Stellar has sub-second finality, needs more frequent status checks
@@ -182,7 +309,7 @@ where
             ))
             .data(app_state.clone())
             .backend(queue.transaction_status_queue_stellar.clone())
-            .build_fn(transaction_status_handler);
+            .build_fn(apalis_transaction_status_handler);
 
     let notification_queue_worker = WorkerBuilder::new(NOTIFICATION_SENDER)
         .layer(ErrorHandlingLayer::new())
@@ -198,7 +325,7 @@ where
         ))
         .data(app_state.clone())
         .backend(queue.notification_queue.clone())
-        .build_fn(notification_handler);
+        .build_fn(apalis_notification_handler);
 
     let token_swap_request_queue_worker = WorkerBuilder::new(TOKEN_SWAP_REQUEST)
         .layer(ErrorHandlingLayer::new())
@@ -214,7 +341,7 @@ where
         ))
         .data(app_state.clone())
         .backend(queue.token_swap_request_queue.clone())
-        .build_fn(token_swap_request_handler);
+        .build_fn(apalis_token_swap_request_handler);
 
     let transaction_cleanup_queue_worker = WorkerBuilder::new(TRANSACTION_CLEANUP)
         .layer(ErrorHandlingLayer::new())
@@ -230,7 +357,7 @@ where
             // every 10 minutes
             apalis_cron::Schedule::from_str("0 */10 * * * *")?,
         ))
-        .build_fn(transaction_cleanup_handler);
+        .build_fn(apalis_transaction_cleanup_handler);
 
     let system_cleanup_queue_worker = WorkerBuilder::new(SYSTEM_CLEANUP)
         .layer(ErrorHandlingLayer::new())
@@ -246,7 +373,7 @@ where
             // Runs at the start of every hour
             apalis_cron::Schedule::from_str("0 0 * * * *")?,
         ))
-        .build_fn(system_cleanup_handler);
+        .build_fn(apalis_system_cleanup_handler);
 
     let relayer_health_check_worker = WorkerBuilder::new(RELAYER_HEALTH_CHECK)
         .layer(ErrorHandlingLayer::new())
@@ -262,7 +389,7 @@ where
         ))
         .data(app_state.clone())
         .backend(queue.relayer_health_check_queue.clone())
-        .build_fn(relayer_health_check_handler);
+        .build_fn(apalis_relayer_health_check_handler);
 
     let monitor = Monitor::new()
         .register(transaction_request_queue_worker)
@@ -398,7 +525,7 @@ where
         .data(relayer.id.clone())
         .data(app_state.clone())
         .backend(CronStream::new(calendar_schedule))
-        .build_fn(token_swap_cron_handler);
+        .build_fn(apalis_token_swap_cron_handler);
 
         workers.push(worker);
         debug!(
