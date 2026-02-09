@@ -29,7 +29,7 @@ use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
     config::ServerConfig,
-    constants::WORKER_SYSTEM_CLEANUP_RETRIES,
+    constants::{SYSTEM_CLEANUP_LOCK_TTL_SECS, WORKER_SYSTEM_CLEANUP_RETRIES},
     jobs::{
         handle_result,
         queue_backend::types::{HandlerError, WorkerContext},
@@ -42,12 +42,7 @@ use crate::{
 /// Only one instance across the cluster should run cleanup at a time.
 const SYSTEM_CLEANUP_LOCK_NAME: &str = "system_queue_cleanup";
 
-/// TTL for the distributed lock (55 minutes).
-///
-/// This value should be:
-/// 1. Greater than the worst-case cleanup runtime to prevent concurrent execution
-/// 2. Less than the cron interval (1 hour) to ensure availability for the next run
-const SYSTEM_CLEANUP_LOCK_TTL_SECS: u64 = 55 * 60;
+// Note: SYSTEM_CLEANUP_LOCK_TTL_SECS is defined in crate::constants::worker
 
 /// Age threshold for job metadata cleanup (1 hour).
 /// Jobs older than this threshold will be cleaned up.

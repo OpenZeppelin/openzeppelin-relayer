@@ -10,6 +10,7 @@ use crate::{
     config::ServerConfig,
     constants::{
         DEFAULT_CONCURRENCY_STATUS_CHECKER, DEFAULT_CONCURRENCY_STATUS_CHECKER_EVM,
+        SYSTEM_CLEANUP_CRON_SCHEDULE, TRANSACTION_CLEANUP_CRON_SCHEDULE,
         WORKER_NOTIFICATION_SENDER_RETRIES, WORKER_RELAYER_HEALTH_CHECK_RETRIES,
         WORKER_SYSTEM_CLEANUP_RETRIES, WORKER_TOKEN_SWAP_REQUEST_RETRIES,
         WORKER_TRANSACTION_CLEANUP_RETRIES, WORKER_TRANSACTION_REQUEST_RETRIES,
@@ -351,8 +352,7 @@ where
         .concurrency(ServerConfig::get_worker_concurrency(TRANSACTION_CLEANUP, 1)) // Default to 1 to avoid DB conflicts
         .data(app_state.clone())
         .backend(CronStream::new(
-            // every 10 minutes
-            apalis_cron::Schedule::from_str("0 */10 * * * *")?,
+            apalis_cron::Schedule::from_str(TRANSACTION_CLEANUP_CRON_SCHEDULE)?,
         ))
         .build_fn(apalis_transaction_cleanup_handler);
 
@@ -366,10 +366,9 @@ where
         )
         .concurrency(1)
         .data(app_state.clone())
-        .backend(CronStream::new(
-            // Runs at the start of every hour
-            apalis_cron::Schedule::from_str("0 0 * * * *")?,
-        ))
+        .backend(CronStream::new(apalis_cron::Schedule::from_str(
+            SYSTEM_CLEANUP_CRON_SCHEDULE,
+        )?))
         .build_fn(apalis_system_cleanup_handler);
 
     let relayer_health_check_worker = WorkerBuilder::new(RELAYER_HEALTH_CHECK)

@@ -15,6 +15,10 @@ use tracing::{debug, info, warn};
 
 use crate::{
     config::ServerConfig,
+    constants::{
+        SYSTEM_CLEANUP_CRON_SCHEDULE, SYSTEM_CLEANUP_LOCK_TTL_SECS,
+        TRANSACTION_CLEANUP_CRON_SCHEDULE, TRANSACTION_CLEANUP_LOCK_TTL_SECS,
+    },
     jobs::{
         queue_backend::types::WorkerContext, system_cleanup_handler, token_swap_cron_handler,
         transaction_cleanup_handler, SystemCleanupCronReminder, TokenSwapCronReminder,
@@ -54,8 +58,8 @@ impl SqsCronScheduler {
         // Transaction cleanup: every 10 minutes, lock TTL 9 min
         handles.push(spawn_cron_task(
             "sqs-cron-transaction-cleanup",
-            "0 */10 * * * *",
-            Duration::from_secs(9 * 60),
+            TRANSACTION_CLEANUP_CRON_SCHEDULE,
+            Duration::from_secs(TRANSACTION_CLEANUP_LOCK_TTL_SECS),
             self.app_state.clone(),
             self.shutdown_rx.clone(),
             |state| {
@@ -77,8 +81,8 @@ impl SqsCronScheduler {
         // System cleanup: every hour, lock TTL 55 min
         handles.push(spawn_cron_task(
             "sqs-cron-system-cleanup",
-            "0 0 * * * *",
-            Duration::from_secs(55 * 60),
+            SYSTEM_CLEANUP_CRON_SCHEDULE,
+            Duration::from_secs(SYSTEM_CLEANUP_LOCK_TTL_SECS),
             self.app_state.clone(),
             self.shutdown_rx.clone(),
             |state| {

@@ -20,7 +20,10 @@ use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
     config::ServerConfig,
-    constants::{FINAL_TRANSACTION_STATUSES, WORKER_TRANSACTION_CLEANUP_RETRIES},
+    constants::{
+        FINAL_TRANSACTION_STATUSES, TRANSACTION_CLEANUP_LOCK_TTL_SECS,
+        WORKER_TRANSACTION_CLEANUP_RETRIES,
+    },
     jobs::{
         handle_result,
         queue_backend::types::{HandlerError, WorkerContext},
@@ -46,22 +49,6 @@ const DELETE_BATCH_SIZE: usize = 100;
 /// Distributed lock name for transaction cleanup.
 /// Only one instance across the cluster should run cleanup at a time.
 const CLEANUP_LOCK_NAME: &str = "transaction_cleanup";
-
-/// TTL for the distributed lock (9 minutes).
-///
-/// This value should be:
-/// 1. Greater than the worst-case cleanup runtime to prevent concurrent execution
-/// 2. Less than the cron interval (10 minutes) to ensure availability for the next run
-///
-/// If cleanup consistently takes longer than this TTL, another instance may acquire
-/// the lock and run concurrently. In that case, consider:
-/// - Increasing the TTL (and cron interval accordingly)
-/// - Optimizing the cleanup process
-/// - Implementing lock refresh during long-running operations
-///
-/// The lock is automatically released when processing completes (via Drop),
-/// so the TTL primarily serves as a safety net for crashed instances.
-const CLEANUP_LOCK_TTL_SECS: u64 = 9 * 60;
 
 /// Handles periodic transaction cleanup jobs from the queue.
 ///
@@ -130,8 +117,11 @@ async fn handle_request(
     let lock_guard = if ServerConfig::get_distributed_mode() {
         if let Some((conn, prefix)) = transaction_repo.connection_info() {
             let lock_key = format!("{prefix}:lock:{CLEANUP_LOCK_NAME}");
-            let lock =
-                DistributedLock::new(conn, &lock_key, Duration::from_secs(CLEANUP_LOCK_TTL_SECS));
+            let lock = DistributedLock::new(
+                conn,
+                &lock_key,
+                Duration::from_secs(TRANSACTION_CLEANUP_LOCK_TTL_SECS),
+            );
 
             match lock.try_acquire().await {
                 Ok(Some(guard)) => {
