@@ -88,6 +88,11 @@ impl SqsBackend {
                 format!("https://sqs.{region}.amazonaws.com/{account_id}/relayer-")
             }
         };
+        info!(
+            region = %region,
+            queue_url_prefix = %prefix,
+            "Resolved SQS queue URL prefix"
+        );
 
         // Build queue URL mapping
         let queue_urls = HashMap::from([
@@ -118,6 +123,11 @@ impl SqsBackend {
         // This avoids silent runtime polling failures and makes infra drift explicit.
         let mut missing_queues = Vec::new();
         for (queue_type, queue_url) in &queue_urls {
+            debug!(
+                queue_type = %queue_type,
+                queue_url = %queue_url,
+                "Probing SQS queue accessibility at startup"
+            );
             let probe = sqs_client
                 .get_queue_attributes()
                 .queue_url(queue_url)
@@ -125,8 +135,24 @@ impl SqsBackend {
                 .send()
                 .await;
 
-            if let Err(err) = probe {
-                missing_queues.push(format!("{queue_type} ({queue_url}): {err}"));
+            match probe {
+                Ok(_) => {
+                    debug!(
+                        queue_type = %queue_type,
+                        queue_url = %queue_url,
+                        "SQS queue probe succeeded"
+                    );
+                }
+                Err(err) => {
+                    // Include debug details because Display often collapses to "service error".
+                    error!(
+                        queue_type = %queue_type,
+                        queue_url = %queue_url,
+                        error = ?err,
+                        "SQS queue probe failed"
+                    );
+                    missing_queues.push(format!("{queue_type} ({queue_url}): {err:?}"));
+                }
             }
         }
 
