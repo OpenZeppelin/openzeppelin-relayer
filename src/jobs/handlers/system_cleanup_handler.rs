@@ -28,6 +28,7 @@ use std::time::Duration;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
+    config::ServerConfig,
     constants::WORKER_SYSTEM_CLEANUP_RETRIES,
     jobs::{
         handle_result,
@@ -130,33 +131,39 @@ async fn handle_cleanup_request(
         }
     };
 
-    let lock_key = format!("{key_prefix}:lock:{SYSTEM_CLEANUP_LOCK_NAME}");
+    // In distributed mode, acquire a lock to prevent multiple instances from
+    // running cleanup simultaneously. In single-instance mode, skip locking.
+    let _lock_guard = if ServerConfig::get_distributed_mode() {
+        let lock_key = format!("{key_prefix}:lock:{SYSTEM_CLEANUP_LOCK_NAME}");
+        let lock = DistributedLock::new(
+            pool.clone(),
+            &lock_key,
+            Duration::from_secs(SYSTEM_CLEANUP_LOCK_TTL_SECS),
+        );
 
-    let lock = DistributedLock::new(
-        pool.clone(),
-        &lock_key,
-        Duration::from_secs(SYSTEM_CLEANUP_LOCK_TTL_SECS),
-    );
-
-    let _lock_guard = match lock.try_acquire().await {
-        Ok(Some(guard)) => {
-            debug!(lock_key = %lock_key, "acquired distributed lock for system cleanup");
-            guard
+        match lock.try_acquire().await {
+            Ok(Some(guard)) => {
+                debug!(lock_key = %lock_key, "acquired distributed lock for system cleanup");
+                Some(guard)
+            }
+            Ok(None) => {
+                info!(lock_key = %lock_key, "system cleanup skipped - another instance is processing");
+                return Ok(());
+            }
+            Err(e) => {
+                // Fail closed: skip cleanup if we can't communicate with Redis for locking,
+                // to prevent concurrent execution across multiple instances
+                warn!(
+                    error = %e,
+                    lock_key = %lock_key,
+                    "failed to acquire distributed lock, skipping cleanup"
+                );
+                return Ok(());
+            }
         }
-        Ok(None) => {
-            info!(lock_key = %lock_key, "system cleanup skipped - another instance is processing");
-            return Ok(());
-        }
-        Err(e) => {
-            // If we can't communicate with Redis for locking, skip cleanup to avoid
-            // potential concurrent execution across multiple instances
-            warn!(
-                error = %e,
-                lock_key = %lock_key,
-                "failed to acquire distributed lock, skipping cleanup"
-            );
-            return Ok(());
-        }
+    } else {
+        debug!("distributed mode disabled, skipping lock acquisition");
+        None
     };
 
     info!("executing queue metadata cleanup");

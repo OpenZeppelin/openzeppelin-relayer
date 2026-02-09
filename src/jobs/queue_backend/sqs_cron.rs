@@ -14,6 +14,7 @@ use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
 use crate::{
+    config::ServerConfig,
     jobs::{
         queue_backend::types::WorkerContext, system_cleanup_handler, token_swap_cron_handler,
         transaction_cleanup_handler, SystemCleanupCronReminder, TokenSwapCronReminder,
@@ -245,7 +246,14 @@ fn spawn_cron_task(
                 break;
             }
 
-            // Try to acquire distributed lock
+            // In distributed mode, acquire a lock to prevent duplicate execution.
+            // In single-instance mode, run the handler directly without locking.
+            if !ServerConfig::get_distributed_mode() {
+                debug!(name = %task_name, "Distributed mode disabled, running cron without lock");
+                handler(app_state.clone()).await;
+                continue;
+            }
+
             let pool = match app_state.transaction_repository().connection_info() {
                 Some((pool, _)) => pool,
                 None => {

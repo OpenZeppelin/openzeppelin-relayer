@@ -512,6 +512,19 @@ impl ServerConfig {
             .unwrap_or(30)
     }
 
+    /// Gets whether distributed mode is enabled from the `DISTRIBUTED_MODE` environment variable.
+    ///
+    /// When `true`, distributed locks are used to coordinate across multiple instances
+    /// (e.g., preventing duplicate cron execution in multi-instance deployments).
+    /// When `false` (default), locks are skipped — appropriate for single-instance deployments.
+    ///
+    /// Defaults to `false`.
+    pub fn get_distributed_mode() -> bool {
+        env::var("DISTRIBUTED_MODE")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false)
+    }
+
     /// Get worker concurrency from environment variable or use default
     ///
     /// Environment variable format: `BACKGROUND_WORKER_{WORKER_NAME}_CONCURRENCY`

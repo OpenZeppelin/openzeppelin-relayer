@@ -19,6 +19,7 @@ use std::time::Duration;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
+    config::ServerConfig,
     constants::{FINAL_TRANSACTION_STATUSES, WORKER_TRANSACTION_CLEANUP_RETRIES},
     jobs::{
         handle_result,
@@ -124,38 +125,40 @@ async fn handle_request(
 ) -> Result<()> {
     let transaction_repo = data.transaction_repository();
 
-    // Attempt to acquire distributed lock to prevent multiple instances from
-    // running cleanup simultaneously. This is necessary because CronStream
-    // is local to each instance, not distributed via Redis queues.
-    // The lock key includes the relayer prefix to support multi-tenant deployments.
-    // Key format: {prefix}:lock:{name} (e.g., "oz-relayer:lock:transaction_cleanup")
-    let lock_guard = if let Some((conn, prefix)) = transaction_repo.connection_info() {
-        let lock_key = format!("{prefix}:lock:{CLEANUP_LOCK_NAME}");
-        let lock =
-            DistributedLock::new(conn, &lock_key, Duration::from_secs(CLEANUP_LOCK_TTL_SECS));
+    // In distributed mode, acquire a lock to prevent multiple instances from
+    // running cleanup simultaneously. In single-instance mode, skip locking.
+    let lock_guard = if ServerConfig::get_distributed_mode() {
+        if let Some((conn, prefix)) = transaction_repo.connection_info() {
+            let lock_key = format!("{prefix}:lock:{CLEANUP_LOCK_NAME}");
+            let lock =
+                DistributedLock::new(conn, &lock_key, Duration::from_secs(CLEANUP_LOCK_TTL_SECS));
 
-        match lock.try_acquire().await {
-            Ok(Some(guard)) => {
-                debug!(lock_key = %lock_key, "acquired distributed lock for transaction cleanup");
-                Some(guard)
+            match lock.try_acquire().await {
+                Ok(Some(guard)) => {
+                    debug!(lock_key = %lock_key, "acquired distributed lock for transaction cleanup");
+                    Some(guard)
+                }
+                Ok(None) => {
+                    info!(lock_key = %lock_key, "transaction cleanup skipped - another instance is processing");
+                    return Ok(());
+                }
+                Err(e) => {
+                    // Fail closed: skip cleanup if we can't communicate with Redis for locking,
+                    // to prevent concurrent execution across multiple instances
+                    warn!(
+                        error = %e,
+                        lock_key = %lock_key,
+                        "failed to acquire distributed lock, skipping cleanup"
+                    );
+                    return Ok(());
+                }
             }
-            Ok(None) => {
-                info!(lock_key = %lock_key, "transaction cleanup skipped - another instance is processing");
-                return Ok(());
-            }
-            Err(e) => {
-                // If we can't communicate with Redis for locking, log warning but proceed
-                // This maintains backwards compatibility and handles Redis connection issues
-                warn!(
-                    error = %e,
-                    lock_key = %lock_key,
-                    "failed to acquire distributed lock, proceeding with cleanup anyway"
-                );
-                None
-            }
+        } else {
+            debug!("in-memory repository detected, skipping distributed lock");
+            None
         }
     } else {
-        debug!("in-memory repository detected, skipping distributed lock");
+        debug!("distributed mode disabled, skipping lock acquisition");
         None
     };
 
