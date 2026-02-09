@@ -11,14 +11,6 @@
 use crate::constants::{EVM_MAX_CONSECUTIVE_STATUS_FAILURES, EVM_MAX_TOTAL_STATUS_FAILURES};
 use crate::models::NetworkType;
 
-/// Metadata key for tracking consecutive status check failures.
-/// Resets to 0 on successful status check (even if transaction not final).
-pub const META_CONSECUTIVE_FAILURES: &str = "consecutive_failures";
-
-/// Metadata key for tracking total status check failures.
-/// Never resets - useful for monitoring, alerting, and as a safety net circuit breaker.
-pub const META_TOTAL_FAILURES: &str = "total_failures";
-
 /// Context for status check circuit breaker decisions.
 ///
 /// This struct is passed to network handlers during status checks to provide
@@ -134,31 +126,9 @@ impl StatusCheckContext {
     }
 }
 
-/// Reads a counter value from job metadata.
-///
-/// # Arguments
-///
-/// * `metadata` - Optional metadata HashMap from the job
-/// * `key` - The metadata key to read
-///
-/// # Returns
-///
-/// The counter value as u32, or 0 if not present or invalid.
-pub fn read_counter_from_metadata(
-    metadata: &Option<std::collections::HashMap<String, String>>,
-    key: &str,
-) -> u32 {
-    metadata
-        .as_ref()
-        .and_then(|m| m.get(key))
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     #[test]
     fn test_status_check_context_default() {
@@ -227,37 +197,5 @@ mod tests {
         assert!(ctx.should_force_finalize());
         assert!(!ctx.triggered_by_consecutive());
         assert!(ctx.triggered_by_total());
-    }
-
-    #[test]
-    fn test_read_counter_from_metadata_present() {
-        let mut metadata = HashMap::new();
-        metadata.insert(META_CONSECUTIVE_FAILURES.to_string(), "5".to_string());
-        let result = read_counter_from_metadata(&Some(metadata), META_CONSECUTIVE_FAILURES);
-        assert_eq!(result, 5);
-    }
-
-    #[test]
-    fn test_read_counter_from_metadata_missing() {
-        let metadata: HashMap<String, String> = HashMap::new();
-        let result = read_counter_from_metadata(&Some(metadata), META_CONSECUTIVE_FAILURES);
-        assert_eq!(result, 0);
-    }
-
-    #[test]
-    fn test_read_counter_from_metadata_none() {
-        let result = read_counter_from_metadata(&None, META_CONSECUTIVE_FAILURES);
-        assert_eq!(result, 0);
-    }
-
-    #[test]
-    fn test_read_counter_from_metadata_invalid() {
-        let mut metadata = HashMap::new();
-        metadata.insert(
-            META_CONSECUTIVE_FAILURES.to_string(),
-            "not_a_number".to_string(),
-        );
-        let result = read_counter_from_metadata(&Some(metadata), META_CONSECUTIVE_FAILURES);
-        assert_eq!(result, 0);
     }
 }

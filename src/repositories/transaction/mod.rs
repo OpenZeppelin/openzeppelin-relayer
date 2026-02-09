@@ -526,6 +526,7 @@ mod tests {
             noop_count: None,
             is_canceled: None,
             delete_at: None,
+            metadata: None,
         }
     }
 

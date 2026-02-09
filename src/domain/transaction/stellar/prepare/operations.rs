@@ -149,6 +149,7 @@ mod tests {
             noop_count: None,
             is_canceled: Some(false),
             delete_at: None,
+            metadata: None,
         }
     }
 

@@ -1799,6 +1799,7 @@ mod tests {
             }),
             noop_count: None,
             is_canceled: Some(false),
+            metadata: None,
         }
     }
 
@@ -2631,6 +2632,7 @@ mod tests {
             priced_at: None,
             noop_count: None,
             delete_at: None,
+            metadata: None,
         };
 
         let updated = repo

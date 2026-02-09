@@ -522,6 +522,7 @@ mod tests {
             noop_count: None,
             is_canceled: Some(false),
             delete_at: None,
+            metadata: None,
         };
 
         // Test with no attempts
@@ -569,6 +570,7 @@ mod tests {
             noop_count: None,
             is_canceled: Some(false),
             delete_at: None,
+            metadata: None,
         };
 
         // Test with no NOOP attempts

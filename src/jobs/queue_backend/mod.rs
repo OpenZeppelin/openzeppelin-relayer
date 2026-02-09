@@ -26,8 +26,8 @@ use std::sync::Arc;
 use crate::{
     config::ServerConfig,
     jobs::{
-        Job, JobProducerTrait, NotificationSend, RelayerHealthCheck, TokenSwapRequest,
-        TransactionRequest, TransactionSend, TransactionStatusCheck,
+        Job, NotificationSend, Queue, RelayerHealthCheck, TokenSwapRequest, TransactionRequest,
+        TransactionSend, TransactionStatusCheck,
     },
     models::DefaultAppState,
     utils::RedisConnections,
@@ -35,6 +35,7 @@ use crate::{
 use actix_web::web::ThinData;
 
 pub mod redis_backend;
+pub mod redis_queue;
 pub mod redis_worker;
 pub mod sqs_backend;
 pub mod sqs_cron;
@@ -157,63 +158,21 @@ impl std::fmt::Debug for QueueBackendStorage {
 }
 
 impl QueueBackendStorage {
-    /// Creates a new queue backend based on the `QUEUE_BACKEND` environment variable.
+    /// Returns a reference to the underlying `Queue` when the backend is Redis.
     ///
-    /// # Arguments
-    /// * `app_state` - Application state containing the job producer and configuration
-    ///
-    /// # Environment Variables
-    /// - `QUEUE_BACKEND`: Backend to use ("redis" or "sqs", default: "redis")
-    ///
-    /// # Errors
-    /// Returns `QueueBackendError::ConfigError` if:
-    /// - `QUEUE_BACKEND` contains an unsupported value
-    /// - Required backend-specific configuration is missing
-    /// - Failed to get queue from job producer
-    pub async fn new(app_state: ThinData<DefaultAppState>) -> Result<Self, QueueBackendError> {
-        let backend_type = ServerConfig::get_queue_backend();
-
-        match backend_type.to_lowercase().as_str() {
-            "redis" => {
-                let queue = app_state.job_producer.get_queue().await.map_err(|e| {
-                    QueueBackendError::ConfigError(format!(
-                        "Failed to get queue from job producer: {e}"
-                    ))
-                })?;
-                let redis_connections = queue.redis_connections();
-                Self::new_with_redis_connections(redis_connections).await
-            }
-            "sqs" => {
-                let backend = sqs_backend::SqsBackend::new().await?;
-                Ok(Self::Sqs(backend))
-            }
-            other => Err(QueueBackendError::ConfigError(format!(
-                "Unsupported QUEUE_BACKEND value: {other}. Must be 'redis' or 'sqs'"
-            ))),
+    /// Returns `None` for non-Redis backends (e.g. SQS) that do not use a `Queue`.
+    pub fn queue(&self) -> Option<&Queue> {
+        match self {
+            Self::Redis(b) => Some(b.queue()),
+            Self::Sqs(_) => None,
         }
     }
 
-    /// Internal helper to create a backend with explicit redis connections.
+    /// Returns the Redis connection pools when the backend is Redis.
     ///
-    /// This is used by `create_queue_backend` when redis connections are already available.
-    async fn new_with_redis_connections(
-        redis_connections: Arc<RedisConnections>,
-    ) -> Result<Self, QueueBackendError> {
-        let backend_type = ServerConfig::get_queue_backend();
-
-        match backend_type.to_lowercase().as_str() {
-            "redis" => {
-                let backend = redis_backend::RedisBackend::new(redis_connections).await?;
-                Ok(Self::Redis(Box::new(backend)))
-            }
-            "sqs" => {
-                let backend = sqs_backend::SqsBackend::new().await?;
-                Ok(Self::Sqs(backend))
-            }
-            other => Err(QueueBackendError::ConfigError(format!(
-                "Unsupported QUEUE_BACKEND value: {other}. Must be 'redis' or 'sqs'"
-            ))),
-        }
+    /// Delegates to `Queue::redis_connections()`. Returns `None` for non-Redis backends.
+    pub fn redis_connections(&self) -> Option<Arc<RedisConnections>> {
+        self.queue().map(|q| q.redis_connections())
     }
 }
 
@@ -335,9 +294,25 @@ impl QueueBackend for QueueBackendStorage {
 pub async fn create_queue_backend(
     redis_connections: Arc<RedisConnections>,
 ) -> Result<Arc<QueueBackendStorage>, QueueBackendError> {
-    QueueBackendStorage::new_with_redis_connections(redis_connections)
-        .await
-        .map(Arc::new)
+    let backend_type = ServerConfig::get_queue_backend();
+
+    let storage = match backend_type.to_lowercase().as_str() {
+        "redis" => {
+            let backend = redis_backend::RedisBackend::new(redis_connections).await?;
+            QueueBackendStorage::Redis(Box::new(backend))
+        }
+        "sqs" => {
+            let backend = sqs_backend::SqsBackend::new().await?;
+            QueueBackendStorage::Sqs(backend)
+        }
+        other => {
+            return Err(QueueBackendError::ConfigError(format!(
+                "Unsupported QUEUE_BACKEND value: {other}. Must be 'redis' or 'sqs'"
+            )));
+        }
+    };
+
+    Ok(Arc::new(storage))
 }
 
 #[cfg(test)]

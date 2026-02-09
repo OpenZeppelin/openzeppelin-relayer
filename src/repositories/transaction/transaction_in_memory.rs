@@ -474,6 +474,7 @@ mod tests {
             }),
             noop_count: None,
             is_canceled: Some(false),
+            metadata: None,
         }
     }
 
@@ -509,6 +510,7 @@ mod tests {
             }),
             noop_count: None,
             is_canceled: Some(false),
+            metadata: None,
         }
     }
 
@@ -631,6 +633,7 @@ mod tests {
             noop_count: None,
             is_canceled: None,
             delete_at: None,
+            metadata: None,
         };
         let updated_tx1 = repo
             .partial_update("test-tx-id".to_string(), update1)
@@ -651,6 +654,7 @@ mod tests {
             noop_count: None,
             is_canceled: None,
             delete_at: None,
+            metadata: None,
         };
         let updated_tx2 = repo
             .partial_update("test-tx-id".to_string(), update2)
@@ -678,6 +682,7 @@ mod tests {
             noop_count: None,
             is_canceled: None,
             delete_at: None,
+            metadata: None,
         };
         let result = repo
             .partial_update("non-existent-id".to_string(), update3)

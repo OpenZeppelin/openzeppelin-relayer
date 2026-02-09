@@ -205,6 +205,7 @@ mod tests {
             hashes: Vec::new(),
             noop_count: None,
             is_canceled: Some(false),
+            metadata: None,
         };
 
         let result = decode_solana_transaction(&tx);
@@ -239,6 +240,7 @@ mod tests {
             hashes: Vec::new(),
             noop_count: None,
             is_canceled: Some(false),
+            metadata: None,
         };
 
         let result = decode_solana_transaction(&tx);
@@ -403,6 +405,7 @@ mod tests {
             hashes: vec!["hash1".to_string(), "hash2".to_string()], // Less than limit
             noop_count: None,
             is_canceled: Some(false),
+            metadata: None,
         };
 
         // Should not be too many attempts when under limit
@@ -427,6 +430,7 @@ mod tests {
             hashes: vec!["hash".to_string(); MAXIMUM_SOLANA_TX_ATTEMPTS], // Exactly at limit
             noop_count: None,
             is_canceled: Some(false),
+            metadata: None,
         };
 
         // Should be too many attempts when at limit
@@ -451,6 +455,7 @@ mod tests {
             hashes: vec!["hash".to_string(); MAXIMUM_SOLANA_TX_ATTEMPTS + 1], // Over limit
             noop_count: None,
             is_canceled: Some(false),
+            metadata: None,
         };
 
         // Should be too many attempts when over limit

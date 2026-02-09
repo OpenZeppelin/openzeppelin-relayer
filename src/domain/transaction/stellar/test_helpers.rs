@@ -266,6 +266,7 @@ pub fn create_test_transaction(relayer_id: &str) -> TransactionRepoModel {
         is_canceled: Some(false),
         status_reason: None,
         delete_at: None,
+        metadata: None,
     }
 }
 

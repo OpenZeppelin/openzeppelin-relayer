@@ -152,6 +152,7 @@ pub mod mockutils {
             network_type: NetworkType::Evm,
             noop_count: None,
             is_canceled: None,
+            metadata: None,
         }
     }
 
@@ -175,6 +176,7 @@ pub mod mockutils {
             noop_count: None,
             is_canceled: None,
             delete_at: None,
+            metadata: None,
         }
     }
 

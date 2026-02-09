@@ -56,6 +56,14 @@ pub enum TransactionStatus {
     Expired,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct TransactionMetadata {
+    #[serde(default)]
+    pub consecutive_failures: u32,
+    #[serde(default)]
+    pub total_failures: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TransactionUpdateRequest {
     pub status: Option<TransactionStatus>,
@@ -73,6 +81,8 @@ pub struct TransactionUpdateRequest {
     pub is_canceled: Option<bool>,
     /// Timestamp when this transaction should be deleted (for final states)
     pub delete_at: Option<String>,
+    /// Status check metadata (failure counters for circuit breaker)
+    pub metadata: Option<TransactionMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,6 +105,9 @@ pub struct TransactionRepoModel {
     pub network_type: NetworkType,
     pub noop_count: Option<u32>,
     pub is_canceled: Option<bool>,
+    /// Status check metadata (failure counters for circuit breaker)
+    #[serde(default)]
+    pub metadata: Option<TransactionMetadata>,
 }
 
 impl TransactionRepoModel {
@@ -164,6 +177,9 @@ impl TransactionRepoModel {
         if let Some(delete_at) = update.delete_at {
             self.delete_at = Some(delete_at);
         }
+        if let Some(metadata) = update.metadata {
+            self.metadata = Some(metadata);
+        }
     }
 
     /// Creates a TransactionUpdateRequest to reset this transaction to its pre-prepare state.
@@ -198,6 +214,7 @@ impl TransactionRepoModel {
             noop_count: None,
             is_canceled: None,
             delete_at: None,
+            metadata: None,
         })
     }
 }
@@ -418,6 +435,7 @@ impl Default for TransactionRepoModel {
             hashes: Vec::new(),
             noop_count: None,
             is_canceled: Some(false),
+            metadata: None,
         }
     }
 }
@@ -888,6 +906,7 @@ impl
                     hashes: Vec::new(),
                     noop_count: None,
                     is_canceled: Some(false),
+                    metadata: None,
                 })
             }
             NetworkTransactionRequest::Solana(solana_request) => Ok(Self {
@@ -910,6 +929,7 @@ impl
                 hashes: Vec::new(),
                 noop_count: None,
                 is_canceled: Some(false),
+                metadata: None,
             }),
             NetworkTransactionRequest::Stellar(stellar_request) => {
                 // Store the source account before consuming the request
@@ -949,6 +969,7 @@ impl
                     hashes: Vec::new(),
                     noop_count: None,
                     is_canceled: Some(false),
+                    metadata: None,
                 })
             }
         }
@@ -1235,6 +1256,7 @@ mod tests {
             noop_count: None,
             is_canceled: None,
             delete_at: None,
+            metadata: None,
         };
 
         let update_req = tx.create_reset_update_request().unwrap();
@@ -3056,6 +3078,7 @@ mod tests {
             network_type: NetworkType::Evm,
             noop_count: None,
             is_canceled: None,
+            metadata: None,
         }
     }
 
@@ -3121,6 +3144,7 @@ mod tests {
             network_type: NetworkType::Evm,
             noop_count: Some(5),
             is_canceled: Some(true),
+            metadata: None,
         };
 
         // Create a partial update that only changes status

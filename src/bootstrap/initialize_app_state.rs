@@ -4,7 +4,7 @@
 //! including setting up repositories, job queues, and other necessary components.
 use crate::{
     config::{RepositoryStorageType, ServerConfig},
-    jobs::{self, Queue},
+    jobs::{self, queue_backend::create_queue_backend},
     models::{AppState, DefaultAppState},
     repositories::{
         ApiKeyRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage,
@@ -133,9 +133,8 @@ pub async fn initialize_app_state(
 
     let repositories = initialize_repositories(&server_config, repo_connections).await?;
 
-    // Queue always uses Redis with deadpool connections
-    let queue = Queue::setup(redis_connections.clone()).await?;
-    let job_producer = Arc::new(jobs::JobProducer::new(queue.clone()));
+    let queue_backend = create_queue_backend(redis_connections).await?;
+    let job_producer = Arc::new(jobs::JobProducer::new(queue_backend));
 
     let app_state = web::ThinData(AppState {
         relayer_repository: repositories.relayer,

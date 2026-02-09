@@ -8,19 +8,17 @@
 
 use crate::{
     jobs::{
-        queue_backend::{create_queue_backend, QueueBackend, QueueBackendStorage},
+        queue_backend::{QueueBackend, QueueBackendStorage},
         Job, NotificationSend, Queue, RelayerHealthCheck, TransactionRequest, TransactionSend,
         TransactionStatusCheck,
     },
     models::RelayerError,
     observability::request_id::get_request_id,
 };
-use apalis_redis::RedisError;
 use async_trait::async_trait;
 use serde::Serialize;
 use std::sync::Arc;
 use thiserror::Error;
-use tokio::sync::OnceCell;
 use tracing::{debug, error};
 
 use super::{JobType, TokenSwapRequest};
@@ -34,43 +32,16 @@ pub enum JobProducerError {
     QueueError(String),
 }
 
-static QUEUE_BACKEND: OnceCell<Arc<QueueBackendStorage>> = OnceCell::const_new();
-
-async fn get_queue_backend(
-    queue: Arc<Queue>,
-) -> Result<Arc<QueueBackendStorage>, JobProducerError> {
-    QUEUE_BACKEND
-        .get_or_try_init(|| async {
-            debug!("Initializing queue backend for job production");
-            create_queue_backend(queue.redis_connections())
-                .await
-                .map_err(|e| {
-                    error!(error = %e, "Failed to initialize queue backend");
-                    JobProducerError::QueueError(format!("Failed to initialize queue backend: {e}"))
-                })
-        })
-        .await
-        .cloned()
-}
-
-impl From<RedisError> for JobProducerError {
-    fn from(err: RedisError) -> Self {
-        error!(error = %err, "Redis error during job production");
-        JobProducerError::QueueError(err.to_string())
-    }
-}
-
 impl From<JobProducerError> for RelayerError {
     fn from(err: JobProducerError) -> Self {
         RelayerError::QueueError(err.to_string())
     }
 }
 
-/// Job producer that enqueues jobs to Redis-backed queues.
-///
+/// Job producer that enqueues jobs via the configured queue backend.
 #[derive(Debug, Clone)]
 pub struct JobProducer {
-    queue: Queue,
+    queue_backend: Arc<QueueBackendStorage>,
 }
 
 #[async_trait]
@@ -116,19 +87,23 @@ pub trait JobProducerTrait: Send + Sync {
 }
 
 impl JobProducer {
-    pub fn new(queue: Queue) -> Self {
-        Self { queue }
+    pub fn new(queue_backend: Arc<QueueBackendStorage>) -> Self {
+        Self { queue_backend }
     }
 
-    async fn queue_backend(&self) -> Result<Arc<QueueBackendStorage>, JobProducerError> {
-        get_queue_backend(Arc::new(self.queue.clone())).await
+    pub fn queue_backend(&self) -> Arc<QueueBackendStorage> {
+        self.queue_backend.clone()
     }
 }
 
 #[async_trait]
 impl JobProducerTrait for JobProducer {
     async fn get_queue(&self) -> Result<Queue, JobProducerError> {
-        Ok(self.queue.clone())
+        self.queue_backend.queue().cloned().ok_or_else(|| {
+            JobProducerError::QueueError(
+                "Queue is not available for the active backend".to_string(),
+            )
+        })
     }
 
     async fn produce_transaction_request_job(
@@ -146,7 +121,7 @@ impl JobProducerTrait for JobProducer {
         let tx_id = job.data.transaction_id.clone();
         let relayer_id = job.data.relayer_id.clone();
 
-        let backend = self.queue_backend().await?;
+        let backend = self.queue_backend();
         let job_id = backend
             .produce_transaction_request(job, scheduled_on)
             .await
@@ -178,7 +153,7 @@ impl JobProducerTrait for JobProducer {
         let relayer_id = job.data.relayer_id.clone();
         let command = job.data.command.clone();
 
-        let backend = self.queue_backend().await?;
+        let backend = self.queue_backend();
         let job_id = backend
             .produce_transaction_submission(job, scheduled_on)
             .await
@@ -213,7 +188,7 @@ impl JobProducerTrait for JobProducer {
         let tx_id = job.data.transaction_id.clone();
         let relayer_id = job.data.relayer_id.clone();
 
-        let backend = self.queue_backend().await?;
+        let backend = self.queue_backend();
         let job_id = backend
             .produce_transaction_status_check(job, scheduled_on)
             .await
@@ -243,7 +218,7 @@ impl JobProducerTrait for JobProducer {
         let request_id = job.request_id.clone();
         let notification_id = job.data.notification_id.clone();
 
-        let backend = self.queue_backend().await?;
+        let backend = self.queue_backend();
         let job_id = backend
             .produce_notification(job, scheduled_on)
             .await
@@ -270,7 +245,7 @@ impl JobProducerTrait for JobProducer {
             Job::new(JobType::TokenSwapRequest, swap_request_job).with_request_id(get_request_id());
         let request_id = job.request_id.clone();
         let relayer_id = job.data.relayer_id.clone();
-        let backend = self.queue_backend().await?;
+        let backend = self.queue_backend();
         let job_id = backend
             .produce_token_swap_request(job, scheduled_on)
             .await
@@ -300,7 +275,7 @@ impl JobProducerTrait for JobProducer {
         .with_request_id(get_request_id());
         let request_id = job.request_id.clone();
         let relayer_id = job.data.relayer_id.clone();
-        let backend = self.queue_backend().await?;
+        let backend = self.queue_backend();
         let job_id = backend
             .produce_relayer_health_check(job, scheduled_on)
             .await

@@ -3,29 +3,25 @@
 //! Monitors the status of submitted transactions by:
 //! - Checking transaction status on the network
 //! - Updating transaction status in storage
-//! - Tracking failure counts for circuit breaker decisions (stored in Redis by tx_id)
+//! - Tracking failure counts for circuit breaker decisions (stored in transaction metadata)
 use actix_web::web::ThinData;
-use deadpool_redis::Pool;
 use eyre::Result;
-use redis::AsyncCommands;
-use std::sync::Arc;
 use tracing::{debug, info, instrument, warn};
 
 use crate::{
-    config::ServerConfig,
     constants::{get_max_consecutive_status_failures, get_max_total_status_failures},
     domain::{get_relayer_transaction, get_transaction_by_id, is_final_state, Transaction},
     jobs::{
         queue_backend::types::{HandlerError, WorkerContext},
-        Job, JobProducerTrait, StatusCheckContext, TransactionStatusCheck,
+        Job, StatusCheckContext, TransactionStatusCheck,
     },
-    models::{ApiError, DefaultAppState, TransactionRepoModel},
+    models::{
+        ApiError, DefaultAppState, TransactionMetadata, TransactionRepoModel,
+        TransactionUpdateRequest,
+    },
     observability::request_id::set_request_id,
+    repositories::TransactionRepository,
 };
-
-/// Redis key prefix for transaction status check metadata (failure counters).
-/// Stored separately from Apalis job data to persist across retries.
-const TX_STATUS_CHECK_METADATA_PREFIX: &str = "queue:tx_status_check_metadata";
 
 #[instrument(
     level = "debug",
@@ -49,25 +45,17 @@ pub async fn transaction_status_handler(
         set_request_id(request_id);
     }
 
-    // Get Redis pool from queue - uses deadpool for connection management
-    let queue = state
-        .job_producer()
-        .get_queue()
-        .await
-        .map_err(|e| HandlerError::Retry(format!("Failed to get queue: {e}")))?;
-
-    let redis_pool = queue.redis_connections().primary().clone();
+    let tx_repo = state.transaction_repository();
 
     // Execute status check - all logic moved here so errors go through handle_result
-    let req_result =
-        handle_request(&job.data, &state, &redis_pool, ctx.attempt, &ctx.task_id).await;
+    let req_result = handle_request(&job.data, &state, ctx.attempt, &ctx.task_id).await;
 
     let tx_id = &job.data.transaction_id;
 
-    // Handle result and update counters in Redis
+    // Handle result and update counters via transaction repository
     handle_result(
         req_result.result,
-        &redis_pool,
+        &*tx_repo,
         tx_id,
         req_result.consecutive_failures,
         req_result.total_failures,
@@ -79,24 +67,28 @@ pub async fn transaction_status_handler(
 /// Handles status check results with circuit breaker tracking.
 ///
 /// # Strategy
-/// - If transaction is in final state → Clean up counters, return Ok (job completes)
-/// - If success but not final → Reset consecutive to 0 in Redis, return Err (retries)
-/// - If error with should_retry=true → Increment counters in Redis, return Err (retries)
+/// - If transaction is in final state → return Ok (job completes, metadata cleaned up via delete_at)
+/// - If success but not final → Reset consecutive to 0, return Err (retries)
+/// - If error with should_retry=true → Increment counters, return Err (retries)
 /// - If error with should_retry=false → Return Ok (job completes, e.g., transaction not found)
 /// - If counters are None (early failure) → Skip counter updates
 ///
-/// Counters are stored in a separate Redis key by tx_id, independent of job data.
-async fn handle_result(
+/// Counters are stored in transaction metadata, persisted via partial_update.
+async fn handle_result<TR>(
     result: Result<TransactionRepoModel>,
-    redis_pool: &Arc<Pool>,
+    tx_repo: &TR,
     tx_id: &str,
     consecutive_failures: Option<u32>,
     total_failures: Option<u32>,
     should_retry_on_error: bool,
-) -> Result<(), HandlerError> {
+) -> Result<(), HandlerError>
+where
+    TR: TransactionRepository + Send + Sync,
+{
     match result {
         Ok(tx) if is_final_state(&tx.status) => {
-            // Transaction reached final state - job complete, clean up counters
+            // Transaction reached final state - job complete
+            // No need to clean up counters - tx will be deleted via delete_at
             debug!(
                 tx_id = %tx.id,
                 relayer_id = %tx.relayer_id,
@@ -105,11 +97,6 @@ async fn handle_result(
                 total_failures = ?total_failures,
                 "transaction in final state, status check complete"
             );
-
-            // Clean up the counters from Redis
-            if let Err(e) = delete_counters_from_redis(redis_pool, tx_id).await {
-                warn!(error = %e, tx_id = %tx_id, "failed to clean up counters from Redis");
-            }
 
             Ok(())
         }
@@ -122,12 +109,19 @@ async fn handle_result(
                 "transaction not in final state"
             );
 
-            // Reset consecutive counter in Redis only if there were previous failures
-            // This avoids creating Redis entries for transactions that never failed
+            // Reset consecutive counter only if there were previous failures
+            // This avoids unnecessary writes for transactions that never failed
             match (consecutive_failures, total_failures) {
                 (Some(consecutive), Some(total)) if consecutive > 0 || total > 0 => {
-                    if let Err(e) = update_counters_in_redis(redis_pool, tx_id, 0, total).await {
-                        warn!(error = %e, tx_id = %tx_id, relayer_id = %tx.relayer_id, "failed to reset consecutive counter in Redis");
+                    let update = TransactionUpdateRequest {
+                        metadata: Some(TransactionMetadata {
+                            consecutive_failures: 0,
+                            total_failures: total,
+                        }),
+                        ..Default::default()
+                    };
+                    if let Err(e) = tx_repo.partial_update(tx_id.to_string(), update).await {
+                        warn!(error = %e, tx_id = %tx_id, relayer_id = %tx.relayer_id, "failed to reset consecutive counter");
                     }
                 }
                 _ => {
@@ -166,12 +160,17 @@ async fn handle_result(
                         "status check failed, incrementing failure counters"
                     );
 
-                    // Update counters in Redis
-                    if let Err(update_err) =
-                        update_counters_in_redis(redis_pool, tx_id, new_consecutive, new_total)
-                            .await
+                    // Update counters via transaction repository
+                    let update = TransactionUpdateRequest {
+                        metadata: Some(TransactionMetadata {
+                            consecutive_failures: new_consecutive,
+                            total_failures: new_total,
+                        }),
+                        ..Default::default()
+                    };
+                    if let Err(update_err) = tx_repo.partial_update(tx_id.to_string(), update).await
                     {
-                        warn!(error = %update_err, tx_id = %tx_id, "failed to update counters in Redis");
+                        warn!(error = %update_err, tx_id = %tx_id, "failed to update counters");
                     }
                 }
                 _ => {
@@ -190,119 +189,6 @@ async fn handle_result(
     }
 }
 
-/// Builds the Redis key for storing status check metadata for a transaction.
-fn get_metadata_key(tx_id: &str) -> String {
-    let redis_key_prefix = ServerConfig::get_redis_key_prefix();
-    format!("{redis_key_prefix}:{TX_STATUS_CHECK_METADATA_PREFIX}:{tx_id}")
-}
-
-/// Reads failure counters from Redis for a given transaction.
-///
-/// Returns (consecutive_failures, total_failures), defaulting to (0, 0) if not found.
-async fn read_counters_from_redis(redis_pool: &Arc<Pool>, tx_id: &str) -> (u32, u32) {
-    let key = get_metadata_key(tx_id);
-
-    let result: Result<(u32, u32)> = async {
-        let mut conn = redis_pool
-            .get()
-            .await
-            .map_err(|e| eyre::eyre!("Failed to get Redis connection: {e}"))?;
-
-        let values: Vec<Option<String>> = conn
-            .hget(&key, &["consecutive", "total"])
-            .await
-            .map_err(|e| eyre::eyre!("Failed to read counters from Redis: {e}"))?;
-
-        let consecutive = values
-            .first()
-            .and_then(|v| v.as_ref())
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0);
-        let total = values
-            .get(1)
-            .and_then(|v| v.as_ref())
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0);
-
-        Ok((consecutive, total))
-    }
-    .await;
-
-    match result {
-        Ok(counters) => counters,
-        Err(e) => {
-            warn!(error = %e, tx_id = %tx_id, "failed to read counters from Redis, using defaults");
-            (0, 0)
-        }
-    }
-}
-
-/// Updates failure counters in Redis for a given transaction.
-///
-/// TTL is refreshed on every update to act as an "inactivity timeout".
-/// If no status checks happen for 12 hours, the metadata is considered stale.
-/// Active transactions keep their metadata fresh.
-async fn update_counters_in_redis(
-    redis_pool: &Arc<Pool>,
-    tx_id: &str,
-    consecutive: u32,
-    total: u32,
-) -> Result<()> {
-    let key = get_metadata_key(tx_id);
-
-    // Use pipeline to atomically set values and TTL
-    // hset_multiple returns "OK", expire returns 1 if TTL was set
-    let mut conn = redis_pool
-        .get()
-        .await
-        .map_err(|e| eyre::eyre!("Failed to get Redis connection: {e}"))?;
-
-    let (ttl_result,): (i64,) = redis::pipe()
-        .hset_multiple(
-            &key,
-            &[
-                ("consecutive", consecutive.to_string()),
-                ("total", total.to_string()),
-            ],
-        )
-        .ignore()
-        .expire(&key, 43200) // 12 hours TTL
-        .query_async(&mut *conn)
-        .await
-        .map_err(|e| eyre::eyre!("Failed to update counters in Redis: {e}"))?;
-
-    let ttl_set = ttl_result == 1;
-
-    debug!(
-        tx_id = %tx_id,
-        consecutive,
-        total,
-        key,
-        ttl_set,
-        "updated status check counters in Redis"
-    );
-
-    Ok(())
-}
-
-/// Deletes failure counters from Redis when transaction reaches final state.
-async fn delete_counters_from_redis(redis_pool: &Arc<Pool>, tx_id: &str) -> Result<()> {
-    let key = get_metadata_key(tx_id);
-
-    let mut conn = redis_pool
-        .get()
-        .await
-        .map_err(|e| eyre::eyre!("Failed to get Redis connection: {e}"))?;
-
-    conn.del::<_, ()>(&key)
-        .await
-        .map_err(|e| eyre::eyre!("Failed to delete counters from Redis: {e}"))?;
-
-    debug!(tx_id = %tx_id, key, "deleted status check counters from Redis");
-
-    Ok(())
-}
-
 /// Result of handle_request including whether to retry on error.
 struct HandleRequestResult {
     result: Result<TransactionRepoModel>,
@@ -318,7 +204,6 @@ struct HandleRequestResult {
 async fn handle_request(
     status_request: &TransactionStatusCheck,
     state: &ThinData<DefaultAppState>,
-    redis_pool: &Arc<Pool>,
     attempt: usize,
     task_id: &str,
 ) -> HandleRequestResult {
@@ -353,9 +238,11 @@ async fn handle_request(
         }
     };
 
-    // Read failure counters from separate Redis key (not job metadata)
-    // This persists across job retries since we store it independently
-    let (consecutive_failures, total_failures) = read_counters_from_redis(redis_pool, tx_id).await;
+    // Read failure counters from transaction metadata
+    let (consecutive_failures, total_failures) = match &transaction.metadata {
+        Some(meta) => (meta.consecutive_failures, meta.total_failures),
+        None => (0, 0),
+    };
 
     // Get network type from transaction (authoritative source)
     let network_type = transaction.network_type;
@@ -439,14 +326,6 @@ mod tests {
     use super::*;
     use crate::models::{NetworkType, TransactionStatus};
     use std::collections::HashMap;
-
-    #[test]
-    fn test_get_metadata_key() {
-        // Note: This test assumes default redis key prefix
-        let key = get_metadata_key("tx123");
-        assert!(key.contains(TX_STATUS_CHECK_METADATA_PREFIX));
-        assert!(key.contains("tx123"));
-    }
 
     #[tokio::test]
     async fn test_status_check_job_validation() {

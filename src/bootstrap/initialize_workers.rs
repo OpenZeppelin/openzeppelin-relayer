@@ -12,7 +12,7 @@ use actix_web::web::ThinData;
 use tracing::info;
 
 use crate::{
-    jobs::queue_backend::{QueueBackend, QueueBackendStorage, WorkerHandle},
+    jobs::queue_backend::{QueueBackend, WorkerHandle},
     models::DefaultAppState,
 };
 
@@ -30,7 +30,7 @@ use crate::{
 pub async fn initialize_queue_workers(
     app_state: ThinData<DefaultAppState>,
 ) -> color_eyre::Result<Vec<WorkerHandle>> {
-    let backend = QueueBackendStorage::new(app_state.clone()).await?;
+    let backend = app_state.job_producer.queue_backend();
 
     let handles = backend.initialize_workers(Arc::new(app_state)).await?;
 
