@@ -341,6 +341,14 @@ pub mod mockutils {
             request_timeout_seconds: 30,
             redis_reader_url: None,
             redis_reader_pool_max_size: 1000,
+            stellar_mainnet_fee_forwarder_address: None,
+            stellar_testnet_fee_forwarder_address: None,
+            stellar_mainnet_soroswap_router_address: None,
+            stellar_testnet_soroswap_router_address: None,
+            stellar_mainnet_soroswap_factory_address: None,
+            stellar_testnet_soroswap_factory_address: None,
+            stellar_mainnet_soroswap_native_wrapper_address: None,
+            stellar_testnet_soroswap_native_wrapper_address: None,
         }
     }
 }
