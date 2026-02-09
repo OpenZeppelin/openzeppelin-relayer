@@ -522,8 +522,32 @@ The signing method depends on your setup:
 
 - **Programmatic signing**: Use the Stellar SDK to sign the authorization entry with the user's private key
 - **Wallet signing**: Use a Soroban-compatible wallet that supports signing authorization entries
+- **CLI helper tool**: A ready-to-use signing tool is provided in the repository at `helpers/sign_soroban_auth_entry.rs`
 
-For complete code examples of signing authorization entries, see the [Relayer SDK examples](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/stellar/src/soroban).
+##### Using the CLI Helper Tool
+
+The repository includes a helper tool that signs Soroban authorization entries directly from the command line. This is useful for testing and development:
+
+```bash
+cargo run --example sign_soroban_auth_entry -- \
+  --secret-key "S..." \
+  --auth-entry "<base64 XDR from build response>" \
+  --network testnet
+```
+
+To generate the full JSON payload ready for the `/transactions` endpoint, include the `--transaction-xdr` flag:
+
+```bash
+cargo run --example sign_soroban_auth_entry -- \
+  --secret-key "S..." \
+  --auth-entry "<base64 XDR from build response>" \
+  --network testnet \
+  --transaction-xdr "<transaction XDR from build response>"
+```
+
+This outputs a JSON object with `network`, `transaction_xdr`, and `signed_auth_entry` fields that can be sent directly to the Submit endpoint.
+
+For complete code examples of signing authorization entries and testing the full gas abstraction flow (quote, build, sign, and send), see the [Relayer SDK examples](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/stellar/src/soroban). The example demonstrates the end-to-end flow including fee estimation, transaction building, authorization signing, and submission.
 
 #### Step 4: Submit to Relayer
 
