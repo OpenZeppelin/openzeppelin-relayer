@@ -8,6 +8,7 @@ use aws_sdk_sqs::types::MessageAttributeValue;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
+use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -36,6 +37,8 @@ pub struct SqsBackend {
     queue_urls: HashMap<QueueType, String>,
     /// AWS region
     region: String,
+    /// Shutdown signal sender — sending `true` tells all workers and cron tasks to stop
+    shutdown_tx: Arc<watch::Sender<bool>>,
 }
 
 impl std::fmt::Debug for SqsBackend {
@@ -140,10 +143,13 @@ impl SqsBackend {
             "SQS backend initialized"
         );
 
+        let (shutdown_tx, _) = watch::channel(false);
+
         Ok(Self {
             sqs_client,
             queue_urls,
             region,
+            shutdown_tx: Arc::new(shutdown_tx),
         })
     }
 
@@ -523,13 +529,46 @@ impl QueueBackend for SqsBackend {
                 *queue_type,
                 queue_url.clone(),
                 app_state.clone(),
+                self.shutdown_tx.subscribe(),
             )
             .await?;
 
             handles.push(handle);
         }
 
-        info!("Successfully spawned {} SQS workers", handles.len());
+        // Start cron scheduler for periodic tasks (cleanup, token swaps)
+        let cron_scheduler =
+            super::sqs_cron::SqsCronScheduler::new(app_state.clone(), self.shutdown_tx.subscribe());
+        let cron_handles = cron_scheduler.start().await?;
+        handles.extend(cron_handles);
+
+        // Internal shutdown signal handler — listens for SIGINT/SIGTERM and
+        // broadcasts shutdown to all SQS workers and cron tasks.
+        // (Redis/Apalis workers handle signals via their own Monitor.)
+        {
+            let shutdown_tx = self.shutdown_tx.clone();
+            let handle = tokio::spawn(async move {
+                let mut sigint =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+                        .expect("Failed to create SIGINT handler");
+                let mut sigterm =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                        .expect("Failed to create SIGTERM handler");
+
+                tokio::select! {
+                    _ = sigint.recv() => info!("SQS backend: received SIGINT, shutting down workers"),
+                    _ = sigterm.recv() => info!("SQS backend: received SIGTERM, shutting down workers"),
+                }
+
+                let _ = shutdown_tx.send(true);
+            });
+            handles.push(WorkerHandle::Tokio(handle));
+        }
+
+        info!(
+            "Successfully spawned {} SQS workers and cron tasks",
+            handles.len()
+        );
         Ok(handles)
     }
 
@@ -599,6 +638,11 @@ impl QueueBackend for SqsBackend {
 
     fn backend_type(&self) -> &'static str {
         "sqs"
+    }
+
+    fn shutdown(&self) {
+        info!("SQS backend: broadcasting shutdown signal to all workers");
+        let _ = self.shutdown_tx.send(true);
     }
 }
 
@@ -678,6 +722,7 @@ mod tests {
             ),
             queue_urls: HashMap::new(),
             region: "us-east-1".to_string(),
+            shutdown_tx: Arc::new(watch::channel(false).0),
         };
 
         let debug_str = format!("{backend:?}");
@@ -697,6 +742,7 @@ mod tests {
             ),
             queue_urls: HashMap::new(),
             region: "us-west-2".to_string(),
+            shutdown_tx: Arc::new(watch::channel(false).0),
         };
 
         assert_eq!(backend.backend_type(), "sqs");
@@ -756,6 +802,7 @@ mod tests {
                 "https://sqs.us-east-1.amazonaws.com/123/test.fifo".to_string(),
             )]),
             region: "us-east-1".to_string(),
+            shutdown_tx: Arc::new(watch::channel(false).0),
         };
 
         // Test that backend is cloneable

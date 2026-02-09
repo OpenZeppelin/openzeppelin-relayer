@@ -8,7 +8,7 @@
 
 use crate::{
     jobs::{
-        queue_backend::{create_queue_backend, QueueBackend},
+        queue_backend::{create_queue_backend, QueueBackend, QueueBackendStorage},
         Job, NotificationSend, Queue, RelayerHealthCheck, TransactionRequest, TransactionSend,
         TransactionStatusCheck,
     },
@@ -34,9 +34,9 @@ pub enum JobProducerError {
     QueueError(String),
 }
 
-static QUEUE_BACKEND: OnceCell<Arc<dyn QueueBackend>> = OnceCell::const_new();
+static QUEUE_BACKEND: OnceCell<Arc<QueueBackendStorage>> = OnceCell::const_new();
 
-async fn get_queue_backend(queue: &Queue) -> Result<Arc<dyn QueueBackend>, JobProducerError> {
+async fn get_queue_backend(queue: &Queue) -> Result<Arc<QueueBackendStorage>, JobProducerError> {
     QUEUE_BACKEND
         .get_or_try_init(|| async {
             debug!("Initializing queue backend for job production");
@@ -118,7 +118,7 @@ impl JobProducer {
         Self { queue }
     }
 
-    async fn queue_backend(&self) -> Result<Arc<dyn QueueBackend>, JobProducerError> {
+    async fn queue_backend(&self) -> Result<Arc<QueueBackendStorage>, JobProducerError> {
         get_queue_backend(&self.queue).await
     }
 }

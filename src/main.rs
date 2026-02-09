@@ -45,13 +45,11 @@ use dotenvy::dotenv;
 use std::env;
 use tracing::info;
 
-use openzeppelin_relayer::jobs::{queue_backend::create_queue_backend, JobProducerTrait};
 use openzeppelin_relayer::{
     api,
     bootstrap::{
-        initialize_app_state, initialize_plugin_pool, initialize_relayers,
-        initialize_token_swap_workers, precompile_plugins, process_config_file,
-        shutdown_plugin_pool,
+        initialize_app_state, initialize_plugin_pool, initialize_queue_workers,
+        initialize_relayers, precompile_plugins, process_config_file, shutdown_plugin_pool,
     },
     config,
     constants::{DEFAULT_CLIENT_DISCONNECT_TIMEOUT_SECONDS, PUBLIC_ENDPOINTS},
@@ -96,19 +94,8 @@ async fn main() -> Result<()> {
     // Initialize relayers: sync and validate relayers
     initialize_relayers(app_state.clone()).await?;
 
-    initialize_token_swap_workers(app_state.clone()).await?;
-
     // Setup workers for processing jobs using the configured queue backend.
-    let queue = app_state.job_producer.get_queue().await?;
-    let queue_backend = create_queue_backend(queue.redis_connections()).await?;
-    let handles = queue_backend
-        .initialize_workers(Arc::new(app_state.clone()))
-        .await?;
-    info!(
-        backend = queue_backend.backend_type(),
-        worker_count = handles.len(),
-        "Initialized queue backend workers"
-    );
+    let _worker_handles = initialize_queue_workers(app_state.clone()).await?;
 
     // Initialize plugin worker pool (enabled by default for better performance)
     // Set PLUGIN_USE_POOL=false to use legacy ts-node mode

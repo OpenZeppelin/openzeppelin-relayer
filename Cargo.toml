@@ -47,6 +47,7 @@ regex = "1"
 futures = "0.3"
 uuid = { version = "1.11", features = ["v4", "v5"] }
 chrono = "0.4"
+cron = "0.13"
 eyre = "0.6"
 color-eyre = "0.6"
 apalis = { version = "0.7", features = ["limit", "retry", "catch-panic", "timeout"] }

@@ -9,6 +9,7 @@ use std::time::Duration;
 use actix_web::web::ThinData;
 use aws_sdk_sqs::types::{Message, MessageAttributeValue, MessageSystemAttributeName};
 use sha2::{Digest, Sha256};
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
@@ -28,8 +29,8 @@ use crate::{
 };
 
 use super::{
-    QueueBackendError, QueueType, QueueWorkerAttempt, QueueWorkerData, QueueWorkerError,
-    QueueWorkerTaskId, WorkerHandle,
+    status_check_retry_delay_secs, QueueBackendError, QueueType, QueueWorkerAttempt,
+    QueueWorkerData, QueueWorkerError, QueueWorkerTaskId, WorkerHandle,
 };
 
 #[derive(Debug)]
@@ -56,6 +57,7 @@ pub async fn spawn_worker_for_queue(
     queue_type: QueueType,
     queue_url: String,
     app_state: Arc<ThinData<crate::models::DefaultAppState>>,
+    mut shutdown_rx: watch::Receiver<bool>,
 ) -> Result<WorkerHandle, QueueBackendError> {
     let concurrency = get_concurrency_for_queue(queue_type);
     let max_retries = queue_type.max_retries();
@@ -76,27 +78,43 @@ pub async fn spawn_worker_for_queue(
         let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
 
         loop {
+            // Check shutdown before each iteration
+            if *shutdown_rx.borrow() {
+                info!(queue_type = ?queue_type, "Shutdown signal received, stopping SQS worker");
+                break;
+            }
+
             // Do not poll for more messages than we can process; otherwise
             // messages sit in-flight waiting for permits.
             let available_permits = semaphore.available_permits();
             if available_permits == 0 {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-                continue;
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(50)) => continue,
+                    _ = shutdown_rx.changed() => {
+                        info!(queue_type = ?queue_type, "Shutdown signal received, stopping SQS worker");
+                        break;
+                    }
+                }
             }
 
             let batch_size = available_permits.min(10) as i32;
 
-            // Poll SQS for messages
-            let messages_result = sqs_client
-                .receive_message()
-                .queue_url(&queue_url)
-                .max_number_of_messages(batch_size) // SQS max is 10
-                .wait_time_seconds(polling_interval as i32) // Long polling
-                .visibility_timeout(visibility_timeout as i32)
-                .message_system_attribute_names(MessageSystemAttributeName::All)
-                .message_attribute_names("All")
-                .send()
-                .await;
+            // Poll SQS for messages, racing with shutdown signal
+            let messages_result = tokio::select! {
+                result = sqs_client
+                    .receive_message()
+                    .queue_url(&queue_url)
+                    .max_number_of_messages(batch_size) // SQS max is 10
+                    .wait_time_seconds(polling_interval as i32) // Long polling
+                    .visibility_timeout(visibility_timeout as i32)
+                    .message_system_attribute_names(MessageSystemAttributeName::All)
+                    .message_attribute_names("All")
+                    .send() => result,
+                _ = shutdown_rx.changed() => {
+                    info!(queue_type = ?queue_type, "Shutdown signal received during SQS poll, stopping worker");
+                    break;
+                }
+            };
 
             match messages_result {
                 Ok(output) => {
@@ -156,11 +174,19 @@ pub async fn spawn_worker_for_queue(
                         error = %e,
                         "Failed to receive messages from SQS"
                     );
-                    // Back off on error
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    // Back off on error, but remain responsive to shutdown
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                        _ = shutdown_rx.changed() => {
+                            info!(queue_type = ?queue_type, "Shutdown signal received during backoff, stopping worker");
+                            break;
+                        }
+                    }
                 }
             }
         }
+
+        info!(queue_type = ?queue_type, "SQS worker stopped");
     });
 
     Ok(WorkerHandle::Tokio(handle))
@@ -307,7 +333,65 @@ async fn process_message(
             Ok(())
         }
         Err(ProcessingError::Retryable(e)) => {
-            // Retry: Let message return to queue after visibility timeout
+            // StatusCheck queues use self-re-enqueue with short delay instead of
+            // relying on the 300s visibility timeout. This brings retry intervals
+            // from ~5 minutes down to 3-10 seconds, matching Apalis backoff behavior.
+            if queue_type == QueueType::StatusCheck {
+                let delay = compute_status_retry_delay(body);
+                let requeue_dedup_id = generate_requeue_dedup_id(
+                    body,
+                    receive_count,
+                    message.message_id().unwrap_or("unknown"),
+                );
+                let group_id = extract_group_id(&message).unwrap_or_default();
+
+                // Re-enqueue with short delay
+                if let Err(send_err) = sqs_client
+                    .send_message()
+                    .queue_url(queue_url)
+                    .message_body(body.to_string())
+                    .message_group_id(group_id)
+                    .message_deduplication_id(requeue_dedup_id)
+                    .delay_seconds(delay)
+                    .send()
+                    .await
+                {
+                    error!(
+                        queue_type = ?queue_type,
+                        error = %send_err,
+                        "Failed to re-enqueue status check message; leaving original for visibility timeout retry"
+                    );
+                    // Fall through — original message will retry after visibility timeout
+                    return Ok(());
+                }
+
+                // Delete the original message now that the re-enqueue succeeded
+                sqs_client
+                    .delete_message()
+                    .queue_url(queue_url)
+                    .receipt_handle(receipt_handle)
+                    .send()
+                    .await
+                    .map_err(|err| {
+                        // Not fatal: worst case is a duplicate delivery after
+                        // the visibility timeout expires, which the handler is
+                        // idempotent to handle.
+                        error!(error = %err, "Failed to delete original status check message after re-enqueue");
+                        QueueBackendError::SqsError(format!("DeleteMessage failed: {err}"))
+                    })?;
+
+                debug!(
+                    queue_type = ?queue_type,
+                    attempt = attempt_number,
+                    delay_seconds = delay,
+                    error = %e,
+                    "Status check re-enqueued with short delay"
+                );
+
+                return Ok(());
+            }
+
+            // Non-StatusCheck queues: let message return via visibility timeout
             if max_retries != usize::MAX && receive_count > max_retries {
                 error!(
                     queue_type = ?queue_type,
@@ -582,6 +666,42 @@ async fn defer_message(
     Ok(())
 }
 
+/// Extracts the `network_type` from a status check message body and returns
+/// the appropriate retry delay in seconds.
+///
+/// Uses partial JSON deserialization to avoid deserializing the full job struct.
+fn compute_status_retry_delay(body: &str) -> i32 {
+    // Partial struct matching Job<TransactionStatusCheck>.data.network_type
+    #[derive(serde::Deserialize)]
+    struct StatusCheckData {
+        network_type: Option<crate::models::NetworkType>,
+    }
+    #[derive(serde::Deserialize)]
+    struct PartialJob {
+        data: StatusCheckData,
+    }
+
+    let network_type = serde_json::from_str::<PartialJob>(body)
+        .ok()
+        .and_then(|j| j.data.network_type);
+
+    status_check_retry_delay_secs(network_type)
+}
+
+/// Generates a unique deduplication ID for re-enqueued status check messages.
+///
+/// Must be unique per retry hop to avoid the 5-minute FIFO dedup window
+/// silently dropping the re-enqueued message.
+fn generate_requeue_dedup_id(body: &str, receive_count: usize, message_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"status-requeue:");
+    hasher.update(body.as_bytes());
+    hasher.update(message_id.as_bytes());
+    hasher.update(receive_count.to_le_bytes());
+    let hash = format!("{:x}", hasher.finalize());
+    hash[..64.min(hash.len())].to_string()
+}
+
 /// Gets the concurrency limit for a queue type from environment.
 fn get_concurrency_for_queue(queue_type: QueueType) -> usize {
     match queue_type {
@@ -766,5 +886,62 @@ mod tests {
         ))));
         let result = map_apalis_error(error);
         assert!(matches!(result, ProcessingError::Retryable(_)));
+    }
+
+    #[test]
+    fn test_compute_status_retry_delay_evm() {
+        // NetworkType uses #[serde(rename_all = "lowercase")]
+        let body = r#"{"message_id":"m1","version":"1","timestamp":"0","job_type":"TransactionStatusCheck","data":{"transaction_id":"tx1","relayer_id":"r1","network_type":"evm"}}"#;
+        assert_eq!(compute_status_retry_delay(body), 10);
+    }
+
+    #[test]
+    fn test_compute_status_retry_delay_stellar() {
+        let body = r#"{"message_id":"m1","version":"1","timestamp":"0","job_type":"TransactionStatusCheck","data":{"transaction_id":"tx1","relayer_id":"r1","network_type":"stellar"}}"#;
+        assert_eq!(compute_status_retry_delay(body), 3);
+    }
+
+    #[test]
+    fn test_compute_status_retry_delay_solana() {
+        let body = r#"{"message_id":"m1","version":"1","timestamp":"0","job_type":"TransactionStatusCheck","data":{"transaction_id":"tx1","relayer_id":"r1","network_type":"solana"}}"#;
+        assert_eq!(compute_status_retry_delay(body), 7);
+    }
+
+    #[test]
+    fn test_compute_status_retry_delay_missing_network() {
+        let body = r#"{"message_id":"m1","version":"1","timestamp":"0","job_type":"TransactionStatusCheck","data":{"transaction_id":"tx1","relayer_id":"r1"}}"#;
+        assert_eq!(compute_status_retry_delay(body), 5);
+    }
+
+    #[test]
+    fn test_compute_status_retry_delay_invalid_body() {
+        assert_eq!(compute_status_retry_delay("not json"), 5);
+    }
+
+    #[test]
+    fn test_generate_requeue_dedup_id_deterministic() {
+        let body = r#"{"data":{"transaction_id":"tx-123"}}"#;
+        let id1 = generate_requeue_dedup_id(body, 1, "msg-1");
+        let id2 = generate_requeue_dedup_id(body, 1, "msg-1");
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn test_generate_requeue_dedup_id_varies_with_receive_count() {
+        let body = r#"{"data":{"transaction_id":"tx-123"}}"#;
+        let id1 = generate_requeue_dedup_id(body, 1, "msg-1");
+        let id2 = generate_requeue_dedup_id(body, 2, "msg-1");
+        assert_ne!(
+            id1, id2,
+            "Different receive counts must produce different dedup IDs"
+        );
+    }
+
+    #[test]
+    fn test_generate_requeue_dedup_id_length() {
+        let body = r#"{"data":{"transaction_id":"tx-123"}}"#;
+        let id = generate_requeue_dedup_id(body, 1, "msg-1");
+        assert!(id.len() <= 128, "Dedup ID must fit SQS 128-char limit");
+        assert!(id.len() >= 32);
     }
 }

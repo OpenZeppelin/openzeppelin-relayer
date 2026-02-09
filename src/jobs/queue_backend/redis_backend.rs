@@ -8,7 +8,6 @@ use std::sync::Arc;
 use tracing::info;
 
 use crate::{
-    bootstrap,
     jobs::{
         Job, NotificationSend, Queue, RelayerHealthCheck, TokenSwapRequest, TransactionRequest,
         TransactionSend, TransactionStatusCheck,
@@ -232,13 +231,17 @@ impl QueueBackend for RedisBackend {
         &self,
         app_state: Arc<ThinData<DefaultAppState>>,
     ) -> Result<Vec<WorkerHandle>, QueueBackendError> {
-        info!("Initializing Redis backend workers via bootstrap::initialize_workers");
+        info!("Initializing Redis backend workers");
 
-        bootstrap::initialize_workers((*app_state).clone())
+        super::redis_worker::initialize_redis_workers((*app_state).clone())
             .await
             .map_err(|e| QueueBackendError::WorkerInitError(e.to_string()))?;
 
-        // Apalis workers are owned by the monitor started in bootstrap; no explicit
+        super::redis_worker::initialize_redis_token_swap_workers((*app_state).clone())
+            .await
+            .map_err(|e| QueueBackendError::WorkerInitError(e.to_string()))?;
+
+        // Apalis workers are owned by the monitors; no explicit
         // worker handles are returned from that flow.
         Ok(vec![])
     }
