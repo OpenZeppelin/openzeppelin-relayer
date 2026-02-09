@@ -134,7 +134,7 @@ pub async fn initialize_app_state(
     let repositories = initialize_repositories(&server_config, repo_connections).await?;
 
     // Queue always uses Redis with deadpool connections
-    let queue = Queue::setup(redis_connections).await?;
+    let queue = Queue::setup(redis_connections.clone()).await?;
     let job_producer = Arc::new(jobs::JobProducer::new(queue.clone()));
 
     let app_state = web::ThinData(AppState {

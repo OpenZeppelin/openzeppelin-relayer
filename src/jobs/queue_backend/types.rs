@@ -96,7 +96,7 @@ impl QueueType {
         match self {
             Self::TransactionRequest => "transaction_request",
             Self::TransactionSubmission => "transaction_sender",
-            Self::StatusCheck => "transaction_status_checker_stellar",
+            Self::StatusCheck => "transaction_status_checker",
             Self::Notification => "notification_sender",
             Self::TokenSwapRequest => "token_swap_request",
             Self::RelayerHealthCheck => "relayer_health_check",
@@ -383,7 +383,7 @@ mod tests {
         );
         assert_eq!(
             QueueType::StatusCheck.concurrency_env_key(),
-            "transaction_status_checker_stellar"
+            "transaction_status_checker"
         );
         assert_eq!(
             QueueType::Notification.concurrency_env_key(),

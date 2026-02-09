@@ -201,7 +201,6 @@ fn spawn_cron_task(
     })?;
 
     let task_name = name.to_string();
-    let lock_key = format!("sqs-cron:lock:{task_name}");
 
     info!(
         name = %task_name,
@@ -254,8 +253,8 @@ fn spawn_cron_task(
                 continue;
             }
 
-            let pool = match app_state.transaction_repository().connection_info() {
-                Some((pool, _)) => pool,
+            let (pool, key_prefix) = match app_state.transaction_repository().connection_info() {
+                Some((pool, key_prefix)) => (pool, key_prefix.to_string()),
                 None => {
                     debug!(name = %task_name, "In-memory mode, running cron without lock");
                     handler(app_state.clone()).await;
@@ -263,6 +262,7 @@ fn spawn_cron_task(
                 }
             };
 
+            let lock_key = format!("{key_prefix}:lock:{task_name}");
             let lock = DistributedLock::new(pool, &lock_key, lock_ttl);
             match lock.try_acquire().await {
                 Ok(Some(guard)) => {

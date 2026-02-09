@@ -36,7 +36,9 @@ pub enum JobProducerError {
 
 static QUEUE_BACKEND: OnceCell<Arc<QueueBackendStorage>> = OnceCell::const_new();
 
-async fn get_queue_backend(queue: &Queue) -> Result<Arc<QueueBackendStorage>, JobProducerError> {
+async fn get_queue_backend(
+    queue: Arc<Queue>,
+) -> Result<Arc<QueueBackendStorage>, JobProducerError> {
     QUEUE_BACKEND
         .get_or_try_init(|| async {
             debug!("Initializing queue backend for job production");
@@ -119,7 +121,7 @@ impl JobProducer {
     }
 
     async fn queue_backend(&self) -> Result<Arc<QueueBackendStorage>, JobProducerError> {
-        get_queue_backend(&self.queue).await
+        get_queue_backend(Arc::new(self.queue.clone())).await
     }
 }
 
